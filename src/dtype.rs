@@ -12,3 +12,15 @@ impl DType {
         }
     }
 }
+
+pub trait WithDType {
+    const DTYPE: DType;
+}
+
+impl WithDType for f32 {
+    const DTYPE: DType = DType::F32;
+}
+
+impl WithDType for f64 {
+    const DTYPE: DType = DType::F64;
+}
