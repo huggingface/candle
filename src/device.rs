@@ -1,4 +1,4 @@
-use crate::{DType, Storage};
+use crate::{storage::Storage, DType};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Device {
