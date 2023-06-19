@@ -2,6 +2,7 @@ use crate::{DType, Device};
 
 // TODO: Think about whether we would be better off with a dtype and
 // a buffer as an owned slice of bytes.
+#[derive(Debug, Clone)]
 pub enum CpuStorage {
     F32(Vec<f32>),
     F64(Vec<f64>),
@@ -17,6 +18,7 @@ impl CpuStorage {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub enum Storage {
     Cpu(CpuStorage),
 }

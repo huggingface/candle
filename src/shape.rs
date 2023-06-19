@@ -1,6 +1,12 @@
 use crate::{Error, Result};
 pub struct Shape(pub(crate) Vec<usize>);
 
+impl std::fmt::Debug for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", &self.dims())
+    }
+}
+
 impl From<&[usize; 1]> for Shape {
     fn from(dims: &[usize; 1]) -> Self {
         Self(dims.to_vec())

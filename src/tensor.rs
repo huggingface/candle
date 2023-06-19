@@ -1,18 +1,24 @@
-use crate::{op::Op, shape, storage::Storage, DType, Device, Result};
+use crate::{op::Op, storage::Storage, DType, Device, Result, Shape};
 use std::sync::Arc;
 
 #[allow(dead_code)]
 pub(crate) struct Tensor_ {
     storage: Storage,
-    shape: shape::Shape,
+    shape: Shape,
     stride: Vec<usize>,
     op: Option<Op>,
 }
 
 pub struct Tensor(Arc<Tensor_>);
 
+impl std::fmt::Debug for Tensor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{:?}, {:?}]", &self.shape().dims(), self.device())
+    }
+}
+
 impl Tensor {
-    pub fn zeros<S: Into<shape::Shape>>(shape: S, dtype: DType, device: Device) -> Self {
+    pub fn zeros<S: Into<Shape>>(shape: S, dtype: DType, device: Device) -> Self {
         let shape = shape.into();
         let storage = device.zeros(&shape, dtype);
         let rank = shape.rank();
@@ -38,6 +44,21 @@ impl Tensor {
         Ok(Self(Arc::new(tensor_)))
     }
 
+    pub fn to_scalar<S: crate::WithDType>(&self) -> Result<S> {
+        // TODO: properly use the strides here.
+        todo!()
+    }
+
+    pub fn to_vec1<S: crate::WithDType>(&self) -> Result<Vec<S>> {
+        // TODO: properly use the strides here.
+        todo!()
+    }
+
+    pub fn to_vec2<S: crate::WithDType>(&self) -> Result<Vec<Vec<S>>> {
+        // TODO: properly use the strides here.
+        todo!()
+    }
+
     pub fn dtype(&self) -> DType {
         self.0.storage.dtype()
     }
@@ -46,7 +67,7 @@ impl Tensor {
         self.0.storage.device()
     }
 
-    pub fn shape(&self) -> &shape::Shape {
+    pub fn shape(&self) -> &Shape {
         &self.0.shape
     }
 
