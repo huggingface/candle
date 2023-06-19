@@ -1,4 +1,4 @@
-use crate::{op::Op, storage::Storage, DType, Device};
+use crate::{op::Op, storage::Storage, DType, Device, Error, Result};
 use std::sync::Arc;
 
 #[allow(dead_code)]
@@ -45,5 +45,57 @@ impl Tensor {
 
     pub fn elem_count(&self) -> usize {
         self.0.shape.iter().product()
+    }
+
+    pub fn shape1(&self) -> Result<usize> {
+        let shape = self.shape();
+        if shape.len() == 1 {
+            Ok(shape[0])
+        } else {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: 1,
+                got: shape.len(),
+                shape: shape.to_vec(),
+            })
+        }
+    }
+
+    pub fn shape2(&self) -> Result<(usize, usize)> {
+        let shape = self.shape();
+        if shape.len() == 2 {
+            Ok((shape[0], shape[1]))
+        } else {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: 2,
+                got: shape.len(),
+                shape: shape.to_vec(),
+            })
+        }
+    }
+
+    pub fn shape3(&self) -> Result<(usize, usize, usize)> {
+        let shape = self.shape();
+        if shape.len() == 3 {
+            Ok((shape[0], shape[1], shape[2]))
+        } else {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: 3,
+                got: shape.len(),
+                shape: shape.to_vec(),
+            })
+        }
+    }
+
+    pub fn shape4(&self) -> Result<(usize, usize, usize, usize)> {
+        let shape = self.shape();
+        if shape.len() == 4 {
+            Ok((shape[0], shape[1], shape[2], shape[4]))
+        } else {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: 4,
+                got: shape.len(),
+                shape: shape.to_vec(),
+            })
+        }
     }
 }
