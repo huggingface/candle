@@ -2,7 +2,7 @@ use crate::{DType, Device};
 
 // TODO: Think about whether we would be better off with a dtype and
 // a buffer as an owned slice of bytes.
-pub(crate) enum CpuStorage {
+pub enum CpuStorage {
     F32(Vec<f32>),
     F64(Vec<f64>),
 }
@@ -17,18 +17,18 @@ impl CpuStorage {
 }
 
 #[allow(dead_code)]
-pub(crate) enum Storage {
+pub enum Storage {
     Cpu(CpuStorage),
 }
 
 impl Storage {
-    pub(crate) fn device(&self) -> Device {
+    pub fn device(&self) -> Device {
         match self {
             Self::Cpu(_) => Device::Cpu,
         }
     }
 
-    pub(crate) fn dtype(&self) -> DType {
+    pub fn dtype(&self) -> DType {
         match self {
             Self::Cpu(storage) => storage.dtype(),
         }
