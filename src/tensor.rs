@@ -1,17 +1,4 @@
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum DType {
-    F32,
-    F64,
-}
-
-impl DType {
-    pub fn size_in_bytes(&self) -> usize {
-        match self {
-            Self::F32 => 4,
-            Self::F64 => 8,
-        }
-    }
-}
+use crate::{DType, Device, Storage};
 
 pub struct Tensor {
     storage: Storage,
@@ -19,25 +6,9 @@ pub struct Tensor {
     stride: Vec<usize>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum Device {
-    Cpu,
-}
-
-#[allow(dead_code)]
-enum Storage {
-    Cpu { dtype: DType, buffer: Vec<u8> },
-}
-
 impl Tensor {
     pub fn zeros(shape: &[usize], dtype: DType, device: Device) -> Self {
-        let storage = match device {
-            Device::Cpu => {
-                let elem_count: usize = shape.iter().product();
-                let buffer = vec![0; elem_count * dtype.size_in_bytes()];
-                Storage::Cpu { dtype, buffer }
-            }
-        };
+        let storage = device.zeros(shape, dtype);
         Self {
             storage,
             shape: shape.to_vec(),
