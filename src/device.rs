@@ -1,4 +1,7 @@
-use crate::{storage::Storage, DType};
+use crate::{
+    storage::{CpuStorage, Storage},
+    DType,
+};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Device {
@@ -10,8 +13,17 @@ impl Device {
         match self {
             Device::Cpu => {
                 let elem_count: usize = shape.iter().product();
-                let buffer = vec![0; elem_count * dtype.size_in_bytes()];
-                Storage::Cpu { dtype, buffer }
+                let storage = match dtype {
+                    DType::F32 => {
+                        let data = vec![0f32; elem_count];
+                        CpuStorage::F32(data)
+                    }
+                    DType::F64 => {
+                        let data = vec![0f64; elem_count];
+                        CpuStorage::F64(data)
+                    }
+                };
+                Storage::Cpu(storage)
             }
         }
     }
