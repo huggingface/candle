@@ -33,6 +33,12 @@ impl From<&[usize]> for Shape {
     }
 }
 
+impl From<&Shape> for Shape {
+    fn from(shape: &Shape) -> Self {
+        Self(shape.0.to_vec())
+    }
+}
+
 impl From<()> for Shape {
     fn from(_: ()) -> Self {
         Self(vec![])
