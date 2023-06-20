@@ -172,6 +172,32 @@ impl Storage {
         }
     }
 
+    pub(crate) fn affine_impl(
+        &self,
+        shape: &Shape,
+        stride: &[usize],
+        mul: f64,
+        add: f64,
+    ) -> Result<Self> {
+        // TODO: Different code path for the contiguous case?
+        match self {
+            Storage::Cpu(storage) => match storage {
+                CpuStorage::F32(storage) => {
+                    let index = StridedIndex::new(shape.dims(), stride);
+                    let mul = mul as f32;
+                    let add = add as f32;
+                    let data = index.map(|i| storage[i] * mul + add).collect();
+                    Ok(Storage::Cpu(CpuStorage::F32(data)))
+                }
+                CpuStorage::F64(storage) => {
+                    let index = StridedIndex::new(shape.dims(), stride);
+                    let data = index.map(|i| storage[i] * mul + add).collect();
+                    Ok(Storage::Cpu(CpuStorage::F64(data)))
+                }
+            },
+        }
+    }
+
     fn unary_impl<B: UnaryOp>(&self, shape: &Shape, stride: &[usize]) -> Result<Self> {
         // TODO: Different code path for the contiguous case?
         match self {
