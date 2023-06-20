@@ -91,18 +91,18 @@ impl Shape {
     }
 
     extract_dims!(r0, 0, |_: &Vec<usize>| (), ());
-    extract_dims!(r1, 1, |d: &Vec<usize>| d[0], usize);
-    extract_dims!(r2, 2, |d: &Vec<usize>| (d[0], d[1]), (usize, usize));
+    extract_dims!(r1, 1, |d: &[usize]| d[0], usize);
+    extract_dims!(r2, 2, |d: &[usize]| (d[0], d[1]), (usize, usize));
     extract_dims!(
         r3,
         3,
-        |d: &Vec<usize>| (d[0], d[1], d[2]),
+        |d: &[usize]| (d[0], d[1], d[2]),
         (usize, usize, usize)
     );
     extract_dims!(
         r4,
         4,
-        |d: &Vec<usize>| (d[0], d[1], d[2], d[3]),
+        |d: &[usize]| (d[0], d[1], d[2], d[3]),
         (usize, usize, usize, usize)
     );
 
