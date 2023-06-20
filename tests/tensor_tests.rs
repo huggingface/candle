@@ -11,7 +11,7 @@ fn zeros() -> Result<()> {
 
 #[test]
 fn add_mul() -> Result<()> {
-    let tensor = Tensor::new([3f32, 1., 4.].as_slice(), Device::Cpu)?;
+    let tensor = Tensor::new(&[3f32, 1., 4.], Device::Cpu)?;
     let dim1 = tensor.shape().r1()?;
     assert_eq!(dim1, 3);
     let content: Vec<f32> = tensor.to_vec1()?;
@@ -22,5 +22,16 @@ fn add_mul() -> Result<()> {
     let tensor = Tensor::mul(&tensor, &tensor)?;
     let content: Vec<f32> = tensor.to_vec1()?;
     assert_eq!(content, [36., 4., 64.]);
+    Ok(())
+}
+
+#[test]
+fn tensor_2d() -> Result<()> {
+    let data = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
+    let tensor = Tensor::new(data, Device::Cpu)?;
+    let dims = tensor.shape().r2()?;
+    assert_eq!(dims, (2, 5));
+    let content: Vec<Vec<f32>> = tensor.to_vec2()?;
+    assert_eq!(content, data);
     Ok(())
 }

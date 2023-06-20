@@ -18,7 +18,11 @@ impl DType {
 pub trait WithDType: Sized + Copy {
     const DTYPE: DType;
 
-    fn to_cpu_storage(data: &[Self]) -> CpuStorage;
+    fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage;
+
+    fn to_cpu_storage(data: &[Self]) -> CpuStorage {
+        Self::to_cpu_storage_owned(data.to_vec())
+    }
 
     fn cpu_storage_as_slice(s: &CpuStorage) -> Result<&[Self]>;
 }
@@ -26,8 +30,8 @@ pub trait WithDType: Sized + Copy {
 impl WithDType for f32 {
     const DTYPE: DType = DType::F32;
 
-    fn to_cpu_storage(data: &[Self]) -> CpuStorage {
-        CpuStorage::F32(data.to_vec())
+    fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage {
+        CpuStorage::F32(data)
     }
 
     fn cpu_storage_as_slice(s: &CpuStorage) -> Result<&[Self]> {
@@ -44,8 +48,8 @@ impl WithDType for f32 {
 impl WithDType for f64 {
     const DTYPE: DType = DType::F64;
 
-    fn to_cpu_storage(data: &[Self]) -> CpuStorage {
-        CpuStorage::F64(data.to_vec())
+    fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage {
+        CpuStorage::F64(data)
     }
 
     fn cpu_storage_as_slice(s: &CpuStorage) -> Result<&[Self]> {

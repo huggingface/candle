@@ -25,6 +25,16 @@ impl<S: crate::WithDType> NdArray for S {
     }
 }
 
+impl<S: crate::WithDType, const N: usize> NdArray for &[S; N] {
+    fn shape(&self) -> Result<Shape> {
+        Ok(Shape::from(self.len()))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        S::to_cpu_storage(self.as_slice())
+    }
+}
+
 impl<S: crate::WithDType> NdArray for &[S] {
     fn shape(&self) -> Result<Shape> {
         Ok(Shape::from(self.len()))
@@ -32,6 +42,16 @@ impl<S: crate::WithDType> NdArray for &[S] {
 
     fn to_cpu_storage(&self) -> CpuStorage {
         S::to_cpu_storage(self)
+    }
+}
+
+impl<S: crate::WithDType, const N: usize, const M: usize> NdArray for &[[S; N]; M] {
+    fn shape(&self) -> Result<Shape> {
+        Ok(Shape::from((M, N)))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        S::to_cpu_storage_owned(self.concat())
     }
 }
 

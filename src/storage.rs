@@ -17,6 +17,7 @@ impl CpuStorage {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct StridedIndex<'a> {
     next_storage_index: Option<usize>,
     multi_index: Vec<usize>,
