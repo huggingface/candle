@@ -119,8 +119,8 @@ impl Storage {
         &self,
         rhs: &Self,
         shape: &Shape,
-        _lhs_stride: &[usize],
-        _rhs_stride: &[usize],
+        lhs_stride: &[usize],
+        rhs_stride: &[usize],
     ) -> Result<Self> {
         self.same_device(rhs, "add")?;
         self.same_dtype(rhs, "add")?;
@@ -130,16 +130,22 @@ impl Storage {
         // https://github.com/ggerganov/llama.cpp/blob/aacdbd40562684665b6f7b8ba6695b7a2088bbb0/ggml.c#L7895
         match (self, rhs) {
             (Storage::Cpu(lhs), Storage::Cpu(rhs)) => match (lhs, rhs) {
-                (CpuStorage::F32(_), CpuStorage::F32(_)) => {
-                    let elem_count = shape.elem_count();
-                    let data = vec![0f32; elem_count];
-                    // TODO: properly fill data with the sum
+                (CpuStorage::F32(lhs), CpuStorage::F32(rhs)) => {
+                    let lhs_index = StridedIndex::new(shape.dims(), lhs_stride);
+                    let rhs_index = StridedIndex::new(shape.dims(), rhs_stride);
+                    let data = lhs_index
+                        .zip(rhs_index)
+                        .map(|(lhs_i, rhs_i)| lhs[lhs_i] + rhs[rhs_i])
+                        .collect();
                     Ok(Storage::Cpu(CpuStorage::F32(data)))
                 }
-                (CpuStorage::F64(_), CpuStorage::F64(_)) => {
-                    let elem_count = shape.elem_count();
-                    let data = vec![0f64; elem_count];
-                    // TODO: properly fill data with the sum
+                (CpuStorage::F64(lhs), CpuStorage::F64(rhs)) => {
+                    let lhs_index = StridedIndex::new(shape.dims(), lhs_stride);
+                    let rhs_index = StridedIndex::new(shape.dims(), rhs_stride);
+                    let data = lhs_index
+                        .zip(rhs_index)
+                        .map(|(lhs_i, rhs_i)| lhs[lhs_i] + rhs[rhs_i])
+                        .collect();
                     Ok(Storage::Cpu(CpuStorage::F64(data)))
                 }
                 _ => {
@@ -158,12 +164,42 @@ impl Storage {
     pub(crate) fn mul_impl(
         &self,
         rhs: &Self,
-        _shape: &Shape,
-        _lhs_stride: &[usize],
-        _rhs_stride: &[usize],
+        shape: &Shape,
+        lhs_stride: &[usize],
+        rhs_stride: &[usize],
     ) -> Result<Self> {
         self.same_device(rhs, "mul")?;
         self.same_dtype(rhs, "mul")?;
-        todo!()
+        // TODO: share this code with the add implementation, using a macro or a trait?
+        match (self, rhs) {
+            (Storage::Cpu(lhs), Storage::Cpu(rhs)) => match (lhs, rhs) {
+                (CpuStorage::F32(lhs), CpuStorage::F32(rhs)) => {
+                    let lhs_index = StridedIndex::new(shape.dims(), lhs_stride);
+                    let rhs_index = StridedIndex::new(shape.dims(), rhs_stride);
+                    let data = lhs_index
+                        .zip(rhs_index)
+                        .map(|(lhs_i, rhs_i)| lhs[lhs_i] * rhs[rhs_i])
+                        .collect();
+                    Ok(Storage::Cpu(CpuStorage::F32(data)))
+                }
+                (CpuStorage::F64(lhs), CpuStorage::F64(rhs)) => {
+                    let lhs_index = StridedIndex::new(shape.dims(), lhs_stride);
+                    let rhs_index = StridedIndex::new(shape.dims(), rhs_stride);
+                    let data = lhs_index
+                        .zip(rhs_index)
+                        .map(|(lhs_i, rhs_i)| lhs[lhs_i] * rhs[rhs_i])
+                        .collect();
+                    Ok(Storage::Cpu(CpuStorage::F64(data)))
+                }
+                _ => {
+                    // This should be covered by the dtype check above.
+                    Err(Error::DTypeMismatchBinaryOp {
+                        lhs: lhs.dtype(),
+                        rhs: rhs.dtype(),
+                        op: "add",
+                    })
+                }
+            },
+        }
     }
 }
