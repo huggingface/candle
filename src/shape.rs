@@ -132,4 +132,17 @@ impl Shape {
             })
         }
     }
+
+    /// The strides given in number of elements for a contiguous n-dimensional
+    /// arrays using this shape.
+    pub(crate) fn stride_contiguous(&self) -> Vec<usize> {
+        self.0
+            .iter()
+            .scan(1, |prod, u| {
+                let prod_pre_mult = *prod;
+                *prod *= u;
+                Some(prod_pre_mult)
+            })
+            .collect()
+    }
 }
