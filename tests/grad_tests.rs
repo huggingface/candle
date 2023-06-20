@@ -5,9 +5,7 @@ use candle::{Device, Tensor};
 fn simple_grad() -> Result<()> {
     let x = Tensor::var(&[3f32, 1., 4.], Device::Cpu)?;
     let five = Tensor::new(&[5f32, 5., 5.], Device::Cpu)?;
-    let x_times_five = x.mul(&five)?;
-    let x2 = x.mul(&x)?;
-    let y = x2.add(&x_times_five)?.add(&five)?;
+    let y = x.mul(&x)?.add(&x.mul(&five)?)?.add(&five)?;
     let grads = y.backward()?;
     let grad_x = grads.get(&x.id()).context("no grad for x")?;
     assert_eq!(x.to_vec1::<f32>()?, [3., 1., 4.]);
