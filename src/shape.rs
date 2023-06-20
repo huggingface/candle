@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn stride() {
         let shape = Shape::from(());
-        assert_eq!(shape.stride_contiguous(), []);
+        assert_eq!(shape.stride_contiguous(), Vec::<usize>::new());
         let shape = Shape::from(42);
         assert_eq!(shape.stride_contiguous(), [1]);
         let shape = Shape::from((42, 1337));
