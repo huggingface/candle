@@ -1,4 +1,4 @@
-use crate::{DType, Shape};
+use crate::{DType, Device, Shape};
 
 /// Main library error type.
 #[derive(thiserror::Error, Debug)]
@@ -10,6 +10,20 @@ pub enum Error {
     ShapeMismatchBinaryOp {
         lhs: Shape,
         rhs: Shape,
+        op: &'static str,
+    },
+
+    #[error("device mismatch in {op}, lhs: {lhs:?}, rhs: {rhs:?}")]
+    DeviceMismatchBinaryOp {
+        lhs: Device,
+        rhs: Device,
+        op: &'static str,
+    },
+
+    #[error("dtype mismatch in {op}, lhs: {lhs:?}, rhs: {rhs:?}")]
+    DTypeMismatchBinaryOp {
+        lhs: DType,
+        rhs: DType,
         op: &'static str,
     },
 

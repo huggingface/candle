@@ -144,6 +144,7 @@ impl Shape {
     pub(crate) fn stride_contiguous(&self) -> Vec<usize> {
         self.0
             .iter()
+            .rev()
             .scan(1, |prod, u| {
                 let prod_pre_mult = *prod;
                 *prod *= u;
