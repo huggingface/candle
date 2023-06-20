@@ -1,10 +1,15 @@
+use crate::{DType, Shape};
+
 /// Main library error type.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("invalid shapes in {op}, lhs: {lhs:?}, rhs: {rhs:?}")]
-    BinaryInvalidShape {
-        lhs: Vec<usize>,
-        rhs: Vec<usize>,
+    #[error("unexpected dtype, expected: {expected:?}, got: {got:?}")]
+    UnexpectedDType { expected: DType, got: DType },
+
+    #[error("shape mismatch in {op}, lhs: {lhs:?}, rhs: {rhs:?}")]
+    ShapeMismatchBinaryOp {
+        lhs: Shape,
+        rhs: Shape,
         op: &'static str,
     },
 
@@ -12,7 +17,7 @@ pub enum Error {
     UnexpectedNumberOfDims {
         expected: usize,
         got: usize,
-        shape: Vec<usize>,
+        shape: Shape,
     },
 }
 

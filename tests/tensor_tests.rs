@@ -6,7 +6,7 @@ fn add() -> Result<()> {
     let (dim1, dim2) = tensor.shape().r2()?;
     assert_eq!(dim1, 5);
     assert_eq!(dim2, 2);
-    let tensor = Tensor::new([3., 1., 4.].as_slice(), Device::Cpu)?;
+    let tensor = Tensor::new([3f32, 1., 4.].as_slice(), Device::Cpu)?;
     let dim1 = tensor.shape().r1()?;
     assert_eq!(dim1, 3);
     Ok(())
