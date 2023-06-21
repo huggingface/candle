@@ -232,8 +232,8 @@ impl Tensor {
         Ok(Self(Arc::new(tensor_)))
     }
 
-    pub(crate) fn strided_index(&self) -> crate::storage::StridedIndex {
-        crate::storage::StridedIndex::new(self.dims(), self.stride())
+    pub(crate) fn strided_index(&self) -> crate::StridedIndex {
+        crate::StridedIndex::new(self.dims(), self.stride())
     }
 
     pub fn to_vec1<S: crate::WithDType>(&self) -> Result<Vec<S>> {
