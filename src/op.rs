@@ -5,6 +5,7 @@ pub(crate) enum Op {
     Mul(Tensor, Tensor),
     Sub(Tensor, Tensor),
     Div(Tensor, Tensor),
+    Matmul(Tensor, Tensor),
 
     #[allow(dead_code)] // add is currently unused.
     Affine {

@@ -101,7 +101,7 @@ impl Device {
         }
     }
 
-    pub(crate) fn tensor<A: NdArray>(&self, array: A) -> Result<Storage> {
+    pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
         match self {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
             Device::Cuda(device) => {

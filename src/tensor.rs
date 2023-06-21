@@ -151,7 +151,7 @@ impl Tensor {
         is_variable: bool,
     ) -> Result<Self> {
         let shape = array.shape()?;
-        let storage = device.tensor(array)?;
+        let storage = device.storage(array)?;
         let stride = shape.stride_contiguous();
         let tensor_ = Tensor_ {
             id: TensorId::new(),
@@ -170,6 +170,26 @@ impl Tensor {
 
     pub fn var<A: crate::device::NdArray>(array: A, device: &Device) -> Result<Self> {
         Self::new_impl(array, device, true)
+    }
+
+    pub fn from_slice<S: Into<Shape>, D: crate::WithDType>(
+        a: &[D],
+        shape: S,
+        device: Device,
+    ) -> Result<Self> {
+        let shape = shape.into();
+        let storage = device.storage(a);
+        let stride = shape.stride_contiguous();
+        let is_variable = false;
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage,
+            shape,
+            stride,
+            op: None,
+            is_variable,
+        };
+        Ok(Self(Arc::new(tensor_)))
     }
 
     pub(crate) fn same_shape_binary_op(&self, rhs: &Self, op: &'static str) -> Result<&Shape> {
@@ -234,6 +254,57 @@ impl Tensor {
         Ok(Self(Arc::new(tensor_)))
     }
 
+    pub fn matmul(&self, rhs: &Self) -> Result<Self> {
+        let a_dims = self.shape().dims();
+        let b_dims = rhs.shape().dims();
+
+        let dim = a_dims.len();
+
+        // if dim < 2 {
+        //     return Err(SmeltError::InsufficientRank { minimum_rank: 2 });
+        // }
+        if b_dims.len() != dim {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul",
+            });
+        }
+
+        let m = a_dims[dim - 2];
+        let k = a_dims[dim - 1];
+        let k2 = b_dims[dim - 2];
+        let n = b_dims[dim - 1];
+        if k != k2 {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul",
+            });
+        }
+
+        let mut c_shape: Vec<_> = a_dims[..dim - 2].into();
+        c_shape.extend(&[m, n]);
+        let c_shape: Shape = Shape(c_shape);
+        let batching: usize = a_dims[..dim - 2].iter().product();
+
+        let storage = self.storage.matmul_impl(
+            &rhs.storage,
+            (batching, m, n, k),
+            self.stride(),
+            rhs.stride(),
+        )?;
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage,
+            shape: c_shape.clone(),
+            stride: c_shape.stride_contiguous(),
+            op: Some(Op::Matmul(self.clone(), rhs.clone())),
+            is_variable: false,
+        };
+        Ok(Self(Arc::new(tensor_)))
+    }
+
     pub(crate) fn strided_index(&self) -> crate::StridedIndex {
         crate::StridedIndex::new(self.dims(), self.stride())
     }
@@ -276,6 +347,28 @@ impl Tensor {
         match &self.storage {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+        }
+    }
+
+    pub fn to_vec3<S: crate::WithDType>(&self) -> Result<Vec<Vec<Vec<S>>>> {
+        let (dim1, dim2, dim3) = self.shape().r3()?;
+        match &self.storage {
+            Storage::Cpu(cpu_storage) => {
+                let data = S::cpu_storage_as_slice(cpu_storage)?;
+                let mut top_rows = vec![];
+                let mut src_index = self.strided_index();
+                for _idx in 0..dim1 {
+                    let mut rows = vec![];
+                    for _jdx in 0..dim2 {
+                        let row = (0..dim3).map(|_| data[src_index.next().unwrap()]).collect();
+                        rows.push(row)
+                    }
+                    top_rows.push(rows);
+                }
+                assert!(src_index.next().is_none());
+                Ok(top_rows)
+            }
+            Storage::Cuda { .. } => todo!(),
         }
     }
 
@@ -340,7 +433,8 @@ impl Tensor {
                     Op::Add(lhs, rhs)
                     | Op::Mul(lhs, rhs)
                     | Op::Sub(lhs, rhs)
-                    | Op::Div(lhs, rhs) => {
+                    | Op::Div(lhs, rhs)
+                    | Op::Matmul(lhs, rhs) => {
                         let (tg, nodes) = walk(lhs, nodes, already_seen);
                         track_grad |= tg;
                         let (tg, nodes) = walk(rhs, nodes, already_seen);
@@ -418,6 +512,38 @@ impl Tensor {
                         *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
                         let rhs_grad = grad.mul(lhs)?.div(&rhs.sqr()?)?;
                         let rhs_sum_grad = grads.or_insert(rhs)?;
+                        *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+                    }
+                    Op::Matmul(lhs, rhs) => {
+                        // let (m, k) = lhs.shape;
+                        // let n = rhs.shape.1;
+                        // let strides = (m, n).strides();
+                        // Self::matmul(
+                        //     (m, n, k),
+                        //     true,
+                        //     grad_out.as_ptr(),
+                        //     strides,
+                        //     rhs.data.as_ptr(),
+                        //     [rhs.strides[1], rhs.strides[0]],
+                        //     grad_lhs.as_mut_ptr(),
+                        //     lhs.strides,
+                        // );
+                        // Self::matmul(
+                        //     (k, m, n),
+                        //     true,
+                        //     lhs.data.as_ptr(),
+                        //     [lhs.strides[1], lhs.strides[0]],
+                        //     grad_out.as_ptr(),
+                        //     strides,
+                        //     grad_rhs.as_mut_ptr(),
+                        //     rhs.strides,
+                        // );
+
+                        let lhs_grad = grad.matmul(rhs)?;
+                        let lhs_sum_grad = grads.entry(lhs.id).or_insert_with(|| lhs.zeros_like());
+                        *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
+                        let rhs_grad = grad.mul(lhs)?.div(&rhs.sqr()?)?;
+                        let rhs_sum_grad = grads.entry(rhs.id).or_insert_with(|| rhs.zeros_like());
                         *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
                     }
                     Op::Affine { arg, mul, .. } => {
