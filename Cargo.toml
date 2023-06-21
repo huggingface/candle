@@ -26,7 +26,7 @@ candle-kernels = { path = "kernels", optional = true }
 anyhow = "1"
 clap = { version = "4.2.4", features = ["derive"] }
 rand = "0.8.5"
-tokenizers = "0.13.3"
+tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
 
 [features]
 default = []

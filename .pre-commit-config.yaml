@@ -8,6 +8,8 @@ repos:
         name: "Rust (clippy)"
         args:
           [
+            "--tests",
+            "--examples",
             "--",
             "-Dwarnings",
           ]
