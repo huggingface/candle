@@ -35,7 +35,7 @@ pub enum Error {
     },
 
     #[error(transparent)]
-    Cudarc(#[from] cudarc::driver::DriverError),
+    Cudarc(#[from] crate::cuda_backend::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -1,6 +1,8 @@
 use crate::{CpuStorage, DType, Result, Shape};
 use cudarc::driver::CudaSlice;
 
+pub(crate) type Error = cudarc::driver::DriverError;
+
 #[derive(Debug, Clone)]
 pub struct CudaDevice(std::sync::Arc<cudarc::driver::CudaDevice>);
 
