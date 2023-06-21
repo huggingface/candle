@@ -301,6 +301,17 @@ impl Tensor {
         self.id
     }
 
+    pub fn is_contiguous(&self) -> bool {
+        let mut acc = 1;
+        for (&stride, &dim) in self.stride.iter().zip(self.shape.dims().iter()).rev() {
+            if stride != acc {
+                return false;
+            }
+            acc *= dim;
+        }
+        true
+    }
+
     /// Return all the nodes that lead to this value in a topologically sorted vec, the first
     /// elements having dependencies on the latter ones, e.g. the first element if any is the
     /// argument.
@@ -432,3 +443,44 @@ impl Tensor {
         Ok(grads)
     }
 }
+
+macro_rules! bin_trait {
+    ($trait:ident, $fn1:ident) => {
+        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<B> for Tensor {
+            type Output = Result<Tensor>;
+
+            fn $fn1(self, rhs: B) -> Self::Output {
+                Tensor::$fn1(&self, rhs.borrow())
+            }
+        }
+
+        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<B> for &Tensor {
+            type Output = Result<Tensor>;
+
+            fn $fn1(self, rhs: B) -> Self::Output {
+                Tensor::$fn1(&self, rhs.borrow())
+            }
+        }
+
+        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<Result<B>> for Tensor {
+            type Output = Result<Tensor>;
+
+            fn $fn1(self, rhs: Result<B>) -> Self::Output {
+                Tensor::$fn1(&self, rhs?.borrow())
+            }
+        }
+
+        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<Result<B>> for &Tensor {
+            type Output = Result<Tensor>;
+
+            fn $fn1(self, rhs: Result<B>) -> Self::Output {
+                Tensor::$fn1(&self, rhs?.borrow())
+            }
+        }
+    };
+}
+
+bin_trait!(Add, add);
+bin_trait!(Sub, sub);
+bin_trait!(Mul, mul);
+bin_trait!(Div, div);

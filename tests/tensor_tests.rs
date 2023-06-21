@@ -35,3 +35,21 @@ fn tensor_2d() -> Result<()> {
     assert_eq!(content, data);
     Ok(())
 }
+
+#[test]
+fn binary_op() -> Result<()> {
+    let data = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
+    let tensor = Tensor::new(data, Device::Cpu)?;
+    let data2 = &[[5f32, 5., 5., 5., 5.], [2., 1., 7., 8., 2.]];
+    let tensor2 = Tensor::new(data2, Device::Cpu)?;
+    let tensor = (&tensor + (&tensor * &tensor)? / (&tensor + &tensor2))?;
+    let dims = tensor.shape().r2()?;
+    assert_eq!(dims, (2, 5));
+    let content: Vec<Vec<f32>> = tensor.to_vec2()?;
+    assert_eq!(content[0], [4.125, 1.1666666, 5.7777777, 1.1666666, 7.5]);
+    assert_eq!(content[1], [3.0, 1.5, 10.5, 12.0, 3.0]);
+    let tensor = (&tensor - &tensor)?;
+    let content: Vec<Vec<f32>> = tensor.to_vec2()?;
+    assert_eq!(content[0], [0., 0., 0., 0., 0.]);
+    Ok(())
+}
