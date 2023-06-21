@@ -4,7 +4,7 @@ use candle::{Device, Tensor};
 #[test]
 fn simple_grad() -> Result<()> {
     let x = Tensor::var(&[3f32, 1., 4.], Device::Cpu)?;
-    let y = x.mul(&x)?.add(&x.affine(5., 0.)?)?.affine(1., 4.)?;
+    let y = (((&x * &x)? + &x * 5f64)? + 4f64)?;
     let grads = y.backward()?;
     let grad_x = grads.get(&x.id()).context("no grad for x")?;
     assert_eq!(x.to_vec1::<f32>()?, [3., 1., 4.]);
