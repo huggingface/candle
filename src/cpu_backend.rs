@@ -68,7 +68,7 @@ impl CpuStorage {
         // same if it helps.
         // https://github.com/ggerganov/llama.cpp/blob/aacdbd40562684665b6f7b8ba6695b7a2088bbb0/ggml.c#L7895
         match (self, rhs) {
-            (CpuStorage::F32(lhs), CpuStorage::F32(rhs)) => {
+            (Self::F32(lhs), Self::F32(rhs)) => {
                 let lhs_index = StridedIndex::new(shape.dims(), lhs_stride);
                 let rhs_index = StridedIndex::new(shape.dims(), rhs_stride);
                 let data = lhs_index
@@ -77,7 +77,7 @@ impl CpuStorage {
                     .collect();
                 Ok(Self::F32(data))
             }
-            (CpuStorage::F64(lhs), CpuStorage::F64(rhs)) => {
+            (Self::F64(lhs), Self::F64(rhs)) => {
                 let lhs_index = StridedIndex::new(shape.dims(), lhs_stride);
                 let rhs_index = StridedIndex::new(shape.dims(), rhs_stride);
                 let data = lhs_index
@@ -93,6 +93,34 @@ impl CpuStorage {
                     rhs: rhs.dtype(),
                     op: B::NAME,
                 })
+            }
+        }
+    }
+
+    pub(crate) fn ones_impl(shape: &Shape, dtype: DType) -> Self {
+        let elem_count = shape.elem_count();
+        match dtype {
+            DType::F32 => {
+                let data = vec![1f32; elem_count];
+                Self::F32(data)
+            }
+            DType::F64 => {
+                let data = vec![1f64; elem_count];
+                Self::F64(data)
+            }
+        }
+    }
+
+    pub(crate) fn zeros_impl(shape: &Shape, dtype: DType) -> Self {
+        let elem_count = shape.elem_count();
+        match dtype {
+            DType::F32 => {
+                let data = vec![0f32; elem_count];
+                Self::F32(data)
+            }
+            DType::F64 => {
+                let data = vec![0f64; elem_count];
+                Self::F64(data)
             }
         }
     }

@@ -56,20 +56,7 @@ impl<S: crate::WithDType, const N: usize, const M: usize> NdArray for &[[S; N]; 
 impl Device {
     pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Storage {
         match self {
-            Device::Cpu => {
-                let elem_count = shape.elem_count();
-                let storage = match dtype {
-                    DType::F32 => {
-                        let data = vec![1f32; elem_count];
-                        CpuStorage::F32(data)
-                    }
-                    DType::F64 => {
-                        let data = vec![1f64; elem_count];
-                        CpuStorage::F64(data)
-                    }
-                };
-                Storage::Cpu(storage)
-            }
+            Device::Cpu => Storage::Cpu(CpuStorage::ones_impl(shape, dtype)),
             Device::Cuda { gpu_id: _ } => {
                 todo!()
             }
@@ -78,20 +65,7 @@ impl Device {
 
     pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Storage {
         match self {
-            Device::Cpu => {
-                let elem_count = shape.elem_count();
-                let storage = match dtype {
-                    DType::F32 => {
-                        let data = vec![0f32; elem_count];
-                        CpuStorage::F32(data)
-                    }
-                    DType::F64 => {
-                        let data = vec![0f64; elem_count];
-                        CpuStorage::F64(data)
-                    }
-                };
-                Storage::Cpu(storage)
-            }
+            Device::Cpu => Storage::Cpu(CpuStorage::zeros_impl(shape, dtype)),
             Device::Cuda { gpu_id: _ } => {
                 todo!()
             }
