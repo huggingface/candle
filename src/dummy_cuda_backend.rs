@@ -6,21 +6,27 @@ pub type CudaError = std::io::Error;
 #[derive(Debug, Clone)]
 pub struct CudaDevice;
 
+macro_rules! fail {
+    () => {
+        unimplemented!("cuda support has not been enabled")
+    };
+}
+
 impl CudaDevice {
     pub(crate) fn new(_: usize) -> Result<Self> {
-        unimplemented!("cuda support hasn't been enabled")
+        fail!()
     }
 
     pub(crate) fn ordinal(&self) -> usize {
-        unimplemented!("cuda support hasn't been enabled")
+        fail!()
     }
 
     pub(crate) fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<CudaStorage> {
-        unimplemented!("cuda support hasn't been enabled")
+        fail!()
     }
 
     pub(crate) fn cuda_from_cpu_storage(&self, _: &CpuStorage) -> Result<CudaStorage> {
-        unimplemented!("cuda support hasn't been enabled")
+        fail!()
     }
 }
 
@@ -29,18 +35,18 @@ pub struct CudaStorage;
 
 impl CudaStorage {
     pub fn dtype(&self) -> DType {
-        unimplemented!()
+        fail!()
     }
 
     pub fn device(&self) -> CudaDevice {
-        unimplemented!()
+        fail!()
     }
 
     pub(crate) fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        unimplemented!()
+        fail!()
     }
 
     pub(crate) fn affine_impl(&self, _: &Shape, _: &[usize], _: f64, _: f64) -> Result<Self> {
-        unimplemented!()
+        fail!()
     }
 }
