@@ -250,7 +250,7 @@ impl Tensor {
                 let data = S::cpu_storage_as_slice(cpu_storage)?;
                 Ok(self.strided_index().map(|i| data[i]).collect())
             }
-            Storage::Cuda { .. } => todo!(),
+            Storage::Cuda(_) => todo!(),
         }
     }
 

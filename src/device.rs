@@ -62,6 +62,11 @@ impl<S: crate::WithDType, const N: usize, const M: usize> NdArray for &[[S; N]; 
 }
 
 impl Device {
+    pub fn new_cuda(ordinal: usize) -> Result<Self> {
+        let device = cudarc::driver::CudaDevice::new(ordinal)?;
+        Ok(Self::Cuda(device))
+    }
+
     pub fn location(&self) -> DeviceLocation {
         match self {
             Self::Cpu => DeviceLocation::Cpu,
@@ -74,11 +79,14 @@ impl Device {
     pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = Storage::Cpu(CpuStorage::ones_impl(shape, dtype));
-                Ok(storage)
+                let storage = CpuStorage::ones_impl(shape, dtype);
+                Ok(Storage::Cpu(storage))
             }
-            Device::Cuda(_) => {
-                todo!()
+            Device::Cuda(device) => {
+                // TODO: Instead of allocating memory on the host and transfering it,
+                // allocate some zeros on the device and use a shader to set them to 1.
+                let storage = device.htod_copy(vec![1f32; shape.elem_count()])?;
+                Ok(Storage::Cuda(storage))
             }
         }
     }
@@ -98,12 +106,18 @@ impl Device {
 
     pub(crate) fn tensor<A: NdArray>(&self, array: A) -> Result<Storage> {
         match self {
-            Device::Cpu => {
-                let storage = Storage::Cpu(array.to_cpu_storage());
-                Ok(storage)
-            }
-            Device::Cuda(_) => {
-                todo!()
+            Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
+            Device::Cuda(device) => {
+                // TODO: Avoid making a copy through the cpu.
+                match array.to_cpu_storage() {
+                    CpuStorage::F64(_) => {
+                        todo!()
+                    }
+                    CpuStorage::F32(data) => {
+                        let storage = device.htod_copy(data)?;
+                        Ok(Storage::Cuda(storage))
+                    }
+                }
             }
         }
     }
