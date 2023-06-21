@@ -13,9 +13,14 @@ readme = "README.md"
 [dependencies]
 safetensors = "0.3.1"
 thiserror = "1"
+cudarc = { version = "0.9.9", optional = true }
 
 [dev-dependencies]
 anyhow = "1"
 clap = { version = "4.2.4", features = ["derive"] }
 rand = "0.8.5"
 tokenizers = "0.13.3"
+
+[features]
+default = []
+cuda = ["dep:cudarc"]
