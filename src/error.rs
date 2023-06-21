@@ -40,6 +40,9 @@ pub enum Error {
         shape: Shape,
     },
 
+    #[error("temporary error where matmul doesn't support arbitrary striding")]
+    UnexpectedStriding,
+
     #[error(transparent)]
     Cuda(#[from] crate::CudaError),
 }
