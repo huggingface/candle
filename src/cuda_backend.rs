@@ -85,13 +85,15 @@ impl CudaStorage {
     pub(crate) fn affine_impl(
         &self,
         shape: &Shape,
-        _stride: &[usize],
+        stride: &[usize],
         mul: f64,
         add: f64,
     ) -> Result<Self> {
         match self {
             Self::F32(arg) => {
-                // TODO: Handle the stride.
+                if !shape.is_contiguous(stride) {
+                    todo!("affine is only implemented for the contiguous case")
+                }
                 let dev = arg.device();
                 let module_name = "affine_f32";
                 if !dev.has_func(module_name, module_name) {

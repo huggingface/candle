@@ -128,6 +128,20 @@ impl Shape {
         stride.reverse();
         stride
     }
+
+    pub fn is_contiguous(&self, stride: &[usize]) -> bool {
+        if self.0.len() != stride.len() {
+            return false;
+        }
+        let mut acc = 1;
+        for (&stride, &dim) in stride.iter().zip(self.0.iter()).rev() {
+            if stride != acc {
+                return false;
+            }
+            acc *= dim;
+        }
+        true
+    }
 }
 
 #[cfg(test)]

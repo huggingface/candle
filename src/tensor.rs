@@ -310,14 +310,7 @@ impl Tensor {
     }
 
     pub fn is_contiguous(&self) -> bool {
-        let mut acc = 1;
-        for (&stride, &dim) in self.stride.iter().zip(self.shape.dims().iter()).rev() {
-            if stride != acc {
-                return false;
-            }
-            acc *= dim;
-        }
-        true
+        self.shape.is_contiguous(&self.stride)
     }
 
     /// Return all the nodes that lead to this value in a topologically sorted vec, the first
