@@ -1,21 +1,4 @@
-use crate::{DType, Device, Error, Result, Shape, StridedIndex};
-
-// TODO: Think about whether we would be better off with a dtype and
-// a buffer as an owned slice of bytes.
-#[derive(Debug, Clone)]
-pub enum CpuStorage {
-    F32(Vec<f32>),
-    F64(Vec<f64>),
-}
-
-impl CpuStorage {
-    pub(crate) fn dtype(&self) -> DType {
-        match self {
-            Self::F32(_) => DType::F32,
-            Self::F64(_) => DType::F64,
-        }
-    }
-}
+use crate::{CpuStorage, DType, Device, Error, Result, Shape};
 
 #[derive(Debug, Clone)]
 pub enum Storage {
@@ -23,13 +6,13 @@ pub enum Storage {
     Cuda { gpu_id: usize }, // TODO: Actually add the storage.
 }
 
-trait UnaryOp {
+pub(crate) trait UnaryOp {
     const NAME: &'static str;
     fn f32(v1: f32) -> f32;
     fn f64(v1: f64) -> f64;
 }
 
-trait BinaryOp {
+pub(crate) trait BinaryOp {
     const NAME: &'static str;
     fn f32(v1: f32, v2: f32) -> f32;
     fn f64(v1: f64, v2: f64) -> f64;
@@ -157,20 +140,10 @@ impl Storage {
     ) -> Result<Self> {
         // TODO: Different code path for the contiguous case?
         match self {
-            Storage::Cpu(storage) => match storage {
-                CpuStorage::F32(storage) => {
-                    let index = StridedIndex::new(shape.dims(), stride);
-                    let mul = mul as f32;
-                    let add = add as f32;
-                    let data = index.map(|i| storage[i] * mul + add).collect();
-                    Ok(Storage::Cpu(CpuStorage::F32(data)))
-                }
-                CpuStorage::F64(storage) => {
-                    let index = StridedIndex::new(shape.dims(), stride);
-                    let data = index.map(|i| storage[i] * mul + add).collect();
-                    Ok(Storage::Cpu(CpuStorage::F64(data)))
-                }
-            },
+            Storage::Cpu(storage) => {
+                let storage = storage.affine_impl(shape, stride, mul, add)?;
+                Ok(Self::Cpu(storage))
+            }
             Self::Cuda { .. } => todo!(),
         }
     }
@@ -178,18 +151,10 @@ impl Storage {
     fn unary_impl<B: UnaryOp>(&self, shape: &Shape, stride: &[usize]) -> Result<Self> {
         // TODO: Different code path for the contiguous case?
         match self {
-            Storage::Cpu(storage) => match storage {
-                CpuStorage::F32(storage) => {
-                    let index = StridedIndex::new(shape.dims(), stride);
-                    let data = index.map(|i| B::f32(storage[i])).collect();
-                    Ok(Storage::Cpu(CpuStorage::F32(data)))
-                }
-                CpuStorage::F64(storage) => {
-                    let index = StridedIndex::new(shape.dims(), stride);
-                    let data = index.map(|i| B::f64(storage[i])).collect();
-                    Ok(Storage::Cpu(CpuStorage::F64(data)))
-                }
-            },
+            Storage::Cpu(storage) => {
+                let storage = storage.unary_impl::<B>(shape, stride)?;
+                Ok(Self::Cpu(storage))
+            }
             Self::Cuda { .. } => todo!(),
         }
     }
@@ -204,39 +169,11 @@ impl Storage {
     ) -> Result<Self> {
         self.same_device(rhs, B::NAME)?;
         self.same_dtype(rhs, B::NAME)?;
-        // The ggml implementation has different paths based on whether the rhs is contiguous
-        // or not, for now we only consider the general case but we should benchmark and do the
-        // same if it helps.
-        // https://github.com/ggerganov/llama.cpp/blob/aacdbd40562684665b6f7b8ba6695b7a2088bbb0/ggml.c#L7895
         match (self, rhs) {
-            (Storage::Cpu(lhs), Storage::Cpu(rhs)) => match (lhs, rhs) {
-                (CpuStorage::F32(lhs), CpuStorage::F32(rhs)) => {
-                    let lhs_index = StridedIndex::new(shape.dims(), lhs_stride);
-                    let rhs_index = StridedIndex::new(shape.dims(), rhs_stride);
-                    let data = lhs_index
-                        .zip(rhs_index)
-                        .map(|(lhs_i, rhs_i)| B::f32(lhs[lhs_i], rhs[rhs_i]))
-                        .collect();
-                    Ok(Storage::Cpu(CpuStorage::F32(data)))
-                }
-                (CpuStorage::F64(lhs), CpuStorage::F64(rhs)) => {
-                    let lhs_index = StridedIndex::new(shape.dims(), lhs_stride);
-                    let rhs_index = StridedIndex::new(shape.dims(), rhs_stride);
-                    let data = lhs_index
-                        .zip(rhs_index)
-                        .map(|(lhs_i, rhs_i)| B::f64(lhs[lhs_i], rhs[rhs_i]))
-                        .collect();
-                    Ok(Storage::Cpu(CpuStorage::F64(data)))
-                }
-                _ => {
-                    // This should be covered by the dtype check above.
-                    Err(Error::DTypeMismatchBinaryOp {
-                        lhs: lhs.dtype(),
-                        rhs: rhs.dtype(),
-                        op: B::NAME,
-                    })
-                }
-            },
+            (Storage::Cpu(lhs), Storage::Cpu(rhs)) => {
+                let storage = lhs.binary_impl::<B>(rhs, shape, lhs_stride, rhs_stride)?;
+                Ok(Self::Cpu(storage))
+            }
             (Self::Cuda { .. }, Self::Cuda { .. }) => todo!(),
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive

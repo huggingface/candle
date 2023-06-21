@@ -1,7 +1,4 @@
-use crate::{
-    storage::{CpuStorage, Storage},
-    DType, Result, Shape,
-};
+use crate::{CpuStorage, DType, Result, Shape, Storage};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Device {
