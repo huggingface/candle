@@ -1,4 +1,4 @@
-use crate::{DType, Device, Shape};
+use crate::{DType, DeviceLocation, Shape};
 
 /// Main library error type.
 #[derive(thiserror::Error, Debug)]
@@ -15,8 +15,8 @@ pub enum Error {
 
     #[error("device mismatch in {op}, lhs: {lhs:?}, rhs: {rhs:?}")]
     DeviceMismatchBinaryOp {
-        lhs: Device,
-        rhs: Device,
+        lhs: DeviceLocation,
+        rhs: DeviceLocation,
         op: &'static str,
     },
 
@@ -33,6 +33,9 @@ pub enum Error {
         got: usize,
         shape: Shape,
     },
+
+    #[error(transparent)]
+    Cuda(#[from] crate::CudaError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

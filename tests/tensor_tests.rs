@@ -2,7 +2,7 @@ use candle::{DType, Device, Result, Tensor};
 
 #[test]
 fn zeros() -> Result<()> {
-    let tensor = Tensor::zeros((5, 2), DType::F32, Device::Cpu)?;
+    let tensor = Tensor::zeros((5, 2), DType::F32, &Device::Cpu)?;
     let (dim1, dim2) = tensor.shape().r2()?;
     assert_eq!(dim1, 5);
     assert_eq!(dim2, 2);
@@ -11,7 +11,7 @@ fn zeros() -> Result<()> {
 
 #[test]
 fn add_mul() -> Result<()> {
-    let tensor = Tensor::new(&[3f32, 1., 4.], Device::Cpu)?;
+    let tensor = Tensor::new(&[3f32, 1., 4.], &Device::Cpu)?;
     let dim1 = tensor.shape().r1()?;
     assert_eq!(dim1, 3);
     let content: Vec<f32> = tensor.to_vec1()?;
@@ -28,7 +28,7 @@ fn add_mul() -> Result<()> {
 #[test]
 fn tensor_2d() -> Result<()> {
     let data = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
-    let tensor = Tensor::new(data, Device::Cpu)?;
+    let tensor = Tensor::new(data, &Device::Cpu)?;
     let dims = tensor.shape().r2()?;
     assert_eq!(dims, (2, 5));
     let content: Vec<Vec<f32>> = tensor.to_vec2()?;
@@ -39,9 +39,9 @@ fn tensor_2d() -> Result<()> {
 #[test]
 fn binary_op() -> Result<()> {
     let data = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
-    let tensor = Tensor::new(data, Device::Cpu)?;
+    let tensor = Tensor::new(data, &Device::Cpu)?;
     let data2 = &[[5f32, 5., 5., 5., 5.], [2., 1., 7., 8., 2.]];
-    let tensor2 = Tensor::new(data2, Device::Cpu)?;
+    let tensor2 = Tensor::new(data2, &Device::Cpu)?;
     let tensor = (&tensor + (&tensor * &tensor)? / (&tensor + &tensor2))?;
     let dims = tensor.shape().r2()?;
     assert_eq!(dims, (2, 5));
