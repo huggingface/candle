@@ -144,7 +144,10 @@ impl Storage {
                 let storage = storage.affine_impl(shape, stride, mul, add)?;
                 Ok(Self::Cpu(storage))
             }
-            Self::Cuda { .. } => todo!(),
+            Self::Cuda(storage) => {
+                let storage = storage.affine_impl(shape, stride, mul, add)?;
+                Ok(Self::Cuda(storage))
+            }
         }
     }
 

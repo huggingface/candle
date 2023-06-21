@@ -1,10 +1,27 @@
 use crate::{CpuStorage, DType, Result, Shape};
-use cudarc::driver::CudaSlice;
+use cudarc::driver::{CudaSlice, LaunchAsync, LaunchConfig};
 
 pub(crate) type Error = cudarc::driver::DriverError;
 
 #[derive(Debug, Clone)]
 pub struct CudaDevice(std::sync::Arc<cudarc::driver::CudaDevice>);
+
+// TODO: Switch to pre-compiled PTX kernels rather than compiling on the fly.
+const AFFINE_CU: &str = r#"
+extern "C" __global__ void affine_f32( 
+    const size_t numel, 
+    const float *x,
+    float *y,
+    const float mul,
+    const float add
+) { 
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; 
+    if (i >= numel) { 
+        return; 
+    } 
+    y[i] = x[i] * mul + add;
+} 
+"#;
 
 impl CudaDevice {
     pub(crate) fn new(ordinal: usize) -> Result<Self> {
@@ -62,6 +79,39 @@ impl CudaStorage {
         match self {
             Self::F32(slice) => CudaDevice(slice.device()),
             Self::F64(slice) => CudaDevice(slice.device()),
+        }
+    }
+
+    pub(crate) fn affine_impl(
+        &self,
+        shape: &Shape,
+        _stride: &[usize],
+        mul: f64,
+        add: f64,
+    ) -> Result<Self> {
+        match self {
+            Self::F32(arg) => {
+                // TODO: Handle the stride.
+                let dev = arg.device();
+                let module_name = "affine_f32";
+                if !dev.has_func(module_name, module_name) {
+                    let ptx = cudarc::nvrtc::compile_ptx(AFFINE_CU).unwrap();
+                    dev.load_ptx(ptx, module_name, &[module_name])?;
+                }
+                let elem_count = shape.elem_count();
+                let fwd_fn = dev.get_func(module_name, module_name).unwrap();
+                let cfg = LaunchConfig::for_num_elems(elem_count as u32);
+                // SAFETY: if this function returns Ok(..), the kernel has been applied
+                // and has set the initially unset memory.
+                let out = unsafe { dev.alloc::<f32>(elem_count) }?;
+                let params = (elem_count, arg, &out, mul as f32, add as f32);
+                // SAFETY: well, well, well...
+                unsafe { fwd_fn.launch(cfg, params) }?;
+                Ok(Self::F32(out))
+            }
+            Self::F64(_) => {
+                todo!()
+            }
         }
     }
 
