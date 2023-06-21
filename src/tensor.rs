@@ -209,6 +209,7 @@ impl Tensor {
                 let data = S::cpu_storage_as_slice(cpu_storage)?;
                 Ok(data[0])
             }
+            Storage::Cuda { .. } => todo!(),
         }
     }
 
@@ -249,6 +250,7 @@ impl Tensor {
                 let data = S::cpu_storage_as_slice(cpu_storage)?;
                 Ok(self.strided_index().map(|i| data[i]).collect())
             }
+            Storage::Cuda { .. } => todo!(),
         }
     }
 
@@ -266,6 +268,7 @@ impl Tensor {
                 assert!(src_index.next().is_none());
                 Ok(rows)
             }
+            Storage::Cuda { .. } => todo!(),
         }
     }
 
