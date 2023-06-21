@@ -1,7 +1,9 @@
 mod cpu_backend;
+#[cfg(feature = "cuda")]
 mod cuda_backend;
 mod device;
 mod dtype;
+mod dummy_cuda_backend;
 mod error;
 mod op;
 mod shape;
@@ -10,7 +12,6 @@ mod strided_index;
 mod tensor;
 
 pub use cpu_backend::CpuStorage;
-pub use cuda_backend::{CudaDevice, CudaStorage};
 pub use device::{Device, DeviceLocation};
 pub use dtype::{DType, WithDType};
 pub use error::{Error, Result};
@@ -18,3 +19,9 @@ pub use shape::Shape;
 pub use storage::Storage;
 use strided_index::StridedIndex;
 pub use tensor::{Tensor, TensorId};
+
+#[cfg(feature = "cuda")]
+pub use cuda_backend::{CudaDevice, CudaError, CudaStorage};
+
+#[cfg(not(feature = "cuda"))]
+pub use dummy_cuda_backend::{CudaDevice, CudaError, CudaStorage};

@@ -35,7 +35,7 @@ pub enum Error {
     },
 
     #[error(transparent)]
-    Cudarc(#[from] crate::cuda_backend::Error),
+    Cuda(#[from] crate::CudaError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

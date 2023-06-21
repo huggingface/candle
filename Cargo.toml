@@ -22,5 +22,5 @@ rand = "0.8.5"
 tokenizers = "0.13.3"
 
 [features]
-default = ["cuda"]
+default = []
 cuda = ["dep:cudarc"]
