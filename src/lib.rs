@@ -9,7 +9,7 @@ mod strided_index;
 mod tensor;
 
 pub use cpu_backend::CpuStorage;
-pub use device::Device;
+pub use device::{Device, DeviceLocation};
 pub use dtype::{DType, WithDType};
 pub use error::{Error, Result};
 pub use shape::Shape;
