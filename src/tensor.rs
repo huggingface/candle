@@ -250,7 +250,12 @@ impl Tensor {
                 let data = S::cpu_storage_as_slice(cpu_storage)?;
                 Ok(self.strided_index().map(|i| data[i]).collect())
             }
-            Storage::Cuda(_) => todo!(),
+            Storage::Cuda(slice) => {
+                // TODO: Would it be possible to only fetch the necessary data?
+                let cpu_storage = slice.to_cpu_storage()?;
+                let data = S::cpu_storage_as_slice(&cpu_storage)?;
+                Ok(self.strided_index().map(|i| data[i]).collect())
+            }
         }
     }
 

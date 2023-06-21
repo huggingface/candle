@@ -1,9 +1,9 @@
-use crate::{CpuStorage, DType, Device, Error, Result, Shape};
+use crate::{CpuStorage, CudaStorage, DType, Device, Error, Result, Shape};
 
 #[derive(Debug, Clone)]
 pub enum Storage {
     Cpu(CpuStorage),
-    Cuda(cudarc::driver::CudaSlice<f32>),
+    Cuda(CudaStorage),
 }
 
 pub(crate) trait UnaryOp {
@@ -100,14 +100,14 @@ impl Storage {
     pub fn device(&self) -> Device {
         match self {
             Self::Cpu(_) => Device::Cpu,
-            Self::Cuda(slice) => Device::Cuda(slice.device()),
+            Self::Cuda(storage) => Device::Cuda(storage.device()),
         }
     }
 
     pub fn dtype(&self) -> DType {
         match self {
             Self::Cpu(storage) => storage.dtype(),
-            Self::Cuda { .. } => todo!(),
+            Self::Cuda(storage) => storage.dtype(),
         }
     }
 
