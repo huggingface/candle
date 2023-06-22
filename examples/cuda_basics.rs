@@ -14,5 +14,13 @@ fn main() -> Result<()> {
     println!("{:?}", y.to_vec2::<f32>()?);
     let z = x.matmul(&y)?;
     println!("{:?}", z.to_vec2::<f32>()?);
+    let x = Tensor::new(
+        &[[11f32, 22.], [33., 44.], [55., 66.], [77., 78.]],
+        &Device::Cpu,
+    )?;
+    let y = Tensor::new(&[[1f32, 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
+    println!("{:?}", y.to_vec2::<f32>()?);
+    let z = x.matmul(&y)?;
+    println!("{:?}", z.to_vec2::<f32>()?);
     Ok(())
 }

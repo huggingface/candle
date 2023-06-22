@@ -177,7 +177,7 @@ fn gemm_config<T>(
         gemm,
         stride_a: (m * k) as i64,
         stride_b: (n * k) as i64,
-        stride_c: (m * n * k) as i64,
+        stride_c: (m * n) as i64,
     }
 }
 
@@ -332,7 +332,7 @@ impl CudaStorage {
         lhs_stride: &[usize],
         rhs_stride: &[usize],
     ) -> Result<Self> {
-        let elem_count = b * m * n * k;
+        let elem_count = b * m * n;
         let dev = &self.device;
         let slice = match (&self.slice, &rhs.slice) {
             (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs)) => {
