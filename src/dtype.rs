@@ -25,6 +25,7 @@ pub trait WithDType: Sized + Copy {
     }
 
     fn cpu_storage_as_slice(s: &CpuStorage) -> Result<&[Self]>;
+    fn cpu_storage_as_mut_slice(s: &mut CpuStorage) -> Result<&mut [Self]>;
 }
 
 macro_rules! with_dtype {
@@ -37,6 +38,16 @@ macro_rules! with_dtype {
             }
 
             fn cpu_storage_as_slice(s: &CpuStorage) -> Result<&[Self]> {
+                match s {
+                    CpuStorage::$dtype(data) => Ok(data),
+                    _ => Err(Error::UnexpectedDType {
+                        expected: DType::$dtype,
+                        got: s.dtype(),
+                    }),
+                }
+            }
+
+            fn cpu_storage_as_mut_slice(s: &mut CpuStorage) -> Result<&mut [Self]> {
                 match s {
                     CpuStorage::$dtype(data) => Ok(data),
                     _ => Err(Error::UnexpectedDType {

@@ -20,12 +20,13 @@ safetensors = "0.3.1"
 thiserror = "1"
 cudarc = { version = "0.9.9", optional = true }
 candle-kernels = { path = "kernels", optional = true }
+gemm = "0.15.4"
 
 [dev-dependencies]
 anyhow = "1"
 clap = { version = "4.2.4", features = ["derive"] }
 rand = "0.8.5"
-tokenizers = "0.13.3"
+tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
 
 [features]
 default = []
