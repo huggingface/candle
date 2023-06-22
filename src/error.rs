@@ -15,6 +15,13 @@ pub enum Error {
     #[error("backward is not supported for {op}")]
     BackwardNotSupported { op: &'static str },
 
+    #[error("{op} invalid index {index} with vocab {vocab_size}")]
+    InvalidIndex {
+        op: &'static str,
+        index: usize,
+        vocab_size: usize,
+    },
+
     #[error("the candle crate has not been built with cuda support")]
     NotCompiledWithCudaSupport,
 
@@ -65,6 +72,9 @@ pub enum Error {
 
     #[error(transparent)]
     Cuda(#[from] crate::CudaError),
+
+    #[error(transparent)]
+    TryFromIntError(#[from] core::num::TryFromIntError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

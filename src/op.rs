@@ -7,6 +7,7 @@ pub(crate) enum Op {
     Sub(Tensor, Tensor),
     Div(Tensor, Tensor),
     Matmul(Tensor, Tensor),
+    Embedding(Tensor, Tensor),
 
     Cat(Vec<Tensor>, usize),
 
