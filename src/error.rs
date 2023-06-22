@@ -6,6 +6,12 @@ pub enum Error {
     #[error("unexpected dtype, expected: {expected:?}, got: {got:?}")]
     UnexpectedDType { expected: DType, got: DType },
 
+    #[error("{op} only supports contiguous tensors")]
+    RequiresContiguous { op: &'static str },
+
+    #[error("the candle crate has not been built with cuda support")]
+    NotCompiledWithCudaSupport,
+
     #[error("shape mismatch in {op}, lhs: {lhs:?}, rhs: {rhs:?}")]
     ShapeMismatchBinaryOp {
         lhs: Shape,

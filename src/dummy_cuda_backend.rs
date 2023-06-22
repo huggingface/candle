@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::{CpuStorage, DType, Result, Shape};
+use crate::{CpuStorage, DType, Error, Result, Shape};
 
 pub type CudaError = std::io::Error;
 
@@ -14,7 +14,7 @@ macro_rules! fail {
 
 impl CudaDevice {
     pub(crate) fn new(_: usize) -> Result<Self> {
-        fail!()
+        Err(Error::NotCompiledWithCudaSupport)
     }
 
     pub(crate) fn ordinal(&self) -> usize {
@@ -22,11 +22,11 @@ impl CudaDevice {
     }
 
     pub(crate) fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<CudaStorage> {
-        fail!()
+        Err(Error::NotCompiledWithCudaSupport)
     }
 
     pub(crate) fn cuda_from_cpu_storage(&self, _: &CpuStorage) -> Result<CudaStorage> {
-        fail!()
+        Err(Error::NotCompiledWithCudaSupport)
     }
 }
 
@@ -43,10 +43,10 @@ impl CudaStorage {
     }
 
     pub(crate) fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        fail!()
+        Err(Error::NotCompiledWithCudaSupport)
     }
 
     pub(crate) fn affine_impl(&self, _: &Shape, _: &[usize], _: f64, _: f64) -> Result<Self> {
-        fail!()
+        Err(Error::NotCompiledWithCudaSupport)
     }
 }

@@ -1,4 +1,4 @@
-use crate::{CpuStorage, DType, Result, Shape};
+use crate::{CpuStorage, DType, Error, Result, Shape};
 use cudarc::driver::{CudaSlice, LaunchAsync, LaunchConfig};
 
 pub type CudaError = cudarc::driver::DriverError;
@@ -92,7 +92,7 @@ impl CudaStorage {
         match self {
             Self::F32(arg) => {
                 if !shape.is_contiguous(stride) {
-                    todo!("affine is only implemented for the contiguous case")
+                    return Err(Error::RequiresContiguous { op: "affine" });
                 }
                 let dev = arg.device();
                 let module_name = "affine_f32";
