@@ -1,6 +1,14 @@
+#[cfg(feature = "cuda")]
 use anyhow::Result;
+#[cfg(feature = "cuda")]
 use candle::{Device, Tensor};
 
+#[cfg(not(feature = "cuda"))]
+fn main() {
+    panic!("The examples requires cuda feature");
+}
+
+#[cfg(feature = "cuda")]
 fn main() -> Result<()> {
     let device = Device::new_cuda(0)?;
     let x = Tensor::new(&[3f32, 1., 4., 1., 5.], &device)?;

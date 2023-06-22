@@ -1,10 +1,13 @@
-use crate::{op, CpuStorage, CudaStorage, DType, Device, Error, Result, Shape};
+#[cfg(feature = "cuda")]
+use crate::CudaStorage;
+use crate::{op, CpuStorage, DType, Device, Error, Result, Shape};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
 // out of memory. Instead try_clone should be used.
 #[derive(Debug)]
 pub enum Storage {
     Cpu(CpuStorage),
+    #[cfg(feature = "cuda")]
     Cuda(CudaStorage),
 }
 
@@ -12,6 +15,7 @@ impl Storage {
     pub fn try_clone(&self) -> Result<Self> {
         match self {
             Self::Cpu(storage) => Ok(Self::Cpu(storage.clone())),
+            #[cfg(feature = "cuda")]
             Self::Cuda(storage) => {
                 let storage = storage.try_clone()?;
                 Ok(Self::Cuda(storage))
@@ -22,6 +26,7 @@ impl Storage {
     pub fn device(&self) -> Device {
         match self {
             Self::Cpu(_) => Device::Cpu,
+            #[cfg(feature = "cuda")]
             Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
         }
     }
@@ -29,6 +34,7 @@ impl Storage {
     pub fn dtype(&self) -> DType {
         match self {
             Self::Cpu(storage) => storage.dtype(),
+            #[cfg(feature = "cuda")]
             Self::Cuda(storage) => storage.dtype(),
         }
     }
@@ -66,6 +72,7 @@ impl Storage {
                 let storage = storage.affine_impl(shape, stride, mul, add)?;
                 Ok(Self::Cpu(storage))
             }
+            #[cfg(feature = "cuda")]
             Self::Cuda(storage) => {
                 let storage = storage.affine_impl(shape, stride, mul, add)?;
                 Ok(Self::Cuda(storage))
@@ -84,6 +91,7 @@ impl Storage {
                 let storage = storage.unary_impl::<B>(shape, stride)?;
                 Ok(Self::Cpu(storage))
             }
+            #[cfg(feature = "cuda")]
             Self::Cuda(storage) => {
                 let storage = storage.unary_impl::<B>(shape, stride)?;
                 Ok(Self::Cuda(storage))
@@ -106,10 +114,12 @@ impl Storage {
                 let storage = lhs.binary_impl::<B>(rhs, shape, lhs_stride, rhs_stride)?;
                 Ok(Self::Cpu(storage))
             }
+            #[cfg(feature = "cuda")]
             (Self::Cuda(lhs), Self::Cuda(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, shape, lhs_stride, rhs_stride)?;
                 Ok(Self::Cuda(storage))
             }
+            #[allow(unreachable_patterns)]
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
                 // anyway.
@@ -136,10 +146,12 @@ impl Storage {
                 let storage = lhs.matmul_impl(rhs, bmnk, lhs_stride, rhs_stride)?;
                 Ok(Self::Cpu(storage))
             }
+            #[cfg(feature = "cuda")]
             (Self::Cuda(lhs), Self::Cuda(rhs)) => {
                 let storage = lhs.matmul_impl(rhs, bmnk, lhs_stride, rhs_stride)?;
                 Ok(Self::Cuda(storage))
             }
+            #[allow(unreachable_patterns)]
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),

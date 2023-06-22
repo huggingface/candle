@@ -49,6 +49,7 @@ pub enum Error {
     #[error("temporary error where matmul doesn't support arbitrary striding")]
     UnexpectedStriding,
 
+    #[cfg(feature = "cuda")]
     #[error(transparent)]
     Cuda(#[from] crate::CudaError),
 }

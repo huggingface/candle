@@ -3,7 +3,6 @@ mod cpu_backend;
 mod cuda_backend;
 mod device;
 mod dtype;
-mod dummy_cuda_backend;
 mod error;
 mod op;
 mod shape;
@@ -22,6 +21,3 @@ pub use tensor::{Tensor, TensorId};
 
 #[cfg(feature = "cuda")]
 pub use cuda_backend::{CudaDevice, CudaError, CudaStorage};
-
-#[cfg(not(feature = "cuda"))]
-pub use dummy_cuda_backend::{CudaDevice, CudaError, CudaStorage};

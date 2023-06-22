@@ -5,12 +5,16 @@ use crate::{CpuStorage, DType, Result, Shape, Storage};
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum DeviceLocation {
     Cpu,
-    Cuda { gpu_id: usize },
+    #[cfg(feature = "cuda")]
+    Cuda {
+        gpu_id: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum Device {
     Cpu,
+    #[cfg(feature = "cuda")]
     Cuda(crate::CudaDevice),
 }
 
@@ -62,6 +66,7 @@ impl<S: crate::WithDType, const N: usize, const M: usize> NdArray for &[[S; N]; 
 }
 
 impl Device {
+    #[cfg(feature = "cuda")]
     pub fn new_cuda(ordinal: usize) -> Result<Self> {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))
     }
@@ -69,6 +74,7 @@ impl Device {
     pub fn location(&self) -> DeviceLocation {
         match self {
             Self::Cpu => DeviceLocation::Cpu,
+            #[cfg(feature = "cuda")]
             Self::Cuda(device) => DeviceLocation::Cuda {
                 gpu_id: device.ordinal(),
             },
@@ -81,6 +87,7 @@ impl Device {
                 let storage = CpuStorage::ones_impl(shape, dtype);
                 Ok(Storage::Cpu(storage))
             }
+            #[cfg(feature = "cuda")]
             Device::Cuda(device) => {
                 let storage = device.ones_impl(shape, dtype)?;
                 Ok(Storage::Cuda(storage))
@@ -94,6 +101,7 @@ impl Device {
                 let storage = CpuStorage::zeros_impl(shape, dtype);
                 Ok(Storage::Cpu(storage))
             }
+            #[cfg(feature = "cuda")]
             Device::Cuda(device) => {
                 let storage = device.zeros_impl(shape, dtype)?;
                 Ok(Storage::Cuda(storage))
@@ -104,6 +112,7 @@ impl Device {
     pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
         match self {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
+            #[cfg(feature = "cuda")]
             Device::Cuda(device) => {
                 let storage = array.to_cpu_storage();
                 let storage = device.cuda_from_cpu_storage(&storage)?;

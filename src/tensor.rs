@@ -238,6 +238,7 @@ impl Tensor {
         };
         match &self.storage {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
+            #[cfg(feature = "cuda")]
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
@@ -322,6 +323,7 @@ impl Tensor {
                 let slice = S::cpu_storage_as_slice(cpu_storage)?;
                 Ok(std::borrow::Cow::Borrowed(slice))
             }
+            #[cfg(feature = "cuda")]
             Storage::Cuda(slice) => {
                 let cpu_storage = slice.to_cpu_storage()?;
                 let storage_data = S::cpu_storage_data(cpu_storage)?;
@@ -343,6 +345,7 @@ impl Tensor {
                 let data = S::cpu_storage_as_slice(cpu_storage)?;
                 Ok(self.strided_index().map(|i| data[i]).collect())
             }
+            #[cfg(feature = "cuda")]
             Storage::Cuda(slice) => {
                 // TODO: Would it be possible to only fetch the necessary data?
                 let cpu_storage = slice.to_cpu_storage()?;
@@ -367,6 +370,7 @@ impl Tensor {
         };
         match &self.storage {
             Storage::Cpu(storage) => from_cpu_storage(storage),
+            #[cfg(feature = "cuda")]
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
@@ -390,6 +394,7 @@ impl Tensor {
         };
         match &self.storage {
             Storage::Cpu(storage) => from_cpu_storage(storage),
+            #[cfg(feature = "cuda")]
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
