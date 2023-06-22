@@ -12,6 +12,11 @@ pub enum Error {
     #[error("the candle crate has not been built with cuda support")]
     NotCompiledWithCudaSupport,
 
+    #[error(
+        "Shape mismatch, got buffer of size {buffer_size} which is compatible with shape {shape:?}"
+    )]
+    ShapeMismatch { buffer_size: usize, shape: Shape },
+
     #[error("shape mismatch in {op}, lhs: {lhs:?}, rhs: {rhs:?}")]
     ShapeMismatchBinaryOp {
         lhs: Shape,
@@ -40,6 +45,7 @@ pub enum Error {
         shape: Shape,
     },
 
+    // TODO this is temporary when we support arbitrary matmul
     #[error("temporary error where matmul doesn't support arbitrary striding")]
     UnexpectedStriding,
 
