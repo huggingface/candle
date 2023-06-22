@@ -3,11 +3,16 @@
 #define UNARY_OP(TYPENAME, FN_NAME, FUNC) \
 extern "C" __global__ void FN_NAME( \
     const size_t numel, \
+    const size_t num_dims, \
+    const size_t *info, \
     const TYPENAME *inp, \
     TYPENAME *out \
 ) { \
+    const size_t *dims = info; \
+    const size_t *strides = info + num_dims; \
     for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
-        TYPENAME x = inp ? inp[i] : out[i]; \
+        unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
+        TYPENAME x = inp ? inp[strided_i] : out[i]; \
         out[i] = FUNC; \
     } \
 } \
