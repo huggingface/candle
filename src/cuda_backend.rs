@@ -166,7 +166,7 @@ impl CudaStorage {
         }
     }
 
-    pub(crate) fn add_impl(
+    pub(crate) fn binary_impl<B: crate::storage::BinaryOp>(
         &self,
         rhs: &Self,
         shape: &Shape,
@@ -180,8 +180,8 @@ impl CudaStorage {
         let dims_and_strides = [dims, lhs_stride, rhs_stride].concat();
         match (self, rhs) {
             (Self::F32(lhs), Self::F32(rhs)) => {
-                let func = dev.get_or_load_func("badd_f32", kernels::BINARY_ADD)?;
-                // SAFETY: Set later by running the add kernel.
+                let func = dev.get_or_load_func(B::KERNEL_F32, kernels::BINARY)?;
+                // SAFETY: Set later by running the kernel.
                 let out = unsafe { dev.0.alloc::<f32>(elem_count) }?;
                 let dims_and_strides = dev.0.htod_copy(dims_and_strides)?;
                 let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
@@ -190,8 +190,8 @@ impl CudaStorage {
                 Ok(Self::F32(out))
             }
             (Self::F64(lhs), Self::F64(rhs)) => {
-                // SAFETY: Set later by running the add kernel.
-                let func = dev.get_or_load_func("badd_f64", kernels::BINARY_ADD)?;
+                // SAFETY: Set later by running the kernel.
+                let func = dev.get_or_load_func(B::KERNEL_F64, kernels::BINARY)?;
                 let out = unsafe { dev.0.alloc::<f64>(elem_count) }?;
                 let dims_and_strides = dev.0.htod_copy(dims_and_strides)?;
                 let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
@@ -200,7 +200,7 @@ impl CudaStorage {
                 Ok(Self::F64(out))
             }
             // The dtypes should have been checked at this point so this is an internal error.
-            _ => Err(CudaError::InternalError("dtype mismatch in add")),
+            _ => Err(CudaError::InternalError("dtype mismatch in binary op")),
         }
     }
 
