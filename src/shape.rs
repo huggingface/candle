@@ -1,7 +1,7 @@
 use crate::{Error, Result};
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct Shape(pub(crate) Vec<usize>);
+pub struct Shape(Vec<usize>);
 
 impl std::fmt::Debug for Shape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -60,6 +60,12 @@ impl From<(usize, usize)> for Shape {
 impl From<(usize, usize, usize)> for Shape {
     fn from(d123: (usize, usize, usize)) -> Self {
         Self(vec![d123.0, d123.1, d123.2])
+    }
+}
+
+impl From<Vec<usize>> for Shape {
+    fn from(dims: Vec<usize>) -> Self {
+        Self(dims)
     }
 }
 
@@ -141,6 +147,11 @@ impl Shape {
             acc *= dim;
         }
         true
+    }
+
+    pub fn extend(mut self, additional_dims: &[usize]) -> Self {
+        self.0.extend(additional_dims);
+        self
     }
 }
 
