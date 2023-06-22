@@ -135,19 +135,17 @@ impl CudaStorage {
         mul: f64,
         add: f64,
     ) -> Result<Self> {
-        if !shape.is_contiguous(stride) {
-            return Err(CudaError::RequiresContiguous { op: "affine" });
-        }
-
-        let elem_count = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(elem_count as u32);
+        let dims = shape.dims();
+        let el_count = shape.elem_count();
+        let cfg = LaunchConfig::for_num_elems(el_count as u32);
         let dev = self.device();
+        let ds = dev.0.htod_copy([dims, stride].concat())?;
         match self {
             Self::F32(arg) => {
                 let func = dev.get_or_load_func("affine_f32", kernels::AFFINE)?;
                 // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.0.alloc::<f32>(elem_count) }?;
-                let params = (elem_count, arg, &out, mul as f32, add as f32);
+                let out = unsafe { dev.0.alloc::<f32>(el_count) }?;
+                let params = (el_count, dims.len(), &ds, arg, &out, mul as f32, add as f32);
                 // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }?;
                 Ok(Self::F32(out))
@@ -155,8 +153,8 @@ impl CudaStorage {
             Self::F64(arg) => {
                 let func = dev.get_or_load_func("affine_f64", kernels::AFFINE)?;
                 // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.0.alloc::<f64>(elem_count) }?;
-                let params = (elem_count, arg, &out, mul, add);
+                let out = unsafe { dev.0.alloc::<f64>(el_count) }?;
+                let params = (el_count, dims.len(), &ds, arg, &out, mul, add);
                 // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }?;
                 Ok(Self::F64(out))
@@ -209,13 +207,12 @@ impl CudaStorage {
         let dims = shape.dims();
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
         let dev = self.device();
-        let dims_and_strides = [dims, lhs_stride, rhs_stride].concat();
+        let dims_and_strides = dev.0.htod_copy([dims, lhs_stride, rhs_stride].concat())?;
         match (self, rhs) {
             (Self::F32(lhs), Self::F32(rhs)) => {
                 let func = dev.get_or_load_func(B::KERNEL_F32, kernels::BINARY)?;
                 // SAFETY: Set later by running the kernel.
                 let out = unsafe { dev.0.alloc::<f32>(elem_count) }?;
-                let dims_and_strides = dev.0.htod_copy(dims_and_strides)?;
                 let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
                 // SAFETY: ffi
                 unsafe { func.launch(cfg, params) }?;
@@ -225,7 +222,6 @@ impl CudaStorage {
                 // SAFETY: Set later by running the kernel.
                 let func = dev.get_or_load_func(B::KERNEL_F64, kernels::BINARY)?;
                 let out = unsafe { dev.0.alloc::<f64>(elem_count) }?;
-                let dims_and_strides = dev.0.htod_copy(dims_and_strides)?;
                 let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
                 // SAFETY: ffi
                 unsafe { func.launch(cfg, params) }?;
