@@ -17,11 +17,22 @@ extern "C" __global__ void FN_NAME( \
     } \
 } \
 
+template<typename T>
+__device__ T gelu_fwd(T x) {
+    constexpr T fastCoeff = 0.044715;
+    T x_sq = x * x;
+    T x_cube = x_sq * x;
+    T alpha = x + fastCoeff * x_cube;
+    return 0.5 * x * (1.0 + tanhg(M_2_SQRTPI * M_SQRT1_2 * alpha));
+}
+
+
 #if __CUDA_ARCH__ >= 530
 UNARY_OP(__half, ucopy_f16, x)
 UNARY_OP(__half, uneg_f16, -x)
 UNARY_OP(__half, usqr_f16, x*x)
 UNARY_OP(__half, usqrt_f16, sqrtg(x))
+// UNARY_OP(__half, gelu_f16, gelu_fwd(x))
 #endif
 
 UNARY_OP(float, ucopy_f32, x)
@@ -32,3 +43,4 @@ UNARY_OP(float, usqr_f32, x*x)
 UNARY_OP(float, usqr_f64, x*x)
 UNARY_OP(float, usqrt_f32, sqrtg(x))
 UNARY_OP(float, usqrt_f64, sqrtg(x))
+UNARY_OP(float, gelu_f32, gelu_fwd(x))

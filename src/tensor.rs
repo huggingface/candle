@@ -240,6 +240,7 @@ impl Tensor {
     unary_op!(neg, Neg);
     unary_op!(sqr, Sqr);
     unary_op!(sqrt, Sqrt);
+    unary_op!(gelu, Gelu);
     pub fn to_scalar<S: crate::WithDType>(&self) -> Result<S> {
         if self.rank() != 0 {
             return Err(Error::UnexpectedNumberOfDims {
@@ -766,6 +767,7 @@ impl Tensor {
                     | Op::Transpose(node, _, _)
                     | Op::Sqr(node)
                     | Op::Sqrt(node)
+                    | Op::Gelu(node)
                     | Op::Neg(node) => {
                         let (tg, nodes) = walk(node, nodes, already_seen);
                         track_grad |= tg;
@@ -854,6 +856,7 @@ impl Tensor {
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
                     Op::Reshape(_arg) => return Err(Error::BackwardNotSupported { op: "reshape" }),
+                    Op::Gelu(_) => return Err(Error::BackwardNotSupported { op: "reshape" }),
                     Op::Sqr(arg) => {
                         let arg_grad = arg.mul(&grad)?.affine(2., 0.)?;
                         let sum_grad = grads.or_insert(arg)?;
