@@ -52,6 +52,13 @@ impl CpuStorage {
                 let data = index.map(|i| storage[i] * mul + add).collect();
                 Ok(Self::F32(data))
             }
+            Self::U32(storage) => {
+                let index = StridedIndex::new(shape.dims(), stride);
+                let mul = mul as u32;
+                let add = add as u32;
+                let data = index.map(|i| storage[i] * mul + add).collect();
+                Ok(Self::U32(data))
+            }
             Self::F64(storage) => {
                 let index = StridedIndex::new(shape.dims(), stride);
                 let data = index.map(|i| storage[i] * mul + add).collect();
@@ -63,6 +70,9 @@ impl CpuStorage {
     pub(crate) fn unary_impl<B: UnaryOp>(&self, shape: &Shape, stride: &[usize]) -> Result<Self> {
         // TODO: Different code path for the contiguous case?
         match self {
+            Self::U32(_) => {
+                todo!("Not so easy because sqrt and neg don't exist of u32")
+            }
             Self::F32(storage) => {
                 let index = StridedIndex::new(shape.dims(), stride);
                 let data = index.map(|i| B::f32(storage[i])).collect();
@@ -310,6 +320,10 @@ impl CpuStorage {
                 let data = vec![1f32; elem_count];
                 Self::F32(data)
             }
+            DType::U32 => {
+                let data = vec![1u32; elem_count];
+                Self::U32(data)
+            }
             DType::F64 => {
                 let data = vec![1f64; elem_count];
                 Self::F64(data)
@@ -327,6 +341,10 @@ impl CpuStorage {
             DType::F32 => {
                 let data = vec![0f32; elem_count];
                 Self::F32(data)
+            }
+            DType::U32 => {
+                let data = vec![0u32; elem_count];
+                Self::U32(data)
             }
             DType::F64 => {
                 let data = vec![0f64; elem_count];
