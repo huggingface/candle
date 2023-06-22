@@ -4,13 +4,14 @@
 extern "C" __global__ void FN_NAME( \
     const size_t numel, \
     const size_t num_dims, \
-    const size_t *dims, \
-    const size_t *lhs_strides, \
-    const size_t *rhs_strides, \
+    const size_t *dims_and_strides, \
     const TYPENAME *lhs, \
     const TYPENAME *rhs, \
     TYPENAME *out \
 ) { \
+    const size_t *dims = dims_and_strides; \
+    const size_t *lhs_strides = dims_and_strides + 1 * num_dims; \
+    const size_t *rhs_strides = dims_and_strides + 2 * num_dims; \
     for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
         unsigned int tmp_i = i; \
         unsigned int lhs_i = 0; \

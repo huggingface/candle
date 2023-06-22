@@ -53,4 +53,8 @@ impl CudaStorage {
     pub(crate) fn affine_impl(&self, _: &Shape, _: &[usize], _: f64, _: f64) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    pub(crate) fn add_impl(&self, _: &Self, _: &Shape, _: &[usize], _: &[usize]) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }

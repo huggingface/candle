@@ -16,6 +16,9 @@ pub enum CudaError {
 
     #[error("missing kernel '{module_name}'")]
     MissingKernel { module_name: &'static str },
+
+    #[error("internal error '{0}'")]
+    InternalError(&'static str),
 }
 
 type Result<T> = std::result::Result<T, CudaError>;
@@ -160,6 +163,44 @@ impl CudaStorage {
                 unsafe { func.launch(cfg, params) }?;
                 Ok(Self::F64(out))
             }
+        }
+    }
+
+    pub(crate) fn add_impl(
+        &self,
+        rhs: &Self,
+        shape: &Shape,
+        lhs_stride: &[usize],
+        rhs_stride: &[usize],
+    ) -> Result<Self> {
+        let elem_count = shape.elem_count();
+        let dims = shape.dims();
+        let cfg = LaunchConfig::for_num_elems(elem_count as u32);
+        let dev = self.device();
+        let dims_and_strides = [dims, lhs_stride, rhs_stride].concat();
+        match (self, rhs) {
+            (Self::F32(lhs), Self::F32(rhs)) => {
+                let func = dev.get_or_load_func("badd_f32", kernels::BINARY_ADD)?;
+                // SAFETY: Set later by running the add kernel.
+                let out = unsafe { dev.0.alloc::<f32>(elem_count) }?;
+                let dims_and_strides = dev.0.htod_copy(dims_and_strides)?;
+                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+                // SAFETY: ffi
+                unsafe { func.launch(cfg, params) }?;
+                Ok(Self::F32(out))
+            }
+            (Self::F64(lhs), Self::F64(rhs)) => {
+                // SAFETY: Set later by running the add kernel.
+                let func = dev.get_or_load_func("badd_f64", kernels::BINARY_ADD)?;
+                let out = unsafe { dev.0.alloc::<f64>(elem_count) }?;
+                let dims_and_strides = dev.0.htod_copy(dims_and_strides)?;
+                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+                // SAFETY: ffi
+                unsafe { func.launch(cfg, params) }?;
+                Ok(Self::F64(out))
+            }
+            // The dtypes should have been checked at this point so this is an internal error.
+            _ => Err(CudaError::InternalError("dtype mismatch in add")),
         }
     }
 
