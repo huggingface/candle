@@ -441,7 +441,7 @@ impl Tensor {
         (stride[n - 2], stride[n - 1]) = (stride[n - 1], stride[n - 2]);
         let tensor_ = Tensor_ {
             id: TensorId::new(),
-            storage: self.storage.clone(),
+            storage: self.storage.try_clone()?,
             shape: Shape::from(dims),
             stride,
             // TODO The op should have a backward

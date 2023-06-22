@@ -34,10 +34,14 @@ impl CudaDevice {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CudaStorage;
 
 impl CudaStorage {
+    pub fn try_clone(&self) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub fn dtype(&self) -> DType {
         fail!()
     }

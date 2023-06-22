@@ -1,12 +1,24 @@
 use crate::{op, CpuStorage, CudaStorage, DType, Device, Error, Result, Shape};
 
-#[derive(Debug, Clone)]
+// We do not want to implement Clone on Storage as cloning may fail because of
+// out of memory. Instead try_clone should be used.
+#[derive(Debug)]
 pub enum Storage {
     Cpu(CpuStorage),
     Cuda(CudaStorage),
 }
 
 impl Storage {
+    pub fn try_clone(&self) -> Result<Self> {
+        match self {
+            Self::Cpu(storage) => Ok(Self::Cpu(storage.clone())),
+            Self::Cuda(storage) => {
+                let storage = storage.try_clone()?;
+                Ok(Self::Cuda(storage))
+            }
+        }
+    }
+
     pub fn device(&self) -> Device {
         match self {
             Self::Cpu(_) => Device::Cpu,

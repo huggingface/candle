@@ -107,13 +107,20 @@ impl CudaDevice {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum CudaStorage {
     F32(CudaSlice<f32>),
     F64(CudaSlice<f64>),
 }
 
 impl CudaStorage {
+    pub fn try_clone(&self) -> Result<Self> {
+        match self {
+            Self::F32(slice) => Ok(Self::F32(slice.try_clone()?)),
+            Self::F64(slice) => Ok(Self::F64(slice.try_clone()?)),
+        }
+    }
+
     pub fn dtype(&self) -> DType {
         match self {
             Self::F32(_) => DType::F32,
