@@ -46,7 +46,7 @@ impl CudaStorage {
         fail!()
     }
 
-    pub fn device(&self) -> CudaDevice {
+    pub fn device(&self) -> &CudaDevice {
         fail!()
     }
 

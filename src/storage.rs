@@ -22,7 +22,7 @@ impl Storage {
     pub fn device(&self) -> Device {
         match self {
             Self::Cpu(_) => Device::Cpu,
-            Self::Cuda(storage) => Device::Cuda(storage.device()),
+            Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
         }
     }
 
