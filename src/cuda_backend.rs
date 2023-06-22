@@ -159,14 +159,15 @@ fn gemm_config<T>(
 ) -> StridedBatchedConfig<T> {
     // https://docs.nvidia.com/cuda/cublas/index.html#cublas-t-gemm
     use cudarc::cublas::sys::cublasOperation_t;
+    println!("{:?} {:?} {:?}", lhs_stride, rhs_stride, (b, m, n, k));
     let gemm = GemmConfig {
         alpha,
         beta,
         m: m as i32,
         n: n as i32,
         k: k as i32,
-        lda: lhs_stride[lhs_stride.len() - 2] as i32,
-        ldb: rhs_stride[rhs_stride.len() - 2] as i32,
+        lda: m as i32,
+        ldb: k as i32,
         ldc: m as i32,
         transa: cublasOperation_t::CUBLAS_OP_N,
         transb: cublasOperation_t::CUBLAS_OP_N,
@@ -174,8 +175,8 @@ fn gemm_config<T>(
     StridedBatchedConfig {
         batch_size: b as i32,
         gemm,
-        stride_a: lhs_stride[0] as i64,
-        stride_b: rhs_stride[0] as i64,
+        stride_a: (m * k) as i64,
+        stride_b: (n * k) as i64,
         stride_c: (m * n * k) as i64,
     }
 }

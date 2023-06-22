@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle::{DType, Device, Tensor};
+use candle::{Device, Tensor};
 
 fn main() -> Result<()> {
     let device = Device::new_cuda(0)?;
@@ -9,7 +9,10 @@ fn main() -> Result<()> {
     let z = (y + x * 3.)?;
     println!("{:?}", z.to_vec1::<f32>()?);
     println!("{:?}", z.sqrt()?.to_vec1::<f32>()?);
-    let x = Tensor::ones((3, 2), DType::F32, &device)?;
-    println!("{:?}", x.to_vec2::<f32>()?);
+    let x = Tensor::new(&[[11f32, 22.], [33., 44.], [55., 66.], [77., 78.]], &device)?;
+    let y = Tensor::new(&[[1f32, 2., 3.], [4., 5., 6.]], &device)?;
+    println!("{:?}", y.to_vec2::<f32>()?);
+    let z = x.matmul(&y)?;
+    println!("{:?}", z.to_vec2::<f32>()?);
     Ok(())
 }
