@@ -128,7 +128,7 @@ impl CpuStorage {
             let lhs_batch_stride = &lhs_stride[..rank - 2];
             let rhs_batch_stride = &rhs_stride[..rank - 2];
 
-            if lhs_batch_stride != &[a_skip] || rhs_batch_stride != &[b_skip] {
+            if lhs_batch_stride != [a_skip] || rhs_batch_stride != [b_skip] {
                 // Temporary error before we support abitrary striding.
                 return Err(Error::UnexpectedStriding);
             }
