@@ -25,6 +25,10 @@ impl CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub(crate) fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<CudaStorage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub(crate) fn cuda_from_cpu_storage(&self, _: &CpuStorage) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
