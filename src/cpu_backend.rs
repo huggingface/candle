@@ -1,4 +1,4 @@
-use crate::storage::{BinaryOp, UnaryOp};
+use crate::op::{BinaryOp, UnaryOp};
 use crate::{DType, Error, Result, Shape, StridedIndex};
 use gemm::{gemm, Parallelism};
 

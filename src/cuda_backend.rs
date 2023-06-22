@@ -164,7 +164,7 @@ impl CudaStorage {
         }
     }
 
-    pub(crate) fn unary_impl<U: crate::storage::UnaryOp>(
+    pub(crate) fn unary_impl<U: crate::op::UnaryOp>(
         &self,
         shape: &Shape,
         stride: &[usize],
@@ -198,7 +198,7 @@ impl CudaStorage {
         }
     }
 
-    pub(crate) fn binary_impl<B: crate::storage::BinaryOp>(
+    pub(crate) fn binary_impl<B: crate::op::BinaryOp>(
         &self,
         rhs: &Self,
         shape: &Shape,
