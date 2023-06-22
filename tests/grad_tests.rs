@@ -29,11 +29,11 @@ fn matmul_grad() -> Result<()> {
     assert_eq!(grad_x.shape(), &Shape::from((2, 2, 3)));
     assert_eq!(grad_y.shape(), &Shape::from((2, 3, 2)));
     assert_eq!(
-        grad_x.as_slice::<f32>()?,
+        &*grad_x.storage_data::<f32>()?,
         &[1., 5., 9., 1., 5., 9., 13., 17., 21., 13., 17., 21.]
     );
     assert_eq!(
-        grad_y.as_slice::<f32>()?,
+        &*grad_y.storage_data::<f32>()?,
         &[3., 3., 5., 5., 7., 7., 15., 15., 17., 17., 19., 19.]
     );
     Ok(())

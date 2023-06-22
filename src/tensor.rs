@@ -313,10 +313,20 @@ impl Tensor {
         crate::StridedIndex::new(self.dims(), self.stride())
     }
 
-    pub fn as_slice<S: crate::WithDType>(&self) -> Result<&[S]> {
+    /// Returns data from the underlying storage, this does not take the strides
+    /// into account so the size of the resulting buffer might be larger than the
+    /// tensor number of elements.
+    pub fn storage_data<S: crate::WithDType>(&self) -> Result<std::borrow::Cow<[S]>> {
         match &self.storage {
-            Storage::Cpu(cpu_storage) => S::cpu_storage_as_slice(cpu_storage),
-            Storage::Cuda { .. } => todo!(),
+            Storage::Cpu(cpu_storage) => {
+                let slice = S::cpu_storage_as_slice(cpu_storage)?;
+                Ok(std::borrow::Cow::Borrowed(slice))
+            }
+            Storage::Cuda(slice) => {
+                let cpu_storage = slice.to_cpu_storage()?;
+                let storage_data = S::cpu_storage_data(cpu_storage)?;
+                Ok(std::borrow::Cow::Owned(storage_data))
+            }
         }
     }
 
