@@ -54,6 +54,14 @@ impl CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub(crate) fn unary_impl<B: crate::storage::UnaryOp>(
+        &self,
+        _: &Shape,
+        _: &[usize],
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub(crate) fn binary_impl<B: crate::storage::BinaryOp>(
         &self,
         _: &Self,

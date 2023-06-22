@@ -145,21 +145,53 @@ impl CudaStorage {
         match self {
             Self::F32(arg) => {
                 let func = dev.get_or_load_func("affine_f32", kernels::AFFINE)?;
-                // SAFETY: if this function returns Ok(..), the kernel has been applied
-                // and has set the initially unset memory.
+                // SAFETY: Set later by running the kernel.
                 let out = unsafe { dev.0.alloc::<f32>(elem_count) }?;
                 let params = (elem_count, arg, &out, mul as f32, add as f32);
-                // SAFETY: well, well, well...
+                // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }?;
                 Ok(Self::F32(out))
             }
             Self::F64(arg) => {
                 let func = dev.get_or_load_func("affine_f64", kernels::AFFINE)?;
-                // SAFETY: if this function returns Ok(..), the kernel has been applied
-                // and has set the initially unset memory.
+                // SAFETY: Set later by running the kernel.
                 let out = unsafe { dev.0.alloc::<f64>(elem_count) }?;
                 let params = (elem_count, arg, &out, mul, add);
-                // SAFETY: well, well, well...
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                Ok(Self::F64(out))
+            }
+        }
+    }
+
+    pub(crate) fn unary_impl<U: crate::storage::UnaryOp>(
+        &self,
+        shape: &Shape,
+        stride: &[usize],
+    ) -> Result<Self> {
+        if !shape.is_contiguous(stride) {
+            return Err(CudaError::RequiresContiguous { op: "affine" });
+        }
+
+        let elem_count = shape.elem_count();
+        let cfg = LaunchConfig::for_num_elems(elem_count as u32);
+        let dev = self.device();
+        match self {
+            Self::F32(arg) => {
+                let func = dev.get_or_load_func(U::KERNEL_F32, kernels::UNARY)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.0.alloc::<f32>(elem_count) }?;
+                let params = (elem_count, arg, &out);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                Ok(Self::F32(out))
+            }
+            Self::F64(arg) => {
+                let func = dev.get_or_load_func(U::KERNEL_F64, kernels::UNARY)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.0.alloc::<f64>(elem_count) }?;
+                let params = (elem_count, arg, &out);
+                // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }?;
                 Ok(Self::F64(out))
             }

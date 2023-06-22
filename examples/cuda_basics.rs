@@ -8,6 +8,7 @@ fn main() -> Result<()> {
     let y = Tensor::new(&[2f32, 7., 1., 8., 2.], &device)?;
     let z = (y + x * 3.)?;
     println!("{:?}", z.to_vec1::<f32>()?);
+    println!("{:?}", z.sqrt()?.to_vec1::<f32>()?);
     let x = Tensor::ones((3, 2), DType::F32, &device)?;
     println!("{:?}", x.to_vec2::<f32>()?);
     Ok(())
