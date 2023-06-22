@@ -4,16 +4,22 @@ version = "0.1.0"
 edition = "2021"
 
 description = "Minimalist ML framework."
-repository = "https://github.com/LaurentMazare/wtensor"
+repository = "https://github.com/LaurentMazare/candle"
 keywords = ["blas", "tensor", "machine-learning"]
 categories = ["science"]
 license = "MIT/Apache-2.0"
 readme = "README.md"
 
+[workspace]
+members = [
+  "kernels",
+]
+
 [dependencies]
 safetensors = "0.3.1"
 thiserror = "1"
 cudarc = { version = "0.9.9", optional = true }
+candle-kernels = { path = "kernels", optional = true }
 
 [dev-dependencies]
 anyhow = "1"
@@ -23,4 +29,4 @@ tokenizers = "0.13.3"
 
 [features]
 default = []
-cuda = ["dep:cudarc"]
+cuda = ["dep:cudarc", "dep:candle-kernels"]
