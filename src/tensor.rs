@@ -254,6 +254,11 @@ impl Tensor {
     broadcast_binary_op!(broadcast_div, Div, BroadcastDiv);
 
     unary_op!(neg, Neg);
+    unary_op!(exp, Exp);
+    unary_op!(log, Log);
+    unary_op!(sin, Sin);
+    unary_op!(cos, Cos);
+    unary_op!(abs, Abs);
     unary_op!(sqr, Sqr);
     unary_op!(sqrt, Sqrt);
     unary_op!(gelu, Gelu);
@@ -774,6 +779,11 @@ impl Tensor {
                     | Op::Sqr(node)
                     | Op::Sqrt(node)
                     | Op::Gelu(node)
+                    | Op::Exp(node)
+                    | Op::Log(node)
+                    | Op::Sin(node)
+                    | Op::Cos(node)
+                    | Op::Abs(node)
                     | Op::Neg(node) => {
                         let (tg, nodes) = walk(node, nodes, already_seen);
                         track_grad |= tg;
@@ -886,6 +896,23 @@ impl Tensor {
                         let arg_grad = grad.affine(*mul, 0.)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
+                    }
+                    Op::Log(arg) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&(&grad * *node)?)?
+                    }
+                    Op::Sin(arg) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&(&grad * arg.cos())?)?
+                    }
+                    Op::Cos(arg) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.sub(&(&grad * arg.sin())?)?
+                    }
+                    Op::Abs(_args) => return Err(Error::BackwardNotSupported { op: "abs" }),
+                    Op::Exp(arg) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&(&grad / arg)?)?
                     }
                     Op::Neg(arg) => {
                         let sum_grad = grads.or_insert(arg)?;
