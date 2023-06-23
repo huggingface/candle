@@ -648,7 +648,7 @@ impl Tensor {
         let mut storage = device.zeros(&shape, dtype)?;
         for (arg, &offset) in args.iter().zip(offsets.iter()) {
             arg.storage
-                .copy_strided_src(&mut storage, &arg.shape, &arg.stride, offset)
+                .copy_strided_src(&mut storage, &arg.shape, &arg.stride, offset)?
         }
         let tensor_ = Tensor_ {
             id: TensorId::new(),

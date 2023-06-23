@@ -132,7 +132,7 @@ impl Storage {
         self.same_device(rhs, "matmul")?;
         self.same_dtype(rhs, "matmul")?;
         match (self, rhs) {
-            (Storage::Cpu(lhs), Storage::Cpu(rhs)) => {
+            (Self::Cpu(lhs), Self::Cpu(rhs)) => {
                 let storage = lhs.matmul_impl(rhs, bmnk, lhs_stride, rhs_stride)?;
                 Ok(Self::Cpu(storage))
             }
@@ -151,11 +151,23 @@ impl Storage {
     // self, the source can be strided whereas dst is contiguous.
     pub(crate) fn copy_strided_src(
         &self,
-        _dst: &mut Self,
-        _shape: &Shape,
-        _stride: &[usize],
-        _offset: usize,
-    ) {
-        todo!()
+        dst: &mut Self,
+        src_shape: &Shape,
+        src_stride: &[usize],
+        dst_offset: usize,
+    ) -> Result<()> {
+        match (self, dst) {
+            (Self::Cpu(src), Self::Cpu(dst)) => {
+                src.copy_strided_src(dst, src_shape, src_stride, dst_offset)
+            }
+            (Self::Cuda(_src), Self::Cuda(_dst)) => {
+                todo!()
+            }
+            (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "copy",
+            }),
+        }
     }
 }
