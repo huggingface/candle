@@ -8,6 +8,8 @@ pub(crate) enum Op {
     Div(Tensor, Tensor),
     Matmul(Tensor, Tensor),
 
+    Cat(Vec<Tensor>, usize),
+
     #[allow(dead_code)] // add is currently unused.
     Affine {
         arg: Tensor,

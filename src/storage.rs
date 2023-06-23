@@ -147,4 +147,15 @@ impl Storage {
             }),
         }
     }
+
+    // self, the source can be strided whereas dst is contiguous.
+    pub(crate) fn copy_strided_src(
+        &self,
+        _dst: &mut Self,
+        _shape: &Shape,
+        _stride: &[usize],
+        _offset: usize,
+    ) {
+        todo!()
+    }
 }

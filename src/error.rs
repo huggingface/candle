@@ -9,6 +9,9 @@ pub enum Error {
     #[error("{op} only supports contiguous tensors")]
     RequiresContiguous { op: &'static str },
 
+    #[error("{op} expects at least one tensor")]
+    OpRequiresAtLeastOneTensor { op: &'static str },
+
     #[error("the candle crate has not been built with cuda support")]
     NotCompiledWithCudaSupport,
 
@@ -22,6 +25,14 @@ pub enum Error {
         lhs: Shape,
         rhs: Shape,
         op: &'static str,
+    },
+
+    #[error("shape mismatch in cat for dim {dim}, shape for arg 1: {first_shape:?} shape for arg {n}: {nth_shape:?}")]
+    ShapeMismatchCat {
+        dim: usize,
+        first_shape: Shape,
+        n: usize,
+        nth_shape: Shape,
     },
 
     #[error("device mismatch in {op}, lhs: {lhs:?}, rhs: {rhs:?}")]
