@@ -1,3 +1,4 @@
+#![allow(unreachable_patterns, dead_code)]
 use crate::{Result, Tensor};
 
 pub struct LayerNorm {
@@ -15,7 +16,7 @@ impl LayerNorm {
         }
     }
 
-    pub fn forward(&self, tensor: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, _tensor: &Tensor) -> Result<Tensor> {
         todo!("Layer norm");
     }
 }

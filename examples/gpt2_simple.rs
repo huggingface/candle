@@ -22,10 +22,10 @@ fn main() -> Result<()> {
     let gpt2 = load::load("model.safetensors", &Device::Cpu, num_heads)?;
     let logits = gpt2.forward(&input_ids, &position_ids)?;
     // let id = logits.argmax(-1)?;
-    todo!("Argmax");
+    todo!("Argmax {:?}", logits);
     // let token = tokenizer.decode(&[id], true).unwrap();
     // assert_eq!(token, "");
-    Ok(())
+    // Ok(())
 }
 
 mod load {
@@ -39,7 +39,7 @@ mod load {
     use std::borrow::Cow;
     use std::fs::File;
 
-    fn to_tensor<'data>(view: TensorView<'data>, device: &Device) -> Result<Tensor> {
+    fn to_tensor(view: TensorView<'_>, device: &Device) -> Result<Tensor> {
         let shape = view.shape().to_vec();
         let data = to_f32(view);
         Ok(Tensor::from_slice(&data, shape.as_slice(), device)?)
@@ -65,20 +65,17 @@ mod load {
         }
     }
 
-    fn embedding_from<'a>(weights: TensorView<'a>, device: &Device) -> Result<Embedding> {
+    fn embedding_from(weights: TensorView<'_>, device: &Device) -> Result<Embedding> {
         Ok(Embedding::new(to_tensor(weights, device)?))
     }
 
-    fn unbiased_linear_from<'a>(
-        weights: TensorView<'a>,
-        device: &Device,
-    ) -> Result<UnbiasedLinear> {
+    fn unbiased_linear_from(weights: TensorView<'_>, device: &Device) -> Result<UnbiasedLinear> {
         Ok(UnbiasedLinear::new(to_tensor(weights, device)?))
     }
 
-    fn layer_norm_from_prefix<'a>(
+    fn layer_norm_from_prefix(
         prefix: &str,
-        tensors: &'a SafeTensors<'a>,
+        tensors: &SafeTensors<'_>,
         device: &Device,
     ) -> LayerNorm {
         let epsilon = 1e-5;
@@ -104,9 +101,9 @@ mod load {
         }
     }
 
-    fn gpt2_layer_from_tensors<'a>(
+    fn gpt2_layer_from_tensors(
         index: usize,
-        tensors: &'a SafeTensors<'a>,
+        tensors: &SafeTensors<'_>,
         device: &Device,
     ) -> Result<Gpt2Layer> {
         let ln_1 = layer_norm_from_prefix(&format!("h.{index}.ln_1"), tensors, device);
@@ -115,9 +112,9 @@ mod load {
         let mlp = gpt2_mlp_from_tensors(index, tensors, device)?;
         Ok(Gpt2Layer::new(attention, mlp, ln_1, ln_2))
     }
-    fn gpt2_attention_from_tensors<'a>(
+    fn gpt2_attention_from_tensors(
         index: usize,
-        tensors: &'a SafeTensors<'a>,
+        tensors: &SafeTensors<'_>,
         device: &Device,
     ) -> Result<Gpt2Attention> {
         let c_attn = linear_from_prefix(&format!("h.{index}.attn.c_attn"), tensors, device)?;
@@ -125,16 +122,16 @@ mod load {
         Ok(Gpt2Attention::new(c_attn, c_proj, index))
     }
 
-    fn gpt2_mlp_from_tensors<'a>(
+    fn gpt2_mlp_from_tensors(
         index: usize,
-        tensors: &'a SafeTensors<'a>,
+        tensors: &SafeTensors<'_>,
         device: &Device,
     ) -> Result<Mlp> {
         let c_fc = linear_from_prefix(&format!("h.{index}.mlp.c_fc"), tensors, device)?;
         let c_proj = linear_from_prefix(&format!("h.{index}.mlp.c_proj"), tensors, device)?;
         Ok(Mlp::new(c_fc, c_proj))
     }
-    fn model_from_tensors<'a>(tensors: &'a SafeTensors<'a>, device: &Device) -> Result<Gpt2Model> {
+    fn model_from_tensors(tensors: &SafeTensors<'_>, device: &Device) -> Result<Gpt2Model> {
         // TODO ! Count heads from tensors present
         let layers: Result<Vec<_>> = (0..12)
             .map(|i| gpt2_layer_from_tensors(i, tensors, device))
@@ -142,9 +139,9 @@ mod load {
         Ok(Gpt2Model::new(layers?))
     }
 
-    fn linear_from_prefix<'a>(
+    fn linear_from_prefix(
         prefix: &str,
-        tensors: &'a SafeTensors<'a>,
+        tensors: &SafeTensors<'_>,
         device: &Device,
     ) -> Result<LinearT> {
         let weights = tensors.tensor(&format!("{}.weight", prefix))?;

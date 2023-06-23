@@ -52,13 +52,6 @@ impl CpuStorage {
                 let data = index.map(|i| storage[i] * mul + add).collect();
                 Ok(Self::F32(data))
             }
-            Self::U32(storage) => {
-                let index = StridedIndex::new(shape.dims(), stride);
-                let mul = mul as u32;
-                let add = add as u32;
-                let data = index.map(|i| storage[i] * mul + add).collect();
-                Ok(Self::U32(data))
-            }
             Self::F64(storage) => {
                 let index = StridedIndex::new(shape.dims(), stride);
                 let data = index.map(|i| storage[i] * mul + add).collect();
@@ -82,9 +75,6 @@ impl CpuStorage {
                 let index = StridedIndex::new(shape.dims(), stride);
                 let data = index.map(|i| B::f64(storage[i])).collect();
                 Ok(Self::F64(data))
-            }
-            Self::U32(_storage) => {
-                todo!("No unary for u32 because of neg, sqrt")
             }
         }
     }
@@ -320,10 +310,6 @@ impl CpuStorage {
                 let data = vec![1f32; elem_count];
                 Self::F32(data)
             }
-            DType::U32 => {
-                let data = vec![1u32; elem_count];
-                Self::U32(data)
-            }
             DType::F64 => {
                 let data = vec![1f64; elem_count];
                 Self::F64(data)
@@ -341,10 +327,6 @@ impl CpuStorage {
             DType::F32 => {
                 let data = vec![0f32; elem_count];
                 Self::F32(data)
-            }
-            DType::U32 => {
-                let data = vec![0u32; elem_count];
-                Self::U32(data)
             }
             DType::F64 => {
                 let data = vec![0f64; elem_count];

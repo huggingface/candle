@@ -1,3 +1,4 @@
+#![allow(unreachable_patterns, dead_code)]
 use crate::nn::layers::{Embedding, LayerNorm, LinearT, UnbiasedLinear};
 use crate::Result;
 use crate::{DType, Device, Tensor};
@@ -66,7 +67,7 @@ impl Mlp {
     }
 
     pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let intermediary_states = self.c_fc.forward(hidden_states)?;
+        let _intermediary_states = self.c_fc.forward(hidden_states)?;
         // let intermediary_states = intermediary_states.gelu()?;
         todo!("MLP gelu");
         // let hidden_states = self.c_proj.forward(intermediary_states)?;

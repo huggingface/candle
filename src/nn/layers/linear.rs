@@ -1,3 +1,4 @@
+#![allow(unreachable_patterns, dead_code)]
 use crate::{Result, Tensor};
 
 /// Linear layer, applies matmul(x, W) + b
@@ -13,7 +14,7 @@ impl Linear {
 
     /// Forward pass
     pub fn forward(&self, tensor: &Tensor) -> Result<Tensor> {
-        let x = tensor.matmul(&self.weight)?;
+        let _x = tensor.matmul(&self.weight)?;
         // x.broadcast_add(&self.bias)
         todo!("Linear")
     }
@@ -31,7 +32,7 @@ impl LinearT {
     }
 
     pub fn forward(&self, tensor: &Tensor) -> Result<Tensor> {
-        let x = tensor.matmul(&self.weight.t()?)?;
+        let _x = tensor.matmul(&self.weight.t()?)?;
         // x.broadcast_add(&self.bias)
         todo!("Linear")
     }
