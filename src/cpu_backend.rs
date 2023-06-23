@@ -86,6 +86,10 @@ impl CpuStorage {
         lhs_stride: &[usize],
         rhs_stride: &[usize],
     ) -> Result<Self> {
+        let dims = shape.dims();
+        if dims.len() != lhs_stride.len() || dims.len() != rhs_stride.len() {
+            todo!("implement broadcast");
+        }
         // The ggml implementation has different paths based on whether the rhs is contiguous
         // or not, for now we only consider the general case but we should benchmark and do the
         // same if it helps.

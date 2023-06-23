@@ -331,8 +331,11 @@ impl CudaStorage {
         lhs_stride: &[usize],
         rhs_stride: &[usize],
     ) -> Result<Self> {
-        let elem_count = shape.elem_count();
         let dims = shape.dims();
+        if dims.len() != lhs_stride.len() || dims.len() != rhs_stride.len() {
+            return Err(CudaError::InternalError("TODO: implement broadcast"));
+        }
+        let elem_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
         let dev = self.device();
         let dims_and_strides = dev.htod_copy([dims, lhs_stride, rhs_stride].concat())?;

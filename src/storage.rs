@@ -91,7 +91,6 @@ impl Storage {
         }
     }
 
-    // TODO: Support broadcasting?
     pub(crate) fn binary_impl<B: op::BinaryOp>(
         &self,
         rhs: &Self,
