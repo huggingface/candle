@@ -23,6 +23,8 @@ pub(crate) enum Op {
     },
     Neg(Tensor),
     Reshape(Tensor),
+    #[allow(dead_code)]
+    Softmax(Tensor, usize),
     Sqr(Tensor),
     Sqrt(Tensor),
     ToDevice(Tensor),
