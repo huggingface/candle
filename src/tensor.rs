@@ -976,7 +976,7 @@ impl Tensor {
                         *sum_grad = sum_grad.sub(&grad)?
                     }
                     Op::Reshape(_arg) => return Err(Error::BackwardNotSupported { op: "reshape" }),
-                    Op::Gelu(_) => return Err(Error::BackwardNotSupported { op: "reshape" }),
+                    Op::Gelu(_) => return Err(Error::BackwardNotSupported { op: "gelu" }),
                     Op::Sqr(arg) => {
                         let arg_grad = arg.mul(&grad)?.affine(2., 0.)?;
                         let sum_grad = grads.or_insert(arg)?;
