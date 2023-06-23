@@ -122,6 +122,31 @@ impl Storage {
         }
     }
 
+    pub(crate) fn embedding_impl(
+        &self,
+        rhs: &Self,
+        hidden_size: usize,
+        vocab_size: usize,
+    ) -> Result<Self> {
+        self.same_device(rhs, "embedding")?;
+        self.same_dtype(rhs, "embedding")?;
+        match (self, rhs) {
+            (Storage::Cpu(lhs), Storage::Cpu(rhs)) => {
+                let storage = lhs.embedding_impl(rhs, hidden_size, vocab_size)?;
+                Ok(Self::Cpu(storage))
+            }
+            (Self::Cuda(lhs), Self::Cuda(rhs)) => {
+                let storage = lhs.embedding_impl(rhs, hidden_size, vocab_size)?;
+                Ok(Self::Cuda(storage))
+            }
+            (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "embedding",
+            }),
+        }
+    }
+
     pub(crate) fn matmul_impl(
         &self,
         rhs: &Self,

@@ -346,6 +346,15 @@ impl CudaStorage {
         }
     }
 
+    pub(crate) fn embedding_impl(
+        &self,
+        rhs: &Self,
+        hidden_size: usize,
+        vocab_size: usize,
+    ) -> Result<Self> {
+        todo!("Implement embedding for gpu");
+    }
+
     pub(crate) fn matmul_impl(
         &self,
         rhs: &Self,
