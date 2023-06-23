@@ -12,6 +12,9 @@ pub enum Error {
     #[error("{op} expects at least one tensor")]
     OpRequiresAtLeastOneTensor { op: &'static str },
 
+    #[error("backward is not supported for {op}")]
+    BackwardNotSupported { op: &'static str },
+
     #[error("the candle crate has not been built with cuda support")]
     NotCompiledWithCudaSupport,
 
