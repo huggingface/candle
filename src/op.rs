@@ -49,6 +49,7 @@ pub(crate) trait BinaryOp {
     const KERNEL_F64: &'static str;
     fn f32(v1: f32, v2: f32) -> f32;
     fn f64(v1: f64, v2: f64) -> f64;
+    fn u32(v1: u32, v2: u32) -> u32;
 }
 
 pub(crate) struct Add;
@@ -70,6 +71,9 @@ impl BinaryOp for Add {
     fn f64(v1: f64, v2: f64) -> f64 {
         v1 + v2
     }
+    fn u32(v1: u32, v2: u32) -> u32 {
+        v1 + v2
+    }
 }
 
 impl BinaryOp for Sub {
@@ -80,6 +84,9 @@ impl BinaryOp for Sub {
         v1 - v2
     }
     fn f64(v1: f64, v2: f64) -> f64 {
+        v1 - v2
+    }
+    fn u32(v1: u32, v2: u32) -> u32 {
         v1 - v2
     }
 }
@@ -94,6 +101,9 @@ impl BinaryOp for Mul {
     fn f64(v1: f64, v2: f64) -> f64 {
         v1 * v2
     }
+    fn u32(v1: u32, v2: u32) -> u32 {
+        v1 * v2
+    }
 }
 
 impl BinaryOp for Div {
@@ -104,6 +114,9 @@ impl BinaryOp for Div {
         v1 / v2
     }
     fn f64(v1: f64, v2: f64) -> f64 {
+        v1 / v2
+    }
+    fn u32(v1: u32, v2: u32) -> u32 {
         v1 / v2
     }
 }

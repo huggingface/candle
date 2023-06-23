@@ -113,6 +113,15 @@ impl CpuStorage {
                     .collect();
                 Ok(Self::F64(data))
             }
+            (Self::U32(lhs), Self::U32(rhs)) => {
+                let lhs_index = StridedIndex::new(shape.dims(), lhs_stride);
+                let rhs_index = StridedIndex::new(shape.dims(), rhs_stride);
+                let data = lhs_index
+                    .zip(rhs_index)
+                    .map(|(lhs_i, rhs_i)| B::u32(lhs[lhs_i], rhs[rhs_i]))
+                    .collect();
+                Ok(Self::U32(data))
+            }
             _ => {
                 // This should be covered by the dtype check above.
                 Err(Error::DTypeMismatchBinaryOp {
