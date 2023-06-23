@@ -13,3 +13,14 @@ repos:
             "--",
             "-Dwarnings",
           ]
+      - id: clippy
+        name: "Rust (cuda + clippy)"
+        args:
+          [
+            "--tests",
+            "--examples",
+            "--features",
+            "cuda",
+            "--",
+            "-Dwarnings",
+          ]

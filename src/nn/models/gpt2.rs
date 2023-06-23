@@ -33,7 +33,6 @@ impl PastKeyValue {
 
 pub type PastKeyValues = Vec<PastKeyValue>;
 
-#[derive(Clone)]
 pub struct Gpt2Attention {
     qkv: LinearT,
     dense: LinearT,
@@ -56,7 +55,6 @@ impl Gpt2Attention {
     }
 }
 
-#[derive(Clone)]
 pub struct Mlp {
     c_fc: LinearT,
     c_proj: LinearT,
@@ -76,7 +74,6 @@ impl Mlp {
     }
 }
 
-#[derive(Clone)]
 pub struct Gpt2Layer {
     attention: Gpt2Attention,
     mlp: Mlp,
@@ -105,7 +102,6 @@ impl Gpt2Layer {
     }
 }
 
-#[derive(Clone)]
 pub struct Gpt2Model {
     layers: Vec<Gpt2Layer>,
 }
@@ -124,7 +120,6 @@ impl Gpt2Model {
     }
 }
 
-#[derive(Clone)]
 pub struct Gpt2 {
     wte: Embedding,
     wpe: Embedding,
@@ -151,10 +146,6 @@ impl Gpt2 {
             lm_head,
             num_heads,
         }
-    }
-
-    pub fn load(filename: &str) -> Result<Self> {
-        todo!("Implement load");
     }
 
     pub fn forward(&self, input_ids: &Tensor, position_ids: &Tensor) -> Result<Tensor> {

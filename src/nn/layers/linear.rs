@@ -1,7 +1,6 @@
 use crate::{Result, Tensor};
 
 /// Linear layer, applies matmul(x, W) + b
-#[derive(Clone)]
 pub struct Linear {
     weight: Tensor,
     bias: Tensor,
@@ -21,7 +20,6 @@ impl Linear {
 }
 
 /// Linear layer, applies matmul(x, W.T) + b
-#[derive(Clone)]
 pub struct LinearT {
     weight: Tensor,
     bias: Tensor,
@@ -39,7 +37,6 @@ impl LinearT {
     }
 }
 
-#[derive(Clone)]
 pub struct UnbiasedLinear {
     weight: Tensor,
 }

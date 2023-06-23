@@ -1,7 +1,5 @@
 use crate::{Result, Tensor};
 
-/// TODO
-#[derive(Clone)]
 pub struct Embedding {
     weight: Tensor,
 }
@@ -20,19 +18,19 @@ impl Embedding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Device;
 
     #[test]
     fn test_embedding() {
-        let weights = Tensor::zeros((3, 2), DType::f32, &Device::Cpu);
+        let weights =
+            Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0], (3, 2), &Device::Cpu).unwrap();
+        let input_ids = Tensor::new(&[2, 1], &Device::Cpu).unwrap();
         let embedding = Embedding::new(weights);
-        let out = embedding.forward(&[0, 1]).unwrap();
-    }
+        let out = embedding.forward(&input_ids).unwrap();
+        assert_eq!(out.storage_data::<f32>().unwrap(), vec![5.0, 6.0, 3.0, 4.0]);
 
-    #[test]
-    fn test_embedding_errors() {
-        let weights = Tensor::zeros(vec![3, 2]);
-        let embedding = Embedding::new(weights);
-        let mut out = Tensor::zeros(vec![2, 2]);
-        assert!(embedding.forward(&[3], &mut out).is_err());
+        // Invalid index
+        let input_ids = Tensor::new(&[3, 1], &Device::Cpu).unwrap();
+        assert!(embedding.forward(&input_ids).is_err());
     }
 }

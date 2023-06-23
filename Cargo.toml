@@ -25,6 +25,7 @@ gemm = "0.15.4"
 [dev-dependencies]
 anyhow = "1"
 clap = { version = "4.2.4", features = ["derive"] }
+memmap2 = "0.7.0"
 rand = "0.8.5"
 tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
 
