@@ -17,6 +17,7 @@ pub(crate) enum Op {
     Neg(Tensor),
     Sqr(Tensor),
     Sqrt(Tensor),
+    ToDevice(Tensor),
     Transpose(Tensor, usize, usize),
     // TODO: Support for custom ops.
 }
