@@ -32,7 +32,7 @@ UNARY_OP(__half, ucopy_f16, x)
 UNARY_OP(__half, uneg_f16, -x)
 UNARY_OP(__half, usqr_f16, x*x)
 UNARY_OP(__half, usqrt_f16, sqrtg(x))
-// UNARY_OP(__half, gelu_f16, gelu_fwd(x))
+UNARY_OP(__half, gelu_f16, gelu_fwd(x))
 #endif
 
 UNARY_OP(float, ucopy_f32, x)
@@ -44,3 +44,4 @@ UNARY_OP(float, usqr_f64, x*x)
 UNARY_OP(float, usqrt_f32, sqrtg(x))
 UNARY_OP(float, usqrt_f64, sqrtg(x))
 UNARY_OP(float, gelu_f32, gelu_fwd(x))
+UNARY_OP(float, gelu_f64, gelu_fwd(x))

@@ -143,14 +143,14 @@ impl UnaryOp for Sqrt {
 /// <https://en.wikipedia.org/wiki/Activation_function#Comparison_of_activation_functions>
 #[inline]
 pub fn gelu_f32(v: f32) -> f32 {
-    0.5 * (v)
+    0.5 * v
         * (1.0 + f32::tanh((2.0f32 / std::f32::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)))
 }
 /// `gelu` operation
 /// <https://en.wikipedia.org/wiki/Activation_function#Comparison_of_activation_functions>
 #[inline]
 pub fn gelu_f64(v: f64) -> f64 {
-    0.5 * (v)
+    0.5 * v
         * (1.0 + f64::tanh((2.0f64 / std::f64::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)))
 }
 impl UnaryOp for Gelu {
