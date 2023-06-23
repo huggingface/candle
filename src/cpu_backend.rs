@@ -150,6 +150,7 @@ impl CpuStorage {
             }
         }
         Ok(())
+    }
 
     pub(crate) fn embedding_impl(
         &self,
