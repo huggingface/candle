@@ -490,6 +490,20 @@ impl Tensor {
         self.shape.is_contiguous(&self.stride)
     }
 
+    /// Compared to clone, this copies the actual storage but may fail because of running out of
+    /// memory.
+    pub fn copy(&self) -> Result<Tensor> {
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.try_clone()?,
+            shape: self.shape.clone(),
+            stride: self.stride.clone(),
+            op: self.op.clone(),
+            is_variable: self.is_variable,
+        };
+        Ok(Tensor(Arc::new(tensor_)))
+    }
+
     /// Return all the nodes that lead to this value in a topologically sorted vec, the first
     /// elements having dependencies on the latter ones, e.g. the first element if any is the
     /// argument.

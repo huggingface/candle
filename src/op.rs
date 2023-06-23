@@ -1,5 +1,6 @@
 use crate::Tensor;
 
+#[derive(Clone)]
 pub(crate) enum Op {
     Add(Tensor, Tensor),
     Mul(Tensor, Tensor),
