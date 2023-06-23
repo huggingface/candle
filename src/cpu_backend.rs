@@ -13,11 +13,18 @@ pub enum CpuStorage {
     F64(Vec<f64>),
 }
 
-fn unary_map<T, F: FnMut(usize) -> T>(shape: &Shape, stride: &[usize], f: F) -> Vec<T> {
+fn unary_map<T: Copy, F: FnMut(T) -> T>(
+    shape: &Shape,
+    stride: &[usize],
+    vs: &[T],
+    mut f: F,
+) -> Vec<T> {
     if shape.is_contiguous(stride) {
-        (0..shape.elem_count()).map(f).collect()
+        vs[..shape.elem_count()].iter().map(|&v| f(v)).collect()
     } else {
-        StridedIndex::new(shape.dims(), stride).map(f).collect()
+        StridedIndex::new(shape.dims(), stride)
+            .map(|i| f(vs[i]))
+            .collect()
     }
 }
 
@@ -109,37 +116,35 @@ impl CpuStorage {
             Self::U32(storage) => {
                 let mul = mul as u32;
                 let add = add as u32;
-                let data = unary_map(shape, stride, |i| storage[i] * mul + add);
+                let data = unary_map(shape, stride, storage, |v| v * mul + add);
                 Ok(Self::U32(data))
             }
             Self::F32(storage) => {
                 let mul = mul as f32;
                 let add = add as f32;
-                let data = unary_map(shape, stride, |i| storage[i] * mul + add);
+                let data = unary_map(shape, stride, storage, |v| v * mul + add);
                 Ok(Self::F32(data))
             }
             Self::F64(storage) => {
-                let data = unary_map(shape, stride, |i| storage[i] * mul + add);
+                let data = unary_map(shape, stride, storage, |v| v * mul + add);
                 Ok(Self::F64(data))
             }
         }
     }
 
     pub(crate) fn unary_impl<B: UnaryOp>(&self, shape: &Shape, stride: &[usize]) -> Result<Self> {
-        // TODO: Different code path for the contiguous case?
         match self {
             Self::F32(storage) => {
-                let index = StridedIndex::new(shape.dims(), stride);
-                let data = index.map(|i| B::f32(storage[i])).collect();
+                let data = unary_map(shape, stride, storage, B::f32);
                 Ok(Self::F32(data))
             }
             Self::F64(storage) => {
-                let index = StridedIndex::new(shape.dims(), stride);
-                let data = index.map(|i| B::f64(storage[i])).collect();
+                let data = unary_map(shape, stride, storage, B::f64);
                 Ok(Self::F64(data))
             }
-            Self::U32(_storage) => {
-                todo!("No unary for u32 because of neg, sqrt")
+            Self::U32(storage) => {
+                let data = unary_map(shape, stride, storage, B::u32);
+                Ok(Self::U32(data))
             }
         }
     }
