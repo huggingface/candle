@@ -358,6 +358,15 @@ impl CudaStorage {
                 unsafe { func.launch(cfg, params) }?;
                 CudaStorageSlice::F64(out)
             }
+            (CudaStorageSlice::U32(lhs), CudaStorageSlice::U32(rhs)) => {
+                // SAFETY: Set later by running the kernel.
+                let func = dev.get_or_load_func(B::KERNEL_U32, kernels::BINARY)?;
+                let out = unsafe { dev.alloc::<u32>(elem_count) }?;
+                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+                // SAFETY: ffi
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::U32(out)
+            }
             // The dtypes should have been checked at this point so this is an internal error.
             _ => return Err(CudaError::InternalError("dtype mismatch in binary op")),
         };

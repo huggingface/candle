@@ -47,6 +47,7 @@ pub(crate) trait BinaryOp {
     // contiguous case separately as it's easy to optimize things out there.
     const KERNEL_F32: &'static str;
     const KERNEL_F64: &'static str;
+    const KERNEL_U32: &'static str;
     fn f32(v1: f32, v2: f32) -> f32;
     fn f64(v1: f64, v2: f64) -> f64;
     fn u32(v1: u32, v2: u32) -> u32;
@@ -65,6 +66,7 @@ impl BinaryOp for Add {
     const NAME: &'static str = "add";
     const KERNEL_F32: &'static str = "badd_f32";
     const KERNEL_F64: &'static str = "badd_f64";
+    const KERNEL_U32: &'static str = "badd_u32";
     fn f32(v1: f32, v2: f32) -> f32 {
         v1 + v2
     }
@@ -80,6 +82,7 @@ impl BinaryOp for Sub {
     const NAME: &'static str = "sub";
     const KERNEL_F32: &'static str = "bsub_f32";
     const KERNEL_F64: &'static str = "bsub_f64";
+    const KERNEL_U32: &'static str = "bsub_u32";
     fn f32(v1: f32, v2: f32) -> f32 {
         v1 - v2
     }
@@ -95,6 +98,7 @@ impl BinaryOp for Mul {
     const NAME: &'static str = "mul";
     const KERNEL_F32: &'static str = "bmul_f32";
     const KERNEL_F64: &'static str = "bmul_f64";
+    const KERNEL_U32: &'static str = "bmul_u32";
     fn f32(v1: f32, v2: f32) -> f32 {
         v1 * v2
     }
@@ -110,6 +114,7 @@ impl BinaryOp for Div {
     const NAME: &'static str = "div";
     const KERNEL_F32: &'static str = "bdiv_f32";
     const KERNEL_F64: &'static str = "bdiv_f64";
+    const KERNEL_U32: &'static str = "bdiv_u32";
     fn f32(v1: f32, v2: f32) -> f32 {
         v1 / v2
     }
