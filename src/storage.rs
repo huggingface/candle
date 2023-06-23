@@ -160,8 +160,8 @@ impl Storage {
             (Self::Cpu(src), Self::Cpu(dst)) => {
                 src.copy_strided_src(dst, src_shape, src_stride, dst_offset)
             }
-            (Self::Cuda(_src), Self::Cuda(_dst)) => {
-                todo!()
+            (Self::Cuda(src), Self::Cuda(dst)) => {
+                Ok(src.copy_strided_src(dst, src_shape, src_stride, dst_offset)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),

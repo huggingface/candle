@@ -18,11 +18,14 @@ extern "C" __global__ void FN_NAME( \
 } \
 
 #if __CUDA_ARCH__ >= 530
+UNARY_OP(__half, ucopy_f16, x)
 UNARY_OP(__half, uneg_f16, -x)
 UNARY_OP(__half, usqr_f16, x*x)
 UNARY_OP(__half, usqrt_f16, sqrtg(x))
 #endif
 
+UNARY_OP(float, ucopy_f32, x)
+UNARY_OP(float, ucopy_f64, x)
 UNARY_OP(float, uneg_f32, -x)
 UNARY_OP(float, uneg_f64, -x)
 UNARY_OP(float, usqr_f32, x*x)

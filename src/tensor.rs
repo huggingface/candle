@@ -596,6 +596,9 @@ impl Tensor {
     }
 
     // TODO: Do we want to allow target shape using -1 on some dimensions?
+    /// Reshape returns a tensor with the target shape provided that the number of elements of the
+    /// original tensor is the same. This uses a new storage and copies the data over, the returned
+    /// tensor is always contiguous.
     pub fn reshape<S: Into<Shape>>(&self, shape: S) -> Result<Tensor> {
         let shape = shape.into();
         if shape.elem_count() != self.elem_count() {

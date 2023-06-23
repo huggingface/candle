@@ -85,4 +85,14 @@ impl CudaStorage {
     ) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    pub(crate) fn copy_strided_src(
+        &self,
+        _: &mut Self,
+        _: &Shape,
+        _: &[usize],
+        _: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
