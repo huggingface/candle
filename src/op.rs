@@ -17,7 +17,6 @@ pub(crate) enum Op {
         add: f64,
     },
     Neg(Tensor),
-    #[allow(dead_code)]
     Reshape(Tensor),
     Sqr(Tensor),
     Sqrt(Tensor),
