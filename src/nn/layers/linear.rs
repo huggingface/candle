@@ -14,9 +14,9 @@ impl Linear {
 
     /// Forward pass
     pub fn forward(&self, tensor: &Tensor) -> Result<Tensor> {
-        let _x = tensor.matmul(&self.weight)?;
+        // TODO
+        tensor.matmul(&self.weight)
         // x.broadcast_add(&self.bias)
-        todo!("Linear")
     }
 }
 
@@ -32,9 +32,8 @@ impl LinearT {
     }
 
     pub fn forward(&self, tensor: &Tensor) -> Result<Tensor> {
-        let _x = tensor.matmul(&self.weight.t()?)?;
-        // x.broadcast_add(&self.bias)
-        todo!("Linear")
+        tensor.matmul(&self.weight.t()?)
+        //TODO
     }
 }
 
@@ -44,11 +43,13 @@ pub struct UnbiasedLinear {
 
 impl UnbiasedLinear {
     pub fn new(weight: Tensor) -> Self {
-        Self { weight }
+        Self {
+            weight: weight.t().unwrap(),
+        }
     }
 
     pub fn forward(&self, tensor: &Tensor) -> Result<Tensor> {
-        tensor.matmul(&self.weight.t()?)
+        tensor.matmul(&self.weight)
     }
 }
 

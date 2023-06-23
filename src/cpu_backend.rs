@@ -133,6 +133,7 @@ impl CpuStorage {
                     dst[dst_offset..].copy_from_slice(src)
                 } else {
                     let src_indexes = StridedIndex::new(src_shape.dims(), src_stride);
+                    println!("Src indexes {src_indexes:?}");
                     for (dst_index, src_index) in src_indexes.enumerate() {
                         dst[dst_index + dst_offset] = src[src_index]
                     }
@@ -290,7 +291,8 @@ impl CpuStorage {
                     // conj_rhs: bool,
                     true,
                     // parallelism: Parallelism
-                    Parallelism::None,
+                    Parallelism::Rayon(num_cpus::get()),
+                    // Parallelism::None,
                 )
             }
         }

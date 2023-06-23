@@ -1,5 +1,5 @@
 #![allow(unreachable_patterns, dead_code)]
-use crate::nn::layers::{Embedding, LayerNorm, LinearT, UnbiasedLinear};
+use crate::nn::layers::{Embedding, LayerNorm, Linear, UnbiasedLinear};
 use crate::Result;
 use crate::{DType, Device, Tensor};
 
@@ -35,43 +35,51 @@ impl PastKeyValue {
 pub type PastKeyValues = Vec<PastKeyValue>;
 
 pub struct Gpt2Attention {
-    qkv: LinearT,
-    dense: LinearT,
-    i: usize,
+    qkv: Linear,
+    dense: Linear,
+    head_dim: usize,
 }
 
 impl Gpt2Attention {
-    pub fn new(qkv: LinearT, dense: LinearT, i: usize) -> Self {
-        Self { qkv, dense, i }
+    pub fn new(qkv: Linear, dense: Linear, head_dim: usize) -> Self {
+        Self {
+            qkv,
+            dense,
+            head_dim,
+        }
     }
 
     pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let hidden_states = self.qkv.forward(hidden_states)?;
+        // let qkv = self.qkv.forward(hidden_states)?;
 
-        // TODO
-        // attention(&self.qkv, self.i)?;
-        //
-        let dense = self.dense.forward(&hidden_states);
-        hidden_states + dense
+        // let causal = true;
+        // let hidden_states = Tensor::attention(&qkv, self.head_dim, causal)?;
+        // TODO CAT + reshape
+        // let scalar: f32 = (1.0 / (self.head_dim as f32)).sqrt();
+        // let weights = q.matmul(&k)? * scalar;
+        // let weights = weights.softmax();
+
+        // let tokens = weights.matmul(v)?;
+
+        self.dense.forward(hidden_states)
     }
 }
 
 pub struct Mlp {
-    c_fc: LinearT,
-    c_proj: LinearT,
+    c_fc: Linear,
+    c_proj: Linear,
 }
 
 impl Mlp {
-    pub fn new(c_fc: LinearT, c_proj: LinearT) -> Self {
+    pub fn new(c_fc: Linear, c_proj: Linear) -> Self {
         Self { c_fc, c_proj }
     }
 
     pub fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        let _intermediary_states = self.c_fc.forward(hidden_states)?;
-        // let intermediary_states = intermediary_states.gelu()?;
-        todo!("MLP gelu");
-        // let hidden_states = self.c_proj.forward(intermediary_states)?;
-        // Ok(hidden_states)
+        let intermediary_states = self.c_fc.forward(hidden_states)?;
+        let intermediary_states = intermediary_states.gelu()?;
+        let hidden_states = self.c_proj.forward(&intermediary_states)?;
+        Ok(hidden_states)
     }
 }
 
@@ -98,7 +106,7 @@ impl Gpt2Layer {
         let hidden_states = (hidden_states + attention_weights)?;
         let layered_states = self.ln_2.forward(&hidden_states)?;
         let output = self.mlp.forward(&layered_states)?;
-        let hidden_states = hidden_states.add(&output)?;
+        let hidden_states = (hidden_states + output)?;
         Ok(hidden_states)
     }
 }
@@ -165,20 +173,4 @@ impl Gpt2 {
         let logits = self.lm_head.forward(&hidden_states)?;
         Ok(logits)
     }
-
-    // pub fn run(&self, input_ids: Vec<usize>, new_tokens: usize) -> Result<Vec<usize>> {
-    //     #[cfg(feature = "cuda")]
-    //     profiler_start()?;
-    //     let mut context = self.new_context(input_ids, self.num_heads)?;
-    //     for _ in 0..new_tokens {
-    //         let start = std::time::Instant::now();
-    //         self.forward(&mut context)?;
-    //         context.generate()?;
-    //         // println!("past {:?}", context.past_key_values[0].key.shape());
-    //         println!("Took {:?}", start.elapsed());
-    //     }
-    //     #[cfg(feature = "cuda")]
-    //     profiler_stop()?;
-    //     context.new_tokens()
-    // }
 }

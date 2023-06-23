@@ -3,7 +3,8 @@ use candle::{Device, Tensor};
 use tokenizers::Tokenizer;
 
 fn main() -> Result<()> {
-    let device = Device::new_cuda(0)?;
+    // let device = Device::new_cuda(0)?;
+    let device = Device::Cpu;
 
     //wget https://huggingface.co/gpt2/raw/main/tokenizer.json
     let tokenizer = Tokenizer::from_file("tokenizer.json").unwrap();
@@ -11,27 +12,40 @@ fn main() -> Result<()> {
 
     let ids = encoded.get_ids();
     assert_eq!(ids, &[2061, 318, 2769, 4673, 5633]);
-    let input_ids = Tensor::from_slice(ids, (1, ids.len()), &device)?;
+    let input_ids = Tensor::from_slice(ids, ids.len(), &device)?;
 
     let position_ids: Vec<_> = (0..ids.len() as u32).collect();
-    let position_ids = Tensor::from_slice(&position_ids, (1, position_ids.len()), &device)?;
+    let position_ids = Tensor::from_slice(&position_ids, position_ids.len(), &device)?;
 
     // XXX: This is highly gpt2 specific, before we actually load configurations.
     let num_heads = 12;
     //wget https://huggingface.co/gpt2/resolve/main/model.safetensors
     let gpt2 = load::load("model.safetensors", &Device::Cpu, num_heads)?;
+    let start = std::time::Instant::now();
     let logits = gpt2.forward(&input_ids, &position_ids)?;
-    // let id = logits.argmax(-1)?;
-    todo!("Argmax {:?}", logits);
-    // let token = tokenizer.decode(&[id], true).unwrap();
-    // assert_eq!(token, "");
-    // Ok(())
+    println!("Taken {:?}", start.elapsed());
+
+    let logits = logits.storage_data::<f32>()?;
+    let (id, _) =
+        logits
+            .iter()
+            .enumerate()
+            .fold((0, logits[0]), |(idx_max, val_max), (idx, val)| {
+                if &val_max > val {
+                    (idx_max, val_max)
+                } else {
+                    (idx as u32, *val)
+                }
+            });
+    let token = tokenizer.decode(vec![id], true).unwrap();
+    assert_eq!(token, " the");
+    Ok(())
 }
 
 mod load {
     use super::*;
     use candle::nn::{
-        layers::{Embedding, LayerNorm, LinearT, UnbiasedLinear},
+        layers::{Embedding, LayerNorm, Linear, UnbiasedLinear},
         models::gpt2::{Gpt2, Gpt2Attention, Gpt2Layer, Gpt2Model, Mlp},
     };
     use memmap2::MmapOptions;
@@ -143,10 +157,10 @@ mod load {
         prefix: &str,
         tensors: &SafeTensors<'_>,
         device: &Device,
-    ) -> Result<LinearT> {
+    ) -> Result<Linear> {
         let weights = tensors.tensor(&format!("{}.weight", prefix))?;
         let bias = tensors.tensor(&format!("{}.bias", prefix))?;
-        Ok(LinearT::new(
+        Ok(Linear::new(
             to_tensor(weights, device)?,
             to_tensor(bias, device)?,
         ))

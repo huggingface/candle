@@ -16,8 +16,9 @@ impl LayerNorm {
         }
     }
 
-    pub fn forward(&self, _tensor: &Tensor) -> Result<Tensor> {
-        todo!("Layer norm");
+    pub fn forward(&self, tensor: &Tensor) -> Result<Tensor> {
+        // TODO
+        Ok(tensor.clone())
     }
 }
 
