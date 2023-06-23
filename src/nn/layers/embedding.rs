@@ -10,8 +10,7 @@ impl Embedding {
     }
 
     pub fn forward(&self, ids: &Tensor) -> Result<Tensor> {
-        todo!("embedding")
-        // self.weight.select(ids)
+        Tensor::embedding(ids, &self.weight)
     }
 }
 
@@ -23,13 +22,13 @@ mod tests {
     #[test]
     fn test_embedding() {
         let weights =
-            Tensor::from_slice(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], (3, 2), &Device::Cpu).unwrap();
+            Tensor::from_slice(&[0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0], (3, 2), &Device::Cpu).unwrap();
         let input_ids = Tensor::new(&[2, 1], &Device::Cpu).unwrap();
         let embedding = Embedding::new(weights);
         let out = embedding.forward(&input_ids).unwrap();
         assert_eq!(
             &out.storage_data::<f32>().unwrap()[..],
-            &[5.0, 6.0, 3.0, 4.0]
+            &[4.0, 5.0, 2.0, 3.0]
         );
 
         // Invalid index
