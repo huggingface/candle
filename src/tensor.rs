@@ -602,6 +602,17 @@ impl Tensor {
         }
     }
 
+    pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
+        let shape = self.shape();
+        let storage = self.storage.to_dtype(shape, self.stride(), dtype)?;
+        let op = if self.track_op() {
+            Some(Op::ToDType(self.clone()))
+        } else {
+            None
+        };
+        Ok(from_storage(storage, shape.clone(), op, false))
+    }
+
     pub fn contiguous(&self) -> Result<Tensor> {
         if self.is_contiguous() {
             Ok(self.clone())
@@ -773,6 +784,7 @@ impl Tensor {
                         }
                     }
                     Op::Reshape(node)
+                    | Op::ToDType(node)
                     | Op::ToDevice(node)
                     | Op::Transpose(node, _, _)
                     | Op::Softmax(node, _)
@@ -892,6 +904,10 @@ impl Tensor {
                         *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
                     }
                     Op::Cat(_args, _dim) => return Err(Error::BackwardNotSupported { op: "cat" }),
+                    Op::ToDType(arg) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad.to_dtype(node.dtype())?)?
+                    }
                     Op::Affine { arg, mul, .. } => {
                         let arg_grad = grad.affine(*mul, 0.)?;
                         let sum_grad = grads.or_insert(arg)?;

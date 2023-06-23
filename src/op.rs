@@ -21,6 +21,7 @@ pub(crate) enum Op {
         mul: f64,
         add: f64,
     },
+    ToDType(Tensor),
     Exp(Tensor),
     Log(Tensor),
     Sin(Tensor),

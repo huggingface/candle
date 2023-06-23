@@ -242,6 +242,10 @@ impl CudaStorage {
         &self.device
     }
 
+    pub(crate) fn to_dtype(&self, _: &Shape, _: &[usize], _: DType) -> Result<Self> {
+        Err(CudaError::InternalError("TODO: implement embedding"))
+    }
+
     pub(crate) fn affine_impl(
         &self,
         shape: &Shape,
@@ -400,7 +404,7 @@ impl CudaStorage {
         _hidden_size: usize,
         _vocab_size: usize,
     ) -> Result<Self> {
-        todo!("Implement embedding for gpu");
+        Err(CudaError::InternalError("TODO: implement embedding"))
     }
 
     pub(crate) fn matmul_impl(

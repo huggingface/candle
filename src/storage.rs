@@ -60,7 +60,6 @@ impl Storage {
         mul: f64,
         add: f64,
     ) -> Result<Self> {
-        // TODO: Different code path for the contiguous case?
         match self {
             Storage::Cpu(storage) => {
                 let storage = storage.affine_impl(shape, stride, mul, add)?;
@@ -68,6 +67,19 @@ impl Storage {
             }
             Self::Cuda(storage) => {
                 let storage = storage.affine_impl(shape, stride, mul, add)?;
+                Ok(Self::Cuda(storage))
+            }
+        }
+    }
+
+    pub(crate) fn to_dtype(&self, shape: &Shape, stride: &[usize], dtype: DType) -> Result<Self> {
+        match self {
+            Storage::Cpu(storage) => {
+                let storage = storage.to_dtype(shape, stride, dtype)?;
+                Ok(Self::Cpu(storage))
+            }
+            Self::Cuda(storage) => {
+                let storage = storage.to_dtype(shape, stride, dtype)?;
                 Ok(Self::Cuda(storage))
             }
         }
