@@ -10,10 +10,18 @@ extern "C" __global__ void FN_NAME( \
 ) { \
     const size_t *dims = info; \
     const size_t *strides = info + num_dims; \
-    for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
-        unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
-        TYPENAME x = inp ? inp[strided_i] : out[i]; \
-        out[i] = FUNC; \
+    if (is_contiguous(num_dims, dims, strides)) { \
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+            TYPENAME x = inp ? inp[i] : out[i]; \
+            out[i] = FUNC; \
+        } \
+    } \
+    else { \
+        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
+            unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
+            TYPENAME x = inp ? inp[strided_i] : out[i]; \
+            out[i] = FUNC; \
+        } \
     } \
 } \
 

@@ -1,6 +1,22 @@
 #include "cuda_fp16.h"
 #include "compatibility.cuh"
 
+__device__ bool is_contiguous(
+    const size_t num_dims,
+    const size_t *dims,
+    const size_t *strides
+) {
+    size_t acc = 1;
+    for (unsigned int d = 0; d < num_dims; d++) {
+        unsigned int dim_idx = num_dims - 1 - d;
+        if (acc != strides[dim_idx]) {
+            return false;
+        }
+        acc *= dims[dim_idx];
+    }
+    return true;
+}
+
 __device__ unsigned int get_strided_index(
     unsigned int idx,
     const size_t num_dims,
