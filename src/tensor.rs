@@ -301,7 +301,7 @@ impl Tensor {
             .storage
             .unary_impl::<crate::op::Exp>(shape, self.stride())?;
         // The resulting storage is contiguous.
-        storage.divide_by_sum_over_dim(shape, dim);
+        storage.divide_by_sum_over_dim(shape, dim)?;
         let op = if self.track_op() {
             Some(Op::Softmax(self.clone(), dim))
         } else {

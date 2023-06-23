@@ -147,8 +147,52 @@ impl CpuStorage {
         }
     }
 
-    pub(crate) fn divide_by_sum_over_dim(&mut self, _shape: &Shape, _dim: usize) {
-        todo!()
+    pub(crate) fn divide_by_sum_over_dim(&mut self, shape: &Shape, dim: usize) -> Result<()> {
+        // [self] stores data in a contiguous way.
+        let dims = shape.dims();
+        let number_of_slices = dims[dim];
+        let prod_pre_dim = dims[..dim].iter().product();
+        let prod_post_dim = dims[dim + 1..].iter().product();
+        let elem_count = shape.elem_count();
+        match self {
+            Self::F32(storage) => {
+                for pre_idx in 0..prod_pre_dim {
+                    for post_idx in 0..prod_post_dim {
+                        let mut sum = 0f64;
+                        let mut idx = pre_idx * prod_post_dim * number_of_slices + post_idx;
+                        while idx < elem_count {
+                            sum += storage[idx] as f64;
+                            idx += prod_post_dim
+                        }
+                        let sum = sum as f32;
+                        let mut idx = pre_idx * prod_post_dim * number_of_slices + post_idx;
+                        while idx < elem_count {
+                            storage[idx] /= sum;
+                            idx += prod_post_dim
+                        }
+                    }
+                }
+            }
+            Self::F64(storage) => {
+                for pre_idx in 0..prod_pre_dim {
+                    for post_idx in 0..prod_post_dim {
+                        let mut sum = 0f64;
+                        let mut idx = pre_idx * prod_post_dim * number_of_slices + post_idx;
+                        while idx < elem_count {
+                            sum += storage[idx];
+                            idx += prod_post_dim
+                        }
+                        let mut idx = pre_idx * prod_post_dim * number_of_slices + post_idx;
+                        while idx < elem_count {
+                            storage[idx] /= sum;
+                            idx += prod_post_dim
+                        }
+                    }
+                }
+            }
+            Self::U32(_) => {}
+        }
+        Ok(())
     }
 
     pub(crate) fn affine_impl(
