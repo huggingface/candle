@@ -446,6 +446,9 @@ impl CudaStorage {
         src_stride: &[usize],
         dst_offset: usize,
     ) -> Result<()> {
+        if src_shape.rank() != src_stride.len() {
+            panic!("incoherent shape and strides {src_shape:?} {src_stride:?}")
+        }
         let dims = src_shape.dims();
         let el_count = src_shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el_count as u32);

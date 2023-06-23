@@ -182,6 +182,9 @@ impl CpuStorage {
         src_stride: &[usize],
         dst_offset: usize,
     ) -> Result<()> {
+        if src_shape.rank() != src_stride.len() {
+            panic!("incoherent shape and strides {src_shape:?} {src_stride:?}")
+        }
         match (self, dst) {
             (Self::F32(src), Self::F32(dst)) => {
                 if src_shape.is_contiguous(src_stride) {
