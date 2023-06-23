@@ -72,6 +72,13 @@ impl Storage {
         }
     }
 
+    pub(crate) fn divide_by_sum_over_dim(&mut self, shape: &Shape, dim: usize) {
+        match self {
+            Storage::Cpu(storage) => storage.divide_by_sum_over_dim(shape, dim),
+            Self::Cuda(storage) => storage.divide_by_sum_over_dim(shape, dim),
+        }
+    }
+
     pub(crate) fn to_dtype(&self, shape: &Shape, stride: &[usize], dtype: DType) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {

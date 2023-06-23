@@ -295,6 +295,21 @@ impl Tensor {
         Ok(from_storage(storage, shape.clone(), op, false))
     }
 
+    pub fn softmax(&self, dim: usize) -> Result<Self> {
+        let shape = self.shape();
+        let mut storage = self
+            .storage
+            .unary_impl::<crate::op::Exp>(shape, self.stride())?;
+        // The resulting storage is contiguous.
+        storage.divide_by_sum_over_dim(shape, dim);
+        let op = if self.track_op() {
+            Some(Op::Softmax(self.clone(), dim))
+        } else {
+            None
+        };
+        Ok(from_storage(storage, shape.clone(), op, false))
+    }
+
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
         let a_dims = self.shape().dims();
         let b_dims = rhs.shape().dims();

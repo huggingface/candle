@@ -147,6 +147,10 @@ impl CpuStorage {
         }
     }
 
+    pub(crate) fn divide_by_sum_over_dim(&mut self, _shape: &Shape, _dim: usize) {
+        todo!()
+    }
+
     pub(crate) fn affine_impl(
         &self,
         shape: &Shape,

@@ -291,6 +291,10 @@ impl CudaStorage {
         Ok(Self { slice, device })
     }
 
+    pub(crate) fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) {
+        todo!()
+    }
+
     pub(crate) fn unary_impl<U: crate::op::UnaryOp>(
         &self,
         shape: &Shape,

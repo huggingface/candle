@@ -62,6 +62,8 @@ impl CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub(crate) fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) {}
+
     pub(crate) fn to_dtype(&self, _: &Shape, _: &[usize], _: DType) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
