@@ -660,7 +660,7 @@ impl Tensor {
         }
         let mut storage = self.device().zeros(&shape, self.dtype())?;
         self.storage
-            .copy_strided_src(&mut storage, &shape, &self.stride, 0)?;
+            .copy_strided_src(&mut storage, &self.shape, &self.stride, 0)?;
         let op = if self.track_op() {
             Some(Op::Reshape(self.clone()))
         } else {
