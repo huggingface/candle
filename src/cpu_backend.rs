@@ -292,7 +292,6 @@ impl CpuStorage {
                     true,
                     // parallelism: Parallelism
                     Parallelism::Rayon(num_cpus::get()),
-                    // Parallelism::None,
                 )
             }
         }
