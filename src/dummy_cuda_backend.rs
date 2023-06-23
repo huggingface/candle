@@ -80,6 +80,9 @@ impl CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub(crate) fn normalize_impl(&self, _: usize, _: f64) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
     pub(crate) fn matmul_impl(
         &self,
         _: &Self,

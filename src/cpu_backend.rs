@@ -212,6 +212,40 @@ impl CpuStorage {
         }
     }
 
+    pub(crate) fn normalize_impl(&self, size: usize, epsilon: f64) -> Result<Self> {
+        match self {
+            Self::U32(_) => {
+                todo!("Not implemented");
+            }
+            Self::F32(src) => {
+                let mut dst = src.clone();
+                let _ = &mut dst[..].chunks_mut(size).for_each(|chunk| {
+                    let sum: f32 = chunk.iter().sum();
+                    let mean = sum / size as f32;
+                    chunk.iter_mut().for_each(|v| *v -= mean);
+                    let var: f32 = chunk.iter().map(|v| v * v).sum();
+                    let var = var / size as f32;
+                    let stddev: f32 = (var + epsilon as f32).sqrt();
+                    chunk.iter_mut().for_each(|v| *v /= stddev);
+                });
+                Ok(Self::F32(dst))
+            }
+            Self::F64(src) => {
+                let mut dst = src.clone();
+                let _ = &mut dst[..].chunks_mut(size).for_each(|chunk| {
+                    let sum: f64 = chunk.iter().sum();
+                    let mean = sum / size as f64;
+                    chunk.iter_mut().for_each(|v| *v -= mean);
+                    let var: f64 = chunk.iter().map(|v| v * v).sum();
+                    let var = var / size as f64;
+                    let stddev: f64 = (var + epsilon).sqrt();
+                    chunk.iter_mut().for_each(|v| *v /= stddev);
+                });
+                Ok(Self::F64(dst))
+            }
+        }
+    }
+
     pub(crate) fn matmul_impl(
         &self,
         rhs: &Self,

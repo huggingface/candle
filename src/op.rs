@@ -24,6 +24,7 @@ pub(crate) enum Op {
     ToDevice(Tensor),
     Transpose(Tensor, usize, usize),
     Gelu(Tensor),
+    Normalize(Tensor),
     // TODO: Support for custom ops.
 }
 

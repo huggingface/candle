@@ -1,7 +1,7 @@
 use crate::{CpuStorage, DType, Shape};
 use candle_kernels as kernels;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
-use cudarc::driver::{CudaFunction, CudaSlice, LaunchAsync, LaunchConfig};
+use cudarc::driver::{CudaFunction, CudaSlice, DeviceSlice, LaunchAsync, LaunchConfig};
 use std::sync::Arc;
 
 /// cudarc related errors
@@ -389,6 +389,41 @@ impl CudaStorage {
         _vocab_size: usize,
     ) -> Result<Self> {
         todo!("Implement embedding for gpu");
+    }
+
+    pub(crate) fn normalize_impl(&self, size: usize, epsilon: f64) -> Result<Self> {
+        let dev = &self.device;
+        let slice = match &self.slice {
+            CudaStorageSlice::U32(_) => {
+                todo!("Not implemented");
+            }
+            CudaStorageSlice::F32(src) => {
+                let cfg = LaunchConfig::for_num_elems(src.len() as u32);
+                let func = dev.get_or_load_func("normalize_f32", kernels::NORMALIZE)?;
+                // SAFETY: Set later by running the kernel.
+                let el_count = src.len();
+                let mut dst = unsafe { dev.alloc::<f32>(el_count) }?;
+                dev.dtod_copy(src, &mut dst)?;
+                let params = (el_count, &mut dst, size, epsilon);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F32(dst)
+            }
+            CudaStorageSlice::F64(src) => {
+                let cfg = LaunchConfig::for_num_elems(src.len() as u32);
+                let func = dev.get_or_load_func("normalize_f64", kernels::NORMALIZE)?;
+                // SAFETY: Set later by running the kernel.
+                let el_count = src.len();
+                let mut dst = unsafe { dev.alloc::<f64>(el_count) }?;
+                dev.dtod_copy(src, &mut dst)?;
+                let params = (el_count, &mut dst, size, epsilon);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F64(dst)
+            }
+        };
+        let device = dev.clone();
+        Ok(Self { slice, device })
     }
 
     pub(crate) fn matmul_impl(

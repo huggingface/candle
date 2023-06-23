@@ -661,6 +661,26 @@ impl Tensor {
         Ok(Tensor(Arc::new(tensor_)))
     }
 
+    pub fn normalize(&self, epsilon: f64) -> Result<Self> {
+        let rank = self.shape().rank();
+        let size = self.shape().dims()[rank - 1];
+        let storage = self.storage.normalize_impl(size, epsilon)?;
+        let op = if self.track_op() {
+            Some(Op::Normalize(self.clone()))
+        } else {
+            None
+        };
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage,
+            shape: self.shape.clone(),
+            stride: self.stride.clone(),
+            op,
+            is_variable: false,
+        };
+        Ok(Tensor(Arc::new(tensor_)))
+    }
+
     pub fn cat(args: &[Self], dim: usize) -> Result<Self> {
         if args.is_empty() {
             return Err(Error::OpRequiresAtLeastOneTensor { op: "cat" });
@@ -801,6 +821,7 @@ impl Tensor {
                     | Op::Sqr(node)
                     | Op::Sqrt(node)
                     | Op::Gelu(node)
+                    | Op::Normalize(node)
                     | Op::Neg(node) => {
                         let (tg, nodes) = walk(node, nodes, already_seen);
                         track_grad |= tg;
@@ -892,7 +913,10 @@ impl Tensor {
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
                     Op::Reshape(_arg) => return Err(Error::BackwardNotSupported { op: "reshape" }),
-                    Op::Gelu(_) => return Err(Error::BackwardNotSupported { op: "reshape" }),
+                    Op::Gelu(_) => return Err(Error::BackwardNotSupported { op: "gelu" }),
+                    Op::Normalize(_) => {
+                        return Err(Error::BackwardNotSupported { op: "normalize" })
+                    }
                     Op::Sqr(arg) => {
                         let arg_grad = arg.mul(&grad)?.affine(2., 0.)?;
                         let sum_grad = grads.or_insert(arg)?;
