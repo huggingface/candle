@@ -4,6 +4,8 @@ use gemm::{gemm, Parallelism};
 
 // TODO: Think about whether we would be better off with a dtype and
 // a buffer as an owned slice of bytes.
+// TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
+// intercept the oom errors to avoid panicking and provide a proper error.
 #[derive(Debug, Clone)]
 pub enum CpuStorage {
     F32(Vec<f32>),

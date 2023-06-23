@@ -17,6 +17,10 @@ impl CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub(crate) fn same_id(&self, _: &Self) -> bool {
+        true
+    }
+
     pub(crate) fn ordinal(&self) -> usize {
         fail!()
     }

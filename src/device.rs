@@ -66,6 +66,14 @@ impl Device {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))
     }
 
+    pub fn same_id(&self, rhs: &Self) -> bool {
+        match (self, rhs) {
+            (Self::Cpu, Self::Cpu) => true,
+            (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_id(rhs),
+            _ => false,
+        }
+    }
+
     pub fn location(&self) -> DeviceLocation {
         match self {
             Self::Cpu => DeviceLocation::Cpu,
