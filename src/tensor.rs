@@ -653,6 +653,30 @@ impl Tensor {
         }
     }
 
+    /// Returns a new tensor duplicating data from the original tensor. New dimensions are inserted
+    /// on the left.
+    pub fn broadcast<S: Into<Shape>>(&self, left_shape: S) -> Result<Self> {
+        let left_shape = left_shape.into();
+        let op = if self.track_op() {
+            Some(Op::Broadcast(self.clone()))
+        } else {
+            None
+        };
+        let mut stride = vec![0; left_shape.rank()];
+        stride.extend_from_slice(&self.stride);
+        let mut dims = left_shape.into_dims();
+        dims.extend(self.shape.dims());
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.clone(),
+            shape: Shape::from(dims),
+            stride,
+            op,
+            is_variable: self.is_variable,
+        };
+        Ok(Tensor(Arc::new(tensor_)))
+    }
+
     pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
         let shape = self.shape();
         let storage = self.storage.to_dtype(shape, self.stride(), dtype)?;
@@ -849,6 +873,7 @@ impl Tensor {
                         }
                     }
                     Op::Reshape(node)
+                    | Op::Broadcast(node)
                     | Op::ToDType(node)
                     | Op::ToDevice(node)
                     | Op::Transpose(node, _, _)
@@ -977,6 +1002,9 @@ impl Tensor {
                             *sum_grad = sum_grad.add(&arg_grad)?;
                             start_idx += len;
                         }
+                    }
+                    Op::Broadcast(_arg) => {
+                        return Err(Error::BackwardNotSupported { op: "broadcast" })
                     }
                     Op::ToDType(arg) => {
                         let sum_grad = grads.or_insert(arg)?;

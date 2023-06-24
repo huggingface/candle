@@ -94,6 +94,10 @@ impl Shape {
         self.0.len()
     }
 
+    pub fn into_dims(self) -> Vec<usize> {
+        self.0
+    }
+
     pub fn dims(&self) -> &[usize] {
         &self.0
     }

@@ -138,3 +138,14 @@ fn narrow() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn broadcast() -> Result<()> {
+    let data = &[3f32, 1., 4.];
+    let tensor = Tensor::new(data, &Device::Cpu)?;
+    assert_eq!(
+        tensor.broadcast((3, 1))?.to_vec3::<f32>()?,
+        &[[[3.0, 1.0, 4.0]], [[3.0, 1.0, 4.0]], [[3.0, 1.0, 4.0]]]
+    );
+    Ok(())
+}

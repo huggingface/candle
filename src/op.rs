@@ -22,6 +22,7 @@ pub(crate) enum Op {
         add: f64,
     },
     ToDType(Tensor),
+    Broadcast(Tensor),
     Exp(Tensor),
     Log(Tensor),
     Sin(Tensor),
