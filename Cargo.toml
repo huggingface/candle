@@ -21,7 +21,7 @@ thiserror = "1"
 cudarc = { version = "0.9.9", optional = true }
 candle-kernels = { path = "kernels", optional = true }
 gemm = "0.15.4"
-zip = "0.6.6"
+zip = { version = "0.6.6", default-features=false }
 
 [dev-dependencies]
 anyhow = "1"
