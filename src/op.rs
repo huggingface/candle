@@ -27,9 +27,9 @@ pub(crate) enum Op {
     Sin(Tensor),
     Cos(Tensor),
     Abs(Tensor),
+    Narrow(Tensor, usize, usize, usize),
     Neg(Tensor),
     Reshape(Tensor),
-    #[allow(dead_code)]
     Softmax(Tensor, usize),
     Sqr(Tensor),
     Sqrt(Tensor),
