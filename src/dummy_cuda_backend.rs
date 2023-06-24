@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 use crate::{CpuStorage, DType, Error, Result, Shape};
 
-pub type CudaError = std::io::Error;
+#[derive(thiserror::Error, Debug)]
+pub enum DummyError {}
+pub type CudaError = DummyError;
 
 #[derive(Debug, Clone)]
 pub struct CudaDevice;

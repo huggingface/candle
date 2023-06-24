@@ -75,6 +75,21 @@ pub enum Error {
 
     #[error(transparent)]
     TryFromIntError(#[from] core::num::TryFromIntError),
+
+    #[error("npy/npz error {0}")]
+    Npy(String),
+
+    /// Zip file format error.
+    #[error(transparent)]
+    Zip(#[from] zip::result::ZipError),
+
+    /// Integer parse error.
+    #[error(transparent)]
+    ParseInt(#[from] std::num::ParseIntError),
+
+    /// I/O error.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

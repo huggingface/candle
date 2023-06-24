@@ -5,6 +5,7 @@ mod device;
 mod dtype;
 mod dummy_cuda_backend;
 mod error;
+mod npy;
 mod op;
 mod shape;
 mod storage;
