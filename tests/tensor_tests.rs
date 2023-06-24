@@ -1,3 +1,4 @@
+// TODO: Also test the cuda backend.
 use candle::{DType, Device, Result, Tensor};
 
 #[test]
@@ -103,6 +104,18 @@ fn softmax() -> Result<()> {
             // (2, 1, 7) / 10, (8, 2, 8) / 18
             [[0.2, 0.1, 0.6999999], [0.44444445, 0.11111111, 0.44444445]]
         ]
+    );
+    Ok(())
+}
+
+#[test]
+fn narrow() -> Result<()> {
+    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let tensor = Tensor::new(data, &Device::Cpu)?;
+    assert_eq!(
+        tensor.narrow(2, 1, 2)?.to_vec3::<f32>()?,
+        // TODO: this is broken at the moment!
+        &[[[1., 4.], [1., 5.]], [[9., 2.], [1., 7.]]]
     );
     Ok(())
 }
