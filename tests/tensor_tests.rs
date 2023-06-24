@@ -114,8 +114,7 @@ fn narrow() -> Result<()> {
     let tensor = Tensor::new(data, &Device::Cpu)?;
     assert_eq!(
         tensor.narrow(2, 1, 2)?.to_vec3::<f32>()?,
-        // TODO: this is broken at the moment!
-        &[[[1., 4.], [1., 5.]], [[9., 2.], [1., 7.]]]
+        &[[[1.0, 4.0], [5.0, 9.0]], [[1.0, 7.0], [2.0, 8.0]]],
     );
     Ok(())
 }

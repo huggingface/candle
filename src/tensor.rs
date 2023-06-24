@@ -316,18 +316,21 @@ impl Tensor {
         }
         let mut dims = dims.to_vec();
         dims[dim] = length;
-        let shape = Shape::from(dims);
-        let mut storage = self.device().zeros(&shape, self.dtype())?;
-        let src_offset = self.stride[dim] * start;
-        // TODO: This is incorrect, see the currently wrong test in tensor_tests.rs
-        self.storage
-            .copy_strided_src(&mut storage, 0, &self.shape, &self.stride, src_offset)?;
+        let adjusted_shape = Shape::from(dims);
+        let mut storage = self.device().zeros(&adjusted_shape, self.dtype())?;
+        self.storage.copy_strided_src(
+            &mut storage,
+            /* dst_offset= */ 0,
+            &adjusted_shape,
+            &self.stride,
+            /* src_offest= */ self.stride[dim] * start,
+        )?;
         let op = if self.track_op() {
             Some(Op::Narrow(self.clone(), dim, start, length))
         } else {
             None
         };
-        Ok(from_storage(storage, shape, op, false))
+        Ok(from_storage(storage, adjusted_shape, op, false))
     }
 
     pub fn softmax(&self, dim: usize) -> Result<Self> {
@@ -881,7 +884,6 @@ impl Tensor {
 
     pub fn backward(&self) -> Result<GradStore> {
         let sorted_nodes = self.sorted_nodes();
-        println!("{}", sorted_nodes.len());
         let mut grads = GradStore::new();
         grads.insert(self, self.ones_like()?);
         for node in sorted_nodes.iter() {
