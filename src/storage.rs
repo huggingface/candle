@@ -196,16 +196,17 @@ impl Storage {
     pub(crate) fn copy_strided_src(
         &self,
         dst: &mut Self,
+        dst_offset: usize,
         src_shape: &Shape,
         src_stride: &[usize],
-        dst_offset: usize,
+        src_offset: usize,
     ) -> Result<()> {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => {
-                src.copy_strided_src(dst, src_shape, src_stride, dst_offset)
+                src.copy_strided_src(dst, dst_offset, src_shape, src_stride, src_offset)
             }
             (Self::Cuda(src), Self::Cuda(dst)) => {
-                Ok(src.copy_strided_src(dst, src_shape, src_stride, dst_offset)?)
+                Ok(src.copy_strided_src(dst, dst_offset, src_shape, src_stride, src_offset)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),

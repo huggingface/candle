@@ -101,6 +101,7 @@ impl CudaStorage {
     pub(crate) fn copy_strided_src(
         &self,
         _: &mut Self,
+        _: usize,
         _: &Shape,
         _: &[usize],
         _: usize,

@@ -450,9 +450,10 @@ impl CudaStorage {
     pub(crate) fn copy_strided_src(
         &self,
         dst: &mut Self,
+        dst_offset: usize,
         src_shape: &Shape,
         src_stride: &[usize],
-        dst_offset: usize,
+        src_offset: usize,
     ) -> Result<()> {
         if src_shape.rank() != src_stride.len() {
             panic!("incoherent shape and strides {src_shape:?} {src_stride:?}")
@@ -464,26 +465,27 @@ impl CudaStorage {
         let ds = dev.htod_copy([dims, src_stride].concat())?;
         match (&self.slice, &mut dst.slice) {
             (CudaStorageSlice::F32(src), CudaStorageSlice::F32(dst)) => {
+                let src = src.slice(src_offset..);
                 let mut dst = dst.slice_mut(dst_offset..);
                 if src_shape.is_contiguous(src_stride) {
-                    dev.dtod_copy(src, &mut dst)?
+                    dev.dtod_copy(&src, &mut dst)?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f32", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, src, &mut dst);
+                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
                     unsafe { func.launch(cfg, params) }?
                 }
             }
             (CudaStorageSlice::F64(src), CudaStorageSlice::F64(dst)) => {
+                let src = src.slice(src_offset..);
                 let mut dst = dst.slice_mut(dst_offset..);
                 if src_shape.is_contiguous(src_stride) {
-                    dev.dtod_copy(src, &mut dst)?
+                    dev.dtod_copy(&src, &mut dst)?
                 } else {
                     let func = dev.get_or_load_func("ucopy_64", kernels::UNARY)?;
-                    let mut dst = dst.slice_mut(dst_offset..);
                     // SAFETY: Set later by running the kernel.
-                    let params = (el_count, dims.len(), &ds, src, &mut dst);
+                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
                     unsafe { func.launch(cfg, params) }?;
                 }
