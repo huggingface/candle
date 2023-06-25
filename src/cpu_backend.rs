@@ -171,13 +171,52 @@ impl CpuStorage {
         }
     }
 
-    pub(crate) fn sum(
-        &self,
-        _shape: &Shape,
-        _stride: &[usize],
-        _sum_dims: &[usize],
-    ) -> Result<Self> {
-        todo!()
+    pub(crate) fn sum(&self, shape: &Shape, stride: &[usize], sum_dims: &[usize]) -> Result<Self> {
+        let src_dims = shape.dims();
+        let mut dst_dims = src_dims.to_vec();
+        for &sum_dim in sum_dims.iter() {
+            dst_dims[sum_dim] = 1;
+        }
+        let dst_shape = Shape::from(dst_dims);
+        let sum_dims_and_stride: Vec<_> = src_dims
+            .iter()
+            .enumerate()
+            .map(|(i, d)| (d, src_dims[i + 1..].iter().product::<usize>()))
+            .collect();
+        let to_dst_index = |unstr_index: usize| {
+            // TODO: Optimize, the following does lots of slow division and modulos.
+            let mut dst_index = unstr_index;
+            // Set the sum_dims indexes to 0.
+            for &(dim, stride) in sum_dims_and_stride.iter() {
+                let index = dst_index / stride % dim;
+                dst_index -= index * stride;
+            }
+            dst_index
+        };
+        // TODO: Maybe provide an implementation with higher precision accumulators?
+        match self {
+            Self::F32(src) => {
+                let mut dst = vec![0f32; dst_shape.elem_count()];
+                for (unstr_index, src_index) in StridedIndex::new(src_dims, stride).enumerate() {
+                    dst[to_dst_index(unstr_index)] += src[src_index];
+                }
+                Ok(Self::F32(dst))
+            }
+            Self::F64(src) => {
+                let mut dst = vec![0f64; dst_shape.elem_count()];
+                for (unstr_index, src_index) in StridedIndex::new(src_dims, stride).enumerate() {
+                    dst[to_dst_index(unstr_index)] += src[src_index];
+                }
+                Ok(Self::F64(dst))
+            }
+            Self::U32(src) => {
+                let mut dst = vec![0u32; dst_shape.elem_count()];
+                for (unstr_index, src_index) in StridedIndex::new(src_dims, stride).enumerate() {
+                    dst[to_dst_index(unstr_index)] += src[src_index];
+                }
+                Ok(Self::U32(dst))
+            }
+        }
     }
 
     pub(crate) fn divide_by_sum_over_dim(&mut self, shape: &Shape, dim: usize) -> Result<()> {
