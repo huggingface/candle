@@ -90,6 +90,9 @@ pub enum Error {
     /// I/O error.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error("cannot broadcast {src_shape:?} to {dst_shape:?}")]
+    BroadcastIncompatibleShapes { src_shape: Shape, dst_shape: Shape },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
