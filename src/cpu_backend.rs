@@ -178,18 +178,22 @@ impl CpuStorage {
             dst_dims[sum_dim] = 1;
         }
         let dst_shape = Shape::from(dst_dims);
-        let sum_dims_and_stride: Vec<_> = src_dims
+        let mut sum_dims = sum_dims.to_vec();
+        // Sort the sum_dims as they have to be processed from left to right when converting the
+        // indexes.
+        sum_dims.sort();
+        let sum_dims_and_stride: Vec<_> = sum_dims
             .iter()
-            .enumerate()
-            .map(|(i, d)| (d, src_dims[i + 1..].iter().product::<usize>()))
+            .map(|&d| (src_dims[d], src_dims[d + 1..].iter().product::<usize>()))
             .collect();
         let to_dst_index = |unstr_index: usize| {
-            // TODO: Optimize, the following does lots of slow division and modulos.
+            // TODO: Optimize, the following does lots of slow division.
             let mut dst_index = unstr_index;
             // Set the sum_dims indexes to 0.
             for &(dim, stride) in sum_dims_and_stride.iter() {
-                let index = dst_index / stride % dim;
-                dst_index -= index * stride;
+                // The compiler is able to optimize the following in a single divmod op.
+                let (pre, post) = (dst_index / stride, dst_index % stride);
+                dst_index = (pre / dim) * stride + post;
             }
             dst_index
         };

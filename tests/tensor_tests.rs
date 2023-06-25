@@ -109,6 +109,25 @@ fn softmax() -> Result<()> {
 }
 
 #[test]
+fn sum() -> Result<()> {
+    let data = &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]];
+    let tensor = Tensor::new(data, &Device::Cpu)?;
+    assert_eq!(
+        tensor.sum(&[2])?.to_vec3::<u32>()?,
+        &[[[8], [15]], [[10], [18]]]
+    );
+    assert_eq!(
+        tensor.t()?.sum(&[1])?.t()?.to_vec3::<u32>()?,
+        &[[[8], [15]], [[10], [18]]]
+    );
+    assert_eq!(
+        tensor.sum(&[2, 1])?.to_vec3::<u32>()?,
+        &[[[8 + 15]], [[10 + 18]]]
+    );
+    Ok(())
+}
+
+#[test]
 fn narrow() -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
     let tensor = Tensor::new(data, &Device::Cpu)?;
