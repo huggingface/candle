@@ -98,8 +98,8 @@ fn copy_strided_src_<T: Copy>(
 ) {
     let src = &src[src_offset..];
     if src_shape.is_contiguous(src_stride) {
-        let elem_to_copy = dst.len() - dst_offset;
-        dst[dst_offset..].copy_from_slice(&src[..elem_to_copy])
+        let elem_to_copy = (dst.len() - dst_offset).min(src.len());
+        dst[dst_offset..dst_offset + elem_to_copy].copy_from_slice(&src[..elem_to_copy])
     } else {
         let src_indexes = StridedIndex::new(src_shape.dims(), src_stride);
         for (dst_index, src_index) in src_indexes.enumerate() {

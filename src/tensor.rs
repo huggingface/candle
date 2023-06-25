@@ -806,6 +806,9 @@ impl Tensor {
         if args.is_empty() {
             return Err(Error::OpRequiresAtLeastOneTensor { op: "cat" });
         }
+        if args.len() == 1 {
+            return Ok(args[0].clone());
+        }
         let rank = args[0].rank();
         if dim >= rank {
             return Err(Error::UnexpectedNumberOfDims {
@@ -875,7 +878,7 @@ impl Tensor {
         let mut storage = device.zeros(&shape, dtype)?;
         for (arg, &offset) in args.iter().zip(offsets.iter()) {
             arg.storage
-                .copy_strided_src(&mut storage, offset, &arg.shape, &arg.stride, 0)?
+                .copy_strided_src(&mut storage, offset, &arg.shape, &arg.stride, 0)?;
         }
         Ok(from_storage(storage, shape, op, false))
     }
