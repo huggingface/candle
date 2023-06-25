@@ -21,6 +21,7 @@ pub(crate) enum Op {
         mul: f64,
         add: f64,
     },
+    Sum(Tensor, Vec<usize>),
     ToDType(Tensor),
     Broadcast(Tensor),
     Exp(Tensor),

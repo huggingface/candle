@@ -56,6 +56,7 @@ impl Tensor {
                     }
                     Op::Reshape(node)
                     | Op::Broadcast(node)
+                    | Op::Sum(node, _)
                     | Op::ToDType(node)
                     | Op::ToDevice(node)
                     | Op::Transpose(node, _, _)
@@ -187,6 +188,9 @@ impl Tensor {
                     }
                     Op::Broadcast(_arg) => {
                         return Err(Error::BackwardNotSupported { op: "broadcast" })
+                    }
+                    Op::Sum(_arg, _sum_dims) => {
+                        return Err(Error::BackwardNotSupported { op: "sum" })
                     }
                     Op::ToDType(arg) => {
                         let sum_grad = grads.or_insert(arg)?;

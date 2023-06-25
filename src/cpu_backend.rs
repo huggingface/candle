@@ -171,6 +171,15 @@ impl CpuStorage {
         }
     }
 
+    pub(crate) fn sum(
+        &self,
+        _shape: &Shape,
+        _stride: &[usize],
+        _sum_dims: &[usize],
+    ) -> Result<Self> {
+        todo!()
+    }
+
     pub(crate) fn divide_by_sum_over_dim(&mut self, shape: &Shape, dim: usize) -> Result<()> {
         // [self] stores data in a contiguous way.
         let dims = shape.dims();

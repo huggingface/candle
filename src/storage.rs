@@ -72,6 +72,19 @@ impl Storage {
         }
     }
 
+    pub(crate) fn sum(&self, shape: &Shape, stride: &[usize], s: &[usize]) -> Result<Self> {
+        match self {
+            Storage::Cpu(storage) => {
+                let storage = storage.sum(shape, stride, s)?;
+                Ok(Self::Cpu(storage))
+            }
+            Self::Cuda(storage) => {
+                let storage = storage.sum(shape, stride, s)?;
+                Ok(Self::Cuda(storage))
+            }
+        }
+    }
+
     pub(crate) fn divide_by_sum_over_dim(&mut self, shape: &Shape, dim: usize) -> Result<()> {
         match self {
             Storage::Cpu(storage) => storage.divide_by_sum_over_dim(shape, dim)?,

@@ -291,6 +291,15 @@ impl CudaStorage {
         Ok(Self { slice, device })
     }
 
+    pub(crate) fn sum(
+        &self,
+        _shape: &Shape,
+        _stride: &[usize],
+        _sum_dims: &[usize],
+    ) -> Result<Self> {
+        todo!()
+    }
+
     pub(crate) fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) -> Result<()> {
         todo!()
     }
