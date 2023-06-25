@@ -435,11 +435,16 @@ impl Tensor {
                 op: "embedding",
             });
         }
-        let seq_len = ids.shape().r1()?;
+        let ids_shape = ids.shape();
+        let seq_len = ids_shape.r1()?;
         let (vocab_size, hidden_size) = rhs.shape().r2()?;
-        let storage = ids
-            .storage
-            .embedding_impl(&rhs.storage, hidden_size, vocab_size)?;
+        let storage = ids.storage.embedding_impl(
+            ids_shape,
+            &ids.stride,
+            &rhs.storage,
+            hidden_size,
+            vocab_size,
+        )?;
         let shape: Shape = (seq_len, hidden_size).into();
         let op = if ids.track_op() || rhs.track_op() {
             Some(Op::Embedding(ids.clone(), rhs.clone()))

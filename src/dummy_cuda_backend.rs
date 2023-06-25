@@ -90,7 +90,14 @@ impl CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    pub(crate) fn embedding_impl(&self, _: &Self, _: usize, _: usize) -> Result<Self> {
+    pub(crate) fn embedding_impl(
+        &self,
+        _: &Shape,
+        _: &[usize],
+        _: &Self,
+        _: usize,
+        _: usize,
+    ) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

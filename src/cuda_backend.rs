@@ -413,6 +413,8 @@ impl CudaStorage {
 
     pub(crate) fn embedding_impl(
         &self,
+        _shape: &Shape,
+        _stride: &[usize],
         _rhs: &Self,
         _hidden_size: usize,
         _vocab_size: usize,
