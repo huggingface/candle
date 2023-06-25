@@ -802,7 +802,7 @@ impl Tensor {
         }
     }
 
-    pub fn cat(args: &[Self], dim: usize) -> Result<Self> {
+    pub fn cat(args: &[&Self], dim: usize) -> Result<Self> {
         if args.is_empty() {
             return Err(Error::OpRequiresAtLeastOneTensor { op: "cat" });
         }
@@ -867,7 +867,8 @@ impl Tensor {
         }
         let shape = Shape::from(cat_dims);
         let op = if args.iter().any(|arg| arg.track_op()) {
-            Some(Op::Cat(args.to_vec(), dim))
+            let args: Vec<Tensor> = args.iter().map(|&arg| arg.clone()).collect();
+            Some(Op::Cat(args, dim))
         } else {
             None
         };

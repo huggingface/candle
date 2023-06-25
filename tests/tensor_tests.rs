@@ -120,6 +120,7 @@ fn sum() -> Result<()> {
         tensor.sum(&[0])?.to_vec3::<u32>()?,
         &[[[5, 2, 11], [9, 7, 17]]],
     );
+    assert_eq!(tensor.sum(&[0, 2, 1])?.to_vec3::<u32>()?, &[[[51]]],);
     assert_eq!(
         tensor.t()?.sum(&[1])?.t()?.to_vec3::<u32>()?,
         &[[[8], [15]], [[10], [18]]]
