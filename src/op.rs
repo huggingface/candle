@@ -12,6 +12,7 @@ pub(crate) enum Op {
     BroadcastDiv(Tensor, Tensor),
     Matmul(Tensor, Tensor),
     Embedding(Tensor, Tensor),
+    WhereCond(Tensor, Tensor, Tensor),
 
     Cat(Vec<Tensor>, usize),
 

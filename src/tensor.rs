@@ -425,6 +425,29 @@ impl Tensor {
         Ok(from_storage(storage, c_shape, op, false))
     }
 
+    pub fn where_cond(&self, on_true: &Self, on_false: &Self) -> Result<Self> {
+        let _shap = self.same_shape_binary_op(on_true, "where_cond")?;
+        let shape = self.same_shape_binary_op(on_false, "where_cond")?;
+        let storage = self.storage.where_cond(
+            shape,
+            self.stride(),
+            &on_true.storage,
+            on_true.stride(),
+            &on_false.storage,
+            on_false.stride(),
+        )?;
+        let op = if self.track_op() || on_true.track_op() || on_false.track_op() {
+            Some(Op::WhereCond(
+                self.clone(),
+                on_true.clone(),
+                on_false.clone(),
+            ))
+        } else {
+            None
+        };
+        Ok(from_storage(storage, shape, op, false))
+    }
+
     pub fn embedding(ids: &Self, rhs: &Self) -> Result<Self> {
         if !rhs.is_contiguous() {
             return Err(Error::RequiresContiguous { op: "embedding" });

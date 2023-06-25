@@ -411,6 +411,18 @@ impl CudaStorage {
         }
     }
 
+    pub(crate) fn where_cond(
+        &self,
+        _shape: &Shape,
+        _stride: &[usize],
+        _t: &Self,
+        _stride_t: &[usize],
+        _f: &Self,
+        _stride_f: &[usize],
+    ) -> Result<Self> {
+        Err(CudaError::InternalError("TODO: implement where_cond"))
+    }
+
     pub(crate) fn embedding_impl(
         &self,
         _shape: &Shape,
