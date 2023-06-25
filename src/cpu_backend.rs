@@ -88,7 +88,7 @@ fn binary_map<T: Copy, F: FnMut(T, T) -> T>(
     }
 }
 
-fn copy_strided_src_<T: Copy>(
+fn copy_strided_src_<T: Copy + std::fmt::Display>(
     src: &[T],
     dst: &mut [T],
     dst_offset: usize,
