@@ -102,6 +102,13 @@ impl Device {
         }
     }
 
+    pub fn is_cuda(&self) -> bool {
+        match self {
+            Self::Cpu => false,
+            Self::Cuda(_) => true,
+        }
+    }
+
     pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {
