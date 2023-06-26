@@ -28,6 +28,10 @@ extern "C" __global__ void FN_NAME(  \
     } \
 } \
 
+#if __CUDA_ARCH__ >= 530
+AFFINE_OP(__half, affine_f16)
+#endif
+
 AFFINE_OP(float, affine_f32)
 AFFINE_OP(double, affine_f64)
 AFFINE_OP(uint32_t, affine_u32)
