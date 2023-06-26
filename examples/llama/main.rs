@@ -300,7 +300,7 @@ impl CausalSelfAttention {
         let att = att.softmax(att.rank() - 1)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
-        let y = y.transpose(1, 2)?.reshape(&[t, c])?;
+        let y = y.transpose(0, 1)?.reshape(&[t, c])?;
         let y = self.c_proj.forward(&y)?;
         Ok(y)
     }
