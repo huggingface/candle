@@ -43,6 +43,10 @@ extern "C" __global__ void FN_NAME(  \
     } \
 } \
 
+#if __CUDA_ARCH__ >= 530
+SUM_OP(float, sum_f32)
+#endif
+
 SUM_OP(float, sum_f32)
 SUM_OP(double, sum_f64)
 SUM_OP(uint32_t, sum_u32)
