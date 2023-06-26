@@ -618,63 +618,176 @@ impl CpuStorage {
             }
         }
 
-        let mut dst = vec![0.0; b * m * n];
-
         let dst_shape: Shape = (m, n).into();
         let dst_strides = dst_shape.stride_contiguous();
         let dst_rs = dst_strides[0];
         let dst_cs = dst_strides[1];
 
-        for step in 0..b {
-            let lhs_p = &self.as_slice::<f32>()?[step * a_skip..];
-            let rhs_p = &rhs.as_slice::<f32>()?[step * b_skip..];
-            let dst_p = &mut dst[step * c_skip..];
-            unsafe {
-                gemm(
-                    // m: usize,
-                    m,
-                    // n: usize,
-                    n,
-                    // k: usize,
-                    k,
-                    // dst: *mut T,
-                    dst_p.as_mut_ptr(),
-                    // dst_cs: isize,
-                    dst_cs as isize,
-                    // dst_rs: isize,
-                    dst_rs as isize,
-                    // read_dst: bool,
-                    false,
-                    // lhs: *const T,
-                    lhs_p.as_ptr(),
-                    // lhs_cs: isize,
-                    lhs_cs as isize,
-                    // lhs_rs: isize,
-                    lhs_rs as isize,
-                    // rhs: *const T,
-                    rhs_p.as_ptr(),
-                    // rhs_cs: isize,
-                    rhs_cs as isize,
-                    // rhs_rs: isize,
-                    rhs_rs as isize,
-                    // alpha: T,
-                    1.0,
-                    // beta: T,
-                    1.0,
-                    // conj_dst: bool,
-                    false,
-                    // conj_lhs: bool,
-                    false,
-                    // conj_rhs: bool,
-                    true,
-                    // parallelism: Parallelism
-                    Parallelism::None,
-                )
+        match (self, rhs) {
+            (CpuStorage::F16(lhs), CpuStorage::F16(rhs)) => {
+                let mut dst = vec![f16::ZERO; b * m * n];
+                for step in 0..b {
+                    let lhs_p = &lhs[step * a_skip..];
+                    let rhs_p = &rhs[step * b_skip..];
+                    let dst_p = &mut dst[step * c_skip..];
+                    unsafe {
+                        gemm(
+                            // m: usize,
+                            m,
+                            // n: usize,
+                            n,
+                            // k: usize,
+                            k,
+                            // dst: *mut T,
+                            dst_p.as_mut_ptr(),
+                            // dst_cs: isize,
+                            dst_cs as isize,
+                            // dst_rs: isize,
+                            dst_rs as isize,
+                            // read_dst: bool,
+                            false,
+                            // lhs: *const T,
+                            lhs_p.as_ptr(),
+                            // lhs_cs: isize,
+                            lhs_cs as isize,
+                            // lhs_rs: isize,
+                            lhs_rs as isize,
+                            // rhs: *const T,
+                            rhs_p.as_ptr(),
+                            // rhs_cs: isize,
+                            rhs_cs as isize,
+                            // rhs_rs: isize,
+                            rhs_rs as isize,
+                            // alpha: T,
+                            f16::ONE,
+                            // beta: T,
+                            f16::ONE,
+                            // conj_dst: bool,
+                            false,
+                            // conj_lhs: bool,
+                            false,
+                            // conj_rhs: bool,
+                            true,
+                            // parallelism: Parallelism
+                            Parallelism::None,
+                        )
+                    }
+                }
+
+                Ok(Self::F16(dst))
+            }
+            (CpuStorage::F32(lhs), CpuStorage::F32(rhs)) => {
+                let mut dst = vec![0f32; b * m * n];
+                for step in 0..b {
+                    let lhs_p = &lhs[step * a_skip..];
+                    let rhs_p = &rhs[step * b_skip..];
+                    let dst_p = &mut dst[step * c_skip..];
+                    unsafe {
+                        gemm(
+                            // m: usize,
+                            m,
+                            // n: usize,
+                            n,
+                            // k: usize,
+                            k,
+                            // dst: *mut T,
+                            dst_p.as_mut_ptr(),
+                            // dst_cs: isize,
+                            dst_cs as isize,
+                            // dst_rs: isize,
+                            dst_rs as isize,
+                            // read_dst: bool,
+                            false,
+                            // lhs: *const T,
+                            lhs_p.as_ptr(),
+                            // lhs_cs: isize,
+                            lhs_cs as isize,
+                            // lhs_rs: isize,
+                            lhs_rs as isize,
+                            // rhs: *const T,
+                            rhs_p.as_ptr(),
+                            // rhs_cs: isize,
+                            rhs_cs as isize,
+                            // rhs_rs: isize,
+                            rhs_rs as isize,
+                            // alpha: T,
+                            1f32,
+                            // beta: T,
+                            1f32,
+                            // conj_dst: bool,
+                            false,
+                            // conj_lhs: bool,
+                            false,
+                            // conj_rhs: bool,
+                            true,
+                            // parallelism: Parallelism
+                            Parallelism::None,
+                        )
+                    }
+                }
+
+                Ok(Self::F32(dst))
+            }
+            (CpuStorage::F64(lhs), CpuStorage::F64(rhs)) => {
+                let mut dst = vec![0f64; b * m * n];
+                for step in 0..b {
+                    let lhs_p = &lhs[step * a_skip..];
+                    let rhs_p = &rhs[step * b_skip..];
+                    let dst_p = &mut dst[step * c_skip..];
+                    unsafe {
+                        gemm(
+                            // m: usize,
+                            m,
+                            // n: usize,
+                            n,
+                            // k: usize,
+                            k,
+                            // dst: *mut T,
+                            dst_p.as_mut_ptr(),
+                            // dst_cs: isize,
+                            dst_cs as isize,
+                            // dst_rs: isize,
+                            dst_rs as isize,
+                            // read_dst: bool,
+                            false,
+                            // lhs: *const T,
+                            lhs_p.as_ptr(),
+                            // lhs_cs: isize,
+                            lhs_cs as isize,
+                            // lhs_rs: isize,
+                            lhs_rs as isize,
+                            // rhs: *const T,
+                            rhs_p.as_ptr(),
+                            // rhs_cs: isize,
+                            rhs_cs as isize,
+                            // rhs_rs: isize,
+                            rhs_rs as isize,
+                            // alpha: T,
+                            1f64,
+                            // beta: T,
+                            1f64,
+                            // conj_dst: bool,
+                            false,
+                            // conj_lhs: bool,
+                            false,
+                            // conj_rhs: bool,
+                            true,
+                            // parallelism: Parallelism
+                            Parallelism::None,
+                        )
+                    }
+                }
+                Ok(Self::F64(dst))
+            }
+            _ => {
+                // This should be covered by the dtype check above.
+                Err(Error::DTypeMismatchBinaryOp {
+                    lhs: self.dtype(),
+                    rhs: rhs.dtype(),
+                    op: "matmul",
+                })
             }
         }
-
-        let c = Self::F32(dst);
-        Ok(c)
     }
 
     pub(crate) fn ones_impl(shape: &Shape, dtype: DType) -> Self {
