@@ -26,7 +26,7 @@
 //! values = np.loadz("test.npz")
 //! ```
 use crate::{DType, Device, Error, Result, Shape, Tensor};
-use byteorder::{ByteOrder, LittleEndian};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
@@ -193,23 +193,21 @@ impl Header {
 impl Tensor {
     fn from_reader<R: std::io::Read>(shape: Shape, dtype: DType, reader: &mut R) -> Result<Self> {
         let elem_count = shape.elem_count();
-        let mut data = Vec::new();
-        reader.read_to_end(&mut data)?;
         match dtype {
             DType::F32 => {
                 // TODO: Avoid the data being copied around multiple times.
                 let mut data_t = vec![0f32; elem_count];
-                LittleEndian::read_f32_into(&data, &mut data_t);
+                reader.read_f32_into::<LittleEndian>(&mut data_t)?;
                 Tensor::from_slice(&data_t, shape, &Device::Cpu)
             }
             DType::F64 => {
                 let mut data_t = vec![0f64; elem_count];
-                LittleEndian::read_f64_into(&data, &mut data_t);
+                reader.read_f64_into::<LittleEndian>(&mut data_t)?;
                 Tensor::from_slice(&data_t, shape, &Device::Cpu)
             }
             DType::U32 => {
                 let mut data_t = vec![0u32; elem_count];
-                LittleEndian::read_u32_into(&data, &mut data_t);
+                reader.read_u32_into::<LittleEndian>(&mut data_t)?;
                 Tensor::from_slice(&data_t, shape, &Device::Cpu)
             }
         }
@@ -295,17 +293,17 @@ impl Tensor {
             DType::F32 => {
                 // TODO: Avoid using a buffer when data is already on the CPU.
                 for v in self.reshape(elem_count)?.to_vec1::<f32>()? {
-                    f.write_all(&v.to_le_bytes())?;
+                    f.write_f32::<LittleEndian>(v)?
                 }
             }
             DType::F64 => {
                 for v in self.reshape(elem_count)?.to_vec1::<f64>()? {
-                    f.write_all(&v.to_le_bytes())?;
+                    f.write_f64::<LittleEndian>(v)?
                 }
             }
             DType::U32 => {
                 for v in self.reshape(elem_count)?.to_vec1::<u32>()? {
-                    f.write_all(&v.to_le_bytes())?;
+                    f.write_u32::<LittleEndian>(v)?
                 }
             }
         }
