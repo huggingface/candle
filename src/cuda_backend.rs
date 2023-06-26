@@ -726,7 +726,7 @@ impl CudaStorage {
         let slice = match &rhs.slice {
             // The kernels below assume that rhs is contiguous.
             CudaStorageSlice::U32(arg) => {
-                let func = dev.get_or_load_func("emb_f16", kernels::EMBEDDINGS)?;
+                let func = dev.get_or_load_func("emb_u32", kernels::EMBEDDINGS)?;
                 // SAFETY: Set later by running the kernel.
                 let out = unsafe { dev.alloc::<u32>(el * h_size) }?;
                 let params = (el, dims.len(), &ds, ids, arg, &out, h_size, v_size);
