@@ -243,7 +243,7 @@ impl CudaStorage {
     }
 
     pub(crate) fn to_dtype(&self, _: &Shape, _: &[usize], _: DType) -> Result<Self> {
-        Err(CudaError::InternalError("TODO: implement embedding"))
+        Err(CudaError::InternalError("TODO: implement to_dtype"))
     }
 
     pub(crate) fn affine_impl(
