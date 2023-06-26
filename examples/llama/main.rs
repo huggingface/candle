@@ -377,7 +377,7 @@ impl Llama {
     }
 }
 
-fn precompute_freqs_cis(config: &Config) -> Result<Tensor> {
+fn precompute_freqs_cis(config: &Config, device: &Device) -> Result<Tensor> {
     let seq_len = CONTEXT_SIZE;
     let n_elem = config.n_embd / config.n_head;
     let theta: Vec<_> = (0..n_elem)
@@ -385,8 +385,8 @@ fn precompute_freqs_cis(config: &Config) -> Result<Tensor> {
         .map(|i| 1f32 / 10000f32.powf(i as f32 / n_elem as f32))
         .collect();
     let arange: Vec<_> = (0..seq_len).map(|c| c as f32).collect();
-    let theta = Tensor::new(theta.as_slice(), &candle::Device::Cpu)?;
-    let arange = Tensor::new(arange.as_slice(), &candle::Device::Cpu)?;
+    let theta = Tensor::new(theta.as_slice(), device)?;
+    let arange = Tensor::new(arange.as_slice(), device)?;
     let idx_theta = arange
         .reshape((arange.elem_count(), 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
@@ -418,6 +418,11 @@ fn main() -> Result<()> {
     use tokenizers::Tokenizer;
 
     let args = Args::parse();
+    let device = if args.cpu {
+        Device::Cpu
+    } else {
+        Device::new_cuda(0)?
+    };
     println!("loading tokenizer config");
     let tokenizer = Tokenizer::from_file("llama-tokenizer.json").map_err(E::msg)?;
     let mut tokens = tokenizer
@@ -438,20 +443,20 @@ fn main() -> Result<()> {
         println!("cannot find {weight_path:?}, using zero weights");
         None
     };
-    let vb = VarBuilder::new::<f32>(weights);
+    let vb = VarBuilder::new::<f32>(&device, weights);
 
     println!("building the model");
     let config = Config::config_7b();
     let llama = Llama::new(vb, &config)?;
 
     println!("pre-computing the positional embeddings");
-    let freqs_cis = precompute_freqs_cis(&config)?;
+    let freqs_cis = precompute_freqs_cis(&config, &device)?;
     println!("starting the inference loop");
     let mut new_tokens = vec![];
     let mut rng = thread_rng();
     for index in 0..args.sample_len {
         let ctxt = &tokens[tokens.len().saturating_sub(CONTEXT_SIZE)..];
-        let input = Tensor::new(ctxt, &Device::Cpu)?;
+        let input = Tensor::new(ctxt, &device)?;
         let logits = llama.forward(&input, &freqs_cis)?;
         let prs = (&logits / args.temperature)?.softmax(logits.rank() - 1)?;
         let logits_v: Vec<f32> = prs.to_vec1()?;
