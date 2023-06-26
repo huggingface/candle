@@ -298,13 +298,53 @@ impl CudaStorage {
         Ok(Self { slice, device })
     }
 
-    pub(crate) fn sum(
-        &self,
-        _shape: &Shape,
-        _stride: &[usize],
-        _sum_dims: &[usize],
-    ) -> Result<Self> {
-        todo!()
+    pub(crate) fn sum(&self, shape: &Shape, stride: &[usize], sum_dims: &[usize]) -> Result<Self> {
+        let src_dims = shape.dims();
+        let el = shape.elem_count();
+        let mut dst_el = el;
+        for &sum_dim in sum_dims.iter() {
+            dst_el /= src_dims[sum_dim];
+        }
+        let mut sum_dims = sum_dims.to_vec();
+        // Sort the sum_dims as they have to be processed from left to right when converting the
+        // indexes.
+        sum_dims.sort();
+        let sum_dims_l: Vec<usize> = sum_dims.iter().map(|&d| src_dims[d]).collect();
+        let sum_dims_s: Vec<usize> = sum_dims
+            .iter()
+            .map(|&d| src_dims[d + 1..].iter().product::<usize>())
+            .collect();
+        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let dev = self.device();
+        let ds = dev.htod_copy([src_dims, stride, &sum_dims_l, &sum_dims_s].concat())?;
+        let slice = match &self.slice {
+            CudaStorageSlice::U32(arg) => {
+                let func = dev.get_or_load_func("sum_u32", kernels::REDUCE)?;
+                let out = dev.alloc_zeros::<u32>(dst_el)?;
+                let params = (el, src_dims.len(), sum_dims.len(), &ds, arg, &out);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::U32(out)
+            }
+            CudaStorageSlice::F32(arg) => {
+                let func = dev.get_or_load_func("sum_f32", kernels::REDUCE)?;
+                let out = dev.alloc_zeros::<f32>(dst_el)?;
+                let params = (el, src_dims.len(), sum_dims.len(), &ds, arg, &out);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F32(out)
+            }
+            CudaStorageSlice::F64(arg) => {
+                let func = dev.get_or_load_func("sum_f64", kernels::REDUCE)?;
+                let out = dev.alloc_zeros::<f64>(dst_el)?;
+                let params = (el, src_dims.len(), sum_dims.len(), &ds, arg, &out);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F64(out)
+            }
+        };
+        let device = dev.clone();
+        Ok(Self { slice, device })
     }
 
     pub(crate) fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) -> Result<()> {
