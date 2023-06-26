@@ -20,6 +20,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: check
+          args: --no-default-features
 
   test:
     name: Test Suite
@@ -38,6 +39,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
+          args: --no-default-features
 
   fmt:
     name: Rustfmt
@@ -69,4 +71,4 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --tests --examples -- -D warnings
+          args: --no-default-features --tests --examples -- -D warnings
