@@ -145,12 +145,28 @@ impl Shape {
         stride
     }
 
+    /// Returns true if the strides are C contiguous (aka row major).
     pub fn is_contiguous(&self, stride: &[usize]) -> bool {
         if self.0.len() != stride.len() {
             return false;
         }
         let mut acc = 1;
         for (&stride, &dim) in stride.iter().zip(self.0.iter()).rev() {
+            if stride != acc {
+                return false;
+            }
+            acc *= dim;
+        }
+        true
+    }
+
+    /// Returns true if the strides are Fortran contiguous (aka column major).
+    pub fn is_fortran_contiguous(&self, stride: &[usize]) -> bool {
+        if self.0.len() != stride.len() {
+            return false;
+        }
+        let mut acc = 1;
+        for (&stride, &dim) in stride.iter().zip(self.0.iter()) {
             if stride != acc {
                 return false;
             }

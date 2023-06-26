@@ -348,7 +348,9 @@ impl CudaStorage {
     }
 
     pub(crate) fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) -> Result<()> {
-        todo!()
+        Err(CudaError::InternalError(
+            "TODO: implement divide_by_sum_over_dim",
+        ))
     }
 
     pub(crate) fn unary_impl<U: crate::op::UnaryOp>(

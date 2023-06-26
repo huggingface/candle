@@ -697,8 +697,14 @@ impl Tensor {
         Ok(Tensor(Arc::new(tensor_)))
     }
 
+    /// Returns true if the data is stored in a C contiguous (aka row major) way.
     pub fn is_contiguous(&self) -> bool {
         self.shape.is_contiguous(&self.stride)
+    }
+
+    /// Returns true if the data is stored in a Fortran contiguous (aka column major) way.
+    pub fn is_fortran_contiguous(&self) -> bool {
+        self.shape.is_fortran_contiguous(&self.stride)
     }
 
     /// Compared to clone, this copies the actual storage but may fail because of running out of
