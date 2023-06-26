@@ -1,4 +1,5 @@
 // TODO: Use a proper distributed reduction rather than atomicAdd.
+// https://people.maths.ox.ac.uk/gilesm/cuda/prac4/reduction.pdf
 #include "cuda_utils.cuh"
 #include<stdint.h>
 

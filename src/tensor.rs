@@ -445,13 +445,6 @@ impl Tensor {
                 op: "matmul",
             });
         }
-        if self.device().is_cuda() && (!self.is_contiguous() || !rhs.is_contiguous()) {
-            // It looks like the cublas implementation of XgemmStridedBatched only supports
-            // non-standard strides on the batch dimension.
-            return Err(Error::RequiresContiguous {
-                op: "matmul-cublas",
-            });
-        }
 
         let m = a_dims[dim - 2];
         let k = a_dims[dim - 1];
