@@ -32,6 +32,10 @@ extern "C" __global__ void FN_NAME(  \
     } \
 } \
 
+#if __CUDA_ARCH__ >= 530
+WHERE_OP(__half, where_f16)
+#endif
+
 WHERE_OP(float, where_f32)
 WHERE_OP(double, where_f64)
 WHERE_OP(uint32_t, where_u32)
