@@ -23,7 +23,7 @@ candle-kernels = { path = "kernels", optional = true }
 gemm = "0.15.4"
 zip = { version = "0.6.6", default-features=false }
 byteorder = "1.4.3"
-half = "2.3.1"
+half = { version = "2.3.1", features = ["num-traits"] }
 num-traits = "0.2.15"
 
 [dev-dependencies]
@@ -33,5 +33,5 @@ rand = "0.8.5"
 tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
 
 [features]
-default = []
+default = ["cuda"]
 cuda = ["dep:cudarc", "dep:candle-kernels"]

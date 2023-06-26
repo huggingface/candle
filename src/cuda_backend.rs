@@ -133,6 +133,22 @@ impl CudaDevice {
                 unsafe { func.launch(cfg, params) }?;
                 CudaStorageSlice::U32(data)
             }
+            DType::BF16 => {
+                // SAFETY: Set later by running the fill kernel.
+                let data = unsafe { self.alloc::<bf16>(elem_count) }?;
+                let func = self.get_or_load_func("fill_bf16", kernels::FILL)?;
+                let params = (&data, bf16::from_f64(v), elem_count);
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::BF16(data)
+            }
+            DType::F16 => {
+                // SAFETY: Set later by running the fill kernel.
+                let data = unsafe { self.alloc::<f16>(elem_count) }?;
+                let func = self.get_or_load_func("fill_f16", kernels::FILL)?;
+                let params = (&data, f16::from_f64(v), elem_count);
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F16(data)
+            }
             DType::F32 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f32>(elem_count) }?;
@@ -165,6 +181,14 @@ impl CudaDevice {
             CpuStorage::U32(storage) => {
                 let data = self.htod_sync_copy(storage)?;
                 CudaStorageSlice::U32(data)
+            }
+            CpuStorage::BF16(storage) => {
+                let data = self.htod_sync_copy(storage)?;
+                CudaStorageSlice::BF16(data)
+            }
+            CpuStorage::F16(storage) => {
+                let data = self.htod_sync_copy(storage)?;
+                CudaStorageSlice::F16(data)
             }
             CpuStorage::F32(storage) => {
                 let data = self.htod_sync_copy(storage)?;
@@ -325,6 +349,40 @@ impl CudaStorage {
                 unsafe { func.launch(cfg, params) }?;
                 CudaStorageSlice::U32(out)
             }
+            CudaStorageSlice::BF16(arg) => {
+                let func = dev.get_or_load_func("affine_bf16", kernels::AFFINE)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<bf16>(el_count) }?;
+                let params = (
+                    el_count,
+                    dims.len(),
+                    &ds,
+                    arg,
+                    &out,
+                    bf16::from_f64(mul),
+                    bf16::from_f64(add),
+                );
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::BF16(out)
+            }
+            CudaStorageSlice::F16(arg) => {
+                let func = dev.get_or_load_func("affine_f16", kernels::AFFINE)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<f16>(el_count) }?;
+                let params = (
+                    el_count,
+                    dims.len(),
+                    &ds,
+                    arg,
+                    &out,
+                    f16::from_f64(mul),
+                    f16::from_f64(add),
+                );
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F16(out)
+            }
             CudaStorageSlice::F32(arg) => {
                 let func = dev.get_or_load_func("affine_f32", kernels::AFFINE)?;
                 // SAFETY: Set later by running the kernel.
@@ -376,6 +434,22 @@ impl CudaStorage {
                 unsafe { func.launch(cfg, params) }?;
                 CudaStorageSlice::U32(out)
             }
+            CudaStorageSlice::BF16(arg) => {
+                let func = dev.get_or_load_func("sum_bf16", kernels::REDUCE)?;
+                let out = dev.alloc_zeros::<bf16>(dst_el)?;
+                let params = (el, src_dims.len(), sum_dims.len(), &ds, arg, &out);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::BF16(out)
+            }
+            CudaStorageSlice::F16(arg) => {
+                let func = dev.get_or_load_func("sum_f16", kernels::REDUCE)?;
+                let out = dev.alloc_zeros::<f16>(dst_el)?;
+                let params = (el, src_dims.len(), sum_dims.len(), &ds, arg, &out);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F16(out)
+            }
             CudaStorageSlice::F32(arg) => {
                 let func = dev.get_or_load_func("sum_f32", kernels::REDUCE)?;
                 let out = dev.alloc_zeros::<f32>(dst_el)?;
@@ -417,6 +491,24 @@ impl CudaStorage {
             CudaStorageSlice::U32(_arg) => {
                 todo!("No unary kernels for u32");
             }
+            CudaStorageSlice::BF16(arg) => {
+                let func = dev.get_or_load_func(U::KERNEL_BF16, kernels::UNARY)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<bf16>(el_count) }?;
+                let params = (el_count, dims.len(), &ds, arg, &out);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::BF16(out)
+            }
+            CudaStorageSlice::F16(arg) => {
+                let func = dev.get_or_load_func(U::KERNEL_F16, kernels::UNARY)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<f16>(el_count) }?;
+                let params = (el_count, dims.len(), &ds, arg, &out);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F16(out)
+            }
             CudaStorageSlice::F32(arg) => {
                 let func = dev.get_or_load_func(U::KERNEL_F32, kernels::UNARY)?;
                 // SAFETY: Set later by running the kernel.
@@ -453,6 +545,24 @@ impl CudaStorage {
         let dev = self.device();
         let dims_and_strides = dev.htod_copy([dims, lhs_stride, rhs_stride].concat())?;
         let slice = match (&self.slice, &rhs.slice) {
+            (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {
+                let func = dev.get_or_load_func(B::KERNEL_BF16, kernels::BINARY)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<bf16>(elem_count) }?;
+                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+                // SAFETY: ffi
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::BF16(out)
+            }
+            (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs)) => {
+                let func = dev.get_or_load_func(B::KERNEL_F16, kernels::BINARY)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<f16>(elem_count) }?;
+                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+                // SAFETY: ffi
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F16(out)
+            }
             (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs)) => {
                 let func = dev.get_or_load_func(B::KERNEL_F32, kernels::BINARY)?;
                 // SAFETY: Set later by running the kernel.
@@ -494,6 +604,16 @@ impl CudaStorage {
                 let cpu_storage = dev.dtoh_sync_copy(slice)?;
                 Ok(CpuStorage::U32(cpu_storage))
             }
+            CudaStorageSlice::BF16(slice) => {
+                let dev = slice.device();
+                let cpu_storage = dev.dtoh_sync_copy(slice)?;
+                Ok(CpuStorage::BF16(cpu_storage))
+            }
+            CudaStorageSlice::F16(slice) => {
+                let dev = slice.device();
+                let cpu_storage = dev.dtoh_sync_copy(slice)?;
+                Ok(CpuStorage::F16(cpu_storage))
+            }
             CudaStorageSlice::F32(slice) => {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice)?;
@@ -530,6 +650,24 @@ impl CudaStorage {
         let dev = self.device();
         let ds = dev.htod_copy([dims, stride, stride_t, stride_f].concat())?;
         let slice = match (&t.slice, &f.slice) {
+            (CudaStorageSlice::BF16(t), CudaStorageSlice::BF16(f)) => {
+                let func = dev.get_or_load_func("where_bf16", kernels::TERNARY)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<bf16>(el) }?;
+                let params = (el, dims.len(), &ds, ids, t, f, &out);
+                // SAFETY: ffi
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::BF16(out)
+            }
+            (CudaStorageSlice::F16(t), CudaStorageSlice::F16(f)) => {
+                let func = dev.get_or_load_func("where_f16", kernels::TERNARY)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<f16>(el) }?;
+                let params = (el, dims.len(), &ds, ids, t, f, &out);
+                // SAFETY: ffi
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F16(out)
+            }
             (CudaStorageSlice::F32(t), CudaStorageSlice::F32(f)) => {
                 let func = dev.get_or_load_func("where_f32", kernels::TERNARY)?;
                 // SAFETY: Set later by running the kernel.
@@ -596,6 +734,24 @@ impl CudaStorage {
                 unsafe { func.launch(cfg, params) }?;
                 CudaStorageSlice::U32(out)
             }
+            CudaStorageSlice::BF16(arg) => {
+                let func = dev.get_or_load_func("emb_bf16", kernels::EMBEDDINGS)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<bf16>(el * h_size) }?;
+                let params = (el, dims.len(), &ds, ids, arg, &out, h_size, v_size);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::BF16(out)
+            }
+            CudaStorageSlice::F16(arg) => {
+                let func = dev.get_or_load_func("emb_f16", kernels::EMBEDDINGS)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<f16>(el * h_size) }?;
+                let params = (el, dims.len(), &ds, ids, arg, &out, h_size, v_size);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F16(out)
+            }
             CudaStorageSlice::F32(arg) => {
                 let func = dev.get_or_load_func("emb_f32", kernels::EMBEDDINGS)?;
                 // SAFETY: Set later by running the kernel.
@@ -629,6 +785,12 @@ impl CudaStorage {
         let elem_count = b * m * n;
         let dev = &self.device;
         let slice = match (&self.slice, &rhs.slice) {
+            (CudaStorageSlice::BF16(_lhs), CudaStorageSlice::BF16(_rhs)) => {
+                todo!("bf16")
+            }
+            (CudaStorageSlice::F16(_lhs), CudaStorageSlice::F16(_rhs)) => {
+                todo!("f16")
+            }
             (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs)) => {
                 let cfg = gemm_config(1., 0., (b, m, n, k), lhs_stride, rhs_stride)?;
                 let mut out = unsafe { dev.alloc::<f32>(elem_count) }?;
@@ -672,6 +834,32 @@ impl CudaStorage {
         let dev = &self.device;
         let ds = dev.htod_copy([dims, src_stride].concat())?;
         match (&self.slice, &mut dst.slice) {
+            (CudaStorageSlice::BF16(src), CudaStorageSlice::BF16(dst)) => {
+                let src = src.slice(src_offset..);
+                let mut dst = dst.slice_mut(dst_offset..);
+                if src_shape.is_contiguous(src_stride) {
+                    dev.dtod_copy(&src, &mut dst)?
+                } else {
+                    let func = dev.get_or_load_func("ucopy_bf16", kernels::UNARY)?;
+                    // SAFETY: Set later by running the kernel.
+                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    // SAFETY: ffi.
+                    unsafe { func.launch(cfg, params) }?
+                }
+            }
+            (CudaStorageSlice::F16(src), CudaStorageSlice::F16(dst)) => {
+                let src = src.slice(src_offset..);
+                let mut dst = dst.slice_mut(dst_offset..);
+                if src_shape.is_contiguous(src_stride) {
+                    dev.dtod_copy(&src, &mut dst)?
+                } else {
+                    let func = dev.get_or_load_func("ucopy_f16", kernels::UNARY)?;
+                    // SAFETY: Set later by running the kernel.
+                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    // SAFETY: ffi.
+                    unsafe { func.launch(cfg, params) }?
+                }
+            }
             (CudaStorageSlice::F32(src), CudaStorageSlice::F32(dst)) => {
                 let src = src.slice(src_offset..);
                 let mut dst = dst.slice_mut(dst_offset..);
@@ -679,6 +867,19 @@ impl CudaStorage {
                     dev.dtod_copy(&src, &mut dst)?
                 } else {
                     let func = dev.get_or_load_func("ucopy_f32", kernels::UNARY)?;
+                    // SAFETY: Set later by running the kernel.
+                    let params = (el_count, dims.len(), &ds, &src, &mut dst);
+                    // SAFETY: ffi.
+                    unsafe { func.launch(cfg, params) }?
+                }
+            }
+            (CudaStorageSlice::U32(src), CudaStorageSlice::U32(dst)) => {
+                let src = src.slice(src_offset..);
+                let mut dst = dst.slice_mut(dst_offset..);
+                if src_shape.is_contiguous(src_stride) {
+                    dev.dtod_copy(&src, &mut dst)?
+                } else {
+                    let func = dev.get_or_load_func("ucopy_u32", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.

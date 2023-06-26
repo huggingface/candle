@@ -46,10 +46,37 @@ fn wcond<T: Copy>(
     }
 }
 
+macro_rules! map1 {
+    ($v: expr, $fn: ident, $( $args:expr ),*) => {{
+        let v = match $v {
+            CpuStorage::BF16(__s) => CpuStorage::BF16($fn::<bf16>(__s, $($args),*)?),
+            CpuStorage::F16(__s) => CpuStorage::F16($fn::<f16>(__s, $($args),*)?),
+            CpuStorage::F32(__s) => CpuStorage::F32($fn::<f32>(__s, $($args),*)?),
+            CpuStorage::F64(__s) => CpuStorage::F64($fn::<f64>(__s, $($args),*)?),
+            CpuStorage::U32(__s) => CpuStorage::U32($fn::<u32>(__s, $($args),*)?),
+        };
+        Ok(v)
+    }};
+}
+
+fn sum_impl1<T: Copy + num_traits::NumAssign>(
+    src: &[T],
+    dst_shape: &Shape,
+    src_dims: &[usize],
+    stride: &[usize],
+    to_dst_index: impl Fn(usize) -> usize,
+) -> Result<Vec<T>> {
+    let mut dst = vec![T::zero(); dst_shape.elem_count()];
+    for (unstr_index, src_index) in StridedIndex::new(src_dims, stride).enumerate() {
+        dst[to_dst_index(unstr_index)] += src[src_index];
+    }
+    Ok(dst)
+}
+
 fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(
+    vs: &[T],
     shape: &Shape,
     stride: &[usize],
-    vs: &[T],
     mut f: F,
 ) -> Vec<U> {
     if shape.is_contiguous(stride) {
@@ -83,11 +110,11 @@ fn binary_map<T: Copy, F: FnMut(T, T) -> T>(
     }
 }
 
-fn take<T: Copy>(
+fn take_impl1<T: Copy>(
+    vs: &[T],
     ids: &[u32],
     shape: &Shape,
     stride: &[usize],
-    vs: &[T],
     vocab_size: usize,
     hidden_size: usize,
 ) -> Result<Vec<T>> {
@@ -153,40 +180,104 @@ impl CpuStorage {
     pub(crate) fn to_dtype(&self, shape: &Shape, stride: &[usize], dtype: DType) -> Result<Self> {
         // TODO: find a way around the quadratic number of cases below.
         match (self, dtype) {
+            (Self::U32(storage), DType::BF16) => {
+                let data = unary_map(storage, shape, stride, |v| bf16::from_f32(v as f32));
+                Ok(Self::BF16(data))
+            }
+            (Self::BF16(storage), DType::BF16) => {
+                let data = unary_map(storage, shape, stride, |v| v);
+                Ok(Self::BF16(data))
+            }
+            (Self::F16(storage), DType::BF16) => {
+                let data = unary_map(storage, shape, stride, |v| bf16::from_f32(v.to_f32()));
+                Ok(Self::BF16(data))
+            }
+            (Self::F32(storage), DType::BF16) => {
+                let data = unary_map(storage, shape, stride, bf16::from_f32);
+                Ok(Self::BF16(data))
+            }
+            (Self::F64(storage), DType::BF16) => {
+                let data = unary_map(storage, shape, stride, bf16::from_f64);
+                Ok(Self::BF16(data))
+            }
+            (Self::U32(storage), DType::F16) => {
+                let data = unary_map(storage, shape, stride, |v| f16::from_f32(v as f32));
+                Ok(Self::F16(data))
+            }
+            (Self::BF16(storage), DType::F16) => {
+                let data = unary_map(storage, shape, stride, |v| f16::from_f32(v.to_f32()));
+                Ok(Self::F16(data))
+            }
+            (Self::F16(storage), DType::F16) => {
+                let data = unary_map(storage, shape, stride, |v| v);
+                Ok(Self::F16(data))
+            }
+            (Self::F32(storage), DType::F16) => {
+                let data = unary_map(storage, shape, stride, f16::from_f32);
+                Ok(Self::F16(data))
+            }
+            (Self::F64(storage), DType::F16) => {
+                let data = unary_map(storage, shape, stride, f16::from_f64);
+                Ok(Self::F16(data))
+            }
             (Self::U32(storage), DType::F32) => {
-                let data = unary_map(shape, stride, storage, |v| v as f32);
+                let data = unary_map(storage, shape, stride, |v| v as f32);
+                Ok(Self::F32(data))
+            }
+            (Self::BF16(storage), DType::F32) => {
+                let data = unary_map(storage, shape, stride, |v| v.to_f32());
+                Ok(Self::F32(data))
+            }
+            (Self::F16(storage), DType::F32) => {
+                let data = unary_map(storage, shape, stride, |v| v.to_f32());
                 Ok(Self::F32(data))
             }
             (Self::F32(storage), DType::F32) => {
-                let data = unary_map(shape, stride, storage, |v| v);
+                let data = unary_map(storage, shape, stride, |v| v);
                 Ok(Self::F32(data))
             }
             (Self::F64(storage), DType::F32) => {
-                let data = unary_map(shape, stride, storage, |v| v as f32);
+                let data = unary_map(storage, shape, stride, |v| v as f32);
                 Ok(Self::F32(data))
             }
             (Self::U32(storage), DType::U32) => {
-                let data = unary_map(shape, stride, storage, |v| v);
+                let data = unary_map(storage, shape, stride, |v| v);
+                Ok(Self::U32(data))
+            }
+            (Self::BF16(storage), DType::U32) => {
+                let data = unary_map(storage, shape, stride, |v| v.to_f32() as u32);
+                Ok(Self::U32(data))
+            }
+            (Self::F16(storage), DType::U32) => {
+                let data = unary_map(storage, shape, stride, |v| v.to_f32() as u32);
                 Ok(Self::U32(data))
             }
             (Self::F32(storage), DType::U32) => {
-                let data = unary_map(shape, stride, storage, |v| v as u32);
+                let data = unary_map(storage, shape, stride, |v| v as u32);
                 Ok(Self::U32(data))
             }
             (Self::F64(storage), DType::U32) => {
-                let data = unary_map(shape, stride, storage, |v| v as u32);
+                let data = unary_map(storage, shape, stride, |v| v as u32);
                 Ok(Self::U32(data))
             }
             (Self::U32(storage), DType::F64) => {
-                let data = unary_map(shape, stride, storage, |v| v as f64);
+                let data = unary_map(storage, shape, stride, |v| v as f64);
+                Ok(Self::F64(data))
+            }
+            (Self::BF16(storage), DType::F64) => {
+                let data = unary_map(storage, shape, stride, |v| v.to_f64());
+                Ok(Self::F64(data))
+            }
+            (Self::F16(storage), DType::F64) => {
+                let data = unary_map(storage, shape, stride, |v| v.to_f64());
                 Ok(Self::F64(data))
             }
             (Self::F32(storage), DType::F64) => {
-                let data = unary_map(shape, stride, storage, |v| v as f64);
+                let data = unary_map(storage, shape, stride, |v| v as f64);
                 Ok(Self::F64(data))
             }
             (Self::F64(storage), DType::F64) => {
-                let data = unary_map(shape, stride, storage, |v| v);
+                let data = unary_map(storage, shape, stride, |v| v);
                 Ok(Self::F64(data))
             }
         }
@@ -219,29 +310,7 @@ impl CpuStorage {
             dst_index
         };
         // TODO: Maybe provide an implementation with higher precision accumulators?
-        match self {
-            Self::F32(src) => {
-                let mut dst = vec![0f32; dst_shape.elem_count()];
-                for (unstr_index, src_index) in StridedIndex::new(src_dims, stride).enumerate() {
-                    dst[to_dst_index(unstr_index)] += src[src_index];
-                }
-                Ok(Self::F32(dst))
-            }
-            Self::F64(src) => {
-                let mut dst = vec![0f64; dst_shape.elem_count()];
-                for (unstr_index, src_index) in StridedIndex::new(src_dims, stride).enumerate() {
-                    dst[to_dst_index(unstr_index)] += src[src_index];
-                }
-                Ok(Self::F64(dst))
-            }
-            Self::U32(src) => {
-                let mut dst = vec![0u32; dst_shape.elem_count()];
-                for (unstr_index, src_index) in StridedIndex::new(src_dims, stride).enumerate() {
-                    dst[to_dst_index(unstr_index)] += src[src_index];
-                }
-                Ok(Self::U32(dst))
-            }
-        }
+        map1!(self, sum_impl1, &dst_shape, src_dims, stride, to_dst_index)
     }
 
     pub(crate) fn divide_by_sum_over_dim(&mut self, shape: &Shape, dim: usize) -> Result<()> {
@@ -251,6 +320,42 @@ impl CpuStorage {
         let prod_pre_dim = dims[..dim].iter().product();
         let prod_post_dim = dims[dim + 1..].iter().product();
         match self {
+            Self::BF16(storage) => {
+                for pre_idx in 0..prod_pre_dim {
+                    for post_idx in 0..prod_post_dim {
+                        let mut sum = 0f64;
+                        let mut idx = pre_idx * prod_post_dim * elem_per_slice + post_idx;
+                        for _ in 0..elem_per_slice {
+                            sum += storage[idx].to_f64();
+                            idx += prod_post_dim
+                        }
+                        let sum = bf16::from_f64(sum);
+                        let mut idx = pre_idx * prod_post_dim * elem_per_slice + post_idx;
+                        for _ in 0..elem_per_slice {
+                            storage[idx] /= sum;
+                            idx += prod_post_dim
+                        }
+                    }
+                }
+            }
+            Self::F16(storage) => {
+                for pre_idx in 0..prod_pre_dim {
+                    for post_idx in 0..prod_post_dim {
+                        let mut sum = 0f64;
+                        let mut idx = pre_idx * prod_post_dim * elem_per_slice + post_idx;
+                        for _ in 0..elem_per_slice {
+                            sum += storage[idx].to_f64();
+                            idx += prod_post_dim
+                        }
+                        let sum = f16::from_f64(sum);
+                        let mut idx = pre_idx * prod_post_dim * elem_per_slice + post_idx;
+                        for _ in 0..elem_per_slice {
+                            storage[idx] /= sum;
+                            idx += prod_post_dim
+                        }
+                    }
+                }
+            }
             Self::F32(storage) => {
                 for pre_idx in 0..prod_pre_dim {
                     for post_idx in 0..prod_post_dim {
@@ -302,17 +407,29 @@ impl CpuStorage {
             Self::U32(storage) => {
                 let mul = mul as u32;
                 let add = add as u32;
-                let data = unary_map(shape, stride, storage, |v| v * mul + add);
+                let data = unary_map(storage, shape, stride, |v| v * mul + add);
                 Ok(Self::U32(data))
+            }
+            Self::BF16(storage) => {
+                let mul = bf16::from_f64(mul);
+                let add = bf16::from_f64(add);
+                let data = unary_map(storage, shape, stride, |v| v * mul + add);
+                Ok(Self::BF16(data))
+            }
+            Self::F16(storage) => {
+                let mul = f16::from_f64(mul);
+                let add = f16::from_f64(add);
+                let data = unary_map(storage, shape, stride, |v| v * mul + add);
+                Ok(Self::F16(data))
             }
             Self::F32(storage) => {
                 let mul = mul as f32;
                 let add = add as f32;
-                let data = unary_map(shape, stride, storage, |v| v * mul + add);
+                let data = unary_map(storage, shape, stride, |v| v * mul + add);
                 Ok(Self::F32(data))
             }
             Self::F64(storage) => {
-                let data = unary_map(shape, stride, storage, |v| v * mul + add);
+                let data = unary_map(storage, shape, stride, |v| v * mul + add);
                 Ok(Self::F64(data))
             }
         }
@@ -320,16 +437,24 @@ impl CpuStorage {
 
     pub(crate) fn unary_impl<B: UnaryOp>(&self, shape: &Shape, stride: &[usize]) -> Result<Self> {
         match self {
+            Self::BF16(storage) => {
+                let data = unary_map(storage, shape, stride, B::bf16);
+                Ok(Self::BF16(data))
+            }
+            Self::F16(storage) => {
+                let data = unary_map(storage, shape, stride, B::f16);
+                Ok(Self::F16(data))
+            }
             Self::F32(storage) => {
-                let data = unary_map(shape, stride, storage, B::f32);
+                let data = unary_map(storage, shape, stride, B::f32);
                 Ok(Self::F32(data))
             }
             Self::F64(storage) => {
-                let data = unary_map(shape, stride, storage, B::f64);
+                let data = unary_map(storage, shape, stride, B::f64);
                 Ok(Self::F64(data))
             }
             Self::U32(storage) => {
-                let data = unary_map(shape, stride, storage, B::u32);
+                let data = unary_map(storage, shape, stride, B::u32);
                 Ok(Self::U32(data))
             }
         }
@@ -343,6 +468,14 @@ impl CpuStorage {
         rhs_stride: &[usize],
     ) -> Result<Self> {
         match (self, rhs) {
+            (Self::BF16(lhs), Self::BF16(rhs)) => {
+                let data = binary_map(shape, lhs_stride, rhs_stride, lhs, rhs, B::bf16);
+                Ok(Self::BF16(data))
+            }
+            (Self::F16(lhs), Self::F16(rhs)) => {
+                let data = binary_map(shape, lhs_stride, rhs_stride, lhs, rhs, B::f16);
+                Ok(Self::F16(data))
+            }
             (Self::F32(lhs), Self::F32(rhs)) => {
                 let data = binary_map(shape, lhs_stride, rhs_stride, lhs, rhs, B::f32);
                 Ok(Self::F32(data))
@@ -381,6 +514,12 @@ impl CpuStorage {
             (Self::U32(src), Self::U32(dst)) => {
                 copy_strided_src_(src, dst, dst_offset, src_shape, src_stride, src_offset)
             }
+            (Self::BF16(src), Self::BF16(dst)) => {
+                copy_strided_src_(src, dst, dst_offset, src_shape, src_stride, src_offset)
+            }
+            (Self::F16(src), Self::F16(dst)) => {
+                copy_strided_src_(src, dst, dst_offset, src_shape, src_stride, src_offset)
+            }
             (Self::F32(src), Self::F32(dst)) => {
                 copy_strided_src_(src, dst, dst_offset, src_shape, src_stride, src_offset)
             }
@@ -411,6 +550,14 @@ impl CpuStorage {
         // TODO: Support types that could be casted to a boolean.
         let pred = self.as_slice::<u32>()?;
         match (t, f) {
+            (Self::BF16(t), Self::BF16(f)) => {
+                let data = wcond(pred, shape, stride, t, stride_t, f, stride_f);
+                Ok(Self::BF16(data))
+            }
+            (Self::F16(t), Self::F16(f)) => {
+                let data = wcond(pred, shape, stride, t, stride_t, f, stride_f);
+                Ok(Self::F16(data))
+            }
             (Self::F32(t), Self::F32(f)) => {
                 let data = wcond(pred, shape, stride, t, stride_t, f, stride_f);
                 Ok(Self::F32(data))
@@ -440,20 +587,7 @@ impl CpuStorage {
         vocab_size: usize,
     ) -> Result<Self> {
         let ids = self.as_slice::<u32>()?;
-        match vs {
-            CpuStorage::F32(vs) => {
-                let storage = take(ids, shape, stride, vs, vocab_size, hidden_size)?;
-                Ok(CpuStorage::F32(storage))
-            }
-            CpuStorage::F64(vs) => {
-                let storage = take(ids, shape, stride, vs, vocab_size, hidden_size)?;
-                Ok(CpuStorage::F64(storage))
-            }
-            CpuStorage::U32(vs) => {
-                let storage = take(ids, shape, stride, vs, vocab_size, hidden_size)?;
-                Ok(CpuStorage::U32(storage))
-            }
-        }
+        map1!(vs, take_impl1, ids, shape, stride, vocab_size, hidden_size)
     }
 
     pub(crate) fn matmul_impl(
