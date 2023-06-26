@@ -314,7 +314,14 @@ impl CudaStorage {
             .iter()
             .map(|&d| src_dims[d + 1..].iter().product::<usize>())
             .collect();
-        let cfg = LaunchConfig::for_num_elems(el as u32);
+        // let cfg = LaunchConfig::for_num_elems(el as u32);
+        // TODO: Hack to run the computation on a single thread, replace with a proper distributed
+        // algorithm.
+        let cfg = LaunchConfig {
+            grid_dim: (1, 1, 1),
+            block_dim: (1, 1, 1),
+            shared_mem_bytes: 0,
+        };
         let dev = self.device();
         let ds = dev.htod_copy([src_dims, stride, &sum_dims_l, &sum_dims_s].concat())?;
         let slice = match &self.slice {

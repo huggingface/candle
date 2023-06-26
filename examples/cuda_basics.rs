@@ -3,6 +3,11 @@ use candle::{Device, Tensor};
 
 fn main() -> Result<()> {
     let device = Device::new_cuda(0)?;
+    let x = Tensor::new(&[[11f32, 22.], [33., 44.], [55., 66.], [77., 78.]], &device)?;
+    println!("> {:?}", x.sum(&[0])?.to_vec2::<f32>()?);
+    println!("> {:?}", x.sum(&[1])?.to_vec2::<f32>()?);
+    println!("> {:?}", x.sum(&[0, 1])?.to_vec2::<f32>()?);
+
     let x = Tensor::new(&[3f32, 1., 4., 1., 5.], &device)?;
     println!("{:?}", x.to_vec1::<f32>()?);
     let y = Tensor::new(&[2f32, 7., 1., 8., 2.], &device)?;

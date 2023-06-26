@@ -20,7 +20,7 @@ extern "C" __global__ void FN_NAME(  \
             for (unsigned int nd = 0; nd < num_sum_dims; ++nd) { \
               size_t stride = sum_dims_s[nd]; \
               size_t pre = dst_index / stride; \
-              size_t post = dst_index / stride; \
+              size_t post = dst_index % stride; \
               dst_index = (pre / sum_dims_l[nd]) * stride + post; \
             } \
             out[dst_index] += inp[i]; \
@@ -33,7 +33,7 @@ extern "C" __global__ void FN_NAME(  \
             for (unsigned int nd = 0; nd < num_sum_dims; ++nd) { \
               size_t stride = sum_dims_s[nd]; \
               size_t pre = dst_index / stride; \
-              size_t post = dst_index / stride; \
+              size_t post = dst_index % stride; \
               dst_index = (pre / sum_dims_l[nd]) * stride + post; \
             } \
             out[dst_index] += inp[strided_i]; \
