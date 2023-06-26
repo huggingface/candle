@@ -1,3 +1,4 @@
+// TODO: Use a proper distributed reduction rather than atomicAdd.
 #include "cuda_utils.cuh"
 #include<stdint.h>
 
@@ -23,7 +24,7 @@ extern "C" __global__ void FN_NAME(  \
               size_t post = dst_index % stride; \
               dst_index = (pre / sum_dims_l[nd]) * stride + post; \
             } \
-            out[dst_index] += inp[i]; \
+            atomicAdd(out + dst_index, inp[i]); \
         } \
     } \
     else { \
@@ -36,7 +37,7 @@ extern "C" __global__ void FN_NAME(  \
               size_t post = dst_index % stride; \
               dst_index = (pre / sum_dims_l[nd]) * stride + post; \
             } \
-            out[dst_index] += inp[strided_i]; \
+            atomicAdd(out + dst_index, inp[strided_i]); \
         } \
     } \
 } \
