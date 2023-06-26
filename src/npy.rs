@@ -26,6 +26,7 @@
 //! values = np.loadz("test.npz")
 //! ```
 use crate::{DType, Device, Error, Result, Shape, Tensor};
+use byteorder::{ByteOrder, LittleEndian};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
@@ -192,37 +193,24 @@ impl Header {
 impl Tensor {
     fn from_reader<R: std::io::Read>(shape: Shape, dtype: DType, reader: &mut R) -> Result<Self> {
         let elem_count = shape.elem_count();
+        let mut data = Vec::new();
+        reader.read_to_end(&mut data)?;
         match dtype {
             DType::F32 => {
-                let mut data = Vec::new();
-                data.reserve(elem_count);
-                for _ in 0..elem_count {
-                    let mut buf = [0u8; 4];
-                    reader.read_exact(&mut buf)?;
-                    data.push(f32::from_le_bytes(buf))
-                }
-                // TODO: We should pass the ownership of data here rather than triggering a copy.
-                Tensor::from_slice(&data, shape, &Device::Cpu)
+                // TODO: Avoid the data being copied around multiple times.
+                let mut data_t = vec![0f32; elem_count];
+                LittleEndian::read_f32_into(&data, &mut data_t);
+                Tensor::from_slice(&data_t, shape, &Device::Cpu)
             }
             DType::F64 => {
-                let mut data = Vec::new();
-                data.reserve(elem_count);
-                for _ in 0..elem_count {
-                    let mut buf = [0u8; 8];
-                    reader.read_exact(&mut buf)?;
-                    data.push(f64::from_le_bytes(buf))
-                }
-                Tensor::from_slice(&data, shape, &Device::Cpu)
+                let mut data_t = vec![0f64; elem_count];
+                LittleEndian::read_f64_into(&data, &mut data_t);
+                Tensor::from_slice(&data_t, shape, &Device::Cpu)
             }
             DType::U32 => {
-                let mut data = Vec::new();
-                data.reserve(elem_count);
-                for _ in 0..elem_count {
-                    let mut buf = [0u8; 4];
-                    reader.read_exact(&mut buf)?;
-                    data.push(u32::from_le_bytes(buf))
-                }
-                Tensor::from_slice(&data, shape, &Device::Cpu)
+                let mut data_t = vec![0u32; elem_count];
+                LittleEndian::read_u32_into(&data, &mut data_t);
+                Tensor::from_slice(&data_t, shape, &Device::Cpu)
             }
         }
     }
