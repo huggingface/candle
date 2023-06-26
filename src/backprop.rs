@@ -37,10 +37,6 @@ impl Tensor {
                     | Op::Mul(lhs, rhs)
                     | Op::Sub(lhs, rhs)
                     | Op::Div(lhs, rhs)
-                    | Op::BroadcastAdd(lhs, rhs)
-                    | Op::BroadcastMul(lhs, rhs)
-                    | Op::BroadcastSub(lhs, rhs)
-                    | Op::BroadcastDiv(lhs, rhs)
                     | Op::Embedding(lhs, rhs)
                     | Op::Matmul(lhs, rhs) => {
                         let (tg, nodes) = walk(lhs, nodes, already_seen);
@@ -141,34 +137,6 @@ impl Tensor {
                         let rhs_grad = grad.mul(lhs)?.div(&rhs.sqr()?)?;
                         let rhs_sum_grad = grads.or_insert(rhs)?;
                         *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
-                    }
-                    Op::BroadcastAdd(lhs, rhs) => {
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.broadcast_add(&grad)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.broadcast_add(&grad)?;
-                    }
-                    Op::BroadcastSub(lhs, rhs) => {
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.broadcast_add(&grad)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.broadcast_sub(&grad)?;
-                    }
-                    Op::BroadcastMul(lhs, rhs) => {
-                        let lhs_grad = grad.broadcast_mul(rhs)?;
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.broadcast_add(&lhs_grad)?;
-                        let rhs_grad = grad.broadcast_mul(lhs)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.broadcast_add(&rhs_grad)?;
-                    }
-                    Op::BroadcastDiv(lhs, rhs) => {
-                        let lhs_grad = grad.broadcast_div(rhs)?;
-                        let lhs_sum_grad = grads.or_insert(lhs)?;
-                        *lhs_sum_grad = lhs_sum_grad.broadcast_add(&lhs_grad)?;
-                        let rhs_grad = grad.broadcast_mul(lhs)?.broadcast_div(&rhs.sqr()?)?;
-                        let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.broadcast_add(&rhs_grad)?;
                     }
                     Op::WhereCond(_pred, _t, _f) => {
                         return Err(Error::BackwardNotSupported { op: "where_cond" })

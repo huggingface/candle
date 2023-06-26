@@ -88,21 +88,20 @@ macro_rules! binary_op {
 }
 
 macro_rules! broadcast_binary_op {
-    ($fn_name:ident, $impl_name:ident, $op_name:ident) => {
+    ($fn_name:ident, $inner_fn_name:ident) => {
         pub fn $fn_name(&self, rhs: &Self) -> Result<Self> {
-            let shape = self.broadcast_shape_binary_op(rhs, stringify!($fn_name))?;
-            let storage = self.storage.binary_impl::<crate::op::$impl_name>(
-                &rhs.storage,
-                shape,
-                self.stride(),
-                rhs.stride(),
-            )?;
-            let op = if self.track_op() || rhs.track_op() {
-                Some(Op::$op_name(self.clone(), rhs.clone()))
-            } else {
-                None
-            };
-            Ok(from_storage(storage, shape.clone(), op, false))
+            let lhs = self;
+            let shape = lhs.broadcast_shape_binary_op(rhs, stringify!($fn_name))?;
+            let l_broadcast = shape != *lhs.shape();
+            let r_broadcast = shape != *rhs.shape();
+            match (l_broadcast, r_broadcast) {
+                (true, true) => lhs
+                    .broadcast_as(&shape)?
+                    .$inner_fn_name(&rhs.broadcast_as(&shape)?),
+                (false, true) => lhs.$inner_fn_name(&rhs.broadcast_as(&shape)?),
+                (true, false) => lhs.broadcast_as(&shape)?.$inner_fn_name(rhs),
+                (false, false) => lhs.$inner_fn_name(rhs),
+            }
         }
     };
 }
@@ -250,21 +249,41 @@ impl Tensor {
         &'a self,
         rhs: &'a Self,
         op: &'static str,
-    ) -> Result<&'a Shape> {
+    ) -> Result<Shape> {
         let lhs = self;
         let lhs_dims = lhs.shape().dims();
         let rhs_dims = rhs.shape().dims();
-        if lhs_dims.strip_suffix(rhs_dims).is_some() {
-            Ok(self.shape())
-        } else if rhs_dims.strip_suffix(lhs_dims).is_some() {
-            Ok(rhs.shape())
-        } else {
-            Err(Error::ShapeMismatchBinaryOp {
-                lhs: self.shape().clone(),
-                rhs: rhs.shape().clone(),
-                op,
-            })
+        let lhs_ndims = lhs_dims.len();
+        let rhs_ndims = rhs_dims.len();
+        let bcast_ndims = usize::max(lhs_ndims, rhs_ndims);
+        let mut bcast_dims = vec![0; bcast_ndims];
+        for (idx, bcast_value) in bcast_dims.iter_mut().enumerate() {
+            let rev_idx = bcast_ndims - idx;
+            let l_value = if lhs_ndims < rev_idx {
+                1
+            } else {
+                lhs_dims[lhs_ndims - rev_idx]
+            };
+            let r_value = if rhs_ndims < rev_idx {
+                1
+            } else {
+                rhs_dims[rhs_ndims - rev_idx]
+            };
+            *bcast_value = if l_value == r_value {
+                l_value
+            } else if l_value == 1 {
+                r_value
+            } else if r_value == 1 {
+                l_value
+            } else {
+                Err(Error::ShapeMismatchBinaryOp {
+                    lhs: self.shape().clone(),
+                    rhs: rhs.shape().clone(),
+                    op,
+                })?
+            }
         }
+        Ok(Shape::from(bcast_dims))
     }
 
     pub(crate) fn same_shape_binary_op(&self, rhs: &Self, op: &'static str) -> Result<&Shape> {
@@ -293,10 +312,10 @@ impl Tensor {
     binary_op!(mul, Mul);
     binary_op!(sub, Sub);
     binary_op!(div, Div);
-    broadcast_binary_op!(broadcast_add, Add, BroadcastAdd);
-    broadcast_binary_op!(broadcast_mul, Mul, BroadcastMul);
-    broadcast_binary_op!(broadcast_sub, Sub, BroadcastSub);
-    broadcast_binary_op!(broadcast_div, Div, BroadcastDiv);
+    broadcast_binary_op!(broadcast_add, add);
+    broadcast_binary_op!(broadcast_mul, mul);
+    broadcast_binary_op!(broadcast_sub, sub);
+    broadcast_binary_op!(broadcast_div, div);
 
     unary_op!(neg, Neg);
     unary_op!(exp, Exp);

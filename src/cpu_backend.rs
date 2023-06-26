@@ -58,8 +58,7 @@ fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(
     }
 }
 
-// This function maps over two strided index sequences. It supports broadcasting in case
-// `lhs_stride` or `rhs_stride` has a length shorter than `shape`.
+// This function maps over two strided index sequences.
 fn binary_map<T: Copy, F: FnMut(T, T) -> T>(
     shape: &Shape,
     lhs_stride: &[usize],
@@ -69,52 +68,15 @@ fn binary_map<T: Copy, F: FnMut(T, T) -> T>(
     mut f: F,
 ) -> Vec<T> {
     let dims = shape.dims();
-    let broadcast_ldims = dims.len() - lhs_stride.len();
-    let broadcast_rdims = dims.len() - rhs_stride.len();
-    let elem_count = shape.elem_count();
-    if broadcast_ldims == 0 && broadcast_rdims == 0 {
-        if shape.is_contiguous(lhs_stride) && shape.is_contiguous(rhs_stride) {
-            (0..shape.elem_count()).map(|i| f(lhs[i], rhs[i])).collect()
-        } else {
-            let lhs_index = StridedIndex::new(dims, lhs_stride);
-            let rhs_index = StridedIndex::new(dims, rhs_stride);
-            lhs_index
-                .zip(rhs_index)
-                .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
-                .collect()
-        }
-    } else if broadcast_rdims == 0 {
-        let mut res = Vec::new();
-        res.reserve(elem_count);
-        let lhs_v: Vec<T> = StridedIndex::new(dims, lhs_stride)
-            .map(|i| lhs[i])
-            .collect();
-        let mut i = 0;
-        for rhs_i in StridedIndex::new(dims, rhs_stride) {
-            res.push(f(lhs_v[i], rhs[rhs_i]));
-            i += 1;
-            if i >= lhs_v.len() {
-                i = 0
-            }
-        }
-        res
-    } else if broadcast_ldims == 0 {
-        let mut res = Vec::new();
-        res.reserve(elem_count);
-        let rhs_v: Vec<T> = StridedIndex::new(dims, rhs_stride)
-            .map(|i| rhs[i])
-            .collect();
-        let mut i = 0;
-        for lhs_i in StridedIndex::new(dims, lhs_stride) {
-            res.push(f(lhs[lhs_i], rhs_v[i]));
-            i += 1;
-            if i >= rhs_v.len() {
-                i = 0
-            }
-        }
-        res
+    if shape.is_contiguous(lhs_stride) && shape.is_contiguous(rhs_stride) {
+        (0..shape.elem_count()).map(|i| f(lhs[i], rhs[i])).collect()
     } else {
-        panic!("unexpected broadcasting dims: {shape:?} {lhs_stride:?} {rhs_stride:?}")
+        let lhs_index = StridedIndex::new(dims, lhs_stride);
+        let rhs_index = StridedIndex::new(dims, rhs_stride);
+        lhs_index
+            .zip(rhs_index)
+            .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
+            .collect()
     }
 }
 
