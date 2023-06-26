@@ -1,6 +1,7 @@
 use crate::op::{BinaryOp, UnaryOp};
 use crate::{DType, Error, Result, Shape, StridedIndex};
 use gemm::{gemm, Parallelism};
+use half::{bf16, f16};
 
 // TODO: Think about whether we would be better off with a dtype and
 // a buffer as an owned slice of bytes.
@@ -9,6 +10,8 @@ use gemm::{gemm, Parallelism};
 #[derive(Debug, Clone)]
 pub enum CpuStorage {
     U32(Vec<u32>),
+    BF16(Vec<bf16>),
+    F16(Vec<f16>),
     F32(Vec<f32>),
     F64(Vec<f64>),
 }
@@ -132,6 +135,8 @@ impl CpuStorage {
     pub fn dtype(&self) -> DType {
         match self {
             Self::U32(_) => DType::U32,
+            Self::BF16(_) => DType::BF16,
+            Self::F16(_) => DType::F16,
             Self::F32(_) => DType::F32,
             Self::F64(_) => DType::F64,
         }
@@ -545,6 +550,14 @@ impl CpuStorage {
                 let data = vec![1u32; elem_count];
                 Self::U32(data)
             }
+            DType::BF16 => {
+                let data = vec![bf16::ONE; elem_count];
+                Self::BF16(data)
+            }
+            DType::F16 => {
+                let data = vec![f16::ONE; elem_count];
+                Self::F16(data)
+            }
             DType::F32 => {
                 let data = vec![1f32; elem_count];
                 Self::F32(data)
@@ -562,6 +575,14 @@ impl CpuStorage {
             DType::U32 => {
                 let data = vec![0u32; elem_count];
                 Self::U32(data)
+            }
+            DType::BF16 => {
+                let data = vec![bf16::ZERO; elem_count];
+                Self::BF16(data)
+            }
+            DType::F16 => {
+                let data = vec![f16::ZERO; elem_count];
+                Self::F16(data)
             }
             DType::F32 => {
                 let data = vec![0f32; elem_count];

@@ -80,6 +80,8 @@ impl Header {
             .collect::<Vec<_>>()
             .join(",");
         let descr = match self.descr {
+            DType::BF16 => todo!("bf16"),
+            DType::F16 => "f2",
             DType::F32 => "f4",
             DType::F64 => "f8",
             DType::U32 => "u4",
@@ -152,7 +154,7 @@ impl Header {
                 //     int64, int32, int16, int8,
                 //     uint8, and bool.
                 match descr.trim_matches(|c: char| c == '=' || c == '<' || c == '|') {
-                    // "e" | "f2" => DType::F16,
+                    "e" | "f2" => DType::F16,
                     "f" | "f4" => DType::F32,
                     "d" | "f8" => DType::F64,
                     // "i" | "i4" => DType::S32,
@@ -194,6 +196,12 @@ impl Tensor {
     fn from_reader<R: std::io::Read>(shape: Shape, dtype: DType, reader: &mut R) -> Result<Self> {
         let elem_count = shape.elem_count();
         match dtype {
+            DType::BF16 => {
+                todo!("bf16")
+            }
+            DType::F16 => {
+                todo!("f16")
+            }
             DType::F32 => {
                 let mut data_t = vec![0f32; elem_count];
                 reader.read_f32_into::<LittleEndian>(&mut data_t)?;
@@ -289,6 +297,12 @@ impl Tensor {
         f.write_all(header.as_bytes())?;
         let elem_count = self.elem_count();
         match self.dtype() {
+            DType::BF16 => {
+                todo!("bf16")
+            }
+            DType::F16 => {
+                todo!("f16")
+            }
             DType::F32 => {
                 // TODO: Avoid using a buffer when data is already on the CPU.
                 for v in self.reshape(elem_count)?.to_vec1::<f32>()? {

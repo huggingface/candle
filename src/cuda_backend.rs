@@ -2,6 +2,7 @@ use crate::{CpuStorage, DType, Shape};
 use candle_kernels as kernels;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
 use cudarc::driver::{CudaFunction, CudaSlice, LaunchAsync, LaunchConfig};
+use half::{bf16, f16};
 use std::sync::Arc;
 
 /// cudarc related errors
@@ -97,6 +98,14 @@ impl CudaDevice {
                 let data = self.alloc_zeros::<u32>(elem_count)?;
                 CudaStorageSlice::U32(data)
             }
+            DType::BF16 => {
+                let data = self.alloc_zeros::<bf16>(elem_count)?;
+                CudaStorageSlice::BF16(data)
+            }
+            DType::F16 => {
+                let data = self.alloc_zeros::<f16>(elem_count)?;
+                CudaStorageSlice::F16(data)
+            }
             DType::F32 => {
                 let data = self.alloc_zeros::<f32>(elem_count)?;
                 CudaStorageSlice::F32(data)
@@ -190,6 +199,8 @@ impl CudaDevice {
 #[derive(Debug)]
 enum CudaStorageSlice {
     U32(CudaSlice<u32>),
+    BF16(CudaSlice<bf16>),
+    F16(CudaSlice<f16>),
     F32(CudaSlice<f32>),
     F64(CudaSlice<f64>),
 }
@@ -265,6 +276,8 @@ impl CudaStorage {
     pub fn try_clone(&self) -> Result<Self> {
         let slice = match &self.slice {
             CudaStorageSlice::U32(slice) => CudaStorageSlice::U32(slice.try_clone()?),
+            CudaStorageSlice::BF16(slice) => CudaStorageSlice::BF16(slice.try_clone()?),
+            CudaStorageSlice::F16(slice) => CudaStorageSlice::F16(slice.try_clone()?),
             CudaStorageSlice::F32(slice) => CudaStorageSlice::F32(slice.try_clone()?),
             CudaStorageSlice::F64(slice) => CudaStorageSlice::F64(slice.try_clone()?),
         };
@@ -275,6 +288,8 @@ impl CudaStorage {
     pub fn dtype(&self) -> DType {
         match self.slice {
             CudaStorageSlice::U32(_) => DType::U32,
+            CudaStorageSlice::BF16(_) => DType::BF16,
+            CudaStorageSlice::F16(_) => DType::F16,
             CudaStorageSlice::F32(_) => DType::F32,
             CudaStorageSlice::F64(_) => DType::F64,
         }
