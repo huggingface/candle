@@ -1,4 +1,4 @@
-use crate::{CpuStorage, DType, Result, Shape, Storage};
+use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
 
 /// A `DeviceLocation` represents a physical device whereas multiple `Device`
 /// can live on the same location (typically for cuda devices).
@@ -21,7 +21,7 @@ pub trait NdArray {
     fn to_cpu_storage(&self) -> CpuStorage;
 }
 
-impl<S: crate::WithDType> NdArray for S {
+impl<S: WithDType> NdArray for S {
     fn shape(&self) -> Result<Shape> {
         Ok(Shape::from(()))
     }
@@ -31,7 +31,7 @@ impl<S: crate::WithDType> NdArray for S {
     }
 }
 
-impl<S: crate::WithDType, const N: usize> NdArray for &[S; N] {
+impl<S: WithDType, const N: usize> NdArray for &[S; N] {
     fn shape(&self) -> Result<Shape> {
         Ok(Shape::from(self.len()))
     }
@@ -41,7 +41,7 @@ impl<S: crate::WithDType, const N: usize> NdArray for &[S; N] {
     }
 }
 
-impl<S: crate::WithDType> NdArray for &[S] {
+impl<S: WithDType> NdArray for &[S] {
     fn shape(&self) -> Result<Shape> {
         Ok(Shape::from(self.len()))
     }
@@ -51,7 +51,7 @@ impl<S: crate::WithDType> NdArray for &[S] {
     }
 }
 
-impl<S: crate::WithDType, const N: usize, const M: usize> NdArray for &[[S; N]; M] {
+impl<S: WithDType, const N: usize, const M: usize> NdArray for &[[S; N]; M] {
     fn shape(&self) -> Result<Shape> {
         Ok(Shape::from((M, N)))
     }
@@ -61,7 +61,7 @@ impl<S: crate::WithDType, const N: usize, const M: usize> NdArray for &[[S; N]; 
     }
 }
 
-impl<S: crate::WithDType, const N1: usize, const N2: usize, const N3: usize> NdArray
+impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize> NdArray
     for &[[[S; N3]; N2]; N1]
 {
     fn shape(&self) -> Result<Shape> {
@@ -133,6 +133,17 @@ impl Device {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
             Device::Cuda(device) => {
                 let storage = array.to_cpu_storage();
+                let storage = device.cuda_from_cpu_storage(&storage)?;
+                Ok(Storage::Cuda(storage))
+            }
+        }
+    }
+
+    pub(crate) fn storage_owned<S: WithDType>(&self, data: Vec<S>) -> Result<Storage> {
+        match self {
+            Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data))),
+            Device::Cuda(device) => {
+                let storage = S::to_cpu_storage_owned(data);
                 let storage = device.cuda_from_cpu_storage(&storage)?;
                 Ok(Storage::Cuda(storage))
             }

@@ -199,6 +199,37 @@ impl Tensor {
         Self::new_impl(array, shape, device, true)
     }
 
+    pub fn from_vec_impl<S: Into<Shape>, D: crate::WithDType>(
+        data: Vec<D>,
+        shape: S,
+        device: &Device,
+        is_variable: bool,
+    ) -> Result<Self> {
+        let shape = shape.into();
+        let buffer_size = data.len();
+        if buffer_size != shape.elem_count() {
+            return Err(Error::ShapeMismatch { buffer_size, shape });
+        }
+        let storage = device.storage_owned(data)?;
+        Ok(from_storage(storage, shape, None, is_variable))
+    }
+
+    pub fn from_vec<S: Into<Shape>, D: crate::WithDType>(
+        data: Vec<D>,
+        shape: S,
+        device: &Device,
+    ) -> Result<Self> {
+        Self::from_vec_impl(data, shape, device, false)
+    }
+
+    pub fn var_from_vec<S: Into<Shape>, D: crate::WithDType>(
+        data: Vec<D>,
+        shape: S,
+        device: &Device,
+    ) -> Result<Self> {
+        Self::from_vec_impl(data, shape, device, true)
+    }
+
     pub fn from_slice<S: Into<Shape>, D: crate::WithDType>(
         array: &[D],
         shape: S,

@@ -195,20 +195,19 @@ impl Tensor {
         let elem_count = shape.elem_count();
         match dtype {
             DType::F32 => {
-                // TODO: Avoid the data being copied around multiple times.
                 let mut data_t = vec![0f32; elem_count];
                 reader.read_f32_into::<LittleEndian>(&mut data_t)?;
-                Tensor::from_slice(&data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::F64 => {
                 let mut data_t = vec![0f64; elem_count];
                 reader.read_f64_into::<LittleEndian>(&mut data_t)?;
-                Tensor::from_slice(&data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::U32 => {
                 let mut data_t = vec![0u32; elem_count];
                 reader.read_u32_into::<LittleEndian>(&mut data_t)?;
-                Tensor::from_slice(&data_t, shape, &Device::Cpu)
+                Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
         }
     }
