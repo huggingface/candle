@@ -1,6 +1,10 @@
 #include "cuda_fp16.h"
 #include "compatibility.cuh"
 
+// TODO: This is often used to check that the data is contiguous so that
+// kernels can be easily mapped. However this only returns true for row
+// major, if all the inputs are column major, we could apply the fast path
+// too (but we wouldn't if some of them are row major and some column major).
 __device__ bool is_contiguous(
     const size_t num_dims,
     const size_t *dims,
