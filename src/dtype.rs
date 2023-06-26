@@ -46,6 +46,7 @@ macro_rules! with_dtype {
                     _ => Err(Error::UnexpectedDType {
                         expected: DType::$dtype,
                         got: s.dtype(),
+                        msg: "unexpected dtype",
                     }),
                 }
             }
@@ -56,6 +57,7 @@ macro_rules! with_dtype {
                     _ => Err(Error::UnexpectedDType {
                         expected: DType::$dtype,
                         got: s.dtype(),
+                        msg: "unexpected dtype",
                     }),
                 }
             }
@@ -66,6 +68,7 @@ macro_rules! with_dtype {
                     _ => Err(Error::UnexpectedDType {
                         expected: DType::$dtype,
                         got: s.dtype(),
+                        msg: "unexpected dtype",
                     }),
                 }
             }

@@ -24,6 +24,13 @@ pub enum CudaError {
 
     #[error("internal error '{0}'")]
     InternalError(&'static str),
+
+    #[error("{msg}, expected: {expected:?}, got: {got:?}")]
+    UnexpectedDType {
+        msg: &'static str,
+        expected: DType,
+        got: DType,
+    },
 }
 
 type Result<T> = std::result::Result<T, CudaError>;
@@ -349,9 +356,6 @@ impl CudaStorage {
         rhs_stride: &[usize],
     ) -> Result<Self> {
         let dims = shape.dims();
-        if dims.len() != lhs_stride.len() || dims.len() != rhs_stride.len() {
-            return Err(CudaError::InternalError("TODO: implement broadcast"));
-        }
         let elem_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
         let dev = self.device();
@@ -425,13 +429,57 @@ impl CudaStorage {
 
     pub(crate) fn embedding_impl(
         &self,
-        _shape: &Shape,
-        _stride: &[usize],
-        _rhs: &Self,
-        _hidden_size: usize,
-        _vocab_size: usize,
+        shape: &Shape,
+        stride: &[usize],
+        rhs: &Self,
+        h_size: usize, // hidden size
+        v_size: usize, // vocab size
     ) -> Result<Self> {
-        Err(CudaError::InternalError("TODO: implement embedding"))
+        let ids = match &self.slice {
+            CudaStorageSlice::U32(slice) => slice,
+            _ => Err(CudaError::UnexpectedDType {
+                msg: "embedding ids should be u32",
+                expected: DType::U32,
+                got: self.dtype(),
+            })?,
+        };
+        let dims = shape.dims();
+        let el = shape.elem_count();
+        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let dev = self.device();
+        let ds = dev.htod_copy([dims, stride].concat())?;
+        let slice = match &rhs.slice {
+            // The kernels below assume that rhs is contiguous.
+            CudaStorageSlice::U32(arg) => {
+                let func = dev.get_or_load_func("emb_f16", kernels::EMBEDDINGS)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<u32>(el * h_size) }?;
+                let params = (el, dims.len(), &ds, ids, arg, &out, h_size, v_size);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::U32(out)
+            }
+            CudaStorageSlice::F32(arg) => {
+                let func = dev.get_or_load_func("emb_f32", kernels::EMBEDDINGS)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<f32>(el * h_size) }?;
+                let params = (el, dims.len(), &ds, ids, arg, &out, h_size, v_size);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F32(out)
+            }
+            CudaStorageSlice::F64(arg) => {
+                let func = dev.get_or_load_func("emb_f64", kernels::EMBEDDINGS)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<f64>(el * h_size) }?;
+                let params = (el, dims.len(), &ds, ids, arg, &out, h_size, v_size);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F64(out)
+            }
+        };
+        let device = dev.clone();
+        Ok(Self { slice, device })
     }
 
     pub(crate) fn matmul_impl(

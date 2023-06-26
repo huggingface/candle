@@ -3,8 +3,12 @@ use crate::{DType, DeviceLocation, Shape};
 /// Main library error type.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("unexpected dtype, expected: {expected:?}, got: {got:?}")]
-    UnexpectedDType { expected: DType, got: DType },
+    #[error("{msg}, expected: {expected:?}, got: {got:?}")]
+    UnexpectedDType {
+        msg: &'static str,
+        expected: DType,
+        got: DType,
+    },
 
     #[error("{op} only supports contiguous tensors")]
     RequiresContiguous { op: &'static str },
