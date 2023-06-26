@@ -426,10 +426,19 @@ fn main() -> Result<()> {
         .get_ids()
         .to_vec();
 
-    println!("loading weights");
-    let start_load = std::time::Instant::now();
-    let vb = VarBuilder::new::<f32>(); // TODO: load the weights from llama.npz
-    println!("loaded weights in {:?}", start_load.elapsed());
+    let weight_path = std::path::Path::new("llama-f32.npz");
+    let weights = if weight_path.exists() {
+        println!("loading weights from {weight_path:?}");
+        let start_load = std::time::Instant::now();
+        let tensors = Tensor::read_npz(weight_path)?;
+        println!("loaded weights in {:?}", start_load.elapsed());
+        let tensors: std::collections::HashMap<String, Tensor> = tensors.into_iter().collect();
+        Some(tensors)
+    } else {
+        println!("cannot find {weight_path:?}, using zero weights");
+        None
+    };
+    let vb = VarBuilder::new::<f32>(weights);
 
     println!("building the model");
     let config = Config::config_7b();

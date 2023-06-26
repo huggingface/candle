@@ -1,4 +1,6 @@
 use candle::{DType, Device, Result, Shape, Tensor, WithDType};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -13,6 +15,7 @@ pub struct VarBuilder {
     path: Vec<String>,
     vars: std::rc::Rc<std::cell::RefCell<Vec<NamedVar>>>,
     default_dtype: DType,
+    tensors: Arc<Option<HashMap<String, Tensor>>>,
 }
 
 #[allow(dead_code)]
@@ -21,12 +24,13 @@ pub struct VarStore {
 }
 
 impl VarBuilder {
-    pub fn new<B: WithDType>() -> Self {
+    pub fn new<B: WithDType>(tensors: Option<HashMap<String, Tensor>>) -> Self {
         let vars = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
         Self {
             path: vec![],
             vars,
             default_dtype: B::DTYPE,
+            tensors: Arc::new(tensors),
         }
     }
 
@@ -38,13 +42,19 @@ impl VarBuilder {
         let shape = shape.into();
         let path = format!("{}.{s}", self.path.join("."));
         let mut vars = self.vars.borrow_mut();
-        let parameter = Tensor::zeros(&shape, self.default_dtype, &Device::Cpu);
+        let parameter = match self.tensors.as_ref() {
+            None => Tensor::zeros(&shape, self.default_dtype, &Device::Cpu)?,
+            Some(tensors) => match tensors.get(&path) {
+                Some(tensor) => tensor.clone(),
+                None => panic!("cannot find tensor for {path}"),
+            },
+        };
         vars.push(NamedVar {
             path,
             dtype: self.default_dtype,
             shape,
         });
-        parameter
+        Ok(parameter)
     }
 
     pub fn into_store(self) -> VarStore {
@@ -65,6 +75,7 @@ impl<S: ToString> std::ops::Div<S> for &VarBuilder {
             path,
             vars: self.vars.clone(),
             default_dtype: self.default_dtype,
+            tensors: self.tensors.clone(),
         }
     }
 }
