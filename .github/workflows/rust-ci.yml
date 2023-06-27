@@ -20,7 +20,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: check
-          args: --no-default-features
+          args: --no-default-features --workspace --exclude candle-kernels
 
   test:
     name: Test Suite
@@ -39,7 +39,7 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features
+          args: --no-default-features --workspace --exclude candle-kernels
 
   fmt:
     name: Rustfmt
@@ -71,4 +71,4 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: --no-default-features --tests --examples -- -D warnings
+          args: --no-default-features --workspace --exclude candle-kernels --tests --examples -- -D warnings
