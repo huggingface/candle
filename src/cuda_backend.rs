@@ -21,7 +21,7 @@ pub enum CudaError {
     RequiresContiguous { op: &'static str },
 
     #[error("missing kernel '{module_name}'")]
-    MissingKernel { module_name: &'static str },
+    MissingKernel { module_name: String },
 
     #[error("internal error '{0}'")]
     InternalError(&'static str),
@@ -43,7 +43,7 @@ pub enum CudaError {
     #[error("{cuda} when loading {module_name}")]
     Load {
         cuda: cudarc::driver::DriverError,
-        module_name: &'static str,
+        module_name: String,
     },
 }
 
@@ -211,19 +211,23 @@ impl CudaDevice {
         })
     }
 
-    fn get_or_load_func(
-        &self,
-        module_name: &'static str,
-        ptx: &'static str,
-    ) -> Result<CudaFunction> {
+    fn get_or_load_func(&self, module_name: &str, ptx: &'static str) -> Result<CudaFunction> {
         if !self.has_func(module_name, module_name) {
-            self.load_ptx(ptx.into(), module_name, &[module_name])
-                .map_err(|cuda| CudaError::Load { cuda, module_name })?;
+            // Leaking the string here is a bit sad but we need a &'static str and this is only
+            // done once per kernel name.
+            let static_module_name = Box::leak(module_name.to_string().into_boxed_str());
+            self.load_ptx(ptx.into(), module_name, &[static_module_name])
+                .map_err(|cuda| CudaError::Load {
+                    cuda,
+                    module_name: module_name.to_string(),
+                })?;
         }
         self.get_func(module_name, module_name)
             // Clippy recommends this `ok_or` rather than `ok_or_else` so hopefully the compiler is
             // able to only build the error value if needed.
-            .ok_or(CudaError::MissingKernel { module_name })
+            .ok_or(CudaError::MissingKernel {
+                module_name: module_name.to_string(),
+            })
     }
 }
 
@@ -330,8 +334,58 @@ impl CudaStorage {
         &self.device
     }
 
-    pub(crate) fn to_dtype(&self, _: &Shape, _: &[usize], _: DType) -> Result<Self> {
-        Err(CudaError::InternalError("TODO: implement to_dtype"))
+    pub(crate) fn to_dtype(&self, shape: &Shape, stride: &[usize], dtype: DType) -> Result<Self> {
+        use cudarc::driver::DevicePtr;
+        let dims = shape.dims();
+        let el = shape.elem_count();
+        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let dev = self.device();
+        let ds = dev.htod_copy([dims, stride].concat())?;
+        let inp = match &self.slice {
+            CudaStorageSlice::U32(inp) => inp.device_ptr(),
+            CudaStorageSlice::BF16(inp) => inp.device_ptr(),
+            CudaStorageSlice::F16(inp) => inp.device_ptr(),
+            CudaStorageSlice::F32(inp) => inp.device_ptr(),
+            CudaStorageSlice::F64(inp) => inp.device_ptr(),
+        };
+        let kernel_name = format!("cast_{}_{}", self.dtype().as_str(), dtype.as_str());
+        let func = dev.get_or_load_func(&kernel_name, kernels::CAST)?;
+        let slice = match dtype {
+            DType::U32 => {
+                let out = unsafe { dev.alloc::<u32>(el) }?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::U32(out)
+            }
+            DType::BF16 => {
+                let out = unsafe { dev.alloc::<bf16>(el) }?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::BF16(out)
+            }
+            DType::F16 => {
+                let out = unsafe { dev.alloc::<f16>(el) }?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F16(out)
+            }
+            DType::F32 => {
+                let out = unsafe { dev.alloc::<f32>(el) }?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F32(out)
+            }
+            DType::F64 => {
+                let out = unsafe { dev.alloc::<f64>(el) }?;
+                let params = (el, dims.len(), &ds, *inp, &out);
+                unsafe { func.launch(cfg, params) }?;
+                CudaStorageSlice::F64(out)
+            }
+        };
+        Ok(Self {
+            slice,
+            device: dev.clone(),
+        })
     }
 
     pub(crate) fn affine_impl(

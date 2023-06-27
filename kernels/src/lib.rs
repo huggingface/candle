@@ -1,5 +1,6 @@
 pub const AFFINE: &str = include_str!(concat!(env!("OUT_DIR"), "/affine.ptx"));
 pub const BINARY: &str = include_str!(concat!(env!("OUT_DIR"), "/binary.ptx"));
+pub const CAST: &str = include_str!(concat!(env!("OUT_DIR"), "/cast.ptx"));
 pub const EMBEDDINGS: &str = include_str!(concat!(env!("OUT_DIR"), "/embeddings.ptx"));
 pub const FILL: &str = include_str!(concat!(env!("OUT_DIR"), "/fill.ptx"));
 pub const REDUCE: &str = include_str!(concat!(env!("OUT_DIR"), "/reduce.ptx"));

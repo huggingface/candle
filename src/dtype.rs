@@ -10,6 +10,16 @@ pub enum DType {
 }
 
 impl DType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::U32 => "u32",
+            Self::BF16 => "bf16",
+            Self::F16 => "f16",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+        }
+    }
+
     pub fn size_in_bytes(&self) -> usize {
         match self {
             Self::U32 => 4,

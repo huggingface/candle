@@ -7,6 +7,8 @@ fn main() -> Result<()> {
     println!("> {:?}", x.sum(&[0])?.to_vec2::<f32>()?);
     println!("> {:?}", x.sum(&[1])?.to_vec2::<f32>()?);
     println!("> {:?}", x.sum(&[0, 1])?.to_vec2::<f32>()?);
+    let x = x.to_dtype(candle::DType::F16)?;
+    println!("> {:?}", x.sum(&[0])?.to_vec2::<half::f16>()?);
 
     let x = Tensor::new(&[3f32, 1., 4., 1., 5.], &device)?;
     println!("{:?}", x.to_vec1::<f32>()?);
