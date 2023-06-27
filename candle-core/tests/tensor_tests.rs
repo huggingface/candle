@@ -1,5 +1,7 @@
 // TODO: Also test the cuda backend.
+mod test_utils;
 use candle::{DType, Device, Result, Tensor};
+use test_utils::to_vec3_round;
 
 fn zeros(device: &Device) -> Result<()> {
     let tensor = Tensor::zeros((5, 2), DType::F32, device)?;
@@ -74,30 +76,30 @@ fn softmax(device: &Device) -> Result<()> {
     let t1 = tensor.log()?.softmax(1)?;
     let t2 = tensor.log()?.softmax(2)?;
     assert_eq!(
-        t0.to_vec3::<f32>()?,
+        to_vec3_round(t0, 4)?,
         &[
             // 3/5, 1/2, 4/11
-            [[0.6, 0.5, 0.36363637], [0.11111111, 0.71428573, 0.5294118]],
+            [[0.6, 0.5, 0.3636], [0.1111, 0.7143, 0.5294]],
             // 2/5, 1/2, 7/11
-            [[0.4, 0.5, 0.63636357], [0.8888889, 0.2857143, 0.47058824]]
+            [[0.4, 0.5, 0.6364], [0.8889, 0.2857, 0.4706]]
         ]
     );
     assert_eq!(
-        t1.to_vec3::<f32>()?,
+        to_vec3_round(t1, 4)?,
         &[
             // 3/4, 1/6, 4/13
-            [[0.75, 0.16666667, 0.30769232], [0.25, 0.8333333, 0.6923077]],
+            [[0.75, 0.1667, 0.3077], [0.25, 0.8333, 0.6923]],
             // 2/10, 1/3, 7/15
-            [[0.2, 0.33333334, 0.46666664], [0.8, 0.6666667, 0.53333336]]
+            [[0.2, 0.3333, 0.4667], [0.8, 0.6667, 0.5333]]
         ]
     );
     assert_eq!(
-        t2.to_vec3::<f32>()?,
+        to_vec3_round(t2, 4)?,
         &[
             // (3, 1, 4) / 8, (1, 5, 9) / 15
-            [[0.375, 0.125, 0.5], [0.06666667, 0.33333334, 0.6]],
+            [[0.375, 0.125, 0.5], [0.0667, 0.3333, 0.6]],
             // (2, 1, 7) / 10, (8, 2, 8) / 18
-            [[0.2, 0.1, 0.6999999], [0.44444445, 0.11111111, 0.44444445]]
+            [[0.2, 0.1, 0.7], [0.4444, 0.1111, 0.4444]]
         ]
     );
     Ok(())
@@ -218,35 +220,13 @@ fn cat(device: &Device) -> Result<()> {
     Ok(())
 }
 
-macro_rules! test {
-    // TODO: Switch to generating the two last arguments automatically once concat_idents is
-    // stable. https://github.com/rust-lang/rust/issues/29599
-    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident) => {
-        #[test]
-        fn $test_cpu() -> Result<()> {
-            $fn_name(&Device::Cpu)
-        }
-
-        #[cfg(feature = "cuda")]
-        #[test]
-        fn $test_cuda() -> Result<()> {
-            $fn_name(&Device::new_cuda(0)?)
-        }
-    };
-}
-
-test!(zeros, zeros_cpu, zeros_gpu);
-test!(add_mul, add_mul_cpu, add_mul_gpu);
-test!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu);
-test!(narrow, narrow_cpu, narrow_gpu);
-test!(broadcast, broadcast_cpu, broadcast_gpu);
-test!(cat, cat_cpu, cat_gpu);
-test!(sum, sum_cpu, sum_gpu);
-test!(transpose, transpose_cpu, transpose_gpu);
-test!(binary_op, binary_op_cpu, binary_op_gpu);
-
-// TODO: Make the test less sensitive to numerical precision and enable on the gpu.
-#[test]
-fn softmax_cpu() -> Result<()> {
-    softmax(&Device::Cpu)
-}
+test_device!(zeros, zeros_cpu, zeros_gpu);
+test_device!(add_mul, add_mul_cpu, add_mul_gpu);
+test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu);
+test_device!(narrow, narrow_cpu, narrow_gpu);
+test_device!(broadcast, broadcast_cpu, broadcast_gpu);
+test_device!(cat, cat_cpu, cat_gpu);
+test_device!(sum, sum_cpu, sum_gpu);
+test_device!(transpose, transpose_cpu, transpose_gpu);
+test_device!(binary_op, binary_op_cpu, binary_op_gpu);
+test_device!(softmax, softmax_cpu, softmax_gpu);
