@@ -3,7 +3,7 @@ mod cpu_backend;
 #[cfg(feature = "cuda")]
 mod cuda_backend;
 mod device;
-mod display;
+pub mod display;
 mod dtype;
 mod dummy_cuda_backend;
 mod error;
@@ -13,7 +13,7 @@ mod shape;
 mod storage;
 mod strided_index;
 mod tensor;
-mod utils;
+pub mod utils;
 
 pub use cpu_backend::CpuStorage;
 pub use device::{Device, DeviceLocation};
