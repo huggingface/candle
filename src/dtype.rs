@@ -3,6 +3,8 @@ use crate::{CpuStorage, Error, Result};
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum DType {
     U32,
+    BF16,
+    F16,
     F32,
     F64,
 }
@@ -11,6 +13,8 @@ impl DType {
     pub fn size_in_bytes(&self) -> usize {
         match self {
             Self::U32 => 4,
+            Self::BF16 => 2,
+            Self::F16 => 2,
             Self::F32 => 4,
             Self::F64 => 8,
         }
@@ -76,5 +80,7 @@ macro_rules! with_dtype {
     };
 }
 with_dtype!(u32, U32);
+with_dtype!(half::f16, F16);
+with_dtype!(half::bf16, BF16);
 with_dtype!(f32, F32);
 with_dtype!(f64, F64);

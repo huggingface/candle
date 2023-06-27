@@ -1,4 +1,6 @@
 use crate::Tensor;
+use half::{bf16, f16};
+use num_traits::float::Float;
 
 #[derive(Clone)]
 pub(crate) enum Op {
@@ -40,10 +42,13 @@ pub(crate) enum Op {
 
 pub(crate) trait UnaryOp {
     const NAME: &'static str;
-    // TODO: These kernels are compatible with arbitrary strides. We should also consider the
-    // contiguous case separately as it's easy to optimize things out there.
+    const KERNEL_BF16: &'static str;
+    const KERNEL_F16: &'static str;
     const KERNEL_F32: &'static str;
     const KERNEL_F64: &'static str;
+    const KERNEL_U32: &'static str;
+    fn bf16(v1: bf16) -> bf16;
+    fn f16(v1: f16) -> f16;
     fn f32(v1: f32) -> f32;
     fn f64(v1: f64) -> f64;
     fn u32(v1: u32) -> u32;
@@ -51,11 +56,13 @@ pub(crate) trait UnaryOp {
 
 pub(crate) trait BinaryOp {
     const NAME: &'static str;
-    // TODO: These kernels are compatible with arbitrary strides. We should also consider the
-    // contiguous case separately as it's easy to optimize things out there.
+    const KERNEL_BF16: &'static str;
+    const KERNEL_F16: &'static str;
     const KERNEL_F32: &'static str;
     const KERNEL_F64: &'static str;
     const KERNEL_U32: &'static str;
+    fn bf16(v1: bf16, v2: bf16) -> bf16;
+    fn f16(v1: f16, v2: f16) -> f16;
     fn f32(v1: f32, v2: f32) -> f32;
     fn f64(v1: f64, v2: f64) -> f64;
     fn u32(v1: u32, v2: u32) -> u32;
@@ -75,215 +82,116 @@ pub(crate) struct Sqr;
 pub(crate) struct Sqrt;
 pub(crate) struct Gelu;
 
-impl BinaryOp for Add {
-    const NAME: &'static str = "add";
-    const KERNEL_F32: &'static str = "badd_f32";
-    const KERNEL_F64: &'static str = "badd_f64";
-    const KERNEL_U32: &'static str = "badd_u32";
-    fn f32(v1: f32, v2: f32) -> f32 {
-        v1 + v2
-    }
-    fn f64(v1: f64, v2: f64) -> f64 {
-        v1 + v2
-    }
-    fn u32(v1: u32, v2: u32) -> u32 {
-        v1 + v2
-    }
+macro_rules! bin_op {
+    ($op:ident, $name: literal, $e: expr) => {
+        impl BinaryOp for $op {
+            const NAME: &'static str = $name;
+            const KERNEL_BF16: &'static str = concat!("b", $name, "_bf16");
+            const KERNEL_F16: &'static str = concat!("b", $name, "_f16");
+            const KERNEL_F32: &'static str = concat!("b", $name, "_f32");
+            const KERNEL_F64: &'static str = concat!("b", $name, "_f64");
+            const KERNEL_U32: &'static str = concat!("b", $name, "_u32");
+            fn bf16(v1: bf16, v2: bf16) -> bf16 {
+                $e(v1, v2)
+            }
+            fn f16(v1: f16, v2: f16) -> f16 {
+                $e(v1, v2)
+            }
+            fn f32(v1: f32, v2: f32) -> f32 {
+                $e(v1, v2)
+            }
+            fn f64(v1: f64, v2: f64) -> f64 {
+                $e(v1, v2)
+            }
+            fn u32(v1: u32, v2: u32) -> u32 {
+                $e(v1, v2)
+            }
+        }
+    };
 }
 
-impl BinaryOp for Sub {
-    const NAME: &'static str = "sub";
-    const KERNEL_F32: &'static str = "bsub_f32";
-    const KERNEL_F64: &'static str = "bsub_f64";
-    const KERNEL_U32: &'static str = "bsub_u32";
-    fn f32(v1: f32, v2: f32) -> f32 {
-        v1 - v2
-    }
-    fn f64(v1: f64, v2: f64) -> f64 {
-        v1 - v2
-    }
-    fn u32(v1: u32, v2: u32) -> u32 {
-        v1 - v2
-    }
+bin_op!(Add, "add", |v1, v2| v1 + v2);
+bin_op!(Sub, "sub", |v1, v2| v1 - v2);
+bin_op!(Mul, "mul", |v1, v2| v1 * v2);
+bin_op!(Div, "div", |v1, v2| v1 / v2);
+
+macro_rules! unary_op {
+    ($op: ident, $name: literal, $a: ident, $e: expr) => {
+        impl UnaryOp for $op {
+            const NAME: &'static str = $name;
+            const KERNEL_BF16: &'static str = concat!("u", $name, "_bf16");
+            const KERNEL_F16: &'static str = concat!("u", $name, "_f16");
+            const KERNEL_F32: &'static str = concat!("u", $name, "_f32");
+            const KERNEL_F64: &'static str = concat!("u", $name, "_f64");
+            const KERNEL_U32: &'static str = concat!("u", $name, "_u32");
+            fn bf16($a: bf16) -> bf16 {
+                $e
+            }
+            fn f16($a: f16) -> f16 {
+                $e
+            }
+            fn f32($a: f32) -> f32 {
+                $e
+            }
+            fn f64($a: f64) -> f64 {
+                $e
+            }
+            fn u32(_: u32) -> u32 {
+                todo!("no unary function for u32")
+            }
+        }
+    };
 }
 
-impl BinaryOp for Mul {
-    const NAME: &'static str = "mul";
-    const KERNEL_F32: &'static str = "bmul_f32";
-    const KERNEL_F64: &'static str = "bmul_f64";
-    const KERNEL_U32: &'static str = "bmul_u32";
-    fn f32(v1: f32, v2: f32) -> f32 {
-        v1 * v2
-    }
-    fn f64(v1: f64, v2: f64) -> f64 {
-        v1 * v2
-    }
-    fn u32(v1: u32, v2: u32) -> u32 {
-        v1 * v2
-    }
-}
-
-impl BinaryOp for Div {
-    const NAME: &'static str = "div";
-    const KERNEL_F32: &'static str = "bdiv_f32";
-    const KERNEL_F64: &'static str = "bdiv_f64";
-    const KERNEL_U32: &'static str = "bdiv_u32";
-    fn f32(v1: f32, v2: f32) -> f32 {
-        v1 / v2
-    }
-    fn f64(v1: f64, v2: f64) -> f64 {
-        v1 / v2
-    }
-    fn u32(v1: u32, v2: u32) -> u32 {
-        v1 / v2
-    }
-}
-
-impl UnaryOp for Exp {
-    const NAME: &'static str = "exp";
-    fn f32(v1: f32) -> f32 {
-        v1.exp()
-    }
-    fn f64(v1: f64) -> f64 {
-        v1.exp()
-    }
-    fn u32(v1: u32) -> u32 {
-        (v1 as f64).exp() as u32
-    }
-    const KERNEL_F32: &'static str = "uexp_f32";
-    const KERNEL_F64: &'static str = "uexp_f64";
-}
-
-impl UnaryOp for Log {
-    const NAME: &'static str = "log";
-    fn f32(v1: f32) -> f32 {
-        v1.ln()
-    }
-    fn f64(v1: f64) -> f64 {
-        v1.ln()
-    }
-    fn u32(v1: u32) -> u32 {
-        (v1 as f64).ln() as u32
-    }
-    const KERNEL_F32: &'static str = "ulog_f32";
-    const KERNEL_F64: &'static str = "ulog_f64";
-}
-
-impl UnaryOp for Sin {
-    const NAME: &'static str = "sin";
-    fn f32(v1: f32) -> f32 {
-        v1.sin()
-    }
-    fn f64(v1: f64) -> f64 {
-        v1.sin()
-    }
-    fn u32(_: u32) -> u32 {
-        0
-    }
-    const KERNEL_F32: &'static str = "usin_f32";
-    const KERNEL_F64: &'static str = "usin_f64";
-}
-
-impl UnaryOp for Cos {
-    const NAME: &'static str = "cos";
-    fn f32(v1: f32) -> f32 {
-        v1.cos()
-    }
-    fn f64(v1: f64) -> f64 {
-        v1.cos()
-    }
-    fn u32(_: u32) -> u32 {
-        0
-    }
-    const KERNEL_F32: &'static str = "ucos_f32";
-    const KERNEL_F64: &'static str = "ucos_f64";
-}
-
-impl UnaryOp for Abs {
-    const NAME: &'static str = "abs";
-    fn f32(v1: f32) -> f32 {
-        v1.abs()
-    }
-    fn f64(v1: f64) -> f64 {
-        v1.abs()
-    }
-    fn u32(v1: u32) -> u32 {
-        v1
-    }
-    const KERNEL_F32: &'static str = "uabs_f32";
-    const KERNEL_F64: &'static str = "uabs_f64";
-}
-
-impl UnaryOp for Neg {
-    const NAME: &'static str = "neg";
-    fn f32(v1: f32) -> f32 {
-        -v1
-    }
-    fn f64(v1: f64) -> f64 {
-        -v1
-    }
-    fn u32(_: u32) -> u32 {
-        0
-    }
-    const KERNEL_F32: &'static str = "uneg_f32";
-    const KERNEL_F64: &'static str = "uneg_f64";
-}
-
-impl UnaryOp for Sqr {
-    const NAME: &'static str = "sqr";
-    fn f32(v1: f32) -> f32 {
-        v1 * v1
-    }
-    fn f64(v1: f64) -> f64 {
-        v1 * v1
-    }
-    fn u32(v: u32) -> u32 {
-        v * v
-    }
-    const KERNEL_F32: &'static str = "usqr_f32";
-    const KERNEL_F64: &'static str = "usqr_f64";
-}
-
-impl UnaryOp for Sqrt {
-    const NAME: &'static str = "sqrt";
-    fn f32(v1: f32) -> f32 {
-        v1.sqrt()
-    }
-    fn f64(v1: f64) -> f64 {
-        v1.sqrt()
-    }
-    fn u32(v: u32) -> u32 {
-        (v as f64).sqrt() as u32
-    }
-    const KERNEL_F32: &'static str = "usqrt_f32";
-    const KERNEL_F64: &'static str = "usqrt_f64";
-}
+unary_op!(Exp, "exp", v, v.exp());
+unary_op!(Log, "log", v, v.ln());
+unary_op!(Sin, "sin", v, v.sin());
+unary_op!(Cos, "cos", v, v.cos());
+unary_op!(Abs, "abs", v, v.abs());
+unary_op!(Neg, "neg", v, -v);
+unary_op!(Sqr, "sqr", v, v * v);
+unary_op!(Sqrt, "sqrt", v, v.sqrt());
 
 /// `gelu` operation
 /// <https://en.wikipedia.org/wiki/Activation_function#Comparison_of_activation_functions>
-#[inline]
-pub fn gelu_f32(v: f32) -> f32 {
-    0.5 * v
-        * (1.0 + f32::tanh((2.0f32 / std::f32::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)))
-}
-/// `gelu` operation
-/// <https://en.wikipedia.org/wiki/Activation_function#Comparison_of_activation_functions>
-#[inline]
-pub fn gelu_f64(v: f64) -> f64 {
-    0.5 * v
-        * (1.0 + f64::tanh((2.0f64 / std::f64::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)))
-}
 impl UnaryOp for Gelu {
     const NAME: &'static str = "gelu";
-    fn f32(v1: f32) -> f32 {
-        gelu_f32(v1)
+    fn bf16(v: bf16) -> bf16 {
+        bf16::from_f32_const(0.5)
+            * v
+            * (bf16::ONE
+                + bf16::tanh(
+                    (bf16::from_f32_const(2.0) / bf16::PI).sqrt()
+                        * v
+                        * (bf16::ONE + bf16::from_f32_const(0.044715) * v * v),
+                ))
     }
-    fn f64(v1: f64) -> f64 {
-        gelu_f64(v1)
+    fn f16(v: f16) -> f16 {
+        f16::from_f32_const(0.5)
+            * v
+            * (f16::ONE
+                + f16::tanh(
+                    (f16::from_f32_const(2.0) / f16::PI).sqrt()
+                        * v
+                        * (f16::ONE + f16::from_f32_const(0.044715) * v * v),
+                ))
     }
-    fn u32(v1: u32) -> u32 {
-        gelu_f64(v1 as f64) as u32
+    fn f32(v: f32) -> f32 {
+        0.5 * v
+            * (1.0
+                + f32::tanh((2.0f32 / std::f32::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)))
     }
+    fn f64(v: f64) -> f64 {
+        0.5 * v
+            * (1.0
+                + f64::tanh((2.0f64 / std::f64::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)))
+    }
+    fn u32(_: u32) -> u32 {
+        0
+    }
+    const KERNEL_BF16: &'static str = "gelu_bf16";
+    const KERNEL_F16: &'static str = "gelu_f16";
     const KERNEL_F32: &'static str = "gelu_f32";
     const KERNEL_F64: &'static str = "gelu_f64";
+    const KERNEL_U32: &'static str = "gelu_u32";
 }
