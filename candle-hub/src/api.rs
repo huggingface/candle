@@ -397,7 +397,6 @@ impl Api {
             let parallel_failures_semaphore = parallel_failures_semaphore.clone();
             let progress = progressbar.clone();
             handles.push(tokio::spawn(async move {
-                println!("Start {start:?} - {stop:?}");
                 let mut chunk = Self::download_chunk(&client, &url, &filename, start, stop).await;
                 let mut i = 0;
                 if parallel_failures > 0 {

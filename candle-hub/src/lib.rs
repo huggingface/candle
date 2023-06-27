@@ -53,9 +53,9 @@ impl Cache {
         let commit_hash = std::fs::read_to_string(commit_path).ok()?;
         let mut pointer_path = self.pointer_path(repo, &commit_hash);
         pointer_path.push(filename);
-        if pointer_path.exists(){
+        if pointer_path.exists() {
             Some(pointer_path)
-        }else{
+        } else {
             None
         }
     }
@@ -150,7 +150,7 @@ impl Repo {
 
     /// The normalized folder nameof the repo within the cache directory
     pub fn folder_name(&self) -> String {
-        let prefix = match self.repo_type{
+        let prefix = match self.repo_type {
             RepoType::Model => "models",
             RepoType::Dataset => "datasets",
             RepoType::Space => "spaces",

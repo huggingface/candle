@@ -15,7 +15,7 @@ use anyhow::{Error as E, Result};
 use clap::Parser;
 
 use candle::{DType, Device, Tensor};
-use candle_hub::{Repo, api::Api, RepoType};
+use candle_hub::{api::Api, Repo, RepoType};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -439,7 +439,10 @@ async fn main() -> Result<()> {
         .to_vec();
 
     let mut filenames = vec![];
-    for rfilename in ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"]{
+    for rfilename in [
+        "model-00001-of-00002.safetensors",
+        "model-00002-of-00002.safetensors",
+    ] {
         let filename = api.get(&repo, rfilename).await?;
         filenames.push(filename);
     }
