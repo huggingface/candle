@@ -1,37 +1,7 @@
-[package]
-name = "candle"
-version = "0.1.0"
-edition = "2021"
-
-description = "Minimalist ML framework."
-repository = "https://github.com/LaurentMazare/candle"
-keywords = ["blas", "tensor", "machine-learning"]
-categories = ["science"]
-license = "MIT/Apache-2.0"
-readme = "README.md"
-
 [workspace]
+
 members = [
-  "kernels",
+    "candle-core",
+    "candle-kernels",
 ]
 
-[dependencies]
-safetensors = "0.3.1"
-thiserror = "1"
-cudarc = { version = "0.9.9", optional = true, features = ["f16"] }
-candle-kernels = { path = "kernels", optional = true }
-gemm = "0.15.4"
-zip = { version = "0.6.6", default-features=false }
-byteorder = "1.4.3"
-half = { version = "2.3.1", features = ["num-traits"] }
-num-traits = "0.2.15"
-
-[dev-dependencies]
-anyhow = "1"
-clap = { version = "4.2.4", features = ["derive"] }
-rand = "0.8.5"
-tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
-
-[features]
-default = ["cuda"]
-cuda = ["dep:cudarc", "dep:candle-kernels"]
