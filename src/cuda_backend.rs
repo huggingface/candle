@@ -700,7 +700,7 @@ impl CudaStorage {
         let ids = match &self.slice {
             CudaStorageSlice::U32(slice) => slice,
             _ => Err(CudaError::UnexpectedDType {
-                msg: "embedding ids should be u32",
+                msg: "where conditions should be u32",
                 expected: DType::U32,
                 got: self.dtype(),
             })?,
