@@ -3,8 +3,8 @@ use candle::{Device, Tensor};
 
 fn main() -> Result<()> {
     let device = Device::new_cuda(0)?;
-    let ids = Tensor::new(&[0u32, 3u32, 1u32], &device)?;
-    let t = Tensor::new(&[[0f32, 1f32], [1f32, 2f32], [2f32, 3f32]], &device)?;
+    let ids = Tensor::new(&[0u32, 2u32, 1u32], &device)?;
+    let t = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], &device)?;
     let hs = Tensor::embedding(&ids, &t)?;
     println!("> {:?}", hs.to_vec2::<f32>());
 

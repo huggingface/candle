@@ -18,13 +18,13 @@ extern "C" __global__ void FN_NAME(  \
     const size_t *strides = info + num_dims; \
     if (is_contiguous(num_dims, dims, strides)) { \
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
-            memcpy(out + i * h_size, inp + ids[i], h_size); \
+            memcpy(&out[i * h_size], &inp[ids[i] * h_size], h_size * sizeof(TYPENAME)); \
         } \
     } \
     else { \
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
             unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
-            memcpy(out + i * h_size, inp + ids[i], h_size); \
+            memcpy(&out[i * h_size], &inp[ids[strided_i] * h_size], h_size * sizeof(TYPENAME)); \
         } \
     } \
 } \
