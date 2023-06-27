@@ -1,4 +1,4 @@
-use crate::{Cache, Repo, NAME, VERSION};
+use crate::{Cache, Repo};
 use fs2::FileExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -17,6 +17,11 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
+
+/// Current version (used in user-agent)
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Current name (used in user-agent)
+const NAME: &str = env!("CARGO_PKG_NAME");
 
 #[derive(Debug, Error)]
 /// All errors the API can throw

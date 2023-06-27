@@ -15,11 +15,6 @@ use std::path::PathBuf;
 #[cfg(feature = "online")]
 pub mod api;
 
-/// Current version (used in user-agent)
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Current name (used in user-agent)
-const NAME: &str = env!("CARGO_PKG_NAME");
-
 /// The type of repo to interact with
 #[derive(Debug, Clone, Copy)]
 pub enum RepoType {
@@ -78,6 +73,7 @@ impl Cache {
         Ok(())
     }
 
+    #[cfg(feature = "online")]
     pub(crate) fn blob_path(&self, repo: &Repo, etag: &str) -> PathBuf {
         let mut blob_path = self.path.clone();
         blob_path.push(repo.folder_name());
@@ -111,6 +107,7 @@ impl Default for Cache {
 }
 
 /// The representation of a repo on the hub.
+#[allow(dead_code)] // Repo type unused in offline mode
 pub struct Repo {
     repo_id: String,
     repo_type: RepoType,
