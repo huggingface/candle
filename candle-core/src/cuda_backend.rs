@@ -301,8 +301,8 @@ fn gemm_config<T>(
     Ok(StridedBatchedConfig {
         batch_size: b as i32,
         gemm,
-        stride_a: (m * k) as i64,
-        stride_b: (n * k) as i64,
+        stride_a: (n * k) as i64,
+        stride_b: (m * k) as i64,
         stride_c: (m * n) as i64,
     })
 }

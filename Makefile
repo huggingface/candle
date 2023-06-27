@@ -1,7 +1,7 @@
 clean-ptx:
 	find target -name "*.ptx" -type f -delete
-	echo "" > kernels/src/lib.rs
-	touch kernels/build.rs
+	echo "" > candle-kernels/src/lib.rs
+	touch candle-kernels/build.rs
 
 clean:
 	cargo clean

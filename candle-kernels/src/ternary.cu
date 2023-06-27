@@ -14,7 +14,7 @@ extern "C" __global__ void FN_NAME(  \
     const size_t *dims = info; \
     const size_t *strides = info + num_dims; \
     const size_t *strides_t = info + 2*num_dims; \
-    const size_t *strides_f = info + 2*num_dims; \
+    const size_t *strides_f = info + 3*num_dims; \
     if (is_contiguous(num_dims, dims, strides) \
         && is_contiguous(num_dims, dims, strides_f) \
         && is_contiguous(num_dims, dims, strides_t)) { \
