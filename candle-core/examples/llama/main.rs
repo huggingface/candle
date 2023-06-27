@@ -306,12 +306,7 @@ impl CausalSelfAttention {
         let re = ((&re_x * &re_f)? - (&im_x * &im_f)?)?;
         let im = ((&re_x * &im_f)? + (&im_x * &re_f)?)?;
         let rope = Tensor::cat(&[&re, &im], rank - 1)?;
-        // TODO: Add the flatten op.
-        let mut dims = rope.dims().to_vec();
-        let v1 = dims.pop().unwrap();
-        let v2 = dims.pop().unwrap();
-        dims.push(v1 * v2);
-        let rope = rope.reshape(dims)?;
+        let rope = rope.flatten(Some(rope.rank() - 2), None)?;
         Ok(rope)
     }
 
