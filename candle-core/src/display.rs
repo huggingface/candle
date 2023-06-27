@@ -186,8 +186,8 @@ trait TensorFormatter {
                     .and_then(|t| t.to_vec1::<Self::Elem>())
                 {
                     for v in vs.into_iter() {
-                        self.fmt(v, max_w, f)?;
                         write!(f, ", ")?;
+                        self.fmt(v, max_w, f)?;
                     }
                 }
             }
@@ -257,7 +257,7 @@ struct FloatFormatter<S: WithDType> {
 
 impl<S> FloatFormatter<S>
 where
-    S: WithDType + num_traits::Float,
+    S: WithDType + num_traits::Float + std::fmt::Display,
 {
     fn new(t: &Tensor, po: &PrinterOptions) -> Result<Self> {
         let mut int_mode = true;
@@ -275,6 +275,7 @@ where
             let mut nonzero_finite_min = S::max_value();
             let mut nonzero_finite_max = S::min_value();
             for &v in values.iter() {
+                let v = v.abs();
                 if v < nonzero_finite_min {
                     nonzero_finite_min = v
                 }
@@ -289,7 +290,6 @@ where
                     break;
                 }
             }
-
             if let Some(v1) = S::from(1000.) {
                 if let Some(v2) = S::from(1e8) {
                     if let Some(v3) = S::from(1e-4) {
