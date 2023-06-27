@@ -20,6 +20,7 @@ zip = { version = "0.6.6", default-features=false }
 byteorder = "1.4.3"
 half = { version = "2.3.1", features = ["num-traits"] }
 num-traits = "0.2.15"
+num_cpus = "1.15.0"
 
 [dev-dependencies]
 anyhow = "1"
