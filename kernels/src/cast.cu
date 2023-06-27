@@ -1,4 +1,5 @@
 #include "cuda_utils.cuh"
+#include<stdint.h>
 
 #define CAST_OP(SRC_TYPENAME, DST_TYPENAME, FN_NAME) \
 extern "C" __global__ void FN_NAME( \
@@ -25,10 +26,23 @@ extern "C" __global__ void FN_NAME( \
 
 #if __CUDA_ARCH__ >= 530
 CAST_OP(__half, __half, cast_f16_f16)
-CAST_OP(__half, float, cast_f16_f32)
-CAST_OP(float, __half, cast_f32_f16)
+
+CAST_OP(__half, uint32_t, cast_f16_u32)
+CAST_OP(__half, float,    cast_f16_f32)
+CAST_OP(__half, double,   cast_f16_f64)
+CAST_OP(uint32_t, __half, cast_u32_f16)
+CAST_OP(float,    __half, cast_f32_f16)
+CAST_OP(double,   __half, cast_f64_f16)
 #endif
 
-CAST_OP(float, float, cast_f32_f32)
-CAST_OP(float, double, cast_f32_f64)
-CAST_OP(double, float, cast_f64_f32)
+CAST_OP(uint32_t, uint32_t, cast_u32_u32)
+CAST_OP(uint32_t, float,    cast_u32_f32)
+CAST_OP(uint32_t, double,   cast_u32_f64)
+
+CAST_OP(float, uint32_t, cast_f32_u32)
+CAST_OP(float, float,    cast_f32_f32)
+CAST_OP(float, double,   cast_f32_f64)
+
+CAST_OP(double, uint32_t, cast_f64_u32)
+CAST_OP(double, float,    cast_f64_f32)
+CAST_OP(double, double,   cast_f64_f64)
