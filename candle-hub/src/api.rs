@@ -378,6 +378,12 @@ impl Api {
         let parallel_failures_semaphore = Arc::new(Semaphore::new(self.parallel_failures));
         let filename = temp_filename();
 
+        // Create the file and set everything properly
+        tokio::fs::File::create(&filename)
+            .await?
+            .set_len(length as u64)
+            .await?;
+
         let chunk_size = self.chunk_size;
         for start in (0..length).step_by(chunk_size) {
             let url = url.to_string();
@@ -391,6 +397,7 @@ impl Api {
             let parallel_failures_semaphore = parallel_failures_semaphore.clone();
             let progress = progressbar.clone();
             handles.push(tokio::spawn(async move {
+                println!("Start {start:?} - {stop:?}");
                 let mut chunk = Self::download_chunk(&client, &url, &filename, start, stop).await;
                 let mut i = 0;
                 if parallel_failures > 0 {
@@ -440,7 +447,6 @@ impl Api {
         let range = format!("bytes={start}-{stop}");
         let mut file = tokio::fs::OpenOptions::new()
             .write(true)
-            .create(true)
             .open(filename)
             .await?;
         file.seek(SeekFrom::Start(start as u64)).await?;
