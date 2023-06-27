@@ -44,12 +44,6 @@ impl std::ops::Deref for Tensor {
     }
 }
 
-impl std::fmt::Debug for Tensor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{:?}, {:?}]", &self.shape().dims(), self.device())
-    }
-}
-
 macro_rules! unary_op {
     ($fn_name:ident, $op_name:ident) => {
         pub fn $fn_name(&self) -> Result<Self> {
@@ -658,18 +652,22 @@ impl Tensor {
     }
 
     pub fn flatten(&self, start_dim: Option<usize>, end_dim: Option<usize>) -> Result<Tensor> {
-        let start_dim = start_dim.unwrap_or(0);
-        let end_dim = end_dim.unwrap_or_else(|| self.rank() - 1);
-        if start_dim < end_dim {
-            let dims = self.dims();
-            let mut dst_dims = dims[..start_dim].to_vec();
-            dst_dims.push(dims[start_dim..end_dim + 1].iter().product::<usize>());
-            if end_dim + 1 < dims.len() {
-                dst_dims.extend(&dims[end_dim + 1..]);
-            }
-            self.reshape(dst_dims)
+        if self.rank() == 0 {
+            self.reshape(1)
         } else {
-            Ok(self.clone())
+            let start_dim = start_dim.unwrap_or(0);
+            let end_dim = end_dim.unwrap_or_else(|| self.rank() - 1);
+            if start_dim < end_dim {
+                let dims = self.dims();
+                let mut dst_dims = dims[..start_dim].to_vec();
+                dst_dims.push(dims[start_dim..end_dim + 1].iter().product::<usize>());
+                if end_dim + 1 < dims.len() {
+                    dst_dims.extend(&dims[end_dim + 1..]);
+                }
+                self.reshape(dst_dims)
+            } else {
+                Ok(self.clone())
+            }
         }
     }
 
@@ -928,6 +926,36 @@ impl Tensor {
                 .copy_strided_src(&mut storage, 0, &self.shape, &self.stride, 0)?;
             Ok(from_storage(storage, shape, op, false))
         }
+    }
+
+    pub fn squeeze(&self, index: usize) -> Result<Self> {
+        // The PyTorch semantics are to return the same tensor if the target dimension
+        // does not have a size of 1.
+        let dims = self.dims();
+        if dims[index] == 1 {
+            let mut dims = dims.to_vec();
+            dims.remove(index);
+            self.reshape(dims)
+        } else {
+            Ok(self.clone())
+        }
+    }
+
+    pub fn unsqueeze(&self, index: usize) -> Result<Self> {
+        let mut dims = self.dims().to_vec();
+        dims.insert(index, 1);
+        self.reshape(dims)
+    }
+
+    pub fn stack<A: AsRef<Tensor>>(args: &[A], dim: usize) -> Result<Self> {
+        if args.is_empty() {
+            return Err(Error::OpRequiresAtLeastOneTensor { op: "stack" });
+        }
+        let args = args
+            .iter()
+            .map(|t| t.as_ref().unsqueeze(dim))
+            .collect::<Result<Vec<_>>>()?;
+        Self::cat(&args, dim)
     }
 
     pub fn cat<A: AsRef<Tensor>>(args: &[A], dim: usize) -> Result<Self> {
