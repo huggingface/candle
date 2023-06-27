@@ -1,0 +1,30 @@
+[package]
+name = "candle-hub"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dirs = "5.0.1"
+fs2 = "0.4.3"
+rand = "0.8.5"
+thiserror = "1.0.40"
+futures = { version = "0.3.28", optional = true }
+reqwest = { version = "0.11.18", optional = true, features = ["json"] }
+tokio = { version = "1.28.2", features = ["fs"], optional = true }
+serde = { version = "1.0.164", features = ["derive"], optional = true }
+serde_json = { version = "1.0.97", optional = true }
+indicatif = { version = "0.17.5", optional = true }
+
+[dev-dependencies]
+rand = "0.8.5"
+sha256 = "1.1.4"
+tokio = { version = "1.28.2", features = ["macros"] }
+tokio-test = "0.4.2"
+
+[features]
+default = ["online"]
+online = ["reqwest", "tokio", "futures", "serde", "serde_json", "indicatif"]
+
+
