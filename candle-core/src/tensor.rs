@@ -652,6 +652,31 @@ impl Tensor {
         &self.op
     }
 
+    pub fn sum_all(&self) -> Result<Tensor> {
+        let dims: Vec<_> = (0..self.rank()).collect();
+        self.sum(&dims)
+    }
+
+    pub fn flatten(&self, start_dim: Option<usize>, end_dim: Option<usize>) -> Result<Tensor> {
+        let start_dim = start_dim.unwrap_or(0);
+        let end_dim = end_dim.unwrap_or_else(|| self.rank() - 1);
+        if start_dim < end_dim {
+            let dims = self.dims();
+            let mut dst_dims = dims[..start_dim].to_vec();
+            dst_dims.push(dims[start_dim..end_dim + 1].iter().product::<usize>());
+            if end_dim + 1 < dims.len() {
+                dst_dims.extend(&dims[end_dim + 1..]);
+            }
+            self.reshape(dst_dims)
+        } else {
+            Ok(self.clone())
+        }
+    }
+
+    pub fn flatten_all(&self) -> Result<Tensor> {
+        self.flatten(None, None)
+    }
+
     /// Returns a tensor that is a transposed version of the input, the two last dimensions of the
     /// input are swapped.
     pub fn t(&self) -> Result<Tensor> {
