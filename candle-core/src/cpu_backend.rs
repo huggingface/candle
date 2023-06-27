@@ -669,7 +669,7 @@ impl CpuStorage {
                             // conj_rhs: bool,
                             true,
                             // parallelism: Parallelism
-                            Parallelism::None,
+                            Parallelism::Rayon(crate::utils::get_num_threads()),
                         )
                     }
                 }
@@ -721,11 +721,10 @@ impl CpuStorage {
                             // conj_rhs: bool,
                             true,
                             // parallelism: Parallelism
-                            Parallelism::None,
+                            Parallelism::Rayon(crate::utils::get_num_threads()),
                         )
                     }
                 }
-
                 Ok(Self::F32(dst))
             }
             (CpuStorage::F64(lhs), CpuStorage::F64(rhs)) => {
@@ -773,7 +772,7 @@ impl CpuStorage {
                             // conj_rhs: bool,
                             true,
                             // parallelism: Parallelism
-                            Parallelism::None,
+                            Parallelism::Rayon(crate::utils::get_num_threads()),
                         )
                     }
                 }

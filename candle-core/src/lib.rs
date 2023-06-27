@@ -12,6 +12,7 @@ mod shape;
 mod storage;
 mod strided_index;
 mod tensor;
+mod utils;
 
 pub use cpu_backend::CpuStorage;
 pub use device::{Device, DeviceLocation};
