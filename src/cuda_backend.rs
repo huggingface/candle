@@ -39,6 +39,12 @@ pub enum CudaError {
         expected: DType,
         got: DType,
     },
+
+    #[error("{cuda} when loading {module_name}")]
+    Load {
+        cuda: cudarc::driver::DriverError,
+        module_name: &'static str,
+    },
 }
 
 type Result<T> = std::result::Result<T, CudaError>;
@@ -211,7 +217,8 @@ impl CudaDevice {
         ptx: &'static str,
     ) -> Result<CudaFunction> {
         if !self.has_func(module_name, module_name) {
-            self.load_ptx(ptx.into(), module_name, &[module_name])?;
+            self.load_ptx(ptx.into(), module_name, &[module_name])
+                .map_err(|cuda| CudaError::Load { cuda, module_name })?;
         }
         self.get_func(module_name, module_name)
             // Clippy recommends this `ok_or` rather than `ok_or_else` so hopefully the compiler is
