@@ -2,6 +2,7 @@
 
 members = [
     "candle-core",
+    "candle-hub",
     "candle-kernels",
 ]
 
