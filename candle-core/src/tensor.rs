@@ -44,12 +44,6 @@ impl std::ops::Deref for Tensor {
     }
 }
 
-impl std::fmt::Debug for Tensor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{:?}, {:?}]", &self.shape().dims(), self.device())
-    }
-}
-
 macro_rules! unary_op {
     ($fn_name:ident, $op_name:ident) => {
         pub fn $fn_name(&self) -> Result<Self> {

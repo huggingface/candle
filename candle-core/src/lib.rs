@@ -3,6 +3,7 @@ mod cpu_backend;
 #[cfg(feature = "cuda")]
 mod cuda_backend;
 mod device;
+mod display;
 mod dtype;
 mod dummy_cuda_backend;
 mod error;
