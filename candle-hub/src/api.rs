@@ -1,5 +1,4 @@
 use crate::{Cache, Repo};
-use fs2::FileExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use reqwest::{
@@ -492,13 +491,6 @@ impl Api {
         let blob_path = self.cache.blob_path(repo, &metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
-        let file1 = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&blob_path)?;
-        file1.lock_exclusive()?;
-
         let progressbar = if self.progress {
             let progress = ProgressBar::new(metadata.size as u64);
             progress.set_style(
@@ -522,7 +514,12 @@ impl Api {
         let tmp_filename = self
             .download_tempfile(&url, metadata.size, progressbar)
             .await?;
-        tokio::fs::copy(tmp_filename, &blob_path).await?;
+
+        if tokio::fs::rename(&tmp_filename, &blob_path).await.is_err() {
+            // Renaming may fail if locations are different mount points
+            std::fs::File::create(&blob_path)?;
+            tokio::fs::copy(tmp_filename, &blob_path).await?;
+        }
 
         let mut pointer_path = self.cache.pointer_path(repo, &metadata.commit_hash);
         pointer_path.push(filename);
