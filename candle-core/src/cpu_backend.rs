@@ -397,7 +397,7 @@ impl CpuStorage {
     }
 
     pub(crate) fn divide_by_sum_over_dim(&mut self, shape: &Shape, dim: usize) -> Result<()> {
-        // [self] stores data in a contiguous way.
+        // [self] stores data in a contiguous way starting at offset 0.
         let dims = shape.dims();
         let elem_per_slice = dims[dim];
         let prod_pre_dim = dims[..dim].iter().product();
