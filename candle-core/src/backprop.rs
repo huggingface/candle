@@ -70,6 +70,7 @@ impl Tensor {
                     | Op::Sqr(node)
                     | Op::Sqrt(node)
                     | Op::Gelu(node)
+                    | Op::Relu(node)
                     | Op::Exp(node)
                     | Op::Log(node)
                     | Op::Sin(node)
@@ -210,6 +211,7 @@ impl Tensor {
                     }
                     Op::Reshape(_arg) => return Err(Error::BackwardNotSupported { op: "reshape" }),
                     Op::Gelu(_) => return Err(Error::BackwardNotSupported { op: "gelu" }),
+                    Op::Relu(_) => return Err(Error::BackwardNotSupported { op: "relu" }),
                     Op::Sqr(arg) => {
                         let arg_grad = arg.mul(&grad)?.affine(2., 0.)?;
                         let sum_grad = grads.or_insert(arg)?;

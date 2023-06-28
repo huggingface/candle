@@ -37,6 +37,7 @@ pub(crate) enum Op {
     ToDevice(Tensor),
     Transpose(Tensor, usize, usize),
     Gelu(Tensor),
+    Relu(Tensor),
     // TODO: Support for custom ops.
 }
 
@@ -81,6 +82,7 @@ pub(crate) struct Neg;
 pub(crate) struct Sqr;
 pub(crate) struct Sqrt;
 pub(crate) struct Gelu;
+pub(crate) struct Relu;
 
 macro_rules! bin_op {
     ($op:ident, $name: literal, $e: expr) => {
@@ -189,9 +191,33 @@ impl UnaryOp for Gelu {
     fn u32(_: u32) -> u32 {
         0
     }
-    const KERNEL_BF16: &'static str = "gelu_bf16";
-    const KERNEL_F16: &'static str = "gelu_f16";
-    const KERNEL_F32: &'static str = "gelu_f32";
-    const KERNEL_F64: &'static str = "gelu_f64";
-    const KERNEL_U32: &'static str = "gelu_u32";
+    const KERNEL_BF16: &'static str = "ugelu_bf16";
+    const KERNEL_F16: &'static str = "ugelu_f16";
+    const KERNEL_F32: &'static str = "ugelu_f32";
+    const KERNEL_F64: &'static str = "ugelu_f64";
+    const KERNEL_U32: &'static str = "ugelu_u32";
+}
+
+impl UnaryOp for Relu {
+    const NAME: &'static str = "relu";
+    const KERNEL_BF16: &'static str = "urelu_bf16";
+    const KERNEL_F16: &'static str = "urelu_f16";
+    const KERNEL_F32: &'static str = "urelu_f32";
+    const KERNEL_F64: &'static str = "urelu_f64";
+    const KERNEL_U32: &'static str = "urelu_u32";
+    fn bf16(v: bf16) -> bf16 {
+        v.max(bf16::ZERO)
+    }
+    fn f16(v: f16) -> f16 {
+        v.max(f16::ZERO)
+    }
+    fn f32(v: f32) -> f32 {
+        v.max(0f32)
+    }
+    fn f64(v: f64) -> f64 {
+        v.max(0f64)
+    }
+    fn u32(v: u32) -> u32 {
+        v
+    }
 }
