@@ -121,6 +121,7 @@ fn from_storage<S: Into<Shape>>(
 }
 
 impl Tensor {
+    // TODO: Maybe this should be a broadcast rather than actually creating the full tensor.
     fn ones_impl<S: Into<Shape>>(
         shape: S,
         dtype: DType,
@@ -144,6 +145,7 @@ impl Tensor {
         Tensor::ones(self.shape(), self.dtype(), &self.device())
     }
 
+    // TODO: Maybe this should be a broadcast rather than actually creating the full tensor.
     fn zeros_impl<S: Into<Shape>>(
         shape: S,
         dtype: DType,
