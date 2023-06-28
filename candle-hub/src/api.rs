@@ -648,54 +648,69 @@ mod tests {
             ModelInfo {
                 siblings: vec![
                     Siblings {
-                        rfilename: ".gitattributes".to_string(),
+                        rfilename: ".gitattributes".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/wikitext-test.parquet".to_string(),
+                        rfilename: "wikitext-103-raw-v1/wikitext-test.parquet".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-raw-v1/wikitext-train-00000-of-00002.parquet"
-                            .to_string(),
+                            .to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-raw-v1/wikitext-train-00001-of-00002.parquet"
-                            .to_string(),
+                            .to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/wikitext-validation.parquet".to_string(),
+                        rfilename: "wikitext-103-raw-v1/wikitext-validation.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/wikitext-test.parquet".to_string(),
+                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string()
+                    },
+                    Siblings {
+                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string()
+                    },
+                    Siblings {
+                        rfilename: "wikitext-103-v1/wikitext-test.parquet".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/wikitext-train-00000-of-00002.parquet"
-                            .to_string(),
+                            .to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/wikitext-train-00001-of-00002.parquet"
-                            .to_string(),
+                            .to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/wikitext-validation.parquet".to_string(),
+                        rfilename: "wikitext-103-v1/wikitext-validation.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-test.parquet".to_string(),
+                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-train.parquet".to_string(),
+                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-validation.parquet".to_string(),
+                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-test.parquet".to_string(),
+                        rfilename: "wikitext-2-raw-v1/wikitext-test.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-train.parquet".to_string(),
+                        rfilename: "wikitext-2-raw-v1/wikitext-train.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-validation.parquet".to_string(),
+                        rfilename: "wikitext-2-raw-v1/wikitext-validation.parquet".to_string()
                     },
+                    Siblings {
+                        rfilename: "wikitext-2-v1/wikitext-test.parquet".to_string()
+                    },
+                    Siblings {
+                        rfilename: "wikitext-2-v1/wikitext-train.parquet".to_string()
+                    },
+                    Siblings {
+                        rfilename: "wikitext-2-v1/wikitext-validation.parquet".to_string()
+                    }
                 ],
             }
         )
