@@ -1,5 +1,5 @@
 use crate::op::{BinaryOp, UnaryOp};
-use crate::{DType, Error, Result, Shape, StridedIndex};
+use crate::{DType, Error, Layout, Result, Shape, StridedIndex};
 use gemm::{gemm, Parallelism};
 use half::{bf16, f16};
 
@@ -18,12 +18,11 @@ pub enum CpuStorage {
 
 fn wcond<T: Copy>(
     pred: &[u32],
-    shape: &Shape,
-    stride: &[usize],
+    layout: &Layout,
     t: &[T],
-    stride_t: &[usize],
+    layout_t: &Layout,
     f: &[T],
-    stride_f: &[usize],
+    layout_f: &Layout,
 ) -> Vec<T> {
     if shape.is_contiguous(stride) && shape.is_contiguous(stride_t) && shape.is_contiguous(stride_f)
     {
@@ -73,12 +72,7 @@ fn sum_impl1<T: Copy + num_traits::NumAssign>(
     Ok(dst)
 }
 
-fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(
-    vs: &[T],
-    shape: &Shape,
-    stride: &[usize],
-    mut f: F,
-) -> Vec<U> {
+fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(vs: &[T], layout: &Layout, mut f: F) -> Vec<U> {
     if shape.is_contiguous(stride) {
         vs[..shape.elem_count()].iter().map(|&v| f(v)).collect()
     } else {
@@ -461,65 +455,59 @@ impl CpuStorage {
         Ok(())
     }
 
-    pub(crate) fn affine_impl(
-        &self,
-        shape: &Shape,
-        stride: &[usize],
-        mul: f64,
-        add: f64,
-    ) -> Result<Self> {
+    pub(crate) fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
         match self {
             Self::U32(storage) => {
                 let mul = mul as u32;
                 let add = add as u32;
-                let data = unary_map(storage, shape, stride, |v| v * mul + add);
+                let data = unary_map(storage, layout, |v| v * mul + add);
                 Ok(Self::U32(data))
             }
             Self::BF16(storage) => {
                 let mul = bf16::from_f64(mul);
                 let add = bf16::from_f64(add);
-                let data = unary_map(storage, shape, stride, |v| v * mul + add);
+                let data = unary_map(storage, layout, |v| v * mul + add);
                 Ok(Self::BF16(data))
             }
             Self::F16(storage) => {
                 let mul = f16::from_f64(mul);
                 let add = f16::from_f64(add);
-                let data = unary_map(storage, shape, stride, |v| v * mul + add);
+                let data = unary_map(storage, layout, |v| v * mul + add);
                 Ok(Self::F16(data))
             }
             Self::F32(storage) => {
                 let mul = mul as f32;
                 let add = add as f32;
-                let data = unary_map(storage, shape, stride, |v| v * mul + add);
+                let data = unary_map(storage, layout, |v| v * mul + add);
                 Ok(Self::F32(data))
             }
             Self::F64(storage) => {
-                let data = unary_map(storage, shape, stride, |v| v * mul + add);
+                let data = unary_map(storage, layout, |v| v * mul + add);
                 Ok(Self::F64(data))
             }
         }
     }
 
-    pub(crate) fn unary_impl<B: UnaryOp>(&self, shape: &Shape, stride: &[usize]) -> Result<Self> {
+    pub(crate) fn unary_impl<B: UnaryOp>(&self, layout: &Layout) -> Result<Self> {
         match self {
             Self::BF16(storage) => {
-                let data = unary_map(storage, shape, stride, B::bf16);
+                let data = unary_map(storage, layout, B::bf16);
                 Ok(Self::BF16(data))
             }
             Self::F16(storage) => {
-                let data = unary_map(storage, shape, stride, B::f16);
+                let data = unary_map(storage, layout, B::f16);
                 Ok(Self::F16(data))
             }
             Self::F32(storage) => {
-                let data = unary_map(storage, shape, stride, B::f32);
+                let data = unary_map(storage, layout, B::f32);
                 Ok(Self::F32(data))
             }
             Self::F64(storage) => {
-                let data = unary_map(storage, shape, stride, B::f64);
+                let data = unary_map(storage, layout, B::f64);
                 Ok(Self::F64(data))
             }
             Self::U32(storage) => {
-                let data = unary_map(storage, shape, stride, B::u32);
+                let data = unary_map(storage, layout, B::u32);
                 Ok(Self::U32(data))
             }
         }
