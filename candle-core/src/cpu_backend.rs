@@ -229,10 +229,6 @@ impl CpuStorage {
         D::cpu_storage_as_slice(self)
     }
 
-    pub fn as_mut_slice<D: crate::WithDType>(&mut self) -> Result<&mut [D]> {
-        D::cpu_storage_as_mut_slice(self)
-    }
-
     pub(crate) fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         // TODO: find a way around the quadratic number of cases below.
         match (self, dtype) {
@@ -581,6 +577,7 @@ impl CpuStorage {
         layout_f: &Layout,
     ) -> Result<Self> {
         // TODO: Support types that could be casted to a boolean.
+        // TODO: this should use the layout.
         let pred = self.as_slice::<u32>()?;
         match (t, f) {
             (Self::BF16(t), Self::BF16(f)) => {
@@ -618,6 +615,7 @@ impl CpuStorage {
         hidden_size: usize,
         vocab_size: usize,
     ) -> Result<Self> {
+        // TODO: this should use the layout.
         let ids = self.as_slice::<u32>()?;
         map1!(vs, take_impl1, ids, layout, vocab_size, hidden_size)
     }

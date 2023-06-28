@@ -17,7 +17,7 @@ impl<'a> StridedIndex<'a> {
             None
         } else {
             // This applies to the scalar case.
-            Some(0)
+            Some(layout.start_offset())
         };
         StridedIndex {
             next_storage_index,

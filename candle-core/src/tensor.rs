@@ -317,6 +317,7 @@ impl Tensor {
     unary_op!(sqrt, Sqrt);
     unary_op!(gelu, Gelu);
     unary_op!(relu, Relu);
+
     pub fn to_scalar<S: crate::WithDType>(&self) -> Result<S> {
         if self.rank() != 0 {
             return Err(Error::UnexpectedNumberOfDims {
