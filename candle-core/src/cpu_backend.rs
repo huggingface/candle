@@ -1,5 +1,5 @@
 use crate::op::{BinaryOp, UnaryOp};
-use crate::{DType, Error, Layout, Result, Shape, StridedIndex};
+use crate::{DType, Error, Layout, Result, Shape};
 use gemm::{gemm, Parallelism};
 use half::{bf16, f16};
 
@@ -81,14 +81,13 @@ fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(vs: &[T], layout: &Layout, mut 
 
 // This function maps over two strided index sequences.
 fn binary_map<T: Copy, F: FnMut(T, T) -> T>(
-    shape: &Shape,
     lhs_layout: &Layout,
     rhs_layout: &Layout,
     lhs: &[T],
     rhs: &[T],
     mut f: F,
 ) -> Vec<T> {
-    let dims = shape.dims();
+    let shape = lhs_layout.shape();
     if lhs_layout.is_contiguous() && rhs_layout.is_contiguous() {
         (0..shape.elem_count()).map(|i| f(lhs[i], rhs[i])).collect()
     } else {
@@ -148,17 +147,19 @@ fn copy_strided_src_<T: Copy + std::fmt::Display>(
     }
 }
 
-fn matmul_impl<T: 'static + num_traits::Num + Copy>(
+fn matmul<T: 'static + num_traits::Num + Copy>(
     lhs: &[T],
     rhs: &[T],
     (b, m, n, k): (usize, usize, usize, usize),
-    lhs_stride: &[usize],
-    rhs_stride: &[usize],
+    lhs_layout: &Layout,
+    rhs_layout: &Layout,
 ) -> Result<Vec<T>> {
     let a_skip: usize = m * k;
     let b_skip: usize = n * k;
     let c_skip: usize = m * n;
 
+    let lhs_stride = lhs_layout.stride();
+    let rhs_stride = rhs_layout.stride();
     let rank = lhs_stride.len();
     let lhs_cs = lhs_stride[rank - 1];
     let lhs_rs = lhs_stride[rank - 2];
@@ -512,29 +513,28 @@ impl CpuStorage {
     pub(crate) fn binary_impl<B: BinaryOp>(
         &self,
         rhs: &Self,
-        shape: &Shape,
         lhs_layout: &Layout,
         rhs_layout: &Layout,
     ) -> Result<Self> {
         match (self, rhs) {
             (Self::BF16(lhs), Self::BF16(rhs)) => {
-                let data = binary_map(shape, lhs_layout, rhs_layout, lhs, rhs, B::bf16);
+                let data = binary_map(lhs_layout, rhs_layout, lhs, rhs, B::bf16);
                 Ok(Self::BF16(data))
             }
             (Self::F16(lhs), Self::F16(rhs)) => {
-                let data = binary_map(shape, lhs_layout, rhs_layout, lhs, rhs, B::f16);
+                let data = binary_map(lhs_layout, rhs_layout, lhs, rhs, B::f16);
                 Ok(Self::F16(data))
             }
             (Self::F32(lhs), Self::F32(rhs)) => {
-                let data = binary_map(shape, lhs_layout, rhs_layout, lhs, rhs, B::f32);
+                let data = binary_map(lhs_layout, rhs_layout, lhs, rhs, B::f32);
                 Ok(Self::F32(data))
             }
             (Self::F64(lhs), Self::F64(rhs)) => {
-                let data = binary_map(shape, lhs_layout, rhs_layout, lhs, rhs, B::f64);
+                let data = binary_map(lhs_layout, rhs_layout, lhs, rhs, B::f64);
                 Ok(Self::F64(data))
             }
             (Self::U32(lhs), Self::U32(rhs)) => {
-                let data = binary_map(shape, lhs_layout, rhs_layout, lhs, rhs, B::u32);
+                let data = binary_map(lhs_layout, rhs_layout, lhs, rhs, B::u32);
                 Ok(Self::U32(data))
             }
             _ => {
@@ -622,24 +622,24 @@ impl CpuStorage {
         map1!(vs, take_impl1, ids, layout, vocab_size, hidden_size)
     }
 
-    pub(crate) fn matmul_impl(
+    pub(crate) fn matmul(
         &self,
         rhs: &Self,
         bmnk: (usize, usize, usize, usize),
-        lhs_stride: &[usize],
-        rhs_stride: &[usize],
+        lhs_layout: &Layout,
+        rhs_layout: &Layout,
     ) -> Result<Self> {
         match (self, rhs) {
             (CpuStorage::F16(lhs), CpuStorage::F16(rhs)) => {
-                let dst = matmul_impl(lhs, rhs, bmnk, lhs_stride, rhs_stride)?;
+                let dst = matmul(lhs, rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::F16(dst))
             }
             (CpuStorage::F32(lhs), CpuStorage::F32(rhs)) => {
-                let dst = matmul_impl(lhs, rhs, bmnk, lhs_stride, rhs_stride)?;
+                let dst = matmul(lhs, rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::F32(dst))
             }
             (CpuStorage::F64(lhs), CpuStorage::F64(rhs)) => {
-                let dst = matmul_impl(lhs, rhs, bmnk, lhs_stride, rhs_stride)?;
+                let dst = matmul(lhs, rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::F64(dst))
             }
             _ => Err(Error::DTypeMismatchBinaryOp {

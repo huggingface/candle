@@ -432,7 +432,7 @@ impl Tensor {
         let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
         let batching: usize = a_dims[..dim - 2].iter().product();
 
-        let storage = self.storage.matmul_impl(
+        let storage = self.storage.matmul(
             &rhs.storage,
             (batching, m, n, k),
             self.layout(),
@@ -587,7 +587,7 @@ impl Tensor {
     }
 
     pub fn shape(&self) -> &Shape {
-        &self.layout().shape()
+        self.layout().shape()
     }
 
     pub fn dims(&self) -> &[usize] {
@@ -600,7 +600,7 @@ impl Tensor {
 
     // TODO: Rename to `stride` once the PR that introduced the layout has been merged.
     pub fn stride_tmp(&self) -> &[usize] {
-        &self.layout.stride()
+        self.layout.stride()
     }
 
     pub fn rank(&self) -> usize {

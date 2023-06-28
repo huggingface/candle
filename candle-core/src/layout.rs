@@ -106,7 +106,7 @@ impl Layout {
         if shape.rank() < self.shape().rank() {
             Err(Error::BroadcastIncompatibleShapes {
                 src_shape: self.shape().clone(),
-                dst_shape: shape,
+                dst_shape: shape.clone(),
             })?
         }
         let added_dims = shape.rank() - self.shape().rank();
@@ -135,6 +135,6 @@ impl Layout {
     }
 
     pub(crate) fn strided_index(&self) -> crate::StridedIndex {
-        crate::StridedIndex::new(&self)
+        crate::StridedIndex::new(self)
     }
 }
