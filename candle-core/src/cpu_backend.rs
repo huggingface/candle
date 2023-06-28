@@ -604,52 +604,22 @@ impl CpuStorage {
     pub(crate) fn ones_impl(shape: &Shape, dtype: DType) -> Self {
         let elem_count = shape.elem_count();
         match dtype {
-            DType::U32 => {
-                let data = vec![1u32; elem_count];
-                Self::U32(data)
-            }
-            DType::BF16 => {
-                let data = vec![bf16::ONE; elem_count];
-                Self::BF16(data)
-            }
-            DType::F16 => {
-                let data = vec![f16::ONE; elem_count];
-                Self::F16(data)
-            }
-            DType::F32 => {
-                let data = vec![1f32; elem_count];
-                Self::F32(data)
-            }
-            DType::F64 => {
-                let data = vec![1f64; elem_count];
-                Self::F64(data)
-            }
+            DType::U32 => Self::U32(vec![1u32; elem_count]),
+            DType::BF16 => Self::BF16(vec![bf16::ONE; elem_count]),
+            DType::F16 => Self::F16(vec![f16::ONE; elem_count]),
+            DType::F32 => Self::F32(vec![1f32; elem_count]),
+            DType::F64 => Self::F64(vec![1f64; elem_count]),
         }
     }
 
     pub(crate) fn zeros_impl(shape: &Shape, dtype: DType) -> Self {
         let elem_count = shape.elem_count();
         match dtype {
-            DType::U32 => {
-                let data = vec![0u32; elem_count];
-                Self::U32(data)
-            }
-            DType::BF16 => {
-                let data = vec![bf16::ZERO; elem_count];
-                Self::BF16(data)
-            }
-            DType::F16 => {
-                let data = vec![f16::ZERO; elem_count];
-                Self::F16(data)
-            }
-            DType::F32 => {
-                let data = vec![0f32; elem_count];
-                Self::F32(data)
-            }
-            DType::F64 => {
-                let data = vec![0f64; elem_count];
-                Self::F64(data)
-            }
+            DType::U32 => Self::U32(vec![0u32; elem_count]),
+            DType::BF16 => Self::BF16(vec![bf16::ZERO; elem_count]),
+            DType::F16 => Self::F16(vec![f16::ZERO; elem_count]),
+            DType::F32 => Self::F32(vec![0f32; elem_count]),
+            DType::F64 => Self::F64(vec![0f64; elem_count]),
         }
     }
 }
