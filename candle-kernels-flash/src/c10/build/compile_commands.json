@@ -1,0 +1,357 @@
+[
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/Allocator.cpp.o -c /home/nicolas/src/pytorch/c10/core/Allocator.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/Allocator.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/AutogradState.cpp.o -c /home/nicolas/src/pytorch/c10/core/AutogradState.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/AutogradState.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/CPUAllocator.cpp.o -c /home/nicolas/src/pytorch/c10/core/CPUAllocator.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/CPUAllocator.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/CopyBytes.cpp.o -c /home/nicolas/src/pytorch/c10/core/CopyBytes.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/CopyBytes.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/DefaultDtype.cpp.o -c /home/nicolas/src/pytorch/c10/core/DefaultDtype.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/DefaultDtype.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/Device.cpp.o -c /home/nicolas/src/pytorch/c10/core/Device.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/Device.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/DeviceType.cpp.o -c /home/nicolas/src/pytorch/c10/core/DeviceType.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/DeviceType.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/DispatchKey.cpp.o -c /home/nicolas/src/pytorch/c10/core/DispatchKey.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/DispatchKey.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/DispatchKeySet.cpp.o -c /home/nicolas/src/pytorch/c10/core/DispatchKeySet.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/DispatchKeySet.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/GeneratorImpl.cpp.o -c /home/nicolas/src/pytorch/c10/core/GeneratorImpl.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/GeneratorImpl.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/GradMode.cpp.o -c /home/nicolas/src/pytorch/c10/core/GradMode.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/GradMode.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/InferenceMode.cpp.o -c /home/nicolas/src/pytorch/c10/core/InferenceMode.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/InferenceMode.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/SafePyObject.cpp.o -c /home/nicolas/src/pytorch/c10/core/SafePyObject.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/SafePyObject.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/Scalar.cpp.o -c /home/nicolas/src/pytorch/c10/core/Scalar.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/Scalar.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/Storage.cpp.o -c /home/nicolas/src/pytorch/c10/core/Storage.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/Storage.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/StorageImpl.cpp.o -c /home/nicolas/src/pytorch/c10/core/StorageImpl.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/StorageImpl.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/Stream.cpp.o -c /home/nicolas/src/pytorch/c10/core/Stream.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/Stream.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/SymBool.cpp.o -c /home/nicolas/src/pytorch/c10/core/SymBool.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/SymBool.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/SymFloat.cpp.o -c /home/nicolas/src/pytorch/c10/core/SymFloat.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/SymFloat.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/SymInt.cpp.o -c /home/nicolas/src/pytorch/c10/core/SymInt.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/SymInt.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/SymIntArrayRef.cpp.o -c /home/nicolas/src/pytorch/c10/core/SymIntArrayRef.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/SymIntArrayRef.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/SymNodeImpl.cpp.o -c /home/nicolas/src/pytorch/c10/core/SymNodeImpl.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/SymNodeImpl.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/TensorImpl.cpp.o -c /home/nicolas/src/pytorch/c10/core/TensorImpl.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/TensorImpl.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/TensorOptions.cpp.o -c /home/nicolas/src/pytorch/c10/core/TensorOptions.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/TensorOptions.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/UndefinedTensorImpl.cpp.o -c /home/nicolas/src/pytorch/c10/core/UndefinedTensorImpl.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/UndefinedTensorImpl.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/WrapDimMinimal.cpp.o -c /home/nicolas/src/pytorch/c10/core/WrapDimMinimal.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/WrapDimMinimal.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/DeviceGuardImplInterface.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/DeviceGuardImplInterface.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/DeviceGuardImplInterface.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/GPUTrace.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/GPUTrace.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/GPUTrace.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/HermeticPyObjectTLS.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/HermeticPyObjectTLS.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/HermeticPyObjectTLS.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/LocalDispatchKeySet.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/LocalDispatchKeySet.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/LocalDispatchKeySet.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/PyInterpreter.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/PyInterpreter.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/PyInterpreter.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/PyObjectSlot.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/PyObjectSlot.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/PyObjectSlot.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/PythonDispatcherTLS.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/PythonDispatcherTLS.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/PythonDispatcherTLS.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/SizesAndStrides.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/SizesAndStrides.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/SizesAndStrides.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/TorchDispatchModeTLS.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/TorchDispatchModeTLS.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/TorchDispatchModeTLS.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/alloc_cpu.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/alloc_cpu.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/alloc_cpu.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/cow/context.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/cow/context.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/cow/context.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/impl/cow/deleter.cpp.o -c /home/nicolas/src/pytorch/c10/core/impl/cow/deleter.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/impl/cow/deleter.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/core/thread_pool.cpp.o -c /home/nicolas/src/pytorch/c10/core/thread_pool.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/core/thread_pool.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/mobile/CPUCachingAllocator.cpp.o -c /home/nicolas/src/pytorch/c10/mobile/CPUCachingAllocator.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/mobile/CPUCachingAllocator.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/mobile/CPUProfilingAllocator.cpp.o -c /home/nicolas/src/pytorch/c10/mobile/CPUProfilingAllocator.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/mobile/CPUProfilingAllocator.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/Array.cpp.o -c /home/nicolas/src/pytorch/c10/util/Array.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/Array.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/Backtrace.cpp.o -c /home/nicolas/src/pytorch/c10/util/Backtrace.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/Backtrace.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/C++17.cpp.o -c /home/nicolas/src/pytorch/c10/util/C++17.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/C++17.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/DeadlockDetection.cpp.o -c /home/nicolas/src/pytorch/c10/util/DeadlockDetection.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/DeadlockDetection.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/Exception.cpp.o -c /home/nicolas/src/pytorch/c10/util/Exception.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/Exception.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/Half.cpp.o -c /home/nicolas/src/pytorch/c10/util/Half.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/Half.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/LeftRight.cpp.o -c /home/nicolas/src/pytorch/c10/util/LeftRight.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/LeftRight.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/Logging.cpp.o -c /home/nicolas/src/pytorch/c10/util/Logging.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/Logging.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/MathConstants.cpp.o -c /home/nicolas/src/pytorch/c10/util/MathConstants.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/MathConstants.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/Metaprogramming.cpp.o -c /home/nicolas/src/pytorch/c10/util/Metaprogramming.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/Metaprogramming.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/Optional.cpp.o -c /home/nicolas/src/pytorch/c10/util/Optional.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/Optional.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/SmallVector.cpp.o -c /home/nicolas/src/pytorch/c10/util/SmallVector.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/SmallVector.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/StringUtil.cpp.o -c /home/nicolas/src/pytorch/c10/util/StringUtil.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/StringUtil.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/ThreadLocalDebugInfo.cpp.o -c /home/nicolas/src/pytorch/c10/util/ThreadLocalDebugInfo.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/ThreadLocalDebugInfo.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/TypeCast.cpp.o -c /home/nicolas/src/pytorch/c10/util/TypeCast.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/TypeCast.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/TypeList.cpp.o -c /home/nicolas/src/pytorch/c10/util/TypeList.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/TypeList.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/TypeTraits.cpp.o -c /home/nicolas/src/pytorch/c10/util/TypeTraits.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/TypeTraits.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/Type_demangle.cpp.o -c /home/nicolas/src/pytorch/c10/util/Type_demangle.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/Type_demangle.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/Type_no_demangle.cpp.o -c /home/nicolas/src/pytorch/c10/util/Type_no_demangle.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/Type_no_demangle.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/Unicode.cpp.o -c /home/nicolas/src/pytorch/c10/util/Unicode.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/Unicode.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/UniqueVoidPtr.cpp.o -c /home/nicolas/src/pytorch/c10/util/UniqueVoidPtr.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/UniqueVoidPtr.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/complex_math.cpp.o -c /home/nicolas/src/pytorch/c10/util/complex_math.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/complex_math.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/flags_use_gflags.cpp.o -c /home/nicolas/src/pytorch/c10/util/flags_use_gflags.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/flags_use_gflags.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/flags_use_no_gflags.cpp.o -c /home/nicolas/src/pytorch/c10/util/flags_use_no_gflags.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/flags_use_no_gflags.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/int128.cpp.o -c /home/nicolas/src/pytorch/c10/util/int128.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/int128.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/intrusive_ptr.cpp.o -c /home/nicolas/src/pytorch/c10/util/intrusive_ptr.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/intrusive_ptr.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/numa.cpp.o -c /home/nicolas/src/pytorch/c10/util/numa.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/numa.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/signal_handler.cpp.o -c /home/nicolas/src/pytorch/c10/util/signal_handler.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/signal_handler.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/thread_name.cpp.o -c /home/nicolas/src/pytorch/c10/util/thread_name.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/thread_name.cpp"
+},
+{
+  "directory": "/home/nicolas/src/pytorch/c10/build",
+  "command": "/usr/bin/c++ -DSUPPORTS_BACKTRACE=1 -I/home/nicolas/src/pytorch/c10/.. -I/home/nicolas/src/pytorch/c10/build -DC10_BUILD_MAIN_LIB -std=gnu++17 -o CMakeFiles/c10.dir/util/typeid.cpp.o -c /home/nicolas/src/pytorch/c10/util/typeid.cpp",
+  "file": "/home/nicolas/src/pytorch/c10/util/typeid.cpp"
+}
+]

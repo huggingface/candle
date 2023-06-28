@@ -1,0 +1,11 @@
+[package]
+name = "candle-kernels-layernorm"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+[build-dependencies]
+candle-kernels-build = { path = "../candle-kernels-build" }

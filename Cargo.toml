@@ -3,6 +3,10 @@
 members = [
     "candle-core",
     "candle-hub",
-    "candle-kernels",
+    "candle-kernels-build",
 ]
-
+exclude = [
+    "candle-kernels-simple",
+    "candle-kernels-flash",
+    "candle-kernels-layernorm",
+]

@@ -1,0 +1,228 @@
+The system is: Linux - 6.3.8-arch1-1 - x86_64
+Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
+Compiler: /usr/bin/c++ 
+Build flags: 
+Id flags:  
+
+The output was:
+0
+
+
+Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "a.out"
+
+The CXX compiler identification is GNU, found in "/home/nicolas/src/pytorch/c10/build/CMakeFiles/3.25.0/CompilerIdCXX/a.out"
+
+Detecting CXX compiler ABI info compiled with the following output:
+Change Dir: /home/nicolas/src/pytorch/c10/build/CMakeFiles/CMakeScratch/TryCompile-3zCvD1
+
+Run Build Command(s):/usr/bin/make -f Makefile cmTC_fb32b/fast && /usr/bin/make  -f CMakeFiles/cmTC_fb32b.dir/build.make CMakeFiles/cmTC_fb32b.dir/build
+make[1]: Entering directory '/home/nicolas/src/pytorch/c10/build/CMakeFiles/CMakeScratch/TryCompile-3zCvD1'
+Building CXX object CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o
+/usr/bin/c++   -v -o CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o -c /home/nicolas/.pyenv/versions/3.10.9/lib/python3.10/site-packages/cmake/data/share/cmake-3.25/Modules/CMakeCXXCompilerABI.cpp
+Using built-in specs.
+COLLECT_GCC=/usr/bin/c++
+Target: x86_64-pc-linux-gnu
+Configured with: /build/gcc/src/gcc/configure --enable-languages=ada,c,c++,d,fortran,go,lto,objc,obj-c++ --enable-bootstrap --prefix=/usr --libdir=/usr/lib --libexecdir=/usr/lib --mandir=/usr/share/man --infodir=/usr/share/info --with-bugurl=https://bugs.archlinux.org/ --with-build-config=bootstrap-lto --with-linker-hash-style=gnu --with-system-zlib --enable-__cxa_atexit --enable-cet=auto --enable-checking=release --enable-clocale=gnu --enable-default-pie --enable-default-ssp --enable-gnu-indirect-function --enable-gnu-unique-object --enable-libstdcxx-backtrace --enable-link-serialization=1 --enable-linker-build-id --enable-lto --enable-multilib --enable-plugin --enable-shared --enable-threads=posix --disable-libssp --disable-libstdcxx-pch --disable-werror
+Thread model: posix
+Supported LTO compression algorithms: zlib zstd
+gcc version 13.1.1 20230429 (GCC) 
+COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_fb32b.dir/'
+ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/cc1plus -quiet -v -D_GNU_SOURCE /home/nicolas/.pyenv/versions/3.10.9/lib/python3.10/site-packages/cmake/data/share/cmake-3.25/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_fb32b.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -version -o /tmp/cckdpAye.s
+GNU C++17 (GCC) version 13.1.1 20230429 (x86_64-pc-linux-gnu)
+	compiled by GNU C version 13.1.1 20230429, GMP version 6.2.1, MPFR version 4.2.0, MPC version 1.3.1, isl version isl-0.26-GMP
+
+warning: MPFR header version 4.2.0 differs from library version 4.2.0-p9.
+GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072
+ignoring nonexistent directory "/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../x86_64-pc-linux-gnu/include"
+#include "..." search starts here:
+#include <...> search starts here:
+ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1
+ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1/x86_64-pc-linux-gnu
+ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1/backward
+ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include
+ /usr/local/include
+ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include-fixed
+ /usr/include
+End of search list.
+Compiler executable checksum: e149eaca55f4ee2a0171ba2b54b0dc8d
+COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_fb32b.dir/'
+ as -v --64 -o CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o /tmp/cckdpAye.s
+GNU assembler version 2.40.0 (x86_64-pc-linux-gnu) using BFD version (GNU Binutils) 2.40.0
+COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/
+LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../:/lib/:/usr/lib/
+COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.'
+Linking CXX executable cmTC_fb32b
+/home/nicolas/.pyenv/versions/3.10.9/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_fb32b.dir/link.txt --verbose=1
+/usr/bin/c++  -v CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o -o cmTC_fb32b 
+Using built-in specs.
+COLLECT_GCC=/usr/bin/c++
+COLLECT_LTO_WRAPPER=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/lto-wrapper
+Target: x86_64-pc-linux-gnu
+Configured with: /build/gcc/src/gcc/configure --enable-languages=ada,c,c++,d,fortran,go,lto,objc,obj-c++ --enable-bootstrap --prefix=/usr --libdir=/usr/lib --libexecdir=/usr/lib --mandir=/usr/share/man --infodir=/usr/share/info --with-bugurl=https://bugs.archlinux.org/ --with-build-config=bootstrap-lto --with-linker-hash-style=gnu --with-system-zlib --enable-__cxa_atexit --enable-cet=auto --enable-checking=release --enable-clocale=gnu --enable-default-pie --enable-default-ssp --enable-gnu-indirect-function --enable-gnu-unique-object --enable-libstdcxx-backtrace --enable-link-serialization=1 --enable-linker-build-id --enable-lto --enable-multilib --enable-plugin --enable-shared --enable-threads=posix --disable-libssp --disable-libstdcxx-pch --disable-werror
+Thread model: posix
+Supported LTO compression algorithms: zlib zstd
+gcc version 13.1.1 20230429 (GCC) 
+COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/
+LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../:/lib/:/usr/lib/
+COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_fb32b' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_fb32b.'
+ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/lto-wrapper -plugin-opt=-fresolution=/tmp/cceLju9P.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_fb32b /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1 -L/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../.. CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/crtn.o
+COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_fb32b' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_fb32b.'
+make[1]: Leaving directory '/home/nicolas/src/pytorch/c10/build/CMakeFiles/CMakeScratch/TryCompile-3zCvD1'
+
+
+
+Parsed CXX implicit include dir info from above output: rv=done
+  found start of include info
+  found start of implicit include info
+    add: [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1]
+    add: [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1/x86_64-pc-linux-gnu]
+    add: [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1/backward]
+    add: [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include]
+    add: [/usr/local/include]
+    add: [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include-fixed]
+    add: [/usr/include]
+  end of search list found
+  collapse include dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1] ==> [/usr/include/c++/13.1.1]
+  collapse include dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1/x86_64-pc-linux-gnu] ==> [/usr/include/c++/13.1.1/x86_64-pc-linux-gnu]
+  collapse include dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1/backward] ==> [/usr/include/c++/13.1.1/backward]
+  collapse include dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include] ==> [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include]
+  collapse include dir [/usr/local/include] ==> [/usr/local/include]
+  collapse include dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include-fixed] ==> [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include-fixed]
+  collapse include dir [/usr/include] ==> [/usr/include]
+  implicit include dirs: [/usr/include/c++/13.1.1;/usr/include/c++/13.1.1/x86_64-pc-linux-gnu;/usr/include/c++/13.1.1/backward;/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include;/usr/local/include;/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include-fixed;/usr/include]
+
+
+Parsed CXX implicit link information from above output:
+  link line regex: [^( *|.*[/\])(ld|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\]+-)?ld|collect2)[^/\]*( |$)]
+  ignore line: [Change Dir: /home/nicolas/src/pytorch/c10/build/CMakeFiles/CMakeScratch/TryCompile-3zCvD1]
+  ignore line: []
+  ignore line: [Run Build Command(s):/usr/bin/make -f Makefile cmTC_fb32b/fast && /usr/bin/make  -f CMakeFiles/cmTC_fb32b.dir/build.make CMakeFiles/cmTC_fb32b.dir/build]
+  ignore line: [make[1]: Entering directory '/home/nicolas/src/pytorch/c10/build/CMakeFiles/CMakeScratch/TryCompile-3zCvD1']
+  ignore line: [Building CXX object CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o]
+  ignore line: [/usr/bin/c++   -v -o CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o -c /home/nicolas/.pyenv/versions/3.10.9/lib/python3.10/site-packages/cmake/data/share/cmake-3.25/Modules/CMakeCXXCompilerABI.cpp]
+  ignore line: [Using built-in specs.]
+  ignore line: [COLLECT_GCC=/usr/bin/c++]
+  ignore line: [Target: x86_64-pc-linux-gnu]
+  ignore line: [Configured with: /build/gcc/src/gcc/configure --enable-languages=ada c c++ d fortran go lto objc obj-c++ --enable-bootstrap --prefix=/usr --libdir=/usr/lib --libexecdir=/usr/lib --mandir=/usr/share/man --infodir=/usr/share/info --with-bugurl=https://bugs.archlinux.org/ --with-build-config=bootstrap-lto --with-linker-hash-style=gnu --with-system-zlib --enable-__cxa_atexit --enable-cet=auto --enable-checking=release --enable-clocale=gnu --enable-default-pie --enable-default-ssp --enable-gnu-indirect-function --enable-gnu-unique-object --enable-libstdcxx-backtrace --enable-link-serialization=1 --enable-linker-build-id --enable-lto --enable-multilib --enable-plugin --enable-shared --enable-threads=posix --disable-libssp --disable-libstdcxx-pch --disable-werror]
+  ignore line: [Thread model: posix]
+  ignore line: [Supported LTO compression algorithms: zlib zstd]
+  ignore line: [gcc version 13.1.1 20230429 (GCC) ]
+  ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_fb32b.dir/']
+  ignore line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/cc1plus -quiet -v -D_GNU_SOURCE /home/nicolas/.pyenv/versions/3.10.9/lib/python3.10/site-packages/cmake/data/share/cmake-3.25/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_fb32b.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -version -o /tmp/cckdpAye.s]
+  ignore line: [GNU C++17 (GCC) version 13.1.1 20230429 (x86_64-pc-linux-gnu)]
+  ignore line: [	compiled by GNU C version 13.1.1 20230429  GMP version 6.2.1  MPFR version 4.2.0  MPC version 1.3.1  isl version isl-0.26-GMP]
+  ignore line: []
+  ignore line: [warning: MPFR header version 4.2.0 differs from library version 4.2.0-p9.]
+  ignore line: [GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072]
+  ignore line: [ignoring nonexistent directory "/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../x86_64-pc-linux-gnu/include"]
+  ignore line: [#include "..." search starts here:]
+  ignore line: [#include <...> search starts here:]
+  ignore line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1]
+  ignore line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1/x86_64-pc-linux-gnu]
+  ignore line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../include/c++/13.1.1/backward]
+  ignore line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include]
+  ignore line: [ /usr/local/include]
+  ignore line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include-fixed]
+  ignore line: [ /usr/include]
+  ignore line: [End of search list.]
+  ignore line: [Compiler executable checksum: e149eaca55f4ee2a0171ba2b54b0dc8d]
+  ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_fb32b.dir/']
+  ignore line: [ as -v --64 -o CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o /tmp/cckdpAye.s]
+  ignore line: [GNU assembler version 2.40.0 (x86_64-pc-linux-gnu) using BFD version (GNU Binutils) 2.40.0]
+  ignore line: [COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/]
+  ignore line: [LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../:/lib/:/usr/lib/]
+  ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.']
+  ignore line: [Linking CXX executable cmTC_fb32b]
+  ignore line: [/home/nicolas/.pyenv/versions/3.10.9/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_fb32b.dir/link.txt --verbose=1]
+  ignore line: [/usr/bin/c++  -v CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o -o cmTC_fb32b ]
+  ignore line: [Using built-in specs.]
+  ignore line: [COLLECT_GCC=/usr/bin/c++]
+  ignore line: [COLLECT_LTO_WRAPPER=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/lto-wrapper]
+  ignore line: [Target: x86_64-pc-linux-gnu]
+  ignore line: [Configured with: /build/gcc/src/gcc/configure --enable-languages=ada c c++ d fortran go lto objc obj-c++ --enable-bootstrap --prefix=/usr --libdir=/usr/lib --libexecdir=/usr/lib --mandir=/usr/share/man --infodir=/usr/share/info --with-bugurl=https://bugs.archlinux.org/ --with-build-config=bootstrap-lto --with-linker-hash-style=gnu --with-system-zlib --enable-__cxa_atexit --enable-cet=auto --enable-checking=release --enable-clocale=gnu --enable-default-pie --enable-default-ssp --enable-gnu-indirect-function --enable-gnu-unique-object --enable-libstdcxx-backtrace --enable-link-serialization=1 --enable-linker-build-id --enable-lto --enable-multilib --enable-plugin --enable-shared --enable-threads=posix --disable-libssp --disable-libstdcxx-pch --disable-werror]
+  ignore line: [Thread model: posix]
+  ignore line: [Supported LTO compression algorithms: zlib zstd]
+  ignore line: [gcc version 13.1.1 20230429 (GCC) ]
+  ignore line: [COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/]
+  ignore line: [LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../:/lib/:/usr/lib/]
+  ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_fb32b' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_fb32b.']
+  link line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/lto-wrapper -plugin-opt=-fresolution=/tmp/cceLju9P.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_fb32b /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1 -L/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../.. CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/crtn.o]
+    arg [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/collect2] ==> ignore
+    arg [-plugin] ==> ignore
+    arg [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/liblto_plugin.so] ==> ignore
+    arg [-plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/lto-wrapper] ==> ignore
+    arg [-plugin-opt=-fresolution=/tmp/cceLju9P.res] ==> ignore
+    arg [-plugin-opt=-pass-through=-lgcc_s] ==> ignore
+    arg [-plugin-opt=-pass-through=-lgcc] ==> ignore
+    arg [-plugin-opt=-pass-through=-lc] ==> ignore
+    arg [-plugin-opt=-pass-through=-lgcc_s] ==> ignore
+    arg [-plugin-opt=-pass-through=-lgcc] ==> ignore
+    arg [--build-id] ==> ignore
+    arg [--eh-frame-hdr] ==> ignore
+    arg [--hash-style=gnu] ==> ignore
+    arg [-m] ==> ignore
+    arg [elf_x86_64] ==> ignore
+    arg [-dynamic-linker] ==> ignore
+    arg [/lib64/ld-linux-x86-64.so.2] ==> ignore
+    arg [-pie] ==> ignore
+    arg [-o] ==> ignore
+    arg [cmTC_fb32b] ==> ignore
+    arg [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/Scrt1.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/Scrt1.o]
+    arg [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/crti.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/crti.o]
+    arg [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/crtbeginS.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/crtbeginS.o]
+    arg [-L/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1] ==> dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1]
+    arg [-L/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib] ==> dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib]
+    arg [-L/lib/../lib] ==> dir [/lib/../lib]
+    arg [-L/usr/lib/../lib] ==> dir [/usr/lib/../lib]
+    arg [-L/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../..] ==> dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../..]
+    arg [CMakeFiles/cmTC_fb32b.dir/CMakeCXXCompilerABI.cpp.o] ==> ignore
+    arg [-lstdc++] ==> lib [stdc++]
+    arg [-lm] ==> lib [m]
+    arg [-lgcc_s] ==> lib [gcc_s]
+    arg [-lgcc] ==> lib [gcc]
+    arg [-lc] ==> lib [c]
+    arg [-lgcc_s] ==> lib [gcc_s]
+    arg [-lgcc] ==> lib [gcc]
+    arg [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/crtendS.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/crtendS.o]
+    arg [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/crtn.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/crtn.o]
+  collapse obj [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/Scrt1.o] ==> [/usr/lib/Scrt1.o]
+  collapse obj [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/crti.o] ==> [/usr/lib/crti.o]
+  collapse obj [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib/crtn.o] ==> [/usr/lib/crtn.o]
+  collapse library dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1] ==> [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1]
+  collapse library dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../../../lib] ==> [/usr/lib]
+  collapse library dir [/lib/../lib] ==> [/lib]
+  collapse library dir [/usr/lib/../lib] ==> [/usr/lib]
+  collapse library dir [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/../../..] ==> [/usr/lib]
+  implicit libs: [stdc++;m;gcc_s;gcc;c;gcc_s;gcc]
+  implicit objs: [/usr/lib/Scrt1.o;/usr/lib/crti.o;/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/crtbeginS.o;/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1/crtendS.o;/usr/lib/crtn.o]
+  implicit dirs: [/usr/lib/gcc/x86_64-pc-linux-gnu/13.1.1;/usr/lib;/lib]
+  implicit fwks: []
+
+
+Determining if the backtrace exist passed with the following output:
+Change Dir: /home/nicolas/src/pytorch/c10/build/CMakeFiles/CMakeScratch/TryCompile-gJ6WsL
+
+Run Build Command(s):/usr/bin/make -f Makefile cmTC_78711/fast && /usr/bin/make  -f CMakeFiles/cmTC_78711.dir/build.make CMakeFiles/cmTC_78711.dir/build
+make[1]: Entering directory '/home/nicolas/src/pytorch/c10/build/CMakeFiles/CMakeScratch/TryCompile-gJ6WsL'
+Building CXX object CMakeFiles/cmTC_78711.dir/CheckSymbolExists.cxx.o
+/usr/bin/c++   -std=gnu++17 -o CMakeFiles/cmTC_78711.dir/CheckSymbolExists.cxx.o -c /home/nicolas/src/pytorch/c10/build/CMakeFiles/CMakeScratch/TryCompile-gJ6WsL/CheckSymbolExists.cxx
+Linking CXX executable cmTC_78711
+/home/nicolas/.pyenv/versions/3.10.9/lib/python3.10/site-packages/cmake/data/bin/cmake -E cmake_link_script CMakeFiles/cmTC_78711.dir/link.txt --verbose=1
+/usr/bin/c++ CMakeFiles/cmTC_78711.dir/CheckSymbolExists.cxx.o -o cmTC_78711 
+make[1]: Leaving directory '/home/nicolas/src/pytorch/c10/build/CMakeFiles/CMakeScratch/TryCompile-gJ6WsL'
+
+
+File CheckSymbolExists.cxx:
+/* */
+#include <execinfo.h>
+
+int main(int argc, char** argv)
+{
+  (void)argv;
+#ifndef backtrace
+  return ((int*)(&backtrace))[argc];
+#else
+  (void)argc;
+  return 0;
+#endif
+}

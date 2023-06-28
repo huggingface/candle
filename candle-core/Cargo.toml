@@ -13,8 +13,9 @@ readme = "README.md"
 [dependencies]
 safetensors = "0.3.1"
 thiserror = "1"
-cudarc = { version = "0.9.9", optional = true, features = ["f16"] }
-candle-kernels = { path = "../candle-kernels", optional = true }
+# cudarc = { version = "0.9.9", optional = true, default-features = false, features = ["driver", "std", "f16", "static-linking", "cublas"] }
+cudarc = { path = "../../cudarc", optional = true, default-features = false, features = ["driver", "std", "f16", "static-linking", "cublas"] }
+candle-kernels = { path = "../candle-kernels-simple", optional = true }
 gemm = "0.15.4"
 zip = { version = "0.6.6", default-features=false }
 byteorder = "1.4.3"
