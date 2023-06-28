@@ -39,6 +39,17 @@ impl Layout {
         self.start_offset
     }
 
+    /// Returns the appropriate start and stop offset if the data is stored in a C
+    /// contiguous (aka row major) way.
+    pub fn contiguous_offsets(&self) -> Option<(usize, usize)> {
+        if self.is_contiguous() {
+            let start_o = self.start_offset;
+            Some((start_o, start_o + self.shape.elem_count()))
+        } else {
+            None
+        }
+    }
+
     /// Returns true if the data is stored in a C contiguous (aka row major) way.
     pub fn is_contiguous(&self) -> bool {
         self.shape.is_contiguous(&self.stride)
