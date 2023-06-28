@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 dirs = "5.0.1"
-fs2 = "0.4.3"
 rand = "0.8.5"
 thiserror = "1.0.40"
 futures = { version = "0.3.28", optional = true }
