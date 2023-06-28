@@ -15,5 +15,3 @@ Cargo.lock
 
 *tokenizer.json
 *.npz
-
-candle-kernels*/src/kernels.rs
