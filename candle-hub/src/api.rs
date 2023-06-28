@@ -522,7 +522,7 @@ impl Api {
         let tmp_filename = self
             .download_tempfile(&url, metadata.size, progressbar)
             .await?;
-        std::fs::copy(tmp_filename, &blob_path)?;
+        tokio::fs::copy(tmp_filename, &blob_path).await?;
 
         let mut pointer_path = self.cache.pointer_path(repo, &metadata.commit_hash);
         pointer_path.push(filename);
