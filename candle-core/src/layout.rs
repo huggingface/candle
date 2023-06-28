@@ -1,4 +1,4 @@
-use crate::Shape;
+use crate::{Error, Result, Shape};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Layout {
@@ -43,5 +43,26 @@ impl Layout {
     /// Returns true if the data is stored in a Fortran contiguous (aka column major) way.
     pub fn is_fortran_contiguous(&self) -> bool {
         self.shape.is_fortran_contiguous(&self.stride)
+    }
+
+    pub fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<Self> {
+        let dims = self.shape().dims();
+        if dim >= dims.len() {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: dim + 1,
+                got: dims.len(),
+                shape: self.shape().clone(),
+            })?
+        }
+        if start + length > dims[dim] {
+            todo!("add a proper error: out of bounds for narrow {dim} {start} {length} {dims:?}")
+        }
+        let mut dims = dims.to_vec();
+        dims[dim] = length;
+        Ok(Self {
+            shape: Shape::from(dims),
+            stride: self.stride.clone(),
+            start_offset: self.start_offset + self.stride[dim] * start,
+        })
     }
 }

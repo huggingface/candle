@@ -351,37 +351,20 @@ impl Tensor {
 
     /// Returns a new tensor that is a narrowed version of the input, the dimension `dim`
     /// ranges from `start` to `start + length`.
-    // TODO: Once we've refactored the shape and strides, make this return a view of the same data
-    // rather than copying.
     pub fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<Self> {
-        let dims = self.shape().dims();
-        if dim >= dims.len() {
-            return Err(Error::UnexpectedNumberOfDims {
-                expected: dim + 1,
-                got: dims.len(),
-                shape: self.shape().clone(),
-            });
-        }
-        if start + length > dims[dim] {
-            todo!("add a proper error: out of bounds for narrow {dim} {start} {length} {dims:?}")
-        }
-        let mut dims = dims.to_vec();
-        dims[dim] = length;
-        let adjusted_shape = Shape::from(dims);
-        let mut storage = self.device().zeros(&adjusted_shape, self.dtype())?;
-        self.storage.copy_strided_src(
-            &mut storage,
-            /* dst_offset= */ 0,
-            &adjusted_shape,
-            &self.stride,
-            /* src_offest= */ self.stride[dim] * start,
-        )?;
         let op = if self.track_op() {
             Some(Op::Narrow(self.clone(), dim, start, length))
         } else {
             None
         };
-        Ok(from_storage(storage, adjusted_shape, op, false))
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.clone(),
+            layout: self.layout().narrow(dim, start, length)?,
+            op,
+            is_variable: false,
+        };
+        Ok(Tensor(Arc::new(tensor_)))
     }
 
     pub fn softmax(&self, dim: usize) -> Result<Self> {
@@ -875,7 +858,7 @@ impl Tensor {
             let shape = self.shape();
             let mut storage = self.device().zeros(shape, self.dtype())?;
             self.storage
-                .copy_strided_src(&mut storage, 0, &self.shape, &self.stride, 0)?;
+                .copy_strided_src(&mut storage, 0, self.layout())?;
             Ok(from_storage(
                 storage,
                 shape.clone(),
@@ -918,7 +901,7 @@ impl Tensor {
         } else {
             let mut storage = self.device().zeros(&shape, self.dtype())?;
             self.storage
-                .copy_strided_src(&mut storage, 0, &self.shape, &self.stride, 0)?;
+                .copy_strided_src(&mut storage, 0, self.layout())?;
             Ok(from_storage(storage, shape, op, false))
         }
     }
@@ -1055,7 +1038,7 @@ impl Tensor {
         for (arg, &offset) in args.iter().zip(offsets.iter()) {
             let arg = arg.as_ref();
             arg.storage
-                .copy_strided_src(&mut storage, offset, &arg.shape, &arg.stride, 0)?;
+                .copy_strided_src(&mut storage, offset, arg.layout())?;
         }
         Ok(from_storage(storage, shape, op, false))
     }

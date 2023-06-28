@@ -227,16 +227,14 @@ impl Storage {
         &self,
         dst: &mut Self,
         dst_offset: usize,
-        src_shape: &Shape,
-        src_stride: &[usize],
-        src_offset: usize,
+        src_layout: &Layout,
     ) -> Result<()> {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => {
-                src.copy_strided_src(dst, dst_offset, src_shape, src_stride, src_offset)
+                src.copy_strided_src(dst, dst_offset, src_layout, src_offset)
             }
             (Self::Cuda(src), Self::Cuda(dst)) => {
-                Ok(src.copy_strided_src(dst, dst_offset, src_shape, src_stride, src_offset)?)
+                Ok(src.copy_strided_src(dst, dst_offset, src_layout, src_offset)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
