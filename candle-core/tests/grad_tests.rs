@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use candle::{Device, Shape, Tensor};
+mod test_utils;
 
-#[test]
-fn simple_grad() -> Result<()> {
-    let x = Tensor::var(&[3f32, 1., 4.], &Device::Cpu)?;
+fn simple_grad(device: &Device) -> Result<()> {
+    let x = Tensor::var(&[3f32, 1., 4.], device)?;
     let y = (((&x * &x)? + &x * 5f64)? + 4f64)?;
     let grads = y.backward()?;
     let grad_x = grads.get(&x).context("no grad for x")?;
@@ -15,12 +15,11 @@ fn simple_grad() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn matmul_grad() -> Result<()> {
+fn matmul_grad(device: &Device) -> Result<()> {
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
-    let x = Tensor::var_from_slice(&data, (2, 2, 3), &Device::Cpu)?;
+    let x = Tensor::var_from_slice(&data, (2, 2, 3), device)?;
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
-    let y = Tensor::var_from_slice(&data, (2, 3, 2), &Device::Cpu)?;
+    let y = Tensor::var_from_slice(&data, (2, 3, 2), device)?;
 
     let c = x.matmul(&y)?;
     let grads = c.backward()?;
@@ -38,3 +37,6 @@ fn matmul_grad() -> Result<()> {
     );
     Ok(())
 }
+
+test_device!(simple_grad, simple_grad_cpu, simple_grad_gpu);
+test_device!(matmul_grad, matmul_grad_cpu, matmul_grad_gpu);

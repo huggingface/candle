@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use candle::{Result, Tensor};
 
 #[macro_export]
