@@ -219,6 +219,63 @@ fn cat(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn embeddings(device: &Device) -> Result<()> {
+    let ids = Tensor::new(&[0u32, 2u32, 1u32], device)?;
+    let t = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], device)?;
+    let hs = Tensor::embedding(&ids, &t)?;
+    assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]);
+    Ok(())
+}
+
+fn matmul(device: &Device) -> Result<()> {
+    let data = vec![1.0f32, 2.0, 3.0, 4.0];
+    let a = Tensor::from_slice(&data, (2, 2), device)?;
+    let data = vec![1.0f32, 2.0, 3.0, 4.0];
+    let b = Tensor::from_slice(&data, (2, 2), device)?;
+
+    let c = a.matmul(&b)?;
+    assert_eq!(c.to_vec2::<f32>()?, &[[7.0f32, 10.0], [15.0, 22.0]]);
+
+    let data = vec![1.0f32, 2.0];
+    let a = Tensor::from_slice(&data, (2, 1), device)?;
+    let data = vec![3.0f32, 4.0];
+    let b = Tensor::from_slice(&data, (1, 2), device)?;
+    let c = a.matmul(&b)?;
+    assert_eq!(c.to_vec2::<f32>()?, &[&[3.0, 4.0], &[6.0, 8.0]]);
+
+    let data: Vec<_> = (0..6).map(|i| i as f32).collect();
+    let a = Tensor::from_slice(&data, (2, 3), device)?;
+    let data: Vec<_> = (0..6).map(|i| (i + 2) as f32).collect();
+    let b = Tensor::from_slice(&data, (3, 2), device)?;
+    let c = a.matmul(&b)?;
+    assert_eq!(c.to_vec2::<f32>()?, &[&[16., 19.], &[52., 64.]]);
+
+    let data: Vec<_> = (0..12).map(|i| i as f32).collect();
+    let a = Tensor::from_slice(&data, (2, 2, 3), device)?;
+    let data: Vec<_> = (0..12).map(|i| (i + 2) as f32).collect();
+    let b = Tensor::from_slice(&data, (2, 3, 2), device)?;
+    let expected = [[[16., 19.], [52., 64.]], [[214., 235.], [304., 334.]]];
+
+    let c = a.matmul(&b)?;
+    assert_eq!(c.to_vec3::<f32>()?, &expected);
+
+    // Also perform the matmul on contiguous transposed versions.
+    let a_tt = a.t()?.contiguous()?.t()?;
+    assert!(!a_tt.is_contiguous());
+    assert_eq!(a.dims(), a_tt.dims());
+    assert_eq!(a_tt.stride(), &[6, 1, 2]);
+
+    let b_tt = b.t()?.contiguous()?.t()?;
+    assert!(!b_tt.is_contiguous());
+    assert_eq!(b.dims(), b_tt.dims());
+    assert_eq!(b_tt.stride(), &[6, 1, 3]);
+
+    assert_eq!(a_tt.matmul(&b)?.to_vec3::<f32>()?, &expected);
+    assert_eq!(a.matmul(&b_tt)?.to_vec3::<f32>()?, &expected);
+    assert_eq!(a_tt.matmul(&b_tt)?.to_vec3::<f32>()?, &expected);
+    Ok(())
+}
+
 test_device!(zeros, zeros_cpu, zeros_gpu);
 test_device!(add_mul, add_mul_cpu, add_mul_gpu);
 test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu);
@@ -229,3 +286,5 @@ test_device!(sum, sum_cpu, sum_gpu);
 test_device!(transpose, transpose_cpu, transpose_gpu);
 test_device!(binary_op, binary_op_cpu, binary_op_gpu);
 test_device!(softmax, softmax_cpu, softmax_gpu);
+test_device!(embeddings, embeddings_cpu, embeddings_gpu);
+test_device!(matmul, matmul_cpu, matmul_gpu);
