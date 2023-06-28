@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::{CpuStorage, DType, Error, Result, Shape};
+use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
 
 #[derive(thiserror::Error, Debug)]
 pub enum DummyError {}
@@ -60,11 +60,11 @@ impl CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    pub(crate) fn affine_impl(&self, _: &Shape, _: &[usize], _: f64, _: f64) -> Result<Self> {
+    pub(crate) fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    pub(crate) fn sum(&self, _: &Shape, _: &[usize], _: &[usize]) -> Result<Self> {
+    pub(crate) fn sum(&self, _: &Layout, _: &[usize]) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
@@ -72,65 +72,49 @@ impl CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    pub(crate) fn to_dtype(&self, _: &Shape, _: &[usize], _: DType) -> Result<Self> {
+    pub(crate) fn to_dtype(&self, _: &Layout, _: DType) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    pub(crate) fn unary_impl<B: crate::op::UnaryOp>(&self, _: &Shape, _: &[usize]) -> Result<Self> {
+    pub(crate) fn unary_impl<B: crate::op::UnaryOp>(&self, _: &Layout) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
     pub(crate) fn binary_impl<B: crate::op::BinaryOp>(
         &self,
         _: &Self,
-        _: &Shape,
-        _: &[usize],
-        _: &[usize],
+        _: &Layout,
+        _: &Layout,
     ) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
     pub(crate) fn where_cond(
         &self,
-        _: &Shape,
-        _: &[usize],
+        _: &Layout,
         _: &Self,
-        _: &[usize],
+        _: &Layout,
         _: &Self,
-        _: &[usize],
+        _: &Layout,
     ) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    pub(crate) fn embedding_impl(
-        &self,
-        _: &Shape,
-        _: &[usize],
-        _: &Self,
-        _: usize,
-        _: usize,
-    ) -> Result<Self> {
+    pub(crate) fn embedding(&self, _: &Layout, _: &Self, _: &Layout) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    pub(crate) fn matmul_impl(
+    pub(crate) fn matmul(
         &self,
         _: &Self,
         _: (usize, usize, usize, usize),
-        _: &[usize],
-        _: &[usize],
+        _: &Layout,
+        _: &Layout,
     ) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    pub(crate) fn copy_strided_src(
-        &self,
-        _: &mut Self,
-        _: usize,
-        _: &Shape,
-        _: &[usize],
-        _: usize,
-    ) -> Result<()> {
+    pub(crate) fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 }

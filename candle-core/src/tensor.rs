@@ -1,4 +1,4 @@
-use crate::{op::Op, storage::Storage, DType, Device, Error, Result, Shape};
+use crate::{op::Op, storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::Arc;
 
 /// Unique identifier for tensors.
@@ -17,9 +17,7 @@ impl TensorId {
 pub struct Tensor_ {
     id: TensorId,
     storage: Arc<Storage>,
-    shape: Shape,
-    // The strides are given in number of elements and not in bytes.
-    stride: Vec<usize>,
+    layout: Layout,
     op: Option<Op>,
     is_variable: bool,
 }
@@ -50,7 +48,7 @@ macro_rules! unary_op {
             let shape = self.shape();
             let storage = self
                 .storage
-                .unary_impl::<crate::op::$op_name>(self.shape(), self.stride())?;
+                .unary_impl::<crate::op::$op_name>(self.layout())?;
             let op = if self.track_op() {
                 Some(Op::$op_name(self.clone()))
             } else {
@@ -67,9 +65,8 @@ macro_rules! binary_op {
             let shape = self.same_shape_binary_op(rhs, stringify!($fn_name))?;
             let storage = self.storage.binary_impl::<crate::op::$op_name>(
                 &rhs.storage,
-                shape,
-                self.stride(),
-                rhs.stride(),
+                self.layout(),
+                rhs.layout(),
             )?;
             let op = if self.track_op() || rhs.track_op() {
                 Some(Op::$op_name(self.clone(), rhs.clone()))
@@ -107,13 +104,10 @@ fn from_storage<S: Into<Shape>>(
     op: Option<Op>,
     is_variable: bool,
 ) -> Tensor {
-    let shape = shape.into();
-    let stride = shape.stride_contiguous();
     let tensor_ = Tensor_ {
         id: TensorId::new(),
         storage: Arc::new(storage),
-        shape,
-        stride,
+        layout: Layout::contiguous(shape),
         op,
         is_variable,
     };
@@ -323,6 +317,7 @@ impl Tensor {
     unary_op!(sqrt, Sqrt);
     unary_op!(gelu, Gelu);
     unary_op!(relu, Relu);
+
     pub fn to_scalar<S: crate::WithDType>(&self) -> Result<S> {
         if self.rank() != 0 {
             return Err(Error::UnexpectedNumberOfDims {
@@ -342,8 +337,7 @@ impl Tensor {
     }
 
     pub fn affine(&self, mul: f64, add: f64) -> Result<Self> {
-        let shape = self.shape();
-        let storage = self.storage.affine_impl(shape, self.stride(), mul, add)?;
+        let storage = self.storage.affine(self.layout(), mul, add)?;
         let op = if self.track_op() {
             Some(Op::Affine {
                 arg: self.clone(),
@@ -353,42 +347,25 @@ impl Tensor {
         } else {
             None
         };
-        Ok(from_storage(storage, shape.clone(), op, false))
+        Ok(from_storage(storage, self.shape(), op, false))
     }
 
     /// Returns a new tensor that is a narrowed version of the input, the dimension `dim`
     /// ranges from `start` to `start + length`.
-    // TODO: Once we've refactored the shape and strides, make this return a view of the same data
-    // rather than copying.
     pub fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<Self> {
-        let dims = self.shape().dims();
-        if dim >= dims.len() {
-            return Err(Error::UnexpectedNumberOfDims {
-                expected: dim + 1,
-                got: dims.len(),
-                shape: self.shape().clone(),
-            });
-        }
-        if start + length > dims[dim] {
-            todo!("add a proper error: out of bounds for narrow {dim} {start} {length} {dims:?}")
-        }
-        let mut dims = dims.to_vec();
-        dims[dim] = length;
-        let adjusted_shape = Shape::from(dims);
-        let mut storage = self.device().zeros(&adjusted_shape, self.dtype())?;
-        self.storage.copy_strided_src(
-            &mut storage,
-            /* dst_offset= */ 0,
-            &adjusted_shape,
-            &self.stride,
-            /* src_offest= */ self.stride[dim] * start,
-        )?;
         let op = if self.track_op() {
             Some(Op::Narrow(self.clone(), dim, start, length))
         } else {
             None
         };
-        Ok(from_storage(storage, adjusted_shape, op, false))
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.clone(),
+            layout: self.layout().narrow(dim, start, length)?,
+            op,
+            is_variable: false,
+        };
+        Ok(Tensor(Arc::new(tensor_)))
     }
 
     pub fn softmax(&self, dim: usize) -> Result<Self> {
@@ -401,9 +378,7 @@ impl Tensor {
             exp.broadcast_div(&sum_exp)
         } else {
             let shape = self.shape();
-            let mut storage = self
-                .storage
-                .unary_impl::<crate::op::Exp>(shape, self.stride())?;
+            let mut storage = self.storage.unary_impl::<crate::op::Exp>(self.layout())?;
             // The resulting storage is contiguous.
             storage.divide_by_sum_over_dim(shape, dim)?;
             let op = if self.track_op() {
@@ -416,7 +391,7 @@ impl Tensor {
     }
 
     pub fn sum(&self, sum_dims: &[usize]) -> Result<Self> {
-        let storage = self.storage.sum(self.shape(), &self.stride, sum_dims)?;
+        let storage = self.storage.sum(self.layout(), sum_dims)?;
         let op = if self.track_op() {
             Some(Op::Sum(self.clone(), sum_dims.to_vec()))
         } else {
@@ -458,11 +433,11 @@ impl Tensor {
         let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
         let batching: usize = a_dims[..dim - 2].iter().product();
 
-        let storage = self.storage.matmul_impl(
+        let storage = self.storage.matmul(
             &rhs.storage,
             (batching, m, n, k),
-            self.stride(),
-            rhs.stride(),
+            self.layout(),
+            rhs.layout(),
         )?;
         let op = if self.track_op() || rhs.track_op() {
             Some(Op::Matmul(self.clone(), rhs.clone()))
@@ -476,12 +451,11 @@ impl Tensor {
         let _shap = self.same_shape_binary_op(on_true, "where_cond")?;
         let shape = self.same_shape_binary_op(on_false, "where_cond")?;
         let storage = self.storage.where_cond(
-            shape,
-            self.stride(),
+            self.layout(),
             &on_true.storage,
-            on_true.stride(),
+            on_true.layout(),
             &on_false.storage,
-            on_false.stride(),
+            on_false.layout(),
         )?;
         let op = if self.track_op() || on_true.track_op() || on_false.track_op() {
             Some(Op::WhereCond(
@@ -498,23 +472,19 @@ impl Tensor {
     pub fn embedding(ids: &Self, rhs: &Self) -> Result<Self> {
         if !rhs.is_contiguous() {
             return Err(Error::RequiresContiguous { op: "embedding" });
-        } else if rhs.shape().rank() != 2 || ids.shape().rank() != 1 {
+        } else if rhs.rank() != 2 || ids.rank() != 1 {
             return Err(Error::ShapeMismatchBinaryOp {
-                lhs: ids.shape.clone(),
-                rhs: rhs.shape.clone(),
+                lhs: ids.shape().clone(),
+                rhs: rhs.shape().clone(),
                 op: "embedding",
             });
         }
         let ids_shape = ids.shape();
         let seq_len = ids_shape.r1()?;
-        let (vocab_size, hidden_size) = rhs.shape().r2()?;
-        let storage = ids.storage.embedding_impl(
-            ids_shape,
-            &ids.stride,
-            &rhs.storage,
-            hidden_size,
-            vocab_size,
-        )?;
+        let (_, hidden_size) = rhs.shape().r2()?;
+        let storage = ids
+            .storage
+            .embedding(ids.layout(), &rhs.storage, rhs.layout())?;
         let shape: Shape = (seq_len, hidden_size).into();
         let op = if ids.track_op() || rhs.track_op() {
             Some(Op::Embedding(ids.clone(), rhs.clone()))
@@ -525,7 +495,7 @@ impl Tensor {
     }
 
     pub(crate) fn strided_index(&self) -> crate::StridedIndex {
-        crate::StridedIndex::new(self.dims(), self.stride())
+        self.layout.strided_index()
     }
 
     /// Returns data from the underlying storage, this does not take the strides
@@ -618,15 +588,20 @@ impl Tensor {
     }
 
     pub fn shape(&self) -> &Shape {
-        &self.shape
+        self.layout().shape()
     }
 
     pub fn dims(&self) -> &[usize] {
         self.shape().dims()
     }
 
-    pub fn stride(&self) -> &[usize] {
-        &self.stride
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    // TODO: Rename to `stride` once the PR that introduced the layout has been merged.
+    pub fn stride_tmp(&self) -> &[usize] {
+        self.layout.stride()
     }
 
     pub fn rank(&self) -> usize {
@@ -704,18 +679,6 @@ impl Tensor {
     /// Returns a tensor that is a transposed version of the input, the given dimensions are
     /// swapped.
     pub fn transpose(&self, dim1: usize, dim2: usize) -> Result<Tensor> {
-        let rank = self.rank();
-        if rank <= dim1 || rank <= dim2 {
-            return Err(Error::UnexpectedNumberOfDims {
-                expected: usize::max(dim1, dim2),
-                got: rank,
-                shape: self.shape().clone(),
-            });
-        }
-        let mut stride = self.stride().to_vec();
-        let mut dims = self.shape().dims().to_vec();
-        dims.swap(dim1, dim2);
-        stride.swap(dim1, dim2);
         let op = if self.track_op() {
             Some(Op::Transpose(self.clone(), dim1, dim2))
         } else {
@@ -724,8 +687,7 @@ impl Tensor {
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: self.storage.clone(),
-            shape: Shape::from(dims),
-            stride,
+            layout: self.layout.transpose(dim1, dim2)?,
             op,
             is_variable: false,
         };
@@ -734,12 +696,12 @@ impl Tensor {
 
     /// Returns true if the data is stored in a C contiguous (aka row major) way.
     pub fn is_contiguous(&self) -> bool {
-        self.shape.is_contiguous(&self.stride)
+        self.layout.is_contiguous()
     }
 
     /// Returns true if the data is stored in a Fortran contiguous (aka column major) way.
     pub fn is_fortran_contiguous(&self) -> bool {
-        self.shape.is_fortran_contiguous(&self.stride)
+        self.layout.is_fortran_contiguous()
     }
 
     /// Compared to clone, this copies the actual storage but may fail because of running out of
@@ -748,8 +710,7 @@ impl Tensor {
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: Arc::new(self.storage.try_clone()?),
-            shape: self.shape.clone(),
-            stride: self.stride.clone(),
+            layout: self.layout.clone(),
             op: None, // TODO
             is_variable: false,
         };
@@ -762,8 +723,7 @@ impl Tensor {
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: self.storage.clone(),
-            shape: self.shape.clone(),
-            stride: self.stride.clone(),
+            layout: self.layout.clone(),
             op: None,
             is_variable: false,
         };
@@ -796,8 +756,7 @@ impl Tensor {
             let tensor_ = Tensor_ {
                 id: TensorId::new(),
                 storage: Arc::new(storage),
-                shape: self.shape.clone(),
-                stride: self.stride.clone(),
+                layout: self.layout.clone(),
                 op,
                 is_variable: false,
             };
@@ -810,7 +769,7 @@ impl Tensor {
     pub fn broadcast_left<S: Into<Shape>>(&self, left_shape: S) -> Result<Self> {
         let left_shape = left_shape.into();
         let mut dims = left_shape.into_dims();
-        dims.extend(self.shape.dims());
+        dims.extend(self.dims());
         self.broadcast_as(dims)
     }
 
@@ -820,36 +779,10 @@ impl Tensor {
         } else {
             None
         };
-        let shape = shape.into();
-        if shape.rank() < self.rank() {
-            return Err(Error::BroadcastIncompatibleShapes {
-                src_shape: self.shape().clone(),
-                dst_shape: shape,
-            });
-        }
-        let added_dims = shape.rank() - self.rank();
-        let mut stride = vec![0; added_dims];
-        for (&dst_dim, (&src_dim, &src_stride)) in shape.dims()[added_dims..]
-            .iter()
-            .zip(self.dims().iter().zip(self.stride()))
-        {
-            let s = if dst_dim == src_dim {
-                src_stride
-            } else if src_dim != 1 {
-                return Err(Error::BroadcastIncompatibleShapes {
-                    src_shape: self.shape().clone(),
-                    dst_shape: shape,
-                });
-            } else {
-                0
-            };
-            stride.push(s)
-        }
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: self.storage.clone(),
-            shape,
-            stride,
+            layout: self.layout.broadcast_as(shape)?,
             op,
             is_variable: false,
         };
@@ -866,7 +799,7 @@ impl Tensor {
             Ok(self.clone())
         } else {
             let shape = self.shape();
-            let storage = self.storage.to_dtype(shape, self.stride(), dtype)?;
+            let storage = self.storage.to_dtype(self.layout(), dtype)?;
             let op = if self.track_op() {
                 Some(Op::ToDType(self.clone()))
             } else {
@@ -883,7 +816,7 @@ impl Tensor {
             let shape = self.shape();
             let mut storage = self.device().zeros(shape, self.dtype())?;
             self.storage
-                .copy_strided_src(&mut storage, 0, &self.shape, &self.stride, 0)?;
+                .copy_strided_src(&mut storage, 0, self.layout())?;
             Ok(from_storage(
                 storage,
                 shape.clone(),
@@ -913,12 +846,10 @@ impl Tensor {
             None
         };
         if self.is_contiguous() {
-            let stride = shape.stride_contiguous();
             let tensor_ = Tensor_ {
                 id: TensorId::new(),
                 storage: self.storage.clone(),
-                shape,
-                stride,
+                layout: Layout::contiguous_with_offset(shape, self.layout.start_offset()),
                 op,
                 is_variable: false,
             };
@@ -926,7 +857,7 @@ impl Tensor {
         } else {
             let mut storage = self.device().zeros(&shape, self.dtype())?;
             self.storage
-                .copy_strided_src(&mut storage, 0, &self.shape, &self.stride, 0)?;
+                .copy_strided_src(&mut storage, 0, self.layout())?;
             Ok(from_storage(storage, shape, op, false))
         }
     }
@@ -1063,7 +994,7 @@ impl Tensor {
         for (arg, &offset) in args.iter().zip(offsets.iter()) {
             let arg = arg.as_ref();
             arg.storage
-                .copy_strided_src(&mut storage, offset, &arg.shape, &arg.stride, 0)?;
+                .copy_strided_src(&mut storage, offset, arg.layout())?;
         }
         Ok(from_storage(storage, shape, op, false))
     }
