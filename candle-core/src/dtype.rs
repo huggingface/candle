@@ -34,6 +34,7 @@ impl DType {
 pub trait WithDType: Sized + Copy {
     const DTYPE: DType;
 
+    fn from_f64(v: f64) -> Self;
     fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage;
 
     fn to_cpu_storage(data: &[Self]) -> CpuStorage {
@@ -45,9 +46,13 @@ pub trait WithDType: Sized + Copy {
 }
 
 macro_rules! with_dtype {
-    ($ty:ty, $dtype:ident) => {
+    ($ty:ty, $dtype:ident, $from_f64:expr) => {
         impl WithDType for $ty {
             const DTYPE: DType = DType::$dtype;
+
+            fn from_f64(v: f64) -> Self {
+                $from_f64(v)
+            }
 
             fn to_cpu_storage_owned(data: Vec<Self>) -> CpuStorage {
                 CpuStorage::$dtype(data)
@@ -77,8 +82,8 @@ macro_rules! with_dtype {
         }
     };
 }
-with_dtype!(u32, U32);
-with_dtype!(half::f16, F16);
-with_dtype!(half::bf16, BF16);
-with_dtype!(f32, F32);
-with_dtype!(f64, F64);
+with_dtype!(u32, U32, |v: f64| v as u32);
+with_dtype!(half::f16, F16, half::f16::from_f64);
+with_dtype!(half::bf16, BF16, half::bf16::from_f64);
+with_dtype!(f32, F32, |v: f64| v as f32);
+with_dtype!(f64, F64, |v: f64| v);
