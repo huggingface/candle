@@ -1,4 +1,3 @@
-// TODO: Also test the cuda backend.
 mod test_utils;
 use candle::{DType, Device, Result, Tensor};
 use test_utils::to_vec3_round;
