@@ -9,11 +9,11 @@ pub enum Storage {
 }
 
 impl Storage {
-    pub fn try_clone(&self) -> Result<Self> {
+    pub fn try_clone(&self, layout: &Layout) -> Result<Self> {
         match self {
             Self::Cpu(storage) => Ok(Self::Cpu(storage.clone())),
             Self::Cuda(storage) => {
-                let storage = storage.try_clone()?;
+                let storage = storage.try_clone(layout)?;
                 Ok(Self::Cuda(storage))
             }
         }

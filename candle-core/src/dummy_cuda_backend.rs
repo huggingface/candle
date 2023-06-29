@@ -44,7 +44,7 @@ impl CudaDevice {
 pub struct CudaStorage;
 
 impl CudaStorage {
-    pub fn try_clone(&self) -> Result<Self> {
+    pub fn try_clone(&self, _: &Layout) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
