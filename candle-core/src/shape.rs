@@ -3,6 +3,8 @@ use crate::{Error, Result};
 #[derive(Clone, PartialEq, Eq)]
 pub struct Shape(Vec<usize>);
 
+pub const SCALAR: Shape = Shape(vec![]);
+
 impl std::fmt::Debug for Shape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", &self.dims())
