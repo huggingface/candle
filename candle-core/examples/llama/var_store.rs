@@ -1,7 +1,6 @@
 use super::*;
 use candle::{DType, Device, Result, Shape, Tensor, WithDType};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[allow(dead_code)]
@@ -142,11 +141,11 @@ impl Block {
 impl Llama {
     pub fn load_npy(
         device: &Device,
-        _filenames: &[PathBuf],
+        filename: &str,
         cache: &Cache,
         config: &Config,
     ) -> Result<Self> {
-        let weight_path = std::path::Path::new("/data/llama.npz");
+        let weight_path = std::path::Path::new(filename);
         let weights = if weight_path.exists() {
             println!("loading weights from {weight_path:?}");
             let start_load = std::time::Instant::now();
