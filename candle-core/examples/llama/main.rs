@@ -448,9 +448,9 @@ struct Args {
     #[arg(long, default_value_t = 100)]
     sample_len: usize,
 
-    /// Enable the key-value cache.
-    #[arg(long, default_value_t = true)]
-    use_kv_cache: bool,
+    /// Disable the key-value cache.
+    #[arg(long)]
+    no_kv_cache: bool,
 }
 
 #[tokio::main]
@@ -464,7 +464,7 @@ async fn main() -> Result<()> {
         Device::new_cuda(0)?
     };
     let config = Config::config_7b();
-    let cache = Cache::new(args.use_kv_cache, &config, &device);
+    let cache = Cache::new(!args.no_kv_cache, &config, &device);
     let start = std::time::Instant::now();
     let (llama, tokenizer_filename) = match args.npy {
         Some(npy) => {
