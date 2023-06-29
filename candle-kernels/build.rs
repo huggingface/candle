@@ -87,6 +87,7 @@ mod cuda {
             std::fs::remove_file(out_path.unwrap()).unwrap();
         }
 
+        println!("cargo:rerun-if-changed=src/");
         for path in &kernel_paths {
             println!("cargo:rerun-if-changed={}", path.display());
         }
