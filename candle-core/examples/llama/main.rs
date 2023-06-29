@@ -1,7 +1,7 @@
-// An implementation of LLaMA https://github.com/facebookresearch/llama");");");
+// An implementation of LLaMA https://github.com/facebookresearch/llama.py
 //
 // This is based on nanoGPT in a similar way to:
-// https://github.com/Lightning-AI/lit-llama/blob/main/lit_llama/model.py");
+// https://github.com/Lightning-AI/lit-llama/blob/main/lit_llama/model.py
 //
 // The tokenizer config can be retrieved from:
 // https://huggingface.co/hf-internal-testing/llama-tokenizer/raw/main/tokenizer.json
@@ -417,7 +417,6 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    //use rand::prelude::*;
     use tokenizers::Tokenizer;
 
     let args = Args::parse();
