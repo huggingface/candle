@@ -1,4 +1,4 @@
-// An implementation of LLaMA https://github.com/facebookresearch/llama.py
+// An implementation of LLaMA https://github.com/facebookresearch/llama
 //
 // This is based on nanoGPT in a similar way to:
 // https://github.com/Lightning-AI/lit-llama/blob/main/lit_llama/model.py
