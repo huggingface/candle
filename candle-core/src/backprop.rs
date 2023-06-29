@@ -99,7 +99,7 @@ impl Tensor {
     pub fn backward(&self) -> Result<GradStore> {
         let sorted_nodes = self.sorted_nodes();
         let mut grads = GradStore::new();
-        grads.insert(self, self.ones_like()?);
+        grads.insert(self, self.ones_like()?.contiguous()?);
         for node in sorted_nodes.iter() {
             if node.is_variable() {
                 continue;

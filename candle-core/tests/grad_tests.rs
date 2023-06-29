@@ -20,7 +20,6 @@ fn matmul_grad(device: &Device) -> Result<()> {
     let x = Tensor::var_from_slice(&data, (2, 2, 3), device)?;
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
     let y = Tensor::var_from_slice(&data, (2, 3, 2), device)?;
-
     let c = x.matmul(&y)?;
     let grads = c.backward()?;
     let grad_x = grads.get(&x).context("no grad for x")?;
