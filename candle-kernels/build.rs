@@ -83,6 +83,14 @@ mod cuda {
             .map(|p| p.unwrap())
             .collect();
 
+        for out_path in glob::glob(&format!("{out_dir}/**/*.ptx")).unwrap() {
+            std::fs::remove_file(out_path.unwrap()).unwrap();
+        }
+
+        for path in &kernel_paths {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+
         for path in &mut include_directories {
             println!("cargo:rerun-if-changed={}", path.display());
             let destination =
