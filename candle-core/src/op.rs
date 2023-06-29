@@ -43,11 +43,8 @@ pub(crate) enum Op {
 
 pub(crate) trait UnaryOp {
     const NAME: &'static str;
-    const KERNEL_BF16: &'static str;
-    const KERNEL_F16: &'static str;
-    const KERNEL_F32: &'static str;
-    const KERNEL_F64: &'static str;
-    const KERNEL_U32: &'static str;
+    const KERNEL: &'static str;
+    const V: Self;
     fn bf16(v1: bf16) -> bf16;
     fn f16(v1: f16) -> f16;
     fn f32(v1: f32) -> f32;
@@ -121,11 +118,8 @@ macro_rules! unary_op {
     ($op: ident, $name: literal, $a: ident, $e: expr) => {
         impl UnaryOp for $op {
             const NAME: &'static str = $name;
-            const KERNEL_BF16: &'static str = concat!("u", $name, "_bf16");
-            const KERNEL_F16: &'static str = concat!("u", $name, "_f16");
-            const KERNEL_F32: &'static str = concat!("u", $name, "_f32");
-            const KERNEL_F64: &'static str = concat!("u", $name, "_f64");
-            const KERNEL_U32: &'static str = concat!("u", $name, "_u32");
+            const KERNEL: &'static str = concat!("u", $name);
+            const V: Self = $op;
             fn bf16($a: bf16) -> bf16 {
                 $e
             }
@@ -158,6 +152,7 @@ unary_op!(Sqrt, "sqrt", v, v.sqrt());
 /// <https://en.wikipedia.org/wiki/Activation_function#Comparison_of_activation_functions>
 impl UnaryOp for Gelu {
     const NAME: &'static str = "gelu";
+    const V: Self = Gelu;
     fn bf16(v: bf16) -> bf16 {
         bf16::from_f32_const(0.5)
             * v
@@ -191,20 +186,13 @@ impl UnaryOp for Gelu {
     fn u32(_: u32) -> u32 {
         0
     }
-    const KERNEL_BF16: &'static str = "ugelu_bf16";
-    const KERNEL_F16: &'static str = "ugelu_f16";
-    const KERNEL_F32: &'static str = "ugelu_f32";
-    const KERNEL_F64: &'static str = "ugelu_f64";
-    const KERNEL_U32: &'static str = "ugelu_u32";
+    const KERNEL: &'static str = "ugelu";
 }
 
 impl UnaryOp for Relu {
     const NAME: &'static str = "relu";
-    const KERNEL_BF16: &'static str = "urelu_bf16";
-    const KERNEL_F16: &'static str = "urelu_f16";
-    const KERNEL_F32: &'static str = "urelu_f32";
-    const KERNEL_F64: &'static str = "urelu_f64";
-    const KERNEL_U32: &'static str = "urelu_u32";
+    const KERNEL: &'static str = "urelu";
+    const V: Self = Relu;
     fn bf16(v: bf16) -> bf16 {
         v.max(bf16::ZERO)
     }

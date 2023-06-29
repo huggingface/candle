@@ -350,6 +350,29 @@ impl<'a> Map1 for Sum<'a> {
     }
 }
 
+impl<U: crate::op::UnaryOp> Map1 for U {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        src: &CudaSlice<T>,
+        dev: &CudaDevice,
+        layout: &Layout,
+    ) -> Result<CudaSlice<T>> {
+        let shape = layout.shape();
+        let dims = shape.dims();
+        let el_count = shape.elem_count();
+        let cfg = LaunchConfig::for_num_elems(el_count as u32);
+        let ds = dev.htod_copy([dims, layout.stride()].concat())?;
+        let src = &src.slice(layout.start_offset()..);
+        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::UNARY)?;
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<T>(el_count) }?;
+        let params = (el_count, dims.len(), &ds, src, &out);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }?;
+        Ok(out)
+    }
+}
+
 fn slice_src_and_dst<'a, T>(
     src: &'a CudaSlice<T>,
     src_l: &Layout,
@@ -539,58 +562,8 @@ impl CudaStorage {
     }
 
     pub(crate) fn unary_impl<U: crate::op::UnaryOp>(&self, layout: &Layout) -> Result<Self> {
-        let shape = layout.shape();
-        let dims = shape.dims();
-        let el_count = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(el_count as u32);
-        let dev = &self.device;
-        let ds = dev.htod_copy([dims, layout.stride()].concat())?;
-        let slice = match &self.slice {
-            CudaStorageSlice::U32(_arg) => {
-                todo!("No unary kernels for u32");
-            }
-            CudaStorageSlice::BF16(arg) => {
-                let arg = &arg.slice(layout.start_offset()..);
-                let func = dev.get_or_load_func(U::KERNEL_BF16, kernels::UNARY)?;
-                // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.alloc::<bf16>(el_count) }?;
-                let params = (el_count, dims.len(), &ds, arg, &out);
-                // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }?;
-                CudaStorageSlice::BF16(out)
-            }
-            CudaStorageSlice::F16(arg) => {
-                let arg = &arg.slice(layout.start_offset()..);
-                let func = dev.get_or_load_func(U::KERNEL_F16, kernels::UNARY)?;
-                // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.alloc::<f16>(el_count) }?;
-                let params = (el_count, dims.len(), &ds, arg, &out);
-                // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }?;
-                CudaStorageSlice::F16(out)
-            }
-            CudaStorageSlice::F32(arg) => {
-                let arg = &arg.slice(layout.start_offset()..);
-                let func = dev.get_or_load_func(U::KERNEL_F32, kernels::UNARY)?;
-                // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.alloc::<f32>(el_count) }?;
-                let params = (el_count, dims.len(), &ds, arg, &out);
-                // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }?;
-                CudaStorageSlice::F32(out)
-            }
-            CudaStorageSlice::F64(arg) => {
-                let arg = &arg.slice(layout.start_offset()..);
-                let func = dev.get_or_load_func(U::KERNEL_F64, kernels::UNARY)?;
-                // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.alloc::<f64>(el_count) }?;
-                let params = (el_count, dims.len(), &ds, arg, &out);
-                // SAFETY: ffi.
-                unsafe { func.launch(cfg, params) }?;
-                CudaStorageSlice::F64(out)
-            }
-        };
-        let device = dev.clone();
+        let device = self.device().clone();
+        let slice = U::V.map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
 
