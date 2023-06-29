@@ -27,6 +27,9 @@ anyhow = "1"
 clap = { version = "4.2.4", features = ["derive"] }
 rand = "0.8.5"
 tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
+tokio = { version = "1.28.2", features = ["macros", "rt-multi-thread"] }
+candle-hub = { path = "../candle-hub" }
+memmap2 = "0.7.1"
 
 [features]
 default = ["cuda"]
