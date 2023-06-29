@@ -23,7 +23,7 @@ num-traits = "0.2.15"
 num_cpus = "1.15.0"
 
 [dev-dependencies]
-anyhow = "1"
+anyhow = { version = "1", features = ["backtrace"] }
 clap = { version = "4.2.4", features = ["derive"] }
 rand = "0.8.5"
 tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
