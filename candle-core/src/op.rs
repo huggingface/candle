@@ -54,11 +54,8 @@ pub(crate) trait UnaryOp {
 
 pub(crate) trait BinaryOp {
     const NAME: &'static str;
-    const KERNEL_BF16: &'static str;
-    const KERNEL_F16: &'static str;
-    const KERNEL_F32: &'static str;
-    const KERNEL_F64: &'static str;
-    const KERNEL_U32: &'static str;
+    const KERNEL: &'static str;
+    const V: Self;
     fn bf16(v1: bf16, v2: bf16) -> bf16;
     fn f16(v1: f16, v2: f16) -> f16;
     fn f32(v1: f32, v2: f32) -> f32;
@@ -85,11 +82,8 @@ macro_rules! bin_op {
     ($op:ident, $name: literal, $e: expr) => {
         impl BinaryOp for $op {
             const NAME: &'static str = $name;
-            const KERNEL_BF16: &'static str = concat!("b", $name, "_bf16");
-            const KERNEL_F16: &'static str = concat!("b", $name, "_f16");
-            const KERNEL_F32: &'static str = concat!("b", $name, "_f32");
-            const KERNEL_F64: &'static str = concat!("b", $name, "_f64");
-            const KERNEL_U32: &'static str = concat!("b", $name, "_u32");
+            const KERNEL: &'static str = concat!("b", $name);
+            const V: Self = $op;
             fn bf16(v1: bf16, v2: bf16) -> bf16 {
                 $e(v1, v2)
             }

@@ -473,6 +473,32 @@ impl<'a> Map2 for WhereCond<'a> {
     }
 }
 
+impl<U: crate::op::BinaryOp> Map2 for U {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        lhs: &CudaSlice<T>,
+        lhs_l: &Layout,
+        rhs: &CudaSlice<T>,
+        rhs_l: &Layout,
+        dev: &CudaDevice,
+    ) -> Result<CudaSlice<T>> {
+        let shape = lhs_l.shape();
+        let dims = shape.dims();
+        let elem_count = shape.elem_count();
+        let cfg = LaunchConfig::for_num_elems(elem_count as u32);
+        let dims_and_strides = dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())?;
+        let lhs = &lhs.slice(lhs_l.start_offset()..);
+        let rhs = &rhs.slice(rhs_l.start_offset()..);
+        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::BINARY)?;
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<T>(elem_count) }?;
+        let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+        // SAFETY: ffi
+        unsafe { func.launch(cfg, params) }?;
+        Ok(out)
+    }
+}
+
 fn slice_src_and_dst<'a, T>(
     src: &'a CudaSlice<T>,
     src_l: &Layout,
@@ -673,72 +699,8 @@ impl CudaStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        let shape = lhs_l.shape();
-        let dims = shape.dims();
-        let elem_count = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(elem_count as u32);
-        let dev = self.device();
-        let dims_and_strides = dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())?;
-        let slice = match (&self.slice, &rhs.slice) {
-            (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {
-                let lhs = &lhs.slice(lhs_l.start_offset()..);
-                let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let func = dev.get_or_load_func(B::KERNEL_BF16, kernels::BINARY)?;
-                // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.alloc::<bf16>(elem_count) }?;
-                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
-                // SAFETY: ffi
-                unsafe { func.launch(cfg, params) }?;
-                CudaStorageSlice::BF16(out)
-            }
-            (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs)) => {
-                let lhs = &lhs.slice(lhs_l.start_offset()..);
-                let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let func = dev.get_or_load_func(B::KERNEL_F16, kernels::BINARY)?;
-                // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.alloc::<f16>(elem_count) }?;
-                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
-                // SAFETY: ffi
-                unsafe { func.launch(cfg, params) }?;
-                CudaStorageSlice::F16(out)
-            }
-            (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs)) => {
-                let lhs = &lhs.slice(lhs_l.start_offset()..);
-                let rhs = &rhs.slice(rhs_l.start_offset()..);
-                let func = dev.get_or_load_func(B::KERNEL_F32, kernels::BINARY)?;
-                // SAFETY: Set later by running the kernel.
-                let out = unsafe { dev.alloc::<f32>(elem_count) }?;
-                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
-                // SAFETY: ffi
-                unsafe { func.launch(cfg, params) }?;
-                CudaStorageSlice::F32(out)
-            }
-            (CudaStorageSlice::F64(lhs), CudaStorageSlice::F64(rhs)) => {
-                let lhs = &lhs.slice(lhs_l.start_offset()..);
-                let rhs = &rhs.slice(rhs_l.start_offset()..);
-                // SAFETY: Set later by running the kernel.
-                let func = dev.get_or_load_func(B::KERNEL_F64, kernels::BINARY)?;
-                let out = unsafe { dev.alloc::<f64>(elem_count) }?;
-                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
-                // SAFETY: ffi
-                unsafe { func.launch(cfg, params) }?;
-                CudaStorageSlice::F64(out)
-            }
-            (CudaStorageSlice::U32(lhs), CudaStorageSlice::U32(rhs)) => {
-                let lhs = &lhs.slice(lhs_l.start_offset()..);
-                let rhs = &rhs.slice(rhs_l.start_offset()..);
-                // SAFETY: Set later by running the kernel.
-                let func = dev.get_or_load_func(B::KERNEL_U32, kernels::BINARY)?;
-                let out = unsafe { dev.alloc::<u32>(elem_count) }?;
-                let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
-                // SAFETY: ffi
-                unsafe { func.launch(cfg, params) }?;
-                CudaStorageSlice::U32(out)
-            }
-            // The dtypes should have been checked at this point so this is an internal error.
-            _ => return Err(CudaError::InternalError("dtype mismatch in binary op")),
-        };
-        let device = dev.clone();
+        let device = self.device().clone();
+        let slice = B::V.map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?;
         Ok(Self { slice, device })
     }
 
