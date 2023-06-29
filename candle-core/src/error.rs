@@ -10,6 +10,14 @@ pub enum Error {
         got: DType,
     },
 
+    #[error("invalid args for narrow: {shape:?}, dim: {dim}, start: {start}, len:{len}")]
+    NarrowInvalidArgs {
+        shape: Shape,
+        dim: usize,
+        start: usize,
+        len: usize,
+    },
+
     #[error("{op} only supports contiguous tensors")]
     RequiresContiguous { op: &'static str },
 
