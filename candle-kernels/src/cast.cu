@@ -28,11 +28,11 @@ extern "C" __global__ void FN_NAME( \
 CAST_OP(__nv_bfloat16, __nv_bfloat16, cast_bf16_bf16)
 
 CAST_OP(__nv_bfloat16, uint32_t, cast_bf16_u32)
-CAST_OP(__nv_bfloat16, __half,   cast_bf16_f16)
+// CAST_OP(__nv_bfloat16, __half,   cast_bf16_f16)
 CAST_OP(__nv_bfloat16, float,    cast_bf16_f32)
 CAST_OP(__nv_bfloat16, double,   cast_bf16_f64)
 CAST_OP(uint32_t, __nv_bfloat16, cast_u32_bf16)
-CAST_OP(__half,   __nv_bfloat16, cast_f16_bf16)
+// CAST_OP(__half,   __nv_bfloat16, cast_f16_bf16)
 CAST_OP(float,    __nv_bfloat16, cast_f32_bf16)
 CAST_OP(double,   __nv_bfloat16, cast_f64_bf16)
 #endif
