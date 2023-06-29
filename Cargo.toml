@@ -1,8 +1,12 @@
 [workspace]
-
 members = [
     "candle-core",
     "candle-hub",
     "candle-kernels",
 ]
 
+[profile.release]
+debug = 1
+opt-level = "z"
+lto = true
+codegen-units = 1
