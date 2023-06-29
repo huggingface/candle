@@ -709,7 +709,7 @@ impl Tensor {
     pub fn copy(&self) -> Result<Tensor> {
         let tensor_ = Tensor_ {
             id: TensorId::new(),
-            storage: Arc::new(self.storage.try_clone()?),
+            storage: Arc::new(self.storage.try_clone(self.layout())?),
             layout: self.layout.clone(),
             op: None, // TODO
             is_variable: false,
