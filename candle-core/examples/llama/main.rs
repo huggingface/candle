@@ -24,7 +24,7 @@ mod var_store;
 mod weights;
 
 const CONTEXT_SIZE: usize = 512;
-const USE_KV_CACHE: bool = true;
+const USE_KV_CACHE: bool = false;
 const START_PROMPT: &str = r"
 EDWARD:
 I wonder how our princely father 'scaped,
@@ -268,7 +268,11 @@ impl CausalSelfAttention {
 
     fn apply_rotary_emb(&self, x: &Tensor, freqs_cis: &Tensor) -> Result<Tensor> {
         let mut dims = x.dims().to_vec();
-        let freqs_cis = freqs_cis.narrow(1, freqs_cis.dims()[1] - dims[1], dims[1])?;
+        let freqs_cis = if dims[1] < CONTEXT_SIZE {
+            freqs_cis.narrow(1, CONTEXT_SIZE - dims[1], dims[1])?
+        } else {
+            freqs_cis.clone()
+        };
         let v = dims.pop().unwrap();
         dims.push(v / 2);
         dims.push(2);
