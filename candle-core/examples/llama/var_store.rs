@@ -1,7 +1,7 @@
 use super::*;
-use candle::{DType, Device, Result, Shape, Tensor, WithDType};
+use candle::{DType, Device, Result, Shape, Tensor};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -14,50 +14,27 @@ struct NamedVar {
 #[derive(Clone)]
 pub struct VarBuilder {
     path: Vec<String>,
-    vars: std::rc::Rc<std::cell::RefCell<Vec<NamedVar>>>,
-    default_dtype: DType,
     default_device: Device,
-    tensors: Arc<Option<HashMap<String, Tensor>>>,
-}
-
-#[allow(dead_code)]
-pub struct VarStore {
-    vars: Vec<NamedVar>,
+    tensors: Arc<Mutex<HashMap<String, Tensor>>>,
 }
 
 impl VarBuilder {
-    pub fn new<B: WithDType>(device: &Device, tensors: Option<HashMap<String, Tensor>>) -> Self {
-        let vars = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+    pub fn new(device: &Device, tensors: HashMap<String, Tensor>) -> Self {
         Self {
             path: vec![],
-            vars,
-            default_dtype: B::DTYPE,
-            tensors: Arc::new(tensors),
+            tensors: Arc::new(Mutex::new(tensors)),
             default_device: device.clone(),
         }
     }
 
-    pub fn len(&self) -> usize {
-        self.vars.borrow().len()
-    }
-
-    pub fn var(&self, s: &str) -> Result<Tensor> {
+    pub fn get_and_remove(&self, s: &str) -> Result<Tensor> {
         let path = format!("{}.{s}", self.path.join("."));
-        let parameter = match self.tensors.as_ref() {
-            None => panic!("Cannot find tensors"),
-            Some(tensors) => match tensors.get(&path) {
-                Some(tensor) => tensor.to_device(&self.default_device)?,
-                None => panic!("cannot find tensor for {path}"),
-            },
+        let mut tensors = self.tensors.as_ref().lock().unwrap();
+        let parameter = match tensors.remove(&path) {
+            Some(tensor) => tensor.to_device(&self.default_device)?,
+            None => panic!("cannot find tensor for {path}"),
         };
         Ok(parameter)
-    }
-
-    pub fn into_store(self) -> VarStore {
-        let vars = self.vars.borrow();
-        VarStore {
-            vars: vars.to_vec(),
-        }
     }
 }
 
@@ -69,8 +46,6 @@ impl<S: ToString> std::ops::Div<S> for &VarBuilder {
         path.push(rhs.to_string());
         VarBuilder {
             path,
-            vars: self.vars.clone(),
-            default_dtype: self.default_dtype,
             default_device: self.default_device.clone(),
             tensors: self.tensors.clone(),
         }
@@ -87,21 +62,21 @@ impl<S: ToString> std::ops::Div<S> for VarBuilder {
 
 impl Embedding {
     fn load_npy(vb: VarBuilder) -> Result<Self> {
-        let embeddings = vb.var("weight")?;
+        let embeddings = vb.get_and_remove("weight")?.to_dtype(DTYPE)?;
         Ok(Self { embeddings })
     }
 }
 
 impl Linear {
     fn load_npy(vb: VarBuilder) -> Result<Self> {
-        let weight = vb.var("weight")?.t()?;
+        let weight = vb.get_and_remove("weight")?.to_dtype(DTYPE)?.t()?;
         Ok(Self { weight })
     }
 }
 
 impl RmsNorm {
     fn load_npy(vb: VarBuilder) -> Result<Self> {
-        let scale = vb.var("scale")?;
+        let scale = vb.get_and_remove("scale")?.to_dtype(DTYPE)?;
         Ok(Self::new(scale))
     }
 }
@@ -144,7 +119,7 @@ impl Llama {
         filename: &str,
         cache: &Cache,
         config: &Config,
-    ) -> Result<Self> {
+    ) -> anyhow::Result<Self> {
         let weight_path = std::path::Path::new(filename);
         let weights = if weight_path.exists() {
             println!("loading weights from {weight_path:?}");
@@ -152,12 +127,11 @@ impl Llama {
             let tensors = Tensor::read_npz(weight_path)?;
             println!("loaded weights in {:?}", start_load.elapsed());
             let tensors: std::collections::HashMap<String, Tensor> = tensors.into_iter().collect();
-            Some(tensors)
+            tensors
         } else {
-            println!("cannot find {weight_path:?}, using zero weights");
-            None
+            anyhow::bail!("cannot find {weight_path:?}")
         };
-        let vb = VarBuilder::new::<f32>(device, weights);
+        let vb = VarBuilder::new(device, weights);
 
         let wte = Embedding::load_npy(&vb / "transformer" / "wte")?;
         let lm_head = Linear::load_npy(&vb / "lm_head")?;
