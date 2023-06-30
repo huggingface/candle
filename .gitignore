@@ -15,3 +15,6 @@ Cargo.lock
 
 *tokenizer.json
 *.npz
+
+perf.data
+flamegraph.svg

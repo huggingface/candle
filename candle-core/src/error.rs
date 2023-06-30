@@ -10,6 +10,13 @@ pub enum Error {
         got: DType,
     },
 
+    #[error("{op}: dimension index {dim} out of range for {shape:?}")]
+    DimOutOfRange {
+        shape: Shape,
+        dim: usize,
+        op: &'static str,
+    },
+
     #[error("invalid args for narrow: {shape:?}, dim: {dim}, start: {start}, len:{len}")]
     NarrowInvalidArgs {
         shape: Shape,
