@@ -249,6 +249,12 @@ impl Map2 for MatMul {
             let lhs_p = &lhs[step * a_skip..];
             let rhs_p = &rhs[step * b_skip..];
             let dst_p = &mut dst[step * c_skip..];
+            let num_threads = crate::utils::get_num_threads();
+            let parallelism = if num_threads > 1 {
+                Parallelism::Rayon(num_threads)
+            } else {
+                Parallelism::None
+            };
             unsafe {
                 gemm(
                     /* m: usize = */ m,
@@ -269,7 +275,7 @@ impl Map2 for MatMul {
                     /* conj_dst: bool = */ false,
                     /* conj_lhs: bool = */ false,
                     /* conj_rhs: bool = */ false,
-                    Parallelism::Rayon(crate::utils::get_num_threads()),
+                    parallelism,
                 )
             }
         }
