@@ -7,6 +7,7 @@ use half::{bf16, f16};
 // intercept the oom errors to avoid panicking and provide a proper error.
 #[derive(Debug, Clone)]
 pub enum CpuStorage {
+    U8(Vec<u8>),
     U32(Vec<u32>),
     BF16(Vec<bf16>),
     F16(Vec<f16>),
@@ -19,6 +20,7 @@ trait Map1 {
 
     fn map(&self, vs: &CpuStorage, layout: &Layout) -> Result<CpuStorage> {
         match vs {
+            CpuStorage::U8(vs) => Ok(CpuStorage::U8(self.f(vs, layout)?)),
             CpuStorage::U32(vs) => Ok(CpuStorage::U32(self.f(vs, layout)?)),
             CpuStorage::BF16(vs) => Ok(CpuStorage::BF16(self.f(vs, layout)?)),
             CpuStorage::F16(vs) => Ok(CpuStorage::F16(self.f(vs, layout)?)),
@@ -41,6 +43,7 @@ trait Map2 {
         l2: &Layout,
     ) -> Result<CpuStorage> {
         match (v1, v2) {
+            (C::U8(v1), C::U8(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
             (C::U32(v1), C::U32(v2)) => Ok(C::U32(self.f(v1, l1, v2, l2)?)),
             (C::BF16(v1), C::BF16(v2)) => Ok(C::BF16(self.f(v1, l1, v2, l2)?)),
             (C::F16(v1), C::F16(v2)) => Ok(C::F16(self.f(v1, l1, v2, l2)?)),
@@ -302,6 +305,7 @@ fn divide_by_sum_over_dim<T: WithDType>(s: &mut [T], shape: &Shape, dim: usize) 
 impl CpuStorage {
     pub fn dtype(&self) -> DType {
         match self {
+            Self::U8(_) => DType::U8,
             Self::U32(_) => DType::U32,
             Self::BF16(_) => DType::BF16,
             Self::F16(_) => DType::F16,
@@ -317,6 +321,10 @@ impl CpuStorage {
     pub(crate) fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         // TODO: find a way around the quadratic number of cases below.
         match (self, dtype) {
+            (Self::U8(storage), DType::BF16) => {
+                let data = unary_map(storage, layout, |v| bf16::from_f32(v as f32));
+                Ok(Self::BF16(data))
+            }
             (Self::U32(storage), DType::BF16) => {
                 let data = unary_map(storage, layout, |v| bf16::from_f32(v as f32));
                 Ok(Self::BF16(data))
@@ -336,6 +344,10 @@ impl CpuStorage {
             (Self::F64(storage), DType::BF16) => {
                 let data = unary_map(storage, layout, bf16::from_f64);
                 Ok(Self::BF16(data))
+            }
+            (Self::U8(storage), DType::F16) => {
+                let data = unary_map(storage, layout, |v| f16::from_f32(v as f32));
+                Ok(Self::F16(data))
             }
             (Self::U32(storage), DType::F16) => {
                 let data = unary_map(storage, layout, |v| f16::from_f32(v as f32));
@@ -357,6 +369,10 @@ impl CpuStorage {
                 let data = unary_map(storage, layout, f16::from_f64);
                 Ok(Self::F16(data))
             }
+            (Self::U8(storage), DType::F32) => {
+                let data = unary_map(storage, layout, |v| v as f32);
+                Ok(Self::F32(data))
+            }
             (Self::U32(storage), DType::F32) => {
                 let data = unary_map(storage, layout, |v| v as f32);
                 Ok(Self::F32(data))
@@ -377,6 +393,34 @@ impl CpuStorage {
                 let data = unary_map(storage, layout, |v| v as f32);
                 Ok(Self::F32(data))
             }
+            (Self::U8(storage), DType::U8) => {
+                let data = unary_map(storage, layout, |v| v);
+                Ok(Self::U8(data))
+            }
+            (Self::BF16(storage), DType::U8) => {
+                let data = unary_map(storage, layout, |v| v.to_f32() as u8);
+                Ok(Self::U8(data))
+            }
+            (Self::F16(storage), DType::U8) => {
+                let data = unary_map(storage, layout, |v| v.to_f32() as u8);
+                Ok(Self::U8(data))
+            }
+            (Self::F32(storage), DType::U8) => {
+                let data = unary_map(storage, layout, |v| v as u8);
+                Ok(Self::U8(data))
+            }
+            (Self::F64(storage), DType::U8) => {
+                let data = unary_map(storage, layout, |v| v as u8);
+                Ok(Self::U8(data))
+            }
+            (Self::U8(storage), DType::U32) => {
+                let data = unary_map(storage, layout, |v| v as u32);
+                Ok(Self::U32(data))
+            }
+            (Self::U32(storage), DType::U8) => {
+                let data = unary_map(storage, layout, |v| v as u8);
+                Ok(Self::U8(data))
+            }
             (Self::U32(storage), DType::U32) => {
                 let data = unary_map(storage, layout, |v| v);
                 Ok(Self::U32(data))
@@ -396,6 +440,10 @@ impl CpuStorage {
             (Self::F64(storage), DType::U32) => {
                 let data = unary_map(storage, layout, |v| v as u32);
                 Ok(Self::U32(data))
+            }
+            (Self::U8(storage), DType::F64) => {
+                let data = unary_map(storage, layout, |v| v as f64);
+                Ok(Self::F64(data))
             }
             (Self::U32(storage), DType::F64) => {
                 let data = unary_map(storage, layout, |v| v as f64);
@@ -449,7 +497,7 @@ impl CpuStorage {
             Self::F16(s) => divide_by_sum_over_dim(s, shape, dim),
             Self::F32(s) => divide_by_sum_over_dim(s, shape, dim),
             Self::F64(s) => divide_by_sum_over_dim(s, shape, dim),
-            Self::U32(_) => Ok(()),
+            Self::U8(_) | Self::U32(_) => Ok(()),
         }
     }
 
@@ -474,6 +522,10 @@ impl CpuStorage {
             Self::F64(storage) => {
                 let data = unary_map(storage, layout, B::f64);
                 Ok(Self::F64(data))
+            }
+            Self::U8(storage) => {
+                let data = unary_map(storage, layout, B::u8);
+                Ok(Self::U8(data))
             }
             Self::U32(storage) => {
                 let data = unary_map(storage, layout, B::u32);
@@ -509,6 +561,10 @@ impl CpuStorage {
                 let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::u32);
                 Ok(Self::U32(data))
             }
+            (Self::U8(lhs), Self::U8(rhs)) => {
+                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::u8);
+                Ok(Self::U8(data))
+            }
             _ => {
                 // This should be covered by the dtype check above.
                 Err(Error::DTypeMismatchBinaryOp {
@@ -527,6 +583,7 @@ impl CpuStorage {
         src_l: &Layout,
     ) -> Result<()> {
         match (self, dst) {
+            (Self::U8(src), Self::U8(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
             (Self::U32(src), Self::U32(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
             (Self::BF16(src), Self::BF16(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
             (Self::F16(src), Self::F16(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
@@ -582,6 +639,7 @@ impl CpuStorage {
     pub(crate) fn ones_impl(shape: &Shape, dtype: DType) -> Self {
         let elem_count = shape.elem_count();
         match dtype {
+            DType::U8 => Self::U8(vec![1u8; elem_count]),
             DType::U32 => Self::U32(vec![1u32; elem_count]),
             DType::BF16 => Self::BF16(vec![bf16::ONE; elem_count]),
             DType::F16 => Self::F16(vec![f16::ONE; elem_count]),
@@ -593,6 +651,7 @@ impl CpuStorage {
     pub(crate) fn zeros_impl(shape: &Shape, dtype: DType) -> Self {
         let elem_count = shape.elem_count();
         match dtype {
+            DType::U8 => Self::U8(vec![0u8; elem_count]),
             DType::U32 => Self::U32(vec![0u32; elem_count]),
             DType::BF16 => Self::BF16(vec![bf16::ZERO; elem_count]),
             DType::F16 => Self::F16(vec![f16::ZERO; elem_count]),

@@ -39,4 +39,5 @@ EMB_OP(__half, emb_f16)
 
 EMB_OP(float, emb_f32)
 EMB_OP(double, emb_f64)
+EMB_OP(uint8_t, emb_u8)
 EMB_OP(uint32_t, emb_u32)

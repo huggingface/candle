@@ -42,4 +42,5 @@ WHERE_OP(__half, where_f16)
 
 WHERE_OP(float, where_f32)
 WHERE_OP(double, where_f64)
+WHERE_OP(uint8_t, where_u8)
 WHERE_OP(uint32_t, where_u32)
