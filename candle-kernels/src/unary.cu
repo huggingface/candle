@@ -40,6 +40,20 @@ __device__ __forceinline__ T relu_fwd(T x) {
 }
 
 
+#if __CUDA_ARCH__ >= 800
+UNARY_OP(__nv_bfloat16, ucopy_bf16, x)
+UNARY_OP(__nv_bfloat16, uneg_bf16, -x)
+UNARY_OP(__nv_bfloat16, uexp_bf16, expg(x))
+UNARY_OP(__nv_bfloat16, ulog_bf16, logg(x))
+UNARY_OP(__nv_bfloat16, usin_bf16, sing(x))
+UNARY_OP(__nv_bfloat16, ucos_bf16, cosg(x))
+UNARY_OP(__nv_bfloat16, uabs_bf16, absg(x))
+UNARY_OP(__nv_bfloat16, usqr_bf16, x*x)
+UNARY_OP(__nv_bfloat16, usqrt_bf16, sqrtg(x))
+UNARY_OP(__nv_bfloat16, ugelu_bf16, gelu_fwd(x))
+UNARY_OP(__nv_bfloat16, urelu_bf16, relu_fwd(x))
+#endif
+
 #if __CUDA_ARCH__ >= 530
 UNARY_OP(__half, ucopy_f16, x)
 UNARY_OP(__half, uneg_f16, -x)

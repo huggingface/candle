@@ -29,6 +29,10 @@ extern "C" __global__ void FN_NAME(  \
     } \
 } \
 
+#if __CUDA_ARCH__ >= 800
+EMB_OP(__nv_bfloat16, emb_bf16)
+#endif
+
 #if __CUDA_ARCH__ >= 530
 EMB_OP(__half, emb_f16)
 #endif
