@@ -86,6 +86,7 @@ impl Header {
             DType::F32 => "f4",
             DType::F64 => "f8",
             DType::U32 => "u4",
+            DType::U8 => "u1",
         };
         if !shape.is_empty() {
             shape.push(',')
@@ -162,9 +163,9 @@ impl Header {
                     // "q" | "i8" => DType::S64,
                     // "h" | "i2" => DType::S16,
                     // "b" | "i1" => DType::S8,
-                    // "B" | "u1" => DType::U8,
+                    "B" | "u1" => DType::U8,
                     "I" | "u4" => DType::U32,
-                    // "?" | "b1" => DType::Pred,
+                    "?" | "b1" => DType::U8,
                     // "F" | "F4" => DType::C64,
                     // "D" | "F8" => DType::C128,
                     descr => return Err(Error::Npy(format!("unrecognized descr {descr}"))),
@@ -216,6 +217,11 @@ impl Tensor {
             DType::F64 => {
                 let mut data_t = vec![0f64; elem_count];
                 reader.read_f64_into::<LittleEndian>(&mut data_t)?;
+                Tensor::from_vec(data_t, shape, &Device::Cpu)
+            }
+            DType::U8 => {
+                let mut data_t = vec![0u8; elem_count];
+                reader.read_exact(&mut data_t)?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
             DType::U32 => {
@@ -330,6 +336,10 @@ impl Tensor {
                 for v in self.reshape(elem_count)?.to_vec1::<u32>()? {
                     f.write_u32::<LittleEndian>(v)?
                 }
+            }
+            DType::U8 => {
+                let data = self.reshape(elem_count)?.to_vec1::<u8>()?;
+                f.write_all(&data)?;
             }
         }
         Ok(())

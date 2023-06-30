@@ -38,4 +38,5 @@ AFFINE_OP(__half, affine_f16)
 
 AFFINE_OP(float, affine_f32)
 AFFINE_OP(double, affine_f64)
+AFFINE_OP(uint8_t, affine_u8)
 AFFINE_OP(uint32_t, affine_u32)

@@ -43,6 +43,7 @@ impl Tensor {
 impl std::fmt::Debug for Tensor {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self.dtype() {
+            DType::U8 => self.fmt_dt::<u8>(f),
             DType::U32 => self.fmt_dt::<u32>(f),
             DType::BF16 => self.fmt_dt::<bf16>(f),
             DType::F16 => self.fmt_dt::<f16>(f),
@@ -415,6 +416,12 @@ impl std::fmt::Display for Tensor {
             self.clone()
         };
         match self.dtype() {
+            DType::U8 => {
+                let tf: IntFormatter<u8> = IntFormatter::new();
+                let max_w = tf.max_width(&to_display);
+                tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
+                writeln!(f)?;
+            }
             DType::U32 => {
                 let tf: IntFormatter<u32> = IntFormatter::new();
                 let max_w = tf.max_width(&to_display);
