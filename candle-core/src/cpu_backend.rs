@@ -251,7 +251,7 @@ impl Map2 for MatMul {
             let dst_p = &mut dst[step * c_skip..];
             let num_threads = crate::utils::get_num_threads();
             let parallelism = if num_threads > 1 {
-                Parallelism::Rayon(crate::utils::get_num_threads())
+                Parallelism::Rayon(num_threads)
             } else {
                 Parallelism::None
             };
