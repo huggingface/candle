@@ -1,15 +1,13 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::{
-    exceptions::PyValueError,
-};
 
-use ::candle::{Tensor, Device::Cpu};
+use ::candle::{Device::Cpu, Tensor};
 
 pub fn wrap_err(err: ::candle::Error) -> PyErr {
     PyErr::new::<PyValueError, _>(format!("{err:?}"))
 }
 
-#[pyclass(name="Tensor")]
+#[pyclass(name = "Tensor")]
 struct PyTensor(Tensor);
 
 impl std::ops::Deref for PyTensor {
