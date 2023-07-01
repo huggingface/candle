@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "candle-core",
-    "candle-hub",
     "candle-kernels",
+    "candle-hub",
+    "candle-pyo3",
 ]
