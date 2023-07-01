@@ -1,3 +1,4 @@
+use pyo3::types::PyTuple;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
@@ -27,8 +28,8 @@ impl PyTensor {
     }
 
     #[getter]
-    fn shape(&self) -> Vec<usize> {
-        self.0.dims().to_vec()
+    fn shape(&self, py: Python<'_>) -> PyObject {
+        PyTuple::new(py, self.0.dims()).to_object(py)
     }
 
     #[getter]
