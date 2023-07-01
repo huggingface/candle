@@ -1,3 +1,5 @@
+extern crate blas;
+extern crate openblas_src;
 // An implementation of LLaMA https://github.com/facebookresearch/llama
 //
 // This is based on nanoGPT in a similar way to:
@@ -24,7 +26,7 @@ mod var_store;
 mod weights;
 
 const MAX_SEQ_LEN: usize = 4096;
-const DTYPE: DType = DType::F16;
+const DTYPE: DType = DType::F32;
 const DEFAULT_PROMPT: &str = r"
 EDWARD:
 I wonder how our princely father 'scaped,

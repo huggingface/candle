@@ -216,33 +216,10 @@ impl Map2 for MatMul {
         let (b, m, n, k) = self.0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
+        let cfg = crate::cuda_backend::gemm_config(1f32, 0f32, (b, m, n, k), lhs_l, rhs_l)?;
         let a_skip: usize = m * k;
         let b_skip: usize = n * k;
         let c_skip: usize = m * n;
-
-        let lhs_stride = lhs_l.stride();
-        let rhs_stride = rhs_l.stride();
-        let rank = lhs_stride.len();
-        let lhs_cs = lhs_stride[rank - 1];
-        let lhs_rs = lhs_stride[rank - 2];
-
-        let rhs_cs = rhs_stride[rank - 1];
-        let rhs_rs = rhs_stride[rank - 2];
-
-        if lhs_stride.len() > 2 {
-            let lhs_batch_stride = &lhs_stride[..rank - 2];
-            let rhs_batch_stride = &rhs_stride[..rank - 2];
-
-            if lhs_batch_stride != [a_skip] || rhs_batch_stride != [b_skip] {
-                // Temporary error before we support abitrary striding.
-                return Err(Error::UnexpectedStriding);
-            }
-        }
-
-        let dst_shape: Shape = (m, n).into();
-        let dst_strides = dst_shape.stride_contiguous();
-        let dst_rs = dst_strides[0];
-        let dst_cs = dst_strides[1];
 
         let mut dst = vec![T::zero(); b * m * n];
         for step in 0..b {
@@ -256,27 +233,50 @@ impl Map2 for MatMul {
                 Parallelism::None
             };
             unsafe {
-                gemm(
-                    /* m: usize = */ m,
-                    /* n: usize = */ n,
-                    /* k: usize = */ k,
-                    /* dst: *mut T = */ dst_p.as_mut_ptr(),
-                    /* dst_cs: isize = */ dst_cs as isize,
-                    /* dst_rs: isize = */ dst_rs as isize,
-                    /* read_dst: bool = */ false,
-                    /* lhs: *const T = */ lhs_p.as_ptr(),
-                    /* lhs_cs: isize = */ lhs_cs as isize,
-                    /* lhs_rs: isize = */ lhs_rs as isize,
-                    /* rhs: *const T = */ rhs_p.as_ptr(),
-                    /* rhs_cs: isize = */ rhs_cs as isize,
-                    /* rhs_rs: isize = */ rhs_rs as isize,
-                    /* alpha: T = */ T::zero(),
-                    /* beta: T = */ T::one(),
-                    /* conj_dst: bool = */ false,
-                    /* conj_lhs: bool = */ false,
-                    /* conj_rhs: bool = */ false,
-                    parallelism,
+                let gemm = cfg.gemm;
+                let a = rhs_p.as_ptr() as *const f32;
+                let b = lhs_p.as_ptr() as *const f32;
+                let c = dst_p.as_mut_ptr() as *mut f32;
+                let a = std::slice::from_raw_parts(a, a_skip);
+                let b = std::slice::from_raw_parts(b, b_skip);
+                let c = std::slice::from_raw_parts_mut(c, c_skip);
+                let transa = match gemm.transa {
+                    cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_N => b'N',
+                    cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T => b'T',
+                    cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_C => b'C',
+                    _ => todo!(),
+                };
+                let transb = match gemm.transb {
+                    cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_N => b'N',
+                    cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_T => b'T',
+                    cudarc::cublas::sys::cublasOperation_t::CUBLAS_OP_C => b'C',
+                    _ => todo!(),
+                };
+                blas::sgemm(
+                    transa, transb, gemm.m, gemm.n, gemm.k, gemm.alpha, a, gemm.lda, b, gemm.ldb,
+                    gemm.beta, c, gemm.ldc,
                 )
+                // gemm(
+                //     /* m: usize = */ m,
+                //     /* n: usize = */ n,
+                //     /* k: usize = */ k,
+                //     /* dst: *mut T = */ dst_p.as_mut_ptr(),
+                //     /* dst_cs: isize = */ dst_cs as isize,
+                //     /* dst_rs: isize = */ dst_rs as isize,
+                //     /* read_dst: bool = */ false,
+                //     /* lhs: *const T = */ lhs_p.as_ptr(),
+                //     /* lhs_cs: isize = */ lhs_cs as isize,
+                //     /* lhs_rs: isize = */ lhs_rs as isize,
+                //     /* rhs: *const T = */ rhs_p.as_ptr(),
+                //     /* rhs_cs: isize = */ rhs_cs as isize,
+                //     /* rhs_rs: isize = */ rhs_rs as isize,
+                //     /* alpha: T = */ T::zero(),
+                //     /* beta: T = */ T::one(),
+                //     /* conj_dst: bool = */ false,
+                //     /* conj_lhs: bool = */ false,
+                //     /* conj_rhs: bool = */ false,
+                //     parallelism,
+                // )
             }
         }
         Ok(dst)

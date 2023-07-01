@@ -543,7 +543,7 @@ pub struct CudaStorage {
     device: CudaDevice,
 }
 
-fn gemm_config<T>(
+pub(crate) fn gemm_config<T>(
     alpha: T,
     beta: T,
     (b, m, n, k): (usize, usize, usize, usize),

@@ -21,6 +21,8 @@ byteorder = "1.4.3"
 half = { version = "2.3.1", features = ["num-traits"] }
 num-traits = "0.2.15"
 num_cpus = "1.15.0"
+blas = "0.22.0"
+openblas-src = "0.10.8"
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
