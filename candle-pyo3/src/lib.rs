@@ -25,8 +25,22 @@ impl PyTensor {
         Ok(Self(Tensor::new(f, &Cpu).map_err(wrap_err)?))
     }
 
+    #[getter]
+    fn shape(&self) -> Vec<usize> {
+        self.0.dims().to_vec()
+    }
+
+    #[getter]
+    fn rank(&self) -> usize {
+        self.0.rank()
+    }
+
     fn __repr__(&self) -> String {
         format!("{}", self.0)
+    }
+
+    fn __str__(&self) -> String {
+        self.__repr__()
     }
 }
 
