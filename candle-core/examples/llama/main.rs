@@ -1,5 +1,5 @@
 extern crate blas;
-extern crate openblas_src;
+extern crate intel_mkl_src;
 // An implementation of LLaMA https://github.com/facebookresearch/llama
 //
 // This is based on nanoGPT in a similar way to:
