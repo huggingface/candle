@@ -1,0 +1,20 @@
+[package]
+name = "candle-pyo3"
+version = "0.1.0"
+edition = "2021"
+
+description = "PyO3 bindings for the candle ML framework."
+repository = "https://github.com/LaurentMazare/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+
+[lib]
+name = "candle"
+crate-type = ["cdylib"]
+
+[dependencies]
+candle = { path = "../candle-core", default-features=false }
+pyo3 = { version = "0.19.0", features = ["extension-module"] }
+half = { version = "2.3.1", features = ["num-traits"] }
