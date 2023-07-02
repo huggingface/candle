@@ -41,6 +41,8 @@ impl ToPyObject for PyDType {
     }
 }
 
+static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PyDevice {
     Cpu,
@@ -52,6 +54,21 @@ impl PyDevice {
         match device {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,
+        }
+    }
+
+    fn as_device(&self) -> PyResult<Device> {
+        match self {
+            Self::Cpu => Ok(Device::Cpu),
+            Self::Cuda => {
+                let mut device = CUDA_DEVICE.lock().unwrap();
+                if let Some(device) = device.as_ref() {
+                    return Ok(device.clone());
+                };
+                let d = Device::new_cuda(0).map_err(wrap_err)?;
+                *device = Some(d.clone());
+                Ok(d)
+            }
         }
     }
 }
@@ -334,6 +351,11 @@ impl PyTensor {
 
     fn to_dtype(&self, dtype: PyDType) -> PyResult<Self> {
         Ok(PyTensor(self.0.to_dtype(dtype.0).map_err(wrap_err)?))
+    }
+
+    fn to_device(&self, device: PyDevice) -> PyResult<Self> {
+        let device = device.as_device()?;
+        Ok(PyTensor(self.0.to_device(&device).map_err(wrap_err)?))
     }
 }
 
