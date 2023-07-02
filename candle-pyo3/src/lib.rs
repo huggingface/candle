@@ -309,10 +309,16 @@ fn stack(tensors: Vec<PyTensor>, dim: usize) -> PyResult<PyTensor> {
     Ok(PyTensor(tensor))
 }
 
+#[pyfunction]
+fn tensor(py: Python<'_>, vs: PyObject) -> PyResult<PyTensor> {
+    PyTensor::new(py, vs)
+}
+
 #[pymodule]
 fn candle(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyTensor>()?;
     m.add_function(wrap_pyfunction!(cat, m)?)?;
+    m.add_function(wrap_pyfunction!(tensor, m)?)?;
     m.add_function(wrap_pyfunction!(stack, m)?)?;
     Ok(())
 }
