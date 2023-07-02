@@ -67,7 +67,8 @@ impl PyTensor {
         Ok(Self(Tensor::new(f, &Cpu).map_err(wrap_err)?))
     }
 
-    fn scalar(&self, py: Python<'_>) -> PyResult<PyObject> {
+    /// Gets the tensor data as a Python value/array/array of array/...
+    fn values(&self, py: Python<'_>) -> PyResult<PyObject> {
         struct M<'a>(Python<'a>);
         impl<'a> MapDType for M<'a> {
             type Output = PyObject;
