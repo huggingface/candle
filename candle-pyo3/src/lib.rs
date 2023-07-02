@@ -4,7 +4,7 @@ use pyo3::types::PyTuple;
 
 use half::{bf16, f16};
 
-use ::candle::{DType, Device::Cpu, Tensor, WithDType};
+use ::candle::{DType, Device, Tensor, WithDType};
 
 pub fn wrap_err(err: ::candle::Error) -> PyErr {
     PyErr::new::<PyValueError, _>(format!("{err:?}"))
@@ -30,7 +30,7 @@ impl<'source> FromPyObject<'source> for PyDType {
         use std::str::FromStr;
         let dtype: &str = ob.extract()?;
         let dtype = DType::from_str(dtype)
-            .map_err(|_| PyTypeError::new_err(format!("invalid dtype {dtype}")))?;
+            .map_err(|_| PyTypeError::new_err(format!("invalid dtype '{dtype}'")))?;
         Ok(Self(dtype))
     }
 }
@@ -38,6 +38,60 @@ impl<'source> FromPyObject<'source> for PyDType {
 impl ToPyObject for PyDType {
     fn to_object(&self, py: Python<'_>) -> PyObject {
         self.0.as_str().to_object(py)
+    }
+}
+
+static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PyDevice {
+    Cpu,
+    Cuda,
+}
+
+impl PyDevice {
+    fn from_device(device: Device) -> Self {
+        match device {
+            Device::Cpu => Self::Cpu,
+            Device::Cuda(_) => Self::Cuda,
+        }
+    }
+
+    fn as_device(&self) -> PyResult<Device> {
+        match self {
+            Self::Cpu => Ok(Device::Cpu),
+            Self::Cuda => {
+                let mut device = CUDA_DEVICE.lock().unwrap();
+                if let Some(device) = device.as_ref() {
+                    return Ok(device.clone());
+                };
+                let d = Device::new_cuda(0).map_err(wrap_err)?;
+                *device = Some(d.clone());
+                Ok(d)
+            }
+        }
+    }
+}
+
+impl<'source> FromPyObject<'source> for PyDevice {
+    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+        let device: &str = ob.extract()?;
+        let device = match device {
+            "cpu" => PyDevice::Cpu,
+            "cuda" => PyDevice::Cuda,
+            _ => Err(PyTypeError::new_err(format!("invalid device '{device}'")))?,
+        };
+        Ok(device)
+    }
+}
+
+impl ToPyObject for PyDevice {
+    fn to_object(&self, py: Python<'_>) -> PyObject {
+        let str = match self {
+            PyDevice::Cpu => "cpu",
+            PyDevice::Cuda => "cuda",
+        };
+        str.to_object(py)
     }
 }
 
@@ -83,6 +137,7 @@ impl PyTensor {
     #[new]
     // TODO: Handle arbitrary input dtype and shape.
     fn new(py: Python<'_>, vs: PyObject) -> PyResult<Self> {
+        use Device::Cpu;
         let tensor = if let Ok(vs) = vs.extract::<u32>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
         } else if let Ok(vs) = vs.extract::<Vec<u32>>(py) {
@@ -153,6 +208,11 @@ impl PyTensor {
     #[getter]
     fn dtype(&self, py: Python<'_>) -> PyObject {
         PyDType(self.0.dtype()).to_object(py)
+    }
+
+    #[getter]
+    fn device(&self, py: Python<'_>) -> PyObject {
+        PyDevice::from_device(self.0.device()).to_object(py)
     }
 
     #[getter]
@@ -291,6 +351,11 @@ impl PyTensor {
 
     fn to_dtype(&self, dtype: PyDType) -> PyResult<Self> {
         Ok(PyTensor(self.0.to_dtype(dtype.0).map_err(wrap_err)?))
+    }
+
+    fn to_device(&self, device: PyDevice) -> PyResult<Self> {
+        let device = device.as_device()?;
+        Ok(PyTensor(self.0.to_device(&device).map_err(wrap_err)?))
     }
 }
 
