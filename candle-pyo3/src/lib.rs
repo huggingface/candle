@@ -1,6 +1,6 @@
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyString, PyTuple};
+use pyo3::types::PyTuple;
 
 use half::{bf16, f16};
 
@@ -22,13 +22,32 @@ impl std::ops::Deref for PyTensor {
     }
 }
 
-trait PyDType: WithDType {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PyDType(DType);
+
+impl<'source> FromPyObject<'source> for PyDType {
+    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+        use std::str::FromStr;
+        let dtype: &str = ob.extract()?;
+        let dtype = DType::from_str(dtype)
+            .map_err(|_| PyTypeError::new_err(format!("invalid dtype {dtype}")))?;
+        Ok(Self(dtype))
+    }
+}
+
+impl ToPyObject for PyDType {
+    fn to_object(&self, py: Python<'_>) -> PyObject {
+        self.0.as_str().to_object(py)
+    }
+}
+
+trait PyWithDType: WithDType {
     fn to_py(&self, py: Python<'_>) -> PyObject;
 }
 
 macro_rules! pydtype {
     ($ty:ty, $conv:expr) => {
-        impl PyDType for $ty {
+        impl PyWithDType for $ty {
             fn to_py(&self, py: Python<'_>) -> PyObject {
                 $conv(*self).to_object(py)
             }
@@ -45,7 +64,7 @@ pydtype!(f64, |v| v);
 // TODO: Something similar to this should probably be a part of candle core.
 trait MapDType {
     type Output;
-    fn f<T: PyDType>(&self, t: &Tensor) -> PyResult<Self::Output>;
+    fn f<T: PyWithDType>(&self, t: &Tensor) -> PyResult<Self::Output>;
 
     fn map(&self, t: &Tensor) -> PyResult<Self::Output> {
         match t.dtype() {
@@ -83,7 +102,7 @@ impl PyTensor {
         struct M<'a>(Python<'a>);
         impl<'a> MapDType for M<'a> {
             type Output = PyObject;
-            fn f<T: PyDType>(&self, t: &Tensor) -> PyResult<Self::Output> {
+            fn f<T: PyWithDType>(&self, t: &Tensor) -> PyResult<Self::Output> {
                 match t.rank() {
                     0 => Ok(t.to_scalar::<T>().map_err(wrap_err)?.to_py(self.0)),
                     1 => {
@@ -133,7 +152,7 @@ impl PyTensor {
 
     #[getter]
     fn dtype(&self, py: Python<'_>) -> PyObject {
-        PyString::new(py, self.0.dtype().as_str()).to_object(py)
+        PyDType(self.0.dtype()).to_object(py)
     }
 
     #[getter]
@@ -269,6 +288,10 @@ impl PyTensor {
     fn copy(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.copy().map_err(wrap_err)?))
     }
+
+    fn to_dtype(&self, dtype: PyDType) -> PyResult<Self> {
+        Ok(PyTensor(self.0.to_dtype(dtype.0).map_err(wrap_err)?))
+    }
 }
 
 /// Concatenate the tensors across one axis.
@@ -286,10 +309,16 @@ fn stack(tensors: Vec<PyTensor>, dim: usize) -> PyResult<PyTensor> {
     Ok(PyTensor(tensor))
 }
 
+#[pyfunction]
+fn tensor(py: Python<'_>, vs: PyObject) -> PyResult<PyTensor> {
+    PyTensor::new(py, vs)
+}
+
 #[pymodule]
 fn candle(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyTensor>()?;
     m.add_function(wrap_pyfunction!(cat, m)?)?;
+    m.add_function(wrap_pyfunction!(tensor, m)?)?;
     m.add_function(wrap_pyfunction!(stack, m)?)?;
     Ok(())
 }
