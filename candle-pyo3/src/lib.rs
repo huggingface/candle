@@ -63,8 +63,19 @@ trait MapDType {
 impl PyTensor {
     #[new]
     // TODO: Handle arbitrary input dtype and shape.
-    fn new(f: f32) -> PyResult<Self> {
-        Ok(Self(Tensor::new(f, &Cpu).map_err(wrap_err)?))
+    fn new(py: Python<'_>, vs: PyObject) -> PyResult<Self> {
+        let tensor = if let Ok(vs) = vs.extract::<u32>(py) {
+            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+        } else if let Ok(vs) = vs.extract::<Vec<u32>>(py) {
+            Tensor::new(vs.as_slice(), &Cpu).map_err(wrap_err)?
+        } else if let Ok(vs) = vs.extract::<f32>(py) {
+            Tensor::new(vs, &Cpu).map_err(wrap_err)?
+        } else if let Ok(vs) = vs.extract::<Vec<f32>>(py) {
+            Tensor::new(vs.as_slice(), &Cpu).map_err(wrap_err)?
+        } else {
+            Err(PyTypeError::new_err("incorrect type for tensor"))?
+        };
+        Ok(Self(tensor))
     }
 
     /// Gets the tensor data as a Python value/array/array of array/...
@@ -166,6 +177,11 @@ impl PyTensor {
 
     fn __rmul__(&self, rhs: &PyAny) -> PyResult<Self> {
         self.__mul__(rhs)
+    }
+
+    // TODO: Add a PyShape type?
+    fn reshape(&self, shape: Vec<usize>) -> PyResult<Self> {
+        Ok(PyTensor(self.0.reshape(shape).map_err(wrap_err)?))
     }
 }
 
