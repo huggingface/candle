@@ -10,6 +10,13 @@ pub enum Error {
         got: DType,
     },
 
+    #[error("{msg}, expected: {expected:?}, got: {got:?}")]
+    UnexpectedShape {
+        msg: String,
+        expected: Shape,
+        got: Shape,
+    },
+
     #[error("{op}: dimension index {dim} out of range for {shape:?}")]
     DimOutOfRange {
         shape: Shape,
