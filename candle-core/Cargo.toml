@@ -14,7 +14,9 @@ readme = "README.md"
 byteorder = "1.4.3"
 candle-kernels = { path = "../candle-kernels", optional = true }
 cudarc = { version = "0.9.9", optional = true, features = ["f16"] }
-gemm = "0.15.4"
+# TODO: Switch back to the official gemm implementation once something similar to
+# https://github.com/sarah-ek/gemm/pull/8 is available.
+gemm = { git = "https://github.com/LaurentMazare/gemm.git", branch = "f16-vectorize-pack" }
 half = { version = "2.3.1", features = ["num-traits"] }
 memmap2 = "0.7.1"
 num-traits = "0.2.15"
