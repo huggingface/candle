@@ -1,4 +1,5 @@
 #include "cuda_utils.cuh"
+#include<stdint.h>
 
 #define UNARY_OP(TYPENAME, FN_NAME, FUNC) \
 extern "C" __global__ void FN_NAME( \
@@ -68,6 +69,8 @@ UNARY_OP(__half, ugelu_f16, gelu_fwd(x))
 UNARY_OP(__half, urelu_f16, relu_fwd(x))
 #endif
 
+UNARY_OP(uint8_t, ucopy_u8, x)
+UNARY_OP(uint32_t, ucopy_u32, x)
 UNARY_OP(float, ucopy_f32, x)
 UNARY_OP(double, ucopy_f64, x)
 UNARY_OP(float, uneg_f32, -x)
