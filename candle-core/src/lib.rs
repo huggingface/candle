@@ -10,6 +10,7 @@ mod error;
 mod layout;
 mod npy;
 mod op;
+pub mod safetensors;
 mod shape;
 mod storage;
 mod strided_index;
