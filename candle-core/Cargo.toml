@@ -11,25 +11,25 @@ license = "MIT/Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-safetensors = "0.3.1"
-thiserror = "1"
-cudarc = { version = "0.9.9", optional = true, features = ["f16"] }
-candle-kernels = { path = "../candle-kernels", optional = true }
-gemm = "0.15.4"
-zip = { version = "0.6.6", default-features=false }
 byteorder = "1.4.3"
+candle-kernels = { path = "../candle-kernels", optional = true }
+cudarc = { version = "0.9.9", optional = true, features = ["f16"] }
+gemm = "0.15.4"
 half = { version = "2.3.1", features = ["num-traits"] }
+memmap2 = "0.7.1"
 num-traits = "0.2.15"
 num_cpus = "1.15.0"
+safetensors = "0.3.1"
+thiserror = "1"
+zip = { version = "0.6.6", default-features=false }
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
+candle-hub = { path = "../candle-hub" }
 clap = { version = "4.2.4", features = ["derive"] }
 rand = "0.8.5"
 tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
 tokio = { version = "1.28.2", features = ["macros", "rt-multi-thread"] }
-candle-hub = { path = "../candle-hub" }
-memmap2 = "0.7.1"
 
 [features]
 default = ["cuda"]
