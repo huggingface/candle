@@ -1,0 +1,22 @@
+[package]
+name = "candle-examples"
+version = "0.1.0"
+edition = "2021"
+
+description = "Examples for the candle ML framework."
+repository = "https://github.com/LaurentMazare/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+
+[dependencies]
+candle = { path = "../candle-core" }
+
+[dev-dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+candle-hub = { path = "../candle-hub" }
+clap = { version = "4.2.4", features = ["derive"] }
+rand = "0.8.5"
+tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
+tokio = { version = "1.28.2", features = ["macros", "rt-multi-thread"] }

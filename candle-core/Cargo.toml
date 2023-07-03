@@ -27,11 +27,6 @@ zip = { version = "0.6.6", default-features=false }
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
-candle-hub = { path = "../candle-hub" }
-clap = { version = "4.2.4", features = ["derive"] }
-rand = "0.8.5"
-tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
-tokio = { version = "1.28.2", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = ["cuda"]
