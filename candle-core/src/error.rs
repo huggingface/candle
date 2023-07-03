@@ -110,6 +110,10 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
+    /// SafeTensor error.
+    #[error(transparent)]
+    SafeTensor(#[from] safetensors::SafeTensorError),
+
     #[error("cannot broadcast {src_shape:?} to {dst_shape:?}")]
     BroadcastIncompatibleShapes { src_shape: Shape, dst_shape: Shape },
 }
