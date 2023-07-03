@@ -607,7 +607,7 @@ fn main() -> Result<()> {
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
-    let token_ids = Tensor::new(&tokens[..7], &device)?;
+    let token_ids = Tensor::new(&tokens[..], &device)?;
     println!("{token_ids}");
     let token_type_ids = token_ids.zeros_like()?;
     let ys = model.forward(&token_ids, &token_type_ids)?;
