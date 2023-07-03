@@ -594,7 +594,8 @@ fn main() -> Result<()> {
         Device::new_cuda(0)?
     };
 
-    let tokenizer = Tokenizer::from_file(args.tokenizer_config).map_err(E::msg)?;
+    let mut tokenizer = Tokenizer::from_file(args.tokenizer_config).map_err(E::msg)?;
+    let tokenizer = tokenizer.with_padding(None).with_truncation(None);
 
     let weights = unsafe { candle::safetensors::MmapedFile::new(args.weights)? };
     let weights = weights.deserialize()?;
