@@ -1,28 +1,34 @@
-use crate::{Device, Result, Tensor};
-use half::f16;
+use crate::{Device, Error, Result, Tensor, WithDType};
 use safetensors::tensor as st;
+
+fn convert_<T: WithDType>(view: st::TensorView<'_>, device: &Device) -> Result<Tensor> {
+    let v = view.data();
+    let size_in_bytes = T::DTYPE.size_in_bytes();
+    let elem_count = v.len() / size_in_bytes;
+    if (v.as_ptr() as usize) % size_in_bytes == 0 {
+        // SAFETY This is safe because we just checked that this
+        // was correctly aligned.
+        let data: &[T] = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const T, elem_count) };
+        Tensor::from_slice(data, view.shape(), device)
+    } else {
+        let mut c = Vec::with_capacity(elem_count);
+        unsafe {
+            std::ptr::copy_nonoverlapping(v.as_ptr(), c.as_mut_ptr() as *mut u8, v.len());
+            c.set_len(elem_count)
+        }
+        Tensor::from_slice(&c, view.shape(), device)
+    }
+}
 
 pub fn convert(view: st::TensorView<'_>, device: &Device) -> Result<Tensor> {
     match view.dtype() {
-        st::Dtype::F16 => {
-            let v = view.data();
-            if (v.as_ptr() as usize) % 2 == 0 {
-                // SAFETY This is safe because we just checked that this
-                // was correctly aligned.
-                let data: &[f16] =
-                    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const f16, v.len() / 2) };
-                Tensor::from_slice(data, view.shape(), device)
-            } else {
-                let mut c = Vec::with_capacity(v.len() / 2);
-                let mut i = 0;
-                while i < v.len() {
-                    c.push(f16::from_le_bytes([v[i], v[i + 1]]));
-                    i += 2;
-                }
-                Tensor::from_slice(&c, view.shape(), device)
-            }
-        }
-        dt => todo!("Unhandled dtype {dt:?}"),
+        st::Dtype::U8 => convert_::<u8>(view, device),
+        st::Dtype::U32 => convert_::<u8>(view, device),
+        st::Dtype::BF16 => convert_::<half::bf16>(view, device),
+        st::Dtype::F16 => convert_::<half::f16>(view, device),
+        st::Dtype::F32 => convert_::<f32>(view, device),
+        st::Dtype::F64 => convert_::<f64>(view, device),
+        dtype => Err(Error::UnsupportedSafeTensorDtype(dtype)),
     }
 }
 
