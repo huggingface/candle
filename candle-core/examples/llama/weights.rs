@@ -105,7 +105,7 @@ impl Llama {
     ) -> Result<Self> {
         let handles: Vec<_> = filenames
             .iter()
-            .map(candle::safetensors::MmapedFile::new)
+            .map(|f| unsafe { candle::safetensors::MmapedFile::new(f) })
             .collect::<Result<Vec<_>>>()?;
         let tensors: Vec<_> = handles
             .iter()
