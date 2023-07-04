@@ -801,6 +801,16 @@ impl CudaStorage {
         Ok(Self { slice, device })
     }
 
+    pub(crate) fn conv1d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConv1D,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     pub(crate) fn embedding(&self, layout: &Layout, rhs: &Self, rhs_l: &Layout) -> Result<Self> {
         let device = self.device().clone();
         let slice = Embedding(self, layout).map(&rhs.slice, &device, rhs_l)?;
