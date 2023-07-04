@@ -149,18 +149,17 @@ impl Storage {
         l: &Layout,
         kernel: &Self,
         kernel_l: &Layout,
-        padding: usize,
-        stride: usize,
+        params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
         self.same_device(kernel, "conv1d")?;
         self.same_dtype(kernel, "conv1d")?;
         match (self, &kernel) {
             (Storage::Cpu(inp), Storage::Cpu(kernel)) => {
-                let s = inp.conv1d(l, kernel, kernel_l, padding, stride)?;
+                let s = inp.conv1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cpu(s))
             }
             (Storage::Cuda(inp), Storage::Cuda(kernel)) => {
-                let s = inp.conv1d(l, kernel, kernel_l, padding, stride)?;
+                let s = inp.conv1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cuda(s))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {

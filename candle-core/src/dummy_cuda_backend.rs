@@ -105,8 +105,7 @@ impl CudaStorage {
         _l: &Layout,
         _kernel: &Self,
         _kernel_l: &Layout,
-        _padding: usize,
-        _stride: usize,
+        _params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
