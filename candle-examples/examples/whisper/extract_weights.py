@@ -8,6 +8,6 @@ data = torch.load("tiny.en.pt")
 weights = {}
 for k, v in data["model_state_dict"].items():
     weights[k] = v.contiguous()
-    print(k, v.shape)
+    print(k, v.shape, v.dtype)
 save_file(weights, "tiny.en.safetensors")
 print(data["dims"])
