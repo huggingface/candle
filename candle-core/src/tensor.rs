@@ -444,6 +444,7 @@ impl Tensor {
         }
         let params = crate::conv::ParamsConv1D {
             b_size,
+            l_in,
             c_out,
             c_in,
             k_size,
@@ -463,7 +464,7 @@ impl Tensor {
         } else {
             None
         };
-        let out_dims = params.out_dims(l_in);
+        let out_dims = params.out_dims();
         Ok(from_storage(storage, out_dims, op, false))
     }
 

@@ -202,6 +202,26 @@ fn copy_strided_src_<T: Copy + std::fmt::Display>(
     }
 }
 
+struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
+
+impl<'a> Map2 for Conv1D<'a> {
+    const OP: &'static str = "conv1d";
+    fn f<T: 'static + num_traits::Num + Copy>(
+        &self,
+        _inp: &[T],
+        _inp_l: &Layout,
+        _k: &[T],
+        _k_l: &Layout,
+    ) -> Result<Vec<T>> {
+        let p = self.0;
+        let l_out = p.l_out();
+        let out_elems = p.c_out * l_out * p.b_size.unwrap_or(1);
+        let dst = vec![T::zero(); out_elems];
+        // TODO: actually implement the ops.
+        Ok(dst)
+    }
+}
+
 struct MatMul((usize, usize, usize, usize));
 
 impl Map2 for MatMul {
@@ -629,12 +649,12 @@ impl CpuStorage {
 
     pub(crate) fn conv1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
-        todo!()
+        Conv1D(params).map(self, l, kernel, kernel_l)
     }
 
     pub(crate) fn embedding(&self, ids_l: &Layout, rhs: &Self, rhs_l: &Layout) -> Result<Self> {
