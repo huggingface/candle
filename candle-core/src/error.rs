@@ -93,8 +93,11 @@ pub enum Error {
     },
 
     // TODO this is temporary when we support arbitrary matmul
-    #[error("temporary error where matmul doesn't support arbitrary striding")]
-    UnexpectedStriding,
+    #[error("temporary error where matmul doesn't support arbitrary striding {lhs_stride:?} x {rhs_stride:?}")]
+    UnexpectedStriding {
+        lhs_stride: Vec<usize>,
+        rhs_stride: Vec<usize>,
+    },
 
     #[error(transparent)]
     Cuda(#[from] crate::CudaError),
