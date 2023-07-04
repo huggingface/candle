@@ -627,6 +627,17 @@ impl CpuStorage {
         WCond(pred, layout).map(t, t_l, f, f_l)
     }
 
+    pub(crate) fn conv1d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _padding: usize,
+        _stride: usize,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     pub(crate) fn embedding(&self, ids_l: &Layout, rhs: &Self, rhs_l: &Layout) -> Result<Self> {
         let ids = self.as_slice::<u32>()?;
         let (vocab_size, hidden_size) = rhs_l.shape().r2()?;
