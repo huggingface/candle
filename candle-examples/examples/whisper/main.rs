@@ -7,7 +7,9 @@
 use anyhow::{Error as E, Result};
 use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
 use clap::Parser;
+use rand::{distributions::Distribution, SeedableRng};
 use std::collections::HashMap;
+use tokenizers::Tokenizer;
 
 const DTYPE: DType = DType::F32;
 
@@ -584,12 +586,15 @@ struct Args {
 
     #[arg(long)]
     tokenizer_config: String,
+
+    /// The seed to use when generating random samples.
+    #[arg(long, default_value_t = 299792458)]
+    seed: u64,
 }
 
 #[derive(Debug, Clone)]
 struct DecodingResult {
-    audio_features: Tensor,
-    tokens: Vec<usize>,
+    tokens: Vec<u32>,
     text: String,
     avg_logprob: f64,
     no_speech_prob: f64,
@@ -600,73 +605,132 @@ struct DecodingResult {
 #[derive(Debug, Clone)]
 struct Segment {
     start: f64,
-    end: f64,
-    tokens: Vec<usize>,
-    result: DecodingResult,
+    duration: f64,
+    dr: DecodingResult,
 }
 
-fn decode(model: &Whisper, mel: &Tensor, t: f64) -> Result<DecodingResult> {
-    let audio_features = model.encoder.forward(&mel)?;
-    let sample_len = model.config.n_text_ctx / 2;
-    let mut tokens: Vec<u32> = vec![]; // TODO: get initial tokens
-    for i in 0..sample_len {
-        let tokens = Tensor::new(tokens.as_slice(), &mel.device())?;
-        let logits = model.decoder.forward(&tokens, mel)?;
-        // logits
-    }
-    todo!()
+struct Decode {
+    model: Whisper,
+    rng: rand::rngs::StdRng,
+    tokenizer: Tokenizer,
 }
 
-fn decode_with_fallback(model: &Whisper, segment: &Tensor) -> Result<DecodingResult> {
-    for (i, &t) in TEMPERATURES.iter().enumerate() {
-        let dr: DecodingResult = decode(model, segment, t)?;
-        if i == TEMPERATURES.len() - 1 {
-            return Ok(dr);
+impl Decode {
+    fn decode(&mut self, mel: &Tensor, t: f64) -> Result<DecodingResult> {
+        let model = &self.model;
+        let audio_features = model.encoder.forward(mel)?;
+        let sample_len = model.config.n_text_ctx / 2;
+        let mut sum_logprob = 0f64;
+        let no_speech_prob = f64::NAN;
+        let mut tokens: Vec<u32> = vec![]; // TODO: get initial tokens
+        for _i in 0..sample_len {
+            let tokens_t = Tensor::new(tokens.as_slice(), &mel.device())?;
+            let logits = model.decoder.forward(&tokens_t, &audio_features)?;
+            let next_token = if t > 0f64 {
+                let prs = (&logits / t)?.softmax(logits.rank() - 1)?;
+                let logits_v: Vec<f32> = prs.to_vec1()?;
+                let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
+                distr.sample(&mut self.rng) as u32
+            } else {
+                let logits_v: Vec<f32> = logits.to_vec1()?;
+                logits_v
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, u), (_, v)| u.total_cmp(v))
+                    .map(|(i, _)| i as u32)
+                    .unwrap()
+            };
+            tokens.push(next_token);
+            let prob = logits
+                .softmax(logits.rank() - 1)?
+                .get(next_token as usize)?
+                .to_scalar::<f32>()? as f64;
+            sum_logprob += prob.ln();
+            // 50256 is the eot token, TODO: parameterize this.
+            if next_token == 50256 || tokens.len() > model.config.n_text_ctx {
+                break;
+            }
         }
-        let needs_fallback = dr.compression_ratio > COMPRESSION_RATIO_THRESHOLD
-            || dr.avg_logprob < LOGPROB_THRESHOLD;
-        if !needs_fallback || dr.no_speech_prob > NO_SPEECH_THRESHOLD {
-            return Ok(dr);
-        }
+        let text = self
+            .tokenizer
+            .decode(tokens.clone(), true)
+            .map_err(E::msg)?;
+        let avg_logprob = sum_logprob / tokens.len() as f64;
+
+        Ok(DecodingResult {
+            tokens,
+            text,
+            avg_logprob,
+            no_speech_prob,
+            temperature: t,
+            compression_ratio: f64::NAN,
+        })
     }
-    unreachable!()
+
+    fn decode_with_fallback(&mut self, segment: &Tensor) -> Result<DecodingResult> {
+        for (i, &t) in TEMPERATURES.iter().enumerate() {
+            let dr: DecodingResult = self.decode(segment, t)?;
+            if i == TEMPERATURES.len() - 1 {
+                return Ok(dr);
+            }
+            let needs_fallback = dr.compression_ratio > COMPRESSION_RATIO_THRESHOLD
+                || dr.avg_logprob < LOGPROB_THRESHOLD;
+            if !needs_fallback || dr.no_speech_prob > NO_SPEECH_THRESHOLD {
+                return Ok(dr);
+            }
+        }
+        unreachable!()
+    }
 }
 
 fn main() -> Result<()> {
-    use tokenizers::Tokenizer;
-
     let args = Args::parse();
     let device = if args.cpu {
         Device::Cpu
     } else {
         Device::new_cuda(0)?
     };
+    let rng = rand::rngs::StdRng::seed_from_u64(args.seed);
 
     let tokenizer = Tokenizer::from_file(args.tokenizer_config).map_err(E::msg)?;
 
     let input = unsafe { candle::safetensors::MmapedFile::new(args.input)? };
     let input = input.deserialize()?;
     let mel = input.tensor("mel", &device)?;
+    println!("loaded mel: {:?}", mel.dims());
+    let mel = if mel.rank() > 2 { mel.squeeze(0)? } else { mel };
 
     let weights = unsafe { candle::safetensors::MmapedFile::new(args.weights)? };
     let weights = weights.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, device);
     let model = Whisper::load(&vb, Config::tiny_en())?;
+    let mut dc = Decode {
+        model,
+        rng,
+        tokenizer,
+    };
 
     let (_, content_frames) = mel.shape().r2()?;
     let content_frames = content_frames - N_SAMPLES;
     let mut seek = 0;
+    let mut segments = vec![];
     while seek < content_frames {
         let time_offset = (seek * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
         let segment_size = usize::min(content_frames - seek, N_FRAMES);
         let mel_segment = mel.narrow(1, seek, segment_size)?;
         let segment_duration = (segment_size * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
-        let dr = decode_with_fallback(&model, &mel_segment)?;
+        let dr = dc.decode_with_fallback(&mel_segment)?;
+        seek += segment_size;
         if dr.no_speech_prob > NO_SPEECH_THRESHOLD && dr.avg_logprob < LOGPROB_THRESHOLD {
-            seek += segment_size;
             continue;
         }
-        //
+        let segment = Segment {
+            start: time_offset,
+            duration: segment_duration,
+            dr,
+        };
+        println!("{seek} {segment:?}");
+        segments.push(segment)
     }
     Ok(())
 }
