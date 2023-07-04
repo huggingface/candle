@@ -2,13 +2,31 @@
 // https://github.com/openai/whisper/blob/main/whisper/model.py
 // TODO:
 // - kv-cache support?
+// - language detection?
 
-use anyhow::Result;
+use anyhow::{Error as E, Result};
 use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
 use clap::Parser;
 use std::collections::HashMap;
 
 const DTYPE: DType = DType::F32;
+
+// Audio parameters.
+const SAMPLE_RATE: usize = 16000;
+const N_FFT: usize = 400;
+const N_MELS: usize = 80;
+const HOP_LENGTH: usize = 160;
+const CHUNK_LENGTH: usize = 30;
+const N_SAMPLES: usize = CHUNK_LENGTH * SAMPLE_RATE; // 480000 samples in a 30-second chunk
+const N_FRAMES: usize = N_SAMPLES / HOP_LENGTH; // 3000 frames in a mel spectrogram input
+const N_SAMPLES_PER_TOKEN: usize = HOP_LENGTH * 2; // the initial convolutions has stride 2
+const FRAMES_PER_SECOND: usize = SAMPLE_RATE / HOP_LENGTH; // 10ms per audio frame
+const TOKENS_PER_SECOND: usize = SAMPLE_RATE / N_SAMPLES_PER_TOKEN; // 20ms per audio token
+
+const NO_SPEECH_THRESHOLD: f64 = 0.6;
+const LOGPROB_THRESHOLD: f64 = -1.0;
+const TEMPERATURES: [f64; 6] = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
+const COMPRESSION_RATIO_THRESHOLD: f64 = 2.4;
 
 struct VarBuilder<'a> {
     safetensors: Option<(HashMap<String, usize>, Vec<SafeTensors<'a>>)>,
@@ -510,6 +528,7 @@ impl TextDecoder {
             mask,
         })
     }
+
     fn forward(&self, x: &Tensor, xa: &Tensor) -> Result<Tensor> {
         let x_dims = x.dims();
         let last = x_dims[x_dims.len() - 1];
@@ -530,13 +549,18 @@ impl TextDecoder {
 struct Whisper {
     encoder: AudioEncoder,
     decoder: TextDecoder,
+    config: Config,
 }
 
 impl Whisper {
-    fn load(vb: &VarBuilder, cfg: &Config) -> Result<Self> {
-        let encoder = AudioEncoder::load("encoder", vb, cfg)?;
-        let decoder = TextDecoder::load("decoder", vb, cfg)?;
-        Ok(Self { encoder, decoder })
+    fn load(vb: &VarBuilder, config: Config) -> Result<Self> {
+        let encoder = AudioEncoder::load("encoder", vb, &config)?;
+        let decoder = TextDecoder::load("decoder", vb, &config)?;
+        Ok(Self {
+            encoder,
+            decoder,
+            config,
+        })
     }
     fn forward(&self, mel: &Tensor, tokens: &Tensor) -> Result<Tensor> {
         let enc = self.encoder.forward(mel)?;
@@ -557,9 +581,60 @@ struct Args {
 
     #[arg(long)]
     input: String,
+
+    #[arg(long)]
+    tokenizer_config: String,
+}
+
+#[derive(Debug, Clone)]
+struct DecodingResult {
+    audio_features: Tensor,
+    tokens: Vec<usize>,
+    text: String,
+    avg_logprob: f64,
+    no_speech_prob: f64,
+    temperature: f64,
+    compression_ratio: f64,
+}
+
+#[derive(Debug, Clone)]
+struct Segment {
+    start: f64,
+    end: f64,
+    tokens: Vec<usize>,
+    result: DecodingResult,
+}
+
+fn decode(model: &Whisper, mel: &Tensor, t: f64) -> Result<DecodingResult> {
+    let audio_features = model.encoder.forward(&mel)?;
+    let sample_len = model.config.n_text_ctx / 2;
+    let mut tokens: Vec<u32> = vec![]; // TODO: get initial tokens
+    for i in 0..sample_len {
+        let tokens = Tensor::new(tokens.as_slice(), &mel.device())?;
+        let logits = model.decoder.forward(&tokens, mel)?;
+        // logits
+    }
+    todo!()
+}
+
+fn decode_with_fallback(model: &Whisper, segment: &Tensor) -> Result<DecodingResult> {
+    for (i, &t) in TEMPERATURES.iter().enumerate() {
+        let dr: DecodingResult = decode(model, segment, t)?;
+        if i == TEMPERATURES.len() - 1 {
+            return Ok(dr);
+        }
+        let needs_fallback = dr.compression_ratio > COMPRESSION_RATIO_THRESHOLD
+            || dr.avg_logprob < LOGPROB_THRESHOLD;
+        if !needs_fallback || dr.no_speech_prob > NO_SPEECH_THRESHOLD {
+            return Ok(dr);
+        }
+    }
+    unreachable!()
 }
 
 fn main() -> Result<()> {
+    use tokenizers::Tokenizer;
+
     let args = Args::parse();
     let device = if args.cpu {
         Device::Cpu
@@ -567,23 +642,31 @@ fn main() -> Result<()> {
         Device::new_cuda(0)?
     };
 
+    let tokenizer = Tokenizer::from_file(args.tokenizer_config).map_err(E::msg)?;
+
     let input = unsafe { candle::safetensors::MmapedFile::new(args.input)? };
     let input = input.deserialize()?;
-    let tokens = input.tensor("tokens", &device)?.to_dtype(DType::U32)?;
     let mel = input.tensor("mel", &device)?;
 
     let weights = unsafe { candle::safetensors::MmapedFile::new(args.weights)? };
     let weights = weights.deserialize()?;
-    let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, device.clone());
-    let cfg = Config::tiny_en();
+    let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, device);
+    let model = Whisper::load(&vb, Config::tiny_en())?;
 
-    let model = Whisper::load(&vb, &cfg)?;
-    let logits = model.forward(&mel, &tokens)?;
-    println!("tokens\n{tokens}");
-    println!("logits:\n{logits}");
-    println!("python logits: {}", input.tensor("dec", &device)?);
-    let enc = model.encoder.forward(&mel)?;
-    println!("encoder:\n{enc}");
-    println!("python enc: {}", input.tensor("enc", &device)?);
+    let (_, content_frames) = mel.shape().r2()?;
+    let content_frames = content_frames - N_SAMPLES;
+    let mut seek = 0;
+    while seek < content_frames {
+        let time_offset = (seek * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
+        let segment_size = usize::min(content_frames - seek, N_FRAMES);
+        let mel_segment = mel.narrow(1, seek, segment_size)?;
+        let segment_duration = (segment_size * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
+        let dr = decode_with_fallback(&model, &mel_segment)?;
+        if dr.no_speech_prob > NO_SPEECH_THRESHOLD && dr.avg_logprob < LOGPROB_THRESHOLD {
+            seek += segment_size;
+            continue;
+        }
+        //
+    }
     Ok(())
 }
