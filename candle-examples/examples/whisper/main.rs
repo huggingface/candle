@@ -201,7 +201,6 @@ fn main() -> Result<()> {
     let mel_filters = mel_filters.deserialize()?;
     let mel_filters = mel_filters.tensor("mel_80", &device)?;
     println!("loaded mel filters {:?}", mel_filters.shape());
-    let (n_mel, n_fft) = mel_filters.shape().r2()?;
     let mel_filters = mel_filters.flatten_all()?.to_vec1::<f32>()?;
 
     let mut input = std::fs::File::open(args.input)?;
@@ -215,9 +214,10 @@ fn main() -> Result<()> {
         .iter()
         .map(|v| *v as f32 / 32768.)
         .collect();
-    let mel = audio::pcm_to_mel(&pcm_data, &mel_filters, n_mel, n_fft)?;
+    println!("pcm data loaded {}", pcm_data.len());
+    let mel = audio::pcm_to_mel(&pcm_data, &mel_filters)?;
     let mel_len = mel.len();
-    let mel = Tensor::from_vec(mel, (1, n_mel, mel_len / n_mel), &device)?;
+    let mel = Tensor::from_vec(mel, (1, N_MELS, mel_len / N_MELS), &device)?;
     println!("loaded mel: {:?}", mel.dims());
 
     let weights = unsafe { candle::safetensors::MmapedFile::new(args.weights)? };
