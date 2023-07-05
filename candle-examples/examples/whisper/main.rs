@@ -109,7 +109,7 @@ impl Decode {
             };
             tokens.push(next_token);
             let prob = logits
-                .softmax(logits.rank() - 1)?
+                .softmax(candle::D::Minus1)?
                 .get(next_token as usize)?
                 .to_scalar::<f32>()? as f64;
             if next_token == EOT_TOKEN || tokens.len() > model.config.n_text_ctx {
