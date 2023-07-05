@@ -1,3 +1,5 @@
+// We use anyhow rather than candle errors as it provides better support for getting the backtrace
+// back when using RUST_LIB_BACKTRACE=1.
 use anyhow::Result;
 use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
 use std::collections::HashMap;

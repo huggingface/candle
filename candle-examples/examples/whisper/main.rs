@@ -2,7 +2,8 @@
 // https://github.com/openai/whisper/blob/main/whisper/model.py
 // TODO:
 // - kv-cache support?
-// - language detection?
+// - Language detection?
+// - Batch size greater than 1.
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
@@ -30,6 +31,12 @@ const NO_SPEECH_THRESHOLD: f64 = 0.6;
 const LOGPROB_THRESHOLD: f64 = -1.0;
 const TEMPERATURES: [f64; 6] = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
 const COMPRESSION_RATIO_THRESHOLD: f64 = 2.4;
+
+// Tokenizer dependent bits.
+const SOT_TOKEN: u32 = 50257;
+const EOT_TOKEN: u32 = 50256;
+const NO_SPEECH_TOKEN: u32 = 50361;
+const NO_TIMESTAMP_TOKEN: u32 = 50362;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -82,19 +89,31 @@ impl Decode {
         println!("audio features: {:?}", audio_features.dims());
         let sample_len = model.config.n_text_ctx / 2;
         let mut sum_logprob = 0f64;
-        let no_speech_prob = f64::NAN;
-        // TODO: 50257 is the start of transcipt token, be more principled about get initial tokens
-        let mut tokens: Vec<u32> = vec![50257];
-        for _i in 0..sample_len {
+        let mut no_speech_prob = f64::NAN;
+        let mut tokens = vec![SOT_TOKEN];
+        for i in 0..sample_len {
             let tokens_t = Tensor::new(tokens.as_slice(), &mel.device())?;
-            // Insert a batch dim.
+
+            // The model expects a batch dim but this inference loop does not handle
+            // it so we add it at this point.
             let tokens_t = tokens_t.unsqueeze(0)?;
             let logits = model.decoder.forward(&tokens_t, &audio_features)?;
             let logits = logits.squeeze(0)?;
+
+            // Extract the no speech probability on the first iteration by looking at the first
+            // token logits and the probability for the according token.
+            if i == 0 {
+                no_speech_prob = logits
+                    .get(0)?
+                    .softmax(0)?
+                    .get(NO_SPEECH_TOKEN as usize)?
+                    .to_scalar::<f32>()? as f64;
+            }
+
             let (seq_len, _) = logits.shape().r2()?;
             let logits = logits.get(seq_len - 1)?;
             let next_token = if t > 0f64 {
-                let prs = (&logits / t)?.softmax(logits.rank() - 1)?;
+                let prs = (&logits / t)?.softmax(0)?;
                 let logits_v: Vec<f32> = prs.to_vec1()?;
                 let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
                 distr.sample(&mut self.rng) as u32
@@ -112,11 +131,10 @@ impl Decode {
                 .softmax(logits.rank() - 1)?
                 .get(next_token as usize)?
                 .to_scalar::<f32>()? as f64;
-            sum_logprob += prob.ln();
-            // 50256 is the eot token, TODO: parameterize this.
-            if next_token == 50256 || tokens.len() > model.config.n_text_ctx {
+            if next_token == EOT_TOKEN || tokens.len() > model.config.n_text_ctx {
                 break;
             }
+            sum_logprob += prob.ln();
         }
         let text = self
             .tokenizer
@@ -136,14 +154,22 @@ impl Decode {
 
     fn decode_with_fallback(&mut self, segment: &Tensor) -> Result<DecodingResult> {
         for (i, &t) in TEMPERATURES.iter().enumerate() {
-            let dr: DecodingResult = self.decode(segment, t)?;
+            let dr: Result<DecodingResult> = self.decode(segment, t);
             if i == TEMPERATURES.len() - 1 {
-                return Ok(dr);
+                return dr;
             }
-            let needs_fallback = dr.compression_ratio > COMPRESSION_RATIO_THRESHOLD
-                || dr.avg_logprob < LOGPROB_THRESHOLD;
-            if !needs_fallback || dr.no_speech_prob > NO_SPEECH_THRESHOLD {
-                return Ok(dr);
+            // On errors, we try again with a different temperature.
+            match dr {
+                Ok(dr) => {
+                    let needs_fallback = dr.compression_ratio > COMPRESSION_RATIO_THRESHOLD
+                        || dr.avg_logprob < LOGPROB_THRESHOLD;
+                    if !needs_fallback || dr.no_speech_prob > NO_SPEECH_THRESHOLD {
+                        return Ok(dr);
+                    }
+                }
+                Err(err) => {
+                    println!("Error running at {t}: {err}")
+                }
             }
         }
         unreachable!()
@@ -195,7 +221,7 @@ fn main() -> Result<()> {
             duration: segment_duration,
             dr,
         };
-        println!("{seek} {segment:?}");
+        println!("{seek}: {segment:?}");
         segments.push(segment)
     }
     Ok(())
