@@ -187,6 +187,7 @@ fn main() -> Result<()> {
         let dr = dc.decode_with_fallback(&mel_segment)?;
         seek += segment_size;
         if dr.no_speech_prob > NO_SPEECH_THRESHOLD && dr.avg_logprob < LOGPROB_THRESHOLD {
+            println!("no speech detected, skipping {seek} {dr:?}");
             continue;
         }
         let segment = Segment {
