@@ -59,6 +59,12 @@ struct Args {
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
+
+    #[arg(
+        long,
+        default_value = "candle-examples/examples/whisper/mel_filters.safetensors"
+    )]
+    filters: String,
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +194,11 @@ fn main() -> Result<()> {
     let rng = rand::rngs::StdRng::seed_from_u64(args.seed);
 
     let tokenizer = Tokenizer::from_file(args.tokenizer_config).map_err(E::msg)?;
+
+    let filters = unsafe { candle::safetensors::MmapedFile::new(args.filters)? };
+    let filters = filters.deserialize()?;
+    let filters = filters.tensor("mel_80", &device)?;
+    println!("loaded mel filters {:?}", filters.shape());
 
     let input = unsafe { candle::safetensors::MmapedFile::new(args.input)? };
     let input = input.deserialize()?;
