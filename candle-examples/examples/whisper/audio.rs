@@ -1,13 +1,16 @@
 // Audio processing code, adapted from whisper.cpp
 // https://github.com/ggerganov/whisper.cpp
 
-const WHISPER_SAMPLE_RATE: usize = 16000;
-const WHISPER_N_FFT: usize = 400;
-const WHISPER_N_MEL: usize = 80;
-const WHISPER_HOP_LENGTH: usize = 160;
-const WHISPER_CHUNK_SIZE: usize = 30;
+pub const WHISPER_SAMPLE_RATE: usize = 16000;
+pub const WHISPER_N_FFT: usize = 400;
+pub const WHISPER_N_MEL: usize = 80;
+pub const WHISPER_HOP_LENGTH: usize = 160;
+pub const WHISPER_CHUNK_SIZE: usize = 30;
 
-trait Float: num_traits::Float + num_traits::FloatConst + num_traits::NumAssign {}
+pub trait Float: num_traits::Float + num_traits::FloatConst + num_traits::NumAssign {}
+
+impl Float for f32 {}
+impl Float for f64 {}
 
 // https://github.com/ggerganov/whisper.cpp/blob/4774d2feb01a772a15de81ffc34b34a1f294f020/whisper.cpp#L2357
 fn fft<T: Float>(inp: &[T]) -> Vec<T> {
@@ -203,7 +206,7 @@ fn log_mel_spectrogram_<T: Float>(
     mel
 }
 
-fn pcm_to_mel<T: Float>(samples: &[T], filters: &[T]) -> anyhow::Result<Vec<T>> {
+pub fn pcm_to_mel<T: Float>(samples: &[T], filters: &[T]) -> anyhow::Result<Vec<T>> {
     if filters.len() != WHISPER_N_MEL * WHISPER_N_FFT {
         anyhow::bail!(
             "unexpected filter length {} (n_mel: {}, n_fft: {})",
