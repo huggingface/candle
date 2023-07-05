@@ -342,8 +342,8 @@ impl MultiHeadAttention {
             let mask = mask.narrow(0, 0, n_ctx)?.narrow(1, 0, n_ctx)?;
             qk = qk.broadcast_add(&mask)?
         }
-        let w = qk.softmax(qk.rank() - 1)?;
-        let wv = w.matmul(&v)?.transpose(1, 2)?.flatten(Some(2), None)?;
+        let w = qk.softmax(candle::D::Minus1)?;
+        let wv = w.matmul(&v)?.transpose(1, 2)?.flatten_from(2)?;
         Ok(wv)
     }
 }
