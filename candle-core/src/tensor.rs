@@ -326,7 +326,7 @@ impl Tensor {
         }
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
             let data = S::cpu_storage_as_slice(cpu_storage)?;
-            Ok::<_, Error>(data[0])
+            Ok::<_, Error>(data[self.layout().start_offset()])
         };
         match self.storage.as_ref() {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
@@ -430,6 +430,42 @@ impl Tensor {
             dims[sum_dim] = 1
         }
         Ok(from_storage(storage, dims, op, false))
+    }
+
+    pub fn conv1d(&self, kernel: &Self, padding: usize, stride: usize) -> Result<Self> {
+        let (c_out, c_in_k, k_size) = kernel.shape().r3()?;
+        let (b_size, c_in, l_in) = match *self.dims() {
+            [b_size, c_in, l_in] => (Some(b_size), c_in, l_in),
+            [c_in, l_in] => (None, c_in, l_in),
+            _ => todo!("proper error message"),
+        };
+        if c_in != c_in_k {
+            todo!("proper error message")
+        }
+        let params = crate::conv::ParamsConv1D {
+            b_size,
+            l_in,
+            c_out,
+            c_in,
+            k_size,
+            padding,
+            stride,
+        };
+        let storage =
+            self.storage
+                .conv1d(self.layout(), &kernel.storage, kernel.layout(), &params)?;
+        let op = if self.track_op() || kernel.track_op() {
+            Some(Op::Conv1D {
+                arg: self.clone(),
+                kernel: kernel.clone(),
+                padding,
+                stride,
+            })
+        } else {
+            None
+        };
+        let out_dims = params.out_dims();
+        Ok(from_storage(storage, out_dims, op, false))
     }
 
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {

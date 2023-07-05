@@ -100,6 +100,16 @@ impl CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub(crate) fn conv1d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConv1D,
+    ) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub(crate) fn embedding(&self, _: &Layout, _: &Self, _: &Layout) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }

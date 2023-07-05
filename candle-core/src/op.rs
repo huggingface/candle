@@ -12,6 +12,14 @@ pub(crate) enum Op {
     Embedding(Tensor, Tensor),
     WhereCond(Tensor, Tensor, Tensor),
 
+    #[allow(dead_code)]
+    Conv1D {
+        arg: Tensor,
+        kernel: Tensor,
+        padding: usize,
+        stride: usize,
+    },
+
     Cat(Vec<Tensor>, usize),
 
     #[allow(dead_code)] // add is currently unused.
