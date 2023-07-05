@@ -77,3 +77,69 @@ fn dft<T: Float>(inp: &[T]) -> Vec<T> {
     }
     out
 }
+
+#[allow(clippy::too_many_arguments)]
+// https://github.com/ggerganov/whisper.cpp/blob/4774d2feb01a772a15de81ffc34b34a1f294f020/whisper.cpp#L2414
+fn log_mel_spectrogram_w<T: Float>(
+    ith: usize,
+    hann: &[T],
+    samples: &[T],
+    filters: &[T],
+    fft_size: usize,
+    fft_step: usize,
+    speed_up: bool,
+    n_len: usize,
+    n_mel: usize,
+    n_threads: usize,
+) {
+    let n_fft = if speed_up {
+        1 + fft_size / 4
+    } else {
+        1 + fft_size / 2
+    };
+
+    let zero = T::zero();
+    let half = T::from(0.5).unwrap();
+    let mut fft_in = vec![zero; fft_size];
+    let mut mel = vec![zero; n_len * n_mel];
+
+    for i in (ith..n_len).step_by(n_threads) {
+        let offset = i * fft_step;
+
+        // apply Hanning window
+        for j in 0..fft_size {
+            fft_in[j] = if offset + j < samples.len() {
+                hann[j] * samples[offset + j]
+            } else {
+                zero
+            }
+        }
+
+        // FFT -> mag^2
+        let mut fft_out: Vec<T> = fft(&fft_in);
+
+        for j in 0..fft_size {
+            fft_out[j] = fft_out[2 * j] * fft_out[2 * j] + fft_out[2 * j + 1] * fft_out[2 * j + 1];
+        }
+        for j in 1..fft_size / 2 {
+            let v = fft_out[fft_size - j];
+            fft_out[j] += v;
+        }
+
+        if speed_up {
+            // scale down in the frequency domain results in a speed up in the time domain
+            for j in 0..n_fft {
+                fft_out[j] = half * (fft_out[2 * j] + fft_out[2 * j + 1]);
+            }
+        }
+
+        // mel spectrogram
+        for j in 0..n_mel {
+            let mut sum = zero;
+            for k in 0..n_fft {
+                sum += fft_out[k] * filters[j * n_fft + k];
+            }
+            mel[j * n_len + i] = T::max(sum, T::from(1e-10).unwrap()).log10();
+        }
+    }
+}
