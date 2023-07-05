@@ -326,7 +326,7 @@ impl Tensor {
         }
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
             let data = S::cpu_storage_as_slice(cpu_storage)?;
-            Ok::<_, Error>(data[0])
+            Ok::<_, Error>(data[self.layout().start_offset()])
         };
         match self.storage.as_ref() {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
