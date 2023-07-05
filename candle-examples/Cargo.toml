@@ -12,6 +12,7 @@ readme = "README.md"
 
 [dependencies]
 candle = { path = "../candle-core", default-features=false }
+num-traits = "0.2.15"
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }

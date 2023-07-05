@@ -10,6 +10,8 @@ use candle::{DType, Device, Tensor};
 use clap::Parser;
 use rand::{distributions::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
+
+mod audio;
 mod model;
 use model::{Config, VarBuilder, Whisper};
 
