@@ -458,7 +458,9 @@ impl AudioEncoder {
         let x = self.conv1.forward(x)?.gelu()?;
         let x = self.conv2.forward(&x)?.gelu()?;
         let x = x.transpose(1, 2)?;
-        let mut x = x.broadcast_add(&self.positional_embedding)?;
+        let (_bsize, seq_len, _hidden) = x.shape().r3()?;
+        let positional_embedding = self.positional_embedding.narrow(0, 0, seq_len)?;
+        let mut x = x.broadcast_add(&positional_embedding)?;
         for block in self.blocks.iter() {
             x = block.forward(&x, None, None)?
         }
