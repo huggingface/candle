@@ -148,7 +148,7 @@ fn log_mel_spectrogram_w<T: Float>(
     mel
 }
 
-fn log_mel_spectrogram_<T: Float>(
+fn log_mel_spectrogram_<T: Float + std::fmt::Display>(
     samples: &[T],
     filters: &[T],
     fft_size: usize,
@@ -200,20 +200,17 @@ fn log_mel_spectrogram_<T: Float>(
     mel
 }
 
-pub fn pcm_to_mel<T: Float>(
+pub fn pcm_to_mel<T: Float + std::fmt::Display>(
     samples: &[T],
     filters: &[T],
-    n_mel: usize,
-    n_fft: usize,
 ) -> anyhow::Result<Vec<T>> {
-    if filters.len() != n_mel * n_fft {
-        anyhow::bail!(
-            "unexpected filter length {} (n_mel: {}, n_fft: {})",
-            filters.len(),
-            n_mel,
-            n_fft
-        )
-    }
-    let mel = log_mel_spectrogram_(samples, filters, n_fft, super::HOP_LENGTH, n_mel, false);
+    let mel = log_mel_spectrogram_(
+        samples,
+        filters,
+        super::N_FFT,
+        super::HOP_LENGTH,
+        super::N_MELS,
+        false,
+    );
     Ok(mel)
 }
