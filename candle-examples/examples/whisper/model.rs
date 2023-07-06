@@ -15,7 +15,7 @@ impl<'a> VarBuilder<'a> {
     pub fn from_safetensors(
         safetensors: Vec<SafeTensors<'a>>,
         dtype: DType,
-        device: Device,
+        device: &Device,
     ) -> Self {
         let mut routing = HashMap::new();
         for (index, sf) in safetensors.iter().enumerate() {
@@ -25,7 +25,7 @@ impl<'a> VarBuilder<'a> {
         }
         Self {
             safetensors: Some((routing, safetensors)),
-            device,
+            device: device.clone(),
             dtype,
         }
     }
