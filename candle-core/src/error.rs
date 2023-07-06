@@ -10,6 +10,13 @@ pub enum Error {
         got: DType,
     },
 
+    #[error("{msg}, expected: {expected:?}, got: {got:?}")]
+    UnexpectedShape {
+        msg: String,
+        expected: Shape,
+        got: Shape,
+    },
+
     #[error("{op}: dimension index {dim} out of range for {shape:?}")]
     DimOutOfRange {
         shape: Shape,
@@ -86,8 +93,11 @@ pub enum Error {
     },
 
     // TODO this is temporary when we support arbitrary matmul
-    #[error("temporary error where matmul doesn't support arbitrary striding")]
-    UnexpectedStriding,
+    #[error("temporary error where matmul doesn't support arbitrary striding {lhs_stride:?} x {rhs_stride:?}")]
+    UnexpectedStriding {
+        lhs_stride: Vec<usize>,
+        rhs_stride: Vec<usize>,
+    },
 
     #[error(transparent)]
     Cuda(#[from] crate::CudaError),
@@ -109,6 +119,13 @@ pub enum Error {
     /// I/O error.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    /// SafeTensor error.
+    #[error(transparent)]
+    SafeTensor(#[from] safetensors::SafeTensorError),
+
+    #[error("unsupported safetensor dtype {0:?}")]
+    UnsupportedSafeTensorDtype(safetensors::Dtype),
 
     #[error("cannot broadcast {src_shape:?} to {dst_shape:?}")]
     BroadcastIncompatibleShapes { src_shape: Shape, dst_shape: Shape },

@@ -1,3 +1,4 @@
+use crate::shape::Dim;
 use crate::{op::Op, storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::Arc;
 
@@ -326,7 +327,7 @@ impl Tensor {
         }
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
             let data = S::cpu_storage_as_slice(cpu_storage)?;
-            Ok::<_, Error>(data[0])
+            Ok::<_, Error>(data[self.layout().start_offset()])
         };
         match self.storage.as_ref() {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
@@ -362,9 +363,9 @@ impl Tensor {
 
     /// Returns a new tensor that is a narrowed version of the input, the dimension `dim`
     /// ranges from `start` to `start + len`.
-    pub fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<Self> {
+    pub fn narrow<D: Dim>(&self, dim: D, start: usize, len: usize) -> Result<Self> {
         let dims = self.dims();
-        self.check_dim(dim, "narrow")?;
+        let dim = dim.to_index(self.shape(), "narrow")?;
         if start + len > dims[dim] {
             Err(Error::NarrowInvalidArgs {
                 shape: self.shape().clone(),
@@ -392,8 +393,8 @@ impl Tensor {
         }
     }
 
-    pub fn softmax(&self, dim: usize) -> Result<Self> {
-        self.check_dim(dim, "softmax")?;
+    pub fn softmax<D: Dim>(&self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "softmax")?;
         // TODO: unify the two branches.
         if self.device().is_cuda() {
             // We do not have a cuda kernel for divide_by_sum_over_dim so split
@@ -430,6 +431,42 @@ impl Tensor {
             dims[sum_dim] = 1
         }
         Ok(from_storage(storage, dims, op, false))
+    }
+
+    pub fn conv1d(&self, kernel: &Self, padding: usize, stride: usize) -> Result<Self> {
+        let (c_out, c_in_k, k_size) = kernel.shape().r3()?;
+        let (b_size, c_in, l_in) = match *self.dims() {
+            [b_size, c_in, l_in] => (Some(b_size), c_in, l_in),
+            [c_in, l_in] => (None, c_in, l_in),
+            _ => todo!("proper error message"),
+        };
+        if c_in != c_in_k {
+            todo!("proper error message")
+        }
+        let params = crate::conv::ParamsConv1D {
+            b_size,
+            l_in,
+            c_out,
+            c_in,
+            k_size,
+            padding,
+            stride,
+        };
+        let storage =
+            self.storage
+                .conv1d(self.layout(), &kernel.storage, kernel.layout(), &params)?;
+        let op = if self.track_op() || kernel.track_op() {
+            Some(Op::Conv1D {
+                arg: self.clone(),
+                kernel: kernel.clone(),
+                padding,
+                stride,
+            })
+        } else {
+            None
+        };
+        let out_dims = params.out_dims();
+        Ok(from_storage(storage, out_dims, op, false))
     }
 
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
@@ -656,14 +693,22 @@ impl Tensor {
         self.sum(&dims)
     }
 
-    pub fn flatten(&self, start_dim: Option<usize>, end_dim: Option<usize>) -> Result<Tensor> {
+    fn flatten_<D1: Dim, D2: Dim>(
+        &self,
+        start_dim: Option<D1>,
+        end_dim: Option<D2>,
+    ) -> Result<Tensor> {
         if self.rank() == 0 {
             self.reshape(1)
         } else {
-            let start_dim = start_dim.unwrap_or(0);
-            let end_dim = end_dim.unwrap_or_else(|| self.rank() - 1);
-            self.check_dim(start_dim, "flatten")?;
-            self.check_dim(end_dim, "flatten")?;
+            let start_dim = match start_dim {
+                None => 0,
+                Some(dim) => dim.to_index(self.shape(), "flatten")?,
+            };
+            let end_dim = match end_dim {
+                None => self.rank() - 1,
+                Some(dim) => dim.to_index(self.shape(), "flatten")?,
+            };
             if start_dim < end_dim {
                 let dims = self.dims();
                 let mut dst_dims = dims[..start_dim].to_vec();
@@ -678,8 +723,20 @@ impl Tensor {
         }
     }
 
+    pub fn flatten<D1: Dim, D2: Dim>(&self, start_dim: D1, end_dim: D2) -> Result<Tensor> {
+        self.flatten_(Some(start_dim), Some(end_dim))
+    }
+
+    pub fn flatten_to<D: Dim>(&self, end_dim: D) -> Result<Tensor> {
+        self.flatten_(None::<usize>, Some(end_dim))
+    }
+
+    pub fn flatten_from<D: Dim>(&self, start_dim: D) -> Result<Tensor> {
+        self.flatten_(Some(start_dim), None::<usize>)
+    }
+
     pub fn flatten_all(&self) -> Result<Tensor> {
-        self.flatten(None, None)
+        self.flatten_(None::<usize>, None::<usize>)
     }
 
     pub fn get(&self, i: usize) -> Result<Tensor> {
@@ -707,9 +764,9 @@ impl Tensor {
 
     /// Returns a tensor that is a transposed version of the input, the given dimensions are
     /// swapped.
-    pub fn transpose(&self, dim1: usize, dim2: usize) -> Result<Tensor> {
-        self.check_dim(dim1, "transpose")?;
-        self.check_dim(dim2, "transpose")?;
+    pub fn transpose<D1: Dim, D2: Dim>(&self, dim1: D1, dim2: D2) -> Result<Tensor> {
+        let dim1 = dim1.to_index(self.shape(), "transpose")?;
+        let dim2 = dim2.to_index(self.shape(), "transpose")?;
         let op = if self.track_op() {
             Some(Op::Transpose(self.clone(), dim1, dim2))
         } else {
@@ -893,30 +950,31 @@ impl Tensor {
         }
     }
 
-    pub fn squeeze(&self, index: usize) -> Result<Self> {
+    pub fn squeeze<D: Dim>(&self, dim: D) -> Result<Self> {
         // The PyTorch semantics are to return the same tensor if the target dimension
         // does not have a size of 1.
         let dims = self.dims();
-        self.check_dim(index, "squeeze")?;
-        if dims[index] == 1 {
+        let dim = dim.to_index(self.shape(), "squeeze")?;
+        if dims[dim] == 1 {
             let mut dims = dims.to_vec();
-            dims.remove(index);
+            dims.remove(dim);
             self.reshape(dims)
         } else {
             Ok(self.clone())
         }
     }
 
-    pub fn unsqueeze(&self, index: usize) -> Result<Self> {
+    pub fn unsqueeze(&self, dim: usize) -> Result<Self> {
         let mut dims = self.dims().to_vec();
-        dims.insert(index, 1);
+        dims.insert(dim, 1);
         self.reshape(dims)
     }
 
-    pub fn stack<A: AsRef<Tensor>>(args: &[A], dim: usize) -> Result<Self> {
+    pub fn stack<A: AsRef<Tensor>, D: Dim>(args: &[A], dim: D) -> Result<Self> {
         if args.is_empty() {
             return Err(Error::OpRequiresAtLeastOneTensor { op: "stack" });
         }
+        let dim = dim.to_index(args[0].as_ref().shape(), "stack")?;
         let args = args
             .iter()
             .map(|t| t.as_ref().unsqueeze(dim))
@@ -924,7 +982,7 @@ impl Tensor {
         Self::cat(&args, dim)
     }
 
-    pub fn cat<A: AsRef<Tensor>>(args: &[A], dim: usize) -> Result<Self> {
+    pub fn cat<A: AsRef<Tensor>, D: Dim>(args: &[A], dim: D) -> Result<Self> {
         if args.is_empty() {
             return Err(Error::OpRequiresAtLeastOneTensor { op: "cat" });
         }
@@ -932,6 +990,7 @@ impl Tensor {
         if args.len() == 1 {
             return Ok(arg0.clone());
         }
+        let dim = dim.to_index(arg0.shape(), "cat")?;
         for arg in args {
             arg.as_ref().check_dim(dim, "cat")?;
         }

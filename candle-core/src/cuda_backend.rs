@@ -597,11 +597,33 @@ pub(crate) fn gemm_config<T>(
         transa,
         transb,
     };
+
+    let stride_b: usize = match lhs_stride[..lhs_stride.len() - 2] {
+        [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
+        [stride] => stride,
+        [] => m * k,
+        _ => Err(CudaError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        })?,
+    };
+    let stride_a: usize = match rhs_stride[..rhs_stride.len() - 2] {
+        [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
+        [stride] => stride,
+        [] => n * k,
+        _ => Err(CudaError::MatMulNonContiguous {
+            lhs_stride: lhs_stride.to_vec(),
+            rhs_stride: rhs_stride.to_vec(),
+            mnk: (m, n, k),
+        })?,
+    };
+
     Ok(StridedBatchedConfig {
         batch_size: b as i32,
         gemm,
-        stride_a: (n * k) as i64,
-        stride_b: (m * k) as i64,
+        stride_a: stride_a as i64,
+        stride_b: stride_b as i64,
         stride_c: (m * n) as i64,
     })
 }
@@ -777,6 +799,16 @@ impl CudaStorage {
         let device = self.device().clone();
         let slice = WhereCond(self, layout).map(&t.slice, t_l, &f.slice, f_l, &device)?;
         Ok(Self { slice, device })
+    }
+
+    pub(crate) fn conv1d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConv1D,
+    ) -> Result<Self> {
+        todo!()
     }
 
     pub(crate) fn embedding(&self, layout: &Layout, rhs: &Self, rhs_l: &Layout) -> Result<Self> {
