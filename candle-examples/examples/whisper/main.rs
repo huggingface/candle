@@ -4,6 +4,7 @@
 // - kv-cache support?
 // - Language detection?
 // - Batch size greater than 1.
+// - More token filters (SuppressBlanks, ApplyTimestampRules).
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
@@ -40,14 +41,15 @@ const SOT_TOKEN: u32 = 50257;
 const EOT_TOKEN: u32 = 50256;
 const NO_SPEECH_TOKEN: u32 = 50361;
 const NO_TIMESTAMP_TOKEN: u32 = 50362;
-// From the _get_suppress_tokens function in the OpenAI codebase.
-const SUPPRESS_TOKENS: [u32; 90] = [
+// From the _get_suppress_tokens function + 50362 (no timestamp)
+// https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/decoding.py#L605
+const SUPPRESS_TOKENS: [u32; 91] = [
     1, 2, 7, 8, 9, 10, 14, 25, 26, 27, 28, 29, 31, 58, 59, 60, 61, 62, 63, 90, 91, 92, 93, 357,
     366, 438, 532, 685, 705, 796, 930, 1058, 1220, 1267, 1279, 1303, 1343, 1377, 1391, 1635, 1782,
     1875, 2162, 2361, 2488, 3467, 4008, 4211, 4600, 4808, 5299, 5855, 6329, 7203, 9609, 9959,
     10563, 10786, 11420, 11709, 11907, 13163, 13697, 13700, 14808, 15306, 16410, 16791, 17992,
     19203, 19510, 20724, 22305, 22935, 27007, 30109, 30420, 33409, 34949, 40283, 40493, 40549,
-    47282, 49146, 50257, 50357, 50358, 50359, 50360, 50361,
+    47282, 49146, 50257, 50357, 50358, 50359, 50360, 50361, 50362,
 ];
 
 #[derive(Debug, Clone)]
