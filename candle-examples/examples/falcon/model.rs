@@ -319,6 +319,13 @@ impl FalconRotaryEmbedding {
     }
 }
 
+fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+    let shape = mask.shape();
+    let on_true = Tensor::new(on_true, &on_false.device())?.broadcast_as(shape.dims())?;
+    let m = mask.where_cond(&on_true, on_false)?;
+    Ok(m)
+}
+
 #[derive(Debug)]
 struct FalconAttention {
     query_key_value: Linear,
@@ -384,7 +391,7 @@ impl FalconAttention {
         }
     }
 
-    fn forward(&mut self, x: &Tensor) -> Result<Tensor> {
+    fn forward(&mut self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let fused_qkv = self.query_key_value.forward(x)?;
         let head_dim = self.head_dim;
         let (query, key, value) = self.split_heads(&fused_qkv)?;
@@ -395,16 +402,29 @@ impl FalconAttention {
         let key = key
             .transpose(1, 2)?
             .reshape((b_sz * self.n_head_kv, q_len, head_dim))?;
-        let _value = value
+        let value = value
             .transpose(1, 2)?
             .reshape((b_sz * self.n_head_kv, q_len, head_dim))?;
-        let (_query, _key) = if let Some(r) = &mut self.maybe_rotary {
+        let (query, key) = if let Some(r) = &mut self.maybe_rotary {
             r.forward(&query, &key)?
         } else {
             (query, key)
         };
+        let mask = masked_fill(&mask.to_dtype(DType::F32)?, mask, -1e9)?.to_dtype(query.dtype())?;
         // TODO: layer_past, use_cache?
-        todo!()
+        let query = query.reshape((b_sz, self.num_heads, q_len, head_dim))?;
+        let key = key.reshape((b_sz, self.n_head_kv, q_len, head_dim))?;
+        let value = value.reshape((b_sz, self.n_head_kv, q_len, head_dim))?;
+
+        // Only handle alibi is None here, and non-flash attention.
+        let attention_scores = (query.matmul(&key.t()?)? * self.inv_norm_factor)?;
+        let attention_scores = (attention_scores + mask)?.softmax(D::Minus1)?;
+        let attn_output = attention_scores
+            .matmul(&value)?
+            .reshape((b_sz, self.num_heads, q_len, head_dim))?
+            .transpose(1, 2)?
+            .reshape((b_sz, q_len, self.num_heads * head_dim))?;
+        Ok(attn_output)
     }
 }
 
