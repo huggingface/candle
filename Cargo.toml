@@ -6,3 +6,7 @@ members = [
     "candle-hub",
     "candle-pyo3",
 ]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

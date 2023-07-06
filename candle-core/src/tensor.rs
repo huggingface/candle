@@ -476,27 +476,28 @@ impl Tensor {
         let dim = a_dims.len();
 
         if dim < 2 || b_dims.len() != dim {
-            return Err(Error::ShapeMismatchBinaryOp {
+            Err(Error::ShapeMismatchBinaryOp {
                 lhs: self.shape().clone(),
                 rhs: rhs.shape().clone(),
                 op: "matmul",
-            });
+            })?
         }
 
         let m = a_dims[dim - 2];
         let k = a_dims[dim - 1];
         let k2 = b_dims[dim - 2];
         let n = b_dims[dim - 1];
-        if k != k2 {
-            return Err(Error::ShapeMismatchBinaryOp {
-                lhs: self.shape().clone(),
-                rhs: rhs.shape().clone(),
-                op: "matmul",
-            });
-        }
 
         let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
         let batching: usize = a_dims[..dim - 2].iter().product();
+        let batching_b: usize = b_dims[..dim - 2].iter().product();
+        if k != k2 || batching != batching_b {
+            Err(Error::ShapeMismatchBinaryOp {
+                lhs: self.shape().clone(),
+                rhs: rhs.shape().clone(),
+                op: "matmul",
+            })?
+        }
 
         let storage = self.storage.matmul(
             &rhs.storage,
@@ -658,6 +659,11 @@ impl Tensor {
 
     pub fn dims(&self) -> &[usize] {
         self.shape().dims()
+    }
+
+    pub fn dim<D: Dim>(&self, dim: D) -> Result<usize> {
+        let dim = dim.to_index(self.shape(), "dim")?;
+        Ok(self.dims()[dim])
     }
 
     pub fn layout(&self) -> &Layout {
