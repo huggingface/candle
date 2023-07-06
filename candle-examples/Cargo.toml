@@ -15,8 +15,7 @@ candle = { path = "../candle-core", default-features=false }
 serde = { version = "1.0.166", features = ["derive"] }
 serde_json = "1.0.99"
 num-traits = "0.2.15"
-blas = "0.22.0"
-intel-mkl-src = {version="0.8.1", features = ["mkl-dynamic-lp64-iomp"]}
+intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
@@ -30,3 +29,4 @@ wav = "1.0.0"
 [features]
 default = ["cuda"]
 cuda = ["candle/cuda"]
+mkl = ["dep:intel-mkl-src", "candle/mkl"]
