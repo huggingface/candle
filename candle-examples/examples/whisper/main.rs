@@ -65,6 +65,14 @@ struct Decode {
 }
 
 impl Decode {
+    fn new(model: Whisper, tokenizer: Tokenizer, seed: u64) -> Self {
+        Self {
+            model,
+            rng: rand::rngs::StdRng::seed_from_u64(seed),
+            tokenizer,
+        }
+    }
+
     fn decode(&mut self, mel: &Tensor, t: f64) -> Result<DecodingResult> {
         let model = &self.model;
         let audio_features = model.encoder.forward(mel)?;
@@ -156,6 +164,33 @@ impl Decode {
         }
         unreachable!()
     }
+
+    fn run(&mut self, mel: &Tensor) -> Result<Vec<Segment>> {
+        let (_, _, content_frames) = mel.shape().r3()?;
+        let mut seek = 0;
+        let mut segments = vec![];
+        let start = std::time::Instant::now();
+        while seek < content_frames {
+            let time_offset = (seek * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
+            let segment_size = usize::min(content_frames - seek, N_FRAMES);
+            let mel_segment = mel.narrow(2, seek, segment_size)?;
+            let segment_duration = (segment_size * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
+            let dr = self.decode_with_fallback(&mel_segment)?;
+            seek += segment_size;
+            if dr.no_speech_prob > NO_SPEECH_THRESHOLD && dr.avg_logprob < LOGPROB_THRESHOLD {
+                println!("no speech detected, skipping {seek} {dr:?}");
+                continue;
+            }
+            let segment = Segment {
+                start: time_offset,
+                duration: segment_duration,
+                dr,
+            };
+            println!("{seek}: {segment:?} : Took {:?}", start.elapsed());
+            segments.push(segment)
+        }
+        Ok(segments)
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -196,8 +231,6 @@ async fn main() -> Result<()> {
     } else {
         Device::new_cuda(0)?
     };
-    let rng = rand::rngs::StdRng::seed_from_u64(args.seed);
-
     let default_model = "openai/whisper-tiny.en".to_string();
     let path = std::path::PathBuf::from(default_model.clone());
     let default_revision = "refs/pr/15".to_string();
@@ -270,34 +303,7 @@ async fn main() -> Result<()> {
     let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, device);
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
     let model = Whisper::load(&vb, config)?;
-    let mut dc = Decode {
-        model,
-        rng,
-        tokenizer,
-    };
-
-    let (_, _, content_frames) = mel.shape().r3()?;
-    let mut seek = 0;
-    let mut segments = vec![];
-    let start = std::time::Instant::now();
-    while seek < content_frames {
-        let time_offset = (seek * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
-        let segment_size = usize::min(content_frames - seek, N_FRAMES);
-        let mel_segment = mel.narrow(2, seek, segment_size)?;
-        let segment_duration = (segment_size * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
-        let dr = dc.decode_with_fallback(&mel_segment)?;
-        seek += segment_size;
-        if dr.no_speech_prob > NO_SPEECH_THRESHOLD && dr.avg_logprob < LOGPROB_THRESHOLD {
-            println!("no speech detected, skipping {seek} {dr:?}");
-            continue;
-        }
-        let segment = Segment {
-            start: time_offset,
-            duration: segment_duration,
-            dr,
-        };
-        println!("{seek}: {segment:?} : Took {:?}", start.elapsed());
-        segments.push(segment)
-    }
+    let mut dc = Decode::new(model, tokenizer, args.seed);
+    dc.run(&mel)?;
     Ok(())
 }
