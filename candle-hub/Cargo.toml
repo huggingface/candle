@@ -27,5 +27,3 @@ tokio-test = "0.4.2"
 default = ["online"]
 online = ["reqwest/blocking", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus"]
 tokio = ["online", "dep:tokio", "dep:futures"]
-
-

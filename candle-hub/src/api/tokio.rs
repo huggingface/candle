@@ -131,7 +131,7 @@ impl ApiBuilder {
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
-            max_files: 100,
+            max_files: num_cpus::get(),
             chunk_size: 10_000_000,
             parallel_failures: 0,
             max_retries: 0,
