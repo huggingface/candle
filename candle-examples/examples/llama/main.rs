@@ -19,7 +19,7 @@ use clap::Parser;
 use rand::{distributions::Distribution, SeedableRng};
 
 use candle::{DType, Device, Tensor, D};
-use candle_hub::{api::Api, Repo, RepoType};
+use candle_hub::{api::sync::Api, Repo, RepoType};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -465,8 +465,7 @@ struct Args {
     prompt: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     use tokenizers::Tokenizer;
 
     let args = Args::parse();
@@ -489,13 +488,13 @@ async fn main() -> Result<()> {
             let api = Api::new()?;
             let repo = Repo::new("Narsil/amall-7b".to_string(), RepoType::Model);
             println!("building the model");
-            let tokenizer_filename = api.get(&repo, "tokenizer.json").await?;
+            let tokenizer_filename = api.get(&repo, "tokenizer.json")?;
             let mut filenames = vec![];
             for rfilename in [
                 "model-00001-of-00002.safetensors",
                 "model-00002-of-00002.safetensors",
             ] {
-                let filename = api.get(&repo, rfilename).await?;
+                let filename = api.get(&repo, rfilename)?;
                 filenames.push(filename);
             }
 
