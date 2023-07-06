@@ -29,7 +29,7 @@ struct Args {
     #[arg(long, default_value = "tiiuae/falcon-7b")]
     model_id: String,
 
-    #[arg(long, default_value = "main")]
+    #[arg(long, default_value = "refs/pr/43")]
     revision: String,
 }
 
