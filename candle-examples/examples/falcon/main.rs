@@ -117,6 +117,7 @@ struct Args {
 
 fn main() -> Result<()> {
     use candle_hub::{api::sync::Api, Repo, RepoType};
+    use tokenizers::Tokenizer;
 
     let args = Args::parse();
     let device = if args.cpu {
