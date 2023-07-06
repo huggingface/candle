@@ -27,7 +27,10 @@ mod var_store;
 mod weights;
 
 const MAX_SEQ_LEN: usize = 4096;
+#[cfg(feature = "mkl")]
 const DTYPE: DType = DType::F32;
+#[cfg(not(feature = "mkl"))]
+const DTYPE: DType = DType::F16;
 const DEFAULT_PROMPT: &str = r"
 EDWARD:
 I wonder how our princely father 'scaped,
