@@ -444,6 +444,7 @@ impl FalconAttention {
             .reshape((b_sz, self.num_heads, q_len, head_dim))?
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.num_heads * head_dim))?;
+        let attn_output = self.attn_output.forward(&attn_output)?;
         Ok(attn_output)
     }
 }
