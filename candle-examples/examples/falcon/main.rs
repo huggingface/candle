@@ -36,9 +36,8 @@ struct Args {
     revision: String,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    use candle_hub::{api::Api, Repo, RepoType};
+fn main() -> Result<()> {
+    use candle_hub::{api::sync::Api, Repo, RepoType};
     use tokenizers::Tokenizer;
 
     let args = Args::parse();
@@ -51,13 +50,13 @@ async fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let api = Api::new()?;
     let repo = Repo::with_revision(args.model_id, RepoType::Model, args.revision);
-    let tokenizer_filename = api.get(&repo, "tokenizer.json").await?;
+    let tokenizer_filename = api.get(&repo, "tokenizer.json")?;
     let mut filenames = vec![];
     for rfilename in [
         "model-00001-of-00002.safetensors",
         "model-00002-of-00002.safetensors",
     ] {
-        let filename = api.get(&repo, rfilename).await?;
+        let filename = api.get(&repo, rfilename)?;
         filenames.push(filename);
     }
     println!("retrieved the files in {:?}", start.elapsed());
