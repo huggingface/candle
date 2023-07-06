@@ -57,9 +57,10 @@ async fn main() -> Result<()> {
         let filename = api.get(&repo, rfilename).await?;
         filenames.push(filename);
     }
-    println!("Loaded in {:?}", start.elapsed());
+    println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
+    let start = std::time::Instant::now();
     let weights = filenames
         .iter()
         .map(|f| Ok(unsafe { candle::safetensors::MmapedFile::new(f)? }))
@@ -73,13 +74,14 @@ async fn main() -> Result<()> {
     let config = Config::falcon7b();
     config.validate()?;
     let mut model = Falcon::load(&vb, config)?;
+    println!("loaded the model in {:?}", start.elapsed());
 
     let tokens = tokenizer
         .encode(args.prompt, true)
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
-    let tokens = Tensor::new(tokens.as_slice(), &device)?;
+    let tokens = Tensor::new(tokens.as_slice(), &device)?.unsqueeze(0)?;
     let logits = model.forward(&tokens)?;
     println!("{}", logits);
     Ok(())
