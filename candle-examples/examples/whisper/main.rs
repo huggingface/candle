@@ -11,7 +11,7 @@ extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
-use candle_hub::{api::Api, Repo, RepoType};
+use candle_hub::{api::sync::Api, Repo, RepoType};
 use clap::Parser;
 use rand::{distributions::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
@@ -253,8 +253,7 @@ struct Args {
     filters: String,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
     let device = if args.cpu {
         Device::Cpu
@@ -276,7 +275,7 @@ async fn main() -> Result<()> {
         config_filename.push("config.json");
         let mut tokenizer_filename = path.clone();
         tokenizer_filename.push("tokenizer.json");
-        let mut model_filename = path.clone();
+        let mut model_filename = path;
         model_filename.push("model.safetensors");
         (
             config_filename,
@@ -288,9 +287,9 @@ async fn main() -> Result<()> {
         let repo = Repo::with_revision(model_id, RepoType::Model, revision);
         let api = Api::new()?;
         (
-            api.get(&repo, "config.json").await?,
-            api.get(&repo, "tokenizer.json").await?,
-            api.get(&repo, "model.safetensors").await?,
+            api.get(&repo, "config.json")?,
+            api.get(&repo, "tokenizer.json")?,
+            api.get(&repo, "model.safetensors")?,
             if let Some(input) = args.input {
                 std::path::PathBuf::from(input)
             } else {
@@ -298,8 +297,7 @@ async fn main() -> Result<()> {
                 api.get(
                     &Repo::new("Narsil/candle-examples".to_string(), RepoType::Dataset),
                     "samples_jfk.wav",
-                )
-                .await?
+                )?
             },
         )
     };
