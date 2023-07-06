@@ -58,13 +58,13 @@ struct Segment {
     dr: DecodingResult,
 }
 
-struct Decode {
+struct Decoder {
     model: Whisper,
     rng: rand::rngs::StdRng,
     tokenizer: Tokenizer,
 }
 
-impl Decode {
+impl Decoder {
     fn new(model: Whisper, tokenizer: Tokenizer, seed: u64) -> Self {
         Self {
             model,
@@ -303,7 +303,7 @@ async fn main() -> Result<()> {
     let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, device);
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
     let model = Whisper::load(&vb, config)?;
-    let mut dc = Decode::new(model, tokenizer, args.seed);
+    let mut dc = Decoder::new(model, tokenizer, args.seed);
     dc.run(&mel)?;
     Ok(())
 }
