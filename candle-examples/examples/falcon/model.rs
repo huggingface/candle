@@ -66,18 +66,14 @@ struct Linear {
 }
 
 impl Linear {
-    fn load(size1: usize, size2: usize, p: &str, vb: &VarBuilder) -> Result<Self> {
+    fn load(size1: usize, size2: usize, bias: bool, p: &str, vb: &VarBuilder) -> Result<Self> {
         let weight = vb.get((size2, size1), &format!("{p}.weight"))?;
-        let bias = vb.get(size2, &format!("{p}.bias"))?;
-        Ok(Self {
-            weight,
-            bias: Some(bias),
-        })
-    }
-
-    fn load_no_bias(size1: usize, size2: usize, p: &str, vb: &VarBuilder) -> Result<Self> {
-        let weight = vb.get((size2, size1), &format!("{p}.weight"))?;
-        Ok(Self { weight, bias: None })
+        let bias = if bias {
+            Some(vb.get(size2, &format!("{p}.bias"))?)
+        } else {
+            None
+        };
+        Ok(Self { weight, bias })
     }
 
     fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
@@ -356,10 +352,17 @@ impl FalconAttention {
         let query_key_value = Linear::load(
             hidden_size,
             qkv_out_dim,
+            cfg.bias,
             &format!("{p}.query_key_value"),
             vb,
         )?;
-        let dense = Linear::load(hidden_size, hidden_size, &format!("{p}.dense"), vb)?;
+        let dense = Linear::load(
+            hidden_size,
+            hidden_size,
+            cfg.bias,
+            &format!("{p}.dense"),
+            vb,
+        )?;
         Ok(Self {
             query_key_value,
             dense,
@@ -438,8 +441,9 @@ struct FalconMlp {
 impl FalconMlp {
     fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
         let h = cfg.hidden_size;
-        let dense_h_to_4h = Linear::load(h, 4 * h, &format!("{p}.dense_h_to_4h"), vb)?;
-        let dense_4h_to_h = Linear::load(4 * h, h, &format!("{p}.dense_4h_to_h"), vb)?;
+        let b = cfg.bias;
+        let dense_h_to_4h = Linear::load(h, 4 * h, b, &format!("{p}.dense_h_to_4h"), vb)?;
+        let dense_4h_to_h = Linear::load(4 * h, h, b, &format!("{p}.dense_4h_to_h"), vb)?;
         let dropout = Dropout::new(cfg.hidden_dropout);
         Ok(Self {
             dense_h_to_4h,
@@ -544,12 +548,21 @@ fn prepare_attn_mask(b_sz: usize, seq_len: usize) -> Result<Tensor> {
 
 impl Falcon {
     pub fn load(vb: &VarBuilder, cfg: Config) -> Result<Self> {
-        let word_embeddings =
-            Embedding::load(cfg.vocab_size, cfg.hidden_size, "word_embeddings", vb)?;
+        let word_embeddings = Embedding::load(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            "transformer.word_embeddings",
+            vb,
+        )?;
         let h = (0..cfg.num_hidden_layers)
-            .map(|i| FalconDecoderLayer::load(&format!("h.{i}"), vb, &cfg))
+            .map(|i| FalconDecoderLayer::load(&format!("transformer.h.{i}"), vb, &cfg))
             .collect::<Result<Vec<_>>>()?;
-        let ln_f = LayerNorm::load(cfg.hidden_size, cfg.layer_norm_epsilon, "ln_f", vb)?;
+        let ln_f = LayerNorm::load(
+            cfg.hidden_size,
+            cfg.layer_norm_epsilon,
+            "transformer.ln_f",
+            vb,
+        )?;
         Ok(Self {
             word_embeddings,
             h,
