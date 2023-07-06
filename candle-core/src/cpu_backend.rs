@@ -1,6 +1,5 @@
 use crate::op::{BinaryOp, UnaryOp};
 use crate::{DType, Error, Layout, Result, Shape, WithDType};
-use gemm::{gemm, Parallelism};
 use half::{bf16, f16};
 
 // TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
@@ -264,6 +263,93 @@ struct MatMul((usize, usize, usize, usize));
 
 impl Map2 for MatMul {
     const OP: &'static str = "mat_mul";
+
+    #[cfg(not(feature = "mkl"))]
+    fn f<T: 'static + num_traits::Num + Copy>(
+        &self,
+        lhs: &[T],
+        lhs_l: &Layout,
+        rhs: &[T],
+        rhs_l: &Layout,
+    ) -> Result<Vec<T>> {
+        use gemm::{gemm, Parallelism};
+        let (b, m, n, k) = self.0;
+        let lhs = &lhs[lhs_l.start_offset()..];
+        let rhs = &rhs[rhs_l.start_offset()..];
+
+        let lhs_stride = lhs_l.stride();
+        let rhs_stride = rhs_l.stride();
+        let rank = lhs_stride.len();
+        let lhs_cs = lhs_stride[rank - 1];
+        let lhs_rs = lhs_stride[rank - 2];
+
+        let rhs_cs = rhs_stride[rank - 1];
+        let rhs_rs = rhs_stride[rank - 2];
+
+        let a_skip: usize = match lhs_stride[..rank - 2] {
+            [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
+            [stride] => stride,
+            [] => m * k,
+            _ => Err(Error::UnexpectedStriding {
+                lhs_stride: lhs_stride.to_vec(),
+                rhs_stride: rhs_stride.to_vec(),
+            })?,
+        };
+        let b_skip: usize = match rhs_stride[..rank - 2] {
+            [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
+            [stride] => stride,
+            [] => n * k,
+            _ => Err(Error::UnexpectedStriding {
+                lhs_stride: lhs_stride.to_vec(),
+                rhs_stride: rhs_stride.to_vec(),
+            })?,
+        };
+        let c_skip: usize = m * n;
+
+        let dst_shape: Shape = (m, n).into();
+        let dst_strides = dst_shape.stride_contiguous();
+        let dst_rs = dst_strides[0];
+        let dst_cs = dst_strides[1];
+
+        let mut dst = vec![T::zero(); b * m * n];
+        let num_threads = crate::utils::get_num_threads();
+        let parallelism = if num_threads > 1 {
+            Parallelism::Rayon(num_threads)
+        } else {
+            Parallelism::None
+        };
+        for step in 0..b {
+            let lhs_p = &lhs[step * a_skip..];
+            let rhs_p = &rhs[step * b_skip..];
+            let dst_p = &mut dst[step * c_skip..];
+            unsafe {
+                gemm(
+                    /* m: usize = */ m,
+                    /* n: usize = */ n,
+                    /* k: usize = */ k,
+                    /* dst: *mut T = */ dst_p.as_mut_ptr(),
+                    /* dst_cs: isize = */ dst_cs as isize,
+                    /* dst_rs: isize = */ dst_rs as isize,
+                    /* read_dst: bool = */ false,
+                    /* lhs: *const T = */ lhs_p.as_ptr(),
+                    /* lhs_cs: isize = */ lhs_cs as isize,
+                    /* lhs_rs: isize = */ lhs_rs as isize,
+                    /* rhs: *const T = */ rhs_p.as_ptr(),
+                    /* rhs_cs: isize = */ rhs_cs as isize,
+                    /* rhs_rs: isize = */ rhs_rs as isize,
+                    /* alpha: T = */ T::zero(),
+                    /* beta: T = */ T::one(),
+                    /* conj_dst: bool = */ false,
+                    /* conj_lhs: bool = */ false,
+                    /* conj_rhs: bool = */ false,
+                    parallelism,
+                )
+            }
+        }
+        Ok(dst)
+    }
+
+    #[cfg(feature = "mkl")]
     fn f<T: 'static + num_traits::Num + Copy>(
         &self,
         lhs: &[T],
@@ -301,12 +387,6 @@ impl Map2 for MatMul {
         let c_skip: usize = m * n;
 
         let mut dst = vec![T::zero(); b * m * n];
-        let num_threads = crate::utils::get_num_threads();
-        let parallelism = if num_threads > 1 {
-            Parallelism::Rayon(num_threads)
-        } else {
-            Parallelism::None
-        };
         for step in 0..b {
             let lhs_p = &lhs[step * a_skip..];
             let rhs_p = &rhs[step * b_skip..];
