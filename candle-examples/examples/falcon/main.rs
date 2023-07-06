@@ -10,7 +10,10 @@ use clap::Parser;
 mod model;
 use model::{Config, Falcon, VarBuilder};
 
-const DTYPE: DType = DType::F16;
+#[cfg(feature = "mkl")]
+const DTYPE: DType = DType::F32;
+#[cfg(not(feature = "mkl"))]
+const DTYPE: DType = DType::BF16;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
