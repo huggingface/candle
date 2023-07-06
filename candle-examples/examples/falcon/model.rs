@@ -285,8 +285,13 @@ struct FalconRotaryEmbedding {
 }
 
 impl FalconRotaryEmbedding {
-    fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
-        let inv_freq = vb.get((1, cfg.head_dim()), &format!("{p}.inv_freq"))?;
+    fn load(vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+        let head_dim = cfg.head_dim();
+        let inv_freq: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / 10000f32.powf(i as f32 / head_dim as f32))
+            .collect();
+        let inv_freq = Tensor::new(inv_freq.as_slice(), &vb.device)?;
         Ok(Self { inv_freq })
     }
 
@@ -337,7 +342,7 @@ struct FalconAttention {
 impl FalconAttention {
     fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
         let maybe_rotary = if cfg.rotary() {
-            let rotary = FalconRotaryEmbedding::load(&format!("{p}.maybe_rotary"), vb, cfg)?;
+            let rotary = FalconRotaryEmbedding::load(vb, cfg)?;
             Some(rotary)
         } else {
             None
