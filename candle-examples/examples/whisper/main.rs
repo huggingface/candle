@@ -6,6 +6,9 @@
 // - Batch size greater than 1.
 // - More token filters (SuppressBlanks, ApplyTimestampRules).
 
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
+
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
 use candle_hub::{api::Api, Repo, RepoType};

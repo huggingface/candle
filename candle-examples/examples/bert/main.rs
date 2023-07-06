@@ -1,4 +1,8 @@
 #![allow(dead_code)]
+
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
+
 use anyhow::{anyhow, Error as E, Result};
 use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
 use candle_hub::{api::Api, Cache, Repo, RepoType};
