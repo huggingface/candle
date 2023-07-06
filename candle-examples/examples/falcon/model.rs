@@ -197,6 +197,7 @@ pub struct Config {
     attention_dropout: f64,
     n_head_kv: Option<usize>,
     alibi: bool,
+    new_decoder_architecture: bool,
     multi_query: bool,
     parallel_attn: bool,
     bias: bool,
@@ -218,6 +219,7 @@ impl Default for Config {
             attention_dropout: 0.0,
             n_head_kv: None,
             alibi: false,
+            new_decoder_architecture: false,
             multi_query: true,
             parallel_attn: true,
             bias: false,
@@ -229,6 +231,9 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.alibi {
             anyhow::bail!("alibi is not supported");
+        }
+        if self.new_decoder_architecture {
+            anyhow::bail!("new_decoder_architecture is not supported");
         }
         if self.n_head_kv.is_some() {
             anyhow::bail!("n_head_kv is not supported");
@@ -254,6 +259,7 @@ impl Config {
             attention_dropout: 0.,
             n_head_kv: None,
             alibi: false,
+            new_decoder_architecture: false,
             multi_query: true,
             parallel_attn: true,
             bias: false,
@@ -315,7 +321,14 @@ impl FalconRotaryEmbedding {
 
 #[derive(Debug)]
 struct FalconAttention {
+    query_key_value: Linear,
+    dense: Linear,
     maybe_rotary: Option<FalconRotaryEmbedding>,
+    inv_norm_factor: f64,
+    multi_query: bool,
+    num_heads: usize,
+    head_dim: usize,
+    n_head_kv: usize,
 }
 
 impl FalconAttention {
@@ -326,10 +339,71 @@ impl FalconAttention {
         } else {
             None
         };
-        Ok(Self { maybe_rotary })
+        let head_dim = cfg.head_dim();
+        let hidden_size = cfg.hidden_size;
+        let qkv_out_dim = if cfg.multi_query {
+            hidden_size + 2 * head_dim
+        } else {
+            3 * hidden_size
+        };
+        let query_key_value = Linear::load(
+            hidden_size,
+            qkv_out_dim,
+            &format!("{p}.query_key_value"),
+            vb,
+        )?;
+        let dense = Linear::load(hidden_size, hidden_size, &format!("{p}.dense"), vb)?;
+        Ok(Self {
+            query_key_value,
+            dense,
+            maybe_rotary,
+            inv_norm_factor: 1. / (head_dim as f64).sqrt(),
+            multi_query: cfg.multi_query,
+            num_heads: cfg.num_attention_heads,
+            n_head_kv: cfg.n_head_kv.unwrap_or(1),
+            head_dim,
+        })
     }
 
-    fn forward(&self, _x: Tensor) -> Result<Tensor> {
+    fn split_heads(&self, fused_qkv: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+        let (b_sz, seq_len, _) = fused_qkv.shape().r3()?;
+        if !self.multi_query {
+            let fused_qkv = fused_qkv.reshape((b_sz, seq_len, self.num_heads, 3, self.head_dim))?;
+            let q = fused_qkv.narrow(D::Minus2, 0, 1)?.squeeze(D::Minus2)?;
+            let k = fused_qkv.narrow(D::Minus2, 1, 1)?.squeeze(D::Minus2)?;
+            let v = fused_qkv.narrow(D::Minus2, 2, 1)?.squeeze(D::Minus2)?;
+            Ok((q, k, v))
+        } else {
+            let fused_qkv =
+                fused_qkv.reshape((b_sz, seq_len, self.num_heads + 2, self.head_dim))?;
+            let d = fused_qkv.dim(D::Minus2)?;
+            let q = fused_qkv.narrow(D::Minus2, 0, d - 2)?;
+            let k = fused_qkv.narrow(D::Minus2, d - 2, 1)?;
+            let v = fused_qkv.narrow(D::Minus2, d - 1, 1)?;
+            Ok((q, k, v))
+        }
+    }
+
+    fn forward(&mut self, x: &Tensor) -> Result<Tensor> {
+        let fused_qkv = self.query_key_value.forward(x)?;
+        let head_dim = self.head_dim;
+        let (query, key, value) = self.split_heads(&fused_qkv)?;
+        let (b_sz, q_len, _) = query.shape().r3()?;
+        let query = query
+            .transpose(1, 2)?
+            .reshape((b_sz * self.num_heads, q_len, head_dim))?;
+        let key = key
+            .transpose(1, 2)?
+            .reshape((b_sz * self.n_head_kv, q_len, head_dim))?;
+        let _value = value
+            .transpose(1, 2)?
+            .reshape((b_sz * self.n_head_kv, q_len, head_dim))?;
+        let (_query, _key) = if let Some(r) = &mut self.maybe_rotary {
+            r.forward(&query, &key)?
+        } else {
+            (query, key)
+        };
+        // TODO: layer_past, use_cache?
         todo!()
     }
 }
