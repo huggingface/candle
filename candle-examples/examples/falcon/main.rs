@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let repo = Repo::new("Narsil/amall-7b".to_string(), RepoType::Model);
+    let repo = Repo::with_revision(args.model_id, RepoType::Model, args.revision);
     let tokenizer_filename = api.get(&repo, "tokenizer.json").await?;
     let mut filenames = vec![];
     for rfilename in [
