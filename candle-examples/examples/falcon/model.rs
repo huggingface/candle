@@ -304,7 +304,8 @@ impl FalconRotaryEmbedding {
         // TODO: Add the cache.
         let t: Vec<_> = (0..seq_len).map(|c| c as u32).collect();
         let t = Tensor::new(t.as_slice(), device)?.to_dtype(dtype)?;
-        let freqs = t.matmul(&self.inv_freq)?;
+        let inv_freq = self.inv_freq.to_dtype(dtype)?;
+        let freqs = t.unsqueeze(1)?.matmul(&inv_freq.unsqueeze(0)?)?;
         let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
         let cos = emb.cos()?;
         let sin = emb.sin()?;
@@ -314,8 +315,8 @@ impl FalconRotaryEmbedding {
     fn forward(&mut self, query: &Tensor, key: &Tensor) -> Result<(Tensor, Tensor)> {
         let (_batch, seq_len, _head_dim) = query.shape().r3()?;
         let (cos, sin) = self.cos_sin(seq_len, &query.device(), query.dtype())?;
-        let qs = ((query * &cos)? + (&rotate_half(query)? * &sin)?)?;
-        let ks = ((key * &cos)? + (&rotate_half(key)? * &sin)?)?;
+        let qs = (query.broadcast_mul(&cos)? + &rotate_half(query)?.broadcast_mul(&sin)?)?;
+        let ks = (key.broadcast_mul(&cos)? + &rotate_half(key)?.broadcast_mul(&sin)?)?;
         Ok((qs, ks))
     }
 }
