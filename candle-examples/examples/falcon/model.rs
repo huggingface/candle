@@ -403,7 +403,7 @@ impl FalconAttention {
         let fused_qkv = self.query_key_value.forward(x)?;
         let head_dim = self.head_dim;
         let (query, key, value) = self.split_heads(&fused_qkv)?;
-        let (b_sz, q_len, _) = query.shape().r3()?;
+        let (b_sz, q_len, _, _) = query.shape().r4()?;
         let query = query
             .transpose(1, 2)?
             .reshape((b_sz * self.num_heads, q_len, head_dim))?;
