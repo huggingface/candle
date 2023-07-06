@@ -1,4 +1,8 @@
 #![allow(dead_code)]
+
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
+
 use candle::{Result, Tensor};
 
 #[macro_export]
