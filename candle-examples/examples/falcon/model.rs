@@ -461,6 +461,7 @@ struct FalconDecoderLayer {
     self_attention: FalconAttention,
     post_attention_layernorm: Option<LayerNorm>,
     mlp: FalconMlp,
+    parallel_attn: bool,
 }
 
 impl FalconDecoderLayer {
@@ -489,11 +490,32 @@ impl FalconDecoderLayer {
             self_attention,
             post_attention_layernorm,
             mlp,
+            parallel_attn: cfg.parallel_attn,
         })
     }
 
-    fn forward(&self, _x: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&mut self, x: &Tensor, mask: &Tensor) -> Result<Tensor> {
+        let residual = x.clone();
+        let ln_attn = self.inp_layernorm.forward(x)?;
+        let attn_output = self.self_attention.forward(&ln_attn, mask)?;
+        let (residual, ln_mlp) = match &self.post_attention_layernorm {
+            None => (residual, ln_attn),
+            Some(pal) => {
+                // This should include some dropout.
+                let residual = (&attn_output + &residual)?;
+                let ln_mlp = pal.forward(&residual)?;
+                (residual, ln_mlp)
+            }
+        };
+        let mlp_output = self.mlp.forward(&ln_mlp)?;
+
+        let mlp_output = if self.parallel_attn {
+            (mlp_output + attn_output)?
+        } else {
+            mlp_output
+        };
+        let output = (mlp_output + residual)?;
+        Ok(output)
     }
 }
 
@@ -503,6 +525,21 @@ pub struct Falcon {
     h: Vec<FalconDecoderLayer>,
     ln_f: LayerNorm,
     config: Config,
+}
+
+fn make_causal_mask(t: usize) -> Result<Tensor> {
+    let mask: Vec<_> = (0..t)
+        .flat_map(|i| (0..t).map(move |j| u32::from(j > i)))
+        .collect();
+    let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
+    Ok(mask)
+}
+
+fn prepare_attn_mask(b_sz: usize, seq_len: usize) -> Result<Tensor> {
+    // let mask = Tensor::ones((b_sz, seq_len), DType::U32, &Device::Cpu)?;
+    let mask = make_causal_mask(seq_len)?;
+    let mask = mask.broadcast_as((b_sz, 1, seq_len, seq_len))?;
+    Ok(mask)
 }
 
 impl Falcon {
@@ -521,11 +558,12 @@ impl Falcon {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
-        let (_bsize, _seq_len) = input_ids.shape().r2()?;
+    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        let (b_sz, seq_len) = input_ids.shape().r2()?;
         let mut hidden_state = self.word_embeddings.forward(input_ids)?;
-        for block in self.h.iter() {
-            hidden_state = block.forward(&hidden_state)?;
+        let causal_mask = prepare_attn_mask(b_sz, seq_len)?.to_device(&input_ids.device())?;
+        for block in self.h.iter_mut() {
+            hidden_state = block.forward(&hidden_state, &causal_mask)?;
         }
         let hidden_state = self.ln_f.forward(&hidden_state)?;
         Ok(hidden_state)
