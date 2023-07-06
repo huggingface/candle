@@ -34,7 +34,8 @@ fn main() -> anyhow::Result<()> {
         Device::new_cuda(0)?
     };
     let vb = VarBuilder::zeros(DTYPE, &device);
-    let config = Config::default();
+    let config = Config::falcon7b();
+    config.validate()?;
     let _model = Falcon::load(&vb, config)?;
     Ok(())
 }

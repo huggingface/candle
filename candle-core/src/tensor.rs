@@ -660,6 +660,11 @@ impl Tensor {
         self.shape().dims()
     }
 
+    pub fn dim<D: Dim>(&self, dim: D) -> Result<usize> {
+        let dim = dim.to_index(self.shape(), "dim")?;
+        Ok(self.dims()[dim])
+    }
+
     pub fn layout(&self) -> &Layout {
         &self.layout
     }

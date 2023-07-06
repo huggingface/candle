@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
+use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor, D};
 use std::collections::HashMap;
 
 pub struct VarBuilder<'a> {
@@ -225,8 +225,114 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    pub fn validate(&self) -> Result<()> {
+        if self.alibi {
+            anyhow::bail!("alibi is not supported");
+        }
+        if self.n_head_kv.is_some() {
+            anyhow::bail!("n_head_kv is not supported");
+        }
+        Ok(())
+    }
+
+    // https://huggingface.co/tiiuae/falcon-7b/blob/main/config.json
+    pub fn falcon7b() -> Self {
+        // This is currently on par with the defaults, the defaults come from the Python default
+        // arguments for the config initialization whereas the following come from the json config.
+        Self {
+            vocab_size: 65024,
+            hidden_size: 4544,
+            num_hidden_layers: 32,
+            num_attention_heads: 71,
+            layer_norm_epsilon: 1e-5,
+            initializer_range: 0.02,
+            use_cache: true,
+            bos_token_id: 11,
+            eos_token_id: 11,
+            hidden_dropout: 0.,
+            attention_dropout: 0.,
+            n_head_kv: None,
+            alibi: false,
+            multi_query: true,
+            parallel_attn: true,
+            bias: false,
+        }
+    }
+
+    fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_attention_heads
+    }
+
+    fn rotary(&self) -> bool {
+        !self.alibi
+    }
+}
+
+fn rotate_half(x: &Tensor) -> Result<Tensor> {
+    let l = x.dim(D::Minus1)?;
+    let x1 = x.narrow(D::Minus1, 0, l / 2)?;
+    let x2 = x.narrow(D::Minus1, l / 2, l - l / 2)?;
+    let x21 = Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)?;
+    Ok(x21)
+}
+
 #[derive(Debug)]
-struct FalconAttention {}
+struct FalconRotaryEmbedding {
+    inv_freq: Tensor,
+}
+
+impl FalconRotaryEmbedding {
+    fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+        let inv_freq = vb.get((1, cfg.head_dim()), &format!("{p}.inv_freq"))?;
+        Ok(Self { inv_freq })
+    }
+
+    fn cos_sin(
+        &mut self,
+        seq_len: usize,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<(Tensor, Tensor)> {
+        // TODO: Add the cache.
+        let t: Vec<_> = (0..seq_len).map(|c| c as u32).collect();
+        let t = Tensor::new(t.as_slice(), device)?.to_dtype(dtype)?;
+        let freqs = t.matmul(&self.inv_freq)?;
+        let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
+        let cos = emb.cos()?;
+        let sin = emb.sin()?;
+        Ok((cos, sin))
+    }
+
+    fn forward(&mut self, query: &Tensor, key: &Tensor) -> Result<(Tensor, Tensor)> {
+        let (_batch, seq_len, _head_dim) = query.shape().r3()?;
+        let (cos, sin) = self.cos_sin(seq_len, &query.device(), query.dtype())?;
+        let qs = ((query * &cos)? + (&rotate_half(query)? * &sin)?)?;
+        let ks = ((key * &cos)? + (&rotate_half(key)? * &sin)?)?;
+        Ok((qs, ks))
+    }
+}
+
+#[derive(Debug)]
+struct FalconAttention {
+    maybe_rotary: Option<FalconRotaryEmbedding>,
+}
+
+impl FalconAttention {
+    fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+        let maybe_rotary = if cfg.rotary() {
+            let rotary = FalconRotaryEmbedding::load(&format!("{p}.maybe_rotary"), vb, cfg)?;
+            Some(rotary)
+        } else {
+            None
+        };
+        Ok(Self { maybe_rotary })
+    }
+
+    fn forward(&self, _x: Tensor) -> Result<Tensor> {
+        todo!()
+    }
+}
 
 #[derive(Debug)]
 struct FalconMlp {
@@ -272,7 +378,7 @@ impl FalconDecoderLayer {
             &format!("{p}.input_layernorm"),
             vb,
         )?;
-        let self_attention = FalconAttention {};
+        let self_attention = FalconAttention::load(&format!("{p}.self_attention"), vb, cfg)?;
         let post_attention_layernorm = if cfg.parallel_attn {
             None
         } else {
@@ -292,7 +398,7 @@ impl FalconDecoderLayer {
         })
     }
 
-    fn forward(_x: &Tensor) -> Result<Tensor> {
+    fn forward(&self, _x: &Tensor) -> Result<Tensor> {
         todo!()
     }
 }
@@ -319,5 +425,15 @@ impl Falcon {
             ln_f,
             config: cfg,
         })
+    }
+
+    pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+        let (_bsize, _seq_len) = input_ids.shape().r2()?;
+        let mut hidden_state = self.word_embeddings.forward(input_ids)?;
+        for block in self.h.iter() {
+            hidden_state = block.forward(&hidden_state)?;
+        }
+        let hidden_state = self.ln_f.forward(&hidden_state)?;
+        Ok(hidden_state)
     }
 }
