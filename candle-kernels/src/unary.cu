@@ -1,4 +1,6 @@
 #include "cuda_utils.cuh"
+#define _USE_MATH_DEFINES
+#include<math.h>
 #include<stdint.h>
 
 #define UNARY_OP(TYPENAME, FN_NAME, FUNC) \
