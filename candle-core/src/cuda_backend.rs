@@ -827,8 +827,17 @@ impl CudaStorage {
         let elem_count = b * m * n;
         let dev = &self.device;
         let slice = match (&self.slice, &rhs.slice) {
-            (CudaStorageSlice::BF16(_lhs), CudaStorageSlice::BF16(_rhs)) => {
-                todo!("bf16")
+            (CudaStorageSlice::BF16(lhs), CudaStorageSlice::BF16(rhs)) => {
+                let lhs = &lhs.slice(lhs_l.start_offset()..);
+                let rhs = &rhs.slice(rhs_l.start_offset()..);
+                let cfg = gemm_config(bf16::ONE, bf16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
+                let mut out = unsafe { dev.alloc::<bf16>(elem_count) }?;
+                unsafe {
+                    self.device
+                        .blas
+                        .gemm_strided_batched(cfg, rhs, lhs, &mut out)
+                }?;
+                CudaStorageSlice::BF16(out)
             }
             (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs)) => {
                 let lhs = &lhs.slice(lhs_l.start_offset()..);
