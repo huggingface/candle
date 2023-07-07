@@ -18,6 +18,8 @@ serde = { version = "1.0.166", features = ["derive"] }
 serde_json = "1.0.99"
 num-traits = "0.2.15"
 intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
+cudarc = { git = "https://github.com/coreylowman/cudarc.git", optional = true, features = ["f16", "nccl"] }
+safetensors = "0.3.1"
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
@@ -29,5 +31,10 @@ wav = "1.0.0"
 
 [features]
 default = ["cuda"]
-cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda", "dep:cudarc"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
+
+[[example]]
+name = "llama_multiprocess"
+required-features = ["cuda"]
+>>>>>>> d2ad4b8 ([TMP] TP sharded (non functional, and super slow ??))

@@ -38,7 +38,7 @@ mod backprop;
 mod conv;
 mod cpu_backend;
 #[cfg(feature = "cuda")]
-mod cuda_backend;
+pub mod cuda_backend;
 mod device;
 pub mod display;
 mod dtype;
@@ -54,7 +54,7 @@ pub mod safetensors;
 mod shape;
 mod storage;
 mod strided_index;
-mod tensor;
+pub mod tensor;
 pub mod utils;
 
 pub use cpu_backend::CpuStorage;

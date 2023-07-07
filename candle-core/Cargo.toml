@@ -15,7 +15,7 @@ byteorder = "1.4.3"
 candle-kernels = { path = "../candle-kernels", optional = true }
 # Re-enable this once 0.9.13 as been released as it would include the cublas-f16 changes
 # cudarc = { version = "0.9.13", optional = true, features = ["f16"] }
-cudarc = { git = "https://github.com/LaurentMazare/cudarc.git", branch = "cublas-bf16", optional = true, features = ["f16"] }
+cudarc = { git = "https://github.com/coreylowman/cudarc.git", optional = true, features = ["f16", "nccl"] }
 # TODO: Switch back to the official gemm implementation once something similar to
 # https://github.com/sarah-ek/gemm/pull/8 is available.
 gemm = { git = "https://github.com/LaurentMazare/gemm.git", branch = "f16-vectorize-pack" }

@@ -61,15 +61,15 @@ impl Tensor {
     }
 }
 
-fn convert_<T: WithDType>(view: st::TensorView<'_>, device: &Device) -> Result<Tensor> {
-    let v = view.data();
+fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
-    let elem_count = v.len() / size_in_bytes;
-    if (v.as_ptr() as usize) % size_in_bytes == 0 {
+    let elem_count = data.len() / size_in_bytes;
+    if (data.as_ptr() as usize) % size_in_bytes == 0 {
         // SAFETY This is safe because we just checked that this
         // was correctly aligned.
-        let data: &[T] = unsafe { std::slice::from_raw_parts(v.as_ptr() as *const T, elem_count) };
-        Tensor::from_slice(data, view.shape(), device)
+        let data: &[T] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const T, elem_count) };
+        Tensor::from_slice(data, shape, device)
     } else {
         // XXX: We need to specify `T` here, otherwise the compiler will infer u8 because of the following cast
         // Making this vector too small to fit a full f16/f32/f64 weights, resulting in out-of-bounds access
@@ -79,11 +79,15 @@ fn convert_<T: WithDType>(view: st::TensorView<'_>, device: &Device) -> Result<T
         // We're downgrading the `c` pointer from T to u8, which removes alignment
         // constraints.
         unsafe {
-            std::ptr::copy_nonoverlapping(v.as_ptr(), c.as_mut_ptr() as *mut u8, v.len());
+            std::ptr::copy_nonoverlapping(data.as_ptr(), c.as_mut_ptr() as *mut u8, data.len());
             c.set_len(elem_count)
         }
-        Tensor::from_slice(&c, view.shape(), device)
+        Tensor::from_slice(&c, shape, device)
     }
+}
+
+fn convert_<T: WithDType>(view: st::TensorView<'_>, device: &Device) -> Result<Tensor> {
+    convert_slice::<T>(view.data(), view.shape(), device)
 }
 
 fn convert_back_<T: WithDType>(value: Cow<'_, [T]>) -> Cow<'_, [u8]> {
@@ -153,8 +157,32 @@ impl MmapedFile {
 }
 
 impl<'a> SafeTensors<'a> {
+    pub fn view(&'a self, name: &str) -> Result<st::TensorView<'a>> {
+        Ok(self.0.tensor(name)?)
+    }
+
     pub fn tensor(&self, name: &str, device: &Device) -> Result<Tensor> {
         convert(self.0.tensor(name)?, device)
+    }
+
+    pub fn slice(
+        &self,
+        name: &str,
+        iterator: safetensors::slice::SliceIterator,
+        new_shape: &[usize],
+        device: &Device,
+    ) -> Result<Tensor> {
+        let view = self.0.tensor(name)?;
+        let data: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
+        match view.dtype() {
+            st::Dtype::U8 => convert_slice::<u8>(&data, new_shape, device),
+            st::Dtype::U32 => convert_slice::<u8>(&data, new_shape, device),
+            st::Dtype::BF16 => convert_slice::<half::bf16>(&data, new_shape, device),
+            st::Dtype::F16 => convert_slice::<half::f16>(&data, new_shape, device),
+            st::Dtype::F32 => convert_slice::<f32>(&data, new_shape, device),
+            st::Dtype::F64 => convert_slice::<f64>(&data, new_shape, device),
+            dtype => Err(Error::UnsupportedSafeTensorDtype(dtype)),
+        }
     }
 
     pub fn tensors(&self, device: &Device) -> Result<Vec<(String, Tensor)>> {

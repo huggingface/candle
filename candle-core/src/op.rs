@@ -3,7 +3,7 @@ use half::{bf16, f16};
 use num_traits::float::Float;
 
 #[derive(Clone)]
-pub(crate) enum Op {
+pub enum Op {
     Add(Tensor, Tensor),
     Mul(Tensor, Tensor),
     Sub(Tensor, Tensor),

@@ -349,7 +349,7 @@ impl BackendDevice for CudaDevice {
 }
 
 #[derive(Debug)]
-enum CudaStorageSlice {
+pub enum CudaStorageSlice {
     U8(CudaSlice<u8>),
     U32(CudaSlice<u32>),
     BF16(CudaSlice<bf16>),
@@ -758,8 +758,8 @@ fn slice_src_and_dst<'a, T>(
 
 #[derive(Debug)]
 pub struct CudaStorage {
-    slice: CudaStorageSlice,
-    device: CudaDevice,
+    pub slice: CudaStorageSlice,
+    pub device: CudaDevice,
 }
 
 fn gemm_config<T>(

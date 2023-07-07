@@ -113,7 +113,7 @@ macro_rules! broadcast_binary_op {
 }
 
 /// Creates a fresh tensor structure based on a storage and a shape, this uses contiguous strides.
-fn from_storage<S: Into<Shape>>(
+pub fn from_storage<S: Into<Shape>>(
     storage: Storage,
     shape: S,
     op: Option<Op>,
@@ -912,6 +912,10 @@ impl Tensor {
                 Ok(self.clone())
             }
         }
+    }
+
+    pub fn storage(&self) -> &Storage {
+        &self.storage
     }
 
     pub fn flatten<D1: Dim, D2: Dim>(&self, start_dim: D1, end_dim: D2) -> Result<Tensor> {
