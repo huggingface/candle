@@ -6,6 +6,7 @@ extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor, D};
+use candle_hub::{api::sync::Api, Repo, RepoType};
 use clap::Parser;
 use rand::{distributions::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
@@ -116,9 +117,6 @@ struct Args {
 }
 
 fn main() -> Result<()> {
-    use candle_hub::{api::sync::Api, Repo, RepoType};
-    use tokenizers::Tokenizer;
-
     let args = Args::parse();
     let device = if args.cpu {
         Device::Cpu
