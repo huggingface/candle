@@ -530,7 +530,14 @@ impl<'a> Map2 for Conv1D<'a> {
         let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }?;
-        let ds = dev.htod_copy([dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat())?;
+        let ds = if dims.len() == 3 {
+            [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
+        } else if dims.len() == 2 {
+            [&[1], dims, &[1], inp_l.stride(), k_l.dims(), k_l.stride()].concat()
+        } else {
+            panic!("unexpected input shape for conv1d {dims:?}")
+        };
+        let ds = dev.htod_copy(ds)?;
         let params = (el, l_out, p.stride, &ds, inp, k, &out);
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }?;
