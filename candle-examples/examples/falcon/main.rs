@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-// TODO: KV cache.
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
