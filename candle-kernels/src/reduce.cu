@@ -14,6 +14,7 @@ const int BLOCK_SIZE = 1024;
 template <typename T>
 __device__ void fast_sum(
     const size_t src_numel,
+    const size_t el_to_sum_per_block,
     const size_t num_dims, 
     const size_t *info,
     const T *src,
@@ -25,22 +26,25 @@ __device__ void fast_sum(
   __shared__ T shr[BLOCK_SIZE];
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
-  size_t grid_stride = (size_t)blockDim.x * (size_t)blockDim.x;
 
   shr[tid] = 0.0;
-  size_t idx = threadIdx.x + blockDim.x * blockIdx.x;
+  // Elements summed in this block range from dst_id * el_to_sum_per_block
+  // to (dst_id + 1) * el_to_sum_per_block.
+  size_t start_idx = dst_id * el_to_sum_per_block;
+  size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);
+  size_t idx = start_idx + tid;
 
-  while (idx < src_numel) {
+  while (idx < stop_idx) {
     // TODO: Fast version for the contiguous case.
     size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
     shr[tid] += src[strided_i];
-    idx += grid_stride;
+    idx += blockDim.x;
   }
 
   // Parallel reduction, see the slides:
   // https://www.olcf.ornl.gov/wp-content/uploads/2019/12/05_Atomics_Reductions_Warp_Shuffle.pdf
   // https://stackoverflow.com/questions/66078814/is-cuda-atomicadd-operation-faster-than-launch-another-kernel-when-we-do-reduce
-  for (size_t s = blockDim.x / 2; s > 0; s >>= 1) {
+  for (int s = blockDim.x / 2; s > 0; s >>= 1) {
     __syncthreads();
     if (tid < s) shr[tid] += shr[tid + s];
   }
@@ -51,12 +55,13 @@ __device__ void fast_sum(
 #define FAST_SUM_OP(TYPENAME, FN_NAME) \
 extern "C" __global__ void FN_NAME(  \
     const size_t src_numel, \
+    const size_t el_to_sum_per_block, \
     const size_t num_dims,  \
     const size_t *info, \
     const TYPENAME *src, \
     TYPENAME *dst \
 ) {  \
-  fast_sum(src_numel, num_dims, info, src, dst); \
+  fast_sum(src_numel, el_to_sum_per_block, num_dims, info, src, dst); \
 } \
 
 #define SUM_OP(TYPENAME, FN_NAME) \
