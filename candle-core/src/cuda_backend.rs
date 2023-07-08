@@ -357,6 +357,7 @@ impl Map1 for Affine {
     }
 }
 
+#[allow(dead_code)]
 struct Sum<'a>(&'a [usize]);
 impl<'a> Map1 for Sum<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -387,6 +388,56 @@ impl<'a> Map1 for Sum<'a> {
         let func = dev.get_or_load_func(&kernel_name::<T>("sum"), kernels::REDUCE)?;
         let out = dev.alloc_zeros::<T>(dst_el)?;
         let params = (el, src_dims.len(), sum_dims.len(), &ds, src, &out);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }?;
+        Ok(out)
+    }
+}
+
+#[allow(dead_code)]
+struct FastSum<'a>(&'a [usize]);
+impl<'a> Map1 for FastSum<'a> {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        src: &CudaSlice<T>,
+        dev: &CudaDevice,
+        layout: &Layout,
+    ) -> Result<CudaSlice<T>> {
+        let src_stride = layout.stride();
+        let src_dims = layout.shape().dims();
+        let src_el: usize = src_dims.iter().product();
+        // Source dims and strides with the sum dims at the end.
+        let mut dims = vec![];
+        let mut stride = vec![];
+        let mut dst_el: usize = 1;
+        for (dim_idx, &d) in src_dims.iter().enumerate() {
+            if !self.0.contains(&dim_idx) {
+                dst_el *= d;
+                dims.push(d);
+                stride.push(src_stride[dim_idx]);
+            }
+        }
+        for &dim_idx in self.0.iter() {
+            dims.push(src_dims[dim_idx]);
+            stride.push(src_stride[dim_idx]);
+        }
+        let el_to_sum_per_block = src_el / dst_el;
+        // The reduction loop requires the shared array to be properly initialized and for
+        // this we want the number of threads to be a power of two.
+        let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
+        let cfg = LaunchConfig {
+            // TODO: Maybe use grid_y if the output is too large?
+            // TODO: Specialized implementation when reducing on no or all dimensions or when
+            // reducing only aggregate a small number of elements together.
+            grid_dim: (dst_el as u32, 1, 1),
+            block_dim: (block_dim as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let ds = dev.htod_copy([dims.as_slice(), stride.as_slice()].concat())?;
+        let src = &src.slice(layout.start_offset()..);
+        let func = dev.get_or_load_func(&kernel_name::<T>("fast_sum"), kernels::REDUCE)?;
+        let out = dev.alloc_zeros::<T>(dst_el)?;
+        let params = (src_el, el_to_sum_per_block, src_dims.len(), &ds, src, &out);
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }?;
         Ok(out)
@@ -726,7 +777,7 @@ impl CudaStorage {
 
     pub(crate) fn sum(&self, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
         let device = self.device().clone();
-        let slice = Sum(sum_dims).map(&self.slice, &device, layout)?;
+        let slice = FastSum(sum_dims).map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
 
