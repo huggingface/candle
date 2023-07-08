@@ -3,6 +3,60 @@
 #include "cuda_utils.cuh"
 #include<stdint.h>
 
+const int BLOCK_SIZE = 1024;
+
+// Fast reduce sum kernel, this assumes that the dimensions to loop over are at
+// the end, each block is responsible for populating one value in the output array.
+// There are at most 1024 threads per block.
+template <typename T>
+__device__ void fast_sum(
+    const size_t src_numel,
+    const size_t dst_numel,
+    const size_t num_dims, 
+    const size_t *info,
+    const T *src,
+    T *dst
+) {
+  const size_t *dims = info;
+  const size_t *strides = info + num_dims;
+
+  __shared__ T shr[BLOCK_SIZE];
+  size_t tid = threadIdx.x;
+  size_t dst_id = blockIdx.x;
+
+  shr[tid] = 0.0;
+  size_t idx = threadIdx.x + blockDim.x * blockIdx.x;
+
+  while (idx < src_numel) {
+    // TODO: Fast version for the contiguous case.
+    size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
+    shr[tid] += src[strided_i];
+    idx += gridDim.x * blockDim.x;
+  }
+
+  // Parallel reduction, see the slides:
+  // https://www.olcf.ornl.gov/wp-content/uploads/2019/12/05_Atomics_Reductions_Warp_Shuffle.pdf
+  // https://stackoverflow.com/questions/66078814/is-cuda-atomicadd-operation-faster-than-launch-another-kernel-when-we-do-reduce
+  for (size_t s = blockDim.x / 2; s > 0; s >>= 1) {
+    __syncthreads();
+    if (tid < s) shr[tid] += shr[tid + s];
+  }
+
+  if (tid == 0) atomicAdd(dst + dst_id, shr[0]);
+}
+
+#define FAST_SUM_OP(TYPENAME, FN_NAME) \
+extern "C" __global__ void FN_NAME(  \
+    const size_t src_numel, \
+    const size_t dst_numel, \
+    const size_t num_dims,  \
+    const size_t *info, \
+    const TYPENAME *src, \
+    TYPENAME *dst \
+) {  \
+  fast_sum(src_numel, dst_numel, num_dims, info, src, dst); \
+} \
+
 #define SUM_OP(TYPENAME, FN_NAME) \
 extern "C" __global__ void FN_NAME(  \
     const size_t numel,  \
@@ -45,12 +99,18 @@ extern "C" __global__ void FN_NAME(  \
 
 #if __CUDA_ARCH__ >= 800
 SUM_OP(__nv_bfloat16, sum_bf16)
+FAST_SUM_OP(__nv_bfloat16, fast_sum_bf16)
 #endif
 
 #if __CUDA_ARCH__ >= 530
 SUM_OP(__half, sum_f16)
+FAST_SUM_OP(__half, fast_sum_f16)
 #endif
 
 SUM_OP(float, sum_f32)
 SUM_OP(double, sum_f64)
 SUM_OP(uint32_t, sum_u32)
+
+FAST_SUM_OP(float, fast_sum_f32)
+FAST_SUM_OP(double, fast_sum_f64)
+FAST_SUM_OP(uint32_t, fast_sum_u32)
