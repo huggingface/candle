@@ -505,6 +505,20 @@ impl<'a> Map1 for Embedding<'a> {
     }
 }
 
+struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
+impl<'a> Map2 for Conv1D<'a> {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        _src1: &CudaSlice<T>,
+        _layout1: &Layout,
+        _src2: &CudaSlice<T>,
+        _layout2: &Layout,
+        _dev: &CudaDevice,
+    ) -> Result<CudaSlice<T>> {
+        todo!()
+    }
+}
+
 struct WhereCond<'a>(&'a CudaStorage, &'a Layout);
 impl<'a> Map2 for WhereCond<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -854,12 +868,14 @@ impl CudaStorage {
 
     pub(crate) fn conv1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
-        todo!()
+        let device = self.device().clone();
+        let slice = Conv1D(params).map(&self.slice, l, &kernel.slice, kernel_l, &device)?;
+        Ok(Self { slice, device })
     }
 
     pub(crate) fn embedding(&self, layout: &Layout, rhs: &Self, rhs_l: &Layout) -> Result<Self> {
