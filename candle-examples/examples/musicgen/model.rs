@@ -249,16 +249,53 @@ impl Default for Config {
     }
 }
 
+fn get_embedding(num_embeddings: usize, embedding_dim: usize) -> Result<Tensor> {
+    let half_dim = embedding_dim / 2;
+    let emb = f64::ln(10000.) / (half_dim - 1) as f64;
+    let xs: Vec<_> = (0..num_embeddings).map(|v| v as f32).collect();
+    let xs = Tensor::from_vec(xs, (num_embeddings, 1), &Device::Cpu)?;
+    let ys: Vec<_> = (0..half_dim)
+        .map(|v| f64::exp(v as f64 * -emb) as f32)
+        .collect();
+    let ys = Tensor::from_vec(ys, (1, half_dim), &Device::Cpu)?;
+    let shape = (num_embeddings, half_dim);
+    let emb = (xs.broadcast_as(shape)? * ys.broadcast_as(shape)?)?;
+    let emb =
+        Tensor::cat(&[&emb.cos()?, &emb.sin()?], 1)?.reshape((num_embeddings, 2 * half_dim))?;
+    let emb = if embedding_dim % 2 == 1 {
+        let zeros = Tensor::zeros((num_embeddings, 1), DType::F32, &Device::Cpu)?;
+        Tensor::cat(&[&emb, &zeros], 1)?
+    } else {
+        emb
+    };
+    Ok(emb)
+}
+
 #[derive(Debug)]
-struct MusicgenSinusoidalPositionalEmbedding {}
+struct MusicgenSinusoidalPositionalEmbedding {
+    num_positions: usize,
+    embedding_dim: usize,
+    weights: Tensor,
+}
 
 impl MusicgenSinusoidalPositionalEmbedding {
-    fn load(_vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
-        Ok(Self {})
+    fn load(_vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+        let num_positions = cfg.max_position_embeddings;
+        let embedding_dim = cfg.hidden_size;
+        let weights = get_embedding(num_positions, embedding_dim)?;
+        Ok(Self {
+            num_positions,
+            embedding_dim,
+            weights,
+        })
     }
 
-    fn forward(&mut self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        let (_b_sz, _codebooks, seq_len) = input_ids.shape().r3()?;
+        if seq_len > self.weights.dim(0)? {
+            self.weights = get_embedding(seq_len, self.embedding_dim)?
+        }
+        Ok(self.weights.narrow(0, 0, seq_len)?)
     }
 }
 
@@ -373,7 +410,7 @@ impl MusicgenDecoderLayer {
         encoder_hidden_states: Option<&Tensor>,
     ) -> Result<Tensor> {
         let residual = xs.clone();
-        let xs = self.self_attn_layer_norm.forward(&xs)?;
+        let xs = self.self_attn_layer_norm.forward(xs)?;
         let xs = self.self_attn.forward(&xs, None, attention_mask)?;
         let mut xs = (xs + residual)?;
         if let Some(encoder_hidden_states) = &encoder_hidden_states {
