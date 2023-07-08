@@ -524,13 +524,14 @@ impl<'a> Map2 for Conv1D<'a> {
         let shape = inp_l.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
-        let dst_el = p.c_out * p.l_out() * p.b_size.unwrap_or(1);
+        let l_out = p.l_out();
+        let dst_el = p.c_out * l_out * p.b_size.unwrap_or(1);
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }?;
         let ds = dev.htod_copy([dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat())?;
-        let params = (el, dims.len(), p.padding, p.stride, &ds, inp, k, &out);
+        let params = (el, l_out, p.stride, &ds, inp, k, &out);
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }?;
         Ok(out)
