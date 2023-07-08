@@ -339,6 +339,7 @@ struct MusicgenDecoderLayer {
     fc1: Linear,
     fc2: Linear,
     final_layer_norm: LayerNorm,
+    activation_fn: HiddenAct,
 }
 
 impl MusicgenDecoderLayer {
@@ -361,11 +362,37 @@ impl MusicgenDecoderLayer {
             fc1,
             fc2,
             final_layer_norm,
+            activation_fn: cfg.activation_function,
         })
     }
 
-    fn forward(&mut self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        attention_mask: &Tensor,
+        encoder_hidden_states: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let residual = xs.clone();
+        let xs = self.self_attn_layer_norm.forward(&xs)?;
+        let xs = self.self_attn.forward(&xs, None, attention_mask)?;
+        let mut xs = (xs + residual)?;
+        if let Some(encoder_hidden_states) = &encoder_hidden_states {
+            let residual = xs.clone();
+            let encoder_attention_mask = attention_mask.clone(); // TODO
+            xs = self.encoder_attn.forward(
+                &xs,
+                Some(encoder_hidden_states),
+                &encoder_attention_mask,
+            )?;
+            xs = (xs + residual)?
+        }
+        let residual = xs.clone();
+        let xs = self.final_layer_norm.forward(&xs)?;
+        let xs = self.fc1.forward(&xs)?;
+        let xs = self.activation_fn.forward(&xs)?;
+        let xs = self.fc2.forward(&xs)?;
+        let xs = (xs + residual)?;
+        Ok(xs)
     }
 }
 
