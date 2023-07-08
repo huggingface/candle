@@ -139,6 +139,34 @@ fn sum(device: &Device) -> Result<()> {
     assert_eq!(tensor.sum(&[0])?.sum(&[1])?.to_vec2::<u32>()?, &[[7998000]]);
     assert_eq!(tensor.sum(&[1])?.sum(&[0])?.to_vec2::<u32>()?, &[[7998000]]);
     assert_eq!(tensor.sum(&[0])?.to_vec2::<u32>()?, &[[3998000, 4000000]]);
+
+    let t1 = tensor.reshape((200, 5, 4))?;
+    let t2 = t1.transpose(0, 2)?.contiguous()?.transpose(0, 2)?;
+    for tensor in [t1, t2] {
+        assert_eq!(tensor.sum(&[0, 1, 2])?.to_vec3::<u32>()?, &[[[7998000]]]);
+        assert_eq!(
+            tensor.sum(&[0])?.sum(&[2])?.sum(&[1])?.to_vec3::<u32>()?,
+            &[[[7998000]]]
+        );
+        assert_eq!(
+            tensor.sum(&[0])?.sum(&[1, 2])?.to_vec3::<u32>()?,
+            &[[[7998000]]]
+        );
+        assert_eq!(
+            tensor.sum(&[1])?.sum(&[0, 2])?.to_vec3::<u32>()?,
+            &[[[7998000]]]
+        );
+        assert_eq!(
+            tensor.sum(&[0])?.to_vec3::<u32>()?,
+            &[[
+                [398000, 398200, 398400, 398600],
+                [398800, 399000, 399200, 399400],
+                [399600, 399800, 400000, 400200],
+                [400400, 400600, 400800, 401000],
+                [401200, 401400, 401600, 401800]
+            ]]
+        );
+    }
     Ok(())
 }
 
