@@ -25,6 +25,7 @@ __device__ void fast_sum(
   __shared__ T shr[BLOCK_SIZE];
   size_t tid = threadIdx.x;
   size_t dst_id = blockIdx.x;
+  size_t grid_stride = (size_t)blockDim.x * (size_t)blockDim.x;
 
   shr[tid] = 0.0;
   size_t idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -33,7 +34,7 @@ __device__ void fast_sum(
     // TODO: Fast version for the contiguous case.
     size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
     shr[tid] += src[strided_i];
-    idx += gridDim.x * blockDim.x;
+    idx += grid_stride;
   }
 
   // Parallel reduction, see the slides:

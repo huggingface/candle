@@ -406,20 +406,30 @@ impl<'a> Map1 for FastSum<'a> {
         let src_stride = layout.stride();
         let src_dims = layout.shape().dims();
         let src_el: usize = src_dims.iter().product();
+        // Source dims and strides with the sum dims at the end.
+        let mut dims = vec![];
+        let mut stride = vec![];
         let mut dst_el: usize = 1;
         for (dim_idx, &d) in src_dims.iter().enumerate() {
             if !self.0.contains(&dim_idx) {
-                dst_el *= d
+                dst_el *= d;
+                dims.push(d);
+                stride.push(src_stride[dim_idx]);
             }
+        }
+        for &dim_idx in self.0.iter() {
+            dims.push(src_dims[dim_idx]);
+            stride.push(src_stride[dim_idx]);
         }
         let cfg = LaunchConfig {
             // TODO: Maybe use grid_y if the output is too large?
+            // TODO: Specialized implementation when reducing on no or all dimensions or when
+            // reducing only aggregate a small number of elements together.
             grid_dim: (dst_el as u32, 1, 1),
             block_dim: (1024, 1, 1),
             shared_mem_bytes: 0,
         };
-        // TODO: Sort the dims to put the sum ones at the end.
-        let ds = dev.htod_copy([src_dims, src_stride].concat())?;
+        let ds = dev.htod_copy([dims.as_slice(), stride.as_slice()].concat())?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("fast_sum"), kernels::REDUCE)?;
         let out = dev.alloc_zeros::<T>(dst_el)?;
@@ -763,7 +773,7 @@ impl CudaStorage {
 
     pub(crate) fn sum(&self, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
         let device = self.device().clone();
-        let slice = Sum(sum_dims).map(&self.slice, &device, layout)?;
+        let slice = FastSum(sum_dims).map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
 
