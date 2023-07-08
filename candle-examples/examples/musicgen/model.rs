@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use anyhow::Result;
-use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
+use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor, D};
 use std::collections::HashMap;
 
 const MAX_SEQ_LEN: usize = 5000;
@@ -266,6 +266,7 @@ impl MusicgenSinusoidalPositionalEmbedding {
 struct MusicgenAttention {
     scaling: f64,
     is_decoder: bool,
+    num_heads: usize,
     head_dim: usize,
     k_proj: Linear,
     v_proj: Linear,
@@ -276,7 +277,8 @@ struct MusicgenAttention {
 impl MusicgenAttention {
     fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
         let h = cfg.hidden_size;
-        let head_dim = h / cfg.num_attention_heads;
+        let num_heads = cfg.num_attention_heads;
+        let head_dim = h / num_heads;
         let k_proj = Linear::load(h, h, false, &format!("{p}.k_proj"), vb)?;
         let v_proj = Linear::load(h, h, false, &format!("{p}.v_proj"), vb)?;
         let q_proj = Linear::load(h, h, false, &format!("{p}.q_proj"), vb)?;
@@ -284,6 +286,7 @@ impl MusicgenAttention {
         Ok(Self {
             scaling: 1. / (head_dim as f64).sqrt(),
             is_decoder: true,
+            num_heads,
             head_dim,
             k_proj,
             v_proj,
@@ -292,8 +295,38 @@ impl MusicgenAttention {
         })
     }
 
-    fn forward(&mut self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        kv_states: Option<&Tensor>,
+        attention_mask: &Tensor,
+    ) -> Result<Tensor> {
+        let (b_sz, tgt_len, _) = xs.shape().r3()?;
+        let query_states = (self.q_proj.forward(xs)? * self.scaling)?;
+
+        let kv_states = kv_states.unwrap_or(xs);
+        let key_states = self.k_proj.forward(kv_states)?;
+        let value_states = self.v_proj.forward(kv_states)?;
+
+        let tgt = (b_sz, tgt_len, self.num_heads, self.head_dim);
+        let query_states = query_states.reshape(tgt)?.transpose(1, 2)?.contiguous()?;
+        let key_states = key_states.reshape(tgt)?.transpose(1, 2)?.contiguous()?;
+        let value_states = value_states.reshape(tgt)?.transpose(1, 2)?.contiguous()?;
+
+        let src_len = key_states.dim(1)?;
+        let attn_weights = query_states.matmul(&key_states.transpose(1, 2)?)?;
+        let attn_weights = attn_weights
+            .reshape((b_sz, self.num_heads, tgt_len, src_len))?
+            .broadcast_add(attention_mask)?;
+        let attn_weights = attn_weights.softmax(D::Minus1)?;
+        // TODO: layer_head_mask?
+        let attn_output = attn_weights
+            .matmul(&value_states)?
+            .reshape((b_sz, self.num_heads, tgt_len, self.head_dim))?
+            .transpose(1, 2)?
+            .reshape((b_sz, tgt_len, self.num_heads * self.head_dim))?;
+        let attn_output = self.out_proj.forward(&attn_output)?;
+        Ok(attn_output)
     }
 }
 
