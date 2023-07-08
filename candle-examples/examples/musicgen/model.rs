@@ -440,6 +440,8 @@ struct MusicgenDecoder {
     layers: Vec<MusicgenDecoderLayer>,
     layer_norm: LayerNorm,
     embed_scale: f64,
+    num_codebooks: usize,
+    d_model: usize,
 }
 
 impl MusicgenDecoder {
@@ -465,26 +467,71 @@ impl MusicgenDecoder {
             layers,
             layer_norm,
             embed_scale,
+            num_codebooks: cfg.num_codebooks,
+            d_model: cfg.hidden_size,
         })
     }
 
-    fn forward(&mut self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        let dev = input_ids.device();
+        let (b_sz_times_codebooks, seq_len) = input_ids.shape().r2()?;
+        let b_sz = b_sz_times_codebooks / self.num_codebooks;
+        let input = input_ids.reshape((b_sz, self.num_codebooks, seq_len))?;
+        let mut inputs_embeds = Tensor::zeros((b_sz, seq_len, self.d_model), DType::F32, &dev)?;
+        for (idx, codebook) in self.embed_tokens.iter().enumerate() {
+            let inp = input.narrow(1, idx, 1)?.squeeze(1)?;
+            inputs_embeds = (inputs_embeds + codebook.forward(&inp)?)?
+        }
+        let inputs_embeds = inputs_embeds;
+        let positions = self.embed_positions.forward(&input)?.to_device(&dev)?;
+        let mut xs = inputs_embeds.broadcast_add(&positions)?;
+        let attention_mask = xs.copy()?; // TODO
+        for (_layer_idx, decoder_layer) in self.layers.iter_mut().enumerate() {
+            xs = decoder_layer.forward(&xs, &attention_mask, None)?;
+        }
+        let xs = self.layer_norm.forward(&xs)?;
+        Ok(xs)
     }
 }
 
 #[derive(Debug)]
 struct MusicgenModel {
     decoder: MusicgenDecoder,
+    lm_heads: Vec<Linear>,
+    cfg: Config,
 }
 
 impl MusicgenModel {
-    fn load(vb: &VarBuilder, cfg: &Config) -> Result<Self> {
-        let decoder = MusicgenDecoder::load("decoder", vb, cfg)?;
-        Ok(Self { decoder })
+    fn config(&self) -> &Config {
+        &self.cfg
     }
 
-    fn forward(&mut self, _input_ids: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn load(vb: &VarBuilder, cfg: Config) -> Result<Self> {
+        let h = cfg.hidden_size;
+        let decoder = MusicgenDecoder::load("model.decoder", vb, &cfg)?;
+        let lm_heads = (0..cfg.num_codebooks)
+            .map(|i| Linear::load(h, cfg.vocab_size, false, &format!("lm_heads.{i}"), vb))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            decoder,
+            lm_heads,
+            cfg,
+        })
+    }
+
+    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        let (b_sz, seq_len) = input_ids.shape().r2()?;
+        let hidden_states = self.decoder.forward(input_ids)?;
+        let lm_logits = self
+            .lm_heads
+            .iter()
+            .map(|h| Ok(h.forward(&hidden_states)?))
+            .collect::<Result<Vec<_>>>()?;
+        let lm_logits = Tensor::stack(&lm_logits, 1)?.reshape((
+            b_sz * self.cfg.num_codebooks,
+            seq_len,
+            self.cfg.vocab_size,
+        ))?;
+        Ok(lm_logits)
     }
 }
