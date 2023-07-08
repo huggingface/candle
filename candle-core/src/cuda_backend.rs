@@ -509,13 +509,24 @@ struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
 impl<'a> Map2 for Conv1D<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
-        _src1: &CudaSlice<T>,
-        _layout1: &Layout,
-        _src2: &CudaSlice<T>,
-        _layout2: &Layout,
-        _dev: &CudaDevice,
+        inp: &CudaSlice<T>,
+        inp_l: &Layout,
+        k: &CudaSlice<T>,
+        k_l: &Layout,
+        dev: &CudaDevice,
     ) -> Result<CudaSlice<T>> {
-        todo!()
+        let shape = inp_l.shape();
+        let dims = shape.dims();
+        let el = shape.elem_count();
+        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), kernels::CONV)?;
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<T>(el) }?;
+        let ds = dev.htod_copy([dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat())?;
+        let params = (el, dims.len(), &ds, inp, k, &out);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }?;
+        Ok(out)
     }
 }
 
