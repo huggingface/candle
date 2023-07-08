@@ -472,6 +472,10 @@ impl MusicgenDecoder {
         })
     }
 
+    fn prepare_decoder_attention_mask(&self, _b_sz: usize, _seq_len: usize) -> Result<Tensor> {
+        todo!()
+    }
+
     fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         let dev = input_ids.device();
         let (b_sz_times_codebooks, seq_len) = input_ids.shape().r2()?;
@@ -485,7 +489,7 @@ impl MusicgenDecoder {
         let inputs_embeds = inputs_embeds;
         let positions = self.embed_positions.forward(&input)?.to_device(&dev)?;
         let mut xs = inputs_embeds.broadcast_add(&positions)?;
-        let attention_mask = xs.copy()?; // TODO
+        let attention_mask = self.prepare_decoder_attention_mask(b_sz, seq_len)?;
         for (_layer_idx, decoder_layer) in self.layers.iter_mut().enumerate() {
             xs = decoder_layer.forward(&xs, &attention_mask, None)?;
         }
