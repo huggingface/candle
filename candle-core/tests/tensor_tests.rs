@@ -124,6 +124,21 @@ fn sum(device: &Device) -> Result<()> {
         tensor.sum(&[2, 1])?.to_vec3::<u32>()?,
         &[[[8 + 15]], [[10 + 18]]]
     );
+    let data: Vec<u32> = (0..4000u32).collect();
+    let tensor = Tensor::new(data.as_slice(), device)?;
+    assert_eq!(tensor.sum(&[0])?.to_vec1::<u32>()?, &[7998000]);
+    let tensor = tensor.reshape((2000, 2))?;
+    assert_eq!(tensor.sum(&[0, 1])?.to_vec2::<u32>()?, &[[7998000]]);
+    assert_eq!(tensor.sum(&[0])?.sum(&[1])?.to_vec2::<u32>()?, &[[7998000]]);
+    assert_eq!(tensor.sum(&[1])?.sum(&[0])?.to_vec2::<u32>()?, &[[7998000]]);
+    assert_eq!(tensor.sum(&[0])?.to_vec2::<u32>()?, &[[3998000, 4000000]]);
+
+    // Make the tensor non contiguous.
+    let tensor = tensor.t()?.contiguous()?.t()?;
+    assert_eq!(tensor.sum(&[0, 1])?.to_vec2::<u32>()?, &[[7998000]]);
+    assert_eq!(tensor.sum(&[0])?.sum(&[1])?.to_vec2::<u32>()?, &[[7998000]]);
+    assert_eq!(tensor.sum(&[1])?.sum(&[0])?.to_vec2::<u32>()?, &[[7998000]]);
+    assert_eq!(tensor.sum(&[0])?.to_vec2::<u32>()?, &[[3998000, 4000000]]);
     Ok(())
 }
 
