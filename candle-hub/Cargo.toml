@@ -15,6 +15,7 @@ tokio = { version = "1.28.2", features = ["fs"], optional = true }
 serde = { version = "1.0.164", features = ["derive"], optional = true }
 serde_json = { version = "1.0.97", optional = true }
 indicatif = { version = "0.17.5", optional = true }
+num_cpus = { version = "1.16.0", optional = true }
 
 [dev-dependencies]
 rand = "0.8.5"
@@ -24,6 +25,5 @@ tokio-test = "0.4.2"
 
 [features]
 default = ["online"]
-online = ["reqwest", "tokio", "futures", "serde", "serde_json", "indicatif"]
-
-
+online = ["reqwest/blocking", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus"]
+tokio = ["online", "dep:tokio", "dep:futures"]

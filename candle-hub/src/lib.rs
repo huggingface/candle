@@ -103,6 +103,7 @@ impl Default for Cache {
                 let mut cache = dirs::home_dir().expect("Cache directory cannot be found");
                 cache.push(".cache");
                 cache.push("huggingface");
+                cache.push("hub");
                 cache
             }
         };

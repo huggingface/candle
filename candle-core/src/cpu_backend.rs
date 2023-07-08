@@ -1,6 +1,5 @@
 use crate::op::{BinaryOp, UnaryOp};
 use crate::{DType, Error, Layout, Result, Shape, WithDType};
-use gemm::{gemm, Parallelism};
 use half::{bf16, f16};
 
 // TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
@@ -202,10 +201,70 @@ fn copy_strided_src_<T: Copy + std::fmt::Display>(
     }
 }
 
+struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
+
+impl<'a> Map2 for Conv1D<'a> {
+    const OP: &'static str = "conv1d";
+    fn f<T: 'static + num_traits::NumAssign + Copy>(
+        &self,
+        inp: &[T],
+        inp_l: &Layout,
+        k: &[T],
+        k_l: &Layout,
+    ) -> Result<Vec<T>> {
+        // TODO: Optimize this (proper algorithm, simd, multithread, remove bound checks, etc).
+        let p = self.0;
+        let inp = &inp[inp_l.start_offset()..];
+        let k = &k[k_l.start_offset()..];
+        let inp_stride = inp_l.stride();
+        let (inp_stride0, inp_stride) = if inp_stride.len() == 3 {
+            (inp_stride[0], &inp_stride[1..])
+        } else {
+            (0, inp_stride) // This value never gets used anyway
+        };
+        let k_stride = k_l.stride();
+        let k_over_2 = p.k_size / 2;
+        let l_out = p.l_out();
+        let dst_elems = p.c_out * l_out * p.b_size.unwrap_or(1);
+        let mut dst = vec![T::zero(); dst_elems];
+        // The output shape is [b_size, c_out, l_out]
+        for b_idx in 0..p.b_size.unwrap_or(1) {
+            let inp_idx = b_idx * inp_stride0;
+            let dst_idx = b_idx * p.c_out * l_out;
+            for dst_c_idx in 0..p.c_out {
+                let dst_idx = dst_idx + dst_c_idx * l_out;
+                for dst_l in 0..l_out {
+                    let dst_idx = dst_idx + dst_l;
+                    let mut d = T::zero();
+                    for offset in 0..p.k_size {
+                        let src_l_plus = p.stride * dst_l + offset;
+                        // inp[bidx, src_c_idx, dst_l + offset - k//2] * k[dst_c_idx, src_c_idx, offset]
+                        if k_over_2 <= src_l_plus && src_l_plus < k_over_2 + p.l_in {
+                            let src_l = src_l_plus - k_over_2;
+                            for src_c_idx in 0..p.c_in {
+                                let inp_idx =
+                                    inp_idx + src_c_idx * inp_stride[0] + src_l * inp_stride[1];
+                                let k_idx = dst_c_idx * k_stride[0]
+                                    + src_c_idx * k_stride[1]
+                                    + offset * k_stride[2];
+                                d += inp[inp_idx] * k[k_idx]
+                            }
+                        }
+                    }
+                    dst[dst_idx] = d
+                }
+            }
+        }
+        Ok(dst)
+    }
+}
+
 struct MatMul((usize, usize, usize, usize));
 
 impl Map2 for MatMul {
     const OP: &'static str = "mat_mul";
+
+    #[cfg(not(feature = "mkl"))]
     fn f<T: 'static + num_traits::Num + Copy>(
         &self,
         lhs: &[T],
@@ -213,6 +272,7 @@ impl Map2 for MatMul {
         rhs: &[T],
         rhs_l: &Layout,
     ) -> Result<Vec<T>> {
+        use gemm::{gemm, Parallelism};
         let (b, m, n, k) = self.0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
@@ -283,6 +343,94 @@ impl Map2 for MatMul {
                     /* conj_lhs: bool = */ false,
                     /* conj_rhs: bool = */ false,
                     parallelism,
+                )
+            }
+        }
+        Ok(dst)
+    }
+
+    #[cfg(feature = "mkl")]
+    fn f<T: 'static + num_traits::Num + Copy>(
+        &self,
+        lhs: &[T],
+        lhs_l: &Layout,
+        rhs: &[T],
+        rhs_l: &Layout,
+    ) -> Result<Vec<T>> {
+        let (b, m, n, k) = self.0;
+        let lhs = &lhs[lhs_l.start_offset()..];
+        let rhs = &rhs[rhs_l.start_offset()..];
+
+        let lhs_stride = lhs_l.stride();
+        let rhs_stride = rhs_l.stride();
+        let rank = lhs_stride.len();
+
+        let a_skip: usize = match lhs_stride[..rank - 2] {
+            [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
+            [stride] => stride,
+            [] => m * k,
+            _ => Err(Error::UnexpectedStriding {
+                lhs_stride: lhs_stride.to_vec(),
+                rhs_stride: rhs_stride.to_vec(),
+            })?,
+        };
+        let b_skip: usize = match rhs_stride[..rank - 2] {
+            [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
+            [stride] => stride,
+            [] => n * k,
+            _ => Err(Error::UnexpectedStriding {
+                lhs_stride: lhs_stride.to_vec(),
+                rhs_stride: rhs_stride.to_vec(),
+            })?,
+        };
+        let c_skip: usize = m * n;
+
+        let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+        let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+        let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+        let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+
+        let (lda, transa) = if rhs_m1 == 1 && rhs_m2 == n {
+            (n as i32, b'N')
+        } else if rhs_m1 == k && rhs_m2 == 1 {
+            (k as i32, b'T')
+        } else {
+            Err(Error::MatMulNonContiguous {
+                lhs_stride: lhs_stride.to_vec(),
+                rhs_stride: rhs_stride.to_vec(),
+                mnk: (m, n, k),
+            })?
+        };
+        // The b tensor has dims batching, m, k (lhs)
+        let (ldb, transb) = if lhs_m1 == 1 && lhs_m2 == k {
+            (k as i32, b'N')
+        } else if lhs_m1 == m && lhs_m2 == 1 {
+            (m as i32, b'T')
+        } else {
+            Err(Error::MatMulNonContiguous {
+                lhs_stride: lhs_stride.to_vec(),
+                rhs_stride: rhs_stride.to_vec(),
+                mnk: (m, n, k),
+            })?
+        };
+
+        let mut dst = vec![T::zero(); b * m * n];
+        for step in 0..b {
+            let lhs_p = &lhs[step * a_skip..];
+            let rhs_p = &rhs[step * b_skip..];
+            let dst_p = &mut dst[step * c_skip..];
+            unsafe {
+                let a = rhs_p.as_ptr() as *const f32;
+                let b = lhs_p.as_ptr() as *const f32;
+                let c = dst_p.as_mut_ptr() as *mut f32;
+                let a = std::slice::from_raw_parts(a, a_skip);
+                let b = std::slice::from_raw_parts(b, b_skip);
+                let c = std::slice::from_raw_parts_mut(c, c_skip);
+                blas::sgemm(
+                    transa, transb, /* m= */ n as i32, /* n= */ m as i32,
+                    /* k= */ k as i32, /* alpha= */ 1., /* a= */ a,
+                    /* lda= */ lda, /* b= */ b, /* ldb= */ ldb, /* beta= */ 0.,
+                    /* c= */ c, /* ldc= */ n as i32,
                 )
             }
         }
@@ -625,6 +773,16 @@ impl CpuStorage {
         // TODO: Support types that could be casted to a boolean.
         let pred = self.as_slice::<u32>()?;
         WCond(pred, layout).map(t, t_l, f, f_l)
+    }
+
+    pub(crate) fn conv1d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
+    ) -> Result<Self> {
+        Conv1D(params).map(self, l, kernel, kernel_l)
     }
 
     pub(crate) fn embedding(&self, ids_l: &Layout, rhs: &Self, rhs_l: &Layout) -> Result<Self> {

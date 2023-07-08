@@ -1,11 +1,15 @@
 #![allow(dead_code)]
-// The tokenizer.json and weights should be retrieved from:
-// https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
 
-use anyhow::{Error as E, Result};
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
+
+use anyhow::{anyhow, Error as E, Result};
 use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
+use candle_hub::{api::sync::Api, Cache, Repo, RepoType};
 use clap::Parser;
+use serde::Deserialize;
 use std::collections::HashMap;
+use tokenizers::{PaddingParams, Tokenizer};
 
 const DTYPE: DType = DType::F32;
 
@@ -66,7 +70,8 @@ impl<'a> VarBuilder<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum HiddenAct {
     Gelu,
     Relu,
@@ -84,13 +89,15 @@ impl HiddenAct {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 enum PositionEmbeddingType {
+    #[default]
     Absolute,
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/configuration_bert.py#L1
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 struct Config {
     vocab_size: usize,
     hidden_size: usize,
@@ -104,9 +111,12 @@ struct Config {
     initializer_range: f64,
     layer_norm_eps: f64,
     pad_token_id: usize,
+    #[serde(default)]
     position_embedding_type: PositionEmbeddingType,
+    #[serde(default)]
     use_cache: bool,
     classifier_dropout: Option<f64>,
+    model_type: Option<String>,
 }
 
 impl Default for Config {
@@ -127,6 +137,7 @@ impl Default for Config {
             position_embedding_type: PositionEmbeddingType::Absolute,
             use_cache: true,
             classifier_dropout: None,
+            model_type: Some("bert".to_string()),
         }
     }
 }
@@ -150,6 +161,7 @@ impl Config {
             position_embedding_type: PositionEmbeddingType::Absolute,
             use_cache: true,
             classifier_dropout: None,
+            model_type: Some("bert".to_string()),
         }
     }
 }
@@ -235,8 +247,22 @@ impl LayerNorm {
     }
 
     fn load(size: usize, eps: f64, p: &str, vb: &VarBuilder) -> Result<Self> {
-        let weight = vb.get(size, &format!("{p}.weight"))?;
-        let bias = vb.get(size, &format!("{p}.bias"))?;
+        let (weight, bias) = match (
+            vb.get(size, &format!("{p}.weight")),
+            vb.get(size, &format!("{p}.bias")),
+        ) {
+            (Ok(weight), Ok(bias)) => (weight, bias),
+            (Err(err), _) | (_, Err(err)) => {
+                if let (Ok(weight), Ok(bias)) = (
+                    vb.get(size, &format!("{p}.gamma")),
+                    vb.get(size, &format!("{p}.beta")),
+                ) {
+                    (weight, bias)
+                } else {
+                    return Err(err.into());
+                }
+            }
+        };
         Ok(Self { weight, bias, eps })
     }
 
@@ -370,12 +396,12 @@ impl BertSelfAttention {
 
         let attention_scores = query_layer.matmul(&key_layer.t()?)?;
         let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
-        let attention_probs = attention_scores.softmax(attention_scores.rank() - 1)?;
+        let attention_probs = attention_scores.softmax(candle::D::Minus1)?;
         let attention_probs = self.dropout.forward(&attention_probs)?;
 
         let context_layer = attention_probs.matmul(&value_layer)?;
         let context_layer = context_layer.transpose(1, 2)?.contiguous()?;
-        let context_layer = context_layer.flatten(Some(context_layer.rank() - 2), None)?;
+        let context_layer = context_layer.flatten_from(candle::D::Minus2)?;
         Ok(context_layer)
     }
 }
@@ -563,15 +589,35 @@ impl BertEncoder {
 struct BertModel {
     embeddings: BertEmbeddings,
     encoder: BertEncoder,
+    device: Device,
 }
 
 impl BertModel {
     fn load(vb: &VarBuilder, config: &Config) -> Result<Self> {
-        let embeddings = BertEmbeddings::load("embeddings", vb, config)?;
-        let encoder = BertEncoder::load("encoder", vb, config)?;
+        let (embeddings, encoder) = match (
+            BertEmbeddings::load("embeddings", vb, config),
+            BertEncoder::load("encoder", vb, config),
+        ) {
+            (Ok(embeddings), Ok(encoder)) => (embeddings, encoder),
+            (Err(err), _) | (_, Err(err)) => {
+                if let Some(model_type) = &config.model_type {
+                    if let (Ok(embeddings), Ok(encoder)) = (
+                        BertEmbeddings::load(&format!("{model_type}.embeddings"), vb, config),
+                        BertEncoder::load(&format!("{model_type}.encoder"), vb, config),
+                    ) {
+                        (embeddings, encoder)
+                    } else {
+                        return Err(err);
+                    }
+                } else {
+                    return Err(err);
+                }
+            }
+        };
         Ok(Self {
             embeddings,
             encoder,
+            device: vb.device.clone(),
         })
     }
 
@@ -589,41 +635,155 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
+    /// Run offline (you must have the files already cached)
     #[arg(long)]
-    tokenizer_config: String,
+    offline: bool,
+
+    /// The model to use, check out available models: https://huggingface.co/models?library=sentence-transformers&sort=trending
+    #[arg(long)]
+    model_id: Option<String>,
 
     #[arg(long)]
-    weights: String,
+    revision: Option<String>,
+
+    /// When set, compute embeddings for this prompt.
+    #[arg(long)]
+    prompt: Option<String>,
+
+    /// The number of times to run the prompt.
+    #[arg(long, default_value = "1")]
+    n: usize,
+}
+
+impl Args {
+    fn build_model_and_tokenizer(&self) -> Result<(BertModel, Tokenizer)> {
+        let device = if self.cpu {
+            Device::Cpu
+        } else {
+            Device::new_cuda(0)?
+        };
+        let default_model = "sentence-transformers/all-MiniLM-L6-v2".to_string();
+        let default_revision = "refs/pr/21".to_string();
+        let (model_id, revision) = match (self.model_id.to_owned(), self.revision.to_owned()) {
+            (Some(model_id), Some(revision)) => (model_id, revision),
+            (Some(model_id), None) => (model_id, "main".to_string()),
+            (None, Some(revision)) => (default_model, revision),
+            (None, None) => (default_model, default_revision),
+        };
+
+        let repo = Repo::with_revision(model_id, RepoType::Model, revision);
+        let (config_filename, tokenizer_filename, weights_filename) = if self.offline {
+            let cache = Cache::default();
+            (
+                cache
+                    .get(&repo, "config.json")
+                    .ok_or(anyhow!("Missing config file in cache"))?,
+                cache
+                    .get(&repo, "tokenizer.json")
+                    .ok_or(anyhow!("Missing tokenizer file in cache"))?,
+                cache
+                    .get(&repo, "model.safetensors")
+                    .ok_or(anyhow!("Missing weights file in cache"))?,
+            )
+        } else {
+            let api = Api::new()?;
+            (
+                api.get(&repo, "config.json")?,
+                api.get(&repo, "tokenizer.json")?,
+                api.get(&repo, "model.safetensors")?,
+            )
+        };
+        let config = std::fs::read_to_string(config_filename)?;
+        let config: Config = serde_json::from_str(&config)?;
+        let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+
+        let weights = unsafe { candle::safetensors::MmapedFile::new(weights_filename)? };
+        let weights = weights.deserialize()?;
+        let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, device);
+        let model = BertModel::load(&vb, &config)?;
+        Ok((model, tokenizer))
+    }
 }
 
 fn main() -> Result<()> {
-    use tokenizers::Tokenizer;
+    let start = std::time::Instant::now();
 
     let args = Args::parse();
-    let device = if args.cpu {
-        Device::Cpu
+    let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
+    let device = &model.device;
+
+    if let Some(prompt) = args.prompt {
+        let tokenizer = tokenizer.with_padding(None).with_truncation(None);
+        let tokens = tokenizer
+            .encode(prompt, true)
+            .map_err(E::msg)?
+            .get_ids()
+            .to_vec();
+        let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
+        let token_type_ids = token_ids.zeros_like()?;
+        println!("Loaded and encoded {:?}", start.elapsed());
+        for _ in 0..args.n {
+            let start = std::time::Instant::now();
+            let _ys = model.forward(&token_ids, &token_type_ids)?;
+            println!("Took {:?}", start.elapsed());
+        }
     } else {
-        Device::new_cuda(0)?
-    };
+        let sentences = [
+            "The cat sits outside",
+            "A man is playing guitar",
+            "I love pasta",
+            "The new movie is awesome",
+            "The cat plays in the garden",
+            "A woman watches TV",
+            "The new movie is so great",
+            "Do you like pizza?",
+        ];
+        let n_sentences = sentences.len();
+        if let Some(pp) = tokenizer.get_padding_mut() {
+            pp.strategy = tokenizers::PaddingStrategy::BatchLongest
+        } else {
+            let pp = PaddingParams {
+                strategy: tokenizers::PaddingStrategy::BatchLongest,
+                ..Default::default()
+            };
+            tokenizer.with_padding(Some(pp));
+        }
+        let tokens = tokenizer
+            .encode_batch(sentences.to_vec(), true)
+            .map_err(E::msg)?;
+        let token_ids = tokens
+            .iter()
+            .map(|tokens| {
+                let tokens = tokens.get_ids().to_vec();
+                Ok(Tensor::new(tokens.as_slice(), device)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-    let mut tokenizer = Tokenizer::from_file(args.tokenizer_config).map_err(E::msg)?;
-    let tokenizer = tokenizer.with_padding(None).with_truncation(None);
-
-    let weights = unsafe { candle::safetensors::MmapedFile::new(args.weights)? };
-    let weights = weights.deserialize()?;
-    let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, device.clone());
-    let config = Config::all_mini_lm_l6_v2();
-    let model = BertModel::load(&vb, &config)?;
-
-    let tokens = tokenizer
-        .encode("This is an example sentence", true)
-        .map_err(E::msg)?
-        .get_ids()
-        .to_vec();
-    let token_ids = Tensor::new(&tokens[..], &device)?.unsqueeze(0)?;
-    println!("{token_ids}");
-    let token_type_ids = token_ids.zeros_like()?;
-    let ys = model.forward(&token_ids, &token_type_ids)?;
-    println!("{ys}");
+        let token_ids = Tensor::stack(&token_ids, 0)?;
+        let token_type_ids = token_ids.zeros_like()?;
+        println!("running inference on batch {:?}", token_ids.shape());
+        let embeddings = model.forward(&token_ids, &token_type_ids)?;
+        println!("generated embeddings {:?}", embeddings.shape());
+        // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
+        let (_n_sentence, n_tokens, _hidden_size) = embeddings.shape().r3()?;
+        let embeddings = (embeddings.sum(&[1])? / (n_tokens as f64))?.squeeze(1)?;
+        println!("pooled embeddings {:?}", embeddings.shape());
+        let mut similarities = vec![];
+        for i in 0..n_sentences {
+            let e_i = embeddings.get(i)?;
+            for j in (i + 1)..n_sentences {
+                let e_j = embeddings.get(j)?;
+                let sum_ij = (&e_i * &e_j)?.sum_all()?.reshape(())?.to_scalar::<f32>()?;
+                let sum_i2 = (&e_i * &e_i)?.sum_all()?.reshape(())?.to_scalar::<f32>()?;
+                let sum_j2 = (&e_j * &e_j)?.sum_all()?.reshape(())?.to_scalar::<f32>()?;
+                let cosine_similarity = sum_ij / (sum_i2 * sum_j2).sqrt();
+                similarities.push((cosine_similarity, i, j))
+            }
+        }
+        similarities.sort_by(|u, v| v.0.total_cmp(&u.0));
+        for &(score, i, j) in similarities[..5].iter() {
+            println!("score: {score:.2} '{}' '{}'", sentences[i], sentences[j])
+        }
+    }
     Ok(())
 }

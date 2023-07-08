@@ -12,6 +12,10 @@ readme = "README.md"
 
 [dependencies]
 candle = { path = "../candle-core", default-features=false }
+serde = { version = "1.0.166", features = ["derive"] }
+serde_json = "1.0.99"
+num-traits = "0.2.15"
+intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
@@ -19,8 +23,9 @@ candle-hub = { path = "../candle-hub" }
 clap = { version = "4.2.4", features = ["derive"] }
 rand = "0.8.5"
 tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
-tokio = { version = "1.28.2", features = ["macros", "rt-multi-thread"] }
+wav = "1.0.0"
 
 [features]
 default = ["cuda"]
 cuda = ["candle/cuda"]
+mkl = ["dep:intel-mkl-src", "candle/mkl"]

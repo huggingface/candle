@@ -1,4 +1,5 @@
 mod backprop;
+mod conv;
 mod cpu_backend;
 #[cfg(feature = "cuda")]
 mod cuda_backend;
@@ -22,7 +23,7 @@ pub use device::{Device, DeviceLocation};
 pub use dtype::{DType, WithDType};
 pub use error::{Error, Result};
 pub use layout::Layout;
-pub use shape::Shape;
+pub use shape::{Shape, D};
 pub use storage::Storage;
 use strided_index::StridedIndex;
 pub use tensor::{Tensor, TensorId};

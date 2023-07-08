@@ -1,5 +1,7 @@
-#include "cuda_utils.cuh"
+#define _USE_MATH_DEFINES
+#include<math.h>
 #include<stdint.h>
+#include "cuda_utils.cuh"
 
 #define UNARY_OP(TYPENAME, FN_NAME, FUNC) \
 extern "C" __global__ void FN_NAME( \

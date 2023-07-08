@@ -9,14 +9,17 @@
 // In order to convert the llama weights to a .npz file, run:
 // python examples/llama/convert_checkpoint.py ..../LLaMA/7B/consolidated.00.pth
 
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
+
 // TODO: This does not use a batch dimension. If adding it back, be cautious about the
 // transposition operations.
 use anyhow::{Error as E, Result};
 use clap::Parser;
 use rand::{distributions::Distribution, SeedableRng};
 
-use candle::{DType, Device, Tensor};
-use candle_hub::{api::Api, Repo, RepoType};
+use candle::{DType, Device, Tensor, D};
+use candle_hub::{api::sync::Api, Repo, RepoType};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +27,9 @@ mod var_store;
 mod weights;
 
 const MAX_SEQ_LEN: usize = 4096;
+#[cfg(feature = "mkl")]
+const DTYPE: DType = DType::F32;
+#[cfg(not(feature = "mkl"))]
 const DTYPE: DType = DType::F16;
 const DEFAULT_PROMPT: &str = r"
 EDWARD:
@@ -283,19 +289,18 @@ impl CausalSelfAttention {
         dims.push(v / 2);
         dims.push(2);
         let x = x.reshape(dims)?;
-        let rank = x.rank();
-        let re_x = x.narrow(rank - 1, 0, 1)?;
-        let im_x = x.narrow(rank - 1, 1, 1)?;
+        let re_x = x.narrow(D::Minus1, 0, 1)?;
+        let im_x = x.narrow(D::Minus1, 1, 1)?;
         let re_f = freqs_cis
-            .narrow(rank - 1, 0, 1)?
+            .narrow(D::Minus1, 0, 1)?
             .broadcast_as(re_x.shape())?;
         let im_f = freqs_cis
-            .narrow(rank - 1, 1, 1)?
+            .narrow(D::Minus1, 1, 1)?
             .broadcast_as(im_x.shape())?;
         let re = ((&re_x * &re_f)? - (&im_x * &im_f)?)?;
         let im = ((&re_x * &im_f)? + (&im_x * &re_f)?)?;
-        let rope = Tensor::cat(&[&re, &im], rank - 1)?;
-        let rope = rope.flatten(Some(rope.rank() - 2), None)?;
+        let rope = Tensor::cat(&[&re, &im], D::Minus1)?;
+        let rope = rope.flatten_from(D::Minus2)?;
         Ok(rope)
     }
 
@@ -335,11 +340,10 @@ impl CausalSelfAttention {
             cache[block_idx] = Some((k.clone(), v.clone()))
         }
 
-        let k_shape = k.shape();
-        let att = (q.matmul(&k.t()?)? / (*k_shape.dims().last().unwrap() as f64).sqrt())?;
+        let att = (q.matmul(&k.t()?)? / (k.dim(D::Minus1)? as f64).sqrt())?;
         let mask = self.cache.mask(t)?.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
-        let att = att.softmax(att.rank() - 1)?;
+        let att = att.softmax(D::Minus1)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(0, 1)?.reshape(&[t, c])?;
@@ -425,8 +429,7 @@ fn precompute_freqs_cis(config: &Config, device: &Device) -> Result<Tensor> {
     let shape = [1, MAX_SEQ_LEN, n_elem / 2, 1];
     let idx_theta_cos = idx_theta.cos()?.reshape(&shape)?;
     let idx_theta_sin = idx_theta.sin()?.reshape(&shape)?;
-    let last_dim = idx_theta_cos.rank() - 1;
-    Ok(Tensor::cat(&[&idx_theta_cos, &idx_theta_sin], last_dim)?)
+    Ok(Tensor::cat(&[&idx_theta_cos, &idx_theta_sin], D::Minus1)?)
 }
 
 #[derive(Parser, Debug)]
@@ -461,8 +464,7 @@ struct Args {
     prompt: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     use tokenizers::Tokenizer;
 
     let args = Args::parse();
@@ -485,13 +487,13 @@ async fn main() -> Result<()> {
             let api = Api::new()?;
             let repo = Repo::new("Narsil/amall-7b".to_string(), RepoType::Model);
             println!("building the model");
-            let tokenizer_filename = api.get(&repo, "tokenizer.json").await?;
+            let tokenizer_filename = api.get(&repo, "tokenizer.json")?;
             let mut filenames = vec![];
             for rfilename in [
                 "model-00001-of-00002.safetensors",
                 "model-00002-of-00002.safetensors",
             ] {
-                let filename = api.get(&repo, rfilename).await?;
+                let filename = api.get(&repo, rfilename)?;
                 filenames.push(filename);
             }
 
@@ -537,7 +539,7 @@ async fn main() -> Result<()> {
 
         let next_token = if let Some(temperature) = args.temperature {
             println!("Sampling with temperature {temperature:?}");
-            let prs = (&logits / temperature)?.softmax(logits.rank() - 1)?;
+            let prs = (&logits / temperature)?.softmax(D::Minus1)?;
             let logits_v: Vec<f32> = prs.to_vec1()?;
             let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
 

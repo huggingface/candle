@@ -2,20 +2,19 @@ use crate::{Cache, Repo};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use reqwest::{
+    blocking::Client,
     header::{
         HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
         CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
     },
     redirect::Policy,
-    Client, Error as ReqwestError,
+    Error as ReqwestError,
 };
 use serde::Deserialize;
+use std::io::{Seek, SeekFrom, Write};
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use thiserror::Error;
-use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
-use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -56,17 +55,6 @@ pub enum ApiError {
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
-
-    /// Semaphore cannot be acquired
-    #[error("Try acquire: {0}")]
-    TryAcquireError(#[from] TryAcquireError),
-
-    /// Semaphore cannot be acquired
-    #[error("Acquire: {0}")]
-    AcquireError(#[from] AcquireError),
-    // /// Semaphore cannot be acquired
-    // #[error("Invalid Response: {0:?}")]
-    // InvalidResponse(Response),
 }
 
 /// Siblings are simplified file descriptions of remote files on the hub
@@ -89,7 +77,6 @@ pub struct ApiBuilder {
     cache: Cache,
     url_template: String,
     token: Option<String>,
-    max_files: usize,
     chunk_size: usize,
     parallel_failures: usize,
     max_retries: usize,
@@ -105,7 +92,7 @@ impl Default for ApiBuilder {
 impl ApiBuilder {
     /// Default api builder
     /// ```
-    /// use candle_hub::api::ApiBuilder;
+    /// use candle_hub::api::sync::ApiBuilder;
     /// let api = ApiBuilder::new().build().unwrap();
     /// ```
     pub fn new() -> Self {
@@ -131,7 +118,6 @@ impl ApiBuilder {
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
-            max_files: 100,
             chunk_size: 10_000_000,
             parallel_failures: 0,
             max_retries: 0,
@@ -179,7 +165,6 @@ impl ApiBuilder {
             client,
 
             no_redirect_client,
-            max_files: self.max_files,
             chunk_size: self.chunk_size,
             parallel_failures: self.parallel_failures,
             max_retries: self.max_retries,
@@ -204,7 +189,6 @@ pub struct Api {
     cache: Cache,
     client: Client,
     no_redirect_client: Client,
-    max_files: usize,
     chunk_size: usize,
     parallel_failures: usize,
     max_retries: usize,
@@ -289,7 +273,7 @@ impl Api {
 
     /// Get the fully qualified URL of the remote filename
     /// ```
-    /// # use candle_hub::{api::Api, Repo};
+    /// # use candle_hub::{api::sync::Api, Repo};
     /// let api = Api::new().unwrap();
     /// let repo = Repo::model("gpt2".to_string());
     /// let url = api.url(&repo, "model.safetensors");
@@ -311,13 +295,12 @@ impl Api {
         &self.client
     }
 
-    async fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
+    fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let response = self
             .no_redirect_client
             .get(url)
             .header(RANGE, "bytes=0-0")
-            .send()
-            .await?;
+            .send()?;
         let response = response.error_for_status()?;
         let headers = response.headers();
         let header_commit = HeaderName::from_static("x-repo-commit");
@@ -344,8 +327,7 @@ impl Api {
             self.client
                 .get(headers.get(LOCATION).unwrap().to_str()?.to_string())
                 .header(RANGE, "bytes=0-0")
-                .send()
-                .await?
+                .send()?
         } else {
             response
         };
@@ -367,67 +349,61 @@ impl Api {
         })
     }
 
-    async fn download_tempfile(
+    fn download_tempfile(
         &self,
         url: &str,
         length: usize,
         progressbar: Option<ProgressBar>,
     ) -> Result<PathBuf, ApiError> {
-        let mut handles = vec![];
-        let semaphore = Arc::new(Semaphore::new(self.max_files));
-        let parallel_failures_semaphore = Arc::new(Semaphore::new(self.parallel_failures));
         let filename = temp_filename();
 
         // Create the file and set everything properly
-        tokio::fs::File::create(&filename)
-            .await?
-            .set_len(length as u64)
-            .await?;
+        std::fs::File::create(&filename)?.set_len(length as u64)?;
 
         let chunk_size = self.chunk_size;
-        for start in (0..length).step_by(chunk_size) {
+
+        let n_chunks = (length + chunk_size - 1) / chunk_size;
+        let n_threads = num_cpus::get();
+        let chunks_per_thread = (n_chunks + n_threads - 1) / n_threads;
+        let handles = (0..n_threads).map(|thread_id| {
             let url = url.to_string();
             let filename = filename.clone();
             let client = self.client.clone();
-
-            let stop = std::cmp::min(start + chunk_size - 1, length);
-            let permit = semaphore.clone().acquire_owned().await?;
             let parallel_failures = self.parallel_failures;
             let max_retries = self.max_retries;
-            let parallel_failures_semaphore = parallel_failures_semaphore.clone();
             let progress = progressbar.clone();
-            handles.push(tokio::spawn(async move {
-                let mut chunk = Self::download_chunk(&client, &url, &filename, start, stop).await;
-                let mut i = 0;
-                if parallel_failures > 0 {
-                    while let Err(dlerr) = chunk {
-                        let parallel_failure_permit =
-                            parallel_failures_semaphore.clone().try_acquire_owned()?;
+            std::thread::spawn(move || {
+                for chunk_id in chunks_per_thread * thread_id
+                    ..std::cmp::min(chunks_per_thread * (thread_id + 1), n_chunks)
+                {
+                    let start = chunk_id * chunk_size;
+                    let stop = std::cmp::min(start + chunk_size - 1, length);
+                    let mut chunk = Self::download_chunk(&client, &url, &filename, start, stop);
+                    let mut i = 0;
+                    if parallel_failures > 0 {
+                        while let Err(dlerr) = chunk {
+                            let wait_time = exponential_backoff(300, i, 10_000);
+                            std::thread::sleep(std::time::Duration::from_millis(wait_time as u64));
 
-                        let wait_time = exponential_backoff(300, i, 10_000);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(wait_time as u64))
-                            .await;
-
-                        chunk = Self::download_chunk(&client, &url, &filename, start, stop).await;
-                        i += 1;
-                        if i > max_retries {
-                            return Err(ApiError::TooManyRetries(dlerr.into()));
+                            chunk = Self::download_chunk(&client, &url, &filename, start, stop);
+                            i += 1;
+                            if i > max_retries {
+                                return Err(ApiError::TooManyRetries(dlerr.into()));
+                            }
                         }
-                        drop(parallel_failure_permit);
                     }
+                    if let Some(p) = &progress {
+                        p.inc((stop - start) as u64);
+                    }
+                    chunk?
                 }
-                drop(permit);
-                if let Some(p) = progress {
-                    p.inc((stop - start) as u64);
-                }
-                chunk
-            }));
-        }
+                Ok(())
+            })
+        });
 
-        // Output the chained result
-        let results: Vec<Result<Result<(), ApiError>, tokio::task::JoinError>> =
-            futures::future::join_all(handles).await;
-        let results: Result<(), ApiError> = results.into_iter().flatten().collect();
+        let results: Result<Vec<()>, ApiError> =
+            handles.into_iter().flat_map(|h| h.join()).collect();
+
         results?;
         if let Some(p) = progressbar {
             p.finish()
@@ -435,8 +411,8 @@ impl Api {
         Ok(filename)
     }
 
-    async fn download_chunk(
-        client: &reqwest::Client,
+    fn download_chunk(
+        client: &Client,
         url: &str,
         filename: &PathBuf,
         start: usize,
@@ -444,36 +420,30 @@ impl Api {
     ) -> Result<(), ApiError> {
         // Process each socket concurrently.
         let range = format!("bytes={start}-{stop}");
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(filename)
-            .await?;
-        file.seek(SeekFrom::Start(start as u64)).await?;
+        let mut file = std::fs::OpenOptions::new().write(true).open(filename)?;
+        file.seek(SeekFrom::Start(start as u64))?;
         let response = client
             .get(url)
             .header(RANGE, range)
-            .send()
-            .await?
+            .send()?
             .error_for_status()?;
-        let content = response.bytes().await?;
-        file.write_all(&content).await?;
+        let content = response.bytes()?;
+        file.write_all(&content)?;
         Ok(())
     }
 
     /// This will attempt the fetch the file locally first, then [`Api.download`]
     /// if the file is not present.
     /// ```no_run
-    /// # use candle_hub::{api::ApiBuilder, Repo};
-    /// # tokio_test::block_on(async {
+    /// use candle_hub::{api::sync::ApiBuilder, Repo};
     /// let api = ApiBuilder::new().build().unwrap();
     /// let repo = Repo::model("gpt2".to_string());
-    /// let local_filename = api.get(&repo, "model.safetensors").await.unwrap();
-    /// # })
-    pub async fn get(&self, repo: &Repo, filename: &str) -> Result<PathBuf, ApiError> {
+    /// let local_filename = api.get(&repo, "model.safetensors").unwrap();
+    pub fn get(&self, repo: &Repo, filename: &str) -> Result<PathBuf, ApiError> {
         if let Some(path) = self.cache.get(repo, filename) {
             Ok(path)
         } else {
-            self.download(repo, filename).await
+            self.download(repo, filename)
         }
     }
 
@@ -482,16 +452,14 @@ impl Api {
     /// This functions require internet access to verify if new versions of the file
     /// exist, even if a file is already on disk at location.
     /// ```no_run
-    /// # use candle_hub::{api::ApiBuilder, Repo};
-    /// # tokio_test::block_on(async {
+    /// # use candle_hub::{api::sync::ApiBuilder, Repo};
     /// let api = ApiBuilder::new().build().unwrap();
     /// let repo = Repo::model("gpt2".to_string());
-    /// let local_filename = api.download(&repo, "model.safetensors").await.unwrap();
-    /// # })
+    /// let local_filename = api.download(&repo, "model.safetensors").unwrap();
     /// ```
-    pub async fn download(&self, repo: &Repo, filename: &str) -> Result<PathBuf, ApiError> {
+    pub fn download(&self, repo: &Repo, filename: &str) -> Result<PathBuf, ApiError> {
         let url = self.url(repo, filename);
-        let metadata = self.metadata(&url).await?;
+        let metadata = self.metadata(&url)?;
 
         let blob_path = self.cache.blob_path(repo, &metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
@@ -516,14 +484,12 @@ impl Api {
             None
         };
 
-        let tmp_filename = self
-            .download_tempfile(&url, metadata.size, progressbar)
-            .await?;
+        let tmp_filename = self.download_tempfile(&url, metadata.size, progressbar)?;
 
-        if tokio::fs::rename(&tmp_filename, &blob_path).await.is_err() {
+        if std::fs::rename(&tmp_filename, &blob_path).is_err() {
             // Renaming may fail if locations are different mount points
             std::fs::File::create(&blob_path)?;
-            tokio::fs::copy(tmp_filename, &blob_path).await?;
+            std::fs::copy(tmp_filename, &blob_path)?;
         }
 
         let mut pointer_path = self.cache.pointer_path(repo, &metadata.commit_hash);
@@ -538,19 +504,17 @@ impl Api {
 
     /// Get information about the Repo
     /// ```
-    /// # use candle_hub::{api::Api, Repo};
-    /// # tokio_test::block_on(async {
+    /// use candle_hub::{api::sync::Api, Repo};
     /// let api = Api::new().unwrap();
     /// let repo = Repo::model("gpt2".to_string());
     /// api.info(&repo);
-    /// # })
     /// ```
-    pub async fn info(&self, repo: &Repo) -> Result<ModelInfo, ApiError> {
+    pub fn info(&self, repo: &Repo) -> Result<ModelInfo, ApiError> {
         let url = format!("{}/api/{}", self.endpoint, repo.api_url());
-        let response = self.client.get(url).send().await?;
+        let response = self.client.get(url).send()?;
         let response = response.error_for_status()?;
 
-        let model_info = response.json().await?;
+        let model_info = response.json()?;
 
         Ok(model_info)
     }
@@ -587,8 +551,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn simple() {
+    #[test]
+    fn simple() {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
             .with_progress(false)
@@ -596,7 +560,7 @@ mod tests {
             .build()
             .unwrap();
         let repo = Repo::new("julien-c/dummy-unknown".to_string(), RepoType::Model);
-        let downloaded_path = api.download(&repo, "config.json").await.unwrap();
+        let downloaded_path = api.download(&repo, "config.json").unwrap();
         assert!(downloaded_path.exists());
         let val = try_digest(&*downloaded_path).unwrap();
         assert_eq!(
@@ -609,8 +573,8 @@ mod tests {
         assert_eq!(cache_path, downloaded_path);
     }
 
-    #[tokio::test]
-    async fn dataset() {
+    #[test]
+    fn dataset() {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
             .with_progress(false)
@@ -624,7 +588,6 @@ mod tests {
         );
         let downloaded_path = api
             .download(&repo, "wikitext-103-v1/wikitext-test.parquet")
-            .await
             .unwrap();
         assert!(downloaded_path.exists());
         let val = try_digest(&*downloaded_path).unwrap();
@@ -634,8 +597,8 @@ mod tests {
         )
     }
 
-    #[tokio::test]
-    async fn info() {
+    #[test]
+    fn info() {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
             .with_progress(false)
@@ -647,7 +610,7 @@ mod tests {
             RepoType::Dataset,
             "refs/convert/parquet".to_string(),
         );
-        let model_info = api.info(&repo).await.unwrap();
+        let model_info = api.info(&repo).unwrap();
         assert_eq!(
             model_info,
             ModelInfo {
