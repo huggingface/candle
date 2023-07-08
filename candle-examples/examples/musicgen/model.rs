@@ -248,3 +248,146 @@ impl Default for Config {
         }
     }
 }
+
+#[derive(Debug)]
+struct MusicgenSinusoidalPositionalEmbedding {}
+
+impl MusicgenSinusoidalPositionalEmbedding {
+    fn load(_vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+        Ok(Self {})
+    }
+
+    fn forward(&mut self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct MusicgenAttention {
+    scaling: f64,
+    is_decoder: bool,
+    head_dim: usize,
+    k_proj: Linear,
+    v_proj: Linear,
+    q_proj: Linear,
+    out_proj: Linear,
+}
+
+impl MusicgenAttention {
+    fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+        let h = cfg.hidden_size;
+        let head_dim = h / cfg.num_attention_heads;
+        let k_proj = Linear::load(h, h, false, &format!("{p}.k_proj"), vb)?;
+        let v_proj = Linear::load(h, h, false, &format!("{p}.v_proj"), vb)?;
+        let q_proj = Linear::load(h, h, false, &format!("{p}.q_proj"), vb)?;
+        let out_proj = Linear::load(h, h, false, &format!("{p}.out_proj"), vb)?;
+        Ok(Self {
+            scaling: 1. / (head_dim as f64).sqrt(),
+            is_decoder: true,
+            head_dim,
+            k_proj,
+            v_proj,
+            q_proj,
+            out_proj,
+        })
+    }
+
+    fn forward(&mut self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct MusicgenDecoderLayer {
+    self_attn: MusicgenAttention,
+    self_attn_layer_norm: LayerNorm,
+    encoder_attn: MusicgenAttention,
+    encoder_attn_layer_norm: LayerNorm,
+    fc1: Linear,
+    fc2: Linear,
+    final_layer_norm: LayerNorm,
+}
+
+impl MusicgenDecoderLayer {
+    fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+        let h = cfg.hidden_size;
+        let self_attn = MusicgenAttention::load(&format!("{p}.self_attn"), vb, cfg)?;
+        let self_attn_layer_norm =
+            LayerNorm::load(h, 1e-5, &format!("{p}.self_attn_layer_norm"), vb)?;
+        let encoder_attn = MusicgenAttention::load(&format!("{p}.encoder_attn"), vb, cfg)?;
+        let encoder_attn_layer_norm =
+            LayerNorm::load(h, 1e-5, &format!("{p}.encoder_attn_layer_norm"), vb)?;
+        let fc1 = Linear::load(h, cfg.ffn_dim, false, &format!("{p}.fc1"), vb)?;
+        let fc2 = Linear::load(cfg.ffn_dim, h, false, &format!("{p}.fc2"), vb)?;
+        let final_layer_norm = LayerNorm::load(h, 1e-5, &format!("{p}.final_layer_norm"), vb)?;
+        Ok(Self {
+            self_attn,
+            self_attn_layer_norm,
+            encoder_attn,
+            encoder_attn_layer_norm,
+            fc1,
+            fc2,
+            final_layer_norm,
+        })
+    }
+
+    fn forward(&mut self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct MusicgenDecoder {
+    embed_tokens: Vec<Embedding>,
+    embed_positions: MusicgenSinusoidalPositionalEmbedding,
+    layers: Vec<MusicgenDecoderLayer>,
+    layer_norm: LayerNorm,
+    embed_scale: f64,
+}
+
+impl MusicgenDecoder {
+    fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+        let h = cfg.hidden_size;
+        let embed_scale = if cfg.scale_embedding {
+            (h as f64).sqrt()
+        } else {
+            1.
+        };
+        let embed_dim = cfg.vocab_size + 1;
+        let embed_tokens = (0..cfg.num_codebooks)
+            .map(|i| Embedding::load(embed_dim, h, &format!("{p}.embed_tokens.{i}"), vb))
+            .collect::<Result<Vec<_>>>()?;
+        let embed_positions = MusicgenSinusoidalPositionalEmbedding::load(vb, cfg)?;
+        let layers = (0..cfg.num_hidden_layers)
+            .map(|i| MusicgenDecoderLayer::load(&format!("{p}.layers.{i}"), vb, cfg))
+            .collect::<Result<Vec<_>>>()?;
+        let layer_norm = LayerNorm::load(h, 1e-5, &format!("{p}.layer_norm"), vb)?;
+        Ok(Self {
+            embed_tokens,
+            embed_positions,
+            layers,
+            layer_norm,
+            embed_scale,
+        })
+    }
+
+    fn forward(&mut self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct MusicgenModel {
+    decoder: MusicgenDecoder,
+}
+
+impl MusicgenModel {
+    fn load(vb: &VarBuilder, cfg: &Config) -> Result<Self> {
+        let decoder = MusicgenDecoder::load("decoder", vb, cfg)?;
+        Ok(Self { decoder })
+    }
+
+    fn forward(&mut self, _input_ids: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+}
