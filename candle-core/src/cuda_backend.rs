@@ -505,6 +505,46 @@ impl<'a> Map1 for Embedding<'a> {
     }
 }
 
+struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
+impl<'a> Map2 for Conv1D<'a> {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        inp: &CudaSlice<T>,
+        inp_l: &Layout,
+        k: &CudaSlice<T>,
+        k_l: &Layout,
+        dev: &CudaDevice,
+    ) -> Result<CudaSlice<T>> {
+        // Kernel shape: (c_out, c_in_k, k_size)
+        // Input shape: (b_size, c_in, l_in) or (c_in, l_in)
+        let p = &self.0;
+
+        let inp = &inp.slice(inp_l.start_offset()..);
+        let k = &k.slice(k_l.start_offset()..);
+        let shape = inp_l.shape();
+        let dims = shape.dims();
+        let el = shape.elem_count();
+        let l_out = p.l_out();
+        let dst_el = p.c_out * l_out * p.b_size.unwrap_or(1);
+        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), kernels::CONV)?;
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<T>(dst_el) }?;
+        let ds = if dims.len() == 3 {
+            [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
+        } else if dims.len() == 2 {
+            [&[1], dims, &[1], inp_l.stride(), k_l.dims(), k_l.stride()].concat()
+        } else {
+            panic!("unexpected input shape for conv1d {dims:?}")
+        };
+        let ds = dev.htod_copy(ds)?;
+        let params = (el, l_out, p.stride, &ds, inp, k, &out);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }?;
+        Ok(out)
+    }
+}
+
 struct WhereCond<'a>(&'a CudaStorage, &'a Layout);
 impl<'a> Map2 for WhereCond<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -854,12 +894,14 @@ impl CudaStorage {
 
     pub(crate) fn conv1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv1D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv1D,
     ) -> Result<Self> {
-        todo!()
+        let device = self.device().clone();
+        let slice = Conv1D(params).map(&self.slice, l, &kernel.slice, kernel_l, &device)?;
+        Ok(Self { slice, device })
     }
 
     pub(crate) fn embedding(&self, layout: &Layout, rhs: &Self, rhs_l: &Layout) -> Result<Self> {
