@@ -517,27 +517,20 @@ impl<'a> Map2 for Conv1D<'a> {
     ) -> Result<CudaSlice<T>> {
         // Kernel shape: (c_out, c_in_k, k_size)
         // Input shape: (b_size, c_in, l_in) or (c_in, l_in)
+        let p = &self.0;
 
         let inp = &inp.slice(inp_l.start_offset()..);
         let k = &k.slice(k_l.start_offset()..);
         let shape = inp_l.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let dst_el = p.c_out * p.l_out() * p.b_size.unwrap_or(1);
+        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(el) }?;
+        let out = unsafe { dev.alloc::<T>(dst_el) }?;
         let ds = dev.htod_copy([dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat())?;
-        let params = (
-            el,
-            dims.len(),
-            self.0.padding,
-            self.0.stride,
-            &ds,
-            inp,
-            k,
-            &out,
-        );
+        let params = (el, dims.len(), p.padding, p.stride, &ds, inp, k, &out);
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }?;
         Ok(out)

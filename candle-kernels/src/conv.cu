@@ -16,6 +16,8 @@ __device__ void conv1d(
   const size_t *strides = info + num_dims;
   const size_t *k_dims = info + 2 * num_dims;
   const size_t *k_strides = info + 3 * num_dims;
+  const size_t dst_i = blockIdx.x * blockDim.x + threadIdx.x;
+  dst[dst_i] = 0;
 }
 
 
