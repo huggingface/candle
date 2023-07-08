@@ -1,34 +1,51 @@
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+use std::str::FromStr;
+
 use anyhow::Result;
 use candle::{Device, Tensor};
 
+fn cos_sin(n: usize, device: &Device) -> Result<Tensor> {
+    let thetas: Vec<_> = (0..n).map(|i| (i as f32 / n as f32)).collect();
+    let xs: Vec<_> = thetas.iter().map(|t| t.cos().abs()).collect();
+    let ys: Vec<_> = thetas.iter().map(|t| t.sin().abs()).collect();
+    let xs = Tensor::from_vec(xs, (n, 1), device)?;
+    let ys = Tensor::from_vec(ys, (1, n), device)?;
+    let ys = Tensor::cat(&[&ys, &ys, &ys, &ys, &ys, &ys], 1)?;
+    Ok(xs.matmul(&ys)?)
+}
+
 fn main() -> Result<()> {
     let device = Device::new_cuda(0)?;
-    let ids = Tensor::new(&[0u32, 2u32, 1u32], &device)?;
-    let t = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], &device)?;
-    let hs = Tensor::embedding(&ids, &t)?;
-    println!("> {:?}", hs.to_vec2::<f32>());
-
-    let x = Tensor::new(&[3f32, 1., 4., 1., 5.], &device)?;
-    println!("{:?}", x.to_vec1::<f32>()?);
-    let y = Tensor::new(&[2f32, 7., 1., 8., 2.], &device)?;
-    let z = (y + x * 3.)?;
-    println!("{:?}", z.to_vec1::<f32>()?);
-    println!("{:?}", z.sqrt()?.to_vec1::<f32>()?);
-    let x = Tensor::new(&[[11f32, 22.], [33., 44.], [55., 66.], [77., 78.]], &device)?;
-    let y = Tensor::new(&[[1f32, 2., 3.], [4., 5., 6.]], &device)?;
-    println!("{:?}", y.to_vec2::<f32>()?);
-    let z = x.matmul(&y)?;
-    println!("{:?}", z.to_vec2::<f32>()?);
-    let x = Tensor::new(
-        &[[11f32, 22.], [33., 44.], [55., 66.], [77., 78.]],
-        &Device::Cpu,
-    )?;
-    let y = Tensor::new(&[[1f32, 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
-    println!("{:?}", y.to_vec2::<f32>()?);
-    let z = x.matmul(&y)?;
-    println!("{:?}", z.to_vec2::<f32>()?);
+    let args = std::env::args().collect::<Vec<String>>();
+    let n = if args.len() < 2 {
+        2000usize
+    } else {
+        usize::from_str(&args[1])?
+    };
+    let xys_cpu = cos_sin(n, &Device::Cpu)?;
+    let xys = cos_sin(n, &device)?;
+    println!("{xys_cpu:?} {xys:?}");
+    let sum_cpu = xys_cpu.sum(&[1])?;
+    println!("{sum_cpu}");
+    let sum = xys.sum(&[1])?;
+    println!("{sum}");
+    let start = std::time::Instant::now();
+    let n_iters = 100;
+    let mut v = 0f32;
+    for _i in 0..n_iters {
+        let sum = xys.sum(&[1])?;
+        let sum = sum.sum(&[0])?;
+        let sum: f32 = sum.reshape(&[])?.to_scalar()?;
+        v += sum;
+    }
+    let elapsed = start.elapsed();
+    if v > 0. {
+        println!(
+            "ran {n_iters} iterations, time per iter: {:?} ({v})",
+            elapsed.div_f64(n_iters as f64)
+        );
+    }
     Ok(())
 }
