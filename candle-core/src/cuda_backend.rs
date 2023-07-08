@@ -357,6 +357,7 @@ impl Map1 for Affine {
     }
 }
 
+#[allow(dead_code)]
 struct Sum<'a>(&'a [usize]);
 impl<'a> Map1 for Sum<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -387,6 +388,42 @@ impl<'a> Map1 for Sum<'a> {
         let func = dev.get_or_load_func(&kernel_name::<T>("sum"), kernels::REDUCE)?;
         let out = dev.alloc_zeros::<T>(dst_el)?;
         let params = (el, src_dims.len(), sum_dims.len(), &ds, src, &out);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }?;
+        Ok(out)
+    }
+}
+
+#[allow(dead_code)]
+struct FastSum<'a>(&'a [usize]);
+impl<'a> Map1 for FastSum<'a> {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        src: &CudaSlice<T>,
+        dev: &CudaDevice,
+        layout: &Layout,
+    ) -> Result<CudaSlice<T>> {
+        let src_stride = layout.stride();
+        let src_dims = layout.shape().dims();
+        let src_el: usize = src_dims.iter().product();
+        let mut dst_el: usize = 1;
+        for (dim_idx, &d) in src_dims.iter().enumerate() {
+            if !self.0.contains(&dim_idx) {
+                dst_el *= d
+            }
+        }
+        let cfg = LaunchConfig {
+            // TODO: Maybe use grid_y if the output is too large?
+            grid_dim: (dst_el as u32, 1, 1),
+            block_dim: (1024, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        // TODO: Sort the dims to put the sum ones at the end.
+        let ds = dev.htod_copy([src_dims, src_stride].concat())?;
+        let src = &src.slice(layout.start_offset()..);
+        let func = dev.get_or_load_func(&kernel_name::<T>("fast_sum"), kernels::REDUCE)?;
+        let out = dev.alloc_zeros::<T>(dst_el)?;
+        let params = (src_el, src_dims.len(), &ds, src, &out);
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }?;
         Ok(out)

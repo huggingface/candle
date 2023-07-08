@@ -5,13 +5,15 @@
 
 const int BLOCK_SIZE = 1024;
 
+// TODO: Maybe add some fast_sum_f16_f32 variant that not only accumulate in f32 but
+// also expect a f32 output so that this can be used for normalization e.g. in softmax.
+
 // Fast reduce sum kernel, this assumes that the dimensions to loop over are at
 // the end, each block is responsible for populating one value in the output array.
 // There are at most 1024 threads per block.
 template <typename T>
 __device__ void fast_sum(
     const size_t src_numel,
-    const size_t dst_numel,
     const size_t num_dims, 
     const size_t *info,
     const T *src,
@@ -48,13 +50,12 @@ __device__ void fast_sum(
 #define FAST_SUM_OP(TYPENAME, FN_NAME) \
 extern "C" __global__ void FN_NAME(  \
     const size_t src_numel, \
-    const size_t dst_numel, \
     const size_t num_dims,  \
     const size_t *info, \
     const TYPENAME *src, \
     TYPENAME *dst \
 ) {  \
-  fast_sum(src_numel, dst_numel, num_dims, info, src, dst); \
+  fast_sum(src_numel, num_dims, info, src, dst); \
 } \
 
 #define SUM_OP(TYPENAME, FN_NAME) \
