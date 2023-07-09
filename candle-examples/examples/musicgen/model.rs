@@ -185,6 +185,41 @@ impl Embedding {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConvConfig {
+    padding: usize,
+    stride: usize,
+}
+
+#[derive(Debug)]
+struct Conv1D {
+    weight: Tensor,
+    bias: Option<Tensor>,
+    config: ConvConfig,
+}
+
+impl Conv1D {
+    fn load(
+        in_channels: usize,
+        out_channels: usize,
+        kernel_size: usize,
+        config: ConvConfig,
+        p: &str,
+        vb: &VarBuilder,
+    ) -> Result<Self> {
+        let weight = vb.get(
+            (out_channels, in_channels, kernel_size),
+            &format!("{p}.weight"),
+        )?;
+        let bias = vb.get(out_channels, &format!("{p}.bias"))?;
+        Ok(Self {
+            weight,
+            bias: Some(bias),
+            config,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HiddenAct {
     Gelu,
     Relu,
@@ -913,7 +948,8 @@ impl EncodecResidualVectorQuantizer {
 struct EncodecLSTM {}
 
 impl EncodecLSTM {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
+    fn load(_dimension: usize, _p: &str, _vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
+        let _ = cfg.num_lstm_layers;
         todo!()
     }
 }
@@ -922,25 +958,58 @@ impl EncodecLSTM {
 struct EncodecConvTranspose1d {}
 
 impl EncodecConvTranspose1d {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
+    fn load(
+        _in_channels: usize,
+        _out_channels: usize,
+        _kernel_size: usize,
+        _stride: usize,
+        _p: &str,
+        _vb: &VarBuilder,
+    ) -> Result<Self> {
         todo!()
     }
 }
 
 #[derive(Debug)]
-struct EncodecConv1d {}
+struct EncodecConv1d {
+    conv: Conv1D,
+}
 
 impl EncodecConv1d {
-    fn load(_: usize, _: usize, _: usize, _p: &str, _vb: &VarBuilder) -> Result<Self> {
-        todo!()
+    fn load(
+        in_channels: usize,
+        out_channels: usize,
+        kernel_size: usize,
+        stride: usize,
+        p: &str,
+        vb: &VarBuilder,
+    ) -> Result<Self> {
+        let conv = Conv1D::load(
+            in_channels,
+            out_channels,
+            kernel_size,
+            ConvConfig { padding: 0, stride },
+            &format!("{p}.conv"),
+            vb,
+        )?;
+        Ok(Self { conv })
     }
 }
 
 #[derive(Debug)]
-struct EncodecResnetBlock {}
+struct EncodecResnetBlock {
+    block: Vec<EncodecConv1d>,
+    shortcut: Option<EncodecConv1d>,
+}
 
 impl EncodecResnetBlock {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
+    fn load(
+        _dim: usize,
+        _dilations: &[usize],
+        _p: &str,
+        _vb: &VarBuilder,
+        _cfg: &EncodecConfig,
+    ) -> Result<Self> {
         todo!()
     }
 }
@@ -966,6 +1035,8 @@ impl Layer {
 #[derive(Debug)]
 struct EncodecEncoder {
     init_conv: EncodecConv1d,
+    sampling_layers: Vec<(Vec<EncodecResnetBlock>, EncodecConv1d)>,
+    final_lstm: EncodecLSTM,
     final_conv: EncodecConv1d,
 }
 
@@ -976,30 +1047,114 @@ impl EncodecEncoder {
             cfg.audio_channels,
             cfg.num_filters,
             cfg.kernel_size,
+            1,
             &layer.next_name(),
             vb,
         )?;
-        let scaling = 1;
+        let mut sampling_layers = vec![];
+        let mut scaling = 1;
+        for &ratio in cfg.upsampling_ratios.iter().rev() {
+            let current_scale = scaling * cfg.num_filters;
+            let mut resnets = vec![];
+            for j in 0..(cfg.num_residual_layers as u32) {
+                let resnet = EncodecResnetBlock::load(
+                    current_scale,
+                    &[cfg.dilation_growth_rate.pow(j), 1],
+                    &layer.next_name(),
+                    vb,
+                    cfg,
+                )?;
+                resnets.push(resnet)
+            }
+            let conv1d = EncodecConv1d::load(
+                current_scale,
+                current_scale * 2,
+                ratio * 2,
+                ratio,
+                &layer.next_name(),
+                vb,
+            )?;
+            sampling_layers.push((resnets, conv1d));
+            scaling *= 2;
+        }
+        let final_lstm = EncodecLSTM::load(cfg.num_filters * scaling, &layer.next_name(), vb, cfg)?;
         let final_conv = EncodecConv1d::load(
             cfg.num_filters * scaling,
             cfg.hidden_size,
             cfg.last_kernel_size,
+            1,
             &layer.next_name(),
             vb,
         )?;
         Ok(Self {
             init_conv,
+            sampling_layers,
             final_conv,
+            final_lstm,
         })
     }
 }
 
 #[derive(Debug)]
-struct EncodecDecoder {}
+struct EncodecDecoder {
+    init_conv: EncodecConv1d,
+    init_lstm: EncodecLSTM,
+    sampling_layers: Vec<(EncodecConvTranspose1d, Vec<EncodecResnetBlock>)>,
+    final_conv: EncodecConv1d,
+}
 
 impl EncodecDecoder {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
-        todo!()
+    fn load(p: &str, vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
+        let mut layer = Layer::new(format!("{p}.layer"));
+        let mut scaling = usize::pow(2, cfg.upsampling_ratios.len() as u32);
+        let init_conv = EncodecConv1d::load(
+            cfg.hidden_size,
+            cfg.num_filters * scaling,
+            cfg.last_kernel_size,
+            1,
+            &layer.next_name(),
+            vb,
+        )?;
+        let init_lstm = EncodecLSTM::load(cfg.num_filters * scaling, &layer.next_name(), vb, cfg)?;
+        let mut sampling_layers = vec![];
+        for &ratio in cfg.upsampling_ratios.iter().rev() {
+            let current_scale = scaling * cfg.num_filters;
+            let conv1d = EncodecConvTranspose1d::load(
+                current_scale,
+                current_scale / 2,
+                ratio * 2,
+                ratio,
+                &layer.next_name(),
+                vb,
+            )?;
+            let mut resnets = vec![];
+            for j in 0..(cfg.num_residual_layers as u32) {
+                let resnet = EncodecResnetBlock::load(
+                    current_scale / 2,
+                    &[cfg.dilation_growth_rate.pow(j), 1],
+                    &layer.next_name(),
+                    vb,
+                    cfg,
+                )?;
+                resnets.push(resnet)
+            }
+            sampling_layers.push((conv1d, resnets));
+            scaling /= 2;
+        }
+        let final_conv = EncodecConv1d::load(
+            cfg.num_filters,
+            cfg.audio_channels,
+            cfg.last_kernel_size,
+            1,
+            &layer.next_name(),
+            vb,
+        )?;
+        Ok(Self {
+            init_conv,
+            init_lstm,
+            sampling_layers,
+            final_conv,
+        })
     }
 }
 
