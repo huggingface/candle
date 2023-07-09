@@ -886,7 +886,7 @@ impl Default for EncodecConfig {
 struct EncodecEuclideanCodebook {}
 
 impl EncodecEuclideanCodebook {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
         todo!()
     }
 }
@@ -895,7 +895,7 @@ impl EncodecEuclideanCodebook {
 struct EncodecVectorQuantization {}
 
 impl EncodecVectorQuantization {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
         todo!()
     }
 }
@@ -904,7 +904,7 @@ impl EncodecVectorQuantization {
 struct EncodecResidualVectorQuantizer {}
 
 impl EncodecResidualVectorQuantizer {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
         todo!()
     }
 }
@@ -913,7 +913,7 @@ impl EncodecResidualVectorQuantizer {
 struct EncodecLSTM {}
 
 impl EncodecLSTM {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
         todo!()
     }
 }
@@ -922,7 +922,7 @@ impl EncodecLSTM {
 struct EncodecConvTranspose1d {}
 
 impl EncodecConvTranspose1d {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
         todo!()
     }
 }
@@ -931,7 +931,7 @@ impl EncodecConvTranspose1d {
 struct EncodecConv1d {}
 
 impl EncodecConv1d {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+    fn load(_: usize, _: usize, _: usize, _p: &str, _vb: &VarBuilder) -> Result<Self> {
         todo!()
     }
 }
@@ -940,17 +940,57 @@ impl EncodecConv1d {
 struct EncodecResnetBlock {}
 
 impl EncodecResnetBlock {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
         todo!()
     }
 }
 
 #[derive(Debug)]
-struct EncodecEncoder {}
+struct Layer {
+    prefix: String,
+    cnt: usize,
+}
+
+impl Layer {
+    fn new(prefix: String) -> Self {
+        Self { prefix, cnt: 0 }
+    }
+
+    fn next_name(&mut self) -> String {
+        let name = format!("{}.{}", self.prefix, self.cnt);
+        self.cnt += 1;
+        name
+    }
+}
+
+#[derive(Debug)]
+struct EncodecEncoder {
+    init_conv: EncodecConv1d,
+    final_conv: EncodecConv1d,
+}
 
 impl EncodecEncoder {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
-        todo!()
+    fn load(p: &str, vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
+        let mut layer = Layer::new(format!("{p}.layer"));
+        let init_conv = EncodecConv1d::load(
+            cfg.audio_channels,
+            cfg.num_filters,
+            cfg.kernel_size,
+            &layer.next_name(),
+            vb,
+        )?;
+        let scaling = 1;
+        let final_conv = EncodecConv1d::load(
+            cfg.num_filters * scaling,
+            cfg.hidden_size,
+            cfg.last_kernel_size,
+            &layer.next_name(),
+            vb,
+        )?;
+        Ok(Self {
+            init_conv,
+            final_conv,
+        })
     }
 }
 
@@ -958,17 +998,28 @@ impl EncodecEncoder {
 struct EncodecDecoder {}
 
 impl EncodecDecoder {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
         todo!()
     }
 }
 
 #[derive(Debug)]
-struct EncodecModel {}
+struct EncodecModel {
+    encoder: EncodecEncoder,
+    decoder: EncodecDecoder,
+    quantizer: EncodecResidualVectorQuantizer,
+}
 
 impl EncodecModel {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
-        todo!()
+    fn load(p: &str, vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
+        let encoder = EncodecEncoder::load(&format!("{p}.encoder"), vb, cfg)?;
+        let decoder = EncodecDecoder::load(&format!("{p}.decoder"), vb, cfg)?;
+        let quantizer = EncodecResidualVectorQuantizer::load(&format!("{p}.quantizer"), vb, cfg)?;
+        Ok(Self {
+            encoder,
+            decoder,
+            quantizer,
+        })
     }
 }
 
@@ -986,9 +1037,10 @@ impl MusicgenForConditionalGeneration {
     }
 
     pub fn load(vb: &VarBuilder, cfg: Config) -> Result<Self> {
-        let t5cfg = T5Config::musicgen_small(); // TODO: Get as argument.
-        let text_encoder = T5EncoderModel::load("text_encoder", vb, &t5cfg)?;
-        let audio_encoder = EncodecModel::load("audio_encoder", vb, &cfg)?;
+        let t5_cfg = T5Config::musicgen_small(); // TODO: Get as argument.
+        let encodec_cfg = EncodecConfig::default(); // TODO
+        let text_encoder = T5EncoderModel::load("text_encoder", vb, &t5_cfg)?;
+        let audio_encoder = EncodecModel::load("audio_encoder", vb, &encodec_cfg)?;
         let decoder = MusicgenForCausalLM::load("decoder", vb, &cfg)?;
         Ok(Self {
             text_encoder,
