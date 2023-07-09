@@ -198,19 +198,39 @@ struct Conv1D {
 }
 
 impl Conv1D {
-    fn load(
-        in_channels: usize,
-        out_channels: usize,
+    // Applies weight norm for inference by recomputing the weight tensor. This
+    // does not apply to training.
+    // https://pytorch.org/docs/stable/generated/torch.nn.utils.weight_norm.html
+    fn load_weight_norm(
+        in_c: usize,
+        out_c: usize,
         kernel_size: usize,
         config: ConvConfig,
         p: &str,
         vb: &VarBuilder,
     ) -> Result<Self> {
-        let weight = vb.get(
-            (out_channels, in_channels, kernel_size),
-            &format!("{p}.weight"),
-        )?;
-        let bias = vb.get(out_channels, &format!("{p}.bias"))?;
+        let weight_g = vb.get((out_c, 1, 1), &format!("{p}.weight_g"))?;
+        let weight_v = vb.get((out_c, in_c, kernel_size), &format!("{p}.weight_v"))?;
+        let norm_v = (&weight_v * &weight_v)?.sum(&[1, 2])?.sqrt()?;
+        let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
+        let bias = vb.get(out_c, &format!("{p}.bias"))?;
+        Ok(Self {
+            weight,
+            bias: Some(bias),
+            config,
+        })
+    }
+
+    fn load(
+        in_c: usize,
+        out_c: usize,
+        kernel_size: usize,
+        config: ConvConfig,
+        p: &str,
+        vb: &VarBuilder,
+    ) -> Result<Self> {
+        let weight = vb.get((out_c, in_c, kernel_size), &format!("{p}.weight"))?;
+        let bias = vb.get(out_c, &format!("{p}.bias"))?;
         Ok(Self {
             weight,
             bias: Some(bias),
@@ -574,6 +594,7 @@ impl MusicgenForCausalLM {
 }
 
 // T5 Text Encoder
+// https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct T5Config {
@@ -843,7 +864,6 @@ impl T5Stack {
     }
 }
 
-// https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 #[derive(Debug)]
 struct T5EncoderModel {
     shared: Embedding,
@@ -859,6 +879,13 @@ impl T5EncoderModel {
 }
 
 // Encodec Model
+// https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py
+
+#[derive(Debug, Clone, PartialEq)]
+enum NormType {
+    WeightNorm,
+    None,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncodecConfig {
@@ -872,7 +899,7 @@ pub struct EncodecConfig {
     num_filters: usize,
     num_residual_layers: usize,
     upsampling_ratios: Vec<usize>,
-    norm_type: &'static str,
+    norm_type: NormType,
     kernel_size: usize,
     last_kernel_size: usize,
     residual_kernel_size: usize,
@@ -900,7 +927,7 @@ impl Default for EncodecConfig {
             num_filters: 32,
             num_residual_layers: 1,
             upsampling_ratios: vec![8, 5, 4, 2],
-            norm_type: "weight_norm",
+            norm_type: NormType::WeightNorm,
             kernel_size: 7,
             last_kernel_size: 7,
             residual_kernel_size: 3,
@@ -913,6 +940,37 @@ impl Default for EncodecConfig {
             codebook_size: 1024,
             codebook_dim: None,
             use_conv_shortcut: true,
+        }
+    }
+}
+
+impl EncodecConfig {
+    // https://huggingface.co/facebook/musicgen-small/blob/495da4ad086b3416a27c6187f9239f9fd96f3962/config.json#L6
+    fn musicgen_small() -> Self {
+        Self {
+            audio_channels: 1,
+            chunk_length_s: None,
+            codebook_dim: Some(128),
+            codebook_size: 2048,
+            compress: 2,
+            dilation_growth_rate: 2,
+            hidden_size: 128,
+            kernel_size: 7,
+            last_kernel_size: 7,
+            norm_type: NormType::WeightNorm,
+            normalize: false,
+            num_filters: 64,
+            num_lstm_layers: 2,
+            num_residual_layers: 1,
+            overlap: None,
+            pad_mode: "reflect",
+            residual_kernel_size: 3,
+            sampling_rate: 32_000,
+            target_bandwidths: vec![2.2],
+            trim_right_ratio: 1.0,
+            upsampling_ratios: vec![8, 5, 4, 4],
+            use_causal_conv: false,
+            use_conv_shortcut: false,
         }
     }
 }
@@ -977,21 +1035,32 @@ struct EncodecConv1d {
 
 impl EncodecConv1d {
     fn load(
-        in_channels: usize,
-        out_channels: usize,
+        in_c: usize,
+        out_c: usize,
         kernel_size: usize,
         stride: usize,
         p: &str,
         vb: &VarBuilder,
+        cfg: &EncodecConfig,
     ) -> Result<Self> {
-        let conv = Conv1D::load(
-            in_channels,
-            out_channels,
-            kernel_size,
-            ConvConfig { padding: 0, stride },
-            &format!("{p}.conv"),
-            vb,
-        )?;
+        let conv = match cfg.norm_type {
+            NormType::WeightNorm => Conv1D::load_weight_norm(
+                in_c,
+                out_c,
+                kernel_size,
+                ConvConfig { padding: 0, stride },
+                &format!("{p}.conv"),
+                vb,
+            )?,
+            NormType::None => Conv1D::load(
+                in_c,
+                out_c,
+                kernel_size,
+                ConvConfig { padding: 0, stride },
+                &format!("{p}.conv"),
+                vb,
+            )?,
+        };
         Ok(Self { conv })
     }
 }
@@ -1013,7 +1082,7 @@ impl EncodecResnetBlock {
         let block = vec![];
         // TODO: Add the conv1d layers in block.
         let shortcut = if cfg.use_conv_shortcut {
-            let conv = EncodecConv1d::load(dim, dim, 1, 1, &format!("{p}.shortcut"), vb)?;
+            let conv = EncodecConv1d::load(dim, dim, 1, 1, &format!("{p}.shortcut"), vb, cfg)?;
             Some(conv)
         } else {
             None
@@ -1062,6 +1131,7 @@ impl EncodecEncoder {
             1,
             &layer.next_name(),
             vb,
+            cfg,
         )?;
         let mut sampling_layers = vec![];
         let mut scaling = 1;
@@ -1086,6 +1156,7 @@ impl EncodecEncoder {
                 ratio,
                 &layer.next_name(),
                 vb,
+                cfg,
             )?;
             sampling_layers.push((resnets, conv1d));
             scaling *= 2;
@@ -1099,6 +1170,7 @@ impl EncodecEncoder {
             1,
             &layer.next_name(),
             vb,
+            cfg,
         )?;
         Ok(Self {
             init_conv,
@@ -1128,6 +1200,7 @@ impl EncodecDecoder {
             1,
             &layer.next_name(),
             vb,
+            cfg,
         )?;
         let init_lstm = EncodecLSTM::load(cfg.num_filters * scaling, &layer.next_name(), vb, cfg)?;
         let mut sampling_layers = vec![];
@@ -1164,6 +1237,7 @@ impl EncodecDecoder {
             1,
             &layer.next_name(),
             vb,
+            cfg,
         )?;
         Ok(Self {
             init_conv,
@@ -1209,7 +1283,7 @@ impl MusicgenForConditionalGeneration {
 
     pub fn load(vb: &VarBuilder, cfg: Config) -> Result<Self> {
         let t5_cfg = T5Config::musicgen_small(); // TODO: Get as argument.
-        let encodec_cfg = EncodecConfig::default(); // TODO
+        let encodec_cfg = EncodecConfig::musicgen_small(); // TODO
         let text_encoder = T5EncoderModel::load("text_encoder", vb, &t5_cfg)?;
         let audio_encoder = EncodecModel::load("audio_encoder", vb, &encodec_cfg)?;
         let decoder = MusicgenForCausalLM::load("decoder", vb, &cfg)?;
