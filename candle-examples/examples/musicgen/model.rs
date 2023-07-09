@@ -540,7 +540,7 @@ impl MusicgenForCausalLM {
 
 // T5 Text Encoder
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct T5Config {
     vocab_size: usize,
     d_model: usize,
@@ -824,6 +824,63 @@ impl T5EncoderModel {
 }
 
 // Encodec Model
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncodecConfig {
+    target_bandwidths: Vec<f64>,
+    sampling_rate: usize,
+    audio_channels: usize,
+    normalize: bool,
+    chunk_length_s: Option<usize>,
+    overlap: Option<usize>,
+    hidden_size: usize,
+    num_filters: usize,
+    num_residual_layers: usize,
+    upsampling_ratios: Vec<usize>,
+    norm_type: &'static str,
+    kernel_size: usize,
+    last_kernel_size: usize,
+    residual_kernel_size: usize,
+    dilation_growth_rate: usize,
+    use_causal_conv: bool,
+    pad_mode: &'static str,
+    compress: usize,
+    num_lstm_layers: usize,
+    trim_right_ratio: f64,
+    codebook_size: usize,
+    codebook_dim: Option<usize>,
+    use_conv_shortcut: bool,
+}
+
+impl Default for EncodecConfig {
+    fn default() -> Self {
+        Self {
+            target_bandwidths: vec![1.5, 3.0, 6.0, 12.0, 24.0],
+            sampling_rate: 24_000,
+            audio_channels: 1,
+            normalize: false,
+            chunk_length_s: None,
+            overlap: None,
+            hidden_size: 128,
+            num_filters: 32,
+            num_residual_layers: 1,
+            upsampling_ratios: vec![8, 5, 4, 2],
+            norm_type: "weight_norm",
+            kernel_size: 7,
+            last_kernel_size: 7,
+            residual_kernel_size: 3,
+            dilation_growth_rate: 2,
+            use_causal_conv: true,
+            pad_mode: "reflect",
+            compress: 2,
+            num_lstm_layers: 2,
+            trim_right_ratio: 1.0,
+            codebook_size: 1024,
+            codebook_dim: None,
+            use_conv_shortcut: true,
+        }
+    }
+}
 
 #[derive(Debug)]
 struct EncodecModel {}
