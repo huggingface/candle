@@ -1,12 +1,14 @@
 #![allow(dead_code)]
 // https://huggingface.co/facebook/musicgen-small/tree/main
 // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/models/musicgen/modeling_musicgen.py
+// TODO: Add an offline mode.
+// TODO: Add a KV cache.
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
 mod model;
-use model::{Config, VarBuilder};
+use model::{Config, MusicgenModel, VarBuilder};
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device};
@@ -21,11 +23,13 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
+    /// The model weight file, in safetensor format.
     #[arg(long)]
-    tokenizer_config: String,
+    model: String,
 
+    /// The tokenizer config.
     #[arg(long)]
-    weights: String,
+    tokenizer: String,
 }
 
 fn main() -> Result<()> {
@@ -38,12 +42,13 @@ fn main() -> Result<()> {
         Device::new_cuda(0)?
     };
 
-    let mut tokenizer = Tokenizer::from_file(args.tokenizer_config).map_err(E::msg)?;
+    let mut tokenizer = Tokenizer::from_file(args.tokenizer).map_err(E::msg)?;
     let _tokenizer = tokenizer.with_padding(None).with_truncation(None);
 
-    let weights = unsafe { candle::safetensors::MmapedFile::new(args.weights)? };
-    let weights = weights.deserialize()?;
-    let _vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &device);
-    let _config = Config::default();
+    let model = unsafe { candle::safetensors::MmapedFile::new(args.model)? };
+    let model = model.deserialize()?;
+    let vb = VarBuilder::from_safetensors(vec![model], DTYPE, &device);
+    let config = Config::default();
+    let _model = MusicgenModel::load(&vb, config)?;
     Ok(())
 }

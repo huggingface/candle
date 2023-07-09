@@ -499,22 +499,23 @@ impl MusicgenDecoder {
 }
 
 #[derive(Debug)]
-struct MusicgenModel {
+pub struct MusicgenModel {
     decoder: MusicgenDecoder,
     lm_heads: Vec<Linear>,
     cfg: Config,
 }
 
 impl MusicgenModel {
-    fn config(&self) -> &Config {
+    pub fn config(&self) -> &Config {
         &self.cfg
     }
 
-    fn load(vb: &VarBuilder, cfg: Config) -> Result<Self> {
+    pub fn load(vb: &VarBuilder, cfg: Config) -> Result<Self> {
         let h = cfg.hidden_size;
-        let decoder = MusicgenDecoder::load("model.decoder", vb, &cfg)?;
+        let p = "decoder";
+        let decoder = MusicgenDecoder::load(&format!("{p}.model.decoder"), vb, &cfg)?;
         let lm_heads = (0..cfg.num_codebooks)
-            .map(|i| Linear::load(h, cfg.vocab_size, false, &format!("lm_heads.{i}"), vb))
+            .map(|i| Linear::load(h, cfg.vocab_size, false, &format!("{p}.lm_heads.{i}"), vb))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             decoder,
@@ -523,7 +524,7 @@ impl MusicgenModel {
         })
     }
 
-    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         let (b_sz, seq_len) = input_ids.shape().r2()?;
         let hidden_states = self.decoder.forward(input_ids)?;
         let lm_logits = self
