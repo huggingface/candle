@@ -349,6 +349,16 @@ impl Tensor {
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
+    pub fn elu(&self, alpha: f64) -> Result<Self> {
+        let storage = self.storage.elu(self.layout(), alpha)?;
+        let op = if self.track_op() {
+            Some(Op::Elu(self.clone(), alpha))
+        } else {
+            None
+        };
+        Ok(from_storage(storage, self.shape(), op, false))
+    }
+
     fn check_dim(&self, dim: usize, op: &'static str) -> Result<()> {
         if dim >= self.dims().len() {
             Err(Error::DimOutOfRange {

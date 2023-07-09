@@ -127,6 +127,9 @@ pub enum Error {
     #[error("unsupported safetensor dtype {0:?}")]
     UnsupportedSafeTensorDtype(safetensors::Dtype),
 
+    #[error("unsupported dtype {0:?} for op {1}")]
+    UnsupportedDTypeForOp(DType, &'static str),
+
     #[error("cannot broadcast {src_shape:?} to {dst_shape:?}")]
     BroadcastIncompatibleShapes { src_shape: Shape, dst_shape: Shape },
 
