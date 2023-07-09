@@ -973,58 +973,115 @@ impl EncodecConfig {
             use_conv_shortcut: false,
         }
     }
+
+    fn codebook_dim(&self) -> usize {
+        self.codebook_dim.unwrap_or(self.codebook_size)
+    }
+
+    fn frame_rate(&self) -> usize {
+        let hop_length: usize = self.upsampling_ratios.iter().product();
+        (self.sampling_rate + hop_length - 1) / hop_length
+    }
+
+    fn num_quantizers(&self) -> usize {
+        let num = 1000f64
+            * self
+                .target_bandwidths
+                .last()
+                .expect("empty target_bandwidths");
+        (num as usize) / (self.frame_rate() * 10)
+    }
 }
 
+// https://github.com/huggingface/transformers/blob/abaca9f9432a84cfaa95531de4c72334f38a42f2/src/transformers/models/encodec/modeling_encodec.py#L340
 #[derive(Debug)]
-struct EncodecEuclideanCodebook {}
+struct EncodecEuclideanCodebook {
+    inited: Tensor,
+    cluster_size: Tensor,
+    embed: Tensor,
+    embed_avg: Tensor,
+}
 
 impl EncodecEuclideanCodebook {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
-        todo!()
+    fn load(p: &str, vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
+        let inited = vb.get(1, &format!("{p}.inited"))?;
+        let cluster_size = vb.get(cfg.codebook_size, &format!("{p}.cluster_size"))?;
+        let e_shape = (cfg.codebook_size, cfg.codebook_dim());
+        let embed = vb.get(e_shape, &format!("{p}.embed"))?;
+        let embed_avg = vb.get(e_shape, &format!("{p}.embed_avg"))?;
+        Ok(Self {
+            inited,
+            cluster_size,
+            embed,
+            embed_avg,
+        })
     }
 }
 
 #[derive(Debug)]
-struct EncodecVectorQuantization {}
+struct EncodecVectorQuantization {
+    codebook: EncodecEuclideanCodebook,
+}
 
 impl EncodecVectorQuantization {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
-        todo!()
+    fn load(p: &str, vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
+        let codebook = EncodecEuclideanCodebook::load(&format!("{p}.codebook"), vb, cfg)?;
+        Ok(Self { codebook })
     }
 }
 
 #[derive(Debug)]
-struct EncodecResidualVectorQuantizer {}
+struct EncodecResidualVectorQuantizer {
+    layers: Vec<EncodecVectorQuantization>,
+}
 
 impl EncodecResidualVectorQuantizer {
-    fn load(_p: &str, _vb: &VarBuilder, _cfg: &EncodecConfig) -> Result<Self> {
-        todo!()
+    fn load(p: &str, vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
+        let p = format!("{p}.layers");
+        let layers = (0..cfg.num_quantizers())
+            .map(|i| EncodecVectorQuantization::load(&format!("{p}.{i}"), vb, cfg))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { layers })
     }
 }
 
+// https://github.com/huggingface/transformers/blob/abaca9f9432a84cfaa95531de4c72334f38a42f2/src/transformers/models/encodec/modeling_encodec.py#L226
 #[derive(Debug)]
-struct EncodecLSTM {}
+struct EncodecLSTM {
+    layers: Vec<(Tensor, Tensor, Tensor, Tensor)>,
+}
 
 impl EncodecLSTM {
-    fn load(_dimension: usize, _p: &str, _vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
-        let _ = cfg.num_lstm_layers;
-        todo!()
+    fn load(dim: usize, p: &str, vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
+        let p = format!("{p}.lstm");
+        let mut layers = vec![];
+        for i in 0..cfg.num_lstm_layers {
+            let w_hh = vb.get((4 * dim, dim), &format!("{p}.weight_hh_l{i}"))?;
+            let w_ih = vb.get((4 * dim, dim), &format!("{p}.weight_ih_l{i}"))?;
+            let b_hh = vb.get(4 * dim, &format!("{p}.bias_hh_l{i}"))?;
+            let b_ih = vb.get(4 * dim, &format!("{p}.bias_ih_l{i}"))?;
+            layers.push((w_hh, w_ih, b_hh, b_ih))
+        }
+        Ok(Self { layers })
     }
 }
 
 #[derive(Debug)]
-struct EncodecConvTranspose1d {}
+struct EncodecConvTranspose1d {
+    // TODO
+}
 
 impl EncodecConvTranspose1d {
     fn load(
-        _in_channels: usize,
-        _out_channels: usize,
+        _in_c: usize,
+        _out_c: usize,
         _kernel_size: usize,
         _stride: usize,
         _p: &str,
         _vb: &VarBuilder,
+        _cfg: &EncodecConfig,
     ) -> Result<Self> {
-        todo!()
+        Ok(Self {})
     }
 }
 
@@ -1214,6 +1271,7 @@ impl EncodecDecoder {
                 ratio,
                 &layer.next_name(),
                 vb,
+                cfg,
             )?;
             let mut resnets = vec![];
             for j in 0..(cfg.num_residual_layers as u32) {
