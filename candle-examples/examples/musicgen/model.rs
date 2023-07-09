@@ -1004,13 +1004,21 @@ struct EncodecResnetBlock {
 
 impl EncodecResnetBlock {
     fn load(
-        _dim: usize,
+        dim: usize,
         _dilations: &[usize],
-        _p: &str,
-        _vb: &VarBuilder,
-        _cfg: &EncodecConfig,
+        p: &str,
+        vb: &VarBuilder,
+        cfg: &EncodecConfig,
     ) -> Result<Self> {
-        todo!()
+        let block = vec![];
+        // TODO: Add the conv1d layers in block.
+        let shortcut = if cfg.use_conv_shortcut {
+            let conv = EncodecConv1d::load(dim, dim, 1, 1, &format!("{p}.shortcut"), vb)?;
+            Some(conv)
+        } else {
+            None
+        };
+        Ok(Self { block, shortcut })
     }
 }
 
@@ -1023,6 +1031,10 @@ struct Layer {
 impl Layer {
     fn new(prefix: String) -> Self {
         Self { prefix, cnt: 0 }
+    }
+
+    fn inc(&mut self) {
+        self.cnt += 1;
     }
 
     fn next_name(&mut self) -> String {
@@ -1042,7 +1054,7 @@ struct EncodecEncoder {
 
 impl EncodecEncoder {
     fn load(p: &str, vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
-        let mut layer = Layer::new(format!("{p}.layer"));
+        let mut layer = Layer::new(format!("{p}.layers"));
         let init_conv = EncodecConv1d::load(
             cfg.audio_channels,
             cfg.num_filters,
@@ -1066,6 +1078,7 @@ impl EncodecEncoder {
                 )?;
                 resnets.push(resnet)
             }
+            layer.inc(); // ELU
             let conv1d = EncodecConv1d::load(
                 current_scale,
                 current_scale * 2,
@@ -1078,6 +1091,7 @@ impl EncodecEncoder {
             scaling *= 2;
         }
         let final_lstm = EncodecLSTM::load(cfg.num_filters * scaling, &layer.next_name(), vb, cfg)?;
+        layer.inc(); // ELU
         let final_conv = EncodecConv1d::load(
             cfg.num_filters * scaling,
             cfg.hidden_size,
@@ -1105,7 +1119,7 @@ struct EncodecDecoder {
 
 impl EncodecDecoder {
     fn load(p: &str, vb: &VarBuilder, cfg: &EncodecConfig) -> Result<Self> {
-        let mut layer = Layer::new(format!("{p}.layer"));
+        let mut layer = Layer::new(format!("{p}.layers"));
         let mut scaling = usize::pow(2, cfg.upsampling_ratios.len() as u32);
         let init_conv = EncodecConv1d::load(
             cfg.hidden_size,
@@ -1119,6 +1133,7 @@ impl EncodecDecoder {
         let mut sampling_layers = vec![];
         for &ratio in cfg.upsampling_ratios.iter().rev() {
             let current_scale = scaling * cfg.num_filters;
+            layer.inc(); // ELU
             let conv1d = EncodecConvTranspose1d::load(
                 current_scale,
                 current_scale / 2,
@@ -1141,6 +1156,7 @@ impl EncodecDecoder {
             sampling_layers.push((conv1d, resnets));
             scaling /= 2;
         }
+        layer.inc(); // ELU
         let final_conv = EncodecConv1d::load(
             cfg.num_filters,
             cfg.audio_channels,
