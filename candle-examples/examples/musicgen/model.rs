@@ -499,28 +499,25 @@ impl MusicgenDecoder {
 }
 
 #[derive(Debug)]
-pub struct MusicgenModel {
+pub struct MusicgenForCausalLM {
     decoder: MusicgenDecoder,
     lm_heads: Vec<Linear>,
-    cfg: Config,
+    num_codebooks: usize,
+    vocab_size: usize,
 }
 
-impl MusicgenModel {
-    pub fn config(&self) -> &Config {
-        &self.cfg
-    }
-
-    pub fn load(vb: &VarBuilder, cfg: Config) -> Result<Self> {
+impl MusicgenForCausalLM {
+    pub fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
         let h = cfg.hidden_size;
-        let p = "decoder";
-        let decoder = MusicgenDecoder::load(&format!("{p}.model.decoder"), vb, &cfg)?;
+        let decoder = MusicgenDecoder::load(&format!("{p}.model.decoder"), vb, cfg)?;
         let lm_heads = (0..cfg.num_codebooks)
             .map(|i| Linear::load(h, cfg.vocab_size, false, &format!("{p}.lm_heads.{i}"), vb))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             decoder,
             lm_heads,
-            cfg,
+            num_codebooks: cfg.num_codebooks,
+            vocab_size: cfg.vocab_size,
         })
     }
 
@@ -533,10 +530,27 @@ impl MusicgenModel {
             .map(|h| Ok(h.forward(&hidden_states)?))
             .collect::<Result<Vec<_>>>()?;
         let lm_logits = Tensor::stack(&lm_logits, 1)?.reshape((
-            b_sz * self.cfg.num_codebooks,
+            b_sz * self.num_codebooks,
             seq_len,
-            self.cfg.vocab_size,
+            self.vocab_size,
         ))?;
         Ok(lm_logits)
+    }
+}
+
+#[derive(Debug)]
+pub struct MusicgenForConditionalGeneration {
+    decoder: MusicgenForCausalLM,
+    cfg: Config,
+}
+
+impl MusicgenForConditionalGeneration {
+    pub fn config(&self) -> &Config {
+        &self.cfg
+    }
+
+    pub fn load(vb: &VarBuilder, cfg: Config) -> Result<Self> {
+        let decoder = MusicgenForCausalLM::load("decoder", vb, &cfg)?;
+        Ok(Self { decoder, cfg })
     }
 }

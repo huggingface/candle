@@ -8,7 +8,7 @@
 extern crate intel_mkl_src;
 
 mod model;
-use model::{Config, MusicgenModel, VarBuilder};
+use model::{Config, MusicgenForConditionalGeneration, VarBuilder};
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device};
@@ -49,6 +49,6 @@ fn main() -> Result<()> {
     let model = model.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![model], DTYPE, &device);
     let config = Config::default();
-    let _model = MusicgenModel::load(&vb, config)?;
+    let _model = MusicgenForConditionalGeneration::load(&vb, config)?;
     Ok(())
 }
