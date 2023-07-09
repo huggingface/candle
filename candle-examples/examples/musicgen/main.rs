@@ -7,8 +7,13 @@
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-mod model;
-use model::{Config, MusicgenForConditionalGeneration, VarBuilder};
+mod encodec_model;
+mod musicgen_model;
+mod nn;
+mod t5_model;
+
+use musicgen_model::{GenConfig, MusicgenForConditionalGeneration};
+use nn::VarBuilder;
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device};
@@ -48,7 +53,7 @@ fn main() -> Result<()> {
     let model = unsafe { candle::safetensors::MmapedFile::new(args.model)? };
     let model = model.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![model], DTYPE, &device);
-    let config = Config::default();
+    let config = GenConfig::small();
     let _model = MusicgenForConditionalGeneration::load(&vb, config)?;
     Ok(())
 }
