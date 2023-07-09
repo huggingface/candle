@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-// TODO: KV cache.
+// TODO: Add an offline mode.
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
