@@ -64,6 +64,10 @@ impl CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    pub(crate) fn elu(&self, _: &Layout, _: f64) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     pub(crate) fn sum(&self, _: &Layout, _: &[usize]) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
