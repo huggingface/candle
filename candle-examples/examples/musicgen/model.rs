@@ -1068,20 +1068,30 @@ impl EncodecLSTM {
 
 #[derive(Debug)]
 struct EncodecConvTranspose1d {
-    // TODO
+    weight_g: Tensor,
+    weight_v: Tensor,
+    bias: Tensor,
 }
 
 impl EncodecConvTranspose1d {
     fn load(
-        _in_c: usize,
-        _out_c: usize,
-        _kernel_size: usize,
+        in_c: usize,
+        out_c: usize,
+        k: usize,
         _stride: usize,
-        _p: &str,
-        _vb: &VarBuilder,
+        p: &str,
+        vb: &VarBuilder,
         _cfg: &EncodecConfig,
     ) -> Result<Self> {
-        Ok(Self {})
+        let p = format!("{p}.conv");
+        let weight_g = vb.get((in_c, 1, 1), &format!("{p}.weight_g"))?;
+        let weight_v = vb.get((in_c, out_c, k), &format!("{p}.weight_v"))?;
+        let bias = vb.get(out_c, &format!("{p}.bias"))?;
+        Ok(Self {
+            weight_g,
+            weight_v,
+            bias,
+        })
     }
 }
 
@@ -1282,7 +1292,7 @@ impl EncodecDecoder {
         )?;
         let init_lstm = EncodecLSTM::load(cfg.num_filters * scaling, &layer.next_name(), vb, cfg)?;
         let mut sampling_layers = vec![];
-        for &ratio in cfg.upsampling_ratios.iter().rev() {
+        for &ratio in cfg.upsampling_ratios.iter() {
             let current_scale = scaling * cfg.num_filters;
             layer.inc(); // ELU
             let conv1d = EncodecConvTranspose1d::load(
