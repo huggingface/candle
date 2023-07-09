@@ -883,6 +883,87 @@ impl Default for EncodecConfig {
 }
 
 #[derive(Debug)]
+struct EncodecEuclideanCodebook {}
+
+impl EncodecEuclideanCodebook {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct EncodecVectorQuantization {}
+
+impl EncodecVectorQuantization {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct EncodecResidualVectorQuantizer {}
+
+impl EncodecResidualVectorQuantizer {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct EncodecLSTM {}
+
+impl EncodecLSTM {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct EncodecConvTranspose1d {}
+
+impl EncodecConvTranspose1d {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct EncodecConv1d {}
+
+impl EncodecConv1d {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct EncodecResnetBlock {}
+
+impl EncodecResnetBlock {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct EncodecEncoder {}
+
+impl EncodecEncoder {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct EncodecDecoder {}
+
+impl EncodecDecoder {
+    fn load(_p: &str, _vb: &VarBuilder, _cfg: &Config) -> Result<Self> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
 struct EncodecModel {}
 
 impl EncodecModel {
