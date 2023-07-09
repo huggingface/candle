@@ -1124,27 +1124,48 @@ impl EncodecConv1d {
 
 #[derive(Debug)]
 struct EncodecResnetBlock {
-    block: Vec<EncodecConv1d>,
+    block_conv1: EncodecConv1d,
+    block_conv2: EncodecConv1d,
     shortcut: Option<EncodecConv1d>,
 }
 
 impl EncodecResnetBlock {
     fn load(
         dim: usize,
-        _dilations: &[usize],
+        dilations: &[usize],
         p: &str,
         vb: &VarBuilder,
         cfg: &EncodecConfig,
     ) -> Result<Self> {
-        let block = vec![];
-        // TODO: Add the conv1d layers in block.
+        let h = dim / cfg.compress;
+        let mut layer = Layer::new(format!("{p}.block"));
+        if dilations.len() != 2 {
+            anyhow::bail!("expected dilations of size 2")
+        }
+        // TODO: Apply dilations!
+        layer.inc();
+        let block_conv1 = EncodecConv1d::load(
+            dim,
+            h,
+            cfg.residual_kernel_size,
+            1,
+            &layer.next_name(),
+            vb,
+            cfg,
+        )?;
+        layer.inc();
+        let block_conv2 = EncodecConv1d::load(h, dim, 1, 1, &layer.next_name(), vb, cfg)?;
         let shortcut = if cfg.use_conv_shortcut {
             let conv = EncodecConv1d::load(dim, dim, 1, 1, &format!("{p}.shortcut"), vb, cfg)?;
             Some(conv)
         } else {
             None
         };
-        Ok(Self { block, shortcut })
+        Ok(Self {
+            block_conv1,
+            block_conv2,
+            shortcut,
+        })
     }
 }
 
