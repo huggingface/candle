@@ -28,5 +28,5 @@ wav = "1.0.0"
 
 [features]
 default = ["cuda"]
-cuda = ["candle/cuda"]
+cuda = ["candle/cuda", "candle-nn/cuda"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
