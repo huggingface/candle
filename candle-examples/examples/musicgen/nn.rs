@@ -63,80 +63,38 @@ impl<'a> VarBuilder<'a> {
     }
 }
 
-#[derive(Debug)]
-pub struct Linear {
-    weight: Tensor,
-    bias: Option<Tensor>,
+pub type Linear = candle_nn::Linear;
+
+pub fn linear(size1: usize, size2: usize, bias: bool, p: &str, vb: &VarBuilder) -> Result<Linear> {
+    let weight = vb.get((size2, size1), &format!("{p}.weight"))?;
+    let bias = if bias {
+        Some(vb.get(size2, &format!("{p}.bias"))?)
+    } else {
+        None
+    };
+    Ok(Linear::new(weight, bias))
 }
 
-impl Linear {
-    pub fn load(size1: usize, size2: usize, bias: bool, p: &str, vb: &VarBuilder) -> Result<Self> {
-        let weight = vb.get((size2, size1), &format!("{p}.weight"))?;
-        let bias = if bias {
-            Some(vb.get(size2, &format!("{p}.bias"))?)
-        } else {
-            None
-        };
-        Ok(Self { weight, bias })
-    }
+pub type LayerNorm = candle_nn::LayerNorm;
 
-    pub fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
-        let (bsize, _, _) = x.shape().r3()?;
-        let w = self.weight.broadcast_left(bsize)?.t()?;
-        let x = x.matmul(&w)?;
-        match &self.bias {
-            None => Ok(x),
-            Some(bias) => x.broadcast_add(bias),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct LayerNorm {
-    weight: Tensor,
-    bias: Tensor,
-    eps: f64,
-}
-
-impl LayerNorm {
-    pub fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
-        Self { weight, bias, eps }
-    }
-
-    pub fn load(size: usize, eps: f64, p: &str, vb: &VarBuilder) -> Result<Self> {
-        let (weight, bias) = match (
-            vb.get(size, &format!("{p}.weight")),
-            vb.get(size, &format!("{p}.bias")),
-        ) {
-            (Ok(weight), Ok(bias)) => (weight, bias),
-            (Err(err), _) | (_, Err(err)) => {
-                if let (Ok(weight), Ok(bias)) = (
-                    vb.get(size, &format!("{p}.gamma")),
-                    vb.get(size, &format!("{p}.beta")),
-                ) {
-                    (weight, bias)
-                } else {
-                    return Err(err.into());
-                }
+pub fn layer_norm(size: usize, eps: f64, p: &str, vb: &VarBuilder) -> Result<LayerNorm> {
+    let (weight, bias) = match (
+        vb.get(size, &format!("{p}.weight")),
+        vb.get(size, &format!("{p}.bias")),
+    ) {
+        (Ok(weight), Ok(bias)) => (weight, bias),
+        (Err(err), _) | (_, Err(err)) => {
+            if let (Ok(weight), Ok(bias)) = (
+                vb.get(size, &format!("{p}.gamma")),
+                vb.get(size, &format!("{p}.beta")),
+            ) {
+                (weight, bias)
+            } else {
+                return Err(err.into());
             }
-        };
-        Ok(Self { weight, bias, eps })
-    }
-
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let dtype = x.dtype();
-        let (_bsize, _seq_len, hidden_size) = x.shape().r3()?;
-        let x = x.to_dtype(DType::F32)?;
-        let mean_x = (x.sum(&[2])? / hidden_size as f64)?;
-        let x = x.broadcast_sub(&mean_x)?;
-        let norm_x = ((&x * &x)?.sum(&[2])? / hidden_size as f64)?;
-        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        let x = x_normed
-            .to_dtype(dtype)?
-            .broadcast_mul(&self.weight)?
-            .broadcast_add(&self.bias)?;
-        Ok(x)
-    }
+        }
+    };
+    Ok(LayerNorm::new(weight, bias, eps))
 }
 
 #[derive(Debug)]

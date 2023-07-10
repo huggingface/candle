@@ -1,4 +1,4 @@
-use crate::nn::{Embedding, HiddenAct, LayerNorm, Linear, VarBuilder};
+use crate::nn::{layer_norm, linear, Embedding, HiddenAct, LayerNorm, Linear, VarBuilder};
 use crate::{encodec_model, t5_model};
 use anyhow::Result;
 use candle::{DType, Device, Tensor, D};
@@ -146,10 +146,10 @@ impl MusicgenAttention {
         let h = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let head_dim = h / num_heads;
-        let k_proj = Linear::load(h, h, false, &format!("{p}.k_proj"), vb)?;
-        let v_proj = Linear::load(h, h, false, &format!("{p}.v_proj"), vb)?;
-        let q_proj = Linear::load(h, h, false, &format!("{p}.q_proj"), vb)?;
-        let out_proj = Linear::load(h, h, false, &format!("{p}.out_proj"), vb)?;
+        let k_proj = linear(h, h, false, &format!("{p}.k_proj"), vb)?;
+        let v_proj = linear(h, h, false, &format!("{p}.v_proj"), vb)?;
+        let q_proj = linear(h, h, false, &format!("{p}.q_proj"), vb)?;
+        let out_proj = linear(h, h, false, &format!("{p}.out_proj"), vb)?;
         Ok(Self {
             scaling: 1. / (head_dim as f64).sqrt(),
             is_decoder: true,
@@ -213,14 +213,13 @@ impl MusicgenDecoderLayer {
     fn load(p: &str, vb: &VarBuilder, cfg: &Config) -> Result<Self> {
         let h = cfg.hidden_size;
         let self_attn = MusicgenAttention::load(&format!("{p}.self_attn"), vb, cfg)?;
-        let self_attn_layer_norm =
-            LayerNorm::load(h, 1e-5, &format!("{p}.self_attn_layer_norm"), vb)?;
+        let self_attn_layer_norm = layer_norm(h, 1e-5, &format!("{p}.self_attn_layer_norm"), vb)?;
         let encoder_attn = MusicgenAttention::load(&format!("{p}.encoder_attn"), vb, cfg)?;
         let encoder_attn_layer_norm =
-            LayerNorm::load(h, 1e-5, &format!("{p}.encoder_attn_layer_norm"), vb)?;
-        let fc1 = Linear::load(h, cfg.ffn_dim, false, &format!("{p}.fc1"), vb)?;
-        let fc2 = Linear::load(cfg.ffn_dim, h, false, &format!("{p}.fc2"), vb)?;
-        let final_layer_norm = LayerNorm::load(h, 1e-5, &format!("{p}.final_layer_norm"), vb)?;
+            layer_norm(h, 1e-5, &format!("{p}.encoder_attn_layer_norm"), vb)?;
+        let fc1 = linear(h, cfg.ffn_dim, false, &format!("{p}.fc1"), vb)?;
+        let fc2 = linear(cfg.ffn_dim, h, false, &format!("{p}.fc2"), vb)?;
+        let final_layer_norm = layer_norm(h, 1e-5, &format!("{p}.final_layer_norm"), vb)?;
         Ok(Self {
             self_attn,
             self_attn_layer_norm,
@@ -290,7 +289,7 @@ impl MusicgenDecoder {
         let layers = (0..cfg.num_hidden_layers)
             .map(|i| MusicgenDecoderLayer::load(&format!("{p}.layers.{i}"), vb, cfg))
             .collect::<Result<Vec<_>>>()?;
-        let layer_norm = LayerNorm::load(h, 1e-5, &format!("{p}.layer_norm"), vb)?;
+        let layer_norm = layer_norm(h, 1e-5, &format!("{p}.layer_norm"), vb)?;
         Ok(Self {
             embed_tokens,
             embed_positions,
@@ -341,7 +340,7 @@ impl MusicgenForCausalLM {
         let h = cfg.hidden_size;
         let decoder = MusicgenDecoder::load(&format!("{p}.model.decoder"), vb, cfg)?;
         let lm_heads = (0..cfg.num_codebooks)
-            .map(|i| Linear::load(h, cfg.vocab_size, false, &format!("{p}.lm_heads.{i}"), vb))
+            .map(|i| linear(h, cfg.vocab_size, false, &format!("{p}.lm_heads.{i}"), vb))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             decoder,
