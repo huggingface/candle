@@ -113,33 +113,16 @@ impl Dropout {
     }
 }
 
-#[derive(Debug)]
-pub struct Embedding {
-    embeddings: Tensor,
+pub type Embedding = candle_nn::Embedding;
+
+pub fn embedding(
+    vocab_size: usize,
     hidden_size: usize,
-}
-
-impl Embedding {
-    pub fn new(embeddings: Tensor, hidden_size: usize) -> Self {
-        Self {
-            embeddings,
-            hidden_size,
-        }
-    }
-
-    pub fn load(vocab_size: usize, hidden_size: usize, p: &str, vb: &VarBuilder) -> Result<Self> {
-        let embeddings = vb.get((vocab_size, hidden_size), &format!("{p}.weight"))?;
-        Ok(Self::new(embeddings, hidden_size))
-    }
-
-    pub fn forward(&self, indexes: &Tensor) -> Result<Tensor> {
-        let mut final_dims = indexes.dims().to_vec();
-        final_dims.push(self.hidden_size);
-        let indexes = indexes.flatten_all()?;
-        let values = Tensor::embedding(&indexes, &self.embeddings)?;
-        let values = values.reshape(final_dims)?;
-        Ok(values)
-    }
+    p: &str,
+    vb: &VarBuilder,
+) -> Result<Embedding> {
+    let embeddings = vb.get((vocab_size, hidden_size), &format!("{p}.weight"))?;
+    Ok(Embedding::new(embeddings, hidden_size))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,17 +180,4 @@ impl Conv1D {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HiddenAct {
-    Gelu,
-    Relu,
-}
-
-impl HiddenAct {
-    pub fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
-        match self {
-            Self::Gelu => xs.gelu(),
-            Self::Relu => xs.relu(),
-        }
-    }
-}
+pub type HiddenAct = candle_nn::Activation;
