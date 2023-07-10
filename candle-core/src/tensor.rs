@@ -444,7 +444,6 @@ impl Tensor {
                 len,
             })?
         }
-        println!("Narrow  {start:?} - {} - {len} - {dims:?}", dims[dim]);
         if start == 0 && dims[dim] == len {
             Ok(self.clone())
         } else {
