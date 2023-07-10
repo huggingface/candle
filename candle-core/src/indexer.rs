@@ -42,7 +42,6 @@ impl Tensor {
                         Bound::Excluded(n) => *n,
                         Bound::Unbounded => dims[i],
                     };
-                    let len = stop - start;
                     let out = x.narrow(current_dim, start, stop - start)?;
                     current_dim += 1;
                     out
