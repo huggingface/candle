@@ -100,7 +100,11 @@ impl<'a> VarBuilder<'a> {
                 routing,
                 safetensors,
             }) => {
-                let path = [&self.path.join("."), tensor_name].join(".");
+                let path = if self.path.is_empty() {
+                    tensor_name.to_string()
+                } else {
+                    [&self.path.join("."), tensor_name].join(".")
+                };
                 // Unwrap or 0 just to let the proper error flow.
                 let index = routing.get(&path).unwrap_or(&0);
                 let tensor = safetensors[*index]
