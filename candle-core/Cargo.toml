@@ -25,6 +25,7 @@ libc = { version = "0.2.147", optional = true }
 memmap2 = "0.7.1"
 num-traits = "0.2.15"
 num_cpus = "1.15.0"
+rand = "0.8.5"
 safetensors = "0.3.1"
 thiserror = "1"
 zip = { version = "0.6.6", default-features=false }
