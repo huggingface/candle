@@ -54,6 +54,6 @@ fn main() -> Result<()> {
     let model = model.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![model], DTYPE, &device);
     let config = GenConfig::small();
-    let _model = MusicgenForConditionalGeneration::load(&vb, config)?;
+    let _model = MusicgenForConditionalGeneration::load(vb, config)?;
     Ok(())
 }
