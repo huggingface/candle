@@ -3,7 +3,7 @@ use crate::nn::{
 };
 use crate::{encodec_model, t5_model};
 use anyhow::Result;
-use candle::{DType, Device, Tensor, D};
+use candle::{DType, Device, Tensor};
 
 // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/models/musicgen/configuration_musicgen.py#L83
 #[derive(Debug, Clone, PartialEq)]
@@ -187,7 +187,7 @@ impl MusicgenAttention {
         let attn_weights = attn_weights
             .reshape((b_sz, self.num_heads, tgt_len, src_len))?
             .broadcast_add(attention_mask)?;
-        let attn_weights = attn_weights.softmax(D::Minus1)?;
+        let attn_weights = attn_weights.softmax(-1)?;
         // TODO: layer_head_mask?
         let attn_output = attn_weights
             .matmul(&value_states)?

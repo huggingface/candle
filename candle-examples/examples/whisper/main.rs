@@ -146,7 +146,7 @@ impl Decoder {
             };
             tokens.push(next_token);
             let prob = logits
-                .softmax(candle::D::Minus1)?
+                .softmax(-1)?
                 .get(next_token as usize)?
                 .to_scalar::<f32>()? as f64;
             if next_token == EOT_TOKEN || tokens.len() > model.config.max_target_positions {

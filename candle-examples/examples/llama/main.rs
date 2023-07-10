@@ -18,7 +18,7 @@ use anyhow::{Error as E, Result};
 use clap::Parser;
 use rand::{distributions::Distribution, SeedableRng};
 
-use candle::{DType, Device, Tensor, D};
+use candle::{DType, Device, Tensor};
 use candle_hub::{api::sync::Api, Repo, RepoType};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -289,18 +289,14 @@ impl CausalSelfAttention {
         dims.push(v / 2);
         dims.push(2);
         let x = x.reshape(dims)?;
-        let re_x = x.narrow(D::Minus1, 0, 1)?;
-        let im_x = x.narrow(D::Minus1, 1, 1)?;
-        let re_f = freqs_cis
-            .narrow(D::Minus1, 0, 1)?
-            .broadcast_as(re_x.shape())?;
-        let im_f = freqs_cis
-            .narrow(D::Minus1, 1, 1)?
-            .broadcast_as(im_x.shape())?;
+        let re_x = x.narrow(-1, 0, 1)?;
+        let im_x = x.narrow(-1, 1, 1)?;
+        let re_f = freqs_cis.narrow(-1, 0, 1)?.broadcast_as(re_x.shape())?;
+        let im_f = freqs_cis.narrow(-1, 1, 1)?.broadcast_as(im_x.shape())?;
         let re = ((&re_x * &re_f)? - (&im_x * &im_f)?)?;
         let im = ((&re_x * &im_f)? + (&im_x * &re_f)?)?;
-        let rope = Tensor::cat(&[&re, &im], D::Minus1)?;
-        let rope = rope.flatten_from(D::Minus2)?;
+        let rope = Tensor::cat(&[&re, &im], -1)?;
+        let rope = rope.flatten_from(-2)?;
         Ok(rope)
     }
 
@@ -340,10 +336,10 @@ impl CausalSelfAttention {
             cache[block_idx] = Some((k.clone(), v.clone()))
         }
 
-        let att = (q.matmul(&k.t()?)? / (k.dim(D::Minus1)? as f64).sqrt())?;
+        let att = (q.matmul(&k.t()?)? / (k.dim(-1)? as f64).sqrt())?;
         let mask = self.cache.mask(t)?.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
-        let att = att.softmax(D::Minus1)?;
+        let att = att.softmax(-1)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(0, 1)?.reshape(&[t, c])?;
@@ -429,7 +425,7 @@ fn precompute_freqs_cis(config: &Config, device: &Device) -> Result<Tensor> {
     let shape = [1, MAX_SEQ_LEN, n_elem / 2, 1];
     let idx_theta_cos = idx_theta.cos()?.reshape(&shape)?;
     let idx_theta_sin = idx_theta.sin()?.reshape(&shape)?;
-    Ok(Tensor::cat(&[&idx_theta_cos, &idx_theta_sin], D::Minus1)?)
+    Ok(Tensor::cat(&[&idx_theta_cos, &idx_theta_sin], -1)?)
 }
 
 #[derive(Parser, Debug)]
@@ -539,7 +535,7 @@ fn main() -> Result<()> {
 
         let next_token = if let Some(temperature) = args.temperature {
             println!("Sampling with temperature {temperature:?}");
-            let prs = (&logits / temperature)?.softmax(D::Minus1)?;
+            let prs = (&logits / temperature)?.softmax(-1)?;
             let logits_v: Vec<f32> = prs.to_vec1()?;
             let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
 

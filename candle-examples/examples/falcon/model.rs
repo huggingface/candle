@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor, D};
+use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
 use candle_nn::{Embedding, LayerNorm, Linear};
 use std::collections::HashMap;
 
@@ -208,10 +208,10 @@ impl Config {
 }
 
 fn rotate_half(x: &Tensor) -> Result<Tensor> {
-    let l = x.dim(D::Minus1)?;
-    let x1 = x.narrow(D::Minus1, 0, l / 2)?;
-    let x2 = x.narrow(D::Minus1, l / 2, l - l / 2)?;
-    let x21 = Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)?;
+    let l = x.dim(-1)?;
+    let x1 = x.narrow(-1, 0, l / 2)?;
+    let x2 = x.narrow(-1, l / 2, l - l / 2)?;
+    let x21 = Tensor::cat(&[&x2.neg()?, &x1], -1)?;
     Ok(x21)
 }
 
@@ -250,7 +250,7 @@ impl FalconRotaryEmbedding {
         let t = Tensor::new(t.as_slice(), device)?.to_dtype(dtype)?;
         let inv_freq = self.inv_freq.to_dtype(dtype)?;
         let freqs = t.unsqueeze(1)?.matmul(&inv_freq.unsqueeze(0)?)?;
-        let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
+        let emb = Tensor::cat(&[&freqs, &freqs], -1)?;
         let cos = emb.cos()?;
         let sin = emb.sin()?;
         self.cache = Some((seq_len, cos.clone(), sin.clone()));
@@ -341,17 +341,17 @@ impl FalconAttention {
         let (b_sz, seq_len, _) = fused_qkv.shape().r3()?;
         if !self.multi_query {
             let fused_qkv = fused_qkv.reshape((b_sz, seq_len, self.num_heads, 3, self.head_dim))?;
-            let q = fused_qkv.narrow(D::Minus2, 0, 1)?.squeeze(D::Minus2)?;
-            let k = fused_qkv.narrow(D::Minus2, 1, 1)?.squeeze(D::Minus2)?;
-            let v = fused_qkv.narrow(D::Minus2, 2, 1)?.squeeze(D::Minus2)?;
+            let q = fused_qkv.narrow(-2, 0, 1)?.squeeze(-2)?;
+            let k = fused_qkv.narrow(-2, 1, 1)?.squeeze(-2)?;
+            let v = fused_qkv.narrow(-2, 2, 1)?.squeeze(-2)?;
             Ok((q, k, v))
         } else {
             let fused_qkv =
                 fused_qkv.reshape((b_sz, seq_len, self.num_heads + 2, self.head_dim))?;
-            let d = fused_qkv.dim(D::Minus2)?;
-            let q = fused_qkv.narrow(D::Minus2, 0, d - 2)?;
-            let k = fused_qkv.narrow(D::Minus2, d - 2, 1)?;
-            let v = fused_qkv.narrow(D::Minus2, d - 1, 1)?;
+            let d = fused_qkv.dim(-2)?;
+            let q = fused_qkv.narrow(-2, 0, d - 2)?;
+            let k = fused_qkv.narrow(-2, d - 2, 1)?;
+            let v = fused_qkv.narrow(-2, d - 1, 1)?;
             Ok((q, k, v))
         }
     }
@@ -405,7 +405,7 @@ impl FalconAttention {
         let attention_scores = attention_scores
             .broadcast_add(&mask.squeeze(1)?)?
             .to_dtype(DType::F32)?
-            .softmax(D::Minus1)?
+            .softmax(-1)?
             .to_dtype(x.dtype())?;
         let attn_output = attention_scores
             .matmul(&value)?

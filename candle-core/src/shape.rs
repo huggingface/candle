@@ -216,36 +216,19 @@ impl Dim for usize {
     }
 }
 
-pub enum D {
-    Minus1,
-    Minus2,
-}
-
-impl Dim for D {
+impl Dim for i32 {
     fn to_index(&self, shape: &Shape, op: &'static str) -> Result<usize> {
-        let rank = shape.rank();
-        match self {
-            Self::Minus1 if rank >= 1 => Ok(rank - 1),
-            Self::Minus2 if rank >= 2 => Ok(rank - 2),
-            _ => Err(Error::DimOutOfRange {
-                shape: shape.clone(),
-                dim: 42, // TODO: Have an adequate error
-                op,
-            }),
-        }
+        let rank = shape.rank() as i32;
+        let dim = if *self < 0 { rank + *self } else { *self };
+        let dim: usize = dim.try_into()?;
+        dim.to_index(shape, op)
     }
 
     fn to_index_plus_one(&self, shape: &Shape, op: &'static str) -> Result<usize> {
-        let rank = shape.rank();
-        match self {
-            Self::Minus1 if rank >= 1 => Ok(rank),
-            Self::Minus2 if rank >= 2 => Ok(rank - 1),
-            _ => Err(Error::DimOutOfRange {
-                shape: shape.clone(),
-                dim: 42, // TODO: Have an adequate error
-                op,
-            }),
-        }
+        let rank = shape.rank() as i32;
+        let dim = if *self < 0 { rank + *self + 1 } else { *self };
+        let dim: usize = dim.try_into()?;
+        dim.to_index_plus_one(shape, op)
     }
 }
 

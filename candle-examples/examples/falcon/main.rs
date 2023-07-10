@@ -5,7 +5,7 @@
 extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, Tensor, D};
+use candle::{DType, Device, Tensor};
 use candle_hub::{api::sync::Api, Repo, RepoType};
 use clap::Parser;
 use rand::{distributions::Distribution, SeedableRng};
@@ -68,7 +68,7 @@ impl TextGeneration {
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
 
             let next_token = if let Some(temperature) = self.temperature {
-                let prs = (&logits / temperature)?.softmax(D::Minus1)?;
+                let prs = (&logits / temperature)?.softmax(-1)?;
                 let logits_v: Vec<f32> = prs.to_vec1()?;
                 let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
                 distr.sample(&mut self.rng) as u32
