@@ -18,7 +18,7 @@ use anyhow::{Error as E, Result};
 use clap::Parser;
 use rand::{distributions::Distribution, SeedableRng};
 
-use candle::{DType, Device, Tensor, D};
+use candle::{DType, Device, IndexOp, Tensor, D};
 use candle_hub::{api::sync::Api, Repo, RepoType};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -281,7 +281,7 @@ impl CausalSelfAttention {
         let mut dims = x.dims().to_vec();
         let fcis_dims = freqs_cis.dims();
         let freqs_cis = if dims[1] < fcis_dims[1] {
-            freqs_cis.narrow(1, 0, dims[1])?
+            freqs_cis.i((.., 0..dims[1]))?
         } else {
             freqs_cis.clone()
         };
@@ -289,13 +289,13 @@ impl CausalSelfAttention {
         dims.push(v / 2);
         dims.push(2);
         let x = x.reshape(dims)?;
-        let re_x = x.narrow(D::Minus1, 0, 1)?;
-        let im_x = x.narrow(D::Minus1, 1, 1)?;
+        let re_x = x.i((.., .., .., 0..1))?;
+        let im_x = x.i((.., .., .., 1..2))?;
         let re_f = freqs_cis
-            .narrow(D::Minus1, 0, 1)?
+            .i((.., .., .., 0..1))?
             .broadcast_as(re_x.shape())?;
         let im_f = freqs_cis
-            .narrow(D::Minus1, 1, 1)?
+            .i((.., .., .., 1..2))?
             .broadcast_as(im_x.shape())?;
         let re = ((&re_x * &re_f)? - (&im_x * &im_f)?)?;
         let im = ((&re_x * &im_f)? + (&im_x * &re_f)?)?;
@@ -309,7 +309,7 @@ impl CausalSelfAttention {
         let qkv = self.c_attn.forward(x)?;
         let qkv = qkv.to_dtype(DType::F32)?;
         let n_embd = c;
-        let q = qkv.narrow(1, 0, n_embd)?;
+        let q = qkv.i(..n_embd)?;
         let k = qkv.narrow(1, n_embd, n_embd)?;
         let v = qkv.narrow(1, 2 * n_embd, n_embd)?;
         let target_dim = [t, self.n_head, c / self.n_head];
