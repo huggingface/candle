@@ -1,4 +1,6 @@
-use crate::nn::{layer_norm, linear, Embedding, HiddenAct, LayerNorm, Linear, VarBuilder};
+use crate::nn::{
+    embedding, layer_norm, linear, Embedding, HiddenAct, LayerNorm, Linear, VarBuilder,
+};
 use crate::{encodec_model, t5_model};
 use anyhow::Result;
 use candle::{DType, Device, Tensor, D};
@@ -283,7 +285,7 @@ impl MusicgenDecoder {
         };
         let embed_dim = cfg.vocab_size + 1;
         let embed_tokens = (0..cfg.num_codebooks)
-            .map(|i| Embedding::load(embed_dim, h, &format!("{p}.embed_tokens.{i}"), vb))
+            .map(|i| embedding(embed_dim, h, &format!("{p}.embed_tokens.{i}"), vb))
             .collect::<Result<Vec<_>>>()?;
         let embed_positions = MusicgenSinusoidalPositionalEmbedding::load(vb, cfg)?;
         let layers = (0..cfg.num_hidden_layers)

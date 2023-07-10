@@ -6,7 +6,7 @@ extern crate intel_mkl_src;
 use anyhow::{anyhow, Error as E, Result};
 use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
 use candle_hub::{api::sync::Api, Cache, Repo, RepoType};
-use candle_nn::{LayerNorm, Linear};
+use candle_nn::{Embedding, LayerNorm, Linear};
 use clap::Parser;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -167,32 +167,9 @@ impl Config {
     }
 }
 
-struct Embedding {
-    embeddings: Tensor,
-    hidden_size: usize,
-}
-
-impl Embedding {
-    fn new(embeddings: Tensor, hidden_size: usize) -> Self {
-        Self {
-            embeddings,
-            hidden_size,
-        }
-    }
-
-    fn load(vocab_size: usize, hidden_size: usize, p: &str, vb: &VarBuilder) -> Result<Self> {
-        let embeddings = vb.get((vocab_size, hidden_size), &format!("{p}.weight"))?;
-        Ok(Self::new(embeddings, hidden_size))
-    }
-
-    fn forward(&self, indexes: &Tensor) -> Result<Tensor> {
-        let mut final_dims = indexes.dims().to_vec();
-        final_dims.push(self.hidden_size);
-        let indexes = indexes.flatten_all()?;
-        let values = Tensor::embedding(&indexes, &self.embeddings)?;
-        let values = values.reshape(final_dims)?;
-        Ok(values)
-    }
+fn embedding(vocab_size: usize, hidden_size: usize, p: &str, vb: &VarBuilder) -> Result<Embedding> {
+    let embeddings = vb.get((vocab_size, hidden_size), &format!("{p}.weight"))?;
+    Ok(Embedding::new(embeddings, hidden_size))
 }
 
 fn linear(size1: usize, size2: usize, p: &str, vb: &VarBuilder) -> Result<Linear> {
@@ -249,19 +226,19 @@ struct BertEmbeddings {
 
 impl BertEmbeddings {
     fn load(p: &str, vb: &VarBuilder, config: &Config) -> Result<Self> {
-        let word_embeddings = Embedding::load(
+        let word_embeddings = embedding(
             config.vocab_size,
             config.hidden_size,
             &format!("{p}.word_embeddings"),
             vb,
         )?;
-        let position_embeddings = Embedding::load(
+        let position_embeddings = embedding(
             config.max_position_embeddings,
             config.hidden_size,
             &format!("{p}.position_embeddings"),
             vb,
         )?;
-        let token_type_embeddings = Embedding::load(
+        let token_type_embeddings = embedding(
             config.type_vocab_size,
             config.hidden_size,
             &format!("{p}.token_type_embeddings"),
