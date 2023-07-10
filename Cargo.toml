@@ -4,6 +4,7 @@ members = [
     "candle-examples",
     "candle-kernels",
     "candle-hub",
+    "candle-nn",
     "candle-pyo3",
 ]
 

@@ -6,6 +6,7 @@ extern crate intel_mkl_src;
 use anyhow::{anyhow, Error as E, Result};
 use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
 use candle_hub::{api::sync::Api, Cache, Repo, RepoType};
+use candle_nn::{LayerNorm, Linear};
 use clap::Parser;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -194,29 +195,10 @@ impl Embedding {
     }
 }
 
-struct Linear {
-    weight: Tensor,
-    bias: Tensor,
-}
-
-impl Linear {
-    fn new(weight: Tensor, bias: Tensor) -> Self {
-        Self { weight, bias }
-    }
-
-    fn load(size1: usize, size2: usize, p: &str, vb: &VarBuilder) -> Result<Self> {
-        let weight = vb.get((size2, size1), &format!("{p}.weight"))?;
-        let bias = vb.get(size2, &format!("{p}.bias"))?;
-        Ok(Self::new(weight, bias))
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let (bsize, _, _) = x.shape().r3()?;
-        let w = self.weight.broadcast_left(bsize)?.t()?;
-        let x = x.matmul(&w)?;
-        let x = x.broadcast_add(&self.bias)?;
-        Ok(x)
-    }
+fn linear(size1: usize, size2: usize, p: &str, vb: &VarBuilder) -> Result<Linear> {
+    let weight = vb.get((size2, size1), &format!("{p}.weight"))?;
+    let bias = vb.get(size2, &format!("{p}.bias"))?;
+    Ok(Linear::new(weight, Some(bias)))
 }
 
 struct Dropout {
@@ -234,49 +216,24 @@ impl Dropout {
     }
 }
 
-// This layer norm version handles both weight and bias so removes the mean.
-struct LayerNorm {
-    weight: Tensor,
-    bias: Tensor,
-    eps: f64,
-}
-
-impl LayerNorm {
-    fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
-        Self { weight, bias, eps }
-    }
-
-    fn load(size: usize, eps: f64, p: &str, vb: &VarBuilder) -> Result<Self> {
-        let (weight, bias) = match (
-            vb.get(size, &format!("{p}.weight")),
-            vb.get(size, &format!("{p}.bias")),
-        ) {
-            (Ok(weight), Ok(bias)) => (weight, bias),
-            (Err(err), _) | (_, Err(err)) => {
-                if let (Ok(weight), Ok(bias)) = (
-                    vb.get(size, &format!("{p}.gamma")),
-                    vb.get(size, &format!("{p}.beta")),
-                ) {
-                    (weight, bias)
-                } else {
-                    return Err(err.into());
-                }
+fn layer_norm(size: usize, eps: f64, p: &str, vb: &VarBuilder) -> Result<LayerNorm> {
+    let (weight, bias) = match (
+        vb.get(size, &format!("{p}.weight")),
+        vb.get(size, &format!("{p}.bias")),
+    ) {
+        (Ok(weight), Ok(bias)) => (weight, bias),
+        (Err(err), _) | (_, Err(err)) => {
+            if let (Ok(weight), Ok(bias)) = (
+                vb.get(size, &format!("{p}.gamma")),
+                vb.get(size, &format!("{p}.beta")),
+            ) {
+                (weight, bias)
+            } else {
+                return Err(err.into());
             }
-        };
-        Ok(Self { weight, bias, eps })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let (_bsize, _seq_len, hidden_size) = x.shape().r3()?;
-        let mean_x = (x.sum(&[2])? / hidden_size as f64)?;
-        let x = x.broadcast_sub(&mean_x)?;
-        let norm_x = ((&x * &x)?.sum(&[2])? / hidden_size as f64)?;
-        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        let x = x_normed
-            .broadcast_mul(&self.weight)?
-            .broadcast_add(&self.bias)?;
-        Ok(x)
-    }
+        }
+    };
+    Ok(LayerNorm::new(weight, bias, eps))
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L180
@@ -310,7 +267,7 @@ impl BertEmbeddings {
             &format!("{p}.token_type_embeddings"),
             vb,
         )?;
-        let layer_norm = LayerNorm::load(
+        let layer_norm = layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
             &format!("{p}.LayerNorm"),
@@ -362,9 +319,9 @@ impl BertSelfAttention {
         let all_head_size = config.num_attention_heads * attention_head_size;
         let dropout = Dropout::new(config.hidden_dropout_prob);
         let hidden_size = config.hidden_size;
-        let query = Linear::load(hidden_size, all_head_size, &format!("{p}.query"), vb)?;
-        let value = Linear::load(hidden_size, all_head_size, &format!("{p}.value"), vb)?;
-        let key = Linear::load(hidden_size, all_head_size, &format!("{p}.key"), vb)?;
+        let query = linear(hidden_size, all_head_size, &format!("{p}.query"), vb)?;
+        let value = linear(hidden_size, all_head_size, &format!("{p}.value"), vb)?;
+        let key = linear(hidden_size, all_head_size, &format!("{p}.key"), vb)?;
         Ok(Self {
             query,
             key,
@@ -414,13 +371,13 @@ struct BertSelfOutput {
 
 impl BertSelfOutput {
     fn load(p: &str, vb: &VarBuilder, config: &Config) -> Result<Self> {
-        let dense = Linear::load(
+        let dense = linear(
             config.hidden_size,
             config.hidden_size,
             &format!("{p}.dense"),
             vb,
         )?;
-        let layer_norm = LayerNorm::load(
+        let layer_norm = layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
             &format!("{p}.LayerNorm"),
@@ -437,7 +394,7 @@ impl BertSelfOutput {
     fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
         let hidden_states = self.dense.forward(hidden_states)?;
         let hidden_states = self.dropout.forward(&hidden_states)?;
-        self.layer_norm.forward(&(hidden_states + input_tensor)?)
+        Ok(self.layer_norm.forward(&(hidden_states + input_tensor)?)?)
     }
 }
 
@@ -472,7 +429,7 @@ struct BertIntermediate {
 
 impl BertIntermediate {
     fn load(p: &str, vb: &VarBuilder, config: &Config) -> Result<Self> {
-        let dense = Linear::load(
+        let dense = linear(
             config.hidden_size,
             config.intermediate_size,
             &format!("{p}.dense"),
@@ -500,13 +457,13 @@ struct BertOutput {
 
 impl BertOutput {
     fn load(p: &str, vb: &VarBuilder, config: &Config) -> Result<Self> {
-        let dense = Linear::load(
+        let dense = linear(
             config.intermediate_size,
             config.hidden_size,
             &format!("{p}.dense"),
             vb,
         )?;
-        let layer_norm = LayerNorm::load(
+        let layer_norm = layer_norm(
             config.hidden_size,
             config.layer_norm_eps,
             &format!("{p}.LayerNorm"),
@@ -523,7 +480,7 @@ impl BertOutput {
     fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
         let hidden_states = self.dense.forward(hidden_states)?;
         let hidden_states = self.dropout.forward(&hidden_states)?;
-        self.layer_norm.forward(&(hidden_states + input_tensor)?)
+        Ok(self.layer_norm.forward(&(hidden_states + input_tensor)?)?)
     }
 }
 

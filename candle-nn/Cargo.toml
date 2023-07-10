@@ -1,0 +1,24 @@
+[package]
+name = "candle-nn"
+version = "0.1.0"
+edition = "2021"
+
+description = "Minimalist ML framework."
+repository = "https://github.com/LaurentMazare/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+
+[dependencies]
+candle = { path = "../candle-core" }
+thiserror = "1"
+intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
+
+[dev-dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+
+[features]
+default = ["cuda"]
+cuda = ["candle/cuda"]
+mkl = ["dep:intel-mkl-src", "candle/mkl"]
