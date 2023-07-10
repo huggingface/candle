@@ -43,6 +43,7 @@ pub mod display;
 mod dtype;
 mod dummy_cuda_backend;
 mod error;
+mod indexer;
 mod layout;
 #[cfg(feature = "mkl")]
 mod mkl;
@@ -59,6 +60,7 @@ pub use cpu_backend::CpuStorage;
 pub use device::{Device, DeviceLocation};
 pub use dtype::{DType, WithDType};
 pub use error::{Error, Result};
+pub use indexer::IndexOp;
 pub use layout::Layout;
 pub use shape::{Shape, D};
 pub use storage::Storage;

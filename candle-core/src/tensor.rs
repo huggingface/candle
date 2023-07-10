@@ -504,10 +504,11 @@ impl Tensor {
             } else {
                 None
             };
+            let layout = self.layout().narrow(dim, start, len)?;
             let tensor_ = Tensor_ {
                 id: TensorId::new(),
                 storage: self.storage.clone(),
-                layout: self.layout().narrow(dim, start, len)?,
+                layout,
                 op,
                 is_variable: false,
             };
