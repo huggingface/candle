@@ -109,6 +109,36 @@ impl Device {
         }
     }
 
+    pub(crate) fn rand_uniform(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+        match self {
+            Device::Cpu => {
+                todo!()
+            }
+            Device::Cuda(device) => {
+                let storage = device.rand_uniform(shape, dtype)?;
+                Ok(Storage::Cuda(storage))
+            }
+        }
+    }
+
+    pub(crate) fn rand_normal(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        mean: f64,
+        std: f64,
+    ) -> Result<Storage> {
+        match self {
+            Device::Cpu => {
+                todo!()
+            }
+            Device::Cuda(device) => {
+                let storage = device.rand_normal(shape, dtype, mean, std)?;
+                Ok(Storage::Cuda(storage))
+            }
+        }
+    }
+
     pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {
