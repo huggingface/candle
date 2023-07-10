@@ -169,7 +169,7 @@ fn main() -> Result<()> {
     let vb = VarBuilder::from_safetensors(weights, DTYPE, &device);
     let config = Config::falcon7b();
     config.validate()?;
-    let model = Falcon::load(&vb, config)?;
+    let model = Falcon::load(vb, config)?;
     println!("loaded the model in {:?}", start.elapsed());
 
     let mut pipeline = TextGeneration::new(model, tokenizer, args.seed, args.temperature, &device);
