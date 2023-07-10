@@ -156,11 +156,11 @@ impl Tensor {
     // Hiding it from now, having this functions forces us to have *every* function that creates
     // a new tensor potentially `_var` Maybe having something more like `Tensor::ones(..).var()`
     // might be easier to check.
-    // pub fn ones_var<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
-    //     // Maybe we should allocate some actual storage for vars rather than just using a
-    //     // broadcasted scalar?
-    //     Self::ones_impl(shape, dtype, device, true)
-    // }
+    pub fn ones_var<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
+        // Maybe we should allocate some actual storage for vars rather than just using a
+        // broadcasted scalar?
+        Self::ones_impl(shape, dtype, device, true)
+    }
 
     /// Create a new tensors filled with ones with same shape, dtype, and device
     /// as the other tensors
@@ -208,9 +208,9 @@ impl Tensor {
         Self::zeros_impl(shape, dtype, device, false)
     }
 
-    // pub fn zeros_var<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
-    //     Self::zeros_impl(shape, dtype, device, true)
-    // }
+    pub fn zeros_var<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
+        Self::zeros_impl(shape, dtype, device, true)
+    }
 
     /// Create a new tensors filled with ones with same shape, dtype, and device
     /// as the other tensors
