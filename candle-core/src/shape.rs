@@ -185,12 +185,26 @@ impl Shape {
 
 pub trait Dim {
     fn to_index(&self, shape: &Shape, op: &'static str) -> Result<usize>;
+    fn to_index_plus_one(&self, shape: &Shape, op: &'static str) -> Result<usize>;
 }
 
 impl Dim for usize {
     fn to_index(&self, shape: &Shape, op: &'static str) -> Result<usize> {
         let dim = *self;
         if dim >= shape.dims().len() {
+            Err(Error::DimOutOfRange {
+                shape: shape.clone(),
+                dim,
+                op,
+            })?
+        } else {
+            Ok(dim)
+        }
+    }
+
+    fn to_index_plus_one(&self, shape: &Shape, op: &'static str) -> Result<usize> {
+        let dim = *self;
+        if dim > shape.dims().len() {
             Err(Error::DimOutOfRange {
                 shape: shape.clone(),
                 dim,
@@ -213,6 +227,19 @@ impl Dim for D {
         match self {
             Self::Minus1 if rank >= 1 => Ok(rank - 1),
             Self::Minus2 if rank >= 2 => Ok(rank - 2),
+            _ => Err(Error::DimOutOfRange {
+                shape: shape.clone(),
+                dim: 42, // TODO: Have an adequate error
+                op,
+            }),
+        }
+    }
+
+    fn to_index_plus_one(&self, shape: &Shape, op: &'static str) -> Result<usize> {
+        let rank = shape.rank();
+        match self {
+            Self::Minus1 if rank >= 1 => Ok(rank),
+            Self::Minus2 if rank >= 2 => Ok(rank - 1),
             _ => Err(Error::DimOutOfRange {
                 shape: shape.clone(),
                 dim: 42, // TODO: Have an adequate error
