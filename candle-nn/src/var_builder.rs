@@ -1,8 +1,13 @@
 use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
 use std::collections::HashMap;
 
+struct SafeTensorWithRouting<'a> {
+    routing: HashMap<String, usize>,
+    safetensors: Vec<SafeTensors<'a>>,
+}
+
 pub struct VarBuilder<'a> {
-    safetensors: Option<(HashMap<String, usize>, Vec<SafeTensors<'a>>)>,
+    safetensors: Option<SafeTensorWithRouting<'a>>,
     pub dtype: DType,
     pub device: Device,
 }
@@ -19,8 +24,12 @@ impl<'a> VarBuilder<'a> {
                 routing.insert(k.to_string(), index);
             }
         }
+        let safetensors = SafeTensorWithRouting {
+            routing,
+            safetensors,
+        };
         Self {
-            safetensors: Some((routing, safetensors)),
+            safetensors: Some(safetensors),
             device: device.clone(),
             dtype,
         }
@@ -38,7 +47,10 @@ impl<'a> VarBuilder<'a> {
         let s: Shape = s.into();
         match &self.safetensors {
             None => Tensor::zeros(s, self.dtype, &self.device),
-            Some((routing, safetensors)) => {
+            Some(SafeTensorWithRouting {
+                routing,
+                safetensors,
+            }) => {
                 // Unwrap or 0 just to let the proper error flow.
                 let index = routing.get(tensor_name).unwrap_or(&0);
                 let tensor = safetensors[*index]
