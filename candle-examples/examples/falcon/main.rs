@@ -7,12 +7,13 @@ extern crate intel_mkl_src;
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor, D};
 use candle_hub::{api::sync::Api, Repo, RepoType};
+use candle_nn::VarBuilder;
 use clap::Parser;
 use rand::{distributions::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
 
 mod model;
-use model::{Config, Falcon, VarBuilder};
+use model::{Config, Falcon};
 
 #[cfg(feature = "mkl")]
 const DTYPE: DType = DType::F32;

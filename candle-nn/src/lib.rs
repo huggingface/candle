@@ -5,9 +5,11 @@ mod conv;
 mod embedding;
 mod layer_norm;
 mod linear;
+mod var_builder;
 
 pub use activation::Activation;
 pub use conv::{Conv1d, Conv1dConfig};
 pub use embedding::Embedding;
 pub use layer_norm::LayerNorm;
 pub use linear::Linear;
+pub use var_builder::VarBuilder;
