@@ -70,3 +70,6 @@ pub use cuda_backend::{CudaDevice, CudaError, CudaStorage};
 
 #[cfg(not(feature = "cuda"))]
 pub use dummy_cuda_backend::{CudaDevice, CudaError, CudaStorage};
+
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
