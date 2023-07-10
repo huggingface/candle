@@ -13,6 +13,7 @@ readme = "README.md"
 [lib]
 name = "candle"
 crate-type = ["cdylib"]
+doc = false
 
 [dependencies]
 candle = { path = "../candle-core", default-features=false }
