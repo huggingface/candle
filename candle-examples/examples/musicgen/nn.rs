@@ -180,17 +180,4 @@ impl Conv1D {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HiddenAct {
-    Gelu,
-    Relu,
-}
-
-impl HiddenAct {
-    pub fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
-        match self {
-            Self::Gelu => xs.gelu(),
-            Self::Relu => xs.relu(),
-        }
-    }
-}
+pub type HiddenAct = candle_nn::Activation;

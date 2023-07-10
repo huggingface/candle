@@ -63,21 +63,6 @@ impl<'a> VarBuilder<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HiddenAct {
-    Gelu,
-    Relu,
-}
-
-impl HiddenAct {
-    fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
-        match self {
-            Self::Gelu => xs.gelu(),
-            Self::Relu => xs.relu(),
-        }
-    }
-}
-
 // The names in comments correspond to the original implementation:
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L17
 #[derive(Debug, Clone, PartialEq, Deserialize)]
