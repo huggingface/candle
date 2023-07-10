@@ -11,7 +11,6 @@ license = "MIT/Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-blas = { version = "0.22.0", optional = true }
 byteorder = "1.4.3"
 candle-kernels = { path = "../candle-kernels", optional = true }
 # Re-enable this once 0.9.13 as been released as it would include the cublas-f16 changes
@@ -22,6 +21,7 @@ cudarc = { git = "https://github.com/LaurentMazare/cudarc.git", branch = "cublas
 gemm = { git = "https://github.com/LaurentMazare/gemm.git", branch = "f16-vectorize-pack" }
 half = { version = "2.3.1", features = ["num-traits"] }
 intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
+libc = { version = "0.2.147", optional = true }
 memmap2 = "0.7.1"
 num-traits = "0.2.15"
 num_cpus = "1.15.0"
@@ -35,4 +35,4 @@ anyhow = { version = "1", features = ["backtrace"] }
 [features]
 default = ["cuda"]
 cuda = ["dep:cudarc", "dep:candle-kernels"]
-mkl = ["dep:blas", "dep:intel-mkl-src"]
+mkl = ["dep:libc", "dep:intel-mkl-src"]

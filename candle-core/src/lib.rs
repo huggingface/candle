@@ -44,6 +44,8 @@ mod dtype;
 mod dummy_cuda_backend;
 mod error;
 mod layout;
+#[cfg(feature = "mkl")]
+mod mkl;
 mod npy;
 mod op;
 pub mod safetensors;
