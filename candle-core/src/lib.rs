@@ -39,7 +39,7 @@ pub trait Forward {
 }
 
 impl Tensor {
-    pub fn apply<F: Forward>(&self, f: F) -> Result<Tensor> {
+    pub fn apply<F: Forward>(&self, f: &F) -> Result<Tensor> {
         f.forward(self)
     }
 }

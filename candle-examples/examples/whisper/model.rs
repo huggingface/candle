@@ -268,12 +268,11 @@ impl ResidualAttentionBlock {
         if let Some((attn, ln)) = &self.cross_attn {
             x = (&x + attn.forward(&ln.forward(&x)?, xa, None)?)?;
         }
-        let mlp = self.mlp_linear2.forward(
-            &self
-                .mlp_linear1
-                .forward(&self.mlp_ln.forward(&x)?)?
-                .gelu()?,
-        )?;
+        let mlp = x
+            .apply(&self.mlp_ln)?
+            .apply(&self.mlp_linear1)?
+            .gelu()?
+            .apply(&self.mlp_linear2)?;
         Ok((x + mlp)?)
     }
 }
