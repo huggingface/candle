@@ -3,7 +3,7 @@ use crate::nn::{
 };
 use crate::{encodec_model, t5_model};
 use anyhow::Result;
-use candle::{DType, Device, Tensor, D};
+use candle::{DType, Device, Forward, Tensor, D};
 
 // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/models/musicgen/configuration_musicgen.py#L83
 #[derive(Debug, Clone, PartialEq)]

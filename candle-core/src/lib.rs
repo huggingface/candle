@@ -33,3 +33,13 @@ pub use cuda_backend::{CudaDevice, CudaError, CudaStorage};
 
 #[cfg(not(feature = "cuda"))]
 pub use dummy_cuda_backend::{CudaDevice, CudaError, CudaStorage};
+
+pub trait Forward {
+    fn forward(&self, _: &Tensor) -> Result<Tensor>;
+}
+
+impl Tensor {
+    pub fn apply<F: Forward>(&self, f: F) -> Result<Tensor> {
+        f.forward(self)
+    }
+}

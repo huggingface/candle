@@ -12,8 +12,10 @@ impl LayerNorm {
     pub fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
         Self { weight, bias, eps }
     }
+}
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl candle::Forward for LayerNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,

@@ -4,7 +4,7 @@
 extern crate intel_mkl_src;
 
 use anyhow::{anyhow, Error as E, Result};
-use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
+use candle::{safetensors::SafeTensors, DType, Device, Forward, Shape, Tensor};
 use candle_hub::{api::sync::Api, Cache, Repo, RepoType};
 use candle_nn::{Embedding, LayerNorm, Linear};
 use clap::Parser;

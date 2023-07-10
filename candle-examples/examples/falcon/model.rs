@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor, D};
+use candle::{safetensors::SafeTensors, DType, Device, Forward, Shape, Tensor, D};
 use candle_nn::{Embedding, LayerNorm, Linear};
 use std::collections::HashMap;
 
