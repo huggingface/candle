@@ -112,7 +112,8 @@ impl Device {
     pub(crate) fn rand_uniform(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                todo!()
+                let storage = CpuStorage::rand_uniform(shape, dtype)?;
+                Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
                 let storage = device.rand_uniform(shape, dtype)?;
@@ -130,7 +131,8 @@ impl Device {
     ) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                todo!()
+                let storage = CpuStorage::rand_normal(shape, dtype, mean, std)?;
+                Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
                 let storage = device.rand_normal(shape, dtype, mean, std)?;
