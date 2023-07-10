@@ -125,59 +125,39 @@ pub fn embedding(
     Ok(Embedding::new(embeddings, hidden_size))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConvConfig {
-    pub padding: usize,
-    pub stride: usize,
+pub type Conv1d = candle_nn::Conv1d;
+pub type Conv1dConfig = candle_nn::Conv1dConfig;
+
+// Applies weight norm for inference by recomputing the weight tensor. This
+// does not apply to training.
+// https://pytorch.org/docs/stable/generated/torch.nn.utils.weight_norm.html
+pub fn conv1d_weight_norm(
+    in_c: usize,
+    out_c: usize,
+    kernel_size: usize,
+    config: Conv1dConfig,
+    p: &str,
+    vb: &VarBuilder,
+) -> Result<Conv1d> {
+    let weight_g = vb.get((out_c, 1, 1), &format!("{p}.weight_g"))?;
+    let weight_v = vb.get((out_c, in_c, kernel_size), &format!("{p}.weight_v"))?;
+    let norm_v = (&weight_v * &weight_v)?.sum(&[1, 2])?.sqrt()?;
+    let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
+    let bias = vb.get(out_c, &format!("{p}.bias"))?;
+    Ok(Conv1d::new(weight, Some(bias), config))
 }
 
-#[derive(Debug)]
-pub struct Conv1D {
-    weight: Tensor,
-    bias: Option<Tensor>,
-    config: ConvConfig,
-}
-
-impl Conv1D {
-    // Applies weight norm for inference by recomputing the weight tensor. This
-    // does not apply to training.
-    // https://pytorch.org/docs/stable/generated/torch.nn.utils.weight_norm.html
-    pub fn load_weight_norm(
-        in_c: usize,
-        out_c: usize,
-        kernel_size: usize,
-        config: ConvConfig,
-        p: &str,
-        vb: &VarBuilder,
-    ) -> Result<Self> {
-        let weight_g = vb.get((out_c, 1, 1), &format!("{p}.weight_g"))?;
-        let weight_v = vb.get((out_c, in_c, kernel_size), &format!("{p}.weight_v"))?;
-        let norm_v = (&weight_v * &weight_v)?.sum(&[1, 2])?.sqrt()?;
-        let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
-        let bias = vb.get(out_c, &format!("{p}.bias"))?;
-        Ok(Self {
-            weight,
-            bias: Some(bias),
-            config,
-        })
-    }
-
-    pub fn load(
-        in_c: usize,
-        out_c: usize,
-        kernel_size: usize,
-        config: ConvConfig,
-        p: &str,
-        vb: &VarBuilder,
-    ) -> Result<Self> {
-        let weight = vb.get((out_c, in_c, kernel_size), &format!("{p}.weight"))?;
-        let bias = vb.get(out_c, &format!("{p}.bias"))?;
-        Ok(Self {
-            weight,
-            bias: Some(bias),
-            config,
-        })
-    }
+pub fn conv1d(
+    in_c: usize,
+    out_c: usize,
+    kernel_size: usize,
+    config: Conv1dConfig,
+    p: &str,
+    vb: &VarBuilder,
+) -> Result<Conv1d> {
+    let weight = vb.get((out_c, in_c, kernel_size), &format!("{p}.weight"))?;
+    let bias = vb.get(out_c, &format!("{p}.bias"))?;
+    Ok(Conv1d::new(weight, Some(bias), config))
 }
 
 pub type HiddenAct = candle_nn::Activation;
