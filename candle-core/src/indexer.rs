@@ -43,7 +43,6 @@ impl Tensor {
                         Bound::Unbounded => dims[i],
                     };
                     let len = stop - start;
-                    println!(" indexer {indexer:?} Start {start} stop{stop} - {len:?}");
                     let out = x.narrow(current_dim, start, stop - start)?;
                     current_dim += 1;
                     out
