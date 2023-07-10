@@ -1,4 +1,3 @@
-// #![deny(missing_docs)]
 use crate::shape::Dim;
 use crate::{op::Op, storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::Arc;
