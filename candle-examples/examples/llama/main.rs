@@ -145,11 +145,7 @@ fn main() -> Result<()> {
     let cache = model::Cache::new(!args.no_kv_cache, &config, &device);
     let (llama, tokenizer_filename) = match args.npy {
         Some(filename) => {
-            let tensors = Tensor::read_npz(filename)?
-                .into_iter()
-                .map(|(n, t)| Ok((n, t.to_dtype(DTYPE)?)))
-                .collect::<Result<std::collections::HashMap<String, Tensor>>>()?;
-            let vb = VarBuilder::from_tensors(tensors, DTYPE, &device);
+            let vb = VarBuilder::from_npz(filename, DTYPE, &device)?;
             let tokenizer = std::path::PathBuf::from("llama-tokenizer.json");
             (Llama::load(vb, &cache, &config)?, tokenizer)
         }
