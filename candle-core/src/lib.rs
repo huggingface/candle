@@ -69,10 +69,10 @@ use strided_index::StridedIndex;
 pub use tensor::{Tensor, TensorId};
 
 #[cfg(feature = "cuda")]
-pub use cuda_backend::{CudaDevice, CudaError, CudaStorage};
+pub use cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(not(feature = "cuda"))]
-pub use dummy_cuda_backend::{CudaDevice, CudaError, CudaStorage};
+pub use dummy_cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;

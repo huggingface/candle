@@ -1,6 +1,6 @@
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
-trait BackendStorage: Sized {
+pub(crate) trait BackendStorage: Sized {
     type Device: BackendDevice;
 
     fn try_clone(&self, _: &Layout) -> Result<Self>;
@@ -49,10 +49,13 @@ trait BackendStorage: Sized {
     fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()>;
 }
 
-trait BackendDevice: Sized {
+pub(crate) trait BackendDevice: Sized + std::fmt::Debug + Clone {
     type Storage: BackendStorage;
 
+    // TODO: Make the usize generic and part of a generic DeviceLocation.
     fn new(_: usize) -> Result<Self>;
+
+    fn location(&self) -> crate::DeviceLocation;
 
     fn same_device(&self, _: &Self) -> bool;
 
