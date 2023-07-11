@@ -143,7 +143,6 @@ fn main() -> Result<()> {
     };
     let config = Config::config_7b();
     let cache = model::Cache::new(!args.no_kv_cache, &config, &device);
-    let start = std::time::Instant::now();
     let (llama, tokenizer_filename) = match args.npy {
         Some(_) => {
             todo!("fix numpy handling if we continue supporting it")
@@ -151,7 +150,7 @@ fn main() -> Result<()> {
         None => {
             let api = Api::new()?;
             let repo = Repo::new("Narsil/amall-7b".to_string(), RepoType::Model);
-            println!("building the model");
+            println!("loading the model weights");
             let tokenizer_filename = api.get(&repo, "tokenizer.json")?;
             let mut filenames = vec![];
             for rfilename in [
@@ -176,7 +175,6 @@ fn main() -> Result<()> {
             (Llama::load(vb, &cache, &config)?, tokenizer_filename)
         }
     };
-    println!("Loaded in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
     let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
     let mut tokens = tokenizer

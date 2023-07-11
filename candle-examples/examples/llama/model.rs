@@ -74,7 +74,7 @@ fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
 fn linear_multi(sz1: usize, sz2: usize, prefixes: &[&str], vb: &VarBuilder) -> Result<Linear> {
     let weights = prefixes
         .iter()
-        .map(|p| vb.pp(p).get((sz1, sz2), "weight"))
+        .map(|p| vb.pp(p).get((sz1, sz2), "weight")?.t())
         .collect::<Result<Vec<_>>>()?;
     let weight = Tensor::cat(&weights, 0)?;
     Ok(Linear::new(weight, None))
