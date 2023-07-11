@@ -309,9 +309,9 @@ impl CausalSelfAttention {
         let qkv = self.c_attn.forward(x)?;
         let qkv = qkv.to_dtype(DType::F32)?;
         let n_embd = c;
-        let q = qkv.i(..n_embd)?;
-        let k = qkv.narrow(1, n_embd, n_embd)?;
-        let v = qkv.narrow(1, 2 * n_embd, n_embd)?;
+        let q = qkv.i((.., ..n_embd))?;
+        let k = qkv.i((.., n_embd..2 * n_embd))?;
+        let v = qkv.i((.., 2 * n_embd..))?;
         let target_dim = [t, self.n_head, c / self.n_head];
         let k = k.reshape(target_dim.as_slice())?.transpose(0, 1)?;
         let q = q.reshape(target_dim.as_slice())?.transpose(0, 1)?;
@@ -326,15 +326,11 @@ impl CausalSelfAttention {
                 v = Tensor::cat(&[cache_v, &v], 1)?.contiguous()?;
                 let k_seq_len = k.dims()[1];
                 if k_seq_len > MAX_SEQ_LEN {
-                    k = k
-                        .narrow(1, k_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)?
-                        .contiguous()?
+                    k = k.i((.., k_seq_len - MAX_SEQ_LEN..))?.contiguous()?
                 }
                 let v_seq_len = v.dims()[1];
                 if v_seq_len > 2 * MAX_SEQ_LEN {
-                    v = v
-                        .narrow(1, v_seq_len - MAX_SEQ_LEN, MAX_SEQ_LEN)?
-                        .contiguous()?
+                    v = v.i((.., v_seq_len - MAX_SEQ_LEN..))?.contiguous()?
                 }
             }
             cache[block_idx] = Some((k.clone(), v.clone()))
@@ -405,7 +401,7 @@ impl Llama {
             x = block.forward(&x, freqs_cis, block_idx)?;
         }
         let x = self.ln_f.forward(&x)?;
-        let x = x.narrow(0, t - 1, 1)?;
+        let x = x.i(t - 1..)?;
         let logits = self.lm_head.forward(&x)?;
         let logits = logits.to_dtype(DType::F32)?;
         let (b, vocab_size) = logits.shape().r2()?;
@@ -530,7 +526,7 @@ fn main() -> Result<()> {
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?;
         let freqs_cis = if cache.use_kv_cache {
-            freqs_cis.narrow(1, index_pos, ctxt.len())?
+            freqs_cis.i((.., index_pos..ctxt.len()))?
         } else {
             freqs_cis.clone()
         };

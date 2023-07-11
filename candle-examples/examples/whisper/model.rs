@@ -1,7 +1,7 @@
 // We use anyhow rather than candle errors as it provides better support for getting the backtrace
 // back when using RUST_LIB_BACKTRACE=1.
 use anyhow::Result;
-use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor};
+use candle::{safetensors::SafeTensors, DType, Device, IndexOp, Shape, Tensor};
 use candle_nn::{Conv1d, Conv1dConfig, Embedding, LayerNorm, Linear};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -217,7 +217,7 @@ impl MultiHeadAttention {
         let v = self.reshape_head(v)?.contiguous()?;
         let mut qk = q.matmul(&k)?;
         if let Some(mask) = mask {
-            let mask = mask.narrow(0, 0, n_ctx)?.narrow(1, 0, n_ctx)?;
+            let mask = mask.i((0..n_ctx, 0..n_ctx))?;
             qk = qk.broadcast_add(&mask)?
         }
         let w = qk.softmax(candle::D::Minus1)?;
@@ -344,7 +344,7 @@ impl AudioEncoder {
         let x = self.conv2.forward(&x)?.gelu()?;
         let x = x.transpose(1, 2)?;
         let (_bsize, seq_len, _hidden) = x.shape().r3()?;
-        let positional_embedding = self.positional_embedding.narrow(0, 0, seq_len)?;
+        let positional_embedding = self.positional_embedding.i(..seq_len)?;
         let mut x = x.broadcast_add(&positional_embedding)?;
         for block in self.blocks.iter() {
             x = block.forward(&x, None, None)?
@@ -395,7 +395,7 @@ impl TextDecoder {
         let x_dims = x.dims();
         let last = x_dims[x_dims.len() - 1];
         let token_embedding = self.token_embedding.forward(x)?;
-        let positional_embedding = self.positional_embedding.narrow(0, 0, last)?;
+        let positional_embedding = self.positional_embedding.i(..last)?;
         let mut x = token_embedding.broadcast_add(&positional_embedding)?;
         for block in self.blocks.iter() {
             x = block.forward(&x, Some(xa), Some(&self.mask))?;

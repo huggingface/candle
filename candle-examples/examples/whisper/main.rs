@@ -10,7 +10,7 @@
 extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, Tensor};
+use candle::{DType, Device, IndexOp, Tensor};
 use candle_hub::{api::sync::Api, Repo, RepoType};
 use clap::Parser;
 use rand::{distributions::Distribution, SeedableRng};
@@ -120,15 +120,15 @@ impl Decoder {
             // token logits and the probability for the according token.
             if i == 0 {
                 no_speech_prob = logits
-                    .get(0)?
+                    .i(0)?
                     .softmax(0)?
-                    .get(NO_SPEECH_TOKEN as usize)?
+                    .i(NO_SPEECH_TOKEN as usize)?
                     .to_scalar::<f32>()? as f64;
             }
 
             let (seq_len, _) = logits.shape().r2()?;
             let logits = logits
-                .get(seq_len - 1)?
+                .i(seq_len - 1)?
                 .broadcast_add(&self.suppress_tokens)?;
             let next_token = if t > 0f64 {
                 let prs = (&logits / t)?.softmax(0)?;
@@ -147,7 +147,7 @@ impl Decoder {
             tokens.push(next_token);
             let prob = logits
                 .softmax(candle::D::Minus1)?
-                .get(next_token as usize)?
+                .i(next_token as usize)?
                 .to_scalar::<f32>()? as f64;
             if next_token == EOT_TOKEN || tokens.len() > model.config.max_target_positions {
                 break;
@@ -201,7 +201,7 @@ impl Decoder {
             let start = std::time::Instant::now();
             let time_offset = (seek * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
             let segment_size = usize::min(content_frames - seek, N_FRAMES);
-            let mel_segment = mel.narrow(2, seek, segment_size)?;
+            let mel_segment = mel.i((.., .., seek, seek + segment_size))?;
             let segment_duration = (segment_size * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
             let dr = self.decode_with_fallback(&mel_segment)?;
             seek += segment_size;

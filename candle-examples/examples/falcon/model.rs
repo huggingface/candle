@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle::{safetensors::SafeTensors, DType, Device, Shape, Tensor, D};
+use candle::{safetensors::SafeTensors, DType, Device, IndexOp, Shape, Tensor, D};
 use candle_nn::{Embedding, LayerNorm, Linear};
 use std::collections::HashMap;
 
@@ -209,8 +209,8 @@ impl Config {
 
 fn rotate_half(x: &Tensor) -> Result<Tensor> {
     let l = x.dim(D::Minus1)?;
-    let x1 = x.narrow(D::Minus1, 0, l / 2)?;
-    let x2 = x.narrow(D::Minus1, l / 2, l - l / 2)?;
+    let x1 = x.i((.., .., ..l / 2))?;
+    let x2 = x.i((.., .., l / 2..))?;
     let x21 = Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)?;
     Ok(x21)
 }
@@ -265,8 +265,8 @@ impl FalconRotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         let (_batch, seq_len, _head_dim) = query.shape().r3()?;
         let (cos, sin) = self.cos_sin(MAX_SEQ_LEN, &query.device(), query.dtype())?;
-        let cos = cos.narrow(0, past_kv_len, seq_len)?;
-        let sin = sin.narrow(0, past_kv_len, seq_len)?;
+        let cos = cos.i(past_kv_len..past_kv_len + seq_len)?;
+        let sin = sin.i(past_kv_len..past_kv_len + seq_len)?;
         let qs = (query.broadcast_mul(&cos)? + &rotate_half(query)?.broadcast_mul(&sin)?)?;
         let ks = (key.broadcast_mul(&cos)? + &rotate_half(key)?.broadcast_mul(&sin)?)?;
         Ok((qs, ks))
@@ -341,17 +341,17 @@ impl FalconAttention {
         let (b_sz, seq_len, _) = fused_qkv.shape().r3()?;
         if !self.multi_query {
             let fused_qkv = fused_qkv.reshape((b_sz, seq_len, self.num_heads, 3, self.head_dim))?;
-            let q = fused_qkv.narrow(D::Minus2, 0, 1)?.squeeze(D::Minus2)?;
-            let k = fused_qkv.narrow(D::Minus2, 1, 1)?.squeeze(D::Minus2)?;
-            let v = fused_qkv.narrow(D::Minus2, 2, 1)?.squeeze(D::Minus2)?;
+            let q = fused_qkv.i((.., .., .., 0))?;
+            let k = fused_qkv.i((.., .., .., 1))?;
+            let v = fused_qkv.i((.., .., .., 2))?;
             Ok((q, k, v))
         } else {
             let fused_qkv =
                 fused_qkv.reshape((b_sz, seq_len, self.num_heads + 2, self.head_dim))?;
             let d = fused_qkv.dim(D::Minus2)?;
-            let q = fused_qkv.narrow(D::Minus2, 0, d - 2)?;
-            let k = fused_qkv.narrow(D::Minus2, d - 2, 1)?;
-            let v = fused_qkv.narrow(D::Minus2, d - 1, 1)?;
+            let q = fused_qkv.i((.., .., ..d - 2))?;
+            let k = fused_qkv.i((.., .., d - 2..d - 1))?;
+            let v = fused_qkv.i((.., .., d - 1..))?;
             Ok((q, k, v))
         }
     }
@@ -576,7 +576,7 @@ impl Falcon {
             hidden_state = block.forward(&hidden_state, &causal_mask, past_kv_len)?;
         }
         let hidden_state = self.ln_f.forward(&hidden_state)?;
-        let hidden_state = hidden_state.narrow(1, seq_len - 1, 1)?;
+        let hidden_state = hidden_state.i((.., seq_len - 1..))?;
         let logits = self.lm_head.forward(&hidden_state)?.squeeze(1)?;
         Ok(logits)
     }
