@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ParamsConv1D {
+pub struct ParamsConv1D {
     pub(crate) b_size: Option<usize>,
     // Maybe we should have a version without l_in as this bit depends on the input and not only on
     // the weights.

@@ -1,3 +1,4 @@
+use crate::backend::BackendStorage;
 use crate::{op, CpuStorage, CudaStorage, DType, Device, Error, Layout, Result, Shape};
 
 // We do not want to implement Clone on Storage as cloning may fail because of

@@ -100,7 +100,7 @@ pub enum Error {
     },
 
     #[error(transparent)]
-    Cuda(#[from] crate::CudaError),
+    Cuda(Box<dyn std::error::Error + Send + Sync>),
 
     #[error(transparent)]
     TryFromIntError(#[from] core::num::TryFromIntError),

@@ -33,6 +33,7 @@
 //!
 //! Rust is cool, and a lot of the HF ecosystem already has Rust crates [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers)
 
+mod backend;
 mod backprop;
 mod conv;
 mod cpu_backend;
@@ -68,10 +69,10 @@ use strided_index::StridedIndex;
 pub use tensor::{Tensor, TensorId};
 
 #[cfg(feature = "cuda")]
-pub use cuda_backend::{CudaDevice, CudaError, CudaStorage};
+pub use cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(not(feature = "cuda"))]
-pub use dummy_cuda_backend::{CudaDevice, CudaError, CudaStorage};
+pub use dummy_cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
