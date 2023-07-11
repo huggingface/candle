@@ -71,15 +71,6 @@ fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
     Ok(Linear::new(weight, None))
 }
 
-fn linear_multi(sz1: usize, sz2: usize, prefixes: &[&str], vb: &VarBuilder) -> Result<Linear> {
-    let weights = prefixes
-        .iter()
-        .map(|p| vb.pp(p).get((sz1, sz2), "weight")?.t())
-        .collect::<Result<Vec<_>>>()?;
-    let weight = Tensor::cat(&weights, 0)?;
-    Ok(Linear::new(weight, None))
-}
-
 struct Embedding {
     embeddings: Tensor,
 }
@@ -228,7 +219,22 @@ impl CausalSelfAttention {
     fn load(vb: VarBuilder, cache: &Cache, cfg: &Config) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size = (cfg.hidden_size / cfg.n_head) * cfg.n_head;
-        let c_attn = linear_multi(size_in, size, &["q_proj", "k_proj", "v_proj"], &vb)?;
+        let q_proj = vb.get((size_in, size), "q_proj.weight")?;
+        let k_proj = vb.get((size_in, size), "k_proj.weight")?;
+        let v_proj = vb.get((size_in, size), "v_proj.weight")?;
+        // Invert the transformation from:
+        // https://github.com/huggingface/transformers/blob/2642d8d04b14c18199ebe7b35f976da02df61752/src/transformers/models/llama/convert_llama_weights_to_hf.py#L101
+        let n_head = cfg.n_head;
+        let q_proj = q_proj
+            .reshape((n_head, 2, size / n_head / 2, size_in))?
+            .transpose(1, 2)?
+            .reshape((size_in, size))?;
+        let k_proj = k_proj
+            .reshape((n_head, 2, size / n_head / 2, size_in))?
+            .transpose(1, 2)?
+            .reshape((size_in, size))?;
+        let attn_weight = Tensor::cat(&[q_proj, k_proj, v_proj], 0)?;
+        let c_attn = Linear::new(attn_weight, None);
         let o_proj = linear(size, size_in, vb.pp("o_proj"))?;
         Ok(Self::new(c_attn, o_proj, cfg.n_head, cache))
     }
