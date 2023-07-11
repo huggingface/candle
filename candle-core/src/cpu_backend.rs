@@ -895,7 +895,7 @@ impl CpuStorage {
         MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
     }
 
-    pub(crate) fn rand_uniform(shape: &Shape, dtype: DType) -> Result<Self> {
+    pub(crate) fn rand_uniform(shape: &Shape, dtype: DType, min: f64, max: f64) -> Result<Self> {
         use rand::prelude::*;
 
         let elem_count = shape.elem_count();
@@ -907,7 +907,7 @@ impl CpuStorage {
             DType::F32 => {
                 let mut data = Vec::new();
                 data.reserve(elem_count);
-                let uniform = rand::distributions::Uniform::new(0f32, 1f32);
+                let uniform = rand::distributions::Uniform::new(min as f32, max as f32);
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f32, _>(uniform))
                 }
@@ -916,7 +916,7 @@ impl CpuStorage {
             DType::F64 => {
                 let mut data = Vec::new();
                 data.reserve(elem_count);
-                let uniform = rand::distributions::Uniform::new(0f64, 1f64);
+                let uniform = rand::distributions::Uniform::new(min, max);
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f64, _>(uniform))
                 }
