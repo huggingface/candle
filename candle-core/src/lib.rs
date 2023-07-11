@@ -33,6 +33,7 @@
 //!
 //! Rust is cool, and a lot of the HF ecosystem already has Rust crates [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers)
 
+mod backend;
 mod backprop;
 mod conv;
 mod cpu_backend;
