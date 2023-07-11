@@ -139,6 +139,9 @@ pub enum Error {
         rhs_stride: Vec<usize>,
         mnk: (usize, usize, usize),
     },
+
+    #[error("cannot find tensor {path}")]
+    CannotFindTensor { path: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

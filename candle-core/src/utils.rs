@@ -10,3 +10,10 @@ pub fn get_num_threads() -> usize {
         Some(_) | None => num_cpus::get(),
     }
 }
+
+pub fn has_mkl() -> bool {
+    #[cfg(feature = "mkl")]
+    return true;
+    #[cfg(not(feature = "mkl"))]
+    return false;
+}

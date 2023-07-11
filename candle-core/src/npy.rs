@@ -1,10 +1,10 @@
-//! Numpy support for literals.
+//! Numpy support for tensors.
 //!
 //! The spec for the npy format can be found in
 //! [npy-format](https://docs.scipy.org/doc/numpy-1.14.2/neps/npy-format.html).
-//! The functions from this module can be used to read literals from npy/npz files
-//! or write literals to these files. A npy file contains a single literal (unnamed)
-//! whereas a npz file can contain multiple named literals. npz files are also compressed.
+//! The functions from this module can be used to read tensors from npy/npz files
+//! or write tensors to these files. A npy file contains a single tensor (unnamed)
+//! whereas a npz file can contain multiple named tensors. npz files are also compressed.
 //!
 //! These two formats are easy to use in Python using the numpy library.
 //!
@@ -232,7 +232,7 @@ impl Tensor {
         }
     }
 
-    /// Reads a npy file and return the stored multi-dimensional array as a literal.
+    /// Reads a npy file and return the stored multi-dimensional array as a tensor.
     pub fn read_npy<T: AsRef<Path>>(path: T) -> Result<Self> {
         let mut reader = File::open(path.as_ref())?;
         let header = read_header(&mut reader)?;
