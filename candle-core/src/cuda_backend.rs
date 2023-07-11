@@ -153,7 +153,13 @@ impl CudaDevice {
         })
     }
 
-    pub(crate) fn rand_uniform(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
+    pub(crate) fn rand_uniform(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        lo: f64,
+        up: f64,
+    ) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let curand = self.curand.lock().unwrap();
         let slice = match dtype {
@@ -174,6 +180,10 @@ impl CudaDevice {
                 CudaStorageSlice::F64(data)
             }
         };
+        if lo != 0.0 || up != 1.0 {
+            let layout = Layout::contiguous(shape);
+            Affine(up - lo, lo).map(&slice, self, &layout)?;
+        }
         Ok(CudaStorage {
             slice,
             device: self.clone(),

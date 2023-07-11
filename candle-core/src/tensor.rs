@@ -226,19 +226,33 @@ impl Tensor {
         s: S,
         dtype: DType,
         device: &Device,
+        lo: f64,
+        up: f64,
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform(&s, dtype)?;
+        let storage = device.rand_uniform(&s, dtype, lo, up)?;
         Ok(from_storage(storage, s, None, is_variable))
     }
 
-    pub fn rand_uniform<S: Into<Shape>>(s: S, dtype: DType, device: &Device) -> Result<Self> {
-        Self::rand_uniform_impl(s, dtype, device, false)
+    pub fn rand_uniform<S: Into<Shape>>(
+        s: S,
+        dtype: DType,
+        device: &Device,
+        lo: f64,
+        up: f64,
+    ) -> Result<Self> {
+        Self::rand_uniform_impl(s, dtype, device, lo, up, false)
     }
 
-    pub fn rand_uniform_var<S: Into<Shape>>(s: S, dtype: DType, device: &Device) -> Result<Self> {
-        Self::rand_uniform_impl(s, dtype, device, true)
+    pub fn rand_uniform_var<S: Into<Shape>>(
+        s: S,
+        dtype: DType,
+        device: &Device,
+        lo: f64,
+        up: f64,
+    ) -> Result<Self> {
+        Self::rand_uniform_impl(s, dtype, device, lo, up, true)
     }
 
     fn rand_normal_impl<S: Into<Shape>>(

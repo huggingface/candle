@@ -39,7 +39,7 @@ impl CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    pub(crate) fn rand_uniform(&self, _: &Shape, _: DType) -> Result<CudaStorage> {
+    pub(crate) fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<CudaStorage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
