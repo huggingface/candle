@@ -1,11 +1,12 @@
 // For now this crate shares its error type with candle-core. We may introduce some separate
 // error type if needed or add some specialized cases on the candle-core side.
-mod activation;
-mod conv;
-mod embedding;
-mod layer_norm;
-mod linear;
-mod var_builder;
+pub mod activation;
+pub mod conv;
+pub mod embedding;
+pub mod init;
+pub mod layer_norm;
+pub mod linear;
+pub mod var_builder;
 
 pub use activation::Activation;
 pub use conv::{Conv1d, Conv1dConfig};
