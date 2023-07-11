@@ -48,7 +48,7 @@ mod indexer;
 mod layout;
 #[cfg(feature = "mkl")]
 mod mkl;
-mod npy;
+pub mod npy;
 mod op;
 pub mod safetensors;
 mod shape;
