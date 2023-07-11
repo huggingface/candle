@@ -28,22 +28,6 @@ fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
     Ok(LayerNorm::new(weight, bias, eps))
 }
 
-#[derive(Debug)]
-struct Dropout {
-    pr: f64,
-}
-
-impl Dropout {
-    fn new(pr: f64) -> Self {
-        Self { pr }
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // TODO
-        Ok(x.clone())
-    }
-}
-
 fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
     let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
     Ok(Embedding::new(embeddings, hidden_size))
@@ -345,7 +329,6 @@ impl FalconAttention {
 struct FalconMlp {
     dense_h_to_4h: Linear,
     dense_4h_to_h: Linear,
-    dropout: Dropout,
 }
 
 impl FalconMlp {
@@ -354,11 +337,9 @@ impl FalconMlp {
         let b = cfg.bias;
         let dense_h_to_4h = linear(h, 4 * h, b, vb.pp("dense_h_to_4h"))?;
         let dense_4h_to_h = linear(4 * h, h, b, vb.pp("dense_4h_to_h"))?;
-        let dropout = Dropout::new(cfg.hidden_dropout);
         Ok(Self {
             dense_h_to_4h,
             dense_4h_to_h,
-            dropout,
         })
     }
 

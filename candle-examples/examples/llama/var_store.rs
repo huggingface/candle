@@ -1,15 +1,7 @@
 use super::*;
-use candle::{DType, Device, Result, Shape, Tensor};
+use candle::{Device, Result, Tensor};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-
-#[allow(dead_code)]
-#[derive(Clone)]
-struct NamedVar {
-    path: String,
-    dtype: DType,
-    shape: Shape,
-}
 
 #[derive(Clone)]
 pub struct VarBuilder {

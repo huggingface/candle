@@ -470,7 +470,6 @@ impl Map1 for Elu {
     }
 }
 
-#[allow(dead_code)]
 struct Sum<'a>(&'a [usize]);
 impl<'a> Map1 for Sum<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -507,7 +506,6 @@ impl<'a> Map1 for Sum<'a> {
     }
 }
 
-#[allow(dead_code)]
 struct FastSum<'a>(&'a [usize]);
 impl<'a> Map1 for FastSum<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(

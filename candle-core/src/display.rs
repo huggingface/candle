@@ -57,7 +57,6 @@ impl std::fmt::Debug for Tensor {
     }
 }
 
-#[allow(dead_code)]
 /// Options for Tensor pretty printing
 pub struct PrinterOptions {
     precision: usize,
