@@ -63,7 +63,7 @@ impl Cache {
 }
 
 fn silu(xs: &Tensor) -> Result<Tensor> {
-    Ok((xs / (xs.neg()?.exp()? + 1.0)?)?)
+    xs / (xs.neg()?.exp()? + 1.0)?
 }
 
 fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
@@ -95,7 +95,7 @@ impl Embedding {
     }
 
     fn forward(&self, indexes: &Tensor) -> Result<Tensor> {
-        Ok(Tensor::embedding(indexes, &self.embeddings)?)
+        Tensor::embedding(indexes, &self.embeddings)
     }
 }
 
@@ -342,7 +342,7 @@ impl Llama {
         let logits = logits.to_dtype(DType::F32)?;
         let (b, vocab_size) = logits.shape().r2()?;
         assert_eq!(b, 1);
-        Ok(logits.reshape(vocab_size)?)
+        logits.reshape(vocab_size)
     }
 
     pub fn load(vb: VarBuilder, cache: &Cache, cfg: &Config) -> Result<Self> {
