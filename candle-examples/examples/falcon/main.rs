@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 // TODO: Add an offline mode.
 
 #[cfg(feature = "mkl")]
