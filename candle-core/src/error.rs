@@ -81,12 +81,21 @@ pub enum Error {
     },
 
     // === Op Specific Errors ===
-    #[error("invalid args for narrow: {msg} {shape:?}, dim: {dim}, start: {start}, len:{len}")]
+    #[error("narrow invalid args {msg}: {shape:?}, dim: {dim}, start: {start}, len:{len}")]
     NarrowInvalidArgs {
         shape: Shape,
         dim: usize,
         start: usize,
         len: usize,
+        msg: &'static str,
+    },
+
+    #[error("conv1d invalid args {msg}: inp: {inp_shape:?}, k: {k_shape:?}, pad: {padding}, stride: {stride}")]
+    Conv1dInvalidArgs {
+        inp_shape: Shape,
+        k_shape: Shape,
+        padding: usize,
+        stride: usize,
         msg: &'static str,
     },
 
