@@ -60,20 +60,26 @@ impl Layout {
         self.shape.is_fortran_contiguous(&self.stride)
     }
 
-    pub(crate) fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<Self> {
+    pub(crate) fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<Self> {
         let dims = self.shape().dims();
         if dim >= dims.len() {
-            Err(Error::UnexpectedNumberOfDims {
-                expected: dim + 1,
-                got: dims.len(),
+            Err(Error::DimOutOfRange {
                 shape: self.shape().clone(),
+                dim: dim as i32,
+                op: "narrow",
             })?
         }
-        if start + length > dims[dim] {
-            todo!("add a proper error: out of bounds for narrow {dim} {start} {length} {dims:?}")
+        if start + len > dims[dim] {
+            Err(Error::NarrowInvalidArgs {
+                shape: self.shape.clone(),
+                dim,
+                start,
+                len,
+                msg: "start + len > dim_len",
+            })?
         }
         let mut dims = dims.to_vec();
-        dims[dim] = length;
+        dims[dim] = len;
         Ok(Self {
             shape: Shape::from(dims),
             stride: self.stride.clone(),

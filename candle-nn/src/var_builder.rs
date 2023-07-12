@@ -157,8 +157,9 @@ impl<'a> VarBuilder<'a> {
                 routing,
                 safetensors,
             } => {
-                // Unwrap or 0 just to let the proper error flow.
-                let index = routing.get(&path).unwrap_or(&0);
+                let index = routing.get(&path).ok_or_else(|| Error::CannotFindTensor {
+                    path: path.to_string(),
+                })?;
                 safetensors[*index]
                     .tensor(&path, &data.device)?
                     .to_dtype(data.dtype)?
