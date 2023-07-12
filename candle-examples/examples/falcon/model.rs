@@ -166,8 +166,7 @@ impl FalconRotaryEmbedding {
             }
             _ => {}
         }
-        let t: Vec<_> = (0..seq_len).map(|c| c as u32).collect();
-        let t = Tensor::new(t.as_slice(), device)?.to_dtype(dtype)?;
+        let t = Tensor::arange(0, seq_len as u32, device)?.to_dtype(dtype)?;
         let inv_freq = self.inv_freq.to_dtype(dtype)?;
         let freqs = t.unsqueeze(1)?.matmul(&inv_freq.unsqueeze(0)?)?;
         let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;

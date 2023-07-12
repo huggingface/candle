@@ -86,11 +86,10 @@ fn precompute_freqs_cis(config: &Config, device: &Device) -> Result<Tensor> {
         .step_by(2)
         .map(|i| 1f32 / 10000f32.powf(i as f32 / n_elem as f32))
         .collect();
-    let arange: Vec<_> = (0..MAX_SEQ_LEN).map(|c| c as f32).collect();
     let theta = Tensor::new(theta.as_slice(), device)?;
-    let arange = Tensor::new(arange.as_slice(), device)?;
-    let idx_theta = arange
-        .reshape((arange.elem_count(), 1))?
+    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
+        .to_dtype(DType::F32)?
+        .reshape((MAX_SEQ_LEN, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
     let shape = [1, MAX_SEQ_LEN, n_elem / 2, 1];
     let idx_theta_cos = idx_theta.cos()?.reshape(&shape)?;
