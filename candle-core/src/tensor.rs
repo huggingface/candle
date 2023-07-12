@@ -490,7 +490,7 @@ impl Tensor {
         if dim >= self.dims().len() {
             Err(Error::DimOutOfRange {
                 shape: self.shape().clone(),
-                dim,
+                dim: dim as i32,
                 op,
             })?
         } else {

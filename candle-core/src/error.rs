@@ -33,7 +33,7 @@ pub enum Error {
     #[error("{op}: dimension index {dim} out of range for {shape:?}")]
     DimOutOfRange {
         shape: Shape,
-        dim: usize,
+        dim: i32,
         op: &'static str,
     },
 
