@@ -6,6 +6,7 @@ members = [
     "candle-hub",
     "candle-nn",
     "candle-pyo3",
+    "candle-transformers",
 ]
 
 [profile.release-with-debug]

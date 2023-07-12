@@ -19,3 +19,4 @@ Cargo.lock
 perf.data
 flamegraph.svg
 *.so
+*.swp
