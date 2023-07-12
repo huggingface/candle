@@ -30,7 +30,7 @@ impl Tensor {
         let mut current_dim = 0;
         for (i, indexer) in indexers.iter().enumerate() {
             x = match indexer {
-                TensorIndexer::Select(n) => x.get(*n)?,
+                TensorIndexer::Select(n) => x.narrow(i, *n, 1)?.squeeze(i)?,
                 TensorIndexer::Narrow(left_bound, right_bound) => {
                     let start = match left_bound {
                         Bound::Included(n) => *n,
