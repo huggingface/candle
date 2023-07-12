@@ -140,6 +140,10 @@ impl EncodecEuclideanCodebook {
             embed_avg,
         })
     }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
@@ -151,6 +155,10 @@ impl EncodecVectorQuantization {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let codebook = EncodecEuclideanCodebook::load(vb.pp("codebook"), cfg)?;
         Ok(Self { codebook })
+    }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
     }
 }
 
@@ -166,6 +174,10 @@ impl EncodecResidualVectorQuantizer {
             .map(|i| EncodecVectorQuantization::load(vb.pp(&i.to_string()), cfg))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { layers })
+    }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
     }
 }
 
@@ -187,6 +199,10 @@ impl EncodecLSTM {
             layers.push((w_hh, w_ih, b_hh, b_ih))
         }
         Ok(Self { layers })
+    }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
     }
 }
 
@@ -215,6 +231,10 @@ impl EncodecConvTranspose1d {
             weight_v,
             bias,
         })
+    }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
     }
 }
 
@@ -250,6 +270,10 @@ impl EncodecConv1d {
         };
         Ok(Self { conv })
     }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
@@ -283,6 +307,10 @@ impl EncodecResnetBlock {
             block_conv2,
             shortcut,
         })
+    }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
     }
 }
 
@@ -369,6 +397,10 @@ impl EncodecEncoder {
             final_lstm,
         })
     }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
@@ -433,6 +465,10 @@ impl EncodecDecoder {
             final_conv,
         })
     }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
@@ -452,5 +488,9 @@ impl EncodecModel {
             decoder,
             quantizer,
         })
+    }
+
+    pub fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
     }
 }
