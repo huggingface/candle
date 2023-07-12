@@ -788,6 +788,25 @@ impl Tensor {
         Ok(from_storage(storage, shape, op, false))
     }
 
+    /// Returns a tensor with the values from the `rhs` tensor at the index corresponding to the
+    /// values hold in the `ids` tensor.
+    ///
+    /// # Arguments
+    ///
+    /// * `ids` - A tensor with dimensions `s` and with integer values between 0 and v (exclusive).
+    /// * `rhs` - A tensor with dimensions `v, h`.
+    ///
+    /// The resulting tensor has dimensions `s, h`. `s` is called the sequence length, `v` the
+    /// vocabulary size, and `h` the hidden size.
+    ///
+    /// ```rust
+    /// use candle::{Tensor, Device};
+    /// let rhs = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let ids = Tensor::new(&[2u32, 1u32, 2u32], &Device::Cpu)?;
+    /// let emb = Tensor::embedding(&ids, &rhs)?;
+    /// assert_eq!(emb.to_vec2::<f32>()?, &[[4., 5.], [2., 3.], [4., 5.]]);
+    /// # Ok::<(), candle::Error>(())
+    /// ```
     pub fn embedding(ids: &Self, rhs: &Self) -> Result<Self> {
         if !rhs.is_contiguous() {
             return Err(Error::RequiresContiguous { op: "embedding" });
