@@ -240,6 +240,7 @@ impl EncodecConvTranspose1d {
 
 #[derive(Debug)]
 struct EncodecConv1d {
+    causal: bool,
     conv: Conv1d,
 }
 
@@ -268,11 +269,17 @@ impl EncodecConv1d {
                 vb.pp("conv"),
             )?,
         };
-        Ok(Self { conv })
+        Ok(Self {
+            causal: cfg.use_causal_conv,
+            conv,
+        })
     }
 
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        // TODO: padding, depending on causal.
+        let xs = self.conv.forward(xs)?;
+        // If we add support for NormType "time_group_norm", we should add some normalization here.
+        Ok(xs)
     }
 }
 
@@ -309,8 +316,17 @@ impl EncodecResnetBlock {
         })
     }
 
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let residual = xs.clone();
+        let xs = xs.elu(1.)?;
+        let xs = self.block_conv1.forward(&xs)?;
+        let xs = xs.elu(1.)?;
+        let xs = self.block_conv2.forward(&xs)?;
+        let xs = match &self.shortcut {
+            None => (xs + residual)?,
+            Some(shortcut) => xs.add(&shortcut.forward(&residual)?)?,
+        };
+        Ok(xs)
     }
 }
 
