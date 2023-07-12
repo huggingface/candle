@@ -31,7 +31,9 @@ Cheatsheet:
 
 |            | Using PyTorch                            | Using Candle                                                     |
 |------------|------------------------------------------|------------------------------------------------------------------|
-| Creation   | `torch.Tensor([[1, 2], [3, 4]])`         | `Tensor::new(&[[1f32, 2.]], [3., 4.]], &Device::Cpu)?`           |
+| Creation   | `torch.Tensor([[1, 2], [3, 4]])`         | `Tensor::new(`                                                   |
+|            |                                          | `  &[[1f32, 2.]], [3., 4.]],`                                    |
+|            |                                          | `  &Device::Cpu)?`                                               |
 | Indexing   | `tensor[:, :4]`                          | `tensor.i((.., ..4))?`                                           |
 | Operations | `tensor.view((2, 2))`                    | `tensor.reshape((2, 2))?`                                        |
 | Operations | `a.matmul(b)`                            | `a.matmul(&b)?`                                                  |
