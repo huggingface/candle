@@ -509,6 +509,7 @@ impl Tensor {
                 dim,
                 start,
                 len,
+                msg: "start + len > dim_len",
             })?
         }
         if start == 0 && dims[dim] == len {

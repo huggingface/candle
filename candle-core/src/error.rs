@@ -81,12 +81,13 @@ pub enum Error {
     },
 
     // === Op Specific Errors ===
-    #[error("invalid args for narrow: {shape:?}, dim: {dim}, start: {start}, len:{len}")]
+    #[error("invalid args for narrow: {msg} {shape:?}, dim: {dim}, start: {start}, len:{len}")]
     NarrowInvalidArgs {
         shape: Shape,
         dim: usize,
         start: usize,
         len: usize,
+        msg: &'static str,
     },
 
     #[error("{op} invalid index {index} with vocab {vocab_size}")]
