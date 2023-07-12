@@ -209,7 +209,6 @@ fn main() -> Result<()> {
         index_pos += ctxt.len();
 
         let next_token = if let Some(temperature) = args.temperature {
-            println!("Sampling with temperature {temperature:?}");
             let prs = (&logits / temperature)?.softmax(D::Minus1)?;
             let logits_v: Vec<f32> = prs.to_vec1()?;
             let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
