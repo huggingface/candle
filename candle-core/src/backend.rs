@@ -9,6 +9,7 @@ pub(crate) trait BackendStorage: Sized {
 
     fn device(&self) -> &Self::Device;
 
+    // Maybe this should return a Cow instead so that no copy is done on the cpu case.
     fn to_cpu_storage(&self) -> Result<CpuStorage>;
 
     fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self>;
