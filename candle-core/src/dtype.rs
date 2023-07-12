@@ -1,3 +1,4 @@
+use crate::backend::BackendStorage;
 use crate::{CpuStorage, Error, Result};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

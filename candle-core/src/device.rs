@@ -1,4 +1,5 @@
 use crate::backend::BackendDevice;
+use crate::cpu_backend::CpuDevice;
 use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
 
 /// A `DeviceLocation` represents a physical device whereas multiple `Device`
@@ -117,7 +118,7 @@ impl Device {
     ) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = CpuStorage::rand_uniform(shape, dtype, lo, up)?;
+                let storage = CpuDevice.rand_uniform(shape, dtype, lo, up)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
@@ -136,7 +137,7 @@ impl Device {
     ) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = CpuStorage::rand_normal(shape, dtype, mean, std)?;
+                let storage = CpuDevice.rand_normal(shape, dtype, mean, std)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
@@ -149,7 +150,7 @@ impl Device {
     pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = CpuStorage::ones_impl(shape, dtype);
+                let storage = CpuDevice.ones_impl(shape, dtype)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
@@ -162,7 +163,7 @@ impl Device {
     pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = CpuStorage::zeros_impl(shape, dtype);
+                let storage = CpuDevice.zeros_impl(shape, dtype)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
