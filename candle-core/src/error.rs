@@ -157,6 +157,15 @@ pub enum Error {
 
     #[error("unsupported safetensor dtype {0:?}")]
     UnsupportedSafeTensorDtype(safetensors::Dtype),
+
+    #[error(transparent)]
+    Wrapped(Box<dyn std::error::Error + Send + Sync>),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl Error {
+    pub fn wrap(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Wrapped(Box::new(err))
+    }
+}

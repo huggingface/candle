@@ -1,0 +1,25 @@
+[package]
+name = "candle-transformers"
+version = "0.1.0"
+edition = "2021"
+
+description = "Pretrained models and inference API for the candle ML framework."
+repository = "https://github.com/LaurentMazare/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+
+[dependencies]
+candle = { path = "../candle-core", default-features=false }
+candle-hub = { path = "../candle-hub" }
+candle-nn = { path = "../candle-nn", default-features=false }
+intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
+tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
+rand = "0.8.5"
+wav = "1.0.0"
+
+[features]
+default = ["cuda"]
+cuda = ["candle/cuda", "candle-nn/cuda"]
+mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl"]
