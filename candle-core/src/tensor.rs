@@ -39,8 +39,8 @@ impl AsRef<Tensor> for Tensor {
 /// ```rust
 /// use candle::{Tensor, DType, Device};
 ///
-/// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-/// let b = Tensor::zeros((3, 4), DType::F32, &Device::Cpu)?;
+/// let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
+/// let b = Tensor::arange(0f32, 12f32, &Device::Cpu)?.reshape((3, 4))?;
 ///
 /// let c = a.matmul(&b)?;
 /// # Ok::<(), candle::Error>(())
@@ -312,6 +312,40 @@ impl Tensor {
     pub fn var<A: crate::device::NdArray>(array: A, device: &Device) -> Result<Self> {
         let shape = array.shape()?;
         Self::new_impl(array, shape, device, true)
+    }
+
+    /// Create a new 1D tensor from an iterator.
+    pub fn from_iter<D: crate::WithDType>(
+        iter: impl IntoIterator<Item = D>,
+        device: &Device,
+    ) -> Result<Self> {
+        let data = iter.into_iter().collect::<Vec<_>>();
+        let len = data.len();
+        Self::from_vec_impl(data, len, device, false)
+    }
+
+    /// Create a new 1D tensor with values from the interval `[start, end)` taken with a common
+    /// difference `1` from `start`.
+    pub fn arange<D: crate::WithDType>(start: D, end: D, device: &Device) -> Result<Self> {
+        Self::arange_step(start, end, D::one(), device)
+    }
+
+    /// Create a new 1D tensor with values from the interval `[start, end)` taken with a common
+    /// difference `step` from `start`.
+    pub fn arange_step<D: crate::WithDType>(
+        start: D,
+        end: D,
+        step: D,
+        device: &Device,
+    ) -> Result<Self> {
+        let mut data = vec![];
+        let mut current = start;
+        while current < end {
+            data.push(current);
+            current += step;
+        }
+        let len = data.len();
+        Self::from_vec_impl(data, len, device, false)
     }
 
     fn from_vec_impl<S: Into<Shape>, D: crate::WithDType>(

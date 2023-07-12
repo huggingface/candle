@@ -53,7 +53,7 @@ impl DType {
     }
 }
 
-pub trait WithDType: Sized + Copy + num_traits::NumAssign + 'static {
+pub trait WithDType: Sized + Copy + num_traits::NumAssign + std::cmp::PartialOrd + 'static {
     const DTYPE: DType;
 
     fn from_f64(v: f64) -> Self;

@@ -5,8 +5,8 @@
 //! # use candle::Error;
 //! # fn main() -> Result<(), Error>{
 //!
-//! let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-//! let b = Tensor::zeros((3, 4), DType::F32, &Device::Cpu)?;
+//! let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
+//! let b = Tensor::arange(0f32, 12f32, &Device::Cpu)?.reshape((3, 4))?;
 //!
 //! let c = a.matmul(&b)?;
 //! # Ok(())}
