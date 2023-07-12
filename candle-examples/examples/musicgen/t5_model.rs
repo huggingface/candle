@@ -294,8 +294,16 @@ impl T5Block {
         })
     }
 
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut xs = self.self_attn.forward(xs)?;
+        // TODO: clamp for f16?
+        if let Some(cross_attn) = &self.cross_attn {
+            xs = cross_attn.forward(&xs)?;
+            // TODO: clamp for f16?
+        }
+        let xs = self.ff.forward(&xs)?;
+        // TODO: clamp for f16?
+        Ok(xs)
     }
 }
 
