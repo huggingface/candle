@@ -1078,6 +1078,14 @@ impl Tensor {
 
     /// Returns a tensor that is a transposed version of the input, the two last dimensions of the
     /// input are swapped.
+    ///
+    /// ```rust
+    /// use candle::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.t()?;
+    /// assert_eq!(tensor.to_vec2::<f32>()?, &[[0.0, 2.0, 4.0], [1.0, 3.0, 5.0]]);
+    /// # Ok::<(), candle::Error>(())
+    /// ```
     pub fn t(&self) -> Result<Tensor> {
         let rank = self.rank();
         if rank < 2 {
@@ -1191,6 +1199,11 @@ impl Tensor {
 
     /// Broadcast the input tensor to the target shape. This returns an error if the input shape is
     /// not compatible with the target shape.
+    ///
+    /// If the input shape is `i_1, i_2, ... i_k`, the target shape has to have `k` dimensions or
+    /// more and shape `j_1, ..., j_l, t_1, t_2, ..., t_k`. The dimensions `j_1` to `j_l` can have
+    /// any value, the dimension `t_a` must be equal to `i_a` if `i_a` is different from 1. If
+    /// `i_a` is equal to 1, any value can be used.
     pub fn broadcast_as<S: Into<Shape>>(&self, shape: S) -> Result<Self> {
         let op = if self.track_op() {
             Some(Op::Broadcast(self.clone()))
@@ -1213,6 +1226,15 @@ impl Tensor {
     }
 
     /// Casts the input tensor to the target `dtype`.
+    ///
+    /// ```rust
+    /// use candle::{Tensor, Device};
+    /// let tensor = Tensor::new(3.14159265358979f64, &Device::Cpu)?;
+    /// assert_eq!(tensor.to_scalar::<f64>()?, 3.14159265358979);
+    /// let tensor = tensor.to_dtype(candle::DType::F32)?;
+    /// assert_eq!(tensor.to_scalar::<f32>()?, 3.1415927);
+    /// # Ok::<(), candle::Error>(())
+    /// ```
     pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
         if self.dtype() == dtype {
             Ok(self.clone())
@@ -1345,8 +1367,7 @@ impl Tensor {
 
     /// Stacks two or more tensors along a particular dimension.
     ///
-    /// All tensors must have the same rank, and the output has
-    /// 1 additional rank
+    /// All tensors must have the same rank, and the output has one additional rank
     ///
     /// ```rust
     /// # use candle::{Tensor, DType, Device};
