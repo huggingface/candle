@@ -1,3 +1,33 @@
+//! Layer Normalization.
+//!
+//! This layer applies Layer Normalization over a mini-batch of inputs as described in [`Layer
+//! Normalization`]. The input is expected to have three dimensions: a batch dimension, a length,
+//! and a hidden size, the normalization is applied over the last dimension.
+//!
+//! # Example
+//!
+//! ```rust
+//! use candle::{Tensor, Device::Cpu};
+//! use candle_nn::LayerNorm;
+//! # fn main() -> candle::Result<()> {
+//!
+//! let w = Tensor::new(1f32, &Cpu)?;
+//! let b = Tensor::new(0f32, &Cpu)?;
+//! let layer = LayerNorm::new(w, b, 1e-5);
+//!
+//! let xs = Tensor::new(
+//!     &[[[1f32, 2., 3.], [4., 5., 6.], [9., 8., 7.]]],
+//!     &Cpu)?;
+//! let ys = layer.forward(&xs)?;
+//! assert_eq!(
+//!     ys.to_vec3::<f32>()?,
+//!     &[[[-1.2247356, 0.0,  1.2247356],
+//!        [-1.2247356, 0.0,  1.2247356],
+//!        [ 1.2247356, 0.0, -1.2247356]]]);
+//! # Ok(()) }
+//! ```
+//!
+//! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
 use candle::{DType, Result, Tensor};
 
 // This layer norm version handles both weight and bias so removes the mean.
