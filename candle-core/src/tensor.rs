@@ -853,6 +853,7 @@ impl Tensor {
         }
     }
 
+    /// Returns the data contained in a 1D tensor as a vector of scalar values.
     pub fn to_vec1<S: crate::WithDType>(&self) -> Result<Vec<S>> {
         if self.rank() != 1 {
             return Err(Error::UnexpectedNumberOfDims {
@@ -875,6 +876,7 @@ impl Tensor {
         }
     }
 
+    /// Returns the data contained in a 2D tensor as a vector of vector of scalar values.
     pub fn to_vec2<S: crate::WithDType>(&self) -> Result<Vec<Vec<S>>> {
         let (dim1, dim2) = self.shape().r2()?;
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
@@ -894,6 +896,7 @@ impl Tensor {
         }
     }
 
+    /// Returns the data contained in a 3D tensor.
     pub fn to_vec3<S: crate::WithDType>(&self) -> Result<Vec<Vec<Vec<S>>>> {
         let (dim1, dim2, dim3) = self.shape().r3()?;
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
@@ -917,27 +920,34 @@ impl Tensor {
         }
     }
 
+    /// The dtype for the elements stored in the input tensor.
     pub fn dtype(&self) -> DType {
         self.storage.dtype()
     }
 
+    /// The device on which the input tensor is located.
     pub fn device(&self) -> Device {
         self.storage.device()
     }
 
+    /// The tensor shape, i.e. dimension sizes on each axis.
     pub fn shape(&self) -> &Shape {
         self.layout().shape()
     }
 
+    /// The dimension size for this tensor on each axis.
     pub fn dims(&self) -> &[usize] {
         self.shape().dims()
     }
 
+    /// The dimension size for a specified dimension index.
     pub fn dim<D: Dim>(&self, dim: D) -> Result<usize> {
         let dim = dim.to_index(self.shape(), "dim")?;
         Ok(self.dims()[dim])
     }
 
+    /// The layout of the input tensor, this stores both the shape of the tensor as well as the
+    /// strides and the start offset to apply to the underlying storage.
     pub fn layout(&self) -> &Layout {
         &self.layout
     }
@@ -946,18 +956,23 @@ impl Tensor {
         self.layout.stride()
     }
 
+    /// The number of dimensions for this tensor, 0 for a scalar tensor, 1 for a 1D tensor, etc.
     pub fn rank(&self) -> usize {
         self.shape().rank()
     }
 
+    /// The number of elements stored in this tensor.
     pub fn elem_count(&self) -> usize {
         self.shape().elem_count()
     }
 
+    /// The unique identifier for this tensor.
     pub fn id(&self) -> TensorId {
         self.id
     }
 
+    /// Whether this tensor is a variable or not. A variable is a tensor for which gradient is
+    /// tracked and on which backpropagation can be performed.
     pub fn is_variable(&self) -> bool {
         self.is_variable
     }
@@ -966,9 +981,19 @@ impl Tensor {
         &self.op
     }
 
+    /// Computes the sum of all the elements in this tensor and returns a tensor holding this
+    /// scalar with zero dimensions.
+    ///
+    /// ```rust
+    /// use candle::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.sum_all()?;
+    /// assert_eq!(tensor.to_scalar::<f32>()?, 15.);
+    /// # Ok::<(), candle::Error>(())
+    /// ```
     pub fn sum_all(&self) -> Result<Tensor> {
         let dims: Vec<_> = (0..self.rank()).collect();
-        self.sum(&dims)
+        self.sum(&dims)?.reshape(())
     }
 
     fn flatten_<D1: Dim, D2: Dim>(
@@ -1001,22 +1026,47 @@ impl Tensor {
         }
     }
 
+    /// Flattens the input tensor on the dimension indexes from `start_dim` to `end_dim` (both
+    /// inclusive).
     pub fn flatten<D1: Dim, D2: Dim>(&self, start_dim: D1, end_dim: D2) -> Result<Tensor> {
         self.flatten_(Some(start_dim), Some(end_dim))
     }
 
+    /// Flattens the input tensor on the dimension indexes from `0` to `end_dim` (inclusive).
     pub fn flatten_to<D: Dim>(&self, end_dim: D) -> Result<Tensor> {
         self.flatten_(None::<usize>, Some(end_dim))
     }
 
+    /// Flattens the input tensor on the dimension indexes from `start_dim` (inclusive) to the last
+    /// dimension.
     pub fn flatten_from<D: Dim>(&self, start_dim: D) -> Result<Tensor> {
         self.flatten_(Some(start_dim), None::<usize>)
     }
 
+    /// Flattens the input tensor by reshaping it into a one dimension tensor.
+    ///
+    /// ```rust
+    /// use candle::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.flatten_all()?;
+    /// assert_eq!(tensor.to_vec1::<f32>()?, &[0., 1., 2., 3., 4., 5.]);
+    /// # Ok::<(), candle::Error>(())
+    /// ```
     pub fn flatten_all(&self) -> Result<Tensor> {
         self.flatten_(None::<usize>, None::<usize>)
     }
 
+    /// Returns the sub-tensor fixing the index at `i` on the first dimension.
+    ///
+    /// ```rust
+    /// use candle::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let t = tensor.get(0)?;
+    /// assert_eq!(t.to_vec1::<f32>()?, &[0., 1.]);
+    /// let t = tensor.get(1)?;
+    /// assert_eq!(t.to_vec1::<f32>()?, &[2., 3.]);
+    /// # Ok::<(), candle::Error>(())
+    /// ```
     pub fn get(&self, i: usize) -> Result<Tensor> {
         let dims = self.dims();
         if dims.is_empty() {
@@ -1162,6 +1212,7 @@ impl Tensor {
         self.broadcast_as(shape)
     }
 
+    /// Casts the input tensor to the target `dtype`.
     pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
         if self.dtype() == dtype {
             Ok(self.clone())
