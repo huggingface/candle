@@ -1,3 +1,4 @@
+//! Convolution Layers.
 use candle::{Result, Tensor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

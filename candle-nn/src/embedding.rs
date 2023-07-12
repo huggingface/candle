@@ -1,3 +1,4 @@
+//! Embedding Layer.
 use candle::{Result, Tensor};
 
 #[derive(Debug)]
