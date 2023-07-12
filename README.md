@@ -29,17 +29,17 @@ let c = a.matmul(&b)?;
 
 Cheatsheet:
 
-| Creation   | torch.zeros((2, 2))                     | Tensor::zeros((2, 2))?                                           |
-|------------|-----------------------------------------|------------------------------------------------------------------|
-| Creation   | torch.Tensor([2, 2])                    | Tensor::new(&[2.0f32, 2.0], &Device::Cpu)?                       |
-| Creation   | torch.Tensor([2, 2, 2, 2]).view((2, 2)) | Tensor::from_slice(&[2.0, 2.0, 2.0, 2.0], (2, 2), &Device::Cpu)? |
-| Indexing   | tensor[:, :4]                           | tensor.i((.., ..4))?                                             |
-| Operations | a.matmul(b)                             | a.matmul(&b)?                                                    |
-| Arithmetic | a + b                                   | &a + &b                                                          |
-| Device     | tensor.to(device="cuda")                | tensor.to_device(&Device::Cuda(0))?                              |
-| Dtype      | tensor.to(dtype=torch.float16)          | tensor.to_dtype(&DType::F16)?                                    |
-| Saving     | torch.save({"A": A}, "model.bin")       | tensor.save_safetensors("A", "model.safetensors")?               |
-| Loading    | weights = torch.load("model.bin")       | TODO (in the examples for now                                    |
+|            | Using PyTorch                            | Using Candle                                                     |
+|------------|------------------------------------------|------------------------------------------------------------------|
+| Creation   | `torch.Tensor([[1, 2], [3, 4]])`         | `Tensor::new(&[[1f32, 2.]], [3., 4.]], &Device::Cpu)?`           |
+| Indexing   | `tensor[:, :4]`                          | `tensor.i((.., ..4))?`                                           |
+| Operations | `tensor.view((2, 2))`                    | `tensor.reshape((2, 2))?`                                        |
+| Operations | `a.matmul(b)`                            | `a.matmul(&b)?`                                                  |
+| Arithmetic | `a + b`                                  | `&a + &b`                                                        |
+| Device     | `tensor.to(device="cuda")`               | `tensor.to_device(&Device::Cuda(0))?`                            |
+| Dtype      | `tensor.to(dtype=torch.float16)`         | `tensor.to_dtype(&DType::F16)?`                                  |
+| Saving     | `torch.save({"A": A}, "model.bin")`      | `tensor.save_safetensors("A", "model.safetensors")?`             |
+| Loading    | `weights = torch.load("model.bin")`      | TODO (see the examples for now)                                  |
 
 
 Check out our [examples](./candle-examples/examples/):
@@ -78,7 +78,8 @@ Rust is cool, and a lot of the HF ecosystem already has Rust crates [safetensors
   engine for your workload
 
 - [tch-rs](https://github.com/LaurentMazare/tch-rs.git) Bindings to the torch library in Rust. Extremely versatile, but they 
-  do bring in the entire torch library into the runtime. `tch-rs` was written by the same author as `candle`.
+  do bring in the entire torch library into the runtime. The main contributor of `tch-rs` is also involved in the development
+  of `candle`.
 
 ### Missing symbols when compiling with the mkl feature.
 
