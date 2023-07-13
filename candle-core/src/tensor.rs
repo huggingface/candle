@@ -1531,6 +1531,12 @@ impl Tensor {
     fn storage(&self) -> std::sync::RwLockReadGuard<'_, Storage> {
         self.storage.read().unwrap()
     }
+
+    /// The storage used by this tensor, together with the layout to use to access it safely.
+    pub fn storage_and_layout(&self) -> (std::sync::RwLockReadGuard<'_, Storage>, &Layout) {
+        let storage = self.storage.read().unwrap();
+        (storage, &self.layout)
+    }
 }
 
 macro_rules! bin_trait {
