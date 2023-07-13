@@ -19,12 +19,13 @@ impl TensorId {
 
 pub struct Tensor_ {
     id: TensorId,
-    // Storage uses a mutex here so inner mutability is available and borrow rules are checked
-    // dynamically. The alternatives would be:
+    // As we provide inner mutability on the tensor content, the alternatives are:
     // - Using a mutex, this would have the highest cost when retrieving the storage but would
     //   prevent errors when concurrent access takes place. Mutex would also be subject to
     //   deadlocks for example using the current code if the same tensor is used twice by a single
     //   binary op.
+    // - Using a refcell unsafe cell would have some intermediary cost, borrow checking would be
+    //   verified dynamically, but the resulting tensors would not be send or sync.
     // - Using an unsafe cell would have the lowest cost but undefined behavior on concurrent
     //   accesses.
     // Ideally, we would use Arc<Storage> for tensors on which we don't plan on modifying the data
