@@ -27,11 +27,11 @@ fn matmul_grad(device: &Device) -> Result<()> {
     assert_eq!(grad_x.shape(), &Shape::from((2, 2, 3)));
     assert_eq!(grad_y.shape(), &Shape::from((2, 3, 2)));
     assert_eq!(
-        &*grad_x.storage_data::<f32>()?,
+        &*grad_x.to_vec1::<f32>()?,
         &[1., 5., 9., 1., 5., 9., 13., 17., 21., 13., 17., 21.]
     );
     assert_eq!(
-        &*grad_y.storage_data::<f32>()?,
+        &*grad_y.to_vec1::<f32>()?,
         &[3., 3., 5., 5., 7., 7., 15., 15., 17., 17., 19., 19.]
     );
     Ok(())
