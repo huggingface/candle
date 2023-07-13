@@ -1,12 +1,13 @@
 use anyhow::{Context, Result};
-use candle::{Device, Shape, Tensor};
+use candle::{Device, Shape, Var};
 mod test_utils;
 
 fn simple_grad(device: &Device) -> Result<()> {
-    let x = Tensor::var(&[3f32, 1., 4.], device)?;
-    let y = (((&x * &x)? + &x * 5f64)? + 4f64)?;
+    let x = Var::new(&[3f32, 1., 4.], device)?;
+    let x = x.as_tensor();
+    let y = (((x * x)? + x * 5f64)? + 4f64)?;
     let grads = y.backward()?;
-    let grad_x = grads.get(&x).context("no grad for x")?;
+    let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(x.to_vec1::<f32>()?, [3., 1., 4.]);
     // y = x^2 + 5.x + 4
     assert_eq!(y.to_vec1::<f32>()?, [28., 10., 40.]);
@@ -17,9 +18,9 @@ fn simple_grad(device: &Device) -> Result<()> {
 
 fn matmul_grad(device: &Device) -> Result<()> {
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
-    let x = Tensor::var_from_slice(&data, (2, 2, 3), device)?;
+    let x = Var::from_slice(&data, (2, 2, 3), device)?;
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
-    let y = Tensor::var_from_slice(&data, (2, 3, 2), device)?;
+    let y = Var::from_slice(&data, (2, 3, 2), device)?;
     let c = x.matmul(&y)?;
     let grads = c.backward()?;
     let grad_x = grads.get(&x).context("no grad for x")?;
