@@ -68,7 +68,7 @@ pub use shape::{Shape, D};
 pub use storage::Storage;
 use strided_index::StridedIndex;
 pub use tensor::{Tensor, TensorId};
-pub use variable::Variable;
+pub use variable::Var;
 
 #[cfg(feature = "cuda")]
 pub use cuda_backend::{CudaDevice, CudaStorage};

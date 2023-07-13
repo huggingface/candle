@@ -109,6 +109,9 @@ pub enum Error {
     #[error("cannot broadcast {src_shape:?} to {dst_shape:?}")]
     BroadcastIncompatibleShapes { src_shape: Shape, dst_shape: Shape },
 
+    #[error("cannot set variable {msg}")]
+    CannotSetVar { msg: &'static str },
+
     // Box indirection to avoid large variant.
     #[error("{0:?}")]
     MatMulUnexpectedStriding(Box<MatMulUnexpectedStriding>),

@@ -148,7 +148,7 @@ fn from_storage<S: Into<Shape>>(
 }
 
 impl Tensor {
-    fn ones_impl<S: Into<Shape>>(
+    pub(crate) fn ones_impl<S: Into<Shape>>(
         shape: S,
         dtype: DType,
         device: &Device,
@@ -171,12 +171,6 @@ impl Tensor {
         Self::ones_impl(shape, dtype, device, false)
     }
 
-    pub fn ones_var<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
-        // Maybe we should allocate some actual storage for vars rather than just using a
-        // broadcasted scalar?
-        Self::ones_impl(shape, dtype, device, true)
-    }
-
     /// Creates a new tensor filled with ones with same shape, dtype, and device as the other tensor.
     ///
     /// ```rust
@@ -190,16 +184,9 @@ impl Tensor {
         Tensor::ones(self.shape(), self.dtype(), self.device())
     }
 
-    /// Creates a new tensor filled with zeros.
-    ///
-    /// ```rust
-    /// use candle::{Tensor, DType, Device};
-    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-    /// let b = Tensor::from_slice(&[0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0], (2, 3), &Device::Cpu)?;
-    /// // a == b
-    /// # Ok::<(), candle::Error>(())
-    /// ```
-    fn zeros_impl<S: Into<Shape>>(
+    // Do not expose outside of the crate, the `is_variable=true` case should only be accessed from
+    // the variable module.
+    pub(crate) fn zeros_impl<S: Into<Shape>>(
         shape: S,
         dtype: DType,
         device: &Device,
@@ -222,10 +209,6 @@ impl Tensor {
         Self::zeros_impl(shape, dtype, device, false)
     }
 
-    pub fn zeros_var<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
-        Self::zeros_impl(shape, dtype, device, true)
-    }
-
     /// Creates a new tensor filled with ones with same shape, dtype, and device as the other
     /// tensor.
     ///
@@ -240,7 +223,7 @@ impl Tensor {
         Tensor::zeros(self.shape(), self.dtype(), self.device())
     }
 
-    fn rand_impl<S: Into<Shape>>(
+    pub(crate) fn rand_impl<S: Into<Shape>>(
         s: S,
         dtype: DType,
         device: &Device,
@@ -264,17 +247,7 @@ impl Tensor {
         Self::rand_impl(s, dtype, device, lo, up, false)
     }
 
-    pub fn rand_var<S: Into<Shape>>(
-        s: S,
-        dtype: DType,
-        device: &Device,
-        lo: f64,
-        up: f64,
-    ) -> Result<Self> {
-        Self::rand_impl(s, dtype, device, lo, up, true)
-    }
-
-    fn randn_impl<S: Into<Shape>>(
+    pub(crate) fn randn_impl<S: Into<Shape>>(
         s: S,
         dtype: DType,
         device: &Device,
@@ -299,17 +272,7 @@ impl Tensor {
         Self::randn_impl(s, dtype, device, mean, std, false)
     }
 
-    pub fn randn_var<S: Into<Shape>>(
-        s: S,
-        dtype: DType,
-        device: &Device,
-        mean: f64,
-        std: f64,
-    ) -> Result<Self> {
-        Self::randn_impl(s, dtype, device, mean, std, true)
-    }
-
-    pub fn new_impl<A: crate::device::NdArray>(
+    pub(crate) fn new_impl<A: crate::device::NdArray>(
         array: A,
         shape: Shape,
         device: &Device,
@@ -328,13 +291,6 @@ impl Tensor {
     pub fn new<A: crate::device::NdArray>(array: A, device: &Device) -> Result<Self> {
         let shape = array.shape()?;
         Self::new_impl(array, shape, device, false)
-    }
-
-    /// Creates a new tensor on the specified device using the content and shape of the input.
-    /// This is similar to `new` but the resulting tensor is a variable.
-    pub fn var<A: crate::device::NdArray>(array: A, device: &Device) -> Result<Self> {
-        let shape = array.shape()?;
-        Self::new_impl(array, shape, device, true)
     }
 
     /// Creates a new 1D tensor from an iterator.
@@ -371,7 +327,7 @@ impl Tensor {
         Self::from_vec_impl(data, len, device, false)
     }
 
-    fn from_vec_impl<S: Into<Shape>, D: crate::WithDType>(
+    pub(crate) fn from_vec_impl<S: Into<Shape>, D: crate::WithDType>(
         data: Vec<D>,
         shape: S,
         device: &Device,
@@ -397,14 +353,6 @@ impl Tensor {
         Self::from_vec_impl(data, shape, device, false)
     }
 
-    pub fn var_from_vec<S: Into<Shape>, D: crate::WithDType>(
-        data: Vec<D>,
-        shape: S,
-        device: &Device,
-    ) -> Result<Self> {
-        Self::from_vec_impl(data, shape, device, true)
-    }
-
     /// Creates a new tensor initialized with values from the input slice. The number of elements
     /// in this vector must be the same as the number of elements defined by the shape.
     pub fn from_slice<S: Into<Shape>, D: crate::WithDType>(
@@ -413,14 +361,6 @@ impl Tensor {
         device: &Device,
     ) -> Result<Self> {
         Self::new_impl(array, shape.into(), device, false)
-    }
-
-    pub fn var_from_slice<S: Into<Shape>, D: crate::WithDType>(
-        array: &[D],
-        shape: S,
-        device: &Device,
-    ) -> Result<Self> {
-        Self::new_impl(array, shape.into(), device, true)
     }
 
     pub(crate) fn broadcast_shape_binary_op<'a>(
@@ -1532,10 +1472,25 @@ impl Tensor {
         self.storage.read().unwrap()
     }
 
+    // If we extend the visibility of this function to be usable outside of this crate, we should
+    // make it unsafe.
+    pub(crate) fn storage_mut_and_layout(
+        &self,
+    ) -> (std::sync::RwLockWriteGuard<'_, Storage>, &Layout) {
+        let storage = self.storage.write().unwrap();
+        (storage, &self.layout)
+    }
+
     /// The storage used by this tensor, together with the layout to use to access it safely.
     pub fn storage_and_layout(&self) -> (std::sync::RwLockReadGuard<'_, Storage>, &Layout) {
         let storage = self.storage.read().unwrap();
         (storage, &self.layout)
+    }
+
+    pub(crate) fn same_storage(&self, rhs: &Self) -> bool {
+        let lhs: &RwLock<Storage> = self.storage.as_ref();
+        let rhs: &RwLock<Storage> = rhs.storage.as_ref();
+        std::ptr::eq(lhs, rhs)
     }
 }
 
