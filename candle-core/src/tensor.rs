@@ -19,11 +19,13 @@ impl TensorId {
 
 pub struct Tensor_ {
     id: TensorId,
-    // Storage uses a refcell here so inner mutability is available and borrow rules are checked
-    // dynamically. Alternatives would be:
-    // - Using a mutex, this would have some higher cost when retrieving the storage but would
-    //   prevent errors when concurrent access takes place.
-    // - Using an unsafe cell would have some lower cost but undefined behavior on concurrent
+    // Storage uses a mutex here so inner mutability is available and borrow rules are checked
+    // dynamically. The alternatives would be:
+    // - Using a mutex, this would have the highest cost when retrieving the storage but would
+    //   prevent errors when concurrent access takes place. Mutex would also be subject to
+    //   deadlocks for example using the current code if the same tensor is used twice by a single
+    //   binary op.
+    // - Using an unsafe cell would have the lowest cost but undefined behavior on concurrent
     //   accesses.
     // Ideally, we would use Arc<Storage> for tensors on which we don't plan on modifying the data
     // and Arc<Mutex<Storage>> for tensors where the data could be modified, e.g. variables but
@@ -185,7 +187,7 @@ impl Tensor {
     /// # Ok::<(), candle::Error>(())
     /// ```
     pub fn ones_like(&self) -> Result<Self> {
-        Tensor::ones(self.shape(), self.dtype(), &self.device())
+        Tensor::ones(self.shape(), self.dtype(), self.device())
     }
 
     /// Creates a new tensor filled with zeros.
@@ -235,7 +237,7 @@ impl Tensor {
     /// # Ok::<(), candle::Error>(())
     /// ```
     pub fn zeros_like(&self) -> Result<Self> {
-        Tensor::zeros(self.shape(), self.dtype(), &self.device())
+        Tensor::zeros(self.shape(), self.dtype(), self.device())
     }
 
     fn rand_impl<S: Into<Shape>>(
@@ -519,7 +521,7 @@ impl Tensor {
             Ok::<_, Error>(data[self.layout().start_offset()])
         };
         match &*self.storage()? {
-            Storage::Cpu(cpu_storage) => from_cpu_storage(&cpu_storage),
+            Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }

@@ -180,7 +180,7 @@ impl EncodecResidualVectorQuantizer {
     }
 
     fn decode(&self, codes: &Tensor) -> Result<Tensor> {
-        let mut quantized_out = Tensor::zeros((), DType::F32, &codes.device())?;
+        let mut quantized_out = Tensor::zeros((), DType::F32, codes.device())?;
         if codes.dim(0)? != self.layers.len() {
             anyhow::bail!(
                 "codes shape {:?} does not match the number of quantization layers {}",

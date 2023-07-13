@@ -50,7 +50,7 @@ enum PyDevice {
 }
 
 impl PyDevice {
-    fn from_device(device: Device) -> Self {
+    fn from_device(device: &Device) -> Self {
         match device {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,

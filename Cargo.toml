@@ -5,7 +5,7 @@ members = [
     "candle-kernels",
     "candle-hub",
     "candle-nn",
-    "candle-pyo3",
+#    "candle-pyo3",
     "candle-transformers",
 ]
 

@@ -196,7 +196,7 @@ impl BertEmbeddings {
         if let Some(position_embeddings) = &self.position_embeddings {
             // TODO: Proper absolute positions?
             let position_ids = (0..seq_len as u32).collect::<Vec<_>>();
-            let position_ids = Tensor::new(&position_ids[..], &input_ids.device())?;
+            let position_ids = Tensor::new(&position_ids[..], input_ids.device())?;
             embeddings = embeddings.broadcast_add(&position_embeddings.forward(&position_ids)?)?
         }
         let embeddings = self.layer_norm.forward(&embeddings)?;

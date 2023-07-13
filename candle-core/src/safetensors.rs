@@ -185,7 +185,7 @@ mod tests {
         let t = Tensor::zeros((2, 2), DType::F32, &Device::Cpu).unwrap();
         t.save_safetensors("t", "t.safetensors").unwrap();
         let bytes = std::fs::read("t.safetensors").unwrap();
-        assert_eq!(bytes, b"@\0\0\0\0\0\0\0{\"t\":{\"dtype\":\"F32\",\"shape\":[2,2],\"data_offsets\":[0,16]}}       \0\0\0\0");
+        assert_eq!(bytes, b"@\0\0\0\0\0\0\0{\"t\":{\"dtype\":\"F32\",\"shape\":[2,2],\"data_offsets\":[0,16]}}       \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
         std::fs::remove_file("t.safetensors").unwrap();
     }
 
@@ -196,7 +196,7 @@ mod tests {
         let map: HashMap<_, _> = [("t", t), ("u", u)].into_iter().collect();
         st::serialize_to_file(map, &None, std::path::Path::new("multi.safetensors")).unwrap();
         let bytes = std::fs::read("multi.safetensors").unwrap();
-        assert_eq!(bytes, b"x\0\0\0\0\0\0\0{\"t\":{\"dtype\":\"F32\",\"shape\":[2,2],\"data_offsets\":[0,16]},\"u\":{\"dtype\":\"F32\",\"shape\":[1,2],\"data_offsets\":[16,24]}}      \0\0\0\0\0\0\0\0");
+        assert_eq!(bytes, b"x\0\0\0\0\0\0\0{\"t\":{\"dtype\":\"F32\",\"shape\":[2,2],\"data_offsets\":[0,16]},\"u\":{\"dtype\":\"F32\",\"shape\":[1,2],\"data_offsets\":[16,24]}}      \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
         std::fs::remove_file("multi.safetensors").unwrap();
     }
 }
