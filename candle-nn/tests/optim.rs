@@ -8,8 +8,7 @@ use candle_nn::SGD;
 #[test]
 fn sgd_optim() -> Result<()> {
     let x = Var::new(0f32, &Device::Cpu)?;
-    let mut sgd = SGD::new(0.1);
-    sgd.push(&x);
+    let sgd = SGD::new(&[&x], 0.1);
     let xt = x.as_tensor();
     for _step in 0..100 {
         let loss = ((xt - 4.2)? * (xt - 4.2)?)?;

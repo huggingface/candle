@@ -8,7 +8,15 @@ pub struct SGD {
 }
 
 impl SGD {
-    pub fn new(learning_rate: f64) -> Self {
+    pub fn new(vars: &[&Var], learning_rate: f64) -> Self {
+        let vars: Vec<_> = vars.iter().map(|&v| v.clone()).collect();
+        Self {
+            vars,
+            learning_rate,
+        }
+    }
+
+    pub fn empty(learning_rate: f64) -> Self {
         Self {
             vars: vec![],
             learning_rate,
