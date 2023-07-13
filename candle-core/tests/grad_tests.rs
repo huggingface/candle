@@ -44,5 +44,21 @@ fn matmul_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+// The simplest gradient descent, using scalar variable.
+fn grad_descent(device: &Device) -> Result<()> {
+    let x = Var::new(0f32, device)?;
+    let learning_rate = 0.1;
+    for _step in 0..10 {
+        let xt = x.as_tensor();
+        let c = ((xt - 4.2)? * (xt - 4.2)?)?;
+        let grads = c.backward()?;
+        let x_grad = grads.get(&x).context("no grad for x")?;
+        x.set(&(x_grad * -learning_rate)?)?
+    }
+    assert_eq!(x.to_scalar::<f32>()?, 0.6999999);
+    Ok(())
+}
+
 test_device!(simple_grad, simple_grad_cpu, simple_grad_gpu);
 test_device!(matmul_grad, matmul_grad_cpu, matmul_grad_gpu);
+test_device!(grad_descent, grad_descent_cpu, grad_descent_gpu);
