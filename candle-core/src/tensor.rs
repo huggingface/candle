@@ -716,7 +716,7 @@ impl Tensor {
         };
         let storage =
             self.storage()
-                .conv1d(self.layout(), &*kernel.storage(), kernel.layout(), &params)?;
+                .conv1d(self.layout(), &kernel.storage(), kernel.layout(), &params)?;
         let op = if self.track_op() || kernel.track_op() {
             Some(Op::Conv1D {
                 arg: self.clone(),
@@ -770,7 +770,7 @@ impl Tensor {
         }
 
         let storage = self.storage().matmul(
-            &*rhs.storage(),
+            &rhs.storage(),
             (batching, m, n, k),
             self.layout(),
             rhs.layout(),
@@ -791,9 +791,9 @@ impl Tensor {
         let shape = self.same_shape_binary_op(on_false, "where_cond")?;
         let storage = self.storage().where_cond(
             self.layout(),
-            &*on_true.storage(),
+            &on_true.storage(),
             on_true.layout(),
-            &*on_false.storage(),
+            &on_false.storage(),
             on_false.layout(),
         )?;
         let op = if self.track_op() || on_true.track_op() || on_false.track_op() {
@@ -842,7 +842,7 @@ impl Tensor {
         let (_, hidden_size) = rhs.shape().r2()?;
         let storage = ids
             .storage()
-            .embedding(ids.layout(), &*rhs.storage(), rhs.layout())?;
+            .embedding(ids.layout(), &rhs.storage(), rhs.layout())?;
         let shape: Shape = (seq_len, hidden_size).into();
         let op = if ids.track_op() || rhs.track_op() {
             Some(Op::Embedding(ids.clone(), rhs.clone()))
