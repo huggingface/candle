@@ -1,6 +1,6 @@
 use crate::nn::{conv1d, conv1d_weight_norm, Conv1d, Conv1dConfig, VarBuilder};
 use anyhow::Result;
-use candle::Tensor;
+use candle::{DType, IndexOp, Tensor};
 
 // Encodec Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py
@@ -141,8 +141,9 @@ impl EncodecEuclideanCodebook {
         })
     }
 
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
+        let quantize = Tensor::embedding(embed_ind, &self.embed)?;
+        Ok(quantize)
     }
 }
 
@@ -157,8 +158,10 @@ impl EncodecVectorQuantization {
         Ok(Self { codebook })
     }
 
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
+        let quantize = self.codebook.decode(embed_ind)?;
+        let quantize = quantize.transpose(1, 2)?;
+        Ok(quantize)
     }
 }
 
@@ -176,8 +179,20 @@ impl EncodecResidualVectorQuantizer {
         Ok(Self { layers })
     }
 
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+        let mut quantized_out = Tensor::zeros((), DType::F32, &codes.device())?;
+        if codes.dim(0)? != self.layers.len() {
+            anyhow::bail!(
+                "codes shape {:?} does not match the number of quantization layers {}",
+                codes.shape(),
+                self.layers.len()
+            )
+        }
+        for (i, layer) in self.layers.iter().enumerate() {
+            let quantized = layer.decode(&codes.i(i)?)?;
+            quantized_out = quantized.broadcast_add(&quantized_out)?;
+        }
+        Ok(quantized_out)
     }
 }
 
