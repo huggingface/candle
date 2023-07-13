@@ -6,6 +6,7 @@ pub mod embedding;
 pub mod init;
 pub mod layer_norm;
 pub mod linear;
+pub mod optim;
 pub mod var_builder;
 
 pub use activation::Activation;
@@ -13,4 +14,5 @@ pub use conv::{Conv1d, Conv1dConfig};
 pub use embedding::Embedding;
 pub use layer_norm::LayerNorm;
 pub use linear::Linear;
+pub use optim::SGD;
 pub use var_builder::VarBuilder;

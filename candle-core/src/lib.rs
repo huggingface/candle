@@ -36,6 +36,7 @@
 mod backend;
 mod backprop;
 mod conv;
+mod convert;
 mod cpu_backend;
 #[cfg(feature = "cuda")]
 mod cuda_backend;
