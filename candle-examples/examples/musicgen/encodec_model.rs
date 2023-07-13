@@ -1,6 +1,6 @@
 use crate::nn::{conv1d, conv1d_weight_norm, Conv1d, Conv1dConfig, VarBuilder};
 use anyhow::Result;
-use candle::Tensor;
+use candle::{DType, IndexOp, Tensor};
 
 // Encodec Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py
@@ -140,6 +140,11 @@ impl EncodecEuclideanCodebook {
             embed_avg,
         })
     }
+
+    fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
+        let quantize = Tensor::embedding(embed_ind, &self.embed)?;
+        Ok(quantize)
+    }
 }
 
 #[derive(Debug)]
@@ -151,6 +156,12 @@ impl EncodecVectorQuantization {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let codebook = EncodecEuclideanCodebook::load(vb.pp("codebook"), cfg)?;
         Ok(Self { codebook })
+    }
+
+    fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
+        let quantize = self.codebook.decode(embed_ind)?;
+        let quantize = quantize.transpose(1, 2)?;
+        Ok(quantize)
     }
 }
 
@@ -166,6 +177,22 @@ impl EncodecResidualVectorQuantizer {
             .map(|i| EncodecVectorQuantization::load(vb.pp(&i.to_string()), cfg))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { layers })
+    }
+
+    fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+        let mut quantized_out = Tensor::zeros((), DType::F32, &codes.device())?;
+        if codes.dim(0)? != self.layers.len() {
+            anyhow::bail!(
+                "codes shape {:?} does not match the number of quantization layers {}",
+                codes.shape(),
+                self.layers.len()
+            )
+        }
+        for (i, layer) in self.layers.iter().enumerate() {
+            let quantized = layer.decode(&codes.i(i)?)?;
+            quantized_out = quantized.broadcast_add(&quantized_out)?;
+        }
+        Ok(quantized_out)
     }
 }
 
@@ -187,6 +214,10 @@ impl EncodecLSTM {
             layers.push((w_hh, w_ih, b_hh, b_ih))
         }
         Ok(Self { layers })
+    }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
     }
 }
 
@@ -216,10 +247,15 @@ impl EncodecConvTranspose1d {
             bias,
         })
     }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
 struct EncodecConv1d {
+    causal: bool,
     conv: Conv1d,
 }
 
@@ -248,7 +284,17 @@ impl EncodecConv1d {
                 vb.pp("conv"),
             )?,
         };
-        Ok(Self { conv })
+        Ok(Self {
+            causal: cfg.use_causal_conv,
+            conv,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        // TODO: padding, depending on causal.
+        let xs = self.conv.forward(xs)?;
+        // If we add support for NormType "time_group_norm", we should add some normalization here.
+        Ok(xs)
     }
 }
 
@@ -283,6 +329,19 @@ impl EncodecResnetBlock {
             block_conv2,
             shortcut,
         })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let residual = xs.clone();
+        let xs = xs.elu(1.)?;
+        let xs = self.block_conv1.forward(&xs)?;
+        let xs = xs.elu(1.)?;
+        let xs = self.block_conv2.forward(&xs)?;
+        let xs = match &self.shortcut {
+            None => (xs + residual)?,
+            Some(shortcut) => xs.add(&shortcut.forward(&residual)?)?,
+        };
+        Ok(xs)
     }
 }
 
@@ -369,6 +428,10 @@ impl EncodecEncoder {
             final_lstm,
         })
     }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
@@ -433,6 +496,10 @@ impl EncodecDecoder {
             final_conv,
         })
     }
+
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
@@ -452,5 +519,9 @@ impl EncodecModel {
             decoder,
             quantizer,
         })
+    }
+
+    pub fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
     }
 }
