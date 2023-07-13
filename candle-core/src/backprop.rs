@@ -182,8 +182,9 @@ impl Tensor {
                     Op::Broadcast(_arg) => {
                         return Err(Error::BackwardNotSupported { op: "broadcast" })
                     }
-                    Op::Sum(_arg, _sum_dims) => {
-                        return Err(Error::BackwardNotSupported { op: "sum" })
+                    Op::Sum(arg, _sum_dims) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.broadcast_add(&grad)?
                     }
                     Op::ToDType(arg) => {
                         let sum_grad = grads.or_insert(arg)?;
