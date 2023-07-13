@@ -48,14 +48,14 @@ fn matmul_grad(device: &Device) -> Result<()> {
 fn grad_descent(device: &Device) -> Result<()> {
     let x = Var::new(0f32, device)?;
     let learning_rate = 0.1;
-    for _step in 0..10 {
+    for _step in 0..100 {
         let xt = x.as_tensor();
         let c = ((xt - 4.2)? * (xt - 4.2)?)?;
         let grads = c.backward()?;
         let x_grad = grads.get(&x).context("no grad for x")?;
-        x.set(&(x_grad * -learning_rate)?)?
+        x.set(&(xt - x_grad * learning_rate)?)?
     }
-    assert_eq!(x.to_scalar::<f32>()?, 0.6999999);
+    assert_eq!(x.to_scalar::<f32>()?, 4.199999);
     Ok(())
 }
 
