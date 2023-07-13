@@ -312,9 +312,11 @@ impl PyTensor {
         Ok(PyTensor(self.0.narrow(dim, start, len).map_err(wrap_err)?))
     }
 
-    fn sum(&self, dims: Vec<usize>) -> PyResult<Self> {
+    fn sum_keepdim(&self, dims: Vec<usize>) -> PyResult<Self> {
         // TODO: Support a single dim as input?
-        Ok(PyTensor(self.0.sum(dims.as_slice()).map_err(wrap_err)?))
+        Ok(PyTensor(
+            self.0.sum_keepdim(dims.as_slice()).map_err(wrap_err)?,
+        ))
     }
 
     fn sum_all(&self) -> PyResult<Self> {
