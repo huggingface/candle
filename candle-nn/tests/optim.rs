@@ -18,7 +18,7 @@ fn sgd_optim() -> Result<()> {
     Ok(())
 }
 
-/* The results of this tests have been checked against the following PyTorch code.
+/* The results of this test have been checked against the following PyTorch code.
     import torch
     from torch import optim
 
