@@ -23,8 +23,8 @@ impl SGD {
         self.learning_rate
     }
 
-    pub fn push(&mut self, var: Var) {
-        self.vars.push(var)
+    pub fn push(&mut self, var: &Var) {
+        self.vars.push(var.clone())
     }
 
     pub fn backward_step(&self, loss: &Tensor) -> Result<()> {
