@@ -195,7 +195,11 @@ impl Tensor {
                             }
                         }
 
-                        let arg_grad = grad.sum(sum_dims.as_slice())?;
+                        let mut arg_grad = grad.sum(sum_dims.as_slice())?;
+                        // sum_dims has increasing values.
+                        for &dim in sum_dims.iter().rev() {
+                            arg_grad = arg_grad.squeeze(dim)?
+                        }
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.broadcast_add(&arg_grad)?
                     }
