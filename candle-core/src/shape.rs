@@ -216,6 +216,7 @@ impl Dim for usize {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum D {
     Minus1,
     Minus2,

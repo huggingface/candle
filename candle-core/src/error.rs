@@ -155,6 +155,12 @@ pub enum Error {
     #[error(transparent)]
     SafeTensor(#[from] safetensors::SafeTensorError),
 
+    // Maybe we could have a more detailed error here, including the line of the function that
+    // triggered this or some backtrace.
+    /// Borrow error.
+    #[error(transparent)]
+    BorrowError(#[from] std::cell::BorrowError),
+
     #[error("unsupported safetensor dtype {0:?}")]
     UnsupportedSafeTensorDtype(safetensors::Dtype),
 

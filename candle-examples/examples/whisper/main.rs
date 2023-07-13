@@ -109,7 +109,7 @@ impl Decoder {
         let mut no_speech_prob = f64::NAN;
         let mut tokens = vec![SOT_TOKEN];
         for i in 0..sample_len {
-            let tokens_t = Tensor::new(tokens.as_slice(), &mel.device())?;
+            let tokens_t = Tensor::new(tokens.as_slice(), mel.device())?;
 
             // The model expects a batch dim but this inference loop does not handle
             // it so we add it at this point.
