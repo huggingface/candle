@@ -56,6 +56,7 @@ mod storage;
 mod strided_index;
 mod tensor;
 pub mod utils;
+mod variable;
 
 pub use cpu_backend::CpuStorage;
 pub use device::{Device, DeviceLocation};
@@ -67,6 +68,7 @@ pub use shape::{Shape, D};
 pub use storage::Storage;
 use strided_index::StridedIndex;
 pub use tensor::{Tensor, TensorId};
+pub use variable::Variable;
 
 #[cfg(feature = "cuda")]
 pub use cuda_backend::{CudaDevice, CudaStorage};
