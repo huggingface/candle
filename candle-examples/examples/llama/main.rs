@@ -24,10 +24,6 @@ mod model;
 use model::{Config, Llama};
 
 const MAX_SEQ_LEN: usize = 4096;
-#[cfg(feature = "mkl")]
-const DTYPE: DType = DType::F32;
-#[cfg(not(feature = "mkl"))]
-const DTYPE: DType = DType::F16;
 const DEFAULT_PROMPT: &str = r"
 EDWARD:
 I wonder how our princely father 'scaped,
@@ -127,6 +123,10 @@ struct Args {
     /// The initial prompt.
     #[arg(long)]
     prompt: Option<String>,
+
+    /// Use f32 computations rather than f16.
+    #[arg(long)]
+    use_f32: bool,
 }
 
 fn main() -> Result<()> {
@@ -140,9 +140,10 @@ fn main() -> Result<()> {
     };
     let config = Config::config_7b();
     let cache = model::Cache::new(!args.no_kv_cache, &config, &device);
+    let dtype = if args.use_f32 { DType::F32 } else { DType::F16 };
     let (llama, tokenizer_filename) = match args.npy {
         Some(filename) => {
-            let vb = VarBuilder::from_npz(filename, DTYPE, &device)?;
+            let vb = VarBuilder::from_npz(filename, dtype, &device)?;
             let tokenizer = std::path::PathBuf::from("llama-tokenizer.json");
             (Llama::load(vb, &cache, &config)?, tokenizer)
         }
@@ -170,7 +171,7 @@ fn main() -> Result<()> {
                 .map(|h| Ok(h.deserialize()?))
                 .collect::<Result<Vec<_>>>()?;
 
-            let vb = VarBuilder::from_safetensors(tensors, DTYPE, &device);
+            let vb = VarBuilder::from_safetensors(tensors, dtype, &device);
             (Llama::load(vb, &cache, &config)?, tokenizer_filename)
         }
     };
