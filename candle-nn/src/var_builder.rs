@@ -146,19 +146,28 @@ impl<'a> VarBuilder<'a> {
             Tensors::Zeros => Tensor::zeros(&s, data.dtype, &data.device)?.contiguous()?,
             Tensors::TensorMap(ts) => ts
                 .get(&path)
-                .ok_or_else(|| Error::CannotFindTensor {
-                    path: path.to_string(),
+                .ok_or_else(|| {
+                    Error::CannotFindTensor {
+                        path: path.to_string(),
+                    }
+                    .bt()
                 })?
                 .clone(),
-            Tensors::Npz(npz) => npz.get(&path)?.ok_or_else(|| Error::CannotFindTensor {
-                path: path.to_string(),
+            Tensors::Npz(npz) => npz.get(&path)?.ok_or_else(|| {
+                Error::CannotFindTensor {
+                    path: path.to_string(),
+                }
+                .bt()
             })?,
             Tensors::SafeTensorWithRouting {
                 routing,
                 safetensors,
             } => {
-                let index = routing.get(&path).ok_or_else(|| Error::CannotFindTensor {
-                    path: path.to_string(),
+                let index = routing.get(&path).ok_or_else(|| {
+                    Error::CannotFindTensor {
+                        path: path.to_string(),
+                    }
+                    .bt()
                 })?;
                 safetensors[*index]
                     .tensor(&path, &data.device)?
@@ -170,7 +179,8 @@ impl<'a> VarBuilder<'a> {
                 msg: format!("shape mismatch for {path}"),
                 expected: s,
                 got: tensor.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         Ok(tensor)
     }

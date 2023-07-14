@@ -67,7 +67,8 @@ impl Layout {
                 shape: self.shape().clone(),
                 dim: dim as i32,
                 op: "narrow",
-            })?
+            }
+            .bt())?
         }
         if start + len > dims[dim] {
             Err(Error::NarrowInvalidArgs {
@@ -76,7 +77,8 @@ impl Layout {
                 start,
                 len,
                 msg: "start + len > dim_len",
-            })?
+            }
+            .bt())?
         }
         let mut dims = dims.to_vec();
         dims[dim] = len;
@@ -90,11 +92,12 @@ impl Layout {
     pub(crate) fn transpose(&self, dim1: usize, dim2: usize) -> Result<Self> {
         let rank = self.shape.rank();
         if rank <= dim1 || rank <= dim2 {
-            return Err(Error::UnexpectedNumberOfDims {
+            Err(Error::UnexpectedNumberOfDims {
                 expected: usize::max(dim1, dim2),
                 got: rank,
                 shape: self.shape().clone(),
-            });
+            }
+            .bt())?
         }
         let mut stride = self.stride().to_vec();
         let mut dims = self.shape().dims().to_vec();
@@ -110,10 +113,11 @@ impl Layout {
     pub fn broadcast_as<S: Into<Shape>>(&self, shape: S) -> Result<Self> {
         let shape = shape.into();
         if shape.rank() < self.shape().rank() {
-            Err(Error::BroadcastIncompatibleShapes {
+            return Err(Error::BroadcastIncompatibleShapes {
                 src_shape: self.shape().clone(),
-                dst_shape: shape.clone(),
-            })?
+                dst_shape: shape,
+            }
+            .bt());
         }
         let added_dims = shape.rank() - self.shape().rank();
         let mut stride = vec![0; added_dims];
@@ -127,7 +131,8 @@ impl Layout {
                 return Err(Error::BroadcastIncompatibleShapes {
                     src_shape: self.shape().clone(),
                     dst_shape: shape,
-                });
+                }
+                .bt());
             } else {
                 0
             };

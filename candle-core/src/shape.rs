@@ -79,7 +79,8 @@ macro_rules! extract_dims {
                     expected: $cnt,
                     got: self.0.len(),
                     shape: self.clone(),
-                })
+                }
+                .bt())
             } else {
                 Ok($dims(&self.0))
             }
@@ -196,7 +197,8 @@ impl Dim for usize {
                 shape: shape.clone(),
                 dim: dim as i32,
                 op,
-            })?
+            }
+            .bt())?
         } else {
             Ok(dim)
         }
@@ -209,7 +211,8 @@ impl Dim for usize {
                 shape: shape.clone(),
                 dim: dim as i32,
                 op,
-            })?
+            }
+            .bt())?
         } else {
             Ok(dim)
         }
@@ -233,6 +236,7 @@ impl D {
             dim,
             op,
         }
+        .bt()
     }
 }
 
@@ -267,14 +271,16 @@ pub trait Dims: Sized {
                     shape: shape.clone(),
                     dims: dims.clone(),
                     op,
-                })?
+                }
+                .bt())?
             }
             if dim >= shape.rank() {
                 Err(Error::DimOutOfRange {
                     shape: shape.clone(),
                     dim: dim as i32,
                     op,
-                })?
+                }
+                .bt())?
             }
         }
         Ok(dims)

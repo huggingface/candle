@@ -58,7 +58,7 @@ pub enum CudaError {
 
 impl From<CudaError> for crate::Error {
     fn from(val: CudaError) -> Self {
-        crate::Error::Cuda(Box::new(val))
+        crate::Error::Cuda(Box::new(val)).bt()
     }
 }
 

@@ -56,7 +56,8 @@ trait Map2 {
                 lhs: v1.dtype(),
                 rhs: v2.dtype(),
                 op: Self::OP,
-            }),
+            }
+            .bt()),
         }
     }
 }
@@ -168,11 +169,12 @@ impl<'a> Map1 for Embedding<'a> {
         for index in self.ids_l.strided_index() {
             let index = self.ids[index].try_into()?;
             if index >= self.vocab_size {
-                return Err(Error::InvalidIndex {
+                Err(Error::InvalidIndex {
                     index,
                     vocab_size: self.vocab_size,
                     op: "take",
-                });
+                }
+                .bt())?
             } else {
                 let hidden_size = self.hidden_size;
                 values.extend(&vs[hidden_size * index..hidden_size * (index + 1)]);
@@ -273,6 +275,7 @@ impl MatMul {
             bmnk: self.0,
             msg,
         }))
+        .bt()
     }
 }
 
@@ -483,7 +486,7 @@ impl Map2 for MatMul {
                     }
                 }
             }
-            dtype => Err(Error::UnsupportedDTypeForOp(dtype, "matmul"))?,
+            dtype => Err(Error::UnsupportedDTypeForOp(dtype, "matmul").bt())?,
         }
         Ok(dst)
     }
@@ -748,8 +751,8 @@ impl BackendStorage for CpuStorage {
                 let data = unary_map(storage, layout, |v| elu(v, alpha));
                 Ok(Self::F64(data))
             }
-            Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu")),
-            Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu")),
+            Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
+            Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt()),
         }
     }
 
@@ -814,7 +817,8 @@ impl BackendStorage for CpuStorage {
                     lhs: self.dtype(),
                     rhs: rhs.dtype(),
                     op: B::NAME,
-                })
+                }
+                .bt())
             }
         }
     }
@@ -833,7 +837,8 @@ impl BackendStorage for CpuStorage {
                     lhs: self.dtype(),
                     rhs: dst.dtype(),
                     op: "copy_strided",
-                });
+                }
+                .bt());
             }
         }
         Ok(())
@@ -923,7 +928,7 @@ impl BackendDevice for CpuDevice {
         let mut rng = rand::thread_rng();
         match dtype {
             DType::U8 | DType::U32 | DType::BF16 | DType::F16 => {
-                Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal"))
+                Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal").bt())
             }
             DType::F32 => {
                 let mut data = Vec::new();
@@ -953,7 +958,7 @@ impl BackendDevice for CpuDevice {
         let mut rng = rand::thread_rng();
         match dtype {
             DType::U8 | DType::U32 | DType::BF16 | DType::F16 => {
-                Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal"))
+                Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal").bt())
             }
             DType::F32 => {
                 let mut data = Vec::new();

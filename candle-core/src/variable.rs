@@ -9,6 +9,12 @@ use crate::{DType, Device, Error, Result, Shape, Tensor};
 #[derive(Clone, Debug)]
 pub struct Var(Tensor);
 
+impl std::fmt::Display for Var {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
 impl std::ops::Deref for Var {
     type Target = Tensor;
 
@@ -90,12 +96,12 @@ impl Var {
     pub fn set(&self, src: &Tensor) -> Result<()> {
         if self.same_storage(src) {
             let msg = "cannot set a variable to a tensor that is derived from its value";
-            Err(Error::CannotSetVar { msg })?
+            Err(Error::CannotSetVar { msg }.bt())?
         }
         let (mut dst, layout) = self.storage_mut_and_layout();
         if !layout.is_contiguous() {
             let msg = "cannot set a non-contiguous variable";
-            Err(Error::CannotSetVar { msg })?
+            Err(Error::CannotSetVar { msg }.bt())?
         }
         let (src, src_l) = src.storage_and_layout();
         if layout.shape() != src_l.shape() {
@@ -103,7 +109,8 @@ impl Var {
                 lhs: layout.shape().clone(),
                 rhs: src_l.shape().clone(),
                 op: "set",
-            })?
+            }
+            .bt())?
         }
         src.copy_strided_src(&mut dst, layout.start_offset(), src_l)?;
         Ok(())

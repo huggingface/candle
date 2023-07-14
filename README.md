@@ -101,3 +101,8 @@ can try adding the following at the top of your binary:
 ```
 extern crate intel_mkl_src;
 ```
+
+### How to know where an error comes from.
+
+You can set `RUST_BACKTRACE=1` to be provided with backtraces when a candle
+error is generated.
