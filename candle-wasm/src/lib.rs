@@ -196,7 +196,7 @@ impl Decoder {
                     }
                 }
                 Err(err) => {
-                    println!("Error running at {t}: {err}")
+                    console_log!("Error running at {t}: {err}")
                 }
             }
         }
@@ -208,7 +208,6 @@ impl Decoder {
         let mut seek = 0;
         let mut segments = vec![];
         while seek < content_frames {
-            let start = std::time::Instant::now();
             let time_offset = (seek * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
             let segment_size = usize::min(content_frames - seek, N_FRAMES);
             let mel_segment = mel.narrow(2, seek, segment_size)?;
@@ -216,7 +215,7 @@ impl Decoder {
             let dr = self.decode_with_fallback(&mel_segment)?;
             seek += segment_size;
             if dr.no_speech_prob > NO_SPEECH_THRESHOLD && dr.avg_logprob < LOGPROB_THRESHOLD {
-                println!("no speech detected, skipping {seek} {dr:?}");
+                console_log!("no speech detected, skipping {seek} {dr:?}");
                 continue;
             }
             let segment = Segment {
@@ -224,7 +223,7 @@ impl Decoder {
                 duration: segment_duration,
                 dr,
             };
-            println!("{seek}: {segment:?}, in {:?}", start.elapsed());
+            console_log!("{seek}: {segment:?}");
             segments.push(segment)
         }
         Ok(segments)
@@ -325,5 +324,12 @@ pub fn test_fn() -> std::result::Result<(), JsValue> {
     p_element.set_text_content(Some(&result));
     let body = document.body().expect("document should have a body");
     body.append_child(&p_element)?;
+    Ok(())
+}
+
+#[wasm_bindgen]
+pub async fn run_fn() -> std::result::Result<(), JsValue> {
+    console_log!("run_fn starting...");
+    run_impl().await?;
     Ok(())
 }

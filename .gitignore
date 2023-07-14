@@ -20,3 +20,6 @@ perf.data
 flamegraph.svg
 *.so
 *.swp
+
+candle-wasm/*.wav
+candle-wasm/*.safetensors
