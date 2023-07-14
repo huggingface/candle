@@ -24,6 +24,8 @@ cargo run --example llama --release
 cargo run --example falcon --release
 ```
 
+In order to use **CUDA** add `--features cuda` to the example command line.
+
 
 ## Features
 
