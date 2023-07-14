@@ -92,7 +92,8 @@ macro_rules! with_dtype {
                         expected: DType::$dtype,
                         got: s.dtype(),
                         msg: "unexpected dtype",
-                    }),
+                    }
+                    .bt()),
                 }
             }
 
@@ -103,7 +104,8 @@ macro_rules! with_dtype {
                         expected: DType::$dtype,
                         got: s.dtype(),
                         msg: "unexpected dtype",
-                    }),
+                    }
+                    .bt()),
                 }
             }
         }
