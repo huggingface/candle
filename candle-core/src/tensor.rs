@@ -281,7 +281,7 @@ impl Tensor {
         let n: usize = shape.elem_count();
         let buffer_size: usize = array.shape()?.elem_count();
         if buffer_size != n {
-            return Err(Error::ShapeMismatch { buffer_size, shape });
+            return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
         }
         let storage = device.storage(array)?;
         Ok(from_storage(storage, shape, None, is_variable))
@@ -336,7 +336,7 @@ impl Tensor {
         let shape = shape.into();
         let buffer_size = data.len();
         if buffer_size != shape.elem_count() {
-            return Err(Error::ShapeMismatch { buffer_size, shape });
+            return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
         }
         let storage = device.storage_owned(data)?;
         Ok(from_storage(storage, shape, None, is_variable))
@@ -398,7 +398,8 @@ impl Tensor {
                     lhs: self.shape().clone(),
                     rhs: rhs.shape().clone(),
                     op,
-                })?
+                }
+                .bt())?
             }
         }
         Ok(Shape::from(bcast_dims))
@@ -412,7 +413,8 @@ impl Tensor {
                 lhs: lhs.clone(),
                 rhs: rhs.clone(),
                 op,
-            })
+            }
+            .bt())
         } else {
             Ok(lhs)
         }
@@ -450,11 +452,12 @@ impl Tensor {
     /// dimensions, an error is returned instead.
     pub fn to_scalar<S: crate::WithDType>(&self) -> Result<S> {
         if self.rank() != 0 {
-            return Err(Error::UnexpectedNumberOfDims {
+            Err(Error::UnexpectedNumberOfDims {
                 expected: 0,
                 got: self.rank(),
                 shape: self.shape().clone(),
-            });
+            }
+            .bt())?
         }
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
             let data = S::cpu_storage_as_slice(cpu_storage)?;
@@ -508,7 +511,8 @@ impl Tensor {
                 shape: self.shape().clone(),
                 dim: dim as i32,
                 op,
-            })?
+            }
+            .bt())?
         } else {
             Ok(())
         }
@@ -526,7 +530,8 @@ impl Tensor {
                 start,
                 len,
                 msg: "start + len > dim_len",
-            })?
+            }
+            .bt())?
         }
         if start == 0 && dims[dim] == len {
             Ok(self.clone())
@@ -666,7 +671,8 @@ impl Tensor {
                 padding,
                 stride,
                 msg: "input rank is not 2 or 3",
-            })?,
+            }
+            .bt())?,
         };
         if c_in != c_in_k {
             Err(Error::Conv1dInvalidArgs {
@@ -675,7 +681,8 @@ impl Tensor {
                 padding,
                 stride,
                 msg: "the number of in-channels on the input doesn't match the kernel size",
-            })?
+            }
+            .bt())?
         }
         let params = crate::conv::ParamsConv1D {
             b_size,
@@ -722,7 +729,8 @@ impl Tensor {
                 lhs: self.shape().clone(),
                 rhs: rhs.shape().clone(),
                 op: "matmul",
-            })?
+            }
+            .bt())?
         }
 
         let m = a_dims[dim - 2];
@@ -738,7 +746,8 @@ impl Tensor {
                 lhs: self.shape().clone(),
                 rhs: rhs.shape().clone(),
                 op: "matmul",
-            })?
+            }
+            .bt())?
         }
 
         let storage = self.storage().matmul(
@@ -801,13 +810,14 @@ impl Tensor {
     /// ```
     pub fn embedding(ids: &Self, rhs: &Self) -> Result<Self> {
         if !rhs.is_contiguous() {
-            return Err(Error::RequiresContiguous { op: "embedding" });
+            Err(Error::RequiresContiguous { op: "embedding" }.bt())?
         } else if rhs.rank() != 2 || ids.rank() != 1 {
-            return Err(Error::ShapeMismatchBinaryOp {
+            Err(Error::ShapeMismatchBinaryOp {
                 lhs: ids.shape().clone(),
                 rhs: rhs.shape().clone(),
                 op: "embedding",
-            });
+            }
+            .bt())?
         }
         let ids_shape = ids.shape();
         let seq_len = ids_shape.r1()?;
@@ -831,11 +841,12 @@ impl Tensor {
     /// Returns the data contained in a 1D tensor as a vector of scalar values.
     pub fn to_vec1<S: crate::WithDType>(&self) -> Result<Vec<S>> {
         if self.rank() != 1 {
-            return Err(Error::UnexpectedNumberOfDims {
+            Err(Error::UnexpectedNumberOfDims {
                 expected: 1,
                 got: self.rank(),
                 shape: self.shape().clone(),
-            });
+            }
+            .bt())?
         }
         match &*self.storage() {
             Storage::Cpu(cpu_storage) => {
@@ -1064,11 +1075,12 @@ impl Tensor {
     pub fn t(&self) -> Result<Tensor> {
         let rank = self.rank();
         if rank < 2 {
-            return Err(Error::UnexpectedNumberOfDims {
+            Err(Error::UnexpectedNumberOfDims {
                 expected: 2,
                 got: rank,
                 shape: self.shape().clone(),
-            });
+            }
+            .bt())?
         }
         self.transpose(rank - 2, rank - 1)
     }
@@ -1278,7 +1290,8 @@ impl Tensor {
                 lhs: self.shape().clone(),
                 rhs: shape,
                 op: "reshape",
-            });
+            }
+            .bt());
         }
         let op = if self.track_op() {
             Some(Op::Reshape(self.clone()))
@@ -1370,7 +1383,7 @@ impl Tensor {
     /// ```
     pub fn stack<A: AsRef<Tensor>, D: Dim>(args: &[A], dim: D) -> Result<Self> {
         if args.is_empty() {
-            return Err(Error::OpRequiresAtLeastOneTensor { op: "stack" });
+            Err(Error::OpRequiresAtLeastOneTensor { op: "stack" }.bt())?
         }
         let dim = dim.to_index_plus_one(args[0].as_ref().shape(), "stack")?;
         let args = args
@@ -1399,7 +1412,7 @@ impl Tensor {
     /// ```
     pub fn cat<A: AsRef<Tensor>, D: Dim>(args: &[A], dim: D) -> Result<Self> {
         if args.is_empty() {
-            return Err(Error::OpRequiresAtLeastOneTensor { op: "cat" });
+            Err(Error::OpRequiresAtLeastOneTensor { op: "cat" }.bt())?
         }
         let arg0 = args[0].as_ref();
         if args.len() == 1 {
@@ -1425,7 +1438,7 @@ impl Tensor {
 
     fn cat0<A: AsRef<Tensor>>(args: &[A]) -> Result<Self> {
         if args.is_empty() {
-            return Err(Error::OpRequiresAtLeastOneTensor { op: "cat" });
+            Err(Error::OpRequiresAtLeastOneTensor { op: "cat" }.bt())?
         }
         let arg0 = args[0].as_ref();
         if args.len() == 1 {
@@ -1442,19 +1455,21 @@ impl Tensor {
             let arg = arg.as_ref();
             if arg.dtype() != dtype {
                 // TODO: Improve the error message.
-                return Err(Error::DTypeMismatchBinaryOp {
+                Err(Error::DTypeMismatchBinaryOp {
                     lhs: dtype,
                     rhs: arg.dtype(),
                     op: "cat",
-                });
+                }
+                .bt())?
             }
             if arg.device().location() != device.location() {
                 // TODO: Improve the error message.
-                return Err(Error::DeviceMismatchBinaryOp {
+                Err(Error::DeviceMismatchBinaryOp {
                     lhs: device.location(),
                     rhs: arg.device().location(),
                     op: "cat",
-                });
+                }
+                .bt())?
             }
             let mut mismatch = arg.rank() != rank;
             for (dim_idx, (v1, v2)) in arg0
@@ -1474,12 +1489,13 @@ impl Tensor {
                 }
             }
             if mismatch {
-                return Err(Error::ShapeMismatchCat {
+                Err(Error::ShapeMismatchCat {
                     dim: 0, // TODO: not the appropriate error message
                     first_shape: arg0.shape().clone(),
                     n: arg_idx + 1,
                     nth_shape: arg.shape().clone(),
-                });
+                }
+                .bt())?
             }
             let next_offset = offsets.last().unwrap() + arg.elem_count();
             offsets.push(next_offset);

@@ -38,7 +38,7 @@ impl Storage {
         let lhs = self.device().location();
         let rhs = rhs.device().location();
         if lhs != rhs {
-            Err(Error::DeviceMismatchBinaryOp { lhs, rhs, op })
+            Err(Error::DeviceMismatchBinaryOp { lhs, rhs, op }.bt())
         } else {
             Ok(())
         }
@@ -48,7 +48,7 @@ impl Storage {
         let lhs = self.dtype();
         let rhs = rhs.dtype();
         if lhs != rhs {
-            Err(Error::DTypeMismatchBinaryOp { lhs, rhs, op })
+            Err(Error::DTypeMismatchBinaryOp { lhs, rhs, op }.bt())
         } else {
             Ok(())
         }
@@ -153,7 +153,8 @@ impl Storage {
                     lhs: lhs.device().location(),
                     rhs: rhs.device().location(),
                     op: B::NAME,
-                })
+                }
+                .bt())
             }
         }
     }
@@ -180,7 +181,8 @@ impl Storage {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
                 op: "conv1d",
-            }),
+            }
+            .bt()),
         }
     }
 
@@ -208,7 +210,8 @@ impl Storage {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
                 op: "where",
-            }),
+            }
+            .bt()),
         }
     }
 
@@ -227,7 +230,8 @@ impl Storage {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
                 op: "embedding",
-            }),
+            }
+            .bt()),
         }
     }
 
@@ -253,7 +257,8 @@ impl Storage {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
                 op: "matmul",
-            }),
+            }
+            .bt()),
         }
     }
 
@@ -271,7 +276,8 @@ impl Storage {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
                 op: "copy",
-            }),
+            }
+            .bt()),
         }
     }
 }

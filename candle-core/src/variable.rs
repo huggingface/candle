@@ -9,6 +9,12 @@ use crate::{DType, Device, Error, Result, Shape, Tensor};
 #[derive(Clone, Debug)]
 pub struct Var(Tensor);
 
+impl std::fmt::Display for Var {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
 impl std::ops::Deref for Var {
     type Target = Tensor;
 
