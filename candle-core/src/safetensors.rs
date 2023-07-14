@@ -155,6 +155,11 @@ impl MmapedFile {
 }
 
 impl<'a> SafeTensors<'a> {
+    pub fn from_buffer(buffer: &'a [u8]) -> Result<Self> {
+        let st = safetensors::SafeTensors::deserialize(buffer)?;
+        Ok(SafeTensors(st))
+    }
+
     pub fn tensor(&self, name: &str, device: &Device) -> Result<Tensor> {
         convert(self.0.tensor(name)?, device)
     }
