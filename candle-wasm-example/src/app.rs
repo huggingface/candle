@@ -319,7 +319,7 @@ pub enum Msg {
 
 pub struct App {
     content: String,
-    decoder: Option<Decoder>,
+    decoder: Option<std::sync::Arc<Decoder>>,
 }
 
 impl Component for App {
@@ -348,16 +348,30 @@ impl Component for App {
         }
     }
 
-    fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
+    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::SetDecoder(decoder) => {
                 self.content = "weights loaded succesfully!".to_string();
-                self.decoder = Some(decoder);
+                self.decoder = Some(std::sync::Arc::new(decoder));
                 true
             }
             Msg::Run(sample_index) => {
                 let sample = SAMPLE_NAMES[sample_index];
-                console_log!("running on {sample}");
+                match &self.decoder {
+                    None => self.content = "waiting for weights to load".to_string(),
+                    Some(decoder) => {
+                        let decoder = decoder.clone();
+                        ctx.link().send_future(async move {
+                            let content = decoder.load_and_run(sample).await;
+                            let content = match content {
+                                Err(err) => format!("decoding error: {err:?}"),
+                                Ok(segments) => format!("decoded succesfully: {segments:?}"),
+                            };
+                            Msg::Refresh(content)
+                        })
+                        //
+                    }
+                }
                 true
             }
             Msg::Refresh(content) => {
