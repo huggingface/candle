@@ -402,17 +402,27 @@ impl Component for App {
     fn view(&self, ctx: &Context<Self>) -> Html {
         html! {
             <div>
-                <ul>
+                <table>
+                <thead>
+                <tr>
+                  <th>{"Sample"}</th>
+                  <th></th>
+                  <th></th>
+                </tr>
+                </thead>
+                <tbody>
                 {
                     SAMPLE_NAMES.iter().enumerate().map(|(i, name)| { html! {
-                <li>{name}
-                <audio controls=true src={format!("./{name}")}></audio>
-                <button class="button" onclick={ctx.link().callback(move |_| Msg::Run(i))}> { "run" }</button>
-                </li>
+                <tr>
+                  <th>{name}</th>
+                  <th><audio controls=true src={format!("./{name}")}></audio></th>
+                  <th><button class="button" onclick={ctx.link().callback(move |_| Msg::Run(i))}> { "run" }</button></th>
+                </tr>
                     }
                     }).collect::<Html>()
                 }
-                </ul>
+                </tbody>
+                </table>
                 <h2>
                   {&self.status}
                 </h2>
