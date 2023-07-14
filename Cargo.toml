@@ -7,7 +7,7 @@ members = [
     "candle-nn",
     "candle-pyo3",
     "candle-transformers",
-    "candle-wasm",
+    "candle-wasm-example",
 ]
 
 [profile.release-with-debug]
