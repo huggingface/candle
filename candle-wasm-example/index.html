@@ -4,13 +4,21 @@
     <meta charset="utf-8" />
     <title>Welcome to Candle!</title>
 
-    <link data-trunk rel="rust" />
-    <link data-trunk rel="css" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.min.css" />
+    <link data-trunk rel="copy-file" href="jfk.wav" />
+    <link data-trunk rel="copy-file" href="mm0.wav" />
+    <link data-trunk rel="copy-file" href="a13.wav" />
+    <link data-trunk rel="copy-file" href="gb0.wav" />
+    <link data-trunk rel="copy-file" href="gb1.wav" />
+    <link data-trunk rel="copy-file" href="hp0.wav" />
+    <link data-trunk rel="copy-file" href="tokenizer.en.json" />
+    <link data-trunk rel="copy-file" href="mel_filters.safetensors" />
+    <link data-trunk rel="copy-file" href="tiny.en.safetensors" />
+    <link data-trunk rel="rust" href="Cargo.toml" data-bin="app" data-type="main" />
+    <link data-trunk rel="rust" href="Cargo.toml" data-bin="worker" data-type="worker" />
+
     <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300italic,700,700italic">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.css">
-
-    <script src="./pkg/bundle.js" defer></script>
   </head>
   <body></body>
 </html>
