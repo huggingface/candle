@@ -37,6 +37,13 @@ pub enum Error {
         op: &'static str,
     },
 
+    #[error("{op}: duplicate dim index {dims:?} for shape {shape:?}")]
+    DuplicateDimIndex {
+        shape: Shape,
+        dims: Vec<usize>,
+        op: &'static str,
+    },
+
     // === Shape Errors ===
     #[error("unexpected rank, expected: {expected}, got: {got} ({shape:?})")]
     UnexpectedNumberOfDims {
