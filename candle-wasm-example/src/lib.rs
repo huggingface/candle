@@ -259,7 +259,7 @@ fn w<T: ToString>(x: T) -> String {
 
 async fn run_impl() -> Result<(), JsValue> {
     let device = Device::Cpu;
-    let tokenizer_config = fetch_url("tokenizer.json").await?;
+    let tokenizer_config = fetch_url("tokenizer.en.json").await?;
     let tokenizer = Tokenizer::from_bytes(tokenizer_config).map_err(w)?;
 
     let mel_filters = fetch_url("mel_filters.safetensors").await?;
