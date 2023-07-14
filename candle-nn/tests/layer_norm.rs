@@ -30,10 +30,10 @@ fn layer_norm() -> Result<()> {
             [4.1742344, 0.5, -3.1742344]
         ]]
     );
-    let mean = (res.sum_keepdim(&[2])? / 3.0)?;
+    let mean = (res.sum_keepdim(2)? / 3.0)?;
     // The average value should be `b`.
     assert_eq!(mean.to_vec3::<f32>()?, [[[0.5], [0.5], [0.5]]]);
-    let std = (res.broadcast_sub(&mean)?.sqr()?.sum_keepdim(&[2])?.sqrt()? / 3.0)?;
+    let std = (res.broadcast_sub(&mean)?.sqr()?.sum_keepdim(2)?.sqrt()? / 3.0)?;
     // The standard deviation should be sqrt(`w`).
     assert_eq!(
         std.to_vec3::<f32>()?,

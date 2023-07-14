@@ -19,7 +19,7 @@ fn simple_grad(device: &Device) -> Result<()> {
 fn sum_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[3f32, 1., 4.], device)?;
     let x = x.as_tensor();
-    let y = (x.sqr()?.sum_keepdim(&[0])? * 2.)?;
+    let y = (x.sqr()?.sum_keepdim(0)? * 2.)?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(y.to_vec1::<f32>()?, [52.]);
@@ -27,7 +27,7 @@ fn sum_grad(device: &Device) -> Result<()> {
     assert_eq!(grad_x.to_vec1::<f32>()?, &[12., 4., 16.]);
 
     // Same test as before but squeezing on the last dimension.
-    let y = (x.sqr()?.sum_keepdim(&[0])? * 2.)?.squeeze(0)?;
+    let y = (x.sqr()?.sum_keepdim(0)? * 2.)?.squeeze(0)?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(y.to_scalar::<f32>()?, 52.);
