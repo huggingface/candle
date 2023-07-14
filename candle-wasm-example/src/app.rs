@@ -426,11 +426,18 @@ impl Component for App {
                 <h2>
                   {&self.status}
                 </h2>
+                {
+                    if self.decode_in_flight {
+                        html! { <progress id="progress-bar" aria-label="decoding…"></progress> }
+                    } else { html!{
                 <blockquote>
                 <p>
                   {&self.content}
                 </p>
                 </blockquote>
+                }
+                }
+                }
 
                 // Display the current date and time the page was rendered
                 <p class="footer">
