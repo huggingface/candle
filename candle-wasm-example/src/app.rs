@@ -356,7 +356,7 @@ impl Component for App {
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::SetDecoder(decoder) => {
-                self.content = "weights loaded succesfully!".to_string();
+                self.status = "weights loaded succesfully!".to_string();
                 self.decoder = Some(std::sync::Arc::new(decoder));
                 true
             }
@@ -370,6 +370,8 @@ impl Component for App {
                         } else {
                             let decoder = decoder.clone();
                             self.decode_in_flight = true;
+                            self.status = format!("decoding {sample}");
+                            self.content = String::new();
                             ctx.link().send_future(async move {
                                 let content = decoder.load_and_run(sample).await;
                                 let content = match content {
@@ -412,7 +414,7 @@ impl Component for App {
                 }
                 </ul>
                 <h2>
-                  {&self.content}
+                  {&self.status}
                 </h2>
                 <blockquote>
                 <p>
