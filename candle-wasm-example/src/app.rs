@@ -313,12 +313,15 @@ fn w<T: ToString>(x: T) -> String {
 
 pub enum Msg {
     Run(usize),
-    Refresh(String),
+    UpdateStatus(String),
+    RunFinished(String),
     SetDecoder(Decoder),
 }
 
 pub struct App {
+    status: String,
     content: String,
+    decode_in_flight: bool,
     decoder: Option<std::sync::Arc<Decoder>>,
 }
 
@@ -327,9 +330,11 @@ impl Component for App {
     type Properties = ();
 
     fn create(_ctx: &Context<Self>) -> Self {
-        let content = "loading weights".to_string();
+        let status = "loading weights".to_string();
         Self {
-            content,
+            status,
+            content: String::new(),
+            decode_in_flight: false,
             decoder: None,
         }
     }
@@ -340,7 +345,7 @@ impl Component for App {
                 match Decoder::load().await {
                     Err(err) => {
                         let status = format!("{err:?}");
-                        Msg::Refresh(status)
+                        Msg::UpdateStatus(status)
                     }
                     Ok(decoder) => Msg::SetDecoder(decoder),
                 }
@@ -360,22 +365,33 @@ impl Component for App {
                 match &self.decoder {
                     None => self.content = "waiting for weights to load".to_string(),
                     Some(decoder) => {
-                        let decoder = decoder.clone();
-                        ctx.link().send_future(async move {
-                            let content = decoder.load_and_run(sample).await;
-                            let content = match content {
-                                Err(err) => format!("decoding error: {err:?}"),
-                                Ok(segments) => format!("decoded succesfully: {segments:?}"),
-                            };
-                            Msg::Refresh(content)
-                        })
+                        if self.decode_in_flight {
+                            self.content = "already decoding some sample at the moment".to_string()
+                        } else {
+                            let decoder = decoder.clone();
+                            self.decode_in_flight = true;
+                            ctx.link().send_future(async move {
+                                let content = decoder.load_and_run(sample).await;
+                                let content = match content {
+                                    Err(err) => format!("decoding error: {err:?}"),
+                                    Ok(segments) => format!("decoded succesfully: {segments:?}"),
+                                };
+                                Msg::RunFinished(content)
+                            })
+                        }
                         //
                     }
                 }
                 true
             }
-            Msg::Refresh(content) => {
+            Msg::RunFinished(content) => {
+                self.status = "Run finished!".to_string();
                 self.content = content;
+                self.decode_in_flight = false;
+                true
+            }
+            Msg::UpdateStatus(status) => {
+                self.status = status;
                 true
             }
         }
@@ -395,9 +411,14 @@ impl Component for App {
                     }).collect::<Html>()
                 }
                 </ul>
+                <h2>
+                  {&self.content}
+                </h2>
+                <blockquote>
                 <p>
                   {&self.content}
                 </p>
+                </blockquote>
 
                 // Display the current date and time the page was rendered
                 <p class="footer">
