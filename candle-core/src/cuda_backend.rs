@@ -106,8 +106,7 @@ trait WrapErr<O> {
 
 impl<O, E: Into<CudaError>> WrapErr<O> for std::result::Result<O, E> {
     fn w(self) -> std::result::Result<O, crate::Error> {
-        self
-            .map_err(|e| crate::Error::Cuda(Box::new(e.into())))
+        self.map_err(|e| crate::Error::Cuda(Box::new(e.into())))
     }
 }
 
