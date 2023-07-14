@@ -4,12 +4,12 @@ members = [
     "candle-examples",
     "candle-hub",
     "candle-nn",
+    "candle-pyo3",
     "candle-transformers",
     "candle-wasm-example",
 ]
 exclude = [
     "candle-kernels",
-    "candle-pyo3",
 ]
 
 [profile.release-with-debug]
