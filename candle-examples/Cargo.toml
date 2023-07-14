@@ -28,6 +28,6 @@ tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
 wav = "1.0.0"
 
 [features]
-default = ["cuda"]
+default = []
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]

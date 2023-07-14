@@ -34,6 +34,6 @@ zip = { version = "0.6.6", default-features=false }
 anyhow = { version = "1", features = ["backtrace"] }
 
 [features]
-default = ["cuda"]
+default = []
 cuda = ["dep:cudarc", "dep:candle-kernels"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]

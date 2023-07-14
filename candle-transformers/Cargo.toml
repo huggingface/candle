@@ -20,6 +20,6 @@ rand = "0.8.5"
 wav = "1.0.0"
 
 [features]
-default = ["cuda"]
+default = []
 cuda = ["candle/cuda", "candle-nn/cuda"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl"]

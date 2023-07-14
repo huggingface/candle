@@ -19,6 +19,6 @@ intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-i
 anyhow = { version = "1", features = ["backtrace"] }
 
 [features]
-default = ["cuda"]
+default = []
 cuda = ["candle/cuda"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]

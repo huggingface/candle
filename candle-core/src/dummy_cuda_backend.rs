@@ -9,7 +9,7 @@ pub struct CudaStorage;
 
 macro_rules! fail {
     () => {
-        unimplemented!("cuda support has not been enabled")
+        unimplemented!("cuda support has not been enabled, add `cuda` feature to enable.")
     };
 }
 
