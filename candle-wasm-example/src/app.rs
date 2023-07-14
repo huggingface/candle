@@ -3,7 +3,7 @@ use anyhow::Error as E;
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use js_sys::Date;
-use rand::{distributions::Distribution, SeedableRng};
+use rand::distributions::Distribution;
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -79,9 +79,9 @@ struct Segment {
     dr: DecodingResult,
 }
 
-struct Decoder {
+pub struct Decoder {
     model: Whisper,
-    rng: rand::rngs::StdRng,
+    mel_filters: Vec<f32>,
     tokenizer: Tokenizer,
     suppress_tokens: Tensor,
 }
@@ -90,7 +90,7 @@ impl Decoder {
     fn new(
         model: Whisper,
         tokenizer: Tokenizer,
-        seed: u64,
+        mel_filters: Vec<f32>,
         device: &Device,
     ) -> anyhow::Result<Self> {
         let suppress_tokens: Vec<f32> = (0..model.config.vocab_size as u32)
@@ -105,13 +105,13 @@ impl Decoder {
         let suppress_tokens = Tensor::new(suppress_tokens.as_slice(), device)?;
         Ok(Self {
             model,
-            rng: rand::rngs::StdRng::seed_from_u64(seed),
+            mel_filters,
             tokenizer,
             suppress_tokens,
         })
     }
 
-    fn decode(&mut self, mel: &Tensor, t: f64) -> anyhow::Result<DecodingResult> {
+    fn decode(&self, mel: &Tensor, t: f64) -> anyhow::Result<DecodingResult> {
         let model = &self.model;
         let audio_features = model.encoder.forward(mel)?;
         console_log!("audio features: {:?}", audio_features.dims());
@@ -146,7 +146,8 @@ impl Decoder {
                 let prs = (&logits / t)?.softmax(0)?;
                 let logits_v: Vec<f32> = prs.to_vec1()?;
                 let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
-                distr.sample(&mut self.rng) as u32
+                let mut rng = rand::thread_rng();
+                distr.sample(&mut rng) as u32
             } else {
                 let logits_v: Vec<f32> = logits.to_vec1()?;
                 logits_v
@@ -182,7 +183,7 @@ impl Decoder {
         })
     }
 
-    fn decode_with_fallback(&mut self, segment: &Tensor) -> anyhow::Result<DecodingResult> {
+    fn decode_with_fallback(&self, segment: &Tensor) -> anyhow::Result<DecodingResult> {
         for (i, &t) in TEMPERATURES.iter().enumerate() {
             let dr: Result<DecodingResult, _> = self.decode(segment, t);
             if i == TEMPERATURES.len() - 1 {
@@ -205,7 +206,7 @@ impl Decoder {
         unreachable!()
     }
 
-    fn run(&mut self, mel: &Tensor) -> anyhow::Result<Vec<Segment>> {
+    fn run(&self, mel: &Tensor) -> anyhow::Result<Vec<Segment>> {
         let (_, _, content_frames) = mel.shape().r3()?;
         let mut seek = 0;
         let mut segments = vec![];
@@ -228,6 +229,57 @@ impl Decoder {
             console_log!("{seek}: {segment:?}");
             segments.push(segment)
         }
+        Ok(segments)
+    }
+
+    async fn load() -> Result<Self, JsValue> {
+        let device = Device::Cpu;
+        let tokenizer_config = fetch_url("tokenizer.en.json").await?;
+        let tokenizer = Tokenizer::from_bytes(tokenizer_config).map_err(w)?;
+
+        let mel_filters = fetch_url("mel_filters.safetensors").await?;
+        let mel_filters = candle::safetensors::SafeTensors::from_buffer(&mel_filters).map_err(w)?;
+        let mel_filters = mel_filters.tensor("mel_80", &device).map_err(w)?;
+        console_log!("loaded mel filters {:?}", mel_filters.shape());
+        let mel_filters = mel_filters
+            .flatten_all()
+            .map_err(w)?
+            .to_vec1::<f32>()
+            .map_err(w)?;
+        let weights = fetch_url("tiny.en.safetensors").await?;
+        let weights = candle::safetensors::SafeTensors::from_buffer(&weights).map_err(w)?;
+        let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &device);
+        let config = Config::tiny_en();
+        let whisper = Whisper::load(&vb, config).map_err(w)?;
+        console_log!("done loading model");
+        let model = Decoder::new(whisper, tokenizer, mel_filters, &device).map_err(w)?;
+        Ok(model)
+    }
+
+    async fn load_and_run(&self, name: &str) -> Result<Vec<Segment>, JsValue> {
+        let device = Device::Cpu;
+        let wav_input = fetch_url(name).await?;
+        let mut wav_input = std::io::Cursor::new(wav_input);
+        let (header, data) = wav::read(&mut wav_input).map_err(w)?;
+        console_log!("loaded wav data: {header:?}");
+        if header.sampling_rate != SAMPLE_RATE as u32 {
+            Err(format!(
+                "wav file must have a {} sampling rate",
+                SAMPLE_RATE
+            ))?
+        }
+        let data = data.as_sixteen().expect("expected 16 bit wav file");
+        let pcm_data: Vec<_> = data[..data.len() / header.channel_count as usize]
+            .iter()
+            .map(|v| *v as f32 / 32768.)
+            .collect();
+        console_log!("pcm data loaded {}", pcm_data.len());
+        let mel = crate::audio::pcm_to_mel(&pcm_data, &self.mel_filters).map_err(w)?;
+        let mel_len = mel.len();
+        let mel = Tensor::from_vec(mel, (1, N_MELS, mel_len / N_MELS), &device).map_err(w)?;
+        console_log!("loaded mel: {:?}", mel.dims());
+
+        let segments = self.run(&mel).map_err(w)?;
         Ok(segments)
     }
 }
@@ -259,58 +311,15 @@ fn w<T: ToString>(x: T) -> String {
     x.to_string()
 }
 
-async fn run_impl() -> Result<(), JsValue> {
-    let device = Device::Cpu;
-    let tokenizer_config = fetch_url("tokenizer.en.json").await?;
-    let tokenizer = Tokenizer::from_bytes(tokenizer_config).map_err(w)?;
-
-    let mel_filters = fetch_url("mel_filters.safetensors").await?;
-    let mel_filters = candle::safetensors::SafeTensors::from_buffer(&mel_filters).map_err(w)?;
-    let mel_filters = mel_filters.tensor("mel_80", &device).map_err(w)?;
-    console_log!("loaded mel filters {:?}", mel_filters.shape());
-    let mel_filters = mel_filters
-        .flatten_all()
-        .map_err(w)?
-        .to_vec1::<f32>()
-        .map_err(w)?;
-
-    let wav_input = fetch_url("jfk.wav").await?;
-    let mut wav_input = std::io::Cursor::new(wav_input);
-    let (header, data) = wav::read(&mut wav_input).map_err(w)?;
-    console_log!("loaded wav data: {header:?}");
-    if header.sampling_rate != SAMPLE_RATE as u32 {
-        Err(format!(
-            "wav file must have a {} sampling rate",
-            SAMPLE_RATE
-        ))?
-    }
-    let data = data.as_sixteen().expect("expected 16 bit wav file");
-    let pcm_data: Vec<_> = data[..data.len() / header.channel_count as usize]
-        .iter()
-        .map(|v| *v as f32 / 32768.)
-        .collect();
-    console_log!("pcm data loaded {}", pcm_data.len());
-    let mel = crate::audio::pcm_to_mel(&pcm_data, &mel_filters).map_err(w)?;
-    let mel_len = mel.len();
-    let mel = Tensor::from_vec(mel, (1, N_MELS, mel_len / N_MELS), &device).map_err(w)?;
-    console_log!("loaded mel: {:?}", mel.dims());
-
-    let weights = fetch_url("tiny.en.safetensors").await?;
-    let weights = candle::safetensors::SafeTensors::from_buffer(&weights).map_err(w)?;
-    let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &device);
-    let config = Config::tiny_en();
-    let model = Whisper::load(&vb, config).map_err(w)?;
-    let mut dc = Decoder::new(model, tokenizer, 299792458, &device).map_err(w)?;
-    dc.run(&mel).map_err(w)?;
-    Ok(())
-}
-
 pub enum Msg {
     Run(usize),
+    Refresh(String),
+    SetDecoder(Decoder),
 }
 
 pub struct App {
     content: String,
+    decoder: Option<Decoder>,
 }
 
 impl Component for App {
@@ -319,14 +328,40 @@ impl Component for App {
 
     fn create(_ctx: &Context<Self>) -> Self {
         let content = "loading weights".to_string();
-        Self { content }
+        Self {
+            content,
+            decoder: None,
+        }
+    }
+
+    fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
+        if first_render {
+            ctx.link().send_future(async {
+                match Decoder::load().await {
+                    Err(err) => {
+                        let status = format!("{err:?}");
+                        Msg::Refresh(status)
+                    }
+                    Ok(decoder) => Msg::SetDecoder(decoder),
+                }
+            });
+        }
     }
 
     fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
+            Msg::SetDecoder(decoder) => {
+                self.content = "weights loaded succesfully!".to_string();
+                self.decoder = Some(decoder);
+                true
+            }
             Msg::Run(sample_index) => {
                 let sample = SAMPLE_NAMES[sample_index];
                 console_log!("running on {sample}");
+                true
+            }
+            Msg::Refresh(content) => {
+                self.content = content;
                 true
             }
         }
