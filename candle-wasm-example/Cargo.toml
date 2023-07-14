@@ -14,8 +14,8 @@ readme = "README.md"
 crate-type = ["cdylib"]
 
 [dependencies]
-candle = { path = "../candle-core", default-features=false }
-candle-nn = { path = "../candle-nn", default-features=false }
+candle = { path = "../candle-core" }
+candle-nn = { path = "../candle-nn" }
 num-traits = "0.2.15"
 tokenizers = { version = "0.13.3", default-features=false, features=["unstable_wasm"] }
 

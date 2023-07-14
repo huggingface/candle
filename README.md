@@ -8,22 +8,34 @@ let b = Tensor::zeros((3, 4), DType::F32, &Device::Cpu)?;
 let c = a.matmul(&b)?;
 ```
 
+## Check out our examples
+
+Check out our [examples](./candle-examples/examples/):
+
+- [Whisper](./candle-examples/examples/whisper/)
+- [Llama](./candle-examples/examples/llama/)
+- [Bert](./candle-examples/examples/bert/) (Useful for sentence embeddings)
+- [Falcon](./candle-examples/examples/falcon/)
+
+```
+cargo run --example bert --release
+cargo run --example whisper --release
+cargo run --example llama --release
+cargo run --example falcon --release
+```
+
+In order to use **CUDA** add `--features cuda` to the example command line.
+
+
 ## Features
 
 - Simple syntax (looks and like PyTorch)
-- CPU and Cuda backends (and M1 support)
+- CPU and Cuda backends, m1, f16, bf16 (and tentatively wasm)
 - Enable serverless (CPU), small and fast deployments
 - Model training
 - Distributed computing (NCCL).
 - Models out of the box (Llama, Whisper, Falcon, ...)
 - Emphasis on enabling users to use custom ops/kernels
-
-## Structure
-
-- [candle-core](./candle-core): Core ops, devices, and `Tensor` struct definition
-- [candle-nn](./candle-nn/): Facilities to build real models
-- [candle-examples](./candle-examples/): Real-world like examples on how to use the library in real settings
-- [candle-kernels](./candle-kernels/): CUDA custom kernels
 
 ## How to use ?
 
@@ -44,12 +56,12 @@ Cheatsheet:
 | Loading    | `weights = torch.load("model.bin")`      | TODO (see the examples for now)                                  |
 
 
-Check out our [examples](./candle-examples/examples/):
+## Structure
 
-- [Whisper](./candle-examples/examples/whisper/)
-- [Llama](./candle-examples/examples/llama/)
-- [Bert](./candle-examples/examples/bert/) (Useful for sentence embeddings)
-- [Falcon](./candle-examples/examples/falcon/)
+- [candle-core](./candle-core): Core ops, devices, and `Tensor` struct definition
+- [candle-nn](./candle-nn/): Facilities to build real models
+- [candle-examples](./candle-examples/): Real-world like examples on how to use the library in real settings
+- [candle-kernels](./candle-kernels/): CUDA custom kernels
 
 
 
