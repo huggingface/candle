@@ -1298,6 +1298,7 @@ impl Tensor {
         } else {
             None
         };
+        println!("{:?} {:?}", self.layout(), shape);
         if self.is_contiguous() {
             let tensor_ = Tensor_ {
                 id: TensorId::new(),
