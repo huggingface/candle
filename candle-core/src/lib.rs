@@ -67,7 +67,7 @@ pub use indexer::IndexOp;
 pub use layout::Layout;
 pub use shape::{Shape, D};
 pub use storage::Storage;
-use strided_index::StridedIndex;
+pub use strided_index::{StridedBlocks, StridedIndex};
 pub use tensor::{Tensor, TensorId};
 pub use variable::Var;
 
