@@ -3,7 +3,7 @@
 // back when using RUST_LIB_BACKTRACE=1.
 use anyhow::Result;
 use candle::{Device, Tensor};
-use candle_nn::{Conv1d, Conv1dConfig, Embedding, LayerNorm, Linear, VarBuilder};
+use candle_nn::{Conv1d, Conv1dConfig, Embedding, LayerNorm, VarBuilder};
 use serde::Deserialize;
 
 // The names in comments correspond to the original implementation:
@@ -35,6 +35,36 @@ impl Config {
             // n_text_state: 384,
             decoder_attention_heads: 6,
             decoder_layers: 4,
+        }
+    }
+}
+
+// The struct below is duplicated from candle_nn::Linear so that it's easier to add some wasm
+// specific monitoring.
+#[derive(Debug)]
+struct Linear {
+    weight: Tensor,
+    bias: Option<Tensor>,
+}
+
+impl Linear {
+    fn new(weight: Tensor, bias: Option<Tensor>) -> Self {
+        Self { weight, bias }
+    }
+
+    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
+        let _timer = crate::Timer::new("Linear::forward");
+        let w = match x.dims() {
+            &[bsize, _, _] => self.weight.broadcast_left(bsize)?.t()?,
+            _ => self.weight.t()?,
+        };
+        let x = {
+            let _timer = crate::Timer::new("Linear::matmul");
+            x.matmul(&w)?
+        };
+        match &self.bias {
+            None => Ok(x),
+            Some(bias) => x.broadcast_add(bias),
         }
     }
 }
@@ -124,6 +154,7 @@ impl MultiHeadAttention {
     }
 
     fn forward(&self, x: &Tensor, xa: Option<&Tensor>, mask: Option<&Tensor>) -> Result<Tensor> {
+        let _timer = crate::Timer::new("MultiHeadAttention::forward");
         let q = self.query.forward(x)?;
         let k = self.key.forward(xa.unwrap_or(x))?;
         let v = self.value.forward(xa.unwrap_or(x))?;
@@ -197,6 +228,7 @@ impl ResidualAttentionBlock {
     }
 
     fn forward(&self, x: &Tensor, xa: Option<&Tensor>, mask: Option<&Tensor>) -> Result<Tensor> {
+        let _timer = crate::Timer::new("ResidualAttentionBlock::forward");
         let attn = self.attn.forward(&self.attn_ln.forward(x)?, None, mask)?;
         let mut x = (x + attn)?;
         if let Some((attn, ln)) = &self.cross_attn {
@@ -268,6 +300,7 @@ impl AudioEncoder {
         })
     }
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let _timer = crate::Timer::new("AudioEncoder::forward");
         let x = self.conv1.forward(x)?.gelu()?;
         let x = self.conv2.forward(&x)?.gelu()?;
         let x = x.transpose(1, 2)?;
@@ -293,6 +326,7 @@ pub struct TextDecoder {
 
 impl TextDecoder {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+        let _timer = crate::Timer::new("TextDecoder::forward");
         let n_state = cfg.d_model;
         let n_head = cfg.decoder_attention_heads;
         let n_ctx = cfg.max_target_positions;
