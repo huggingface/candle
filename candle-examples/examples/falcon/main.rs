@@ -120,20 +120,7 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    #[cfg(feature = "cuda")]
-    let default_device = Device::new_cuda(0)?;
-
-    #[cfg(not(feature = "cuda"))]
-    let default_device = {
-        println!("Running on CPU, to run on GPU, run this example with `--features cuda`");
-        Device::Cpu
-    };
-    let device = if args.cpu {
-        Device::Cpu
-    } else {
-        default_device
-    };
-
+    let device = candle_examples::device(args.cpu)?;
     let start = std::time::Instant::now();
     let api = Api::new()?;
     let repo = Repo::with_revision(args.model_id, RepoType::Model, args.revision);

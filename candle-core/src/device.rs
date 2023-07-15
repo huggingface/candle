@@ -109,6 +109,14 @@ impl Device {
         }
     }
 
+    pub fn cuda_if_available(ordinal: usize) -> Result<Self> {
+        if crate::utils::cuda_is_available() {
+            Self::new_cuda(ordinal)
+        } else {
+            Ok(Self::Cpu)
+        }
+    }
+
     pub(crate) fn rand_uniform(
         &self,
         shape: &Shape,
