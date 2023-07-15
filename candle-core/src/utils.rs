@@ -17,3 +17,10 @@ pub fn has_mkl() -> bool {
     #[cfg(not(feature = "mkl"))]
     return false;
 }
+
+pub fn cuda_is_available() -> bool {
+    #[cfg(feature = "cuda")]
+    return true;
+    #[cfg(not(feature = "cuda"))]
+    return false;
+}

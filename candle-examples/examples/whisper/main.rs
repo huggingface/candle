@@ -257,21 +257,7 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-
-    #[cfg(feature = "cuda")]
-    let default_device = Device::new_cuda(0)?;
-
-    #[cfg(not(feature = "cuda"))]
-    let default_device = {
-        println!("Running on CPU, to run on GPU, run this example with `--features cuda`");
-        Device::Cpu
-    };
-
-    let device = if args.cpu {
-        Device::Cpu
-    } else {
-        default_device
-    };
+    let device = candle_examples::device(args.cpu)?;
     let default_model = "openai/whisper-tiny.en".to_string();
     let path = std::path::PathBuf::from(default_model.clone());
     let default_revision = "refs/pr/15".to_string();

@@ -134,20 +134,7 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    #[cfg(feature = "cuda")]
-    let default_device = Device::new_cuda(0)?;
-
-    #[cfg(not(feature = "cuda"))]
-    let default_device = {
-        println!("Running on CPU, to run on GPU, run this example with `--features cuda`");
-        Device::Cpu
-    };
-
-    let device = if args.cpu {
-        Device::Cpu
-    } else {
-        default_device
-    };
+    let device = candle_examples::device(args.cpu)?;
     let config = Config::config_7b();
     let cache = model::Cache::new(!args.no_kv_cache, &config, &device);
     let dtype = if args.use_f32 { DType::F32 } else { DType::F16 };
