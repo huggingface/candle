@@ -18,7 +18,7 @@ candle-kernels = { path = "../candle-kernels", optional = true }
 cudarc = { git = "https://github.com/LaurentMazare/cudarc.git", branch = "cublas-bf16", optional = true, features = ["f16"] }
 # TODO: Switch back to the official gemm implementation once something similar to
 # https://github.com/sarah-ek/gemm/pull/8 is available.
-ggblas = { git = "https://github.com/Narsil/ggblas.git" }
+ggblas = { path = "../../ggblas" }
 half = { version = "2.3.1", features = ["num-traits"] }
 intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
 libc = { version = "0.2.147", optional = true }
