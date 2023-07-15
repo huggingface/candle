@@ -290,7 +290,6 @@ impl Map2 for MatMul {
         rhs: &[T],
         rhs_l: &Layout,
     ) -> Result<Vec<T>> {
-        use gemm::{gemm, Parallelism};
         let (b, m, n, k) = self.0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
@@ -324,17 +323,23 @@ impl Map2 for MatMul {
         let dst_cs = dst_strides[1];
 
         let mut dst = vec![T::zero(); b * m * n];
-        let num_threads = crate::utils::get_num_threads();
-        let parallelism = if num_threads > 1 {
-            Parallelism::Rayon(num_threads)
-        } else {
-            Parallelism::None
-        };
         for step in 0..b {
             let lhs_p = &lhs[step * a_skip..];
             let rhs_p = &rhs[step * b_skip..];
             let dst_p = &mut dst[step * c_skip..];
+            let lhs_p = lhs_p.as_ptr() as *const f32;
+            let rhs_p = rhs_p.as_ptr() as *const f32;
+            let dst_p = dst_p.as_mut_ptr() as *mut f32;
             unsafe {
+                let lhs_p = std::slice::from_raw_parts(lhs_p, m * k);
+                let rhs_p = std::slice::from_raw_parts(rhs_p, n * k);
+                let dst_p = std::slice::from_raw_parts_mut(dst_p, m * n);
+                if rhs_stride.last() == Some(&1) {
+                    ggblas::batched_sgemm(lhs_p, rhs_p, dst_p, m, n, k)
+                } else {
+                    ggblas::batched_sgemm_t(lhs_p, rhs_p, dst_p, m, n, k)
+                }
+                /*
                 gemm(
                     /* m: usize = */ m,
                     /* n: usize = */ n,
@@ -356,6 +361,7 @@ impl Map2 for MatMul {
                     /* conj_rhs: bool = */ false,
                     parallelism,
                 )
+                    */
             }
         }
         Ok(dst)
