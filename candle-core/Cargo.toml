@@ -11,27 +11,23 @@ license = "MIT/Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-byteorder = "1.4.3"
+byteorder = { workspace = true }
 candle-kernels = { path = "../candle-kernels", optional = true }
-# Re-enable this once 0.9.13 as been released as it would include the cublas-f16 changes
-# cudarc = { version = "0.9.13", optional = true, features = ["f16"] }
-cudarc = { git = "https://github.com/LaurentMazare/cudarc.git", branch = "cublas-bf16", optional = true, features = ["f16"] }
-# TODO: Switch back to the official gemm implementation once something similar to
-# https://github.com/sarah-ek/gemm/pull/8 is available.
-gemm = { git = "https://github.com/LaurentMazare/gemm.git", branch = "f16-vectorize-pack" }
-half = { version = "2.3.1", features = ["num-traits"] }
-intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
-libc = { version = "0.2.147", optional = true }
-memmap2 = "0.7.1"
-num-traits = "0.2.15"
-num_cpus = "1.15.0"
-rand = "0.8.5"
-safetensors = "0.3.1"
-thiserror = "1"
-zip = { version = "0.6.6", default-features=false }
+cudarc = { workspace = true, optional = true }
+gemm = { workspace = true }
+half = { workspace = true }
+intel-mkl-src = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
+memmap2 = { workspace = true }
+num-traits = { workspace = true }
+num_cpus = { workspace = true }
+rand = { workspace = true }
+safetensors = { workspace = true }
+thiserror = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]
-anyhow = { version = "1", features = ["backtrace"] }
+anyhow = { workspace = true }
 
 [features]
 default = []

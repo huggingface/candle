@@ -11,13 +11,13 @@ license = "MIT/Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-candle = { path = "../candle-core", default-features=false }
+candle = { path = "../candle-core" }
 candle-hub = { path = "../candle-hub" }
-candle-nn = { path = "../candle-nn", default-features=false }
-intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
-tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
-rand = "0.8.5"
-wav = "1.0.0"
+candle-nn = { path = "../candle-nn" }
+intel-mkl-src = { workspace = true, optional = true, features = ["mkl-dynamic-lp64-iomp"]}
+tokenizers = { workspace = true }
+rand = { workspace = true }
+wav = { workspace = true }
 
 [features]
 default = []
