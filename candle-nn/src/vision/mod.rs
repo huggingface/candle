@@ -8,4 +8,5 @@ pub struct Dataset {
     pub labels: usize,
 }
 
+pub mod cifar;
 pub mod mnist;
