@@ -11,12 +11,12 @@ license = "MIT/Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-candle = { path = "../candle-core", default-features=false }
-thiserror = "1"
-intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
+candle = { path = "../candle-core" }
+thiserror = { workspace = true }
+intel-mkl-src = { workspace = true, optional = true }
 
 [dev-dependencies]
-anyhow = { version = "1", features = ["backtrace"] }
+anyhow = { workspace = true }
 
 [features]
 default = []
