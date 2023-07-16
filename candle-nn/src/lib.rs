@@ -8,6 +8,7 @@ pub mod layer_norm;
 pub mod linear;
 pub mod optim;
 pub mod var_builder;
+pub mod vision;
 
 pub use activation::Activation;
 pub use conv::{Conv1d, Conv1dConfig};
