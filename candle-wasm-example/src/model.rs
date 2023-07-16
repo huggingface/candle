@@ -178,16 +178,34 @@ impl MultiHeadAttention {
     ) -> Result<Tensor> {
         let (_, n_ctx, n_state) = q.shape().r3()?;
         let scale = ((n_state / self.n_head) as f64).powf(-0.25);
-        let q = (self.reshape_head(q)? * scale)?;
-        let k = (self.reshape_head(k)?.transpose(2, 3)? * scale)?;
-        let v = self.reshape_head(v)?.contiguous()?;
-        let mut qk = q.matmul(&k)?;
+        let q = {
+            let _timer = crate::Timer::new("q::reshape");
+            (self.reshape_head(q)? * scale)?
+        };
+        let k = {
+            let _timer = crate::Timer::new("k::reshape");
+            (self.reshape_head(k)?.transpose(2, 3)? * scale)?
+        };
+        let v = {
+            let _timer = crate::Timer::new("v::reshape-contiguous");
+            self.reshape_head(v)?.contiguous()?
+        };
+        let mut qk = {
+            let _timer = crate::Timer::new("qk::matmul");
+            q.matmul(&k)?
+        };
         if let Some(mask) = mask {
             let mask = mask.narrow(0, 0, n_ctx)?.narrow(1, 0, n_ctx)?;
             qk = qk.broadcast_add(&mask)?
         }
-        let w = qk.softmax(candle::D::Minus1)?;
-        let wv = w.matmul(&v)?.transpose(1, 2)?.flatten_from(2)?;
+        let w = {
+            let _timer = crate::Timer::new("qk::softmax");
+            qk.softmax(candle::D::Minus1)?
+        };
+        let wv = {
+            let _timer = crate::Timer::new("wv::matmul");
+            w.matmul(&v)?.transpose(1, 2)?.flatten_from(2)?
+        };
         Ok(wv)
     }
 }
@@ -301,8 +319,14 @@ impl AudioEncoder {
     }
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _timer = crate::Timer::new("AudioEncoder::forward");
-        let x = self.conv1.forward(x)?.gelu()?;
-        let x = self.conv2.forward(&x)?.gelu()?;
+        let x = {
+            let _timer = crate::Timer::new("conv1::forward");
+            self.conv1.forward(x)?.gelu()?
+        };
+        let x = {
+            let _timer = crate::Timer::new("conv2::forward");
+            self.conv2.forward(&x)?.gelu()?
+        };
         let x = x.transpose(1, 2)?;
         let (_bsize, seq_len, _hidden) = x.shape().r3()?;
         let positional_embedding = self.positional_embedding.narrow(0, 0, seq_len)?;
