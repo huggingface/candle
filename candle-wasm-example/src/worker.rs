@@ -2,7 +2,7 @@ use crate::model::{Config, Whisper};
 use anyhow::Error as E;
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use rand::distributions::Distribution;
+use rand::{distributions::Distribution, rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
@@ -59,20 +59,20 @@ pub const SUPPRESS_TOKENS: [u32; 91] = [
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct DecodingResult {
-    tokens: Vec<u32>,
-    text: String,
-    avg_logprob: f64,
-    no_speech_prob: f64,
+pub struct DecodingResult {
+    pub tokens: Vec<u32>,
+    pub text: String,
+    pub avg_logprob: f64,
+    pub no_speech_prob: f64,
     temperature: f64,
     compression_ratio: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
-    start: f64,
-    duration: f64,
-    dr: DecodingResult,
+    pub start: f64,
+    pub duration: f64,
+    pub dr: DecodingResult,
 }
 
 pub struct Decoder {
@@ -107,7 +107,7 @@ impl Decoder {
         })
     }
 
-    fn decode(&self, mel: &Tensor, t: f64) -> anyhow::Result<DecodingResult> {
+    fn decode(&self, mel: &Tensor, t: f64, rng: &mut StdRng) -> anyhow::Result<DecodingResult> {
         let model = &self.model;
         let audio_features = model.encoder.forward(mel)?;
         console_log!("audio features: {:?}", audio_features.dims());
@@ -142,8 +142,7 @@ impl Decoder {
                 let prs = (&logits / t)?.softmax(0)?;
                 let logits_v: Vec<f32> = prs.to_vec1()?;
                 let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
-                let mut rng = rand::thread_rng();
-                distr.sample(&mut rng) as u32
+                distr.sample(rng) as u32
             } else {
                 let logits_v: Vec<f32> = logits.to_vec1()?;
                 logits_v
@@ -179,9 +178,13 @@ impl Decoder {
         })
     }
 
-    fn decode_with_fallback(&self, segment: &Tensor) -> anyhow::Result<DecodingResult> {
+    fn decode_with_fallback(
+        &self,
+        segment: &Tensor,
+        rng: &mut StdRng,
+    ) -> anyhow::Result<DecodingResult> {
         for (i, &t) in TEMPERATURES.iter().enumerate() {
-            let dr: Result<DecodingResult, _> = self.decode(segment, t);
+            let dr: Result<DecodingResult, _> = self.decode(segment, t, rng);
             if i == TEMPERATURES.len() - 1 {
                 return dr;
             }
@@ -203,6 +206,7 @@ impl Decoder {
     }
 
     fn run(&self, mel: &Tensor) -> anyhow::Result<Vec<Segment>> {
+        let mut rng = StdRng::seed_from_u64(299792458);
         let (_, _, content_frames) = mel.shape().r3()?;
         let mut seek = 0;
         let mut segments = vec![];
@@ -211,7 +215,7 @@ impl Decoder {
             let segment_size = usize::min(content_frames - seek, N_FRAMES);
             let mel_segment = mel.narrow(2, seek, segment_size)?;
             let segment_duration = (segment_size * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
-            let dr = self.decode_with_fallback(&mel_segment)?;
+            let dr = self.decode_with_fallback(&mel_segment, &mut rng)?;
             seek += segment_size;
             if dr.no_speech_prob > NO_SPEECH_THRESHOLD && dr.avg_logprob < LOGPROB_THRESHOLD {
                 console_log!("no speech detected, skipping {seek} {dr:?}");
@@ -289,14 +293,15 @@ pub enum WorkerInput {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct WorkerOutput {
-    pub value: Result<Vec<Segment>, String>,
+pub enum WorkerOutput {
+    Decoded(Vec<Segment>),
+    WeightsLoaded,
 }
 
 impl yew_agent::Worker for Worker {
     type Input = WorkerInput;
     type Message = ();
-    type Output = WorkerOutput;
+    type Output = Result<WorkerOutput, String>;
     type Reach = Public<Self>;
 
     fn create(link: WorkerLink<Self>) -> Self {
@@ -311,11 +316,11 @@ impl yew_agent::Worker for Worker {
     }
 
     fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
-        let value = match msg {
+        let output = match msg {
             WorkerInput::ModelData(md) => match Decoder::load(md) {
                 Ok(decoder) => {
                     self.decoder = Some(decoder);
-                    Ok(vec![])
+                    Ok(WorkerOutput::WeightsLoaded)
                 }
                 Err(err) => Err(format!("model creation error {err:?}")),
             },
@@ -323,10 +328,11 @@ impl yew_agent::Worker for Worker {
                 None => Err("model has not been set".to_string()),
                 Some(decoder) => decoder
                     .convert_and_run(&wav_bytes)
+                    .map(WorkerOutput::Decoded)
                     .map_err(|e| e.to_string()),
             },
         };
-        self.link.respond(id, WorkerOutput { value });
+        self.link.respond(id, output);
     }
 
     fn name_of_resource() -> &'static str {

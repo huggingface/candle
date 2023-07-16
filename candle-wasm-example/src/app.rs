@@ -1,5 +1,5 @@
 use crate::console_log;
-use crate::worker::{ModelData, Worker, WorkerInput, WorkerOutput};
+use crate::worker::{ModelData, Segment, Worker, WorkerInput, WorkerOutput};
 use js_sys::Date;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -38,13 +38,17 @@ pub enum Msg {
     UpdateStatus(String),
     SetDecoder(ModelData),
     WorkerInMsg(WorkerInput),
-    WorkerOutMsg(WorkerOutput),
+    WorkerOutMsg(Result<WorkerOutput, String>),
+}
+
+pub struct CurrentDecode {
+    start_time: Option<f64>,
 }
 
 pub struct App {
     status: String,
-    content: String,
-    decode_in_flight: bool,
+    segments: Vec<Segment>,
+    current_decode: Option<CurrentDecode>,
     worker: Box<dyn Bridge<Worker>>,
 }
 
@@ -60,6 +64,12 @@ async fn model_data_load() -> Result<ModelData, JsValue> {
     })
 }
 
+fn performance_now() -> Option<f64> {
+    let window = web_sys::window()?;
+    let performance = window.performance()?;
+    Some(performance.now() / 1000.)
+}
+
 impl Component for App {
     type Message = Msg;
     type Properties = ();
@@ -73,8 +83,8 @@ impl Component for App {
         let worker = Worker::bridge(std::rc::Rc::new(cb));
         Self {
             status,
-            content: String::new(),
-            decode_in_flight: false,
+            segments: vec![],
+            current_decode: None,
             worker,
         }
     }
@@ -103,18 +113,19 @@ impl Component for App {
             }
             Msg::Run(sample_index) => {
                 let sample = SAMPLE_NAMES[sample_index];
-                if self.decode_in_flight {
-                    self.content = "already decoding some sample at the moment".to_string()
+                if self.current_decode.is_some() {
+                    self.status = "already decoding some sample at the moment".to_string()
                 } else {
-                    self.decode_in_flight = true;
+                    let start_time = performance_now();
+                    self.current_decode = Some(CurrentDecode { start_time });
                     self.status = format!("decoding {sample}");
-                    self.content = String::new();
+                    self.segments.clear();
                     ctx.link().send_future(async move {
                         match fetch_url(sample).await {
                             Err(err) => {
-                                let value = Err(format!("decoding error: {err:?}"));
-                                // Mimic a worker output to so as to release decode_in_flight
-                                Msg::WorkerOutMsg(WorkerOutput { value })
+                                let output = Err(format!("decoding error: {err:?}"));
+                                // Mimic a worker output to so as to release current_decode
+                                Msg::WorkerOutMsg(output)
                             }
                             Ok(wav_bytes) => {
                                 Msg::WorkerInMsg(WorkerInput::DecodeTask { wav_bytes })
@@ -125,10 +136,26 @@ impl Component for App {
                 //
                 true
             }
-            Msg::WorkerOutMsg(WorkerOutput { value }) => {
-                self.status = "Worker responded!".to_string();
-                self.content = format!("{value:?}");
-                self.decode_in_flight = false;
+            Msg::WorkerOutMsg(output) => {
+                let dt = self.current_decode.as_ref().and_then(|current_decode| {
+                    current_decode.start_time.and_then(|start_time| {
+                        performance_now().map(|stop_time| stop_time - start_time)
+                    })
+                });
+                self.current_decode = None;
+                match output {
+                    Ok(WorkerOutput::WeightsLoaded) => self.status = "weights loaded!".to_string(),
+                    Ok(WorkerOutput::Decoded(segments)) => {
+                        self.status = match dt {
+                            None => "decoding succeeded!".to_string(),
+                            Some(dt) => format!("decoding succeeded in {:.2}s", dt),
+                        };
+                        self.segments = segments;
+                    }
+                    Err(err) => {
+                        self.status = format!("decoding error {err:?}");
+                    }
+                }
                 true
             }
             Msg::WorkerInMsg(inp) => {
@@ -170,12 +197,30 @@ impl Component for App {
                   {&self.status}
                 </h2>
                 {
-                    if self.decode_in_flight {
+                    if self.current_decode.is_some() {
                         html! { <progress id="progress-bar" aria-label="decoding…"></progress> }
                     } else { html!{
                 <blockquote>
                 <p>
-                  {&self.content}
+                  {
+                      self.segments.iter().map(|segment| { html! {
+                          <>
+                          <i>
+                          {
+                              format!("{:.2}s-{:.2}s: (avg-logprob: {:.4}, no-speech-prob: {:.4})",
+                                  segment.start,
+                                  segment.start + segment.duration,
+                                  segment.dr.avg_logprob,
+                                  segment.dr.no_speech_prob,
+                              )
+                          }
+                          </i>
+                          <br/ >
+                          {&segment.dr.text}
+                          <br/ >
+                          </>
+                      } }).collect::<Html>()
+                  }
                 </p>
                 </blockquote>
                 }
