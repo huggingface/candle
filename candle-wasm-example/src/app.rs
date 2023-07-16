@@ -1,5 +1,5 @@
 use crate::console_log;
-use crate::worker::{ModelData, Worker, WorkerInput, WorkerOutput};
+use crate::worker::{ModelData, Segment, Worker, WorkerInput, WorkerOutput};
 use js_sys::Date;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -43,7 +43,7 @@ pub enum Msg {
 
 pub struct App {
     status: String,
-    content: String,
+    segments: Vec<Segment>,
     decode_in_flight: bool,
     worker: Box<dyn Bridge<Worker>>,
 }
@@ -73,7 +73,7 @@ impl Component for App {
         let worker = Worker::bridge(std::rc::Rc::new(cb));
         Self {
             status,
-            content: String::new(),
+            segments: vec![],
             decode_in_flight: false,
             worker,
         }
@@ -104,11 +104,11 @@ impl Component for App {
             Msg::Run(sample_index) => {
                 let sample = SAMPLE_NAMES[sample_index];
                 if self.decode_in_flight {
-                    self.content = "already decoding some sample at the moment".to_string()
+                    self.status = "already decoding some sample at the moment".to_string()
                 } else {
                     self.decode_in_flight = true;
                     self.status = format!("decoding {sample}");
-                    self.content = String::new();
+                    self.segments.clear();
                     ctx.link().send_future(async move {
                         match fetch_url(sample).await {
                             Err(err) => {
@@ -126,9 +126,16 @@ impl Component for App {
                 true
             }
             Msg::WorkerOutMsg(WorkerOutput { value }) => {
-                self.status = "Worker responded!".to_string();
-                self.content = format!("{value:?}");
                 self.decode_in_flight = false;
+                match value {
+                    Ok(segments) => {
+                        self.status = "decoding succeeded!".to_string();
+                        self.segments = segments;
+                    }
+                    Err(err) => {
+                        self.status = format!("decoding error {err:?}");
+                    }
+                }
                 true
             }
             Msg::WorkerInMsg(inp) => {
@@ -175,7 +182,25 @@ impl Component for App {
                     } else { html!{
                 <blockquote>
                 <p>
-                  {&self.content}
+                  {
+                      self.segments.iter().map(|segment| { html! {
+                          <>
+                          <i>
+                          {
+                              format!("{:.2}s-{:.2}s: (avg-logprob: {:.4}, no-speech-prob: {:.4})",
+                                  segment.start,
+                                  segment.start + segment.duration,
+                                  segment.dr.avg_logprob,
+                                  segment.dr.no_speech_prob,
+                              )
+                          }
+                          </i>
+                          <br/ >
+                          {&segment.dr.text}
+                          <br/ >
+                          </>
+                      } }).collect::<Html>()
+                  }
                 </p>
                 </blockquote>
                 }

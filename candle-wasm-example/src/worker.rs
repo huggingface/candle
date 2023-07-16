@@ -59,20 +59,20 @@ pub const SUPPRESS_TOKENS: [u32; 91] = [
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct DecodingResult {
-    tokens: Vec<u32>,
-    text: String,
-    avg_logprob: f64,
-    no_speech_prob: f64,
+pub struct DecodingResult {
+    pub tokens: Vec<u32>,
+    pub text: String,
+    pub avg_logprob: f64,
+    pub no_speech_prob: f64,
     temperature: f64,
     compression_ratio: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
-    start: f64,
-    duration: f64,
-    dr: DecodingResult,
+    pub start: f64,
+    pub duration: f64,
+    pub dr: DecodingResult,
 }
 
 pub struct Decoder {
