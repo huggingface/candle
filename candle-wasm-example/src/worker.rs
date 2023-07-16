@@ -293,14 +293,15 @@ pub enum WorkerInput {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct WorkerOutput {
-    pub value: Result<Vec<Segment>, String>,
+pub enum WorkerOutput {
+    Decoded(Vec<Segment>),
+    WeightsLoaded,
 }
 
 impl yew_agent::Worker for Worker {
     type Input = WorkerInput;
     type Message = ();
-    type Output = WorkerOutput;
+    type Output = Result<WorkerOutput, String>;
     type Reach = Public<Self>;
 
     fn create(link: WorkerLink<Self>) -> Self {
@@ -315,11 +316,11 @@ impl yew_agent::Worker for Worker {
     }
 
     fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
-        let value = match msg {
+        let output = match msg {
             WorkerInput::ModelData(md) => match Decoder::load(md) {
                 Ok(decoder) => {
                     self.decoder = Some(decoder);
-                    Ok(vec![])
+                    Ok(WorkerOutput::WeightsLoaded)
                 }
                 Err(err) => Err(format!("model creation error {err:?}")),
             },
@@ -327,10 +328,11 @@ impl yew_agent::Worker for Worker {
                 None => Err("model has not been set".to_string()),
                 Some(decoder) => decoder
                     .convert_and_run(&wav_bytes)
+                    .map(WorkerOutput::Decoded)
                     .map_err(|e| e.to_string()),
             },
         };
-        self.link.respond(id, WorkerOutput { value });
+        self.link.respond(id, output);
     }
 
     fn name_of_resource() -> &'static str {

@@ -38,7 +38,7 @@ pub enum Msg {
     UpdateStatus(String),
     SetDecoder(ModelData),
     WorkerInMsg(WorkerInput),
-    WorkerOutMsg(WorkerOutput),
+    WorkerOutMsg(Result<WorkerOutput, String>),
 }
 
 pub struct CurrentDecode {
@@ -123,9 +123,9 @@ impl Component for App {
                     ctx.link().send_future(async move {
                         match fetch_url(sample).await {
                             Err(err) => {
-                                let value = Err(format!("decoding error: {err:?}"));
+                                let output = Err(format!("decoding error: {err:?}"));
                                 // Mimic a worker output to so as to release current_decode
-                                Msg::WorkerOutMsg(WorkerOutput { value })
+                                Msg::WorkerOutMsg(output)
                             }
                             Ok(wav_bytes) => {
                                 Msg::WorkerInMsg(WorkerInput::DecodeTask { wav_bytes })
@@ -136,15 +136,16 @@ impl Component for App {
                 //
                 true
             }
-            Msg::WorkerOutMsg(WorkerOutput { value }) => {
+            Msg::WorkerOutMsg(output) => {
                 let dt = self.current_decode.as_ref().and_then(|current_decode| {
                     current_decode.start_time.and_then(|start_time| {
                         performance_now().map(|stop_time| stop_time - start_time)
                     })
                 });
                 self.current_decode = None;
-                match value {
-                    Ok(segments) => {
+                match output {
+                    Ok(WorkerOutput::WeightsLoaded) => self.status = "weights loaded!".to_string(),
+                    Ok(WorkerOutput::Decoded(segments)) => {
                         self.status = match dt {
                             None => "decoding succeeded!".to_string(),
                             Some(dt) => format!("decoding succeeded in {:.2}s", dt),
