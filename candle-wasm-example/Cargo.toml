@@ -13,16 +13,16 @@ readme = "README.md"
 [dependencies]
 candle = { path = "../candle-core" }
 candle-nn = { path = "../candle-nn" }
-num-traits = "0.2.15"
-tokenizers = { version = "0.13.3", default-features=false, features=["unstable_wasm"] }
+num-traits = { workspace = true }
+tokenizers = { version = "0.13.3", default-features = false, features = ["unstable_wasm"] }
 
 # App crates.
-anyhow = "1.0.71"
-log = "0.4"
-rand = "0.8.5"
-serde = { version = "1.0.166", features = ["derive"] }
-serde_json = "1.0.99"
-wav = "1.0.0"
+anyhow = { workspace = true }
+log = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wav = { workspace = true }
 
 # Wasm specific crates.
 getrandom = { version = "0.2", features = ["js"] }

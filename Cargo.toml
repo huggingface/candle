@@ -12,6 +12,39 @@ exclude = [
     "candle-kernels",
 ]
 
+[workspace.dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+byteorder = "1.4.3"
+clap = { version = "4.2.4", features = ["derive"] }
+# Re-enable this once 0.9.13 as been released as it would include the cublas-f16 changes
+# cudarc = { version = "0.9.13", optional = true, features = ["f16"] }
+cudarc = { git = "https://github.com/LaurentMazare/cudarc.git", branch = "cublas-bf16", features = ["f16"] }
+futures = "0.3.28"
+# TODO: Switch back to the official gemm implementation once something similar to
+# https://github.com/sarah-ek/gemm/pull/8 is available.
+gemm = { git = "https://github.com/LaurentMazare/gemm.git", branch = "f16-vectorize-pack" }
+ggblas = { git  = "https://github.com/Narsil/ggblas.git" } 
+half = { version = "2.3.1", features = ["num-traits"] }
+indicatif = "0.17.5"
+intel-mkl-src = { version = "0.8.1", features = ["mkl-dynamic-lp64-iomp"] }
+libc = { version = "0.2.147" }
+log = "0.4"
+memmap2 = "0.7.1"
+num_cpus = "1.15.0"
+num-traits = "0.2.15"
+rand = "0.8.5"
+reqwest = "0.11.18"
+safetensors = "0.3.1"
+serde = { version = "1.0.166", features = ["derive"] }
+serde_json = "1.0.99"
+sha256 = "1.1.4"
+thiserror = "1"
+tokenizers = { version = "0.13.3", default-features = false, features = ["onig"] }
+tokio = "1.28.2"
+tokio-test = "0.4.2"
+wav = "1.0.0"
+zip = { version = "0.6.6", default-features = false }
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true

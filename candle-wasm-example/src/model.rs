@@ -191,7 +191,7 @@ impl MultiHeadAttention {
             self.reshape_head(v)?.contiguous()?
         };
         let mut qk = {
-            let _timer = crate::Timer::new("qk::softmax");
+            let _timer = crate::Timer::new("qk::matmul");
             q.matmul(&k)?
         };
         if let Some(mask) = mask {

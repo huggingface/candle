@@ -7,21 +7,21 @@ edition = "2021"
 
 [dependencies]
 dirs = "5.0.1"
-rand = "0.8.5"
-thiserror = "1.0.40"
-futures = { version = "0.3.28", optional = true }
-reqwest = { version = "0.11.18", optional = true, features = ["json"] }
-tokio = { version = "1.28.2", features = ["fs"], optional = true }
-serde = { version = "1.0.164", features = ["derive"], optional = true }
-serde_json = { version = "1.0.97", optional = true }
-indicatif = { version = "0.17.5", optional = true }
-num_cpus = { version = "1.16.0", optional = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true, features = ["json"] }
+tokio = { workspace = true, features = ["fs"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+indicatif = { workspace = true, optional = true }
+num_cpus = { workspace = true, optional = true }
 
 [dev-dependencies]
-rand = "0.8.5"
-sha256 = "1.1.4"
-tokio = { version = "1.28.2", features = ["macros"] }
-tokio-test = "0.4.2"
+rand = { workspace = true }
+sha256 = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+tokio-test = { workspace = true }
 
 [features]
 default = ["online"]

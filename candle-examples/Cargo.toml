@@ -11,21 +11,21 @@ license = "MIT/Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-candle = { path = "../candle-core", default-features=false }
-candle-nn = { path = "../candle-nn", default-features=false }
-candle-transformers = { path = "../candle-transformers", default-features=false }
-serde = { version = "1.0.166", features = ["derive"] }
-serde_json = "1.0.99"
-num-traits = "0.2.15"
-intel-mkl-src = {version="0.8.1", optional=true, features = ["mkl-dynamic-lp64-iomp"]}
+candle = { path = "../candle-core" }
+candle-nn = { path = "../candle-nn" }
+candle-transformers = { path = "../candle-transformers" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+num-traits = { workspace = true }
+intel-mkl-src = { workspace = true, optional = true }
 
 [dev-dependencies]
-anyhow = { version = "1", features = ["backtrace"] }
+anyhow = { workspace = true }
 candle-hub = { path = "../candle-hub" }
-clap = { version = "4.2.4", features = ["derive"] }
-rand = "0.8.5"
-tokenizers = { version = "0.13.3", default-features=false, features=["onig"] }
-wav = "1.0.0"
+clap = { workspace = true }
+rand = { workspace = true }
+tokenizers = { workspace = true }
+wav = { workspace = true }
 
 [features]
 default = []
