@@ -2,7 +2,7 @@ use crate::model::{Config, Whisper};
 use anyhow::Error as E;
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use rand::distributions::Distribution;
+use rand::{distributions::Distribution, rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
@@ -107,7 +107,7 @@ impl Decoder {
         })
     }
 
-    fn decode(&self, mel: &Tensor, t: f64) -> anyhow::Result<DecodingResult> {
+    fn decode(&self, mel: &Tensor, t: f64, rng: &mut StdRng) -> anyhow::Result<DecodingResult> {
         let model = &self.model;
         let audio_features = model.encoder.forward(mel)?;
         console_log!("audio features: {:?}", audio_features.dims());
@@ -142,8 +142,7 @@ impl Decoder {
                 let prs = (&logits / t)?.softmax(0)?;
                 let logits_v: Vec<f32> = prs.to_vec1()?;
                 let distr = rand::distributions::WeightedIndex::new(&logits_v)?;
-                let mut rng = rand::thread_rng();
-                distr.sample(&mut rng) as u32
+                distr.sample(rng) as u32
             } else {
                 let logits_v: Vec<f32> = logits.to_vec1()?;
                 logits_v
@@ -179,9 +178,13 @@ impl Decoder {
         })
     }
 
-    fn decode_with_fallback(&self, segment: &Tensor) -> anyhow::Result<DecodingResult> {
+    fn decode_with_fallback(
+        &self,
+        segment: &Tensor,
+        rng: &mut StdRng,
+    ) -> anyhow::Result<DecodingResult> {
         for (i, &t) in TEMPERATURES.iter().enumerate() {
-            let dr: Result<DecodingResult, _> = self.decode(segment, t);
+            let dr: Result<DecodingResult, _> = self.decode(segment, t, rng);
             if i == TEMPERATURES.len() - 1 {
                 return dr;
             }
@@ -203,6 +206,7 @@ impl Decoder {
     }
 
     fn run(&self, mel: &Tensor) -> anyhow::Result<Vec<Segment>> {
+        let mut rng = StdRng::seed_from_u64(299792458);
         let (_, _, content_frames) = mel.shape().r3()?;
         let mut seek = 0;
         let mut segments = vec![];
@@ -211,7 +215,7 @@ impl Decoder {
             let segment_size = usize::min(content_frames - seek, N_FRAMES);
             let mel_segment = mel.narrow(2, seek, segment_size)?;
             let segment_duration = (segment_size * HOP_LENGTH) as f64 / SAMPLE_RATE as f64;
-            let dr = self.decode_with_fallback(&mel_segment)?;
+            let dr = self.decode_with_fallback(&mel_segment, &mut rng)?;
             seek += segment_size;
             if dr.no_speech_prob > NO_SPEECH_THRESHOLD && dr.avg_logprob < LOGPROB_THRESHOLD {
                 console_log!("no speech detected, skipping {seek} {dr:?}");

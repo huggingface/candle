@@ -41,10 +41,14 @@ pub enum Msg {
     WorkerOutMsg(WorkerOutput),
 }
 
+pub struct CurrentDecode {
+    start_time: Option<f64>,
+}
+
 pub struct App {
     status: String,
     segments: Vec<Segment>,
-    decode_in_flight: bool,
+    current_decode: Option<CurrentDecode>,
     worker: Box<dyn Bridge<Worker>>,
 }
 
@@ -58,6 +62,12 @@ async fn model_data_load() -> Result<ModelData, JsValue> {
         mel_filters,
         weights,
     })
+}
+
+fn performance_now() -> Option<f64> {
+    let window = web_sys::window()?;
+    let performance = window.performance()?;
+    Some(performance.now() / 1000.)
 }
 
 impl Component for App {
@@ -74,7 +84,7 @@ impl Component for App {
         Self {
             status,
             segments: vec![],
-            decode_in_flight: false,
+            current_decode: None,
             worker,
         }
     }
@@ -103,17 +113,18 @@ impl Component for App {
             }
             Msg::Run(sample_index) => {
                 let sample = SAMPLE_NAMES[sample_index];
-                if self.decode_in_flight {
+                if self.current_decode.is_some() {
                     self.status = "already decoding some sample at the moment".to_string()
                 } else {
-                    self.decode_in_flight = true;
+                    let start_time = performance_now();
+                    self.current_decode = Some(CurrentDecode { start_time });
                     self.status = format!("decoding {sample}");
                     self.segments.clear();
                     ctx.link().send_future(async move {
                         match fetch_url(sample).await {
                             Err(err) => {
                                 let value = Err(format!("decoding error: {err:?}"));
-                                // Mimic a worker output to so as to release decode_in_flight
+                                // Mimic a worker output to so as to release current_decode
                                 Msg::WorkerOutMsg(WorkerOutput { value })
                             }
                             Ok(wav_bytes) => {
@@ -126,10 +137,18 @@ impl Component for App {
                 true
             }
             Msg::WorkerOutMsg(WorkerOutput { value }) => {
-                self.decode_in_flight = false;
+                let dt = self.current_decode.as_ref().and_then(|current_decode| {
+                    current_decode.start_time.and_then(|start_time| {
+                        performance_now().map(|stop_time| stop_time - start_time)
+                    })
+                });
+                self.current_decode = None;
                 match value {
                     Ok(segments) => {
-                        self.status = "decoding succeeded!".to_string();
+                        self.status = match dt {
+                            None => "decoding succeeded!".to_string(),
+                            Some(dt) => format!("decoding succeeded in {:.2}s", dt),
+                        };
                         self.segments = segments;
                     }
                     Err(err) => {
@@ -177,7 +196,7 @@ impl Component for App {
                   {&self.status}
                 </h2>
                 {
-                    if self.decode_in_flight {
+                    if self.current_decode.is_some() {
                         html! { <progress id="progress-bar" aria-label="decoding…"></progress> }
                     } else { html!{
                 <blockquote>
