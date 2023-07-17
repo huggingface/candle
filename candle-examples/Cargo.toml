@@ -25,6 +25,9 @@ candle-hub = { path = "../candle-hub" }
 clap = { workspace = true }
 rand = { workspace = true }
 tokenizers = { workspace = true }
+tracing = { workspace = true }
+tracing-chrome = { workspace = true }
+tracing-subscriber = { workspace = true }
 wav = { workspace = true }
 
 [features]
