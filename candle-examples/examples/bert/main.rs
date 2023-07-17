@@ -21,6 +21,10 @@ struct Args {
     #[arg(long)]
     offline: bool,
 
+    /// Enable tracing (generates a trace-timestamp.json file).
+    #[arg(long)]
+    tracing: bool,
+
     /// The model to use, check out available models: https://huggingface.co/models?library=sentence-transformers&sort=trending
     #[arg(long)]
     model_id: Option<String>,
@@ -87,11 +91,17 @@ fn main() -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
-    let (chrome_layer, _guard) = ChromeLayerBuilder::new().build();
-    tracing_subscriber::registry().with(chrome_layer).init();
+    let args = Args::parse();
+    let _guard = if args.tracing {
+        println!("tracing...");
+        let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
+        tracing_subscriber::registry().with(chrome_layer).init();
+        Some(guard)
+    } else {
+        None
+    };
     let start = std::time::Instant::now();
 
-    let args = Args::parse();
     let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
     let device = &model.device;
 
