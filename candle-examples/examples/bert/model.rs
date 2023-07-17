@@ -11,14 +11,25 @@ enum HiddenAct {
     Relu,
 }
 
-impl HiddenAct {
+struct HiddenActLayer {
+    act: HiddenAct,
+    span: tracing::Span,
+}
+
+impl HiddenActLayer {
+    fn new(act: HiddenAct) -> Self {
+        let span = tracing::span!(tracing::Level::TRACE, "hidden-act");
+        Self { act, span }
+    }
+
     fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
-        match self {
+        let _enter = self.span.enter();
+        match self.act {
             // TODO: The all-MiniLM-L6-v2 model uses "gelu" whereas this is "gelu_new", this explains some
             // small numerical difference.
             // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
-            Self::Gelu => xs.gelu(),
-            Self::Relu => xs.relu(),
+            HiddenAct::Gelu => xs.gelu(),
+            HiddenAct::Relu => xs.relu(),
         }
     }
 }
@@ -351,7 +362,7 @@ impl BertAttention {
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L441
 struct BertIntermediate {
     dense: Linear,
-    intermediate_act: HiddenAct,
+    intermediate_act: HiddenActLayer,
     span: tracing::Span,
 }
 
@@ -360,7 +371,7 @@ impl BertIntermediate {
         let dense = linear(config.hidden_size, config.intermediate_size, vb.pp("dense"))?;
         Ok(Self {
             dense,
-            intermediate_act: config.hidden_act,
+            intermediate_act: HiddenActLayer::new(config.hidden_act),
             span: tracing::span!(tracing::Level::TRACE, "inter"),
         })
     }
