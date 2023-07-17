@@ -66,6 +66,7 @@ struct WCond<'a>(&'a [u32], &'a Layout);
 
 impl<'a> Map2 for WCond<'a> {
     const OP: &'static str = "where";
+    #[inline(always)]
     fn f<T: WithDType>(&self, t: &[T], t_l: &Layout, f: &[T], f_l: &Layout) -> Result<Vec<T>> {
         let vs = match (
             self.1.contiguous_offsets(),
@@ -116,18 +117,18 @@ impl<'a> Map1 for Sum<'a> {
 }
 
 fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(vs: &[T], layout: &Layout, mut f: F) -> Vec<U> {
-    let mut result = vec![];
-    result.reserve(layout.shape().elem_count());
     match layout.strided_blocks() {
-        crate::StridedBlocks::SingleBlock { start_offset, len } => {
-            for &v in vs[start_offset..start_offset + len].iter() {
-                result.push(f(v))
-            }
-        }
+        crate::StridedBlocks::SingleBlock { start_offset, len } => vs
+            [start_offset..start_offset + len]
+            .iter()
+            .map(|&v| f(v))
+            .collect(),
         crate::StridedBlocks::MultipleBlocks {
             block_start_index,
             block_len,
         } => {
+            let mut result = vec![];
+            result.reserve(layout.shape().elem_count());
             // Specialize the case where block_len is one to avoid the second loop.
             if block_len == 1 {
                 for index in block_start_index {
@@ -142,9 +143,9 @@ fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(vs: &[T], layout: &Layout, mut 
                     }
                 }
             }
+            result
         }
     }
-    result
 }
 
 // This function maps over two strided index sequences.
