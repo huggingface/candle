@@ -21,6 +21,7 @@ perf.data
 flamegraph.svg
 *.so
 *.swp
+trace-*.json
 
 candle-wasm-example/*.wav
 candle-wasm-example/*.safetensors
