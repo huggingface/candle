@@ -115,10 +115,35 @@ impl<'a> Map1 for Sum<'a> {
 }
 
 fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(vs: &[T], layout: &Layout, mut f: F) -> Vec<U> {
-    match layout.contiguous_offsets() {
-        Some((o1, o2)) => vs[o1..o2].iter().map(|&v| f(v)).collect(),
-        None => layout.strided_index().map(|i| f(vs[i])).collect(),
+    let mut result = vec![];
+    result.reserve(layout.shape().elem_count());
+    match layout.strided_blocks() {
+        crate::StridedBlocks::SingleBlock { start_offset, len } => {
+            for &v in vs[start_offset..start_offset + len].iter() {
+                result.push(f(v))
+            }
+        }
+        crate::StridedBlocks::MultipleBlocks {
+            block_start_index,
+            block_len,
+        } => {
+            // Specialize the case where block_len is one to avoid the second loop.
+            if block_len == 1 {
+                for index in block_start_index {
+                    let v = unsafe { vs.get_unchecked(index) };
+                    result.push(f(*v))
+                }
+            } else {
+                for index in block_start_index {
+                    for offset in 0..block_len {
+                        let v = unsafe { vs.get_unchecked(index + offset) };
+                        result.push(f(*v))
+                    }
+                }
+            }
+        }
     }
+    result
 }
 
 // This function maps over two strided index sequences.
