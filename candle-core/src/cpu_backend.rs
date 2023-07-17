@@ -98,6 +98,7 @@ struct Sum<'a> {
 }
 
 impl<'a> Map1 for Sum<'a> {
+    #[inline(always)]
     fn f<T: WithDType>(&self, src: &[T], src_layout: &Layout) -> Result<Vec<T>> {
         let mut dst = vec![T::zero(); self.dst_shape.elem_count()];
         for (unstr_index, src_index) in src_layout.strided_index().enumerate() {
