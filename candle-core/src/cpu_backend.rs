@@ -162,6 +162,64 @@ fn binary_map<T: Copy, F: FnMut(T, T) -> T>(
             .zip(rhs[o_r1..o_r2].iter())
             .map(|(&l, &r)| f(l, r))
             .collect(),
+        (Some((o_l1, o_l2)), None) => {
+            // TODO: Maybe we want to avoid going through the layout twice.
+            match rhs_l.offsets_b() {
+                Some(ob) => {
+                    let mut i_in_block = 0;
+                    let mut i_right_broadcast = 0;
+                    lhs[o_l1..o_l2]
+                        .iter()
+                        .map(|&l| {
+                            let r = unsafe { rhs.get_unchecked(i_in_block + ob.start) };
+                            i_right_broadcast += 1;
+                            if i_right_broadcast >= ob.right_broadcast {
+                                i_in_block += 1;
+                                i_right_broadcast = 0;
+                            }
+                            if i_in_block >= ob.len {
+                                i_in_block = 0
+                            }
+                            f(l, *r)
+                        })
+                        .collect()
+                }
+                None => lhs_l
+                    .strided_index()
+                    .zip(rhs_l.strided_index())
+                    .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
+                    .collect(),
+            }
+        }
+        (None, Some((o_r1, o_r2))) => {
+            // TODO: Maybe we want to avoid going through the layout twice.
+            match lhs_l.offsets_b() {
+                Some(ob) => {
+                    let mut i_in_block = 0;
+                    let mut i_right_broadcast = 0;
+                    rhs[o_r1..o_r2]
+                        .iter()
+                        .map(|&r| {
+                            let l = unsafe { lhs.get_unchecked(i_in_block + ob.start) };
+                            i_right_broadcast += 1;
+                            if i_right_broadcast >= ob.right_broadcast {
+                                i_in_block += 1;
+                                i_right_broadcast = 0;
+                            }
+                            if i_in_block >= ob.len {
+                                i_in_block = 0
+                            }
+                            f(*l, r)
+                        })
+                        .collect()
+                }
+                None => lhs_l
+                    .strided_index()
+                    .zip(rhs_l.strided_index())
+                    .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
+                    .collect(),
+            }
+        }
         _ => lhs_l
             .strided_index()
             .zip(rhs_l.strided_index())
