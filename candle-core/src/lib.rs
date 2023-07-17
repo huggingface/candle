@@ -46,7 +46,7 @@ mod dtype;
 mod dummy_cuda_backend;
 mod error;
 mod indexer;
-mod layout;
+pub mod layout;
 #[cfg(feature = "mkl")]
 mod mkl;
 pub mod npy;
