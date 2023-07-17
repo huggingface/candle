@@ -3,6 +3,9 @@ use libc::{c_char, c_double, c_float, c_int};
 mod ffi {
     use super::*;
     extern "C" {
+        pub fn vsTanh(n: c_int, a: *const c_float, y: *mut c_float);
+        pub fn vdTanh(n: c_int, a: *const c_double, y: *mut c_double);
+
         pub fn sgemm_(
             transa: *const c_char,
             transb: *const c_char,
@@ -151,4 +154,26 @@ pub unsafe fn hgemm(
         c.as_mut_ptr(),
         &ldc,
     )
+}
+
+#[allow(dead_code)]
+#[inline]
+pub fn vs_tanh(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsTanh(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[allow(dead_code)]
+#[inline]
+pub fn vd_tanh(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdTanh(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
 }
