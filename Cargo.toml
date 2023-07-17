@@ -20,9 +20,10 @@ clap = { version = "4.2.4", features = ["derive"] }
 # cudarc = { version = "0.9.13", optional = true, features = ["f16"] }
 cudarc = { git = "https://github.com/LaurentMazare/cudarc.git", branch = "cublas-bf16", features = ["f16"] }
 futures = "0.3.28"
-# TODO: Switch back to the official gemm implementation once something similar to
-# https://github.com/sarah-ek/gemm/pull/8 is available.
-gemm = { git = "https://github.com/LaurentMazare/gemm.git", branch = "f16-vectorize-pack" }
+# TODO: Switch back to the official gemm implementation once the following are available.
+# https://github.com/sarah-ek/gemm/pull/8.
+# https://github.com/sarah-ek/gemm/pull/9.
+gemm = { git = "https://github.com/LaurentMazare/gemm.git", branch = "f16-vec-plus-wasm-simd" }
 half = { version = "2.3.1", features = ["num-traits"] }
 indicatif = "0.17.5"
 intel-mkl-src = { version = "0.8.1", features = ["mkl-dynamic-lp64-iomp"] }
@@ -36,7 +37,7 @@ reqwest = "0.11.18"
 safetensors = "0.3.1"
 serde = { version = "1.0.166", features = ["derive"] }
 serde_json = "1.0.99"
-sha256 = "1.1.4"
+sha256 = "=1.1.4"
 thiserror = "1"
 tokenizers = { version = "0.13.3", default-features = false, features = ["onig"] }
 tokio = "1.28.2"
