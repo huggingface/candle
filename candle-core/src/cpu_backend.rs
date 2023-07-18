@@ -346,8 +346,8 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
             Some(ob) => {
                 let rhs = &rhs[ob.start..];
                 let mut ys = lhs[o_l1..o_l2].to_vec();
-                for l in 0..ob.left_broadcast {
-                    let start = l * ob.len * ob.right_broadcast;
+                for idx_l in 0..ob.left_broadcast {
+                    let start = idx_l * ob.len * ob.right_broadcast;
                     for (i, &r) in rhs.iter().enumerate() {
                         let start = start + i * ob.right_broadcast;
                         for v in ys[start..start + ob.right_broadcast].iter_mut() {
@@ -384,23 +384,17 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
             }
             Some(ob) => {
                 let lhs = &lhs[ob.start..];
-                let mut i_in_block = 0;
-                let mut i_right_broadcast = 0;
-                rhs[o_r1..o_r2]
-                    .iter()
-                    .map(|&r| {
-                        let l = unsafe { lhs.get_unchecked(i_in_block) };
-                        i_right_broadcast += 1;
-                        if i_right_broadcast >= ob.right_broadcast {
-                            i_in_block += 1;
-                            i_right_broadcast = 0;
+                let mut ys = rhs[o_r1..o_r2].to_vec();
+                for idx_l in 0..ob.left_broadcast {
+                    let start = idx_l * ob.len * ob.right_broadcast;
+                    for (i, &l) in lhs.iter().enumerate() {
+                        let start = start + i * ob.right_broadcast;
+                        for v in ys[start..start + ob.right_broadcast].iter_mut() {
+                            *v = f(l, *v)
                         }
-                        if i_in_block >= ob.len {
-                            i_in_block = 0
-                        }
-                        f(*l, r)
-                    })
-                    .collect()
+                    }
+                }
+                ys
             }
             None => lhs_l
                 .strided_index()
