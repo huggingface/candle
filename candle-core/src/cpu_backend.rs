@@ -276,6 +276,119 @@ fn binary_map<T: Copy, F: FnMut(T, T) -> T>(
     }
 }
 
+fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>(
+    lhs_l: &Layout,
+    rhs_l: &Layout,
+    lhs: &[T],
+    rhs: &[T],
+    mut f: F,
+    mut f_vec: FV,
+) -> Vec<T> {
+    let el_count = lhs_l.shape().elem_count();
+    match (lhs_l.contiguous_offsets(), rhs_l.contiguous_offsets()) {
+        (Some((o_l1, o_l2)), Some((o_r1, o_r2))) => {
+            let mut ys: Vec<T> = Vec::with_capacity(el_count);
+            let ys_to_set = ys.spare_capacity_mut();
+            let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
+            f_vec(&lhs[o_l1..o_l2], &rhs[o_r1..o_r2], ys_to_set);
+            // SAFETY: values are all set by f_vec.
+            unsafe { ys.set_len(el_count) };
+            ys
+        }
+        (Some((o_l1, o_l2)), None) => match rhs_l.offsets_b() {
+            Some(ob) if ob.right_broadcast == 1 => {
+                let mut ys: Vec<T> = Vec::with_capacity(el_count);
+                let ys_to_set = ys.spare_capacity_mut();
+                let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
+                let mut dst_i = 0;
+                for src_i in (o_l1..o_l2).step_by(ob.len) {
+                    f_vec(
+                        &lhs[src_i..src_i + ob.len],
+                        rhs,
+                        &mut ys_to_set[dst_i..dst_i + ob.len],
+                    );
+                    dst_i += ob.len;
+                }
+                // SAFETY: values are all set by f_vec.
+                unsafe { ys.set_len(el_count) };
+                ys
+            }
+            Some(ob) => {
+                let mut i_in_block = 0;
+                let mut i_right_broadcast = 0;
+                lhs[o_l1..o_l2]
+                    .iter()
+                    .map(|&l| {
+                        let r = unsafe { rhs.get_unchecked(i_in_block + ob.start) };
+                        i_right_broadcast += 1;
+                        if i_right_broadcast >= ob.right_broadcast {
+                            i_in_block += 1;
+                            i_right_broadcast = 0;
+                        }
+                        if i_in_block >= ob.len {
+                            i_in_block = 0
+                        }
+                        f(l, *r)
+                    })
+                    .collect()
+            }
+            None => lhs_l
+                .strided_index()
+                .zip(rhs_l.strided_index())
+                .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
+                .collect(),
+        },
+        (None, Some((o_r1, o_r2))) => match lhs_l.offsets_b() {
+            Some(ob) if ob.right_broadcast == 1 => {
+                let mut ys: Vec<T> = Vec::with_capacity(el_count);
+                let ys_to_set = ys.spare_capacity_mut();
+                let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
+                let mut dst_i = 0;
+                for src_i in (o_r1..o_r2).step_by(ob.len) {
+                    f_vec(
+                        lhs,
+                        &rhs[src_i..src_i + ob.len],
+                        &mut ys_to_set[dst_i..dst_i + ob.len],
+                    );
+                    dst_i += ob.len;
+                }
+                // SAFETY: values are all set by f_vec.
+                unsafe { ys.set_len(el_count) };
+                ys
+            }
+            Some(ob) => {
+                let mut i_in_block = 0;
+                let mut i_right_broadcast = 0;
+                rhs[o_r1..o_r2]
+                    .iter()
+                    .map(|&r| {
+                        let l = unsafe { lhs.get_unchecked(i_in_block + ob.start) };
+                        i_right_broadcast += 1;
+                        if i_right_broadcast >= ob.right_broadcast {
+                            i_in_block += 1;
+                            i_right_broadcast = 0;
+                        }
+                        if i_in_block >= ob.len {
+                            i_in_block = 0
+                        }
+                        f(*l, r)
+                    })
+                    .collect()
+            }
+            None => lhs_l
+                .strided_index()
+                .zip(rhs_l.strided_index())
+                .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
+                .collect(),
+        },
+        _ => lhs_l
+            .strided_index()
+            .zip(rhs_l.strided_index())
+            .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
+            .collect(),
+    }
+}
+
 struct Affine(f64, f64);
 
 impl Map1 for Affine {
@@ -961,27 +1074,51 @@ impl BackendStorage for CpuStorage {
     fn binary_impl<B: BinaryOp>(&self, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
         match (self, rhs) {
             (Self::BF16(lhs), Self::BF16(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::bf16);
+                let data = if B::BF16_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::bf16, B::bf16_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::bf16)
+                };
                 Ok(Self::BF16(data))
             }
             (Self::F16(lhs), Self::F16(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::f16);
+                let data = if B::F16_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f16, B::f16_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f16)
+                };
                 Ok(Self::F16(data))
             }
             (Self::F32(lhs), Self::F32(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::f32);
+                let data = if B::F32_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f32, B::f32_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f32)
+                };
                 Ok(Self::F32(data))
             }
             (Self::F64(lhs), Self::F64(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::f64);
+                let data = if B::F64_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f64, B::f64_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f64)
+                };
                 Ok(Self::F64(data))
             }
             (Self::U32(lhs), Self::U32(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::u32);
+                let data = if B::U32_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::u32, B::u32_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::u32)
+                };
                 Ok(Self::U32(data))
             }
             (Self::U8(lhs), Self::U8(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::u8);
+                let data = if B::U8_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::u8, B::u8_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::u8)
+                };
                 Ok(Self::U8(data))
             }
             _ => {

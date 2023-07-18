@@ -115,9 +115,12 @@ fn main() -> Result<()> {
         let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
         let token_type_ids = token_ids.zeros_like()?;
         println!("Loaded and encoded {:?}", start.elapsed());
-        for _ in 0..args.n {
+        for idx in 0..args.n {
             let start = std::time::Instant::now();
-            let _ys = model.forward(&token_ids, &token_type_ids)?;
+            let ys = model.forward(&token_ids, &token_type_ids)?;
+            if idx == 0 {
+                println!("{ys}");
+            }
             println!("Took {:?}", start.elapsed());
         }
     } else {
