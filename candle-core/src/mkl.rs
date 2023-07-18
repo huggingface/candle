@@ -6,6 +6,14 @@ mod ffi {
     extern "C" {
         pub fn vsTanh(n: c_int, a: *const c_float, y: *mut c_float);
         pub fn vdTanh(n: c_int, a: *const c_double, y: *mut c_double);
+        pub fn vsExp(n: c_int, a: *const c_float, y: *mut c_float);
+        pub fn vdExp(n: c_int, a: *const c_double, y: *mut c_double);
+        pub fn vsLn(n: c_int, a: *const c_float, y: *mut c_float);
+        pub fn vdLn(n: c_int, a: *const c_double, y: *mut c_double);
+        pub fn vsSin(n: c_int, a: *const c_float, y: *mut c_float);
+        pub fn vdSin(n: c_int, a: *const c_double, y: *mut c_double);
+        pub fn vsCos(n: c_int, a: *const c_float, y: *mut c_float);
+        pub fn vdCos(n: c_int, a: *const c_double, y: *mut c_double);
 
         pub fn vsAdd(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
         pub fn vdAdd(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
@@ -164,6 +172,86 @@ pub unsafe fn hgemm(
         c.as_mut_ptr(),
         &ldc,
     )
+}
+
+#[inline]
+pub fn vs_exp(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsExp(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_exp(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdExp(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vs_ln(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsLn(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_ln(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdLn(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vs_sin(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsSin(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_sin(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdSin(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vs_cos(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsCos(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_cos(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdCos(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
 }
 
 #[inline]
