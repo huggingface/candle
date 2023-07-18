@@ -14,7 +14,7 @@ readme = "README.md"
 candle = { path = "../candle-core" }
 candle-nn = { path = "../candle-nn" }
 num-traits = { workspace = true }
-tokenizers = { version = "0.13.3", default-features = false, features = ["unstable_wasm"] }
+tokenizers = { workspace = true, features = ["unstable_wasm"] }
 
 # App crates.
 anyhow = { workspace = true }
