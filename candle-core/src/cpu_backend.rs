@@ -276,6 +276,17 @@ fn binary_map<T: Copy, F: FnMut(T, T) -> T>(
     }
 }
 
+fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>(
+    lhs_l: &Layout,
+    rhs_l: &Layout,
+    lhs: &[T],
+    rhs: &[T],
+    f: F,
+    _f_vec: FV,
+) -> Vec<T> {
+    binary_map(lhs_l, rhs_l, lhs, rhs, f)
+}
+
 struct Affine(f64, f64);
 
 impl Map1 for Affine {
@@ -961,27 +972,51 @@ impl BackendStorage for CpuStorage {
     fn binary_impl<B: BinaryOp>(&self, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
         match (self, rhs) {
             (Self::BF16(lhs), Self::BF16(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::bf16);
+                let data = if B::BF16_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::bf16, B::bf16_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::bf16)
+                };
                 Ok(Self::BF16(data))
             }
             (Self::F16(lhs), Self::F16(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::f16);
+                let data = if B::F16_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f16, B::f16_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f16)
+                };
                 Ok(Self::F16(data))
             }
             (Self::F32(lhs), Self::F32(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::f32);
+                let data = if B::F32_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f32, B::f32_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f32)
+                };
                 Ok(Self::F32(data))
             }
             (Self::F64(lhs), Self::F64(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::f64);
+                let data = if B::F64_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::f64, B::f64_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::f64)
+                };
                 Ok(Self::F64(data))
             }
             (Self::U32(lhs), Self::U32(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::u32);
+                let data = if B::U32_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::u32, B::u32_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::u32)
+                };
                 Ok(Self::U32(data))
             }
             (Self::U8(lhs), Self::U8(rhs)) => {
-                let data = binary_map(lhs_l, rhs_l, lhs, rhs, B::u8);
+                let data = if B::U8_VEC {
+                    binary_map_vec(lhs_l, rhs_l, lhs, rhs, B::u8, B::u8_vec)
+                } else {
+                    binary_map(lhs_l, rhs_l, lhs, rhs, B::u8)
+                };
                 Ok(Self::U8(data))
             }
             _ => {
