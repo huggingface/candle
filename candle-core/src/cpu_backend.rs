@@ -177,6 +177,7 @@ fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U])>(
                     result.push(f(*v))
                 }
             } else {
+                // TODO: Use f_vec here.
                 for index in block_start_index {
                     for offset in 0..block_len {
                         let v = unsafe { vs.get_unchecked(index + offset) };
