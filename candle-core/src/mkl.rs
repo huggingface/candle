@@ -224,7 +224,7 @@ pub fn vd_gelu(vs: &[f64], ys: &mut [f64]) {
 macro_rules! binary_op {
     ($fn_name:ident, $ty:ty) => {
         #[inline]
-        fn $fn_name(a: &[$ty], b: &[$ty], y: &mut [$ty]) {
+        pub fn $fn_name(a: &[$ty], b: &[$ty], y: &mut [$ty]) {
             let a_len = a.len();
             let b_len = b.len();
             let y_len = y.len();

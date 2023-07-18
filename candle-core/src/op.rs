@@ -110,7 +110,7 @@ pub(crate) struct Gelu;
 pub(crate) struct Relu;
 
 macro_rules! bin_op {
-    ($op:ident, $name: literal, $e: expr) => {
+    ($op:ident, $name: literal, $e: expr, $f32_vec: ident, $f64_vec: ident) => {
         impl BinaryOp for $op {
             const NAME: &'static str = $name;
             const KERNEL: &'static str = concat!("b", $name);
@@ -139,14 +139,29 @@ macro_rules! bin_op {
             fn u32(v1: u32, v2: u32) -> u32 {
                 $e(v1, v2)
             }
+
+            #[cfg(feature = "mkl")]
+            const F32_VEC: bool = true;
+            #[cfg(feature = "mkl")]
+            const F64_VEC: bool = true;
+            #[cfg(feature = "mkl")]
+            #[inline(always)]
+            fn f32_vec(xs1: &[f32], xs2: &[f32], ys: &mut [f32]) {
+                crate::mkl::$f32_vec(xs1, xs2, ys)
+            }
+            #[cfg(feature = "mkl")]
+            #[inline(always)]
+            fn f64_vec(xs1: &[f64], xs2: &[f64], ys: &mut [f64]) {
+                crate::mkl::$f64_vec(xs1, xs2, ys)
+            }
         }
     };
 }
 
-bin_op!(Add, "add", |v1, v2| v1 + v2);
-bin_op!(Sub, "sub", |v1, v2| v1 - v2);
-bin_op!(Mul, "mul", |v1, v2| v1 * v2);
-bin_op!(Div, "div", |v1, v2| v1 / v2);
+bin_op!(Add, "add", |v1, v2| v1 + v2, vs_add, vd_add);
+bin_op!(Sub, "sub", |v1, v2| v1 - v2, vs_sub, vd_sub);
+bin_op!(Mul, "mul", |v1, v2| v1 * v2, vs_mul, vd_mul);
+bin_op!(Div, "div", |v1, v2| v1 / v2, vs_div, vd_div);
 
 macro_rules! unary_op {
     ($op: ident, $name: literal, $a: ident, $e: expr) => {
