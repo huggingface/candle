@@ -315,7 +315,6 @@ impl BertSelfAttention {
         new_x_shape.pop();
         new_x_shape.push(self.num_attention_heads);
         new_x_shape.push(self.attention_head_size);
-        // Be cautious about the transposition if adding a batch dim!
         let xs = xs.reshape(new_x_shape.as_slice())?.transpose(1, 2)?;
         xs.contiguous()
     }
