@@ -24,7 +24,7 @@ anyhow = { workspace = true }
 candle-hub = { path = "../candle-hub" }
 clap = { workspace = true }
 rand = { workspace = true }
-tokenizers = { workspace = true }
+tokenizers = { workspace = true, features = ["onig"] }
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }

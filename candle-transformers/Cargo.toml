@@ -15,7 +15,7 @@ candle = { path = "../candle-core" }
 candle-hub = { path = "../candle-hub" }
 candle-nn = { path = "../candle-nn" }
 intel-mkl-src = { workspace = true, optional = true, features = ["mkl-dynamic-lp64-iomp"]}
-tokenizers = { workspace = true }
+tokenizers = { workspace = true, features = ["onig"] }
 rand = { workspace = true }
 wav = { workspace = true }
 
