@@ -7,14 +7,14 @@ mod ffi {
         pub fn vsTanh(n: c_int, a: *const c_float, y: *mut c_float);
         pub fn vdTanh(n: c_int, a: *const c_double, y: *mut c_double);
 
-        pub fn vs_add(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
-        pub fn vd_add(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
-        pub fn vs_sub(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
-        pub fn vd_sub(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
-        pub fn vs_mul(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
-        pub fn vd_mul(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
-        pub fn vs_div(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
-        pub fn vd_div(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
+        pub fn vsAdd(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
+        pub fn vdAdd(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
+        pub fn vsSub(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
+        pub fn vdSub(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
+        pub fn vsMul(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
+        pub fn vdMul(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
+        pub fn vsDiv(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
+        pub fn vdDiv(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
 
         pub fn sgemm_(
             transa: *const c_char,
@@ -222,7 +222,7 @@ pub fn vd_gelu(vs: &[f64], ys: &mut [f64]) {
 }
 
 macro_rules! binary_op {
-    ($fn_name:ident, $ty:ty) => {
+    ($fn_name:ident, $ty:ty, $mkl_name:ident) => {
         #[inline]
         pub fn $fn_name(a: &[$ty], b: &[$ty], y: &mut [$ty]) {
             let a_len = a.len();
@@ -234,15 +234,15 @@ macro_rules! binary_op {
                     stringify!($fn_name)
                 );
             }
-            unsafe { ffi::$fn_name(a_len as i32, a.as_ptr(), b.as_ptr(), y.as_mut_ptr()) }
+            unsafe { ffi::$mkl_name(a_len as i32, a.as_ptr(), b.as_ptr(), y.as_mut_ptr()) }
         }
     };
 }
-binary_op!(vs_add, f32);
-binary_op!(vd_add, f64);
-binary_op!(vs_sub, f32);
-binary_op!(vd_sub, f64);
-binary_op!(vs_mul, f32);
-binary_op!(vd_mul, f64);
-binary_op!(vs_div, f32);
-binary_op!(vd_div, f64);
+binary_op!(vs_add, f32, vsAdd);
+binary_op!(vd_add, f64, vdAdd);
+binary_op!(vs_sub, f32, vsSub);
+binary_op!(vd_sub, f64, vdSub);
+binary_op!(vs_mul, f32, vsMul);
+binary_op!(vd_mul, f64, vdMul);
+binary_op!(vs_div, f32, vsDiv);
+binary_op!(vd_div, f64, vdDiv);
