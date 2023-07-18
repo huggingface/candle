@@ -14,6 +14,8 @@ mod ffi {
         pub fn vdSin(n: c_int, a: *const c_double, y: *mut c_double);
         pub fn vsCos(n: c_int, a: *const c_float, y: *mut c_float);
         pub fn vdCos(n: c_int, a: *const c_double, y: *mut c_double);
+        pub fn vsSqrt(n: c_int, a: *const c_float, y: *mut c_float);
+        pub fn vdSqrt(n: c_int, a: *const c_double, y: *mut c_double);
 
         pub fn vsAdd(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
         pub fn vdAdd(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
@@ -252,6 +254,46 @@ pub fn vd_cos(a: &[f64], y: &mut [f64]) {
         panic!("a and y have different lengths {a_len} <> {y_len}")
     }
     unsafe { ffi::vdCos(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vs_sqrt(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsSqrt(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_sqrt(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdSqrt(a_len as i32, a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vs_sqr(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vsMul(a_len as i32, a.as_ptr(), a.as_ptr(), y.as_mut_ptr()) }
+}
+
+#[inline]
+pub fn vd_sqr(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vdMul(a_len as i32, a.as_ptr(), a.as_ptr(), y.as_mut_ptr()) }
 }
 
 #[inline]

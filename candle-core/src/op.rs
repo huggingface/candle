@@ -254,8 +254,8 @@ unary_op!(Sin, "sin", v, v.sin(), vs_sin, vd_sin);
 unary_op!(Cos, "cos", v, v.cos(), vs_cos, vd_cos);
 unary_op!(Abs, "abs", v, v.abs());
 unary_op!(Neg, "neg", v, -v);
-unary_op!(Sqr, "sqr", v, v * v);
-unary_op!(Sqrt, "sqrt", v, v.sqrt());
+unary_op!(Sqr, "sqr", v, v * v, vs_sqr, vd_sqr);
+unary_op!(Sqrt, "sqrt", v, v.sqrt(), vs_sqrt, vd_sqrt);
 
 /// `gelu` operation
 /// <https://en.wikipedia.org/wiki/Activation_function#Comparison_of_activation_functions>
