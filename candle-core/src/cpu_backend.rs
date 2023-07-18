@@ -296,6 +296,23 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
             ys
         }
         (Some((o_l1, o_l2)), None) => match rhs_l.offsets_b() {
+            Some(ob) if ob.right_broadcast == 1 => {
+                let mut ys: Vec<T> = Vec::with_capacity(el_count);
+                let ys_to_set = ys.spare_capacity_mut();
+                let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
+                let mut dst_i = 0;
+                for src_i in (o_l1..o_l2).step_by(ob.len) {
+                    f_vec(
+                        &lhs[src_i..src_i + ob.len],
+                        rhs,
+                        &mut ys_to_set[dst_i..dst_i + ob.len],
+                    );
+                    dst_i += ob.len;
+                }
+                // SAFETY: values are all set by f_vec.
+                unsafe { ys.set_len(el_count) };
+                ys
+            }
             Some(ob) => {
                 let mut i_in_block = 0;
                 let mut i_right_broadcast = 0;
@@ -321,8 +338,24 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
                 .map(|(lhs_i, rhs_i)| f(lhs[lhs_i], rhs[rhs_i]))
                 .collect(),
         },
-        // TODO: Handle the following case with a strided version of f_vec.
         (None, Some((o_r1, o_r2))) => match lhs_l.offsets_b() {
+            Some(ob) if ob.right_broadcast == 1 => {
+                let mut ys: Vec<T> = Vec::with_capacity(el_count);
+                let ys_to_set = ys.spare_capacity_mut();
+                let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
+                let mut dst_i = 0;
+                for src_i in (o_r1..o_r2).step_by(ob.len) {
+                    f_vec(
+                        lhs,
+                        &rhs[src_i..src_i + ob.len],
+                        &mut ys_to_set[dst_i..dst_i + ob.len],
+                    );
+                    dst_i += ob.len;
+                }
+                // SAFETY: values are all set by f_vec.
+                unsafe { ys.set_len(el_count) };
+                ys
+            }
             Some(ob) => {
                 let mut i_in_block = 0;
                 let mut i_right_broadcast = 0;
