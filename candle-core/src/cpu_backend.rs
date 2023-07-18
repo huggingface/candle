@@ -168,24 +168,30 @@ fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U])>(
             block_start_index,
             block_len,
         } => {
-            let mut result = vec![];
-            result.reserve(layout.shape().elem_count());
+            let el_count = layout.shape().elem_count();
             // Specialize the case where block_len is one to avoid the second loop.
             if block_len == 1 {
+                let mut result = Vec::with_capacity(el_count);
                 for index in block_start_index {
                     let v = unsafe { vs.get_unchecked(index) };
                     result.push(f(*v))
                 }
+                result
             } else {
-                // TODO: Use f_vec here.
-                for index in block_start_index {
-                    for offset in 0..block_len {
-                        let v = unsafe { vs.get_unchecked(index + offset) };
-                        result.push(f(*v))
-                    }
+                let mut ys: Vec<U> = Vec::with_capacity(el_count);
+                let ys_to_set = ys.spare_capacity_mut();
+                let ys_to_set = unsafe { std::mem::transmute::<_, &mut [U]>(ys_to_set) };
+                let mut dst_index = 0;
+                for src_index in block_start_index {
+                    let vs = &vs[src_index..src_index + block_len];
+                    let ys = &mut ys_to_set[dst_index..dst_index + block_len];
+                    f_vec(vs, ys);
+                    dst_index += block_len;
                 }
+                // SAFETY: values are all set by f_vec.
+                unsafe { ys.set_len(el_count) };
+                ys
             }
-            result
         }
     }
 }
