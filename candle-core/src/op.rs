@@ -60,6 +60,13 @@ pub(crate) trait UnaryOp {
     fn f64(v1: f64) -> f64;
     fn u8(v1: u8) -> u8;
     fn u32(v1: u32) -> u32;
+
+    // There is no very good way to represent optional function in traits so we go for an explicit
+    // boolean flag to mark the function as existing.
+    const F32_VEC: bool = false;
+    fn f32_vec(_xs: &[f32], _ys: &mut [f32]) {}
+    const F64_VEC: bool = false;
+    fn f64_vec(_xs: &[f64], _ys: &mut [f64]) {}
 }
 
 pub(crate) trait BinaryOp {
@@ -219,6 +226,24 @@ impl UnaryOp for Gelu {
         0
     }
     const KERNEL: &'static str = "ugelu";
+
+    #[cfg(features = "mkl")]
+    const F32_VEC: bool = true;
+
+    #[cfg(features = "mkl")]
+    #[inline(always)]
+    fn f32_vec(xs: &[f32], ys: &mut [f32]) {
+        crate::mkl::vs_gelu(xs, ys)
+    }
+
+    #[cfg(features = "mkl")]
+    const F64_VEC: bool = true;
+
+    #[cfg(features = "mkl")]
+    #[inline(always)]
+    fn f64_vec(xs: &[f64], ys: &mut [f64]) {
+        crate::mkl::vd_gelu(xs, ys)
+    }
 }
 
 impl UnaryOp for Relu {
