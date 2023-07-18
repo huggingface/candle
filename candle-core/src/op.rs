@@ -83,6 +83,15 @@ pub(crate) trait BinaryOp {
     fn f64(v1: f64, v2: f64) -> f64;
     fn u8(v1: u8, v2: u8) -> u8;
     fn u32(v1: u32, v2: u32) -> u32;
+
+    const BF16_VEC: bool = false;
+    fn bf16_vec(_xs1: &[bf16], _xs2: &[bf16], _ys: &mut [bf16]) {}
+    const F16_VEC: bool = false;
+    fn f16_vec(_xs1: &[f16], _xs2: &[f16], _ys: &mut [f16]) {}
+    const F32_VEC: bool = false;
+    fn f32_vec(_xs1: &[f32], _xs2: &[f32], _ys: &mut [f32]) {}
+    const F64_VEC: bool = false;
+    fn f64_vec(_xs1: &[f64], _xs2: &[f64], _ys: &mut [f64]) {}
 }
 
 pub(crate) struct Add;
