@@ -344,24 +344,18 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
                 ys
             }
             Some(ob) => {
-                let mut i_in_block = 0;
-                let mut i_right_broadcast = 0;
                 let rhs = &rhs[ob.start..];
-                lhs[o_l1..o_l2]
-                    .iter()
-                    .map(|&l| {
-                        let r = unsafe { rhs.get_unchecked(i_in_block) };
-                        i_right_broadcast += 1;
-                        if i_right_broadcast >= ob.right_broadcast {
-                            i_in_block += 1;
-                            i_right_broadcast = 0;
+                let mut ys = lhs[o_l1..o_l2].to_vec();
+                for l in 0..ob.left_broadcast {
+                    let start = l * ob.len * ob.right_broadcast;
+                    for (i, &r) in rhs.iter().enumerate() {
+                        let start = start + i * ob.right_broadcast;
+                        for v in ys[start..start + ob.right_broadcast].iter_mut() {
+                            *v = f(*v, r)
                         }
-                        if i_in_block >= ob.len {
-                            i_in_block = 0
-                        }
-                        f(l, *r)
-                    })
-                    .collect()
+                    }
+                }
+                ys
             }
             None => lhs_l
                 .strided_index()
