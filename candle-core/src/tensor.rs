@@ -730,12 +730,22 @@ impl Tensor {
         self.max_impl(max_dims, false)
     }
 
+    pub fn max_all(&self) -> Result<Tensor> {
+        let dims: Vec<_> = (0..self.rank()).collect();
+        self.max(dims)
+    }
+
     pub fn min_keepdim<D: Dims>(&self, min_dims: D) -> Result<Self> {
         self.min_impl(min_dims, true)
     }
 
     pub fn min<D: Dims>(&self, min_dims: D) -> Result<Self> {
         self.min_impl(min_dims, false)
+    }
+
+    pub fn min_all(&self) -> Result<Tensor> {
+        let dims: Vec<_> = (0..self.rank()).collect();
+        self.min(dims)
     }
 
     /// Applies a 1D convolution over the input tensor.
