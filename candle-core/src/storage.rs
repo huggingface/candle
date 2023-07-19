@@ -80,40 +80,19 @@ impl Storage {
         }
     }
 
-    pub(crate) fn max(&self, layout: &Layout, s: &[usize]) -> Result<Self> {
+    pub(crate) fn reduce_op(
+        &self,
+        op: crate::op::ReduceOp,
+        layout: &Layout,
+        s: &[usize],
+    ) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {
-                let storage = storage.max(layout, s)?;
+                let storage = storage.reduce_op(op, layout, s)?;
                 Ok(Self::Cpu(storage))
             }
             Self::Cuda(storage) => {
-                let storage = storage.max(layout, s)?;
-                Ok(Self::Cuda(storage))
-            }
-        }
-    }
-
-    pub(crate) fn min(&self, layout: &Layout, s: &[usize]) -> Result<Self> {
-        match self {
-            Storage::Cpu(storage) => {
-                let storage = storage.min(layout, s)?;
-                Ok(Self::Cpu(storage))
-            }
-            Self::Cuda(storage) => {
-                let storage = storage.min(layout, s)?;
-                Ok(Self::Cuda(storage))
-            }
-        }
-    }
-
-    pub(crate) fn sum(&self, layout: &Layout, s: &[usize]) -> Result<Self> {
-        match self {
-            Storage::Cpu(storage) => {
-                let storage = storage.sum(layout, s)?;
-                Ok(Self::Cpu(storage))
-            }
-            Self::Cuda(storage) => {
-                let storage = storage.sum(layout, s)?;
+                let storage = storage.reduce_op(op, layout, s)?;
                 Ok(Self::Cuda(storage))
             }
         }

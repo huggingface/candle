@@ -356,3 +356,10 @@ impl UnaryOp for Relu {
         v
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReduceOp {
+    Sum,
+    Min,
+    Max,
+}

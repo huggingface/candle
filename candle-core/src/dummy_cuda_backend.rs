@@ -40,15 +40,7 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn min(&self, _: &Layout, _: &[usize]) -> Result<Self> {
-        Err(Error::NotCompiledWithCudaSupport)
-    }
-
-    fn max(&self, _: &Layout, _: &[usize]) -> Result<Self> {
-        Err(Error::NotCompiledWithCudaSupport)
-    }
-
-    fn sum(&self, _: &Layout, _: &[usize]) -> Result<Self> {
+    fn reduce_op(&self, _: crate::op::ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

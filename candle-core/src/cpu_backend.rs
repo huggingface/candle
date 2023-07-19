@@ -97,11 +97,16 @@ struct Reduce<'a> {
     dst_shape: &'a Shape,
     reduce_dims: &'a [usize],
     reduce_dims_and_stride: Vec<(usize, usize)>,
+    op: crate::op::ReduceOp,
 }
 
 impl<'a> Map1 for Reduce<'a> {
     #[inline(always)]
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
+        match self.op {
+            crate::op::ReduceOp::Min | crate::op::ReduceOp::Max => todo!(),
+            crate::op::ReduceOp::Sum => (),
+        }
         let mut dst = vec![T::zero(); self.dst_shape.elem_count()];
         match src_l.contiguous_offsets() {
             Some((o1, o2)) => {
@@ -1010,15 +1015,12 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn min(&self, _layout: &Layout, _sum_dims: &[usize]) -> Result<Self> {
-        todo!()
-    }
-
-    fn max(&self, _layout: &Layout, _sum_dims: &[usize]) -> Result<Self> {
-        todo!()
-    }
-
-    fn sum(&self, layout: &Layout, reduce_dims: &[usize]) -> Result<Self> {
+    fn reduce_op(
+        &self,
+        op: crate::op::ReduceOp,
+        layout: &Layout,
+        reduce_dims: &[usize],
+    ) -> Result<Self> {
         let src_dims = layout.dims();
         let mut dst_dims = src_dims.to_vec();
         for &dim in reduce_dims.iter() {
@@ -1037,6 +1039,7 @@ impl BackendStorage for CpuStorage {
             dst_shape: &dst_shape,
             reduce_dims: &reduce_dims,
             reduce_dims_and_stride,
+            op,
         }
         .map(self, layout)
     }

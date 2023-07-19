@@ -629,7 +629,9 @@ impl Tensor {
 
     fn max_impl<D: Dims>(&self, max_dims: D, keepdim: bool) -> Result<Self> {
         let max_dims = max_dims.to_indexes(self.shape(), "max")?;
-        let storage = self.storage().max(self.layout(), &max_dims)?;
+        let storage =
+            self.storage()
+                .reduce_op(crate::op::ReduceOp::Max, self.layout(), &max_dims)?;
         let op = if self.track_op() {
             Some(Op::Max(self.clone(), max_dims.to_vec()))
         } else {
@@ -649,7 +651,9 @@ impl Tensor {
 
     fn min_impl<D: Dims>(&self, min_dims: D, keepdim: bool) -> Result<Self> {
         let min_dims = min_dims.to_indexes(self.shape(), "min")?;
-        let storage = self.storage().min(self.layout(), &min_dims)?;
+        let storage =
+            self.storage()
+                .reduce_op(crate::op::ReduceOp::Min, self.layout(), &min_dims)?;
         let op = if self.track_op() {
             Some(Op::Min(self.clone(), min_dims.to_vec()))
         } else {
@@ -669,7 +673,9 @@ impl Tensor {
 
     fn sum_impl<D: Dims>(&self, sum_dims: D, keepdim: bool) -> Result<Self> {
         let sum_dims = sum_dims.to_indexes(self.shape(), "sum")?;
-        let storage = self.storage().sum(self.layout(), &sum_dims)?;
+        let storage =
+            self.storage()
+                .reduce_op(crate::op::ReduceOp::Sum, self.layout(), &sum_dims)?;
         let op = if self.track_op() {
             Some(Op::Sum(self.clone(), sum_dims.to_vec()))
         } else {
