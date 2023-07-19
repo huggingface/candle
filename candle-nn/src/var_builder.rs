@@ -1,4 +1,7 @@
-use candle::{safetensors::SafeTensors, DType, Device, Error, Result, Shape, Tensor};
+use candle::{
+    safetensors::{Load, SafeTensors},
+    DType, Device, Error, Result, Shape, Tensor,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -170,7 +173,8 @@ impl<'a> VarBuilder<'a> {
                     .bt()
                 })?;
                 safetensors[*index]
-                    .tensor(&path, &data.device)?
+                    .tensor(&path)?
+                    .load(&data.device)?
                     .to_dtype(data.dtype)?
             }
         };

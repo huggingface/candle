@@ -1,6 +1,6 @@
 use crate::model::{Config, Whisper};
 use anyhow::Error as E;
-use candle::{DType, Device, Tensor};
+use candle::{safetensors::Load, DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use rand::{distributions::Distribution, rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -236,11 +236,11 @@ impl Decoder {
         let device = Device::Cpu;
         let tokenizer = Tokenizer::from_bytes(&md.tokenizer).map_err(anyhow::Error::msg)?;
 
-        let mel_filters = candle::safetensors::SafeTensors::from_buffer(&md.mel_filters)?;
-        let mel_filters = mel_filters.tensor("mel_80", &device)?;
+        let mel_filters = candle::safetensors::SafeTensors::deserialize(&md.mel_filters)?;
+        let mel_filters = mel_filters.tensor("mel_80")?.load(&device)?;
         console_log!("loaded mel filters {:?}", mel_filters.shape());
         let mel_filters = mel_filters.flatten_all()?.to_vec1::<f32>()?;
-        let weights = candle::safetensors::SafeTensors::from_buffer(&md.weights)?;
+        let weights = candle::safetensors::SafeTensors::deserialize(&md.weights)?;
         let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &device);
         let config = Config::tiny_en();
         let whisper = Whisper::load(&vb, config)?;
