@@ -50,7 +50,7 @@ __device__ void fast_sum(
     if (tid < s) shr[tid] += shr[tid + s];
   }
 
-  if (tid == 0) atomicAdd(dst + dst_id, shr[0]);
+  if (tid == 0) dst[dst_id] = shr[0];
 }
 
 template <typename T>
