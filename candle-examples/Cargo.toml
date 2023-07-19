@@ -21,7 +21,7 @@ intel-mkl-src = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-candle-hub = { path = "../candle-hub" }
+hf-hub = { workspace = true}
 clap = { workspace = true }
 rand = { workspace = true }
 tokenizers = { workspace = true, features = ["onig"] }

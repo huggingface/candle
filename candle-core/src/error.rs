@@ -79,6 +79,9 @@ pub enum Error {
         nth_shape: Shape,
     },
 
+    #[error("empty tensor for {op}")]
+    EmptyTensor { op: &'static str },
+
     // === Device Errors ===
     #[error("device mismatch in {op}, lhs: {lhs:?}, rhs: {rhs:?}")]
     DeviceMismatchBinaryOp {
