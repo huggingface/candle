@@ -87,7 +87,10 @@ fn precompute_freqs_cis(config: &Config, device: &Device) -> Result<Tensor> {
         .to_dtype(DType::F32)?
         .reshape((MAX_SEQ_LEN, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-    let shape = [1, MAX_SEQ_LEN, n_elem / 2, 1];
+    // This is different from the paper, see:
+    // https://github.com/huggingface/transformers/blob/6112b1c6442aaf7affd2b0676a1cd4eee30c45cf/src/transformers/models/llama/modeling_llama.py#L112
+    let idx_theta = Tensor::cat(&[&idx_theta, &idx_theta], D::Minus1)?;
+    let shape = [1, MAX_SEQ_LEN, n_elem, 1];
     let idx_theta_cos = idx_theta.cos()?.reshape(&shape)?;
     let idx_theta_sin = idx_theta.sin()?.reshape(&shape)?;
     Ok(Tensor::cat(&[&idx_theta_cos, &idx_theta_sin], D::Minus1)?)

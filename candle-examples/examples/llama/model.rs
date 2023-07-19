@@ -99,7 +99,7 @@ impl RmsNorm {
         let (b_sz, seq_len, hidden_size) = x.shape().r3()?;
         let norm_x = (x.sqr()?.sum_keepdim(2)? / hidden_size as f64)?;
         let norm_x = norm_x.broadcast_as((b_sz, seq_len, hidden_size))?;
-        let x_normed = (x / (norm_x + 1e-5)?.sqrt()?)?;
+        let x_normed = (x / (norm_x + 1e-6)?.sqrt()?)?;
         let size = self.scale.shape().r1()?;
         let scale = self
             .scale
@@ -124,29 +124,28 @@ struct CausalSelfAttention {
 
 impl CausalSelfAttention {
     fn apply_rotary_emb(&self, x: &Tensor, freqs_cis: &Tensor) -> Result<Tensor> {
-        let mut dims = x.dims().to_vec();
+        let (b_sz, _, seq_len, n_embd) = x.shape().r4()?;
+        let dims = x.dims().to_vec();
         let fcis_dims = freqs_cis.dims();
         let freqs_cis = if dims[2] < fcis_dims[1] {
             freqs_cis.narrow(1, 0, dims[2])?
         } else {
             freqs_cis.clone()
         };
-        let v = dims.pop().unwrap();
-        dims.push(v / 2);
-        dims.push(2);
-        let x = x.reshape(dims)?;
-        let re_x = x.narrow(D::Minus1, 0, 1)?;
-        let im_x = x.narrow(D::Minus1, 1, 1)?;
-        let re_f = freqs_cis
+        let cos = freqs_cis
             .narrow(D::Minus1, 0, 1)?
-            .broadcast_as(re_x.shape())?;
-        let im_f = freqs_cis
+            .squeeze(D::Minus1)?
+            .squeeze(0)?;
+        let sin = freqs_cis
             .narrow(D::Minus1, 1, 1)?
-            .broadcast_as(im_x.shape())?;
-        let re = ((&re_x * &re_f)? - (&im_x * &im_f)?)?;
-        let im = ((&re_x * &im_f)? + (&im_x * &re_f)?)?;
-        let rope = Tensor::cat(&[&re, &im], D::Minus1)?;
-        let rope = rope.flatten_from(D::Minus2)?;
+            .squeeze(D::Minus1)?
+            .squeeze(0)?;
+        let cos = cos.broadcast_as((b_sz, 1, seq_len, n_embd))?;
+        let sin = sin.broadcast_as((b_sz, 1, seq_len, n_embd))?;
+        let x1 = x.narrow(D::Minus1, 0, n_embd / 2)?;
+        let x2 = x.narrow(D::Minus1, n_embd / 2, n_embd / 2)?;
+        let rotate_x = Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)?;
+        let rope = (x.broadcast_mul(&cos)? + rotate_x.broadcast_mul(&sin)?)?;
         Ok(rope)
     }
 
@@ -196,7 +195,7 @@ impl CausalSelfAttention {
 
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
-        let att = (q.matmul(&k.t()?)? / (k.dim(D::Minus1)? as f64).sqrt())?;
+        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
         let mask = self.cache.mask(seq_len)?.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
         let att = att.softmax(D::Minus1)?;
@@ -298,11 +297,11 @@ impl Block {
     }
 
     fn forward(&self, x: &Tensor, freqs_cis: &Tensor, block_idx: usize) -> Result<Tensor> {
-        let x = (self
-            .attn
-            .forward(&self.rms_1.forward(x)?, freqs_cis, block_idx)?
-            + x)?;
-        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + x)?;
+        let residual = x;
+        let x = self.rms_1.forward(x)?;
+        let x = (self.attn.forward(&x, freqs_cis, block_idx)? + residual)?;
+        let residual = &x;
+        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
     }
 
