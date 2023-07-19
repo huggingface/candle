@@ -12,6 +12,7 @@ pub struct Config {
     pub n_layer: usize,
     pub n_head: usize,
     pub n_embd: usize,
+    pub n_key_value_head: usize,
 }
 
 impl Config {
@@ -23,6 +24,7 @@ impl Config {
             n_layer: 32,
             n_head: 32,
             n_embd: 4096,
+            n_key_value_head: 32,
         }
     }
 }
@@ -110,22 +112,17 @@ impl RmsNorm {
 }
 
 struct CausalSelfAttention {
-    c_attn: Linear,
-    c_proj: Linear,
+    q_proj: Linear,
+    k_proj: Linear,
+    v_proj: Linear,
+    o_proj: Linear,
     n_head: usize,
+    n_key_value_head: usize,
+    head_dim: usize,
     cache: Cache,
 }
 
 impl CausalSelfAttention {
-    fn new(c_attn: Linear, c_proj: Linear, n_head: usize, cache: &Cache) -> Self {
-        Self {
-            c_attn,
-            c_proj,
-            n_head,
-            cache: cache.clone(),
-        }
-    }
-
     fn apply_rotary_emb(&self, x: &Tensor, freqs_cis: &Tensor) -> Result<Tensor> {
         let mut dims = x.dims().to_vec();
         let fcis_dims = freqs_cis.dims();
@@ -156,15 +153,23 @@ impl CausalSelfAttention {
     fn forward(&self, x: &Tensor, freqs_cis: &Tensor, block_idx: usize) -> Result<Tensor> {
         let x_dtype = x.dtype();
         let (b_sz, seq_len, n_embd) = x.shape().r3()?;
-        let qkv = self.c_attn.forward(x)?;
-        let qkv = qkv.to_dtype(DType::F32)?;
-        let q = qkv.narrow(D::Minus1, 0, n_embd)?;
-        let k = qkv.narrow(D::Minus1, n_embd, n_embd)?;
-        let v = qkv.narrow(D::Minus1, 2 * n_embd, n_embd)?;
-        let target_dim = [b_sz, seq_len, self.n_head, n_embd / self.n_head];
-        let k = k.reshape(target_dim.as_slice())?.transpose(1, 2)?;
-        let q = q.reshape(target_dim.as_slice())?.transpose(1, 2)?;
-        let mut v = v.reshape(target_dim.as_slice())?.transpose(1, 2)?;
+        let q = self.q_proj.forward(x)?;
+        let k = self.k_proj.forward(x)?;
+        let v = self.v_proj.forward(x)?;
+
+        let q = q
+            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .transpose(1, 2)?
+            .to_dtype(DType::F32)?;
+        let k = k
+            .reshape((b_sz, seq_len, self.n_key_value_head, self.head_dim))?
+            .transpose(1, 2)?
+            .to_dtype(DType::F32)?;
+        let mut v = v
+            .reshape((b_sz, seq_len, self.n_key_value_head, self.head_dim))?
+            .transpose(1, 2)?
+            .to_dtype(DType::F32)?;
+
         let q = self.apply_rotary_emb(&q, freqs_cis)?;
         let mut k = self.apply_rotary_emb(&k, freqs_cis)?;
 
@@ -189,6 +194,8 @@ impl CausalSelfAttention {
             cache[block_idx] = Some((k.clone(), v.clone()))
         }
 
+        let k = self.repeat_kv(k)?;
+        let v = self.repeat_kv(v)?;
         let att = (q.matmul(&k.t()?)? / (k.dim(D::Minus1)? as f64).sqrt())?;
         let mask = self.cache.mask(seq_len)?.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
@@ -197,31 +204,42 @@ impl CausalSelfAttention {
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = y.to_dtype(x_dtype)?;
-        let y = self.c_proj.forward(&y)?;
+        let y = self.o_proj.forward(&y)?;
         Ok(y)
+    }
+
+    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
+        let n_rep = self.n_head / self.n_key_value_head;
+        if n_rep == 1 {
+            Ok(x)
+        } else {
+            let (b_sz, n_kv_head, seq_len, head_dim) = x.shape().r4()?;
+            let x = x
+                .unsqueeze(2)?
+                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
+                .reshape((b_sz, n_kv_head, n_rep, seq_len, head_dim))?;
+            Ok(x)
+        }
     }
 
     fn load(vb: VarBuilder, cache: &Cache, cfg: &Config) -> Result<Self> {
         let size_in = cfg.hidden_size;
-        let size = (cfg.hidden_size / cfg.n_head) * cfg.n_head;
-        let q_proj = vb.get((size_in, size), "q_proj.weight")?;
-        let k_proj = vb.get((size_in, size), "k_proj.weight")?;
-        let v_proj = vb.get((size_in, size), "v_proj.weight")?;
-        // Invert the transformation from:
-        // https://github.com/huggingface/transformers/blob/2642d8d04b14c18199ebe7b35f976da02df61752/src/transformers/models/llama/convert_llama_weights_to_hf.py#L101
-        let n_head = cfg.n_head;
-        let q_proj = q_proj
-            .reshape((n_head, 2, size / n_head / 2, size_in))?
-            .transpose(1, 2)?
-            .reshape((size_in, size))?;
-        let k_proj = k_proj
-            .reshape((n_head, 2, size / n_head / 2, size_in))?
-            .transpose(1, 2)?
-            .reshape((size_in, size))?;
-        let attn_weight = Tensor::cat(&[q_proj, k_proj, v_proj], 0)?;
-        let c_attn = Linear::new(attn_weight, None);
-        let o_proj = linear(size, size_in, vb.pp("o_proj"))?;
-        Ok(Self::new(c_attn, o_proj, cfg.n_head, cache))
+        let size_q = (cfg.hidden_size / cfg.n_head) * cfg.n_head;
+        let size_kv = (cfg.hidden_size / cfg.n_head) * cfg.n_key_value_head;
+        let q_proj = linear(size_in, size_q, vb.pp("q_proj"))?;
+        let k_proj = linear(size_in, size_kv, vb.pp("k_proj"))?;
+        let v_proj = linear(size_in, size_kv, vb.pp("v_proj"))?;
+        let o_proj = linear(size_q, size_in, vb.pp("o_proj"))?;
+        Ok(Self {
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
+            n_head: cfg.n_head,
+            n_key_value_head: cfg.n_key_value_head,
+            head_dim: cfg.hidden_size / cfg.n_head,
+            cache: cache.clone(),
+        })
     }
 }
 
