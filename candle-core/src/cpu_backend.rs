@@ -109,24 +109,24 @@ impl<'a> Map1 for Reduce<'a> {
                 // Handle the case where we reduce over the last dimensions separately as it is
                 // fairly common and easy to optimize. This rely on the layout being contiguous!
                 // reduce_dims is sorted, check if it is ranging from a to n-1.
-                let sum_over_last_dims = self
+                let reduce_over_last_dims = self
                     .reduce_dims
                     .iter()
                     .rev()
                     .enumerate()
                     .all(|(i, &v)| v == src_l.shape().rank() - 1 - i);
-                if sum_over_last_dims {
-                    let sum_sz = self
+                if reduce_over_last_dims {
+                    let reduce_sz = self
                         .reduce_dims_and_stride
                         .iter()
                         .map(|(u, _)| u)
                         .product::<usize>();
                     let mut src_i = 0;
                     for dst_v in dst.iter_mut() {
-                        for &s in src[src_i..src_i + sum_sz].iter() {
+                        for &s in src[src_i..src_i + reduce_sz].iter() {
                             *dst_v += s
                         }
-                        src_i += sum_sz
+                        src_i += reduce_sz
                     }
                     return Ok(dst);
                 };
