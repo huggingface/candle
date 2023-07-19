@@ -1,4 +1,6 @@
 #include "compatibility.cuh"
+#include<stdint.h>
+#include<cmath>
 
 // TODO: This is often used to check that the data is contiguous so that
 // kernels can be easily mapped. However this only returns true for row
@@ -139,6 +141,9 @@ __device__ __forceinline__ float absg(float a) { return fabsf(a); }
 __device__ __forceinline__ double absg(double a) { return fabs(a); }
 __device__ __forceinline__ float copysigng(float a, float b) { return copysignf(a, b); }
 __device__ __forceinline__ double copysigng(double a, double b) { return copysign(a, b); }
+
+__device__ __forceinline__ uint32_t ming(uint32_t a, uint32_t b) { return min(a, b); }
+__device__ __forceinline__ uint32_t maxg(uint32_t a, uint32_t b) { return max(a, b); }
 
 #if __CUDA_ARCH__ >= 530
 __device__ __forceinline__ __half powg(__half a, __half b) { return __float2half(powf(__half2float(a), __half2float(b))); }
