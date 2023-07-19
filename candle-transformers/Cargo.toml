@@ -14,7 +14,7 @@ readme = "README.md"
 candle = { path = "../candle-core" }
 hf-hub = { workspace = true}
 candle-nn = { path = "../candle-nn" }
-intel-mkl-src = { workspace = true, optional = true, features = ["mkl-dynamic-lp64-iomp"]}
+intel-mkl-src = { workspace = true, optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
 rand = { workspace = true }
 wav = { workspace = true }
