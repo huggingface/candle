@@ -4,9 +4,9 @@ mod model;
 
 use anyhow::{anyhow, Error as E, Result};
 use candle::Tensor;
-use candle_hub::{api::sync::Api, Cache, Repo, RepoType};
 use candle_nn::VarBuilder;
 use clap::Parser;
+use hf_hub::{api::sync::Api, Cache, Repo, RepoType};
 use model::{BertModel, Config, DTYPE};
 use tokenizers::{PaddingParams, Tokenizer};
 

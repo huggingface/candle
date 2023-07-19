@@ -5,10 +5,10 @@ extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
-use candle_hub::{api::sync::Api, Repo, RepoType};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use clap::Parser;
+use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 mod model;
