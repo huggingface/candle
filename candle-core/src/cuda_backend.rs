@@ -955,10 +955,21 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
-    fn sum(&self, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
-        let device = self.device().clone();
-        let slice = FastSum(sum_dims).map(&self.slice, &device, layout)?;
-        Ok(Self { slice, device })
+    fn reduce_op(
+        &self,
+        op: crate::op::ReduceOp,
+        layout: &Layout,
+        sum_dims: &[usize],
+    ) -> Result<Self> {
+        match op {
+            crate::op::ReduceOp::Sum => {
+                let device = self.device().clone();
+                let slice = FastSum(sum_dims).map(&self.slice, &device, layout)?;
+                Ok(Self { slice, device })
+            }
+            crate::op::ReduceOp::Min => Err(CudaError::InternalError("TODO: implement min").into()),
+            crate::op::ReduceOp::Max => Err(CudaError::InternalError("TODO: implement max").into()),
+        }
     }
 
     fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) -> Result<()> {

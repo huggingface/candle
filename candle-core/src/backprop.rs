@@ -67,6 +67,8 @@ impl Tensor {
                     Op::Reshape(node)
                     | Op::Broadcast(node)
                     | Op::Sum(node, _)
+                    | Op::Max(node, _)
+                    | Op::Min(node, _)
                     | Op::ToDType(node)
                     | Op::ToDevice(node)
                     | Op::Transpose(node, _, _)
@@ -202,6 +204,12 @@ impl Tensor {
                     Op::Sum(arg, _sum_dims) => {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.broadcast_add(&grad)?
+                    }
+                    Op::Max(_args, _sum_dims) => {
+                        return Err(Error::BackwardNotSupported { op: "max" })
+                    }
+                    Op::Min(_args, _sum_dims) => {
+                        return Err(Error::BackwardNotSupported { op: "min" })
                     }
                     Op::ToDType(arg) => {
                         let sum_grad = grads.or_insert(arg)?;

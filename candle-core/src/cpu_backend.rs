@@ -93,47 +93,52 @@ impl<'a> Map2 for WCond<'a> {
     }
 }
 
-struct Sum<'a> {
+struct Reduce<'a> {
     dst_shape: &'a Shape,
-    sum_dims: &'a [usize],
-    sum_dims_and_stride: Vec<(usize, usize)>,
+    reduce_dims: &'a [usize],
+    reduce_dims_and_stride: Vec<(usize, usize)>,
+    op: crate::op::ReduceOp,
 }
 
-impl<'a> Map1 for Sum<'a> {
+impl<'a> Map1 for Reduce<'a> {
     #[inline(always)]
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
+        match self.op {
+            crate::op::ReduceOp::Min | crate::op::ReduceOp::Max => todo!(),
+            crate::op::ReduceOp::Sum => (),
+        }
         let mut dst = vec![T::zero(); self.dst_shape.elem_count()];
         match src_l.contiguous_offsets() {
             Some((o1, o2)) => {
                 let src = &src[o1..o2];
-                // Handle the case where we sum over the last dimensions separately as it is
+                // Handle the case where we reduce over the last dimensions separately as it is
                 // fairly common and easy to optimize. This rely on the layout being contiguous!
-                // sum_dims is sorted, check if it is ranging from a to n-1.
-                let sum_over_last_dims = self
-                    .sum_dims
+                // reduce_dims is sorted, check if it is ranging from a to n-1.
+                let reduce_over_last_dims = self
+                    .reduce_dims
                     .iter()
                     .rev()
                     .enumerate()
                     .all(|(i, &v)| v == src_l.shape().rank() - 1 - i);
-                if sum_over_last_dims {
-                    let sum_sz = self
-                        .sum_dims_and_stride
+                if reduce_over_last_dims {
+                    let reduce_sz = self
+                        .reduce_dims_and_stride
                         .iter()
                         .map(|(u, _)| u)
                         .product::<usize>();
                     let mut src_i = 0;
                     for dst_v in dst.iter_mut() {
-                        for &s in src[src_i..src_i + sum_sz].iter() {
+                        for &s in src[src_i..src_i + reduce_sz].iter() {
                             *dst_v += s
                         }
-                        src_i += sum_sz
+                        src_i += reduce_sz
                     }
                     return Ok(dst);
                 };
                 for (unstr_index, &src) in src.iter().enumerate() {
                     let mut dst_index = unstr_index;
-                    // Set the sum_dims indexes to 0.
-                    for &(dim, stride) in self.sum_dims_and_stride.iter() {
+                    // Set the reduce_dims indexes to 0.
+                    for &(dim, stride) in self.reduce_dims_and_stride.iter() {
                         // The compiler is able to optimize the following in a single divmod op.
                         let (pre, post) = (dst_index / stride, dst_index % stride);
                         dst_index = (pre / dim) * stride + post;
@@ -144,8 +149,8 @@ impl<'a> Map1 for Sum<'a> {
             None => {
                 for (unstr_index, src_index) in src_l.strided_index().enumerate() {
                     let mut dst_index = unstr_index;
-                    // Set the sum_dims indexes to 0.
-                    for &(dim, stride) in self.sum_dims_and_stride.iter() {
+                    // Set the reduce_dims indexes to 0.
+                    for &(dim, stride) in self.reduce_dims_and_stride.iter() {
                         // The compiler is able to optimize the following in a single divmod op.
                         let (pre, post) = (dst_index / stride, dst_index % stride);
                         dst_index = (pre / dim) * stride + post;
@@ -340,7 +345,7 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
         }
         (Some((o_l1, o_l2)), None) => match rhs_l.offsets_b() {
             Some(ob) if ob.right_broadcast == 1 => {
-                let rhs = &rhs[ob.start..];
+                let rhs = &rhs[ob.start..ob.start + ob.len];
                 let mut ys: Vec<T> = Vec::with_capacity(el_count);
                 let ys_to_set = ys.spare_capacity_mut();
                 let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
@@ -358,7 +363,7 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
                 ys
             }
             Some(ob) => {
-                let rhs = &rhs[ob.start..];
+                let rhs = &rhs[ob.start..ob.start + ob.len];
                 let mut ys = lhs[o_l1..o_l2].to_vec();
                 for idx_l in 0..ob.left_broadcast {
                     let start = idx_l * ob.len * ob.right_broadcast;
@@ -379,7 +384,7 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
         },
         (None, Some((o_r1, o_r2))) => match lhs_l.offsets_b() {
             Some(ob) if ob.right_broadcast == 1 => {
-                let lhs = &lhs[ob.start..];
+                let lhs = &lhs[ob.start..ob.start + ob.len];
                 let mut ys: Vec<T> = Vec::with_capacity(el_count);
                 let ys_to_set = ys.spare_capacity_mut();
                 let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
@@ -397,7 +402,7 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
                 ys
             }
             Some(ob) => {
-                let lhs = &lhs[ob.start..];
+                let lhs = &lhs[ob.start..ob.start + ob.len];
                 let mut ys = rhs[o_r1..o_r2].to_vec();
                 for idx_l in 0..ob.left_broadcast {
                     let start = idx_l * ob.len * ob.right_broadcast;
@@ -1010,25 +1015,31 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn sum(&self, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
+    fn reduce_op(
+        &self,
+        op: crate::op::ReduceOp,
+        layout: &Layout,
+        reduce_dims: &[usize],
+    ) -> Result<Self> {
         let src_dims = layout.dims();
         let mut dst_dims = src_dims.to_vec();
-        for &sum_dim in sum_dims.iter() {
-            dst_dims[sum_dim] = 1;
+        for &dim in reduce_dims.iter() {
+            dst_dims[dim] = 1;
         }
         let dst_shape = Shape::from(dst_dims);
-        let mut sum_dims = sum_dims.to_vec();
-        // Sort the sum_dims as they have to be processed from left to right when converting the
+        let mut reduce_dims = reduce_dims.to_vec();
+        // Sort the reduce_dims as they have to be processed from left to right when converting the
         // indexes.
-        sum_dims.sort();
-        let sum_dims_and_stride: Vec<_> = sum_dims
+        reduce_dims.sort();
+        let reduce_dims_and_stride: Vec<_> = reduce_dims
             .iter()
             .map(|&d| (src_dims[d], src_dims[d + 1..].iter().product::<usize>()))
             .collect();
-        Sum {
+        Reduce {
             dst_shape: &dst_shape,
-            sum_dims: &sum_dims,
-            sum_dims_and_stride,
+            reduce_dims: &reduce_dims,
+            reduce_dims_and_stride,
+            op,
         }
         .map(self, layout)
     }

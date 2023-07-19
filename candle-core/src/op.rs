@@ -29,6 +29,8 @@ pub(crate) enum Op {
         add: f64,
     },
     Sum(Tensor, Vec<usize>),
+    Max(Tensor, Vec<usize>),
+    Min(Tensor, Vec<usize>),
     ToDType(Tensor),
     Broadcast(Tensor),
     Exp(Tensor),
@@ -353,4 +355,11 @@ impl UnaryOp for Relu {
     fn u32(v: u32) -> u32 {
         v
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReduceOp {
+    Sum,
+    Min,
+    Max,
 }
