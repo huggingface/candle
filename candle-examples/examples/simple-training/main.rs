@@ -21,7 +21,7 @@ pub fn main() -> Result<()> {
     for epoch in 1..200 {
         let logits = m.train_images.matmul(&ws)?.broadcast_add(&bs)?;
         let loss = logits.softmax(D::Minus1)?;
-        // TODO: let loss = loss.nll_loss(&m.train_labels);
+        // TODO: log_softmax + let loss = loss.nll_loss(&m.train_labels);
         sgd.backward_step(&loss)?;
 
         let _test_logits = m.test_images.matmul(&ws)?.broadcast_add(&bs)?;

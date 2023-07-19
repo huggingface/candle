@@ -17,6 +17,8 @@ pub(crate) trait BackendStorage: Sized {
     fn elu(&self, _: &Layout, _: f64) -> Result<Self>;
 
     fn sum(&self, _: &Layout, _: &[usize]) -> Result<Self>;
+    fn min(&self, _: &Layout, _: &[usize]) -> Result<Self>;
+    fn max(&self, _: &Layout, _: &[usize]) -> Result<Self>;
 
     fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) -> Result<()>;
 

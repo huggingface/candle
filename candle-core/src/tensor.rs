@@ -605,7 +605,69 @@ impl Tensor {
         }
     }
 
-    pub fn sum_impl<D: Dims>(&self, sum_dims: D, keepdim: bool) -> Result<Self> {
+    fn squeeze_dims(self, dims: &[usize]) -> Result<Self> {
+        match dims {
+            [] => Ok(self),
+            [i] => self.squeeze(*i),
+            dims => {
+                let dims = self
+                    .dims()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(dim_idx, &v)| {
+                        if dims.contains(&dim_idx) {
+                            None
+                        } else {
+                            Some(v)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                self.reshape(dims)
+            }
+        }
+    }
+
+    fn max_impl<D: Dims>(&self, max_dims: D, keepdim: bool) -> Result<Self> {
+        let max_dims = max_dims.to_indexes(self.shape(), "max")?;
+        let storage = self.storage().max(self.layout(), &max_dims)?;
+        let op = if self.track_op() {
+            Some(Op::Max(self.clone(), max_dims.to_vec()))
+        } else {
+            None
+        };
+        let mut dims = self.dims().to_vec();
+        for &max_dim in max_dims.iter() {
+            dims[max_dim] = 1
+        }
+        let max = from_storage(storage, dims, op, false);
+        if keepdim {
+            Ok(max)
+        } else {
+            max.squeeze_dims(&max_dims)
+        }
+    }
+
+    fn min_impl<D: Dims>(&self, min_dims: D, keepdim: bool) -> Result<Self> {
+        let min_dims = min_dims.to_indexes(self.shape(), "min")?;
+        let storage = self.storage().min(self.layout(), &min_dims)?;
+        let op = if self.track_op() {
+            Some(Op::Min(self.clone(), min_dims.to_vec()))
+        } else {
+            None
+        };
+        let mut dims = self.dims().to_vec();
+        for &min_dim in min_dims.iter() {
+            dims[min_dim] = 1
+        }
+        let min = from_storage(storage, dims, op, false);
+        if keepdim {
+            Ok(min)
+        } else {
+            min.squeeze_dims(&min_dims)
+        }
+    }
+
+    fn sum_impl<D: Dims>(&self, sum_dims: D, keepdim: bool) -> Result<Self> {
         let sum_dims = sum_dims.to_indexes(self.shape(), "sum")?;
         let storage = self.storage().sum(self.layout(), &sum_dims)?;
         let op = if self.track_op() {
@@ -621,25 +683,7 @@ impl Tensor {
         if keepdim {
             Ok(sum)
         } else {
-            match sum_dims.as_slice() {
-                [] => Ok(sum),
-                [i] => sum.squeeze(*i),
-                sum_dims => {
-                    let dims = sum
-                        .dims()
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(dim_idx, &v)| {
-                            if sum_dims.contains(&dim_idx) {
-                                None
-                            } else {
-                                Some(v)
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    sum.reshape(dims)
-                }
-            }
+            sum.squeeze_dims(&sum_dims)
         }
     }
 
@@ -669,6 +713,22 @@ impl Tensor {
     /// kept.
     pub fn sum<D: Dims>(&self, sum_dims: D) -> Result<Self> {
         self.sum_impl(sum_dims, false)
+    }
+
+    pub fn max_keepdim<D: Dims>(&self, max_dims: D) -> Result<Self> {
+        self.max_impl(max_dims, true)
+    }
+
+    pub fn max<D: Dims>(&self, max_dims: D) -> Result<Self> {
+        self.max_impl(max_dims, false)
+    }
+
+    pub fn min_keepdim<D: Dims>(&self, min_dims: D) -> Result<Self> {
+        self.min_impl(min_dims, true)
+    }
+
+    pub fn min<D: Dims>(&self, min_dims: D) -> Result<Self> {
+        self.min_impl(min_dims, false)
     }
 
     /// Applies a 1D convolution over the input tensor.
