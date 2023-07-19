@@ -24,7 +24,7 @@ cudarc = { git = "https://github.com/LaurentMazare/cudarc.git", branch = "cublas
 gemm = { git = "https://github.com/LaurentMazare/gemm.git", branch = "f16-vec-plus-wasm-simd" }
 hf-hub = "0.1.0"
 half = { version = "2.3.1", features = ["num-traits"] }
-intel-mkl-src = { version = "0.8.1", features = ["mkl-static-ilp64-iomp"] }
+intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
 libc = { version = "0.2.147" }
 log = "0.4"
 memmap2 = "0.7.1"
