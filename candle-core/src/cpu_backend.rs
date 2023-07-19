@@ -305,6 +305,7 @@ fn binary_map<T: Copy, F: FnMut(T, T) -> T>(
     }
 }
 
+// Similar to binary_map but with vectorized variants.
 fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>(
     lhs_l: &Layout,
     rhs_l: &Layout,
