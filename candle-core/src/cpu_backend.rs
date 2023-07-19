@@ -345,7 +345,7 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
         }
         (Some((o_l1, o_l2)), None) => match rhs_l.offsets_b() {
             Some(ob) if ob.right_broadcast == 1 => {
-                let rhs = &rhs[ob.start..];
+                let rhs = &rhs[ob.start..ob.start + ob.len];
                 let mut ys: Vec<T> = Vec::with_capacity(el_count);
                 let ys_to_set = ys.spare_capacity_mut();
                 let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
@@ -363,7 +363,7 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
                 ys
             }
             Some(ob) => {
-                let rhs = &rhs[ob.start..];
+                let rhs = &rhs[ob.start..ob.start + ob.len];
                 let mut ys = lhs[o_l1..o_l2].to_vec();
                 for idx_l in 0..ob.left_broadcast {
                     let start = idx_l * ob.len * ob.right_broadcast;
@@ -384,7 +384,7 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
         },
         (None, Some((o_r1, o_r2))) => match lhs_l.offsets_b() {
             Some(ob) if ob.right_broadcast == 1 => {
-                let lhs = &lhs[ob.start..];
+                let lhs = &lhs[ob.start..ob.start + ob.len];
                 let mut ys: Vec<T> = Vec::with_capacity(el_count);
                 let ys_to_set = ys.spare_capacity_mut();
                 let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
@@ -402,7 +402,7 @@ fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>
                 ys
             }
             Some(ob) => {
-                let lhs = &lhs[ob.start..];
+                let lhs = &lhs[ob.start..ob.start + ob.len];
                 let mut ys = rhs[o_r1..o_r2].to_vec();
                 for idx_l in 0..ob.left_broadcast {
                     let start = idx_l * ob.len * ob.right_broadcast;
