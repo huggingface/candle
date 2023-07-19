@@ -12,7 +12,7 @@ readme = "README.md"
 
 [dependencies]
 candle = { path = "../candle-core" }
-candle-hub = { path = "../candle-hub" }
+hf-hub = { workspace = true}
 candle-nn = { path = "../candle-nn" }
 intel-mkl-src = { workspace = true, optional = true, features = ["mkl-dynamic-lp64-iomp"]}
 tokenizers = { workspace = true, features = ["onig"] }

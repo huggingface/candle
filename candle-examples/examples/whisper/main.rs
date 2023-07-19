@@ -11,9 +11,9 @@ extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
-use candle_hub::{api::sync::Api, Repo, RepoType};
 use candle_nn::VarBuilder;
 use clap::Parser;
+use hf_hub::{api::sync::Api, Repo, RepoType};
 use rand::{distributions::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
 

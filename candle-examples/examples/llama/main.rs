@@ -16,9 +16,9 @@ use anyhow::{Error as E, Result};
 use clap::Parser;
 
 use candle::{DType, Device, Tensor, D};
-use candle_hub::{api::sync::Api, Repo, RepoType};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
+use hf_hub::{api::sync::Api, Repo, RepoType};
 
 mod model;
 use model::{Config, Llama};
