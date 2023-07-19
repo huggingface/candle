@@ -10,7 +10,7 @@
 extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, Tensor};
+use candle::{safetensors::Load, DType, Device, Tensor};
 use candle_hub::{api::sync::Api, Repo, RepoType};
 use candle_nn::VarBuilder;
 use clap::Parser;
@@ -311,7 +311,7 @@ fn main() -> Result<()> {
 
     let mel_filters = unsafe { candle::safetensors::MmapedFile::new(args.filters)? };
     let mel_filters = mel_filters.deserialize()?;
-    let mel_filters = mel_filters.tensor("mel_80", &device)?;
+    let mel_filters = mel_filters.tensor("mel_80")?.load(&device)?;
     println!("loaded mel filters {:?}", mel_filters.shape());
     let mel_filters = mel_filters.flatten_all()?.to_vec1::<f32>()?;
 
