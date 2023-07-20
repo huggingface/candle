@@ -1059,6 +1059,10 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
+        Err(CudaError::InternalError("TODO: implement index-select").into())
+    }
+
     fn matmul(
         &self,
         rhs: &Self,

@@ -267,6 +267,32 @@ impl Storage {
         }
     }
 
+    pub(crate) fn index_select(
+        &self,
+        rhs: &Self,
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        d: usize,
+    ) -> Result<Self> {
+        self.same_device(rhs, "index-select")?;
+        match (self, rhs) {
+            (Storage::Cpu(lhs), Storage::Cpu(rhs)) => {
+                let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
+                Ok(Self::Cpu(storage))
+            }
+            (Self::Cuda(lhs), Self::Cuda(rhs)) => {
+                let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
+                Ok(Self::Cuda(storage))
+            }
+            (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
+                lhs: lhs.device().location(),
+                rhs: rhs.device().location(),
+                op: "index-select",
+            }
+            .bt()),
+        }
+    }
+
     pub(crate) fn matmul(
         &self,
         rhs: &Self,

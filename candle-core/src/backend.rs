@@ -40,6 +40,7 @@ pub(crate) trait BackendStorage: Sized {
     ) -> Result<Self>;
 
     fn embedding(&self, _: &Layout, _: &Self, _: &Layout) -> Result<Self>;
+    fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self>;
 
     fn matmul(
         &self,
