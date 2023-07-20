@@ -110,6 +110,12 @@ struct Args {
     /// Use f32 computations rather than f16.
     #[arg(long)]
     use_f32: bool,
+
+    #[arg(long)]
+    model_id: Option<String>,
+
+    #[arg(long)]
+    v2: bool,
 }
 
 fn main() -> Result<()> {
@@ -129,8 +135,15 @@ fn main() -> Result<()> {
         }
         None => {
             let api = Api::new()?;
-            let repo = Repo::new("Narsil/amall-7b".to_string(), RepoType::Model);
-            println!("loading the model weights");
+            let model_id = args.model_id.unwrap_or_else(|| {
+                if args.v2 {
+                    "meta-llama/Llama-2-7b".to_string()
+                } else {
+                    "Narsil/amall-7b".to_string()
+                }
+            });
+            println!("loading the model weights from {model_id}");
+            let repo = Repo::new(model_id, RepoType::Model);
             let tokenizer_filename = api.get(&repo, "tokenizer.json")?;
             let mut filenames = vec![];
             for rfilename in [
