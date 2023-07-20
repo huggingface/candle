@@ -137,7 +137,7 @@ fn main() -> Result<()> {
             let api = Api::new()?;
             let model_id = args.model_id.unwrap_or_else(|| {
                 if args.v2 {
-                    "meta-llama/Llama-2-7b".to_string()
+                    "meta-llama/Llama-2-7b-hf".to_string()
                 } else {
                     "Narsil/amall-7b".to_string()
                 }
