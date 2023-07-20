@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use crate::op::{CmpOp, ReduceOp};
 use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
 
 #[derive(Debug, Clone)]
@@ -40,7 +41,11 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn reduce_op(&self, _: crate::op::ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
+    fn reduce_op(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

@@ -1,3 +1,4 @@
+use crate::op::{CmpOp, ReduceOp};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
 pub(crate) trait BackendStorage: Sized {
@@ -16,7 +17,9 @@ pub(crate) trait BackendStorage: Sized {
 
     fn elu(&self, _: &Layout, _: f64) -> Result<Self>;
 
-    fn reduce_op(&self, _: crate::op::ReduceOp, _: &Layout, _: &[usize]) -> Result<Self>;
+    fn reduce_op(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self>;
+
+    fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self>;
 
     fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) -> Result<()>;
 

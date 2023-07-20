@@ -2,12 +2,31 @@ use crate::Tensor;
 use half::{bf16, f16};
 use num_traits::float::Float;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CmpOp {
+    Eq,
+    Ne,
+    Le,
+    Ge,
+    Lt,
+    Gt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReduceOp {
+    Sum,
+    Min,
+    Max,
+}
+
 #[derive(Clone)]
 pub(crate) enum Op {
     Add(Tensor, Tensor),
     Mul(Tensor, Tensor),
     Sub(Tensor, Tensor),
     Div(Tensor, Tensor),
+    Cmp(Tensor, CmpOp),
+    Reduce(Tensor, ReduceOp, Vec<usize>),
     Matmul(Tensor, Tensor),
     Embedding(Tensor, Tensor),
     WhereCond(Tensor, Tensor, Tensor),
@@ -28,9 +47,6 @@ pub(crate) enum Op {
         mul: f64,
         add: f64,
     },
-    Sum(Tensor, Vec<usize>),
-    Max(Tensor, Vec<usize>),
-    Min(Tensor, Vec<usize>),
     ToDType(Tensor),
     Broadcast(Tensor),
     Exp(Tensor),
@@ -355,11 +371,4 @@ impl UnaryOp for Relu {
     fn u32(v: u32) -> u32 {
         v
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReduceOp {
-    Sum,
-    Min,
-    Max,
 }
