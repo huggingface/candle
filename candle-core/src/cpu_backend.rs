@@ -1,5 +1,5 @@
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::op::{BinaryOp, ReduceOp, UnaryOp};
+use crate::op::{BinaryOp, CmpOp, ReduceOp, UnaryOp};
 use crate::{DType, Error, Layout, Result, Shape, WithDType};
 use half::{bf16, f16};
 
@@ -1062,6 +1062,10 @@ impl BackendStorage for CpuStorage {
             op,
         }
         .map(self, layout)
+    }
+
+    fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
+        todo!()
     }
 
     fn divide_by_sum_over_dim(&mut self, shape: &Shape, dim: usize) -> Result<()> {
