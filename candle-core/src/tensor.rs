@@ -1,5 +1,5 @@
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::op::{CmpOp, Op, ReduceOp};
+use crate::op::{BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::shape::{Dim, Dims};
 use crate::{storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
@@ -80,7 +80,7 @@ macro_rules! unary_op {
                 .storage()
                 .unary_impl::<crate::op::$op_name>(self.layout())?;
             let op = if self.track_op() {
-                Some(Op::$op_name(self.clone()))
+                Some(Op::Unary(self.clone(), UnaryOp::$op_name))
             } else {
                 None
             };
@@ -99,7 +99,7 @@ macro_rules! binary_op {
                 rhs.layout(),
             )?;
             let op = if self.track_op() || rhs.track_op() {
-                Some(Op::$op_name(self.clone(), rhs.clone()))
+                Some(Op::Binary(self.clone(), rhs.clone(), BinaryOp::$op_name))
             } else {
                 None
             };

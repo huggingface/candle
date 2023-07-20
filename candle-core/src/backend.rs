@@ -1,4 +1,4 @@
-use crate::op::{CmpOp, ReduceOp};
+use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
 pub(crate) trait BackendStorage: Sized {
@@ -25,10 +25,9 @@ pub(crate) trait BackendStorage: Sized {
 
     fn to_dtype(&self, _: &Layout, _: DType) -> Result<Self>;
 
-    fn unary_impl<B: crate::op::UnaryOp>(&self, _: &Layout) -> Result<Self>;
+    fn unary_impl<B: UnaryOpT>(&self, _: &Layout) -> Result<Self>;
 
-    fn binary_impl<B: crate::op::BinaryOp>(&self, _: &Self, _: &Layout, _: &Layout)
-        -> Result<Self>;
+    fn binary_impl<B: BinaryOpT>(&self, _: &Self, _: &Layout, _: &Layout) -> Result<Self>;
 
     fn where_cond(&self, _: &Layout, _: &Self, _: &Layout, _: &Self, _: &Layout) -> Result<Self>;
 

@@ -1,5 +1,5 @@
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::op::{CmpOp, ReduceOp};
+use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape, WithDType};
 use candle_kernels as kernels;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
@@ -573,7 +573,7 @@ impl<'a> Map1 for FastReduce<'a> {
     }
 }
 
-impl<U: crate::op::UnaryOp> Map1 for U {
+impl<U: UnaryOpT> Map1 for U {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         src: &CudaSlice<T>,
@@ -716,7 +716,7 @@ impl<'a> Map2 for WhereCond<'a> {
     }
 }
 
-impl<U: crate::op::BinaryOp> Map2 for U {
+impl<U: crate::op::BinaryOpT> Map2 for U {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         lhs: &CudaSlice<T>,
@@ -976,13 +976,13 @@ impl BackendStorage for CudaStorage {
         Err(CudaError::InternalError("TODO: implement divide_by_sum_over_dim").into())
     }
 
-    fn unary_impl<U: crate::op::UnaryOp>(&self, layout: &Layout) -> Result<Self> {
+    fn unary_impl<U: UnaryOp>(&self, layout: &Layout) -> Result<Self> {
         let device = self.device().clone();
         let slice = U::V.map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
 
-    fn binary_impl<B: crate::op::BinaryOp>(
+    fn binary_impl<B: BinaryOpT>(
         &self,
         rhs: &Self,
         lhs_l: &Layout,

@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::op::{CmpOp, ReduceOp};
+use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
 
 #[derive(Debug, Clone)]
@@ -57,16 +57,11 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn unary_impl<B: crate::op::UnaryOp>(&self, _: &Layout) -> Result<Self> {
+    fn unary_impl<B: UnaryOpT>(&self, _: &Layout) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn binary_impl<B: crate::op::BinaryOp>(
-        &self,
-        _: &Self,
-        _: &Layout,
-        _: &Layout,
-    ) -> Result<Self> {
+    fn binary_impl<B: BinaryOpT>(&self, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
