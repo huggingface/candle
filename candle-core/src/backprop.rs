@@ -207,13 +207,13 @@ impl Tensor {
                             }
                         }
 
-                        let arg_grad = grad.sum(sum_dims.as_slice())?;
+                        let arg_grad = grad.sum_keepdim(sum_dims.as_slice())?;
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.broadcast_add(&arg_grad)?
+                        *sum_grad = sum_grad.add(&arg_grad)?;
                     }
                     Op::Reduce(arg, ReduceOp::Sum, _) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.broadcast_add(&grad)?
+                        *sum_grad = sum_grad.broadcast_add(&grad)?;
                     }
                     Op::Cmp(_args, _) => return Err(Error::BackwardNotSupported { op: "cmp" }),
                     Op::Reduce(_args, ReduceOp::Max, _) => {
@@ -233,7 +233,7 @@ impl Tensor {
                     }
                     Op::Unary(arg, UnaryOp::Log) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&(&grad * *node)?)?
+                        *sum_grad = sum_grad.add(&(&grad / node.sqr()?)?)?
                     }
                     Op::Unary(arg, UnaryOp::Sin) => {
                         let sum_grad = grads.or_insert(arg)?;
