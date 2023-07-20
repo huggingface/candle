@@ -271,7 +271,7 @@ impl Tensor {
                     Op::Unary(_, UnaryOp::Abs) => Err(Error::BackwardNotSupported { op: "abs" })?,
                     Op::Unary(arg, UnaryOp::Exp) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.add(&(&grad / *node)?)?
+                        *sum_grad = sum_grad.add(&(&grad * *node)?)?
                     }
                     Op::Unary(arg, UnaryOp::Neg) => {
                         let sum_grad = grads.or_insert(arg)?;
