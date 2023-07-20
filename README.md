@@ -13,7 +13,7 @@ let c = a.matmul(&b)?;
 Check out our [examples](./candle-examples/examples/):
 
 - [Whisper](./candle-examples/examples/whisper/)
-- [Llama](./candle-examples/examples/llama/)
+- [Llama and Llama-v2](./candle-examples/examples/llama/)
 - [Bert](./candle-examples/examples/bert/) (Useful for sentence embeddings)
 - [Falcon](./candle-examples/examples/falcon/)
 
