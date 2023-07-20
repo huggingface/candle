@@ -633,15 +633,15 @@ impl Tensor {
         let storage = self
             .storage()
             .reduce_op(ReduceOp::Max, self.layout(), &max_dims)?;
-        let op = if self.track_op() {
-            Some(Op::Reduce(self.clone(), ReduceOp::Max, max_dims.to_vec()))
-        } else {
-            None
-        };
         let mut dims = self.dims().to_vec();
         for &max_dim in max_dims.iter() {
             dims[max_dim] = 1
         }
+        let op = if self.track_op() {
+            Some(Op::Reduce(self.clone(), ReduceOp::Max, dims.to_vec()))
+        } else {
+            None
+        };
         let max = from_storage(storage, dims, op, false);
         if keepdim {
             Ok(max)
@@ -655,15 +655,15 @@ impl Tensor {
         let storage = self
             .storage()
             .reduce_op(ReduceOp::Min, self.layout(), &min_dims)?;
-        let op = if self.track_op() {
-            Some(Op::Reduce(self.clone(), ReduceOp::Min, min_dims.to_vec()))
-        } else {
-            None
-        };
         let mut dims = self.dims().to_vec();
         for &min_dim in min_dims.iter() {
             dims[min_dim] = 1
         }
+        let op = if self.track_op() {
+            Some(Op::Reduce(self.clone(), ReduceOp::Min, dims.to_vec()))
+        } else {
+            None
+        };
         let min = from_storage(storage, dims, op, false);
         if keepdim {
             Ok(min)
@@ -677,15 +677,15 @@ impl Tensor {
         let storage = self
             .storage()
             .reduce_op(ReduceOp::Sum, self.layout(), &sum_dims)?;
-        let op = if self.track_op() {
-            Some(Op::Reduce(self.clone(), ReduceOp::Sum, sum_dims.to_vec()))
-        } else {
-            None
-        };
         let mut dims = self.dims().to_vec();
         for &sum_dim in sum_dims.iter() {
             dims[sum_dim] = 1
         }
+        let op = if self.track_op() {
+            Some(Op::Reduce(self.clone(), ReduceOp::Sum, dims.to_vec()))
+        } else {
+            None
+        };
         let sum = from_storage(storage, dims, op, false);
         if keepdim {
             Ok(sum)

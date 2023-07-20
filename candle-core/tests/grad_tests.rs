@@ -79,7 +79,42 @@ fn grad_descent(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn unary_grad(device: &Device) -> Result<()> {
+    let x = Var::new(&[3f32, 1., 4., 0.15], device)?;
+    let x = x.as_tensor();
+    let y = (x.log()? + 1.)?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(y.to_vec1::<f32>()?, [2.0986123, 1.0, 2.3862944, -0.89712]);
+    assert_eq!(grad_x.to_vec1::<f32>()?, [0.33333334, 1.0, 0.25, 6.6666665]);
+    let y = x.exp()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(
+        y.to_vec1::<f32>()?,
+        [20.085537, 2.7182817, 54.59815, 1.1618342]
+    );
+    assert_eq!(
+        grad_x.to_vec1::<f32>()?,
+        [20.085537, 2.7182817, 54.59815, 1.1618342]
+    );
+    let y = x.exp()?.sqr()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(
+        y.to_vec1::<f32>()?,
+        [403.4288, 7.3890557, 2980.9578, 1.3498588]
+    );
+    // exp(x)^2 = exp(2*x)
+    assert_eq!(
+        grad_x.to_vec1::<f32>()?,
+        [806.8576, 14.778111, 5961.9155, 2.6997175]
+    );
+    Ok(())
+}
+
 test_device!(simple_grad, simple_grad_cpu, simple_grad_gpu);
 test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu);
 test_device!(matmul_grad, matmul_grad_cpu, matmul_grad_gpu);
 test_device!(grad_descent, grad_descent_cpu, grad_descent_gpu);
+test_device!(unary_grad, unary_grad_cpu, unary_grad_gpu);

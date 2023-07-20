@@ -52,7 +52,7 @@ mod mkl;
 pub mod npy;
 mod op;
 pub mod safetensors;
-mod shape;
+pub mod shape;
 mod storage;
 mod strided_index;
 mod tensor;
