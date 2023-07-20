@@ -976,7 +976,7 @@ impl BackendStorage for CudaStorage {
         Err(CudaError::InternalError("TODO: implement divide_by_sum_over_dim").into())
     }
 
-    fn unary_impl<U: UnaryOp>(&self, layout: &Layout) -> Result<Self> {
+    fn unary_impl<U: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         let device = self.device().clone();
         let slice = U::V.map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
