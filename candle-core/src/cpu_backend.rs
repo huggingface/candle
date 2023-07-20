@@ -62,6 +62,49 @@ trait Map2 {
     }
 }
 
+trait Map2U8 {
+    const OP: &'static str;
+    fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, v2: &[T], l2: &Layout) -> Result<Vec<u8>>;
+
+    fn map(
+        &self,
+        v1: &CpuStorage,
+        l1: &Layout,
+        v2: &CpuStorage,
+        l2: &Layout,
+    ) -> Result<CpuStorage> {
+        match (v1, v2) {
+            (C::U8(v1), C::U8(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
+            (C::U32(v1), C::U32(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
+            (C::BF16(v1), C::BF16(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
+            (C::F16(v1), C::F16(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
+            (C::F32(v1), C::F32(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
+            (C::F64(v1), C::F64(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
+            _ => Err(Error::DTypeMismatchBinaryOp {
+                lhs: v1.dtype(),
+                rhs: v2.dtype(),
+                op: Self::OP,
+            }
+            .bt()),
+        }
+    }
+}
+
+struct Cmp(CmpOp);
+impl Map2U8 for Cmp {
+    const OP: &'static str = "where";
+    #[inline(always)]
+    fn f<T: WithDType>(
+        &self,
+        _lhs: &[T],
+        _lhs_l: &Layout,
+        _rhs: &[T],
+        _rhs_l: &Layout,
+    ) -> Result<Vec<u8>> {
+        todo!()
+    }
+}
+
 struct WCond<'a>(&'a [u32], &'a Layout);
 
 impl<'a> Map2 for WCond<'a> {
@@ -1064,8 +1107,8 @@ impl BackendStorage for CpuStorage {
         .map(self, layout)
     }
 
-    fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
-        todo!()
+    fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
+        Cmp(op).map(self, lhs_l, rhs, rhs_l)
     }
 
     fn divide_by_sum_over_dim(&mut self, shape: &Shape, dim: usize) -> Result<()> {
