@@ -15,7 +15,7 @@ extern crate intel_mkl_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle::{DType, Device, Tensor, D};
+use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -76,26 +76,6 @@ Whate'er it bodes, henceforward will I bear
 Upon my target three fair-shining suns.
 ";
 
-fn precompute_freqs_cis(config: &Config, device: &Device) -> Result<Tensor> {
-    let n_elem = config.n_embd / config.n_head;
-    let theta: Vec<_> = (0..n_elem)
-        .step_by(2)
-        .map(|i| 1f32 / 10000f32.powf(i as f32 / n_elem as f32))
-        .collect();
-    let theta = Tensor::new(theta.as_slice(), device)?;
-    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
-        .to_dtype(DType::F32)?
-        .reshape((MAX_SEQ_LEN, 1))?
-        .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-    // This is different from the paper, see:
-    // https://github.com/huggingface/transformers/blob/6112b1c6442aaf7affd2b0676a1cd4eee30c45cf/src/transformers/models/llama/modeling_llama.py#L112
-    let idx_theta = Tensor::cat(&[&idx_theta, &idx_theta], D::Minus1)?;
-    let shape = [1, MAX_SEQ_LEN, n_elem, 1];
-    let idx_theta_cos = idx_theta.cos()?.reshape(&shape)?;
-    let idx_theta_sin = idx_theta.sin()?.reshape(&shape)?;
-    Ok(Tensor::cat(&[&idx_theta_cos, &idx_theta_sin], D::Minus1)?)
-}
-
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -139,7 +119,7 @@ fn main() -> Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
     let config = Config::config_7b();
-    let cache = model::Cache::new(!args.no_kv_cache, &config, &device);
+    let cache = model::Cache::new(!args.no_kv_cache, &config, &device)?;
     let dtype = if args.use_f32 { DType::F32 } else { DType::F16 };
     let (llama, tokenizer_filename) = match args.npy {
         Some(filename) => {
@@ -183,8 +163,6 @@ fn main() -> Result<()> {
         .get_ids()
         .to_vec();
 
-    println!("pre-computing the positional embeddings");
-    let freqs_cis = precompute_freqs_cis(&config, &device)?;
     println!("starting the inference loop");
     let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature);
     let mut new_tokens = vec![];
@@ -199,12 +177,7 @@ fn main() -> Result<()> {
         };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
-        let freqs_cis = if cache.use_kv_cache {
-            freqs_cis.narrow(1, index_pos, ctxt.len())?
-        } else {
-            freqs_cis.clone()
-        };
-        let logits = llama.forward(&input, &freqs_cis)?;
+        let logits = llama.forward(&input, index_pos)?;
         let logits = logits.squeeze(0)?;
         index_pos += ctxt.len();
 

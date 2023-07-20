@@ -35,17 +35,37 @@ pub struct Cache {
     pub use_kv_cache: bool,
     #[allow(clippy::type_complexity)]
     kvs: Arc<Mutex<Vec<Option<(Tensor, Tensor)>>>>,
+    cos: Tensor,
+    sin: Tensor,
     device: Device,
 }
 
 impl Cache {
-    pub fn new(use_kv_cache: bool, config: &Config, device: &Device) -> Self {
-        Self {
+    pub fn new(use_kv_cache: bool, config: &Config, device: &Device) -> Result<Self> {
+        // precompute freqs_cis
+        let n_elem = config.n_embd / config.n_head;
+        let theta: Vec<_> = (0..n_elem)
+            .step_by(2)
+            .map(|i| 1f32 / 10000f32.powf(i as f32 / n_elem as f32))
+            .collect();
+        let theta = Tensor::new(theta.as_slice(), device)?;
+        let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
+            .to_dtype(DType::F32)?
+            .reshape((MAX_SEQ_LEN, 1))?
+            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+        // This is different from the paper, see:
+        // https://github.com/huggingface/transformers/blob/6112b1c6442aaf7affd2b0676a1cd4eee30c45cf/src/transformers/models/llama/modeling_llama.py#L112
+        let idx_theta = Tensor::cat(&[&idx_theta, &idx_theta], D::Minus1)?;
+        let cos = idx_theta.cos()?;
+        let sin = idx_theta.sin()?;
+        Ok(Self {
             masks: Arc::new(Mutex::new(HashMap::new())),
             use_kv_cache,
             kvs: Arc::new(Mutex::new(vec![None; config.n_layer])),
             device: device.clone(),
-        }
+            cos,
+            sin,
+        })
     }
 
     fn mask(&self, t: usize) -> Result<Tensor> {
@@ -123,23 +143,10 @@ struct CausalSelfAttention {
 }
 
 impl CausalSelfAttention {
-    fn apply_rotary_emb(&self, x: &Tensor, freqs_cis: &Tensor) -> Result<Tensor> {
+    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (b_sz, _, seq_len, n_embd) = x.shape().r4()?;
-        let dims = x.dims().to_vec();
-        let fcis_dims = freqs_cis.dims();
-        let freqs_cis = if dims[2] < fcis_dims[1] {
-            freqs_cis.narrow(1, 0, dims[2])?
-        } else {
-            freqs_cis.clone()
-        };
-        let cos = freqs_cis
-            .narrow(D::Minus1, 0, 1)?
-            .squeeze(D::Minus1)?
-            .squeeze(0)?;
-        let sin = freqs_cis
-            .narrow(D::Minus1, 1, 1)?
-            .squeeze(D::Minus1)?
-            .squeeze(0)?;
+        let cos = self.cache.cos.narrow(0, index_pos, seq_len)?;
+        let sin = self.cache.sin.narrow(0, index_pos, seq_len)?;
         let cos = cos.broadcast_as((b_sz, 1, seq_len, n_embd))?;
         let sin = sin.broadcast_as((b_sz, 1, seq_len, n_embd))?;
         let x1 = x.narrow(D::Minus1, 0, n_embd / 2)?;
@@ -149,7 +156,7 @@ impl CausalSelfAttention {
         Ok(rope)
     }
 
-    fn forward(&self, x: &Tensor, freqs_cis: &Tensor, block_idx: usize) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor, index_pos: usize, block_idx: usize) -> Result<Tensor> {
         let x_dtype = x.dtype();
         let (b_sz, seq_len, n_embd) = x.shape().r3()?;
         let q = self.q_proj.forward(x)?;
@@ -169,8 +176,8 @@ impl CausalSelfAttention {
             .transpose(1, 2)?
             .to_dtype(DType::F32)?;
 
-        let q = self.apply_rotary_emb(&q, freqs_cis)?;
-        let mut k = self.apply_rotary_emb(&k, freqs_cis)?;
+        let q = self.apply_rotary_emb(&q, index_pos)?;
+        let mut k = self.apply_rotary_emb(&k, index_pos)?;
 
         if self.cache.use_kv_cache {
             let mut cache = self.cache.kvs.lock().unwrap();
@@ -296,10 +303,10 @@ impl Block {
         }
     }
 
-    fn forward(&self, x: &Tensor, freqs_cis: &Tensor, block_idx: usize) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor, index_pos: usize, block_idx: usize) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let x = (self.attn.forward(&x, freqs_cis, block_idx)? + residual)?;
+        let x = (self.attn.forward(&x, index_pos, block_idx)? + residual)?;
         let residual = &x;
         let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
@@ -337,11 +344,11 @@ impl Llama {
         }
     }
 
-    pub fn forward(&self, x: &Tensor, freqs_cis: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.shape().r2()?;
         let mut x = self.wte.forward(x)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = block.forward(&x, freqs_cis, block_idx)?;
+            x = block.forward(&x, index_pos, block_idx)?;
         }
         let x = self.ln_f.forward(&x)?;
         let x = x.i((.., seq_len - 1, ..))?;
