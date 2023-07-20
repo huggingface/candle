@@ -147,7 +147,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn unary_impl<B: op::UnaryOp>(&self, layout: &Layout) -> Result<Self> {
+    pub(crate) fn unary_impl<B: op::UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         // TODO: Different code path for the contiguous case?
         match self {
             Storage::Cpu(storage) => {
@@ -161,7 +161,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn binary_impl<B: op::BinaryOp>(
+    pub(crate) fn binary_impl<B: op::BinaryOpT>(
         &self,
         rhs: &Self,
         lhs_layout: &Layout,

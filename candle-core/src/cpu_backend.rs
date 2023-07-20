@@ -1,5 +1,5 @@
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::op::{BinaryOp, CmpOp, ReduceOp, UnaryOp};
+use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, Layout, Result, Shape, WithDType};
 use half::{bf16, f16};
 
@@ -1158,7 +1158,7 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn unary_impl<B: UnaryOp>(&self, layout: &Layout) -> Result<Self> {
+    fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         match self {
             Self::BF16(storage) => {
                 if B::BF16_VEC {
@@ -1207,7 +1207,12 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn binary_impl<B: BinaryOp>(&self, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
+    fn binary_impl<B: BinaryOpT>(
+        &self,
+        rhs: &Self,
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
         match (self, rhs) {
             (Self::BF16(lhs), Self::BF16(rhs)) => {
                 let data = if B::BF16_VEC {
