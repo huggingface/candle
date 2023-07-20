@@ -51,6 +51,7 @@ pub(crate) enum Op {
     Reduce(Tensor, ReduceOp, Vec<usize>),
     Matmul(Tensor, Tensor),
     Embedding(Tensor, Tensor),
+    IndexSelect(Tensor, Tensor, usize),
     WhereCond(Tensor, Tensor, Tensor),
 
     #[allow(dead_code)]
