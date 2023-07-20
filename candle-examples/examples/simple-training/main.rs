@@ -3,7 +3,7 @@
 extern crate intel_mkl_src;
 
 use anyhow::Result;
-use candle::{DType, IndexOp, Tensor, Var, D};
+use candle::{DType, Tensor, Var, D};
 
 const IMAGE_DIM: usize = 784;
 const LABELS: usize = 10;
@@ -30,8 +30,8 @@ pub fn main() -> Result<()> {
     println!("train-labels: {:?}", m.train_labels.shape());
     println!("test-images: {:?}", m.test_images.shape());
     println!("test-labels: {:?}", m.test_labels.shape());
-    let train_labels = m.train_labels.i(0..100)?;
-    let train_images = m.train_images.i(0..100)?;
+    let train_labels = m.train_labels;
+    let train_images = m.train_images;
     let train_labels = train_labels.to_vec1::<u8>()?;
     let train_label_mask = train_labels
         .iter()
@@ -40,22 +40,22 @@ pub fn main() -> Result<()> {
     let train_label_mask = Tensor::from_vec(train_label_mask, (train_labels.len(), LABELS), &dev)?;
     let ws = Var::zeros((IMAGE_DIM, LABELS), DType::F32, &dev)?;
     let bs = Var::zeros(LABELS, DType::F32, &dev)?;
-    let sgd = candle_nn::SGD::new(&[&ws, &bs], 0.0003);
+    let sgd = candle_nn::SGD::new(&[&ws, &bs], 3e-1);
+    let test_images = m.test_images;
     let test_labels = m.test_labels.to_vec1::<u8>()?;
     for epoch in 1..200 {
         let logits = train_images.matmul(&ws)?.broadcast_add(&bs)?;
         let log_sm = log_softmax(&logits, D::Minus1)?;
-        let loss = (log_sm * &train_label_mask)?
+        let loss = (&log_sm * &train_label_mask)?
             .sum_all()?
-            .affine(1f64 / train_images.dim(0)? as f64, 0f64)?;
-        println!("{loss:?}");
+            .affine(-1f64 / train_images.dim(0)? as f64, 0f64)?;
         sgd.backward_step(&loss)?;
 
-        let test_logits = m.test_images.matmul(&ws)?.broadcast_add(&bs)?;
+        let test_logits = test_images.matmul(&ws)?.broadcast_add(&bs)?;
         /* TODO: Add argmax so that the following can be computed within candle.
         let test_accuracy = test_logits
             .argmax(Some(-1), false)
-            .eq_tensor(&m.test_labels)
+            .eq_tensor(&test_labels)
             .to_kind(Kind::Float)
             .mean(Kind::Float)
             .double_value(&[]);
