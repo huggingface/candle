@@ -33,14 +33,15 @@ pub fn main() -> Result<()> {
     let ws = Var::zeros((IMAGE_DIM, LABELS), DType::F32, &dev)?;
     let bs = Var::zeros(LABELS, DType::F32, &dev)?;
     let sgd = candle_nn::SGD::new(&[&ws, &bs], 0.1);
+    let test_labels = m.test_labels.to_vec1::<u8>()?;
     for epoch in 1..200 {
         let logits = m.train_images.matmul(&ws)?.broadcast_add(&bs)?;
         let loss = nll_loss(&log_softmax(&logits, D::Minus1)?, &train_labels)?;
         println!("{loss:?}");
         sgd.backward_step(&loss)?;
 
-        let _test_logits = m.test_images.matmul(&ws)?.broadcast_add(&bs)?;
-        /* TODO
+        let test_logits = m.test_images.matmul(&ws)?.broadcast_add(&bs)?;
+        /* TODO: Add argmax so that the following can be computed within candle.
         let test_accuracy = test_logits
             .argmax(Some(-1), false)
             .eq_tensor(&m.test_labels)
@@ -48,7 +49,20 @@ pub fn main() -> Result<()> {
             .mean(Kind::Float)
             .double_value(&[]);
         */
-        let test_accuracy = 0.;
+        let test_logits = test_logits.to_vec2::<f32>()?;
+        let sum_ok = test_logits
+            .iter()
+            .zip(test_labels.iter())
+            .map(|(logits, label)| {
+                let arg_max = logits
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, v1), (_, v2)| v1.total_cmp(v2))
+                    .map(|(idx, _)| idx);
+                f64::from(arg_max == Some(*label as usize))
+            })
+            .sum::<f64>();
+        let test_accuracy = sum_ok / test_labels.len() as f64;
         println!(
             "{epoch:4} train loss: {:8.5} test acc: {:5.2}%",
             loss.to_scalar::<f32>()?,
