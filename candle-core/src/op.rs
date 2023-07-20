@@ -48,6 +48,7 @@ pub(crate) enum Op {
     Binary(Tensor, Tensor, BinaryOp),
     Unary(Tensor, UnaryOp),
     Cmp(Tensor, CmpOp),
+    // The third argument is the reduced shape with `keepdim=true`.
     Reduce(Tensor, ReduceOp, Vec<usize>),
     Matmul(Tensor, Tensor),
     Embedding(Tensor, Tensor),

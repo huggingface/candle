@@ -2,6 +2,19 @@ use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
 use crate::{Error, Result, Tensor, TensorId};
 use std::collections::HashMap;
 
+// arg has been reduced to node via reduce_dims, expand it back to arg.
+// This has to handle keepdims.
+fn broadcast_back(arg: &Tensor, node: &Tensor, reduced_dims: &[usize]) -> Result<Tensor> {
+    if arg.rank() == node.rank() {
+        // keepdim = true
+        node.broadcast_as(arg.shape())
+    } else {
+        // keepdim = false
+        // first expand the reduced dims.
+        node.reshape(reduced_dims)?.broadcast_as(arg.shape())
+    }
+}
+
 impl Tensor {
     /// Return all the nodes that lead to this value in a topologically sorted vec, the first
     /// elements having dependencies on the latter ones, e.g. the first element if any is the
@@ -214,23 +227,25 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad.broadcast_as(sum_grad.dims())?)?;
                     }
-                    Op::Reduce(arg, ReduceOp::Sum, _) => {
-                        // TODO: Handle keep-dim.
+                    Op::Reduce(arg, ReduceOp::Sum, reduced_dims) => {
+                        let grad = broadcast_back(arg, &grad, reduced_dims)?;
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.broadcast_add(&grad)?;
+                        *sum_grad = sum_grad.add(&grad)?;
                     }
                     Op::Cmp(_args, _) => return Err(Error::BackwardNotSupported { op: "cmp" }),
-                    Op::Reduce(arg, ReduceOp::Max, _) => {
-                        // TODO: Handle keep-dim.
+                    Op::Reduce(arg, ReduceOp::Max, reduced_dims) => {
+                        let node = broadcast_back(arg, node, reduced_dims)?;
+                        let grad = broadcast_back(arg, &grad, reduced_dims)?;
                         let grad = node.eq(arg)?.to_dtype(grad.dtype())?.mul(&grad)?;
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.broadcast_add(&grad)?;
+                        *sum_grad = sum_grad.add(&grad.broadcast_as(sum_grad.dims())?)?;
                     }
-                    Op::Reduce(arg, ReduceOp::Min, _) => {
-                        // TODO: Handle keep-dim.
+                    Op::Reduce(arg, ReduceOp::Min, reduced_dims) => {
+                        let node = broadcast_back(arg, node, reduced_dims)?;
+                        let grad = broadcast_back(arg, &grad, reduced_dims)?;
                         let grad = node.eq(arg)?.to_dtype(grad.dtype())?.mul(&grad)?;
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.broadcast_add(&grad)?;
+                        *sum_grad = sum_grad.add(&grad.broadcast_as(sum_grad.dims())?)?;
                     }
                     Op::ToDType(arg) => {
                         let sum_grad = grads.or_insert(arg)?;
