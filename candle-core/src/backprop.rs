@@ -207,9 +207,12 @@ impl Tensor {
                             }
                         }
 
-                        let arg_grad = grad.sum(sum_dims.as_slice())?;
+                        let mut arg_grad = grad.sum_keepdim(sum_dims.as_slice())?;
+                        for _i in 0..left_dims {
+                            arg_grad = arg_grad.squeeze(0)?
+                        }
                         let sum_grad = grads.or_insert(arg)?;
-                        *sum_grad = sum_grad.broadcast_add(&arg_grad)?;
+                        *sum_grad = sum_grad.add(&arg_grad.broadcast_as(sum_grad.dims())?)?;
                     }
                     Op::Reduce(arg, ReduceOp::Sum, _) => {
                         // TODO: Handle keep-dim.
