@@ -3,7 +3,7 @@
 extern crate intel_mkl_src;
 
 use anyhow::Result;
-use candle::{DType, Tensor, Var, D};
+use candle::{DType, IndexOp, Tensor, Var, D};
 
 const IMAGE_DIM: usize = 784;
 const LABELS: usize = 10;
@@ -17,7 +17,8 @@ fn log_softmax<D: candle::shape::Dim>(xs: &Tensor, d: D) -> candle::Result<Tenso
     Ok(log_sm)
 }
 
-fn nll_loss(inp: &Tensor, target: &Tensor) -> candle::Result<Tensor> {
+// TODO: Once the index_select backprop is efficient enough, switch to using this.
+fn _nll_loss(inp: &Tensor, target: &Tensor) -> candle::Result<Tensor> {
     let b_sz = target.shape().r1()?;
     inp.index_select(target, 0)?.sum_all()? / b_sz as f64
 }
@@ -29,14 +30,22 @@ pub fn main() -> Result<()> {
     println!("train-labels: {:?}", m.train_labels.shape());
     println!("test-images: {:?}", m.test_images.shape());
     println!("test-labels: {:?}", m.test_labels.shape());
-    let train_labels = m.train_labels.to_dtype(DType::U32)?;
+    let train_labels = m.train_labels.i(0..100)?;
+    let train_images = m.train_images.i(0..100)?;
+    let train_labels = train_labels.to_vec1::<u8>()?;
+    let train_label_mask = train_labels
+        .iter()
+        .flat_map(|l| (0..LABELS).map(|i| f32::from(i == *l as usize)))
+        .collect::<Vec<_>>();
+    let train_label_mask = Tensor::from_vec(train_label_mask, (train_labels.len(), LABELS), &dev)?;
     let ws = Var::zeros((IMAGE_DIM, LABELS), DType::F32, &dev)?;
     let bs = Var::zeros(LABELS, DType::F32, &dev)?;
     let sgd = candle_nn::SGD::new(&[&ws, &bs], 0.1);
     let test_labels = m.test_labels.to_vec1::<u8>()?;
     for epoch in 1..200 {
-        let logits = m.train_images.matmul(&ws)?.broadcast_add(&bs)?;
-        let loss = nll_loss(&log_softmax(&logits, D::Minus1)?, &train_labels)?;
+        let logits = train_images.matmul(&ws)?.broadcast_add(&bs)?;
+        let log_sm = log_softmax(&logits, D::Minus1)?;
+        let loss = (log_sm * &train_label_mask)?.sum_all()?;
         println!("{loss:?}");
         sgd.backward_step(&loss)?;
 
