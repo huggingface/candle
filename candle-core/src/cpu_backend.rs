@@ -92,16 +92,24 @@ trait Map2U8 {
 
 struct Cmp(CmpOp);
 impl Map2U8 for Cmp {
-    const OP: &'static str = "where";
+    const OP: &'static str = "cmp";
     #[inline(always)]
     fn f<T: WithDType>(
         &self,
-        _lhs: &[T],
-        _lhs_l: &Layout,
-        _rhs: &[T],
-        _rhs_l: &Layout,
+        lhs: &[T],
+        lhs_l: &Layout,
+        rhs: &[T],
+        rhs_l: &Layout,
     ) -> Result<Vec<u8>> {
-        todo!()
+        let dst = match self.0 {
+            CmpOp::Eq => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x == y)),
+            CmpOp::Ne => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x != y)),
+            CmpOp::Lt => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x < y)),
+            CmpOp::Le => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x <= y)),
+            CmpOp::Gt => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x > y)),
+            CmpOp::Ge => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x >= y)),
+        };
+        Ok(dst)
     }
 }
 
@@ -312,13 +320,13 @@ fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U])>(
 }
 
 // This function maps over two strided index sequences.
-fn binary_map<T: Copy, F: FnMut(T, T) -> T>(
+fn binary_map<T: Copy, U: Copy, F: FnMut(T, T) -> U>(
     lhs_l: &Layout,
     rhs_l: &Layout,
     lhs: &[T],
     rhs: &[T],
     mut f: F,
-) -> Vec<T> {
+) -> Vec<U> {
     match (lhs_l.contiguous_offsets(), rhs_l.contiguous_offsets()) {
         (Some((o_l1, o_l2)), Some((o_r1, o_r2))) => lhs[o_l1..o_l2]
             .iter()
