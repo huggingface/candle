@@ -301,6 +301,39 @@ fn embeddings(device: &Device) -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn index_select() -> Result<()> {
+    // TODO: Test on cuda once the kernel is available.
+    let device = &Device::Cpu;
+    let ids = Tensor::new(&[0u32, 2u32, 1u32], device)?;
+    let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
+    let hs = t.index_select(&ids, 1)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[
+            [0.0, 2.0, 1.0],
+            [3.0, 5.0, 4.0],
+            [6.0, 8.0, 7.0],
+            [9.0, 11.0, 10.0]
+        ]
+    );
+    let hs = t.index_select(&ids, 0)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[[0.0, 1.0, 2.0], [6.0, 7.0, 8.0], [3.0, 4.0, 5.0]]
+    );
+    Ok(())
+}
+
 fn matmul(device: &Device) -> Result<()> {
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
     let a = Tensor::from_slice(&data, (2, 2), device)?;
