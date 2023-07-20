@@ -761,6 +761,30 @@ impl Tensor {
         Ok(from_storage(storage, shape.dims(), op, false))
     }
 
+    pub fn eq(&self, rhs: &Self) -> Result<Self> {
+        self.cmp(rhs, CmpOp::Eq)
+    }
+
+    pub fn ne(&self, rhs: &Self) -> Result<Self> {
+        self.cmp(rhs, CmpOp::Ne)
+    }
+
+    pub fn lt(&self, rhs: &Self) -> Result<Self> {
+        self.cmp(rhs, CmpOp::Lt)
+    }
+
+    pub fn gt(&self, rhs: &Self) -> Result<Self> {
+        self.cmp(rhs, CmpOp::Gt)
+    }
+
+    pub fn ge(&self, rhs: &Self) -> Result<Self> {
+        self.cmp(rhs, CmpOp::Ge)
+    }
+
+    pub fn le(&self, rhs: &Self) -> Result<Self> {
+        self.cmp(rhs, CmpOp::Le)
+    }
+
     /// Applies a 1D convolution over the input tensor.
     pub fn conv1d(&self, kernel: &Self, padding: usize, stride: usize) -> Result<Self> {
         let (c_out, c_in_k, k_size) = kernel.shape().r3()?;
