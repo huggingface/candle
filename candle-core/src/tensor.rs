@@ -482,6 +482,11 @@ impl Tensor {
         }
     }
 
+    /// An alias for `to_scalar`.
+    pub fn to_vec0<S: crate::WithDType>(&self) -> Result<S> {
+        self.to_scalar::<S>()
+    }
+
     /// This operation multiplies the input tensor by `mul` then adds `add` and return the result.
     /// The input values `mul` and `add` are casted to the appropriate type so some rounding might
     /// be performed.
