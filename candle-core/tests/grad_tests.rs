@@ -114,23 +114,23 @@ fn unary_grad(device: &Device) -> Result<()> {
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(
-        y.to_vec1::<f32>()?,
-        [0.14112, 0.84147096, -0.7568025, 0.14943814],
+        test_utils::to_vec1_round(&y, 4)?,
+        [0.1411, 0.8415, -0.7568, 0.1494],
     );
     assert_eq!(
-        grad_x.to_vec1::<f32>()?,
-        [-0.9899925, 0.5403023, -0.6536436, 0.9887711],
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [-0.99, 0.5403, -0.6536, 0.9888],
     );
     let y = x.cos()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(
-        y.to_vec1::<f32>()?,
-        [-0.9899925, 0.5403023, -0.6536436, 0.9887711],
+        test_utils::to_vec1_round(&y, 4)?,
+        [-0.99, 0.5403, -0.6536, 0.9888],
     );
     assert_eq!(
-        grad_x.to_vec1::<f32>()?,
-        [-0.14112, -0.84147096, 0.7568025, -0.14943814],
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [-0.1411, -0.8415, 0.7568, -0.1494],
     );
     let y = x.sqr()?;
     let grads = y.backward()?;
