@@ -14,6 +14,7 @@ readme = "README.md"
 candle = { path = "../candle-core" }
 thiserror = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
+safetensors = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
