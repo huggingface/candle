@@ -1,3 +1,4 @@
+use candle::backend::BackendStorage;
 use candle::cpu_backend;
 use candle::{CpuStorage, CustomOp1, DType, Device, Error, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
@@ -24,6 +25,10 @@ impl CustomOp1 for Elu {
 
     fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
         use CpuStorage::*;
+
+        // In this example, we pattern match over the different dtypes. Some helper functions and
+        // traits from the `cpu_backend` module can be used to avoid this in some common cases, see
+        // e.g. `Map1`.
         let storage = match s {
             BF16(s) => {
                 let alpha = bf16::from_f64(self.alpha);
@@ -41,12 +46,10 @@ impl CustomOp1 for Elu {
                 F32(data)
             }
             F64(s) => {
-                let alpha = self.alpha;
-                let data = cpu_backend::unary_map(s, l, |v| fwd(v, alpha));
+                let data = cpu_backend::unary_map(s, l, |v| fwd(v, self.alpha));
                 F64(data)
             }
-            U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt())?,
-            U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt())?,
+            _ => Err(Error::UnsupportedDTypeForOp(s.dtype(), "elu").bt())?,
         };
         Ok((storage, l.shape().clone()))
     }
