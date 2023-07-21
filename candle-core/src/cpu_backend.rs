@@ -1660,3 +1660,13 @@ impl BackendDevice for CpuDevice {
         Ok(storage)
     }
 }
+
+#[macro_export]
+macro_rules! map_dtype {
+    ($name:expr, $storage:ident, $fn:expr, ($($dtypes:ident),+)) => {
+        match $storage {
+            $(CpuStorage::$dtypes(__e) => CpuStorage::$dtypes($fn(__e)),)*
+            s => Err(Error::UnsupportedDTypeForOp(s.dtype(), $name).bt())?,
+        }
+    };
+}
