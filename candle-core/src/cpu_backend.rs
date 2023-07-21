@@ -665,7 +665,7 @@ impl<'a> Map1 for IndexSelect<'a> {
                 if index >= src_dim {
                     Err(Error::InvalidIndex {
                         index,
-                        src_size: src_dim,
+                        size: src_dim,
                         op: "index-select",
                     }
                     .bt())?
@@ -675,6 +675,51 @@ impl<'a> Map1 for IndexSelect<'a> {
                 dst[start_dst_idx..start_dst_idx + right_len]
                     .copy_from_slice(&src[start_src_idx..start_src_idx + right_len])
             }
+        }
+        Ok(dst)
+    }
+}
+
+struct IndexAdd<'a> {
+    ids: &'a [u32],
+    dim: usize,
+}
+
+impl<'a> Map2 for IndexAdd<'a> {
+    const OP: &'static str = "index-add";
+    // https://pytorch.org/docs/stable/generated/torch.Tensor.index_add_.html#torch.Tensor.index_add_
+    // v1, l1 -> self
+    // v2, l2 -> src
+    fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, v2: &[T], l2: &Layout) -> Result<Vec<T>> {
+        let dst_len = l1.shape().elem_count();
+        let mut dst = vec![T::zero(); dst_len];
+        copy_strided_src_(v1, &mut dst, 0, l1);
+        let src = match l2.contiguous_offsets() {
+            None => Err(Error::RequiresContiguous { op: "index-add" })?,
+            Some((o1, o2)) => &v2[o1..o2],
+        };
+        let max_idx = l1.dims()[self.dim];
+        if self.dim == 0 {
+            let stride = l2.stride()[0];
+            for (src_idx, &dst_idx) in self.ids.iter().enumerate() {
+                let dst_idx = dst_idx as usize;
+                if dst_idx >= max_idx {
+                    Err(Error::InvalidIndex {
+                        index: dst_idx,
+                        op: "index-add",
+                        size: max_idx,
+                    })?
+                }
+                let src_idx = src_idx * stride;
+                let dst_idx = dst_idx * stride;
+                let src = &src[src_idx..src_idx + stride];
+                let dst = &mut dst[dst_idx..dst_idx + stride];
+                for (d, &s) in dst.iter_mut().zip(src.iter()) {
+                    *d += s
+                }
+            }
+        } else {
+            todo!()
         }
         Ok(dst)
     }
@@ -698,7 +743,7 @@ impl<'a> Map1 for Embedding<'a> {
             if index >= self.vocab_size {
                 Err(Error::InvalidIndex {
                     index,
-                    src_size: self.vocab_size,
+                    size: self.vocab_size,
                     op: "take",
                 }
                 .bt())?
@@ -711,12 +756,7 @@ impl<'a> Map1 for Embedding<'a> {
     }
 }
 
-fn copy_strided_src_<T: Copy + std::fmt::Display>(
-    src: &[T],
-    dst: &mut [T],
-    dst_offset: usize,
-    src_l: &Layout,
-) {
+fn copy_strided_src_<T: Copy>(src: &[T], dst: &mut [T], dst_offset: usize, src_l: &Layout) {
     match src_l.strided_blocks() {
         crate::StridedBlocks::SingleBlock { start_offset, len } => {
             let to_copy = (dst.len() - dst_offset).min(len);
@@ -1534,14 +1574,19 @@ impl BackendStorage for CpuStorage {
 
     fn index_add(
         &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<Self> {
-        todo!()
+        let ids = ids.as_slice::<u32>()?;
+        let ids = match ids_l.contiguous_offsets() {
+            Some((a, b)) => &ids[a..b],
+            None => Err(Error::RequiresContiguous { op: "index-add" })?,
+        };
+        IndexAdd { ids, dim }.map(self, l, src, src_l)
     }
 
     fn matmul(
