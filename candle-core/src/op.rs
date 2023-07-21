@@ -67,6 +67,7 @@ pub(crate) enum Op {
     Matmul(Tensor, Tensor),
     Embedding(Tensor, Tensor),
     IndexSelect(Tensor, Tensor, usize),
+    IndexAdd(Tensor, Tensor, Tensor, usize),
     WhereCond(Tensor, Tensor, Tensor),
 
     #[allow(dead_code)]

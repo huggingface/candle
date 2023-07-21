@@ -1532,6 +1532,18 @@ impl BackendStorage for CpuStorage {
         IndexSelect { ids, ids_l, dim }.map(self, l)
     }
 
+    fn index_add(
+        &self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     fn matmul(
         &self,
         rhs: &Self,
