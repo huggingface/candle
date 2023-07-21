@@ -304,6 +304,12 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
+                    Op::Reduce(_, ReduceOp::ArgMin, _) => {
+                        Err(Error::BackwardNotSupported { op: "argmin" })?
+                    }
+                    Op::Reduce(_, ReduceOp::ArgMax, _) => {
+                        Err(Error::BackwardNotSupported { op: "argmax" })?
+                    }
                     Op::Softmax(_arg, _) => Err(Error::BackwardNotSupported { op: "softmax" })?,
                     Op::Reshape(arg) => {
                         let arg_grad = grad.reshape(arg.dims())?;

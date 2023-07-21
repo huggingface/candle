@@ -562,6 +562,8 @@ impl<'a> Map1 for FastReduce<'a> {
             ReduceOp::Sum => "fast_sum",
             ReduceOp::Min => "fast_min",
             ReduceOp::Max => "fast_max",
+            ReduceOp::ArgMin => "fast_argmin",
+            ReduceOp::ArgMax => "fast_argmax",
         };
         let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::REDUCE)?;
         // SAFETY: filled in by the follow up kernel.

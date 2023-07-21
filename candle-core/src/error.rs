@@ -79,6 +79,9 @@ pub enum Error {
         nth_shape: Shape,
     },
 
+    #[error("{op} can only be performed on a single dimension")]
+    OnlySingleDimension { op: &'static str, dims: Vec<usize> },
+
     #[error("empty tensor for {op}")]
     EmptyTensor { op: &'static str },
 
