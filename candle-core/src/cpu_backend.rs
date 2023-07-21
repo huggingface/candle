@@ -225,7 +225,22 @@ impl ReduceIndex {
                     }
                 }
             }
-            None => Err(Error::RequiresContiguous { op: "reduce-index" })?,
+            None => {
+                let l = src_l.narrow(self.reduce_dim_index, 0, 1)?;
+                for (unstr_index, src_index) in l.strided_index().enumerate() {
+                    let src = &src[src_index..];
+                    let mut acc = 0;
+                    let mut val = src[0];
+                    for src_i in 0..reduce_dim_size {
+                        let s = src[src_i * reduce_dim_stride];
+                        if f(val, s) {
+                            acc = src_i;
+                            val = s
+                        }
+                    }
+                    dst[unstr_index] = g(val, acc)
+                }
+            }
         }
         unsafe { dst.set_len(dst_len) };
         Ok(dst)
