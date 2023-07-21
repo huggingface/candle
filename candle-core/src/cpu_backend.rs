@@ -205,6 +205,12 @@ impl ReduceIndex {
                     }
                 } else {
                     for (start_src_i, dst_v) in dst_to_set.iter_mut().enumerate() {
+                        let (p, q) = (
+                            start_src_i / reduce_dim_stride,
+                            start_src_i % reduce_dim_stride,
+                        );
+                        // start_src_i = p * reduce_dim_stride + q
+                        let start_src_i = p * reduce_dim_stride * reduce_dim_size + q;
                         let src = &src[start_src_i..];
                         let mut acc = 0;
                         let mut val = src[0];
