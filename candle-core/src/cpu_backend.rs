@@ -236,16 +236,13 @@ impl Map1Any for ReduceIndex {
         if src_l.shape().elem_count() == 0 {
             Err(Error::EmptyTensor { op: "reduce" }.bt())?
         }
-        let dst = if self.return_index {
-            if self.use_min {
-                wrap(self.fold_impl(src, src_l, |x, y| x > y, |v, _i| v)?)
-            } else {
-                wrap(self.fold_impl(src, src_l, |x, y| x < y, |v, _i| v)?)
-            }
-        } else {
-            if self.use_min {
+        let dst = match (self.return_index, self.use_min) {
+            (false, true) => wrap(self.fold_impl(src, src_l, |x, y| x > y, |v, _i| v)?),
+            (false, false) => wrap(self.fold_impl(src, src_l, |x, y| x < y, |v, _i| v)?),
+            (true, true) => {
                 CpuStorage::U32(self.fold_impl(src, src_l, |x, y| x > y, |_v, i| i as u32)?)
-            } else {
+            }
+            (true, false) => {
                 CpuStorage::U32(self.fold_impl(src, src_l, |x, y| x < y, |_v, i| i as u32)?)
             }
         };
