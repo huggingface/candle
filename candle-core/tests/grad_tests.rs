@@ -110,6 +110,48 @@ fn unary_grad(device: &Device) -> Result<()> {
         grad_x.to_vec1::<f32>()?,
         [806.8576, 14.778111, 5961.9155, 2.6997175]
     );
+    let y = x.sin()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(
+        y.to_vec1::<f32>()?,
+        [0.14112, 0.84147096, -0.7568025, 0.14943814],
+    );
+    assert_eq!(
+        grad_x.to_vec1::<f32>()?,
+        [-0.9899925, 0.5403023, -0.6536436, 0.9887711],
+    );
+    let y = x.cos()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(
+        y.to_vec1::<f32>()?,
+        [-0.9899925, 0.5403023, -0.6536436, 0.9887711],
+    );
+    assert_eq!(
+        grad_x.to_vec1::<f32>()?,
+        [-0.14112, -0.84147096, 0.7568025, -0.14943814],
+    );
+    let y = x.sqr()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(y.to_vec1::<f32>()?, [9.0, 1.0, 16.0, 0.0225],);
+    assert_eq!(grad_x.to_vec1::<f32>()?, [6.0, 2.0, 8.0, 0.3]);
+    let y = x.sqr()?.sqrt()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(y.to_vec1::<f32>()?, [3.0, 1.0, 4.0, 0.15],);
+    assert_eq!(grad_x.to_vec1::<f32>()?, [1.0, 1.0, 1.0, 1.0]);
+    let y = x.neg()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(y.to_vec1::<f32>()?, [-3.0, -1.0, -4.0, -0.15],);
+    assert_eq!(grad_x.to_vec1::<f32>()?, [-1.0, -1.0, -1.0, -1.0]);
+    let y = x.affine(0.2, 1.)?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(y.to_vec1::<f32>()?, [1.6, 1.2, 1.8, 1.03],);
+    assert_eq!(grad_x.to_vec1::<f32>()?, [0.2, 0.2, 0.2, 0.2]);
     Ok(())
 }
 

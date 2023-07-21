@@ -162,6 +162,7 @@ impl Tensor {
                         let dim = *dim;
                         let sum_grad = grads.or_insert(arg)?;
                         // TODO: This is very very very inefficient, have some dedicated kernel for this.
+                        // https://pytorch.org/docs/stable/generated/torch.Tensor.index_add.html
                         let indexes = indexes.to_vec1::<u32>()?;
                         for (dst_index, src_index) in indexes.iter().enumerate() {
                             let src_index = *src_index as usize;
@@ -318,7 +319,7 @@ impl Tensor {
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
                     Op::Unary(arg, UnaryOp::Sqrt) => {
-                        let arg_grad = grad.div(arg)?.affine(0.5, 0.)?;
+                        let arg_grad = grad.div(node)?.affine(0.5, 0.)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
