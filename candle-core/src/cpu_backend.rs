@@ -33,6 +33,26 @@ trait Map1 {
     }
 }
 
+trait Map1Any {
+    fn f<T: WithDType, W: Fn(Vec<T>) -> CpuStorage>(
+        &self,
+        vs: &[T],
+        layout: &Layout,
+        wrap: W,
+    ) -> Result<CpuStorage>;
+
+    fn map(&self, vs: &CpuStorage, layout: &Layout) -> Result<CpuStorage> {
+        match vs {
+            CpuStorage::U8(vs) => Ok(self.f(vs, layout, CpuStorage::U8)?),
+            CpuStorage::U32(vs) => Ok(self.f(vs, layout, CpuStorage::U32)?),
+            CpuStorage::BF16(vs) => Ok(self.f(vs, layout, CpuStorage::BF16)?),
+            CpuStorage::F16(vs) => Ok(self.f(vs, layout, CpuStorage::F16)?),
+            CpuStorage::F32(vs) => Ok(self.f(vs, layout, CpuStorage::F32)?),
+            CpuStorage::F64(vs) => Ok(self.f(vs, layout, CpuStorage::F64)?),
+        }
+    }
+}
+
 type C = CpuStorage;
 trait Map2 {
     const OP: &'static str;
@@ -144,11 +164,99 @@ impl<'a> Map2 for WCond<'a> {
     }
 }
 
+struct ReduceIndex {
+    reduce_dim_index: usize,
+    use_min: bool,
+    return_index: bool,
+}
+
+impl ReduceIndex {
+    // The value gets replaced if f(s[current_acc], s[i]) returns true.
+    #[inline(always)]
+    fn fold_impl<T, U, F, G>(&self, src: &[T], src_l: &Layout, f: F, g: G) -> Result<Vec<U>>
+    where
+        T: Clone + Copy,
+        U: Clone + Copy,
+        F: Fn(T, T) -> bool,
+        G: Fn(T, usize) -> U,
+    {
+        let reduce_dim_size = src_l.dims()[self.reduce_dim_index];
+        let reduce_dim_stride = src_l.stride()[self.reduce_dim_index];
+        let dst_len = src_l.shape().elem_count() / reduce_dim_size;
+        let mut dst: Vec<U> = Vec::with_capacity(dst_len);
+        let dst_to_set = dst.spare_capacity_mut();
+        let dst_to_set = unsafe { std::mem::transmute::<_, &mut [U]>(dst_to_set) };
+        match src_l.contiguous_offsets() {
+            Some((o1, o2)) => {
+                let src = &src[o1..o2];
+                if reduce_dim_stride == 1 {
+                    for (start_src_i, dst_v) in dst_to_set.iter_mut().enumerate() {
+                        let src = &src[start_src_i..start_src_i + reduce_dim_size];
+                        let mut acc = 0;
+                        let mut val = src[0];
+                        for (src_i, &s) in src.iter().enumerate() {
+                            if f(val, s) {
+                                acc = src_i;
+                                val = s
+                            }
+                        }
+                        *dst_v = g(val, acc)
+                    }
+                } else {
+                    for (start_src_i, dst_v) in dst_to_set.iter_mut().enumerate() {
+                        let src = &src[start_src_i..];
+                        let mut acc = 0;
+                        let mut val = src[0];
+                        for src_i in 0..reduce_dim_size {
+                            let s = src[src_i * reduce_dim_stride];
+                            if f(val, s) {
+                                acc = src_i;
+                                val = s
+                            }
+                        }
+                        *dst_v = g(val, acc)
+                    }
+                }
+            }
+            None => Err(Error::RequiresContiguous { op: "reduce-index" })?,
+        }
+        unsafe { dst.set_len(dst_len) };
+        Ok(dst)
+    }
+}
+
+impl Map1Any for ReduceIndex {
+    #[inline(always)]
+    fn f<T: WithDType, W: Fn(Vec<T>) -> CpuStorage>(
+        &self,
+        src: &[T],
+        src_l: &Layout,
+        wrap: W,
+    ) -> Result<CpuStorage> {
+        if src_l.shape().elem_count() == 0 {
+            Err(Error::EmptyTensor { op: "reduce" }.bt())?
+        }
+        let dst = if self.return_index {
+            if self.use_min {
+                wrap(self.fold_impl(src, src_l, |x, y| x > y, |v, _i| v)?)
+            } else {
+                wrap(self.fold_impl(src, src_l, |x, y| x < y, |v, _i| v)?)
+            }
+        } else {
+            if self.use_min {
+                CpuStorage::U32(self.fold_impl(src, src_l, |x, y| x > y, |_v, i| i as u32)?)
+            } else {
+                CpuStorage::U32(self.fold_impl(src, src_l, |x, y| x < y, |_v, i| i as u32)?)
+            }
+        };
+        Ok(dst)
+    }
+}
+
 struct Reduce<'a> {
     dst_shape: &'a Shape,
     reduce_dims: &'a [usize],
     reduce_dims_and_stride: Vec<(usize, usize)>,
-    op: ReduceOp,
 }
 
 impl<'a> Reduce<'a> {
@@ -217,25 +325,7 @@ impl<'a> Reduce<'a> {
 impl<'a> Map1 for Reduce<'a> {
     #[inline(always)]
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
-        match self.op {
-            ReduceOp::Min => {
-                let s = if src_l.shape().elem_count() != 0 {
-                    src[src_l.start_offset()]
-                } else {
-                    Err(Error::EmptyTensor { op: "min" }.bt())?
-                };
-                self.fold_impl(src, src_l, s, |x, y| if x < y { x } else { y })
-            }
-            ReduceOp::Max => {
-                let s = if src_l.shape().elem_count() != 0 {
-                    src[src_l.start_offset()]
-                } else {
-                    Err(Error::EmptyTensor { op: "max" }.bt())?
-                };
-                self.fold_impl(src, src_l, s, |x, y| if x > y { x } else { y })
-            }
-            ReduceOp::Sum => self.fold_impl(src, src_l, T::zero(), |x, y| x + y),
-        }
+        self.fold_impl(src, src_l, T::zero(), |x, y| x + y)
     }
 }
 
@@ -1144,27 +1234,59 @@ impl BackendStorage for CpuStorage {
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, reduce_dims: &[usize]) -> Result<Self> {
-        let src_dims = layout.dims();
-        let mut dst_dims = src_dims.to_vec();
-        for &dim in reduce_dims.iter() {
-            dst_dims[dim] = 1;
+        match op {
+            ReduceOp::Sum => {
+                let src_dims = layout.dims();
+                let mut dst_dims = src_dims.to_vec();
+                for &dim in reduce_dims.iter() {
+                    dst_dims[dim] = 1;
+                }
+                let dst_shape = Shape::from(dst_dims);
+                let mut reduce_dims = reduce_dims.to_vec();
+                // Sort the reduce_dims as they have to be processed from left to right when converting the
+                // indexes.
+                reduce_dims.sort();
+                let reduce_dims_and_stride: Vec<_> = reduce_dims
+                    .iter()
+                    .map(|&d| (src_dims[d], src_dims[d + 1..].iter().product::<usize>()))
+                    .collect();
+                Reduce {
+                    dst_shape: &dst_shape,
+                    reduce_dims: &reduce_dims,
+                    reduce_dims_and_stride,
+                }
+                .map(self, layout)
+            }
+            ReduceOp::Min | ReduceOp::ArgMin | ReduceOp::Max | ReduceOp::ArgMax => {
+                let reduce_dim_index = match reduce_dims {
+                    [reduce_dim_index] => *reduce_dim_index,
+                    _ => {
+                        let op = match op {
+                            ReduceOp::Min => "min",
+                            ReduceOp::ArgMin => "argmin",
+                            ReduceOp::Max => "max",
+                            ReduceOp::ArgMax => "argmax",
+                            _ => unreachable!(),
+                        };
+                        let dims = reduce_dims.to_vec();
+                        Err(Error::OnlySingleDimension { op, dims })?
+                    }
+                };
+                let (use_min, return_index) = match op {
+                    ReduceOp::Min => (true, false),
+                    ReduceOp::ArgMin => (true, true),
+                    ReduceOp::Max => (false, false),
+                    ReduceOp::ArgMax => (false, true),
+                    _ => unreachable!(),
+                };
+                ReduceIndex {
+                    reduce_dim_index,
+                    use_min,
+                    return_index,
+                }
+                .map(self, layout)
+            }
         }
-        let dst_shape = Shape::from(dst_dims);
-        let mut reduce_dims = reduce_dims.to_vec();
-        // Sort the reduce_dims as they have to be processed from left to right when converting the
-        // indexes.
-        reduce_dims.sort();
-        let reduce_dims_and_stride: Vec<_> = reduce_dims
-            .iter()
-            .map(|&d| (src_dims[d], src_dims[d + 1..].iter().product::<usize>()))
-            .collect();
-        Reduce {
-            dst_shape: &dst_shape,
-            reduce_dims: &reduce_dims,
-            reduce_dims_and_stride,
-            op,
-        }
-        .map(self, layout)
     }
 
     fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {

@@ -17,6 +17,20 @@ pub enum ReduceOp {
     Sum,
     Min,
     Max,
+    ArgMin,
+    ArgMax,
+}
+
+impl ReduceOp {
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::ArgMax => "argmax",
+            Self::ArgMin => "argmin",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Sum => "sum",
+        }
+    }
 }
 
 // These ops return the same type as their input type.
