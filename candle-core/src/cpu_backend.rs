@@ -689,18 +689,18 @@ impl<'a> Map2 for IndexAdd<'a> {
     const OP: &'static str = "index-add";
     // https://pytorch.org/docs/stable/generated/torch.Tensor.index_add_.html#torch.Tensor.index_add_
     // v1, l1 -> self
-    // v2, l2 -> src
-    fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, v2: &[T], l2: &Layout) -> Result<Vec<T>> {
+    fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         let dst_len = l1.shape().elem_count();
         let mut dst = vec![T::zero(); dst_len];
         copy_strided_src_(v1, &mut dst, 0, l1);
-        let src = match l2.contiguous_offsets() {
+        let src = match src_l.contiguous_offsets() {
             None => Err(Error::RequiresContiguous { op: "index-add" })?,
-            Some((o1, o2)) => &v2[o1..o2],
+            Some((o1, o2)) => &src[o1..o2],
         };
-        let max_idx = l1.dims()[self.dim];
-        if self.dim == 0 {
-            let stride = l2.stride()[0];
+        let dim = self.dim;
+        let max_idx = l1.dims()[dim];
+        let stride = src_l.stride()[dim];
+        if dim == 0 {
             for (src_idx, &dst_idx) in self.ids.iter().enumerate() {
                 let dst_idx = dst_idx as usize;
                 if dst_idx >= max_idx {
@@ -719,7 +719,28 @@ impl<'a> Map2 for IndexAdd<'a> {
                 }
             }
         } else {
-            todo!()
+            let pre_dim = src_l.dims()[..dim].iter().product::<usize>();
+            let post_dim = src_l.dims()[dim + 1..].iter().product::<usize>();
+            for (src_idx, &dst_idx) in self.ids.iter().enumerate() {
+                let dst_idx = dst_idx as usize;
+                if dst_idx >= max_idx {
+                    Err(Error::InvalidIndex {
+                        index: dst_idx,
+                        op: "index-add",
+                        size: max_idx,
+                    })?
+                }
+                for pre_i in 0..pre_dim {
+                    let pre_i = pre_i * stride;
+                    let pre_src_i = (pre_i + src_idx) * post_dim;
+                    let pre_dst_i = (pre_i + dst_idx) * post_dim;
+                    let src = &src[pre_src_i..pre_src_i + post_dim];
+                    let dst = &mut dst[pre_dst_i..pre_dst_i + post_dim];
+                    for (d, &s) in dst.iter_mut().zip(src.iter()) {
+                        *d += s
+                    }
+                }
+            }
         }
         Ok(dst)
     }
