@@ -160,6 +160,11 @@ fn unary_grad(device: &Device) -> Result<()> {
         grad_x.to_vec1::<f32>()?,
         [-0.11111111, -1.0, -0.0625, -44.444443],
     );
+    let y = x.broadcast_div(&Tensor::new(0.5f32, device)?)?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(y.to_vec1::<f32>()?, [6., 2., 8., 0.3]);
+    assert_eq!(grad_x.to_vec1::<f32>()?, [2., 2., 2., 2.]);
     Ok(())
 }
 
