@@ -94,10 +94,10 @@ impl CustomOp1 for EluWithBackward {
         self.0.cpu_fwd(s, l)
     }
 
-    fn bwd(&self, arg: &Tensor, _res: &Tensor, grad_res: &Tensor) -> Result<Tensor> {
+    fn bwd(&self, arg: &Tensor, _res: &Tensor, grad_res: &Tensor) -> Result<Option<Tensor>> {
         let alpha = self.0.alpha;
         let bwd = arg.custom_op1(EluBackward { alpha })?;
-        grad_res.mul(&bwd)
+        Ok(Some(grad_res.mul(&bwd)?))
     }
 }
 

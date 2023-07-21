@@ -94,6 +94,8 @@ pub(crate) enum Op {
     Transpose(Tensor, usize, usize),
     Elu(Tensor, f64),
     CustomOp1(Tensor, std::sync::Arc<Box<dyn CustomOp1>>),
+    CustomOp2(Tensor, Tensor, std::sync::Arc<Box<dyn CustomOp2>>),
+    CustomOp3(Tensor, Tensor, Tensor, std::sync::Arc<Box<dyn CustomOp3>>),
 }
 
 /// Unary ops that can be defined in user-land.
@@ -116,7 +118,88 @@ pub trait CustomOp1: Send + Sync {
     /// This function takes as argument the argument `arg` used in the forward pass, the result
     /// produced by the forward operation `res` and the gradient of the result `grad_res`.
     /// The function should return the gradient of the argument.
-    fn bwd(&self, _arg: &Tensor, _res: &Tensor, _grad_res: &Tensor) -> Result<Tensor> {
+    fn bwd(&self, _arg: &Tensor, _res: &Tensor, _grad_res: &Tensor) -> Result<Option<Tensor>> {
+        Err(crate::Error::BackwardNotSupported { op: self.name() })
+    }
+}
+
+pub trait CustomOp2: Send + Sync {
+    fn name(&self) -> &'static str;
+
+    /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn cpu_fwd(
+        &self,
+        s1: &CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+    ) -> Result<(CpuStorage, Shape)>;
+
+    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn cuda_fwd(
+        &self,
+        _: &CudaStorage,
+        _: &Layout,
+        _: &CudaStorage,
+        _: &Layout,
+    ) -> Result<(CudaStorage, Shape)> {
+        Err(crate::Error::Cuda(
+            format!("no cuda implementation for {}", self.name()).into(),
+        ))
+    }
+
+    fn bwd(
+        &self,
+        _arg1: &Tensor,
+        _arg2: &Tensor,
+        _res: &Tensor,
+        _grad_res: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>)> {
+        Err(crate::Error::BackwardNotSupported { op: self.name() })
+    }
+}
+
+pub trait CustomOp3: Send + Sync {
+    fn name(&self) -> &'static str;
+
+    /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn cpu_fwd(
+        &self,
+        s1: &CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+        s3: &CpuStorage,
+        l3: &Layout,
+    ) -> Result<(CpuStorage, Shape)>;
+
+    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn cuda_fwd(
+        &self,
+        _: &CudaStorage,
+        _: &Layout,
+        _: &CudaStorage,
+        _: &Layout,
+        _: &CudaStorage,
+        _: &Layout,
+    ) -> Result<(CudaStorage, Shape)> {
+        Err(crate::Error::Cuda(
+            format!("no cuda implementation for {}", self.name()).into(),
+        ))
+    }
+
+    fn bwd(
+        &self,
+        _arg1: &Tensor,
+        _arg2: &Tensor,
+        _arg3: &Tensor,
+        _res: &Tensor,
+        _grad_res: &Tensor,
+    ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
         Err(crate::Error::BackwardNotSupported { op: self.name() })
     }
 }
