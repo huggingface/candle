@@ -191,6 +191,7 @@ impl ReduceIndex {
                 let src = &src[o1..o2];
                 if reduce_dim_stride == 1 {
                     for (start_src_i, dst_v) in dst_to_set.iter_mut().enumerate() {
+                        let start_src_i = start_src_i * reduce_dim_size;
                         let src = &src[start_src_i..start_src_i + reduce_dim_size];
                         let mut acc = 0;
                         let mut val = src[0];
