@@ -86,7 +86,8 @@ impl Tensor {
                     | Op::Narrow(node, _, _, _)
                     | Op::Softmax(node, _)
                     | Op::Unary(node, _)
-                    | Op::Elu(node, _) => {
+                    | Op::Elu(node, _)
+                    | Op::CustomOp1(node, _) => {
                         let (tg, nodes) = walk(node, nodes, already_seen);
                         track_grad |= tg;
                         nodes
@@ -319,6 +320,11 @@ impl Tensor {
                     Op::Unary(_, UnaryOp::Gelu) => Err(Error::BackwardNotSupported { op: "gelu" })?,
                     Op::Unary(_, UnaryOp::Relu) => Err(Error::BackwardNotSupported { op: "relu" })?,
                     Op::Elu(..) => Err(Error::BackwardNotSupported { op: "elu" })?,
+                    Op::CustomOp1(arg, c) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        let arg_grad = c.bwd(arg, node, &grad)?;
+                        *sum_grad = sum_grad.add(&arg_grad)?
+                    }
                     Op::Unary(arg, UnaryOp::Sqr) => {
                         let arg_grad = arg.mul(&grad)?.affine(2., 0.)?;
                         let sum_grad = grads.or_insert(arg)?;

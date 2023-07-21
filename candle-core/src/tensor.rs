@@ -1,5 +1,5 @@
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::op::{BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
+use crate::op::{BinaryOp, CmpOp, CustomOp1, Op, ReduceOp, UnaryOp};
 use crate::shape::{Dim, Dims};
 use crate::{storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
@@ -1687,6 +1687,19 @@ impl Tensor {
         let lhs: &RwLock<Storage> = self.storage.as_ref();
         let rhs: &RwLock<Storage> = rhs.storage.as_ref();
         std::ptr::eq(lhs, rhs)
+    }
+
+    /// Applies a unary custom op.
+    pub fn custom_op1(&self, c: Arc<Box<dyn CustomOp1>>) -> Result<Self> {
+        let (storage, shape) = self
+            .storage()
+            .custom_op1(self.layout(), c.as_ref().as_ref())?;
+        let op = if self.track_op() {
+            Some(Op::CustomOp1(self.clone(), c))
+        } else {
+            None
+        };
+        Ok(from_storage(storage, shape, op, false))
     }
 }
 

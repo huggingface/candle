@@ -1,5 +1,5 @@
 use crate::backend::BackendStorage;
-use crate::op::{self, CmpOp, ReduceOp};
+use crate::op::{self, CmpOp, CustomOp1, ReduceOp};
 use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, Result, Shape};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
@@ -143,6 +143,19 @@ impl Storage {
             Self::Cuda(storage) => {
                 let storage = storage.to_dtype(layout, dtype)?;
                 Ok(Self::Cuda(storage))
+            }
+        }
+    }
+
+    pub(crate) fn custom_op1(&self, l: &Layout, c: &dyn CustomOp1) -> Result<(Self, Shape)> {
+        match self {
+            Storage::Cpu(storage) => {
+                let (storage, shape) = c.cpu_fwd(storage, l)?;
+                Ok((Self::Cpu(storage), shape))
+            }
+            Self::Cuda(storage) => {
+                let (storage, shape) = c.cuda_fwd(storage, l)?;
+                Ok((Self::Cuda(storage), shape))
             }
         }
     }
