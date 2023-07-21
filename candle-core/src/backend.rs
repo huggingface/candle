@@ -1,7 +1,7 @@
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 
-pub(crate) trait BackendStorage: Sized {
+pub trait BackendStorage: Sized {
     type Device: BackendDevice;
 
     fn try_clone(&self, _: &Layout) -> Result<Self>;
@@ -53,7 +53,7 @@ pub(crate) trait BackendStorage: Sized {
     fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()>;
 }
 
-pub(crate) trait BackendDevice: Sized + std::fmt::Debug + Clone {
+pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
     type Storage: BackendStorage;
 
     // TODO: Make the usize generic and part of a generic DeviceLocation.

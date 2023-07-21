@@ -33,13 +33,13 @@
 //!
 //! Rust is cool, and a lot of the HF ecosystem already has Rust crates [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers)
 
-mod backend;
+pub mod backend;
 mod backprop;
 mod conv;
 mod convert;
-mod cpu_backend;
+pub mod cpu_backend;
 #[cfg(feature = "cuda")]
-mod cuda_backend;
+pub mod cuda_backend;
 mod device;
 pub mod display;
 mod dtype;
@@ -65,6 +65,7 @@ pub use dtype::{DType, WithDType};
 pub use error::{Error, Result};
 pub use indexer::IndexOp;
 pub use layout::Layout;
+pub use op::CustomOp1;
 pub use shape::{Shape, D};
 pub use storage::Storage;
 pub use strided_index::{StridedBlocks, StridedIndex};
