@@ -18,7 +18,7 @@ pub enum CpuStorage {
 #[derive(Debug, Clone)]
 pub struct CpuDevice;
 
-trait Map1 {
+pub trait Map1 {
     fn f<T: WithDType>(&self, vs: &[T], layout: &Layout) -> Result<Vec<T>>;
 
     fn map(&self, vs: &CpuStorage, layout: &Layout) -> Result<CpuStorage> {
@@ -33,7 +33,7 @@ trait Map1 {
     }
 }
 
-trait Map1Any {
+pub trait Map1Any {
     fn f<T: WithDType, W: Fn(Vec<T>) -> CpuStorage>(
         &self,
         vs: &[T],
@@ -54,7 +54,7 @@ trait Map1Any {
 }
 
 type C = CpuStorage;
-trait Map2 {
+pub trait Map2 {
     const OP: &'static str;
     fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, v2: &[T], l2: &Layout) -> Result<Vec<T>>;
 
@@ -82,7 +82,7 @@ trait Map2 {
     }
 }
 
-trait Map2U8 {
+pub trait Map2U8 {
     const OP: &'static str;
     fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, v2: &[T], l2: &Layout) -> Result<Vec<u8>>;
 
@@ -348,7 +348,11 @@ impl<'a> Map1 for Reduce<'a> {
     }
 }
 
-fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(vs: &[T], layout: &Layout, mut f: F) -> Vec<U> {
+pub fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(
+    vs: &[T],
+    layout: &Layout,
+    mut f: F,
+) -> Vec<U> {
     match layout.strided_blocks() {
         crate::StridedBlocks::SingleBlock { start_offset, len } => vs
             [start_offset..start_offset + len]
@@ -380,7 +384,7 @@ fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(vs: &[T], layout: &Layout, mut 
     }
 }
 
-fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U])>(
+pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U])>(
     vs: &[T],
     layout: &Layout,
     mut f: F,

@@ -37,9 +37,9 @@ mod backend;
 mod backprop;
 mod conv;
 mod convert;
-mod cpu_backend;
+pub mod cpu_backend;
 #[cfg(feature = "cuda")]
-mod cuda_backend;
+pub mod cuda_backend;
 mod device;
 pub mod display;
 mod dtype;

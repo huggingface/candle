@@ -1690,7 +1690,7 @@ impl Tensor {
     }
 
     /// Applies a unary custom op.
-    pub fn custom_op1(&self, c: Arc<Box<dyn CustomOp1>>) -> Result<Self> {
+    pub fn custom_op1_arc(&self, c: Arc<Box<dyn CustomOp1>>) -> Result<Self> {
         let (storage, shape) = self
             .storage()
             .custom_op1(self.layout(), c.as_ref().as_ref())?;
@@ -1700,6 +1700,10 @@ impl Tensor {
             None
         };
         Ok(from_storage(storage, shape, op, false))
+    }
+
+    pub fn custom_op1<C: 'static + CustomOp1>(&self, c: C) -> Result<Self> {
+        self.custom_op1_arc(Arc::new(Box::new(c)))
     }
 }
 
