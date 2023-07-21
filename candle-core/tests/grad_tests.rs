@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use candle::{Device, Shape, Var};
+use candle::{Device, Shape, Tensor, Var};
 mod test_utils;
 
 fn simple_grad(device: &Device) -> Result<()> {
@@ -135,23 +135,31 @@ fn unary_grad(device: &Device) -> Result<()> {
     let y = x.sqr()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
-    assert_eq!(y.to_vec1::<f32>()?, [9.0, 1.0, 16.0, 0.0225],);
+    assert_eq!(y.to_vec1::<f32>()?, [9.0, 1.0, 16.0, 0.0225]);
     assert_eq!(grad_x.to_vec1::<f32>()?, [6.0, 2.0, 8.0, 0.3]);
     let y = x.sqr()?.sqrt()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
-    assert_eq!(y.to_vec1::<f32>()?, [3.0, 1.0, 4.0, 0.15],);
+    assert_eq!(y.to_vec1::<f32>()?, [3.0, 1.0, 4.0, 0.15]);
     assert_eq!(grad_x.to_vec1::<f32>()?, [1.0, 1.0, 1.0, 1.0]);
     let y = x.neg()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
-    assert_eq!(y.to_vec1::<f32>()?, [-3.0, -1.0, -4.0, -0.15],);
+    assert_eq!(y.to_vec1::<f32>()?, [-3.0, -1.0, -4.0, -0.15]);
     assert_eq!(grad_x.to_vec1::<f32>()?, [-1.0, -1.0, -1.0, -1.0]);
     let y = x.affine(0.2, 1.)?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
-    assert_eq!(y.to_vec1::<f32>()?, [1.6, 1.2, 1.8, 1.03],);
+    assert_eq!(y.to_vec1::<f32>()?, [1.6, 1.2, 1.8, 1.03]);
     assert_eq!(grad_x.to_vec1::<f32>()?, [0.2, 0.2, 0.2, 0.2]);
+    let y = Tensor::new(1f32, device)?.broadcast_div(x)?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(y.to_vec1::<f32>()?, [0.33333334, 1.0, 0.25, 6.6666665]);
+    assert_eq!(
+        grad_x.to_vec1::<f32>()?,
+        [-0.11111111, -1.0, -0.0625, -44.444443],
+    );
     Ok(())
 }
 

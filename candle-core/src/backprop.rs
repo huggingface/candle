@@ -146,7 +146,7 @@ impl Tensor {
                         *lhs_sum_grad = lhs_sum_grad.add(&lhs_grad)?;
                         let rhs_grad = grad.mul(lhs)?.div(&rhs.sqr()?)?;
                         let rhs_sum_grad = grads.or_insert(rhs)?;
-                        *rhs_sum_grad = rhs_sum_grad.add(&rhs_grad)?;
+                        *rhs_sum_grad = rhs_sum_grad.sub(&rhs_grad)?;
                     }
                     Op::WhereCond(pred, t, f) => {
                         let zeros = grad.zeros_like()?;
