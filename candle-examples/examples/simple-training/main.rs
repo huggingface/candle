@@ -33,13 +33,7 @@ pub fn main() -> Result<()> {
     println!("test-labels: {:?}", m.test_labels.shape());
     let train_labels = m.train_labels;
     let train_images = m.train_images;
-    let train_labels_32 = train_labels.to_dtype(DType::U32)?.unsqueeze(1)?;
-    let train_labels = train_labels.to_vec1::<u8>()?;
-    let train_label_mask = train_labels
-        .iter()
-        .flat_map(|l| (0..LABELS).map(|i| f32::from(i == *l as usize)))
-        .collect::<Vec<_>>();
-    let train_label_mask = Tensor::from_vec(train_label_mask, (train_labels.len(), LABELS), &dev)?;
+    let train_labels = train_labels.to_dtype(DType::U32)?.unsqueeze(1)?;
     let ws = Var::zeros((IMAGE_DIM, LABELS), DType::F32, &dev)?;
     let bs = Var::zeros(LABELS, DType::F32, &dev)?;
     let sgd = candle_nn::SGD::new(&[&ws, &bs], 1.0);
@@ -48,9 +42,7 @@ pub fn main() -> Result<()> {
     for epoch in 1..200 {
         let logits = train_images.matmul(&ws)?.broadcast_add(&bs)?;
         let log_sm = log_softmax(&logits, D::Minus1)?;
-        let loss = (&log_sm * &train_label_mask)?
-            .sum_all()?
-            .affine(-1f64 / train_images.dim(0)? as f64, 0f64)?;
+        let loss = nll_loss(&log_sm, &train_labels)?;
         sgd.backward_step(&loss)?;
 
         let test_logits = test_images.matmul(&ws)?.broadcast_add(&bs)?;
@@ -66,8 +58,6 @@ pub fn main() -> Result<()> {
             loss.to_scalar::<f32>()?,
             100. * test_accuracy
         );
-        let nll_loss = nll_loss(&log_sm, &train_labels_32)?.to_vec0::<f32>()?;
-        println!("{nll_loss}");
     }
     Ok(())
 }
