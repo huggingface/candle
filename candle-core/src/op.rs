@@ -66,6 +66,8 @@ pub(crate) enum Op {
     Reduce(Tensor, ReduceOp, Vec<usize>),
     Matmul(Tensor, Tensor),
     Embedding(Tensor, Tensor),
+    Gather(Tensor, Tensor, usize),
+    ScatterAdd(Tensor, Tensor, Tensor, usize),
     IndexSelect(Tensor, Tensor, usize),
     IndexAdd(Tensor, Tensor, Tensor, usize),
     WhereCond(Tensor, Tensor, Tensor),

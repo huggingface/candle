@@ -40,6 +40,16 @@ pub trait BackendStorage: Sized {
     ) -> Result<Self>;
 
     fn embedding(&self, _: &Layout, _: &Self, _: &Layout) -> Result<Self>;
+    fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self>;
+    fn scatter_add(
+        &self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<Self>;
     fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self>;
     fn index_add(
         &self,
