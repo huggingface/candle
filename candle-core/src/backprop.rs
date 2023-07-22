@@ -56,6 +56,7 @@ impl Tensor {
                     }
                     | Op::CustomOp2(lhs, rhs, _)
                     | Op::Binary(lhs, rhs, _)
+                    | Op::Gather(lhs, rhs, _)
                     | Op::IndexSelect(lhs, rhs, _)
                     | Op::Embedding(lhs, rhs)
                     | Op::Matmul(lhs, rhs) => {
@@ -162,6 +163,7 @@ impl Tensor {
                         *f_sum_grad = f_sum_grad.add(&f_grad)?;
                     }
                     Op::Conv1D { .. } => Err(Error::BackwardNotSupported { op: "conv1d" })?,
+                    Op::Gather(..) => Err(Error::BackwardNotSupported { op: "gather" })?,
                     Op::IndexAdd { .. } => Err(Error::BackwardNotSupported { op: "index-add" })?,
                     Op::IndexSelect(arg, indexes, dim) => {
                         let sum_grad = grads.or_insert(arg)?;

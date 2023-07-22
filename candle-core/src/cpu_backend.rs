@@ -1593,6 +1593,11 @@ impl BackendStorage for CpuStorage {
         IndexSelect { ids, ids_l, dim }.map(self, l)
     }
 
+    fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
+        let ids = ids.as_slice::<u32>()?;
+        IndexSelect { ids, ids_l, dim }.map(self, l)
+    }
+
     fn index_add(
         &self,
         l: &Layout,

@@ -85,6 +85,10 @@ impl crate::backend::BackendStorage for CudaStorage {
     fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+    fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn index_add(
         &self,
         _: &Layout,

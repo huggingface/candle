@@ -992,6 +992,19 @@ impl Tensor {
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
+    pub fn gather<D: Dim>(&self, indexes: &Self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "gather")?;
+        let storage =
+            self.storage()
+                .gather(self.layout(), &indexes.storage(), indexes.layout(), dim)?;
+        let op = if indexes.track_op() || self.track_op() {
+            Some(Op::Gather(self.clone(), indexes.clone(), dim))
+        } else {
+            None
+        };
+        Ok(from_storage(storage, indexes.shape(), op, false))
+    }
+
     pub fn index_select<D: Dim>(&self, indexes: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "index-select")?;
         let indexes_len = match indexes.dims() {
