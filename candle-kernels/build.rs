@@ -184,6 +184,7 @@ mod cuda {
                         let mut command = std::process::Command::new("nvcc");
                             command.arg(format!("--gpu-architecture=sm_{compute_cap}"))
                             .arg("--ptx")
+                            .arg("--expt-relaxed-constexpr")
                             .args(["--default-stream", "per-thread"])
                             .args(["--output-directory", &out_dir])
                             // Flash attention only
