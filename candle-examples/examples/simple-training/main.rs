@@ -3,26 +3,11 @@
 extern crate intel_mkl_src;
 
 use anyhow::Result;
-use candle::{DType, Tensor, Var, D};
+use candle::{DType, Var, D};
+use candle_nn::{loss, ops};
 
 const IMAGE_DIM: usize = 784;
 const LABELS: usize = 10;
-
-fn log_softmax<D: candle::shape::Dim>(xs: &Tensor, d: D) -> candle::Result<Tensor> {
-    let d = d.to_index(xs.shape(), "log-softmax")?;
-    let max = xs.max_keepdim(d)?;
-    let diff = xs.broadcast_sub(&max)?;
-    let sum_exp = diff.exp()?.sum_keepdim(d)?;
-    let log_sm = diff.broadcast_sub(&sum_exp.log()?)?;
-    Ok(log_sm)
-}
-
-fn nll_loss(inp: &Tensor, target: &Tensor) -> candle::Result<Tensor> {
-    let b_sz = target.dim(0)?;
-    inp.gather(target, 1)?
-        .sum_all()?
-        .affine(-1f64 / b_sz as f64, 0.)
-}
 
 pub fn main() -> Result<()> {
     let dev = candle::Device::cuda_if_available(0)?;
@@ -41,8 +26,8 @@ pub fn main() -> Result<()> {
     let test_labels = m.test_labels.to_dtype(DType::U32)?;
     for epoch in 1..200 {
         let logits = train_images.matmul(&ws)?.broadcast_add(&bs)?;
-        let log_sm = log_softmax(&logits, D::Minus1)?;
-        let loss = nll_loss(&log_sm, &train_labels)?;
+        let log_sm = ops::log_softmax(&logits, D::Minus1)?;
+        let loss = loss::nll(&log_sm, &train_labels)?;
         sgd.backward_step(&loss)?;
 
         let test_logits = test_images.matmul(&ws)?.broadcast_add(&bs)?;

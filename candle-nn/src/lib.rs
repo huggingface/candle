@@ -6,6 +6,8 @@ pub mod embedding;
 pub mod init;
 pub mod layer_norm;
 pub mod linear;
+pub mod loss;
+pub mod ops;
 pub mod optim;
 pub mod var_builder;
 pub mod vision;
