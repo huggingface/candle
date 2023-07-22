@@ -1,3 +1,4 @@
+#![allow(unused)]
 use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::PathBuf;
@@ -15,8 +16,8 @@ const DIRS: [KernelDirectories; 1] = [KernelDirectories {
 impl KernelDirectories {
     fn maybe_build_ptx(
         &self,
-        cu_file: &PathBuf,
-        ptx_file: &PathBuf,
+        cu_file: &std::path::Path,
+        ptx_file: &std::path::Path,
         compute_cap: usize,
     ) -> Result<()> {
         let should_compile = if ptx_file.exists() {
@@ -27,27 +28,38 @@ impl KernelDirectories {
             true
         };
         if should_compile {
-            let mut command = std::process::Command::new("nvcc");
-            let out_dir = ptx_file.parent().context("no parent for ptx file")?;
-            command
-                .arg(format!("--gpu-architecture=sm_{compute_cap}"))
-                .arg("--ptx")
-                .args(["--default-stream", "per-thread"])
-                .args(["--output-directory", out_dir.to_str().unwrap()])
-                .arg(format!("-I/{}", self.kernel_dir))
-                .arg(cu_file);
-            let output = command.spawn()?.wait_with_output()?;
-            if !output.status.success() {
-                anyhow::bail!(
+            #[cfg(feature = "cuda")]
+            {
+                let mut command = std::process::Command::new("nvcc");
+                let out_dir = ptx_file.parent().context("no parent for ptx file")?;
+                command
+                    .arg(format!("--gpu-architecture=sm_{compute_cap}"))
+                    .arg("--ptx")
+                    .args(["--default-stream", "per-thread"])
+                    .args(["--output-directory", out_dir.to_str().unwrap()])
+                    .arg(format!("-I/{}", self.kernel_dir))
+                    .arg(cu_file);
+                let output = command
+                    .spawn()
+                    .context("failed spawning nvcc")?
+                    .wait_with_output()?;
+                if !output.status.success() {
+                    anyhow::bail!(
                     "nvcc error while compiling {cu_file:?}:\n\n# stdout\n{:#}\n\n# stderr\n{:#}",
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)
                 )
+                }
             }
+            #[cfg(not(feature = "cuda"))]
+            std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(ptx_file)?;
         }
         Ok(())
     }
-    fn process(&self, out_dir: &PathBuf, compute_cap: usize) -> Result<()> {
+    fn process(&self, out_dir: &std::path::Path, compute_cap: usize) -> Result<()> {
         println!("cargo:rerun-if-changed={}", self.kernel_dir);
         let kernel_dir = PathBuf::from(self.kernel_dir);
         let out_dir = out_dir.join(self.kernel_dir);
@@ -56,14 +68,12 @@ impl KernelDirectories {
         }
         let mut cu_files = vec![];
         let mut cuh_files = vec![];
-        for file in std::fs::read_dir(kernel_dir)? {
-            if let Ok(file) = file {
-                let file = file.path();
-                match file.extension().and_then(|v| v.to_str()) {
-                    Some("cu") => cu_files.push(file),
-                    Some("cuh") => cuh_files.push(file),
-                    _ => {}
-                }
+        for file in std::fs::read_dir(kernel_dir)?.flatten() {
+            let file = file.path();
+            match file.extension().and_then(|v| v.to_str()) {
+                Some("cu") => cu_files.push(file),
+                Some("cuh") => cuh_files.push(file),
+                _ => {}
             }
         }
 
@@ -72,7 +82,7 @@ impl KernelDirectories {
             let file_stem = cu_file
                 .file_stem()
                 .with_context(|| format!("no stem {cu_file:?}"))?;
-            let file_stem = file_stem.to_string_lossy().to_owned();
+            let file_stem = file_stem.to_string_lossy().into_owned();
             let ptx_file = out_dir.join(&format!("{file_stem}.ptx"));
             self.maybe_build_ptx(cu_file, &ptx_file, compute_cap)?;
             ptx_paths.push(ptx_file);
@@ -87,11 +97,12 @@ impl KernelDirectories {
                     .context("empty stem")?
                     .to_string_lossy();
                 let const_definition = format!(
-                    r#"pub const {}: &str = include_str!(concat!(env!("OUT_DIR"), "/{}/{name}.ptx"));\n"#,
+                    r#"pub const {}: &str = include_str!(concat!(env!("OUT_DIR"), "/{}/{name}.ptx"));"#,
                     name.to_uppercase().replace('.', "_"),
                     self.kernel_dir,
                 );
                 file.write_all(const_definition.as_bytes())?;
+                file.write_all(b"\n")?;
             }
         }
         Ok(())
@@ -115,7 +126,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[allow(unused)]
 fn set_cuda_include_dir() -> Result<()> {
     // NOTE: copied from cudarc build.rs.
     let env_vars = [
