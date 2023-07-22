@@ -994,6 +994,27 @@ impl Tensor {
 
     pub fn gather<D: Dim>(&self, indexes: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "gather")?;
+        let self_dims = self.dims();
+        let indexes_dims = indexes.dims();
+        let mismatch = if indexes_dims.len() != self_dims.len() {
+            true
+        } else {
+            let mut mismatch = false;
+            for (i, (&d1, &d2)) in self_dims.iter().zip(indexes_dims.iter()).enumerate() {
+                if i != dim && d1 != d2 {
+                    mismatch = true;
+                    break;
+                }
+            }
+            mismatch
+        };
+        if mismatch {
+            Err(Error::ShapeMismatchBinaryOp {
+                op: "gather",
+                lhs: self.shape().clone(),
+                rhs: indexes.shape().clone(),
+            })?
+        }
         let storage =
             self.storage()
                 .gather(self.layout(), &indexes.storage(), indexes.layout(), dim)?;
