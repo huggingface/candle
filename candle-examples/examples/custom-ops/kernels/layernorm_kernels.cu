@@ -1,7 +1,7 @@
 #include "reduction_utils.cuh"
 
 template <typename scalar_t>
-__global__ void
+__device__ void
 rms_norm_kernel(scalar_t *__restrict__ out,         // [num_tokens, hidden_size]
                 const scalar_t *__restrict__ input, // [num_tokens, hidden_size]
                 const scalar_t *__restrict__ weight, // [hidden_size]
@@ -26,3 +26,12 @@ rms_norm_kernel(scalar_t *__restrict__ out,         // [num_tokens, hidden_size]
         ((scalar_t)(x * s_variance)) * weight[idx];
   }
 }
+extern "C" __global__ void rms_norm_kernel_f32(
+    float *__restrict__ out,         // [num_tokens, hidden_size]
+    const float *__restrict__ input, // [num_tokens, hidden_size]
+    const float *__restrict__ weight, // [hidden_size]
+    const float epsilon, const int num_tokens,
+    const int hidden_size) {
+  rms_norm_kernel(out, input, weight, epsilon, num_tokens, hidden_size);
+}
+
