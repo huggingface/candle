@@ -134,7 +134,7 @@ impl Decoder {
                     .to_scalar::<f32>()? as f64;
             }
 
-            let (seq_len, _) = logits.shape().r2()?;
+            let (seq_len, _) = logits.dims2()?;
             let logits = logits
                 .get(seq_len - 1)?
                 .broadcast_add(&self.suppress_tokens)?;
@@ -207,7 +207,7 @@ impl Decoder {
 
     fn run(&self, mel: &Tensor) -> anyhow::Result<Vec<Segment>> {
         let mut rng = StdRng::seed_from_u64(299792458);
-        let (_, _, content_frames) = mel.shape().r3()?;
+        let (_, _, content_frames) = mel.dims3()?;
         let mut seek = 0;
         let mut segments = vec![];
         while seek < content_frames {

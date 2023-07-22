@@ -338,7 +338,7 @@ impl T5Stack {
 
     fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
-        let (_b_sz, _seq_len) = input_embeds.shape().r2()?;
+        let (_b_sz, _seq_len) = input_embeds.dims2()?;
 
         let mut hidden_states = self.dropout.forward(&input_embeds)?;
         for block in self.block.iter() {

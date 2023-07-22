@@ -620,7 +620,7 @@ impl<'a> Map1 for Embedding<'a> {
         let shape = ids_l.shape();
         let (v_size, h_size) = rhs_l
             .shape()
-            .r2()
+            .dims2()
             .map_err(|e| CudaError::WrappedError(Box::new(e)))
             .w()?;
         let dims = shape.dims();
