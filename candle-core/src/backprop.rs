@@ -39,6 +39,7 @@ impl Tensor {
             } else if let Some(op) = node.op() {
                 match op {
                     Op::IndexAdd(t1, t2, t3, _)
+                    | Op::ScatterAdd(t1, t2, t3, _)
                     | Op::CustomOp3(t1, t2, t3, _)
                     | Op::WhereCond(t1, t2, t3) => {
                         let (tg, nodes) = walk(t1, nodes, already_seen);
@@ -163,7 +164,11 @@ impl Tensor {
                         *f_sum_grad = f_sum_grad.add(&f_grad)?;
                     }
                     Op::Conv1D { .. } => Err(Error::BackwardNotSupported { op: "conv1d" })?,
-                    Op::Gather(..) => Err(Error::BackwardNotSupported { op: "gather" })?,
+                    Op::Gather(arg, indexes, dim) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.scatter_add(indexes, &grad, *dim)?;
+                    }
+                    Op::ScatterAdd(..) => Err(Error::BackwardNotSupported { op: "scatter-add" })?,
                     Op::IndexAdd { .. } => Err(Error::BackwardNotSupported { op: "index-add" })?,
                     Op::IndexSelect(arg, indexes, dim) => {
                         let sum_grad = grads.or_insert(arg)?;

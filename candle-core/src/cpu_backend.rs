@@ -733,6 +733,22 @@ impl<'a> Map1 for IndexSelect<'a> {
     }
 }
 
+struct ScatterAdd<'a> {
+    ids: &'a [u32],
+    ids_l: &'a Layout,
+    dim: usize,
+}
+
+impl<'a> Map2 for ScatterAdd<'a> {
+    const OP: &'static str = "scatter-add";
+    fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, v2: &[T], l2: &Layout) -> Result<Vec<T>> {
+        let dst_len = l1.shape().elem_count();
+        let mut dst = vec![T::zero(); dst_len];
+        copy_strided_src_(v1, &mut dst, 0, l1);
+        Ok(dst)
+    }
+}
+
 struct IndexAdd<'a> {
     ids: &'a [u32],
     dim: usize,
@@ -1649,6 +1665,19 @@ impl BackendStorage for CpuStorage {
     fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
         let ids = ids.as_slice::<u32>()?;
         Gather { ids, ids_l, dim }.map(self, l)
+    }
+
+    fn scatter_add(
+        &self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<Self> {
+        let ids = ids.as_slice::<u32>()?;
+        ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l)
     }
 
     fn index_add(

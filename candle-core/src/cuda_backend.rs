@@ -1067,6 +1067,17 @@ impl BackendStorage for CudaStorage {
     fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self> {
         Err(CudaError::InternalError("TODO: implement gather").into())
     }
+    fn scatter_add(
+        &self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: usize,
+    ) -> Result<Self> {
+        Err(CudaError::InternalError("TODO: implement scatter-add").into())
+    }
     fn index_add(
         &self,
         _: &Layout,
