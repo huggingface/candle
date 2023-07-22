@@ -112,11 +112,11 @@ pub enum Error {
         msg: &'static str,
     },
 
-    #[error("{op} invalid index {index} with src dim size {src_size}")]
+    #[error("{op} invalid index {index} with dim size {size}")]
     InvalidIndex {
         op: &'static str,
         index: usize,
-        src_size: usize,
+        size: usize,
     },
 
     #[error("cannot broadcast {src_shape:?} to {dst_shape:?}")]
