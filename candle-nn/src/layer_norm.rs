@@ -49,7 +49,7 @@ impl LayerNorm {
             DType::F16 | DType::BF16 => DType::F32,
             d => d,
         };
-        let (_bsize, _seq_len, hidden_size) = x.shape().r3()?;
+        let (_bsize, _seq_len, hidden_size) = x.dims3()?;
         let x = x.to_dtype(internal_dtype)?;
         let mean_x = (x.sum_keepdim(2)? / hidden_size as f64)?;
         let x = x.broadcast_sub(&mean_x)?;

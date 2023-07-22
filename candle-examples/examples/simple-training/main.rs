@@ -52,7 +52,7 @@ pub fn main() -> Result<()> {
             .to_dtype(DType::F32)?
             .sum_all()?
             .to_scalar::<f32>()?;
-        let test_accuracy = sum_ok / test_labels.shape().r1()? as f32;
+        let test_accuracy = sum_ok / test_labels.dims1()? as f32;
         println!(
             "{epoch:4} train loss: {:8.5} test acc: {:5.2}%",
             loss.to_scalar::<f32>()?,

@@ -132,7 +132,7 @@ impl MultiHeadAttention {
     }
 
     fn reshape_head(&self, x: &Tensor) -> Result<Tensor> {
-        let (n_batch, n_ctx, n_state) = x.shape().r3()?;
+        let (n_batch, n_ctx, n_state) = x.dims3()?;
         let target_dims = &[n_batch, n_ctx, self.n_head, n_state / self.n_head];
         Ok(x.reshape(target_dims)?.transpose(1, 2)?)
     }
@@ -144,7 +144,7 @@ impl MultiHeadAttention {
         v: &Tensor,
         mask: Option<&Tensor>,
     ) -> Result<Tensor> {
-        let (_, n_ctx, n_state) = q.shape().r3()?;
+        let (_, n_ctx, n_state) = q.dims3()?;
         let scale = ((n_state / self.n_head) as f64).powf(-0.25);
         let q = (self.reshape_head(q)? * scale)?;
         let k = (self.reshape_head(k)?.transpose(2, 3)? * scale)?;
@@ -270,7 +270,7 @@ impl AudioEncoder {
         let x = self.conv1.forward(x)?.gelu()?;
         let x = self.conv2.forward(&x)?.gelu()?;
         let x = x.transpose(1, 2)?;
-        let (_bsize, seq_len, _hidden) = x.shape().r3()?;
+        let (_bsize, seq_len, _hidden) = x.dims3()?;
         let positional_embedding = self.positional_embedding.narrow(0, 0, seq_len)?;
         let mut x = x.broadcast_add(&positional_embedding)?;
         for block in self.blocks.iter() {

@@ -41,7 +41,7 @@ impl Conv1d {
         match &self.bias {
             None => Ok(x),
             Some(bias) => {
-                let b = bias.shape().r1()?;
+                let b = bias.dims1()?;
                 let bias = bias.reshape((1, b, 1))?;
                 Ok(x.broadcast_add(&bias)?)
             }

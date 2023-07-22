@@ -1688,7 +1688,7 @@ impl BackendStorage for CpuStorage {
 
     fn embedding(&self, ids_l: &Layout, rhs: &Self, rhs_l: &Layout) -> Result<Self> {
         let ids = self.as_slice::<u32>()?;
-        let (vocab_size, hidden_size) = rhs_l.shape().r2()?;
+        let (vocab_size, hidden_size) = rhs_l.shape().dims2()?;
         Embedding {
             vocab_size,
             hidden_size,
