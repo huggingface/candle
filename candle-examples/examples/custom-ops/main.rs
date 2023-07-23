@@ -25,16 +25,22 @@ impl CustomOp1 for LayerNorm {
         "layer-norm"
     }
 
-    fn cpu_fwd(&self, _s: &CpuStorage, _l: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
+        let s = s.as_slice::<f32>()?;
+        let _s = match l.contiguous_offsets() {
+            None => Err(Error::Wrapped("input has to be contiguous".into()))?,
+            Some((o1, o2)) => &s[o1..o2],
+        };
         todo!()
     }
 
     #[cfg(feature = "cuda")]
     fn cuda_fwd(
         &self,
-        _: &candle::CudaStorage,
-        _: &Layout,
+        s: &candle::CudaStorage,
+        l: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
+        todo!()
     }
 }
 
@@ -42,6 +48,8 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
     let t = Tensor::arange(0f32, 14f32, &device)?.reshape((2, 7))?;
+    println!("{t}");
+    let t = t.custom_op1(LayerNorm)?;
     println!("{t}");
     Ok(())
 }
