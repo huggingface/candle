@@ -1,3 +1,7 @@
+// This example illustrates how to implement custom operations. These operations can provide their
+// own forward pass (CPU and GPU versions) as well as their backward pass.
+//
+// In this example we add the RMS normalization operation and implement it for f32.
 #![allow(dead_code)]
 #![allow(unused)]
 
@@ -20,7 +24,9 @@ struct Args {
     cpu: bool,
 }
 
-struct LayerNorm;
+struct LayerNorm {
+    eps: f32,
+}
 
 impl CustomOp1 for LayerNorm {
     fn name(&self) -> &'static str {
@@ -28,12 +34,21 @@ impl CustomOp1 for LayerNorm {
     }
 
     fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
+        let (dim1, dim2) = l.shape().dims2()?;
         let s = s.as_slice::<f32>()?;
-        let _s = match l.contiguous_offsets() {
+        let src = match l.contiguous_offsets() {
             None => Err(Error::Wrapped("input has to be contiguous".into()))?,
             Some((o1, o2)) => &s[o1..o2],
         };
-        todo!()
+        let mut dst = Vec::with_capacity(dim1 * dim2);
+        for idx1 in 0..dim1 {
+            let src = &src[idx1 * dim2..(idx1 + 1) * dim2];
+            let variance = src.iter().map(|x| x * x).sum::<f32>();
+            let s_variance = 1f32 / (variance / dim2 as f32 + self.eps).sqrt();
+            dst.extend(src.iter().map(|x| x * s_variance))
+        }
+        let storage = candle::WithDType::to_cpu_storage_owned(dst);
+        Ok((storage, l.shape().clone()))
     }
 
     #[cfg(feature = "cuda")]
@@ -56,7 +71,7 @@ impl CustomOp1 for LayerNorm {
         let elem_count = l.shape().elem_count();
         let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
         let func = dev.get_or_load_func("rms_f32", cuda_kernels::LAYERNORM_KERNELS)?;
-        let params = (&dst, &s, 1e-5f32, d1, d2);
+        let params = (&dst, &s, self.eps, d1, d2);
         let cfg = LaunchConfig {
             grid_dim: (d1, 1, 1),
             block_dim: (d2, 1, 1),
@@ -74,7 +89,7 @@ fn main() -> anyhow::Result<()> {
     let device = candle_examples::device(args.cpu)?;
     let t = Tensor::arange(0f32, 14f32, &device)?.reshape((2, 7))?;
     println!("{t}");
-    let t = t.custom_op1(LayerNorm)?;
+    let t = t.custom_op1(LayerNorm { eps: 1e-5 })?;
     println!("{t}");
     Ok(())
 }
