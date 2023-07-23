@@ -4,6 +4,8 @@
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+mod cuda_kernels;
+
 use clap::Parser;
 
 use candle::backend::BackendStorage;
@@ -40,17 +42,24 @@ impl CustomOp1 for LayerNorm {
         s: &candle::CudaStorage,
         l: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
-        let device = s.device().clone();
+        use candle::cuda_backend::{cudarc, WrapErr};
+        use cudarc::driver::{LaunchAsync, LaunchConfig};
+        let dev = s.device().clone();
         let s = s.as_cuda_slice::<f32>()?;
         let s = match l.contiguous_offsets() {
             None => Err(Error::Wrapped("input has to be contiguous".into()))?,
             Some((o1, o2)) => s, // TODO: slice with o1 and o2
         };
-        let s: std::result::Result<_, candle::cuda_backend::CudaError> =
-            s.try_clone().map_err(|v| v.into());
-        let s = s?;
-        let s = candle::CudaStorage::wrap_cuda_slice(s, device);
-        Ok((s, l.shape().clone()))
+        let s = s.try_clone().w()?;
+        let elem_count = l.shape().elem_count();
+        let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+        let func = dev.get_or_load_func("fill_u8", cuda_kernels::LAYERNORM_KERNELS)?;
+        let params = (&dst, elem_count);
+        let cfg = LaunchConfig::for_num_elems(elem_count as u32);
+        unsafe { func.launch(cfg, params) }.w()?;
+
+        let dst = candle::CudaStorage::wrap_cuda_slice(dst, dev);
+        Ok((dst, l.shape().clone()))
     }
 }
 
