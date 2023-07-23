@@ -96,6 +96,7 @@ impl KernelDirectories {
                     .file_stem()
                     .context("empty stem")?
                     .to_string_lossy();
+                file.write_all(b"#[rustfmt::skip]\n")?;
                 let const_definition = format!(
                     r#"pub const {}: &str = include_str!(concat!(env!("OUT_DIR"), "/{}/{name}.ptx"));"#,
                     name.to_uppercase().replace('.', "_"),
