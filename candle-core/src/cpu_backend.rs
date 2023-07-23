@@ -634,13 +634,13 @@ impl Map1 for Affine {
     }
 }
 
-struct Gather<'a> {
-    ids: &'a [u32],
+struct Gather<'a, I: IntDType> {
+    ids: &'a [I],
     ids_l: &'a Layout,
     dim: usize,
 }
 
-impl<'a> Map1 for Gather<'a> {
+impl<'a, I: IntDType> Map1 for Gather<'a, I> {
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         let ids = match self.ids_l.contiguous_offsets() {
             Some((a, b)) => &self.ids[a..b],
@@ -669,7 +669,7 @@ impl<'a> Map1 for Gather<'a> {
                 let start_dst_idx = start_dst_idx + i * dst_right_len;
                 for right_i in 0..dst_right_len {
                     let dst_idx = start_dst_idx + right_i;
-                    let index = ids[dst_idx] as usize;
+                    let index = ids[dst_idx].as_usize();
                     if index >= src_dim_len {
                         Err(Error::InvalidIndex {
                             index,
@@ -1716,25 +1716,40 @@ impl BackendStorage for CpuStorage {
     }
 
     fn embedding(&self, ids_l: &Layout, rhs: &Self, rhs_l: &Layout) -> Result<Self> {
-        let ids = self.as_slice::<u32>()?;
         let (vocab_size, hidden_size) = rhs_l.shape().dims2()?;
-        Embedding {
-            vocab_size,
-            hidden_size,
-            ids,
-            ids_l,
+        match self {
+            Self::U8(ids) => Embedding {
+                vocab_size,
+                hidden_size,
+                ids,
+                ids_l,
+            }
+            .map(rhs, rhs_l),
+            Self::U32(ids) => Embedding {
+                vocab_size,
+                hidden_size,
+                ids,
+                ids_l,
+            }
+            .map(rhs, rhs_l),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "embedding")),
         }
-        .map(rhs, rhs_l)
     }
 
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
-        let ids = ids.as_slice::<u32>()?;
-        IndexSelect { ids, ids_l, dim }.map(self, l)
+        match ids {
+            Self::U8(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
+            Self::U32(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-select")),
+        }
     }
 
     fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
-        let ids = ids.as_slice::<u32>()?;
-        Gather { ids, ids_l, dim }.map(self, l)
+        match ids {
+            Self::U8(ids) => Gather { ids, ids_l, dim }.map(self, l),
+            Self::U32(ids) => Gather { ids, ids_l, dim }.map(self, l),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "gather")),
+        }
     }
 
     fn scatter_add(
@@ -1746,8 +1761,11 @@ impl BackendStorage for CpuStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<Self> {
-        let ids = ids.as_slice::<u32>()?;
-        ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l)
+        match ids {
+            Self::U8(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
+            Self::U32(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter-add")),
+        }
     }
 
     fn index_add(
@@ -1759,12 +1777,23 @@ impl BackendStorage for CpuStorage {
         src_l: &Layout,
         dim: usize,
     ) -> Result<Self> {
-        let ids = ids.as_slice::<u32>()?;
-        let ids = match ids_l.contiguous_offsets() {
-            Some((a, b)) => &ids[a..b],
-            None => Err(Error::RequiresContiguous { op: "index-add" })?,
-        };
-        IndexAdd { ids, dim }.map(self, l, src, src_l)
+        match ids {
+            Self::U8(ids) => {
+                let ids = match ids_l.contiguous_offsets() {
+                    Some((a, b)) => &ids[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" })?,
+                };
+                IndexAdd { ids, dim }.map(self, l, src, src_l)
+            }
+            Self::U32(ids) => {
+                let ids = match ids_l.contiguous_offsets() {
+                    Some((a, b)) => &ids[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" })?,
+                };
+                IndexAdd { ids, dim }.map(self, l, src, src_l)
+            }
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-add")),
+        }
     }
 
     fn matmul(
