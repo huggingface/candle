@@ -206,7 +206,6 @@ impl Storage {
     }
 
     pub(crate) fn unary_impl<B: op::UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
-        // TODO: Different code path for the contiguous case?
         match self {
             Storage::Cpu(storage) => {
                 let storage = storage.unary_impl::<B>(layout)?;
