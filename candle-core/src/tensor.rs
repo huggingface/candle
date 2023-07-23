@@ -1148,12 +1148,22 @@ impl Tensor {
         let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
             let data = S::cpu_storage_as_slice(cpu_storage)?;
             let mut rows = vec![];
-            let mut src_index = self.strided_index();
-            for _idx_row in 0..dim1 {
-                let row = (0..dim2).map(|_| data[src_index.next().unwrap()]).collect();
-                rows.push(row)
+            match self.layout.contiguous_offsets() {
+                Some((o1, o2)) => {
+                    let data = &data[o1..o2];
+                    for idx_row in 0..dim1 {
+                        rows.push(data[idx_row * dim2..(idx_row + 1) * dim2].to_vec())
+                    }
+                }
+                None => {
+                    let mut src_index = self.strided_index();
+                    for _idx_row in 0..dim1 {
+                        let row = (0..dim2).map(|_| data[src_index.next().unwrap()]).collect();
+                        rows.push(row)
+                    }
+                    assert!(src_index.next().is_none());
+                }
             }
-            assert!(src_index.next().is_none());
             Ok(rows)
         };
         match &*self.storage() {
