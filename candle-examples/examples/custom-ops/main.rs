@@ -28,12 +28,21 @@ impl CustomOp1 for LayerNorm {
     }
 
     fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
+        let (dim1, dim2) = l.shape().dims2()?;
         let s = s.as_slice::<f32>()?;
-        let _s = match l.contiguous_offsets() {
+        let src = match l.contiguous_offsets() {
             None => Err(Error::Wrapped("input has to be contiguous".into()))?,
             Some((o1, o2)) => &s[o1..o2],
         };
-        todo!()
+        let mut dst = Vec::with_capacity(dim1 * dim2);
+        for idx1 in 0..dim1 {
+            let src = &src[idx1 * dim2..(idx1 + 1) * dim2];
+            let variance = src.iter().map(|x| x * x).sum::<f32>();
+            let s_variance = 1f32 / (variance / dim2 as f32 + 1e-5).sqrt();
+            dst.extend(src.iter().map(|x| x * s_variance))
+        }
+        let storage = candle::WithDType::to_cpu_storage_owned(dst);
+        Ok((storage, l.shape().clone()))
     }
 
     #[cfg(feature = "cuda")]
