@@ -1128,17 +1128,17 @@ impl Tensor {
             }
             .bt())?
         }
+        let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
+            let data = S::cpu_storage_as_slice(cpu_storage)?;
+            let data = match self.layout.contiguous_offsets() {
+                Some((o1, o2)) => data[o1..o2].to_vec(),
+                None => self.strided_index().map(|i| data[i]).collect(),
+            };
+            Ok::<Vec<_>, Error>(data)
+        };
         match &*self.storage() {
-            Storage::Cpu(cpu_storage) => {
-                let data = S::cpu_storage_as_slice(cpu_storage)?;
-                Ok(self.strided_index().map(|i| data[i]).collect())
-            }
-            Storage::Cuda(slice) => {
-                // TODO: Would it be possible to only fetch the necessary data?
-                let cpu_storage = slice.to_cpu_storage()?;
-                let data = S::cpu_storage_as_slice(&cpu_storage)?;
-                Ok(self.strided_index().map(|i| data[i]).collect())
-            }
+            Storage::Cpu(storage) => from_cpu_storage(storage),
+            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
