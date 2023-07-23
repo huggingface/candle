@@ -1404,7 +1404,7 @@ impl Tensor {
             id: TensorId::new(),
             storage: Arc::new(RwLock::new(self.storage().try_clone(self.layout())?)),
             layout: self.layout.clone(),
-            op: None, // TODO
+            op: Some(Op::Copy(self.clone())),
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -1540,7 +1540,7 @@ impl Tensor {
             Ok(from_storage(
                 storage,
                 shape.clone(),
-                None, // TODO
+                Some(Op::Copy(self.clone())),
                 false,
             ))
         }

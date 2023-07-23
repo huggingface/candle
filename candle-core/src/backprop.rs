@@ -82,6 +82,7 @@ impl Tensor {
                         }
                     }
                     Op::Reshape(node)
+                    | Op::Copy(node)
                     | Op::Broadcast(node)
                     | Op::Cmp(node, _)
                     | Op::Reduce(node, _, _)
@@ -245,6 +246,10 @@ impl Tensor {
                     Op::ToDType(arg) => {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad.to_dtype(node.dtype())?)?
+                    }
+                    Op::Copy(arg) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad)?
                     }
                     Op::Affine { arg, mul, .. } => {
                         let arg_grad = grad.affine(*mul, 0.)?;
