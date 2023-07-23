@@ -1734,7 +1734,6 @@ impl Tensor {
         for (arg_idx, arg) in args.iter().enumerate() {
             let arg = arg.as_ref();
             if arg.dtype() != dtype {
-                // TODO: Improve the error message.
                 Err(Error::DTypeMismatchBinaryOp {
                     lhs: dtype,
                     rhs: arg.dtype(),
@@ -1743,7 +1742,6 @@ impl Tensor {
                 .bt())?
             }
             if arg.device().location() != device.location() {
-                // TODO: Improve the error message.
                 Err(Error::DeviceMismatchBinaryOp {
                     lhs: device.location(),
                     rhs: arg.device().location(),
@@ -1751,7 +1749,14 @@ impl Tensor {
                 }
                 .bt())?
             }
-            let mut mismatch = arg.rank() != rank;
+            if rank != arg.rank() {
+                Err(Error::UnexpectedNumberOfDims {
+                    expected: rank,
+                    got: arg.rank(),
+                    shape: arg.shape().clone(),
+                }
+                .bt())?
+            }
             for (dim_idx, (v1, v2)) in arg0
                 .shape()
                 .dims()
@@ -1763,19 +1768,14 @@ impl Tensor {
                     cat_dims[0] += v2;
                 }
                 if dim_idx != 0 && v1 != v2 {
-                    // TODO: It would probably be good to have a nicer error message here, i.e.
-                    // mention the problematic dimension and the values.
-                    mismatch = true;
+                    Err(Error::ShapeMismatchCat {
+                        dim: dim_idx,
+                        first_shape: arg0.shape().clone(),
+                        n: arg_idx + 1,
+                        nth_shape: arg.shape().clone(),
+                    }
+                    .bt())?
                 }
-            }
-            if mismatch {
-                Err(Error::ShapeMismatchCat {
-                    dim: 0, // TODO: not the appropriate error message
-                    first_shape: arg0.shape().clone(),
-                    n: arg_idx + 1,
-                    nth_shape: arg.shape().clone(),
-                }
-                .bt())?
             }
             let next_offset = offsets.last().unwrap() + arg.elem_count();
             offsets.push(next_offset);
