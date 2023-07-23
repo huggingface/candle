@@ -40,7 +40,17 @@ impl CustomOp1 for LayerNorm {
         s: &candle::CudaStorage,
         l: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
-        todo!()
+        let device = s.device().clone();
+        let s = s.as_cuda_slice::<f32>()?;
+        let s = match l.contiguous_offsets() {
+            None => Err(Error::Wrapped("input has to be contiguous".into()))?,
+            Some((o1, o2)) => s, // TODO: slice with o1 and o2
+        };
+        let s: std::result::Result<_, candle::cuda_backend::CudaError> =
+            s.try_clone().map_err(|v| v.into());
+        let s = s?;
+        let s = candle::CudaStorage::wrap_cuda_slice(s, device);
+        Ok((s, l.shape().clone()))
     }
 }
 
