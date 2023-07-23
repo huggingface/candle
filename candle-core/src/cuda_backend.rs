@@ -2,6 +2,7 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape, WithDType};
 use candle_kernels as kernels;
+pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
 use cudarc::driver::{
     CudaFunction, CudaSlice, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig, ValidAsZeroBits,
@@ -101,7 +102,7 @@ impl std::ops::Deref for CudaDevice {
     }
 }
 
-trait WrapErr<O> {
+pub trait WrapErr<O> {
     fn w(self) -> std::result::Result<O, crate::Error>;
 }
 
@@ -171,7 +172,7 @@ impl CudaDevice {
         })
     }
 
-    fn get_or_load_func(&self, module_name: &str, ptx: &'static str) -> Result<CudaFunction> {
+    pub fn get_or_load_func(&self, module_name: &str, ptx: &'static str) -> Result<CudaFunction> {
         if !self.has_func(module_name, module_name) {
             // Leaking the string here is a bit sad but we need a &'static str and this is only
             // done once per kernel name.
