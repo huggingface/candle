@@ -865,7 +865,9 @@ struct Embedding<'a> {
 
 impl<'a> Map1 for Embedding<'a> {
     fn f<T: WithDType>(&self, vs: &[T], layout: &Layout) -> Result<Vec<T>> {
-        // TODO: We assume that vs is contiguous here.
+        if !layout.is_contiguous() {
+            Err(Error::RequiresContiguous { op: "embedding" })?
+        }
         let vs = &vs[layout.start_offset()..];
         let mut values = Vec::with_capacity(self.ids_l.shape().elem_count() * self.hidden_size);
         // TODO: Optimize for the case where ids are contiguous.
