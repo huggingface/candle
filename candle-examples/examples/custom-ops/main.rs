@@ -44,17 +44,17 @@ impl CustomOp1 for LayerNorm {
     ) -> Result<(candle::CudaStorage, Shape)> {
         use candle::cuda_backend::{cudarc, WrapErr};
         use cudarc::driver::{LaunchAsync, LaunchConfig};
+        let (d1, d2) = l.shape().dims2()?;
         let dev = s.device().clone();
         let s = s.as_cuda_slice::<f32>()?;
         let s = match l.contiguous_offsets() {
             None => Err(Error::Wrapped("input has to be contiguous".into()))?,
-            Some((o1, o2)) => s, // TODO: slice with o1 and o2
+            Some((o1, o2)) => s.slice(o1..o2),
         };
-        let s = s.try_clone().w()?;
         let elem_count = l.shape().elem_count();
         let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
-        let func = dev.get_or_load_func("fill_u8", cuda_kernels::LAYERNORM_KERNELS)?;
-        let params = (&dst, elem_count);
+        let func = dev.get_or_load_func("rms_f32", cuda_kernels::LAYERNORM_KERNELS)?;
+        let params = (&dst, &s, 1e-5f32, d1, d2);
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
         unsafe { func.launch(cfg, params) }.w()?;
 
