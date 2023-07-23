@@ -30,6 +30,9 @@ tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
 wav = { workspace = true }
 
+[build-dependencies]
+anyhow = { workspace = true }
+
 [features]
 default = []
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
