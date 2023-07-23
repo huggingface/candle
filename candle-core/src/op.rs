@@ -89,6 +89,7 @@ pub(crate) enum Op {
         add: f64,
     },
     ToDType(Tensor),
+    Copy(Tensor),
     Broadcast(Tensor),
     Narrow(Tensor, usize, usize, usize),
     Reshape(Tensor),
