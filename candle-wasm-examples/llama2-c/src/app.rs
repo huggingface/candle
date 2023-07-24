@@ -153,10 +153,13 @@ impl Component for App {
     fn view(&self, ctx: &Context<Self>) -> Html {
         html! {
             <div>
-                <div>{"Running "}
-                <a href="https://github.com/karpathy/llama2.c">{"llama2.c"}</a>
+                <div><p>{"Running "}
+                <a href="https://github.com/karpathy/llama2.c" target="_blank">{"llama2.c"}</a>
                 {" in the browser using rust/wasm with "}
-                <a href="https://github.com/LaurentMazare/candle">{"candle!"}</a>
+                <a href="https://github.com/LaurentMazare/candle" target="_blank">{"candle!"}</a>
+                </p>
+                <p>{"Once the weights have loaded, click on the run button to start generating content."}
+                </p>
                 </div>
                 <button class="button" onclick={ctx.link().callback(move |_| Msg::Run)}> { "run" }</button>
                 <br/ >
