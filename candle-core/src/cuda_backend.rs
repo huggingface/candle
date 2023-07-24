@@ -681,7 +681,7 @@ impl<'a> Map1 for Embedding<'a> {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = dev.htod_copy([dims, ids_l.stride()].concat()).w()?;
         let rhs = &rhs.slice(rhs_l.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::EMBEDDINGS)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el * h_size) }.w()?;
         let params = (el, dims.len(), &ds, ids, rhs, &out, h_size, v_size);
@@ -726,7 +726,7 @@ impl<'a> Map1 for IndexSelect<'a> {
         let left_size: usize = src_l.dims()[..self.2].iter().product();
         let right_size: usize = src_l.dims()[self.2 + 1..].iter().product();
         let dim_size = src_l.dims()[self.2];
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::EMBEDDINGS)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(ids_el * left_size * right_size) }.w()?;
         let params = (
@@ -782,7 +782,7 @@ impl<'a> Map1 for Gather<'a> {
         let right_sz: usize = src_l.dims()[dim + 1..].iter().product();
         let src_dim_sz = src_l.dims()[dim];
         let ids_dim_sz = ids_l.dims()[dim];
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::EMBEDDINGS)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (
@@ -829,7 +829,7 @@ impl<'a> Map2InPlace for IndexAdd<'a> {
         let src_dim_sz = src_l.dims()[dim];
         let dst_dim_sz = dst_shape.dims()[dim];
         let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::EMBEDDINGS)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let params = (ids, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz);
         // SAFETY: ffi.
@@ -873,7 +873,7 @@ impl<'a> Map2InPlace for ScatterAdd<'a> {
         let src_dim_sz = src_l.dims()[dim];
         let ids_dim_sz = ids_l.dims()[dim];
         let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::EMBEDDINGS)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let params = (ids, &src, dst, left_sz, src_dim_sz, ids_dim_sz, right_sz);
         // SAFETY: ffi.
