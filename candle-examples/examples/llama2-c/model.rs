@@ -28,8 +28,8 @@ pub struct Cache {
 
 impl Cache {
     pub fn new(use_kv_cache: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let freq_cis_real = vb.get((cfg.seq_len, cfg.dim / 2), "freq_cis_real")?;
-        let freq_cis_imag = vb.get((cfg.seq_len, cfg.dim / 2), "freq_cis_imag")?;
+        let freq_cis_real = vb.get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_real")?;
+        let freq_cis_imag = vb.get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_imag")?;
         Ok(Self {
             masks: Arc::new(Mutex::new(HashMap::new())),
             use_kv_cache,
@@ -66,7 +66,7 @@ fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
 }
 
 fn embedding(cfg: &Config, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((cfg.vocab_size, cfg.vocab_size), "weight")?;
+    let embeddings = vb.get((cfg.vocab_size, cfg.dim), "weight")?;
     Ok(Embedding::new(embeddings, cfg.vocab_size))
 }
 

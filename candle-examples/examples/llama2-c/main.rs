@@ -34,8 +34,8 @@ struct TransformerWeights {
     // final rmsnorm
     rms_final_weight: Tensor, // (dim,)
     // freq_cis for RoPE relatively positional embeddings
-    freq_cis_real: Tensor, // (seq_len, dim/2)
-    freq_cis_imag: Tensor, // (seq_len, dim/2)
+    freq_cis_real: Tensor, // (seq_len, head_size/2)
+    freq_cis_imag: Tensor, // (seq_len, head_size/2)
 }
 
 impl Config {
@@ -114,6 +114,23 @@ impl TransformerWeights {
             freq_cis_imag,
         })
     }
+
+    fn var_builder(&self, device: &Device) -> Result<VarBuilder> {
+        let mut ws = std::collections::HashMap::new();
+        let mut insert = |name: &str, t: Tensor| {
+            ws.insert(name.to_string(), t);
+        };
+        insert("rot.freq_cis_real", self.freq_cis_real.clone());
+        insert("rot.freq_cis_imag", self.freq_cis_imag.clone());
+        insert(
+            "model.embed_tokens.weight",
+            self.token_embedding_table.clone(),
+        );
+        insert("lm_head.weight", self.token_embedding_table.clone());
+        insert("model.norm.weight", self.rms_final_weight.clone());
+        let vb = VarBuilder::from_tensors(ws, DType::F32, device);
+        Ok(vb)
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -136,9 +153,8 @@ fn main() -> anyhow::Result<()> {
     let mut file = std::fs::File::open(&args.config)?;
     let config = Config::from_reader(&mut file)?;
     println!("config: {config:?}");
-    let _weights = TransformerWeights::from_reader(&mut file, &config, &device)?;
-    let weights = std::collections::HashMap::new();
-    let vb = VarBuilder::from_tensors(weights, DType::F32, &device);
+    let weights = TransformerWeights::from_reader(&mut file, &config, &device)?;
+    let vb = weights.var_builder(&device)?;
     let cache = model::Cache::new(true, &config, vb.pp("rot"))?;
     let model = Llama::load(vb, &cache, &config)?;
 
