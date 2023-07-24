@@ -153,11 +153,16 @@ impl Component for App {
     fn view(&self, ctx: &Context<Self>) -> Html {
         html! {
             <div>
+                <div>{"Running "}
+                <a href="https://github.com/karpathy/llama2.c">{"llama2.c"}</a>
+                {" in the browser using rust/wasm with "}
+                <a href="https://github.com/LaurentMazare/candle">{"candle!"}</a>
+                </div>
                 <button class="button" onclick={ctx.link().callback(move |_| Msg::Run)}> { "run" }</button>
                 <br/ >
-                <h2>
+                <h3>
                   {&self.status}
-                </h2>
+                </h3>
                 {
                     if self.current_decode.is_some() {
                         html! { <progress id="progress-bar" aria-label="generating…"></progress> }
@@ -166,7 +171,13 @@ impl Component for App {
                     }
                 }
                 <blockquote>
-                <p> { &self.generated } </p>
+                <p> { self.generated.chars().map(|c|
+                    if c == '\r' || c == '\n' {
+                        html! { <br/> }
+                    } else {
+                        html! { {c} }
+                    }).collect::<Html>()
+                } </p>
                 </blockquote>
             </div>
         }
