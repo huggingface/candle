@@ -203,7 +203,7 @@ fn main() -> anyhow::Result<()> {
     let mut index_pos = 0;
     let mut tokens = vec![1u32];
 
-    for index in 0..config.seq_len {
+    for index in 0..config.seq_len - 10 {
         let start_gen = std::time::Instant::now();
         let context_size = if cache.use_kv_cache && index > 0 {
             1

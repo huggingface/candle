@@ -148,9 +148,9 @@ impl CausalSelfAttention {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
-        let q = q.transpose(1, 2)?;
-        let k = k.transpose(1, 2)?;
-        let v = v.transpose(1, 2)?;
+        let q = q.transpose(1, 2)?.contiguous()?;
+        let k = k.transpose(1, 2)?.contiguous()?;
+        let v = v.transpose(1, 2)?.contiguous()?;
 
         let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
         let mask = self.cache.mask(seq_len)?.broadcast_as(att.shape())?;
