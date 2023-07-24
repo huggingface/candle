@@ -5,7 +5,7 @@ members = [
     "candle-nn",
     "candle-pyo3",
     "candle-transformers",
-    "candle-wasm-example",
+    "candle-wasm-examples/whisper",
 ]
 exclude = [
     "candle-kernels",
