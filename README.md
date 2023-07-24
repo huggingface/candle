@@ -26,6 +26,22 @@ cargo run --example falcon --release
 
 In order to use **CUDA** add `--features cuda` to the example command line.
 
+There are also some wasm examples for whisper and
+[llama2.c](https://github.com/karpathy/llama2.c). You can either build them with
+`trunk` or try them online:
+[whisper](https://laurentmazare.github.io/candle-whisper/index.html),
+[llama2](https://laurentmazare.github.io/candle-llama2/index.html).
+
+For llama2, run the following command to retrieve the weight files and start a
+test server:
+```bash
+cd candle-wasm-examples/llama2-c
+wget https://karpathy.ai/llama2c/model.bin
+wget https://github.com/karpathy/llama2.c/raw/master/tokenizer.bin
+trunk serve --release --public-url /candle-llama2/ --port 8081
+```
+And then browse to
+[http://localhost:8081/candle-llama2](http://localhost:8081/candle-llama2).
 
 ## Features
 

@@ -24,6 +24,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Wasm specific crates.
+console_error_panic_hook = "0.1.7"
 getrandom = { version = "0.2", features = ["js"] }
 gloo = "0.8"
 js-sys = "0.3.64"

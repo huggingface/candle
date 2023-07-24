@@ -107,9 +107,11 @@ impl LogitsProcessor {
 }
 
 impl Model {
-    fn run(&self, link: &WorkerLink<Worker>, id: HandlerId) -> Result<()> {
+    fn run(&self, link: &WorkerLink<Worker>, id: HandlerId, temp: f64) -> Result<()> {
         let dev = Device::Cpu;
-        let mut logits_processor = LogitsProcessor::new(299792458, None);
+        let temp = if temp <= 0. { None } else { Some(temp) };
+        console_log!("{temp:?}");
+        let mut logits_processor = LogitsProcessor::new(299792458, temp);
         let mut index_pos = 0;
         let mut tokens = vec![1u32];
 
@@ -299,7 +301,7 @@ pub struct Worker {
 #[derive(Serialize, Deserialize)]
 pub enum WorkerInput {
     ModelData(ModelData),
-    Run,
+    Run(f64),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -332,10 +334,16 @@ impl yew_agent::Worker for Worker {
                 }
                 Err(err) => Err(format!("model creation error {err:?}")),
             },
-            WorkerInput::Run => match &self.model {
+            WorkerInput::Run(temp) => match &mut self.model {
                 None => Err("model has not been set yet".to_string()),
                 Some(model) => {
-                    let result = model.run(&self.link, id).map_err(|e| e.to_string());
+                    {
+                        let mut cache = model.cache.kvs.lock().unwrap();
+                        for elem in cache.iter_mut() {
+                            *elem = None
+                        }
+                    }
+                    let result = model.run(&self.link, id, temp).map_err(|e| e.to_string());
                     Ok(WorkerOutput::GenerationDone(result))
                 }
             },
