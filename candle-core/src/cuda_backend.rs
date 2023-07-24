@@ -406,6 +406,30 @@ trait Map2 {
     }
 }
 
+trait Map2Any {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        src1: &CudaSlice<T>,
+        layout1: &Layout,
+        src2: &CudaSlice<T>,
+        layout2: &Layout,
+        dev: &CudaDevice,
+    ) -> Result<S>;
+
+    fn map(&self, s1: &S, l1: &Layout, s2: &S, l2: &Layout, d: &CudaDevice) -> Result<S> {
+        let out = match (s1, s2) {
+            (S::U8(s1), S::U8(s2)) => self.f(s1, l1, s2, l2, d)?,
+            (S::U32(s1), S::U32(s2)) => self.f(s1, l1, s2, l2, d)?,
+            (S::BF16(s1), S::BF16(s2)) => self.f(s1, l1, s2, l2, d)?,
+            (S::F16(s1), S::F16(s2)) => self.f(s1, l1, s2, l2, d)?,
+            (S::F32(s1), S::F32(s2)) => self.f(s1, l1, s2, l2, d)?,
+            (S::F64(s1), S::F64(s2)) => self.f(s1, l1, s2, l2, d)?,
+            _ => Err(CudaError::InternalError("dtype mismatch in binary op")).w()?,
+        };
+        Ok(out)
+    }
+}
+
 struct Clone;
 impl Map1 for Clone {
     fn f<T: DeviceRepr>(
@@ -747,6 +771,43 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
     }
 }
 
+struct Cmp(CmpOp);
+impl Map2Any for Cmp {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        lhs: &CudaSlice<T>,
+        lhs_l: &Layout,
+        rhs: &CudaSlice<T>,
+        rhs_l: &Layout,
+        dev: &CudaDevice,
+    ) -> Result<S> {
+        let shape = lhs_l.shape();
+        let dims = shape.dims();
+        let elem_count = shape.elem_count();
+        let cfg = LaunchConfig::for_num_elems(elem_count as u32);
+        let dims_and_strides = dev
+            .htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
+            .w()?;
+        let lhs = &lhs.slice(lhs_l.start_offset()..);
+        let rhs = &rhs.slice(rhs_l.start_offset()..);
+        let name = match self.0 {
+            CmpOp::Eq => "eq",
+            CmpOp::Ne => "ne",
+            CmpOp::Lt => "lt",
+            CmpOp::Le => "le",
+            CmpOp::Gt => "gt",
+            CmpOp::Ge => "ge",
+        };
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::BINARY)?;
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
+        let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
+        // SAFETY: ffi
+        unsafe { func.launch(cfg, params) }.w()?;
+        Ok(S::U8(out))
+    }
+}
+
 fn slice_src_and_dst<'a, T>(
     src: &'a CudaSlice<T>,
     src_l: &Layout,
@@ -1015,8 +1076,10 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
-    fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
-        Err(CudaError::InternalError("TODO: implement cmp").into())
+    fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
+        let device = self.device().clone();
+        let slice = Cmp(op).map(&self.slice, lhs_l, &rhs.slice, rhs_l, &device)?;
+        Ok(Self { slice, device })
     }
 
     fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) -> Result<()> {
