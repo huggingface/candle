@@ -346,6 +346,40 @@ fn index_select(device: &Device) -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn gather() -> Result<()> {
+    let device = &Device::Cpu;
+    let ids = Tensor::new(&[[0u32], [2u32], [1u32], [0u32]], device)?;
+    let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
+    let hs = t.gather(&ids, 1)?;
+    assert_eq!(hs.to_vec2::<f32>()?, &[[0.0], [5.0], [7.0], [9.0]]);
+    let ids = Tensor::new(
+        &[[0u32, 0u32], [2u32, 0u32], [1u32, 1u32], [0u32, 2u32]],
+        device,
+    )?;
+    let hs = t.gather(&ids, 1)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[[0.0, 0.0], [5.0, 3.0], [7.0, 7.0], [9.0, 11.0]]
+    );
+    let ids = Tensor::new(&[[0u32, 2u32, 0u32]], device)?;
+    let hs = t.gather(&ids, 0)?;
+    assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 7.0, 2.0]]);
+    let ids = Tensor::new(&[[0u32, 2u32, 0u32], [0u32, 1u32, 1u32]], device)?;
+    let hs = t.gather(&ids, 0)?;
+    assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 7.0, 2.0], [0.0, 4.0, 5.0]]);
+    Ok(())
+}
+
 fn matmul(device: &Device) -> Result<()> {
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
     let a = Tensor::from_slice(&data, (2, 2), device)?;
