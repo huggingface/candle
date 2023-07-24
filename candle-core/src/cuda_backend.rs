@@ -716,6 +716,54 @@ impl<'a> Map1 for IndexSelect<'a> {
     }
 }
 
+struct Gather<'a>(&'a CudaStorage, &'a Layout, usize);
+impl<'a> Map1 for Gather<'a> {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        src: &CudaSlice<T>,
+        dev: &CudaDevice,
+        src_l: &Layout,
+    ) -> Result<CudaSlice<T>> {
+        let ids = &self.0;
+        let ids_l = &self.1;
+        let dim = self.2;
+        let (ids_o1, ids_o2) = match ids_l.contiguous_offsets() {
+            Some(o12) => o12,
+            None => Err(crate::Error::RequiresContiguous { op: "gather" }.bt())?,
+        };
+        let (name, ids) = match &ids.slice {
+            CudaStorageSlice::U32(slice) => {
+                ("gather_u32", *slice.slice(ids_o1..ids_o2).device_ptr())
+            }
+            CudaStorageSlice::U8(slice) => ("gather_u8", *slice.slice(ids_o1..ids_o2).device_ptr()),
+            _ => Err(CudaError::UnexpectedDType {
+                msg: "gather ids should be u8 or u32",
+                expected: DType::U32,
+                got: ids.dtype(),
+            })?,
+        };
+        let el = ids_l.shape().elem_count();
+        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let src = match src_l.contiguous_offsets() {
+            Some((o1, o2)) => src.slice(o1..o2),
+            None => Err(crate::Error::RequiresContiguous { op: "gather" }.bt())?,
+        };
+        let left_sz: usize = src_l.dims()[..dim].iter().product();
+        let right_sz: usize = src_l.dims()[dim + 1..].iter().product();
+        let src_dim_sz = src_l.dims()[dim];
+        let ids_dim_sz = ids_l.dims()[dim];
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::EMBEDDINGS)?;
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<T>(el) }.w()?;
+        let params = (
+            el, ids, &src, &out, left_sz, src_dim_sz, ids_dim_sz, right_sz,
+        );
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }.w()?;
+        Ok(out)
+    }
+}
+
 struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
 impl<'a> Map2 for Conv1D<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -1226,8 +1274,10 @@ impl BackendStorage for CudaStorage {
         let slice = IndexSelect(ids, ids_l, dim).map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
-    fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self> {
-        Err(CudaError::InternalError("TODO: implement gather").into())
+    fn gather(&self, l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
+        let device = self.device().clone();
+        let slice = Gather(ids, ids_l, dim).map(&self.slice, &device, l)?;
+        Ok(Self { slice, device })
     }
     fn scatter_add(
         &self,

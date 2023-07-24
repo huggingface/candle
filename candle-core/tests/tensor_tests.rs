@@ -346,9 +346,7 @@ fn index_select(device: &Device) -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn gather() -> Result<()> {
-    let device = &Device::Cpu;
+fn gather(device: &Device) -> Result<()> {
     let ids = Tensor::new(&[[0u32], [2u32], [1u32], [0u32]], device)?;
     let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
     assert_eq!(
@@ -545,3 +543,4 @@ test_device!(cmp, cmp_cpu, cmp_gpu);
 test_device!(matmul, matmul_cpu, matmul_gpu);
 test_device!(broadcasting, broadcasting_cpu, broadcasting_gpu);
 test_device!(index_select, index_select_cpu, index_select_gpu);
+test_device!(gather, gather_cpu, gather_gpu);
