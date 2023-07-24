@@ -20,7 +20,7 @@ pub struct Cache {
     masks: Arc<Mutex<HashMap<usize, Tensor>>>,
     pub use_kv_cache: bool,
     #[allow(clippy::type_complexity)]
-    kvs: Arc<Mutex<Vec<Option<(Tensor, Tensor)>>>>,
+    pub kvs: Arc<Mutex<Vec<Option<(Tensor, Tensor)>>>>,
     cos: Tensor,
     sin: Tensor,
     device: Device,

@@ -1,5 +1,6 @@
 use crate::console_log;
 use crate::worker::{ModelData, Worker, WorkerInput, WorkerOutput};
+use std::str::FromStr;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use yew::{html, Component, Context, Html};
@@ -42,6 +43,7 @@ pub struct CurrentDecode {
 
 pub struct App {
     status: String,
+    temperature: std::rc::Rc<std::cell::RefCell<f64>>,
     generated: String,
     current_decode: Option<CurrentDecode>,
     worker: Box<dyn Bridge<Worker>>,
@@ -73,6 +75,7 @@ impl Component for App {
         let worker = Worker::bridge(std::rc::Rc::new(cb));
         Self {
             status,
+            temperature: std::rc::Rc::new(std::cell::RefCell::new(0.)),
             generated: String::new(),
             current_decode: None,
             worker,
@@ -109,7 +112,10 @@ impl Component for App {
                     self.current_decode = Some(CurrentDecode { start_time });
                     self.status = "generating...".to_string();
                     self.generated.clear();
-                    ctx.link().send_message(Msg::WorkerInMsg(WorkerInput::Run))
+                    let temp = *self.temperature.borrow();
+                    console_log!("temp: {}", temp);
+                    ctx.link()
+                        .send_message(Msg::WorkerInMsg(WorkerInput::Run(temp)))
                 }
                 true
             }
@@ -151,8 +157,16 @@ impl Component for App {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
+        use yew::TargetCast;
+        let temperature = self.temperature.clone();
+        let oninput = move |e: yew::InputEvent| {
+            let input: web_sys::HtmlInputElement = e.target_unchecked_into();
+            if let Ok(temp) = f64::from_str(&input.value()) {
+                *temperature.borrow_mut() = temp
+            }
+        };
         html! {
-            <div>
+            <div style="margin: 2%;">
                 <div><p>{"Running "}
                 <a href="https://github.com/karpathy/llama2.c" target="_blank">{"llama2.c"}</a>
                 {" in the browser using rust/wasm with "}
@@ -161,6 +175,7 @@ impl Component for App {
                 <p>{"Once the weights have loaded, click on the run button to start generating content."}
                 </p>
                 </div>
+                {"temperature: "}<input type="range" min="0." max="1.2" step="0.1" value={self.temperature.borrow().to_string()} {oninput} id="temp"/>
                 <button class="button" onclick={ctx.link().callback(move |_| Msg::Run)}> { "run" }</button>
                 <br/ >
                 <h3>
