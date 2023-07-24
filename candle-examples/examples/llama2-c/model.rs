@@ -67,7 +67,7 @@ fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
 
 fn embedding(cfg: &Config, vb: VarBuilder) -> Result<Embedding> {
     let embeddings = vb.get((cfg.vocab_size, cfg.dim), "weight")?;
-    Ok(Embedding::new(embeddings, cfg.vocab_size))
+    Ok(Embedding::new(embeddings, cfg.dim))
 }
 
 struct RmsNorm {
@@ -113,12 +113,13 @@ impl CausalSelfAttention {
         let (b_sz, _, seq_len, n_embd) = x.dims4()?;
         let cos = self.cache.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.cache.sin.narrow(0, index_pos, seq_len)?;
-        let cos = cos.broadcast_as((b_sz, 1, seq_len, n_embd))?;
-        let sin = sin.broadcast_as((b_sz, 1, seq_len, n_embd))?;
-        let x1 = x.narrow(D::Minus1, 0, n_embd / 2)?;
-        let x2 = x.narrow(D::Minus1, n_embd / 2, n_embd / 2)?;
-        let rotate_x = Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)?;
-        let rope = (x.broadcast_mul(&cos)? + rotate_x.broadcast_mul(&sin)?)?;
+        let cos = cos.broadcast_as((b_sz, 1, seq_len, n_embd / 2))?;
+        let sin = sin.broadcast_as((b_sz, 1, seq_len, n_embd / 2))?;
+        let x0 = x.narrow(D::Minus1, 0, n_embd / 2)?;
+        let x1 = x.narrow(D::Minus1, n_embd / 2, n_embd / 2)?;
+        let dst0 = (x0.broadcast_mul(&cos)? - x1.broadcast_mul(&sin)?)?;
+        let dst1 = (x0.broadcast_mul(&sin)? + x1.broadcast_mul(&cos)?)?;
+        let rope = Tensor::cat(&[&dst0, &dst1], D::Minus1)?;
         Ok(rope)
     }
 

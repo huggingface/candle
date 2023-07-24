@@ -91,9 +91,9 @@ impl TransformerWeights {
         let wv = Self::read_tensor(r, (c.n_layers, c.dim, c.dim), dev)?;
         let wo = Self::read_tensor(r, (c.n_layers, c.dim, c.dim), dev)?;
         let rms_ffn_weight = Self::read_tensor(r, (c.n_layers, c.dim), dev)?;
-        let w1 = Self::read_tensor(r, (c.n_layers, c.dim, c.hidden_dim), dev)?;
-        let w2 = Self::read_tensor(r, (c.n_layers, c.hidden_dim, c.dim), dev)?;
-        let w3 = Self::read_tensor(r, (c.n_layers, c.dim, c.hidden_dim), dev)?;
+        let w1 = Self::read_tensor(r, (c.n_layers, c.hidden_dim, c.dim), dev)?;
+        let w2 = Self::read_tensor(r, (c.n_layers, c.dim, c.hidden_dim), dev)?;
+        let w3 = Self::read_tensor(r, (c.n_layers, c.hidden_dim, c.dim), dev)?;
         let rms_final_weight = Self::read_tensor(r, c.dim, dev)?;
         let head_size = c.head_size();
         let freq_cis_real = Self::read_tensor(r, (c.seq_len, head_size / 2), dev)?;
@@ -115,7 +115,7 @@ impl TransformerWeights {
         })
     }
 
-    fn var_builder(&self, device: &Device) -> Result<VarBuilder> {
+    fn var_builder(&self, cfg: &Config, device: &Device) -> Result<VarBuilder> {
         let mut ws = std::collections::HashMap::new();
         let mut insert = |name: &str, t: Tensor| {
             ws.insert(name.to_string(), t);
@@ -128,6 +128,44 @@ impl TransformerWeights {
         );
         insert("lm_head.weight", self.token_embedding_table.clone());
         insert("model.norm.weight", self.rms_final_weight.clone());
+        for layer in 0..cfg.n_layers {
+            ws.insert(
+                format!("model.layers.{layer}.self_attn.q_proj.weight"),
+                self.wq.i(layer)?,
+            );
+            ws.insert(
+                format!("model.layers.{layer}.self_attn.k_proj.weight"),
+                self.wk.i(layer)?,
+            );
+            ws.insert(
+                format!("model.layers.{layer}.self_attn.v_proj.weight"),
+                self.wv.i(layer)?,
+            );
+            ws.insert(
+                format!("model.layers.{layer}.self_attn.o_proj.weight"),
+                self.wo.i(layer)?,
+            );
+            ws.insert(
+                format!("model.layers.{layer}.mlp.gate_proj.weight"),
+                self.w1.i(layer)?,
+            );
+            ws.insert(
+                format!("model.layers.{layer}.mlp.down_proj.weight"),
+                self.w2.i(layer)?,
+            );
+            ws.insert(
+                format!("model.layers.{layer}.mlp.up_proj.weight"),
+                self.w3.i(layer)?,
+            );
+            ws.insert(
+                format!("model.layers.{layer}.input_layernorm.weight"),
+                self.rms_att_weight.i(layer)?,
+            );
+            ws.insert(
+                format!("model.layers.{layer}.post_attention_layernorm.weight"),
+                self.rms_ffn_weight.i(layer)?,
+            );
+        }
         let vb = VarBuilder::from_tensors(ws, DType::F32, device);
         Ok(vb)
     }
@@ -154,7 +192,7 @@ fn main() -> anyhow::Result<()> {
     let config = Config::from_reader(&mut file)?;
     println!("config: {config:?}");
     let weights = TransformerWeights::from_reader(&mut file, &config, &device)?;
-    let vb = weights.var_builder(&device)?;
+    let vb = weights.var_builder(&config, &device)?;
     let cache = model::Cache::new(true, &config, vb.pp("rot"))?;
     let model = Llama::load(vb, &cache, &config)?;
 
