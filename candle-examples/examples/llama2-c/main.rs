@@ -5,22 +5,16 @@
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+mod model;
 use clap::Parser;
 
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use candle::{DType, Device, Error, Layout, Shape, Tensor};
+use candle::{DType, Device, Error, IndexOp, Layout, Shape, Tensor};
+use candle_nn::{Embedding, Linear, VarBuilder};
+use candle_transformers::generation::LogitsProcessor;
 
-#[derive(Debug, Clone)]
-struct Config {
-    dim: usize,        // transformer dimension
-    hidden_dim: usize, // for ffn layers
-    n_layers: usize,   // number of layers
-    n_heads: usize,    // number of query heads
-    n_kv_heads: usize, // number of key/value heads (can be < query heads because of multiquery)
-    vocab_size: usize, // vocabulary size, usually 256 (byte-level)
-    seq_len: usize,    // max sequence length
-}
+use model::{Config, Llama};
 
 struct TransformerWeights {
     // token embedding table
@@ -42,23 +36,6 @@ struct TransformerWeights {
     // freq_cis for RoPE relatively positional embeddings
     freq_cis_real: Tensor, // (seq_len, dim/2)
     freq_cis_imag: Tensor, // (seq_len, dim/2)
-}
-
-struct RunState {
-    // current wave of activations
-    x: Tensor,      // activation at current time stamp (dim,)
-    xb: Tensor,     // same, but inside a residual branch (dim,)
-    xb2: Tensor,    // an additional buffer just for convenience (dim,)
-    hb: Tensor,     // buffer for hidden dimension in the ffn (hidden_dim,)
-    hb2: Tensor,    // buffer for hidden dimension in the ffn (hidden_dim,)
-    q: Tensor,      // query (dim,)
-    k: Tensor,      // key (dim,)
-    v: Tensor,      // value (dim,)
-    att: Tensor,    // buffer for scores/attention values (seq_len,)
-    logits: Tensor, // output logits
-    // kv cache
-    key_cache: Tensor,   // (layer, seq_len, dim)
-    value_cache: Tensor, // (layer, seq_len, dim)
 }
 
 impl Config {
@@ -84,6 +61,7 @@ impl Config {
             n_kv_heads,
             vocab_size,
             seq_len,
+            norm_eps: 1e-5,
         })
     }
 
@@ -159,6 +137,50 @@ fn main() -> anyhow::Result<()> {
     let config = Config::from_reader(&mut file)?;
     println!("config: {config:?}");
     let _weights = TransformerWeights::from_reader(&mut file, &config, &device)?;
+    let weights = std::collections::HashMap::new();
+    let vb = VarBuilder::from_tensors(weights, DType::F32, &device);
+    let cache = model::Cache::new(true, &config, vb.pp("rot"))?;
+    let model = Llama::load(vb, &cache, &config)?;
 
+    println!("starting the inference loop");
+    let mut logits_processor = LogitsProcessor::new(299792458, None);
+    let mut new_tokens: Vec<u32> = vec![];
+    let start_gen = std::time::Instant::now();
+    let mut index_pos = 0;
+    let mut tokens = vec![1u32];
+
+    for index in 0..config.seq_len {
+        let start_gen = std::time::Instant::now();
+        let context_size = if cache.use_kv_cache && index > 0 {
+            1
+        } else {
+            tokens.len()
+        };
+        let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
+        let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
+        let logits = model.forward(&input, index_pos)?;
+        let logits = logits.squeeze(0)?;
+        index_pos += ctxt.len();
+
+        let next_token = logits_processor.sample(&logits)?;
+        tokens.push(next_token);
+        new_tokens.push(next_token);
+        println!("> {:?}", start_gen.elapsed());
+        println!(
+            "{} token: {} '{}'",
+            index + 1,
+            next_token,
+            0,
+            // tokenizer.decode(vec![next_token], true).map_err(E::msg)?
+        );
+    }
+    let dt = start_gen.elapsed();
+    println!(
+        "{} tokens generated ({} token/s)\n----\n{}\n----",
+        config.seq_len,
+        config.seq_len as f64 / dt.as_secs_f64(),
+        0,
+        // tokenizer.decode(new_tokens, true).map_err(E::msg)?
+    );
     Ok(())
 }
