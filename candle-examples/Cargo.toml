@@ -21,6 +21,7 @@ intel-mkl-src = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+byteorder = { workspace = true }
 hf-hub = { workspace = true}
 clap = { workspace = true }
 rand = { workspace = true }
