@@ -304,6 +304,18 @@ fn embeddings(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn cmp(device: &Device) -> Result<()> {
+    let t1 = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], device)?;
+    let t2 = Tensor::new(&[[1f32, 0f32], [3f32, 3f32], [4f32, 7f32]], device)?;
+    assert_eq!(t1.eq(&t2)?.to_vec2::<u8>()?, &[[0, 0], [0, 1], [1, 0]]);
+    assert_eq!(t1.ne(&t2)?.to_vec2::<u8>()?, &[[1, 1], [1, 0], [0, 1]]);
+    assert_eq!(t1.le(&t2)?.to_vec2::<u8>()?, &[[1, 0], [1, 1], [1, 1]]);
+    assert_eq!(t1.lt(&t2)?.to_vec2::<u8>()?, &[[1, 0], [1, 0], [0, 1]]);
+    assert_eq!(t1.gt(&t2)?.to_vec2::<u8>()?, &[[0, 1], [0, 0], [0, 0]]);
+    assert_eq!(t1.ge(&t2)?.to_vec2::<u8>()?, &[[0, 1], [0, 1], [1, 0]]);
+    Ok(())
+}
+
 #[test]
 fn index_select() -> Result<()> {
     // TODO: Test on cuda once the kernel is available.
@@ -498,5 +510,6 @@ test_device!(transpose, transpose_cpu, transpose_gpu);
 test_device!(binary_op, binary_op_cpu, binary_op_gpu);
 test_device!(softmax, softmax_cpu, softmax_gpu);
 test_device!(embeddings, embeddings_cpu, embeddings_gpu);
+test_device!(cmp, cmp_cpu, cmp_gpu);
 test_device!(matmul, matmul_cpu, matmul_gpu);
 test_device!(broadcasting, broadcasting_cpu, broadcasting_gpu);
