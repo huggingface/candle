@@ -5,7 +5,8 @@ use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
 use cudarc::driver::{
-    CudaFunction, CudaSlice, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig, ValidAsZeroBits,
+    CudaFunction, CudaSlice, DevicePtr, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig,
+    ValidAsZeroBits,
 };
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex};
@@ -632,8 +633,13 @@ impl<'a> Map1 for Embedding<'a> {
         rhs_l: &Layout,
     ) -> Result<CudaSlice<T>> {
         let ids_l = &self.1;
-        let ids = match &self.0.slice {
-            CudaStorageSlice::U32(slice) => slice.slice(ids_l.start_offset()..),
+        let (name, ids) = match &self.0.slice {
+            CudaStorageSlice::U32(slice) => {
+                ("emb_u32", *slice.slice(ids_l.start_offset()..).device_ptr())
+            }
+            CudaStorageSlice::U8(slice) => {
+                ("emb_u8", *slice.slice(ids_l.start_offset()..).device_ptr())
+            }
             _ => Err(CudaError::UnexpectedDType {
                 msg: "embedding ids should be u32",
                 expected: DType::U32,
@@ -641,7 +647,6 @@ impl<'a> Map1 for Embedding<'a> {
             })
             .w()?,
         };
-        let ids = &ids;
         let shape = ids_l.shape();
         let (v_size, h_size) = rhs_l
             .shape()
@@ -653,7 +658,7 @@ impl<'a> Map1 for Embedding<'a> {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = dev.htod_copy([dims, ids_l.stride()].concat()).w()?;
         let rhs = &rhs.slice(rhs_l.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("emb"), kernels::EMBEDDINGS)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::EMBEDDINGS)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el * h_size) }.w()?;
         let params = (el, dims.len(), &ds, ids, rhs, &out, h_size, v_size);
@@ -991,7 +996,6 @@ impl BackendStorage for CudaStorage {
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
-        use cudarc::driver::DevicePtr;
         let shape = layout.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
