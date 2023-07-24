@@ -398,9 +398,39 @@ trait Map2 {
             (S::F16(s1), S::F16(s2)) => S::F16(self.f(s1, l1, s2, l2, d)?),
             (S::F32(s1), S::F32(s2)) => S::F32(self.f(s1, l1, s2, l2, d)?),
             (S::F64(s1), S::F64(s2)) => S::F64(self.f(s1, l1, s2, l2, d)?),
-            _ => Err(CudaError::InternalError("dtype mismatch in binary op")).w()?,
+            _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
         };
         Ok(out)
+    }
+}
+
+trait Map2InPlace {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        dst: &mut CudaSlice<T>,
+        dst_shape: &Shape,
+        src: &CudaSlice<T>,
+        src_l: &Layout,
+        dev: &CudaDevice,
+    ) -> Result<()>;
+
+    fn map(
+        &self,
+        dst: &mut S,
+        dst_s: &Shape,
+        src: &S,
+        src_l: &Layout,
+        d: &CudaDevice,
+    ) -> Result<()> {
+        match (dst, src) {
+            (S::U8(dst), S::U8(src)) => self.f(dst, dst_s, src, src_l, d),
+            (S::U32(dst), S::U32(src)) => self.f(dst, dst_s, src, src_l, d),
+            (S::BF16(dst), S::BF16(src)) => self.f(dst, dst_s, src, src_l, d),
+            (S::F16(dst), S::F16(src)) => self.f(dst, dst_s, src, src_l, d),
+            (S::F32(dst), S::F32(src)) => self.f(dst, dst_s, src, src_l, d),
+            (S::F64(dst), S::F64(src)) => self.f(dst, dst_s, src, src_l, d),
+            _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
+        }
     }
 }
 
@@ -765,29 +795,29 @@ impl<'a> Map1 for Gather<'a> {
 }
 
 struct IndexAdd<'a>(&'a CudaStorage, &'a Layout, usize);
-impl<'a> Map2 for IndexAdd<'a> {
+impl<'a> Map2InPlace for IndexAdd<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
-        _init: &CudaSlice<T>,
-        _init_l: &Layout,
+        _dst: &mut CudaSlice<T>,
+        _dst_shape: &Shape,
         _src: &CudaSlice<T>,
         _src_l: &Layout,
         _dev: &CudaDevice,
-    ) -> Result<CudaSlice<T>> {
+    ) -> Result<()> {
         todo!()
     }
 }
 
 struct ScatterAdd<'a>(&'a CudaStorage, &'a Layout, usize);
-impl<'a> Map2 for ScatterAdd<'a> {
+impl<'a> Map2InPlace for ScatterAdd<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
-        _init: &CudaSlice<T>,
-        _init_l: &Layout,
+        _dst: &mut CudaSlice<T>,
+        _dst_shape: &Shape,
         _src: &CudaSlice<T>,
         _src_l: &Layout,
         _dev: &CudaDevice,
-    ) -> Result<CudaSlice<T>> {
+    ) -> Result<()> {
         todo!()
     }
 }
@@ -1313,8 +1343,10 @@ impl BackendStorage for CudaStorage {
         dim: usize,
     ) -> Result<Self> {
         let device = self.device().clone();
-        let slice = ScatterAdd(ids, ids_l, dim).map(&self.slice, l, &src.slice, src_l, &device)?;
-        Ok(Self { slice, device })
+        let mut acc = device.zeros_impl(l.shape(), self.dtype())?;
+        self.copy_strided_src(&mut acc, 0, l)?;
+        ScatterAdd(ids, ids_l, dim).map(&mut acc.slice, l.shape(), &src.slice, src_l, &device)?;
+        Ok(acc)
     }
     fn index_add(
         &self,
@@ -1326,8 +1358,10 @@ impl BackendStorage for CudaStorage {
         dim: usize,
     ) -> Result<Self> {
         let device = self.device().clone();
-        let slice = IndexAdd(ids, ids_l, dim).map(&self.slice, l, &src.slice, src_l, &device)?;
-        Ok(Self { slice, device })
+        let mut acc = device.zeros_impl(l.shape(), self.dtype())?;
+        self.copy_strided_src(&mut acc, 0, l)?;
+        IndexAdd(ids, ids_l, dim).map(&mut acc.slice, l.shape(), &src.slice, src_l, &device)?;
+        Ok(acc)
     }
 
     fn matmul(
