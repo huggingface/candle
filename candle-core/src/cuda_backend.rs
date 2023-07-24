@@ -764,6 +764,34 @@ impl<'a> Map1 for Gather<'a> {
     }
 }
 
+struct IndexAdd<'a>(&'a CudaStorage, &'a Layout, usize);
+impl<'a> Map2 for IndexAdd<'a> {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        _init: &CudaSlice<T>,
+        _init_l: &Layout,
+        _src: &CudaSlice<T>,
+        _src_l: &Layout,
+        _dev: &CudaDevice,
+    ) -> Result<CudaSlice<T>> {
+        todo!()
+    }
+}
+
+struct ScatterAdd<'a>(&'a CudaStorage, &'a Layout, usize);
+impl<'a> Map2 for ScatterAdd<'a> {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        _init: &CudaSlice<T>,
+        _init_l: &Layout,
+        _src: &CudaSlice<T>,
+        _src_l: &Layout,
+        _dev: &CudaDevice,
+    ) -> Result<CudaSlice<T>> {
+        todo!()
+    }
+}
+
 struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
 impl<'a> Map2 for Conv1D<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -1004,8 +1032,7 @@ fn gemm_config<T>(
             lhs_stride: lhs_stride.to_vec(),
             rhs_stride: rhs_stride.to_vec(),
             mnk: (m, n, k),
-        })
-        .w()?
+        })?
     };
     // The b tensor has dims batching, m, k (lhs)
     let (ldb, transb) = if lhs_m1 == 1 && lhs_m2 == k {
@@ -1017,8 +1044,7 @@ fn gemm_config<T>(
             lhs_stride: lhs_stride.to_vec(),
             rhs_stride: rhs_stride.to_vec(),
             mnk: (m, n, k),
-        })
-        .w()?
+        })?
     };
     // The setup below was copied from:
     // https://github.com/lebedov/scikit-cuda/blob/7e7300474286019c917a6c8a4bca59405c64fbce/tests/test_cublas.py#L531
@@ -1043,8 +1069,7 @@ fn gemm_config<T>(
             lhs_stride: lhs_stride.to_vec(),
             rhs_stride: rhs_stride.to_vec(),
             mnk: (m, n, k),
-        })
-        .w()?,
+        })?,
     };
     let stride_a: usize = match rhs_stride[..rhs_stride.len() - 2] {
         [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
@@ -1054,8 +1079,7 @@ fn gemm_config<T>(
             lhs_stride: lhs_stride.to_vec(),
             rhs_stride: rhs_stride.to_vec(),
             mnk: (m, n, k),
-        })
-        .w()?,
+        })?,
     };
 
     Ok(StridedBatchedConfig {
@@ -1281,25 +1305,29 @@ impl BackendStorage for CudaStorage {
     }
     fn scatter_add(
         &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<Self> {
-        Err(CudaError::InternalError("TODO: implement scatter-add").into())
+        let device = self.device().clone();
+        let slice = ScatterAdd(ids, ids_l, dim).map(&self.slice, l, &src.slice, src_l, &device)?;
+        Ok(Self { slice, device })
     }
     fn index_add(
         &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<Self> {
-        Err(CudaError::InternalError("TODO: implement index-add").into())
+        let device = self.device().clone();
+        let slice = IndexAdd(ids, ids_l, dim).map(&self.slice, l, &src.slice, src_l, &device)?;
+        Ok(Self { slice, device })
     }
 
     fn matmul(
@@ -1364,7 +1392,7 @@ impl BackendStorage for CudaStorage {
                 .w()?;
                 CudaStorageSlice::F64(out)
             }
-            _ => Err(CudaError::InternalError("dtype mismatch in matmul op")).w()?,
+            _ => Err(CudaError::InternalError("dtype mismatch in matmul op"))?,
         };
         let device = dev.clone();
         Ok(Self { slice, device })
@@ -1452,8 +1480,7 @@ impl BackendStorage for CudaStorage {
             }
             _ => Err(CudaError::InternalError(
                 "dtype mismatch in copy_strided op",
-            ))
-            .w()?,
+            ))?,
         }
         Ok(())
     }
