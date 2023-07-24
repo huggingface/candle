@@ -828,10 +828,13 @@ impl<'a> Map2InPlace for IndexAdd<'a> {
         let right_sz: usize = src_l.dims()[dim + 1..].iter().product();
         let src_dim_sz = src_l.dims()[dim];
         let dst_dim_sz = dst_shape.dims()[dim];
+        let ids_dim_sz = ids_l.dims()[0];
         let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
-        let params = (ids, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz);
+        let params = (
+            ids, ids_dim_sz, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz,
+        );
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }.w()?;
         Ok(())
