@@ -1,5 +1,5 @@
 [package]
-name = "candle-wasm-example"
+name = "candle-wasm-example-llama2"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,18 +11,17 @@ license = "MIT/Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-candle = { path = "../candle-core" }
-candle-nn = { path = "../candle-nn" }
+candle = { path = "../../candle-core" }
+candle-nn = { path = "../../candle-nn" }
 num-traits = { workspace = true }
-tokenizers = { workspace = true, features = ["unstable_wasm"] }
 
 # App crates.
 anyhow = { workspace = true }
+byteorder = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-wav = { workspace = true }
 
 # Wasm specific crates.
 getrandom = { version = "0.2", features = ["js"] }
