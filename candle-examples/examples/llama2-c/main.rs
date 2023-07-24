@@ -212,8 +212,6 @@ impl Tokenizer {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
-    let t = Tensor::arange(0f32, 14f32, &device)?.reshape((2, 7))?;
-    println!("{t}");
     let mut file = std::fs::File::open(&args.config)?;
     let config = Config::from_reader(&mut file)?;
     println!("config: {config:?}");
@@ -251,7 +249,7 @@ fn main() -> anyhow::Result<()> {
     }
     let dt = start_gen.elapsed();
     println!(
-        "\n{} tokens generated ({} token/s)\n",
+        "\n{} tokens generated ({:.2} token/s)\n",
         tokens.len(),
         tokens.len() as f64 / dt.as_secs_f64(),
     );
