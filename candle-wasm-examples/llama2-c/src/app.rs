@@ -1,6 +1,5 @@
 use crate::console_log;
 use crate::worker::{ModelData, Worker, WorkerInput, WorkerOutput};
-use js_sys::Date;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use yew::{html, Component, Context, Html};
@@ -128,8 +127,8 @@ impl Component for App {
                             })
                         });
                         self.status = match dt {
-                            None => "decoding succeeded!".to_string(),
-                            Some(dt) => format!("decoding succeeded in {:.2}s", dt),
+                            None => "generation succeeded!".to_string(),
+                            Some(dt) => format!("generation succeeded in {:.2}s", dt),
                         };
                         self.current_decode = None
                     }
@@ -162,19 +161,13 @@ impl Component for App {
                 {
                     if self.current_decode.is_some() {
                         html! { <progress id="progress-bar" aria-label="generating…"></progress> }
-                    } else { html!{
+                    } else {
+                        html! {}
+                    }
+                }
                 <blockquote>
                 <p> { &self.generated } </p>
                 </blockquote>
-                }
-                }
-                }
-
-                // Display the current date and time the page was rendered
-                <p class="footer">
-                    { "Rendered: " }
-                    { String::from(Date::new_0().to_string()) }
-                </p>
             </div>
         }
     }
