@@ -186,6 +186,10 @@ struct Args {
     /// Tokenizer config file in binary format.
     #[arg(long)]
     tokenizer: String,
+
+    /// The temperature used to generate samples.
+    #[arg(long)]
+    temperature: Option<f64>,
 }
 
 struct Tokenizer {
@@ -222,7 +226,7 @@ fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_reader(&mut file, &config)?;
 
     println!("starting the inference loop");
-    let mut logits_processor = LogitsProcessor::new(299792458, None);
+    let mut logits_processor = LogitsProcessor::new(299792458, args.temperature);
     let mut index_pos = 0;
     let mut tokens = vec![1u32];
 
