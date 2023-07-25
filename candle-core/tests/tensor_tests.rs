@@ -389,6 +389,46 @@ fn index_add(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn scatter_add(device: &Device) -> Result<()> {
+    let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
+    let ids = Tensor::new(&[[0u32, 1, 2], [3, 4, 0], [3, 3, 1], [2, 0, 4]], device)?;
+    let init = Tensor::ones((4, 5), DType::F32, device)?;
+    let hs = init.scatter_add(&ids, &t, 1)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[
+            [1.0, 2.0, 3.0, 1.0, 1.0],
+            [6.0, 1.0, 1.0, 4.0, 5.0],
+            [1.0, 9.0, 1.0, 14.0, 1.0],
+            [11.0, 1.0, 10.0, 1.0, 12.0]
+        ]
+    );
+
+    let init = Tensor::ones((6, 3), DType::F32, device)?;
+    let hs = init.scatter_add(&ids, &t, 0)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[
+            [1.0, 11.0, 6.0],
+            [1.0, 2.0, 9.0],
+            [10.0, 1.0, 3.0],
+            [10.0, 8.0, 1.0],
+            [1.0, 5.0, 12.0],
+            [1.0, 1.0, 1.0]
+        ]
+    );
+    Ok(())
+}
+
 fn gather(device: &Device) -> Result<()> {
     let ids = Tensor::new(&[[0u32], [2u32], [1u32], [0u32]], device)?;
     let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
@@ -588,3 +628,4 @@ test_device!(broadcasting, broadcasting_cpu, broadcasting_gpu);
 test_device!(index_select, index_select_cpu, index_select_gpu);
 test_device!(index_add, index_add_cpu, index_add_gpu);
 test_device!(gather, gather_cpu, gather_gpu);
+test_device!(scatter_add, scatter_add_cpu, scatter_add_gpu);

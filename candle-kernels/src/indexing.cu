@@ -144,7 +144,6 @@ extern "C" __global__ void FN_NAME(  \
 template<typename T, typename I>
 __device__ void scatter_add(
     const I *ids,
-    const size_t ids_dim_size,
     const T *inp,
     T *out,
     const size_t left_size,
@@ -156,8 +155,8 @@ __device__ void scatter_add(
       for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
           const size_t pre = i / right_size;
           const size_t post = i % right_size;
-          for (unsigned int j = 0; j < ids_dim_size; ++j) {
-              const size_t src_i = (pre * ids_dim_size + j) * right_size + post;
+          for (unsigned int j = 0; j < src_dim_size; ++j) {
+              const size_t src_i = (pre * src_dim_size + j) * right_size + post;
               const size_t idx = ids[src_i];
               const size_t dst_i = (pre * dst_dim_size + idx) * right_size + post;
               out[dst_i] += inp[src_i];
@@ -168,14 +167,13 @@ __device__ void scatter_add(
 #define SA_OP(TYPENAME, INDEX_TYPENAME, FN_NAME) \
 extern "C" __global__ void FN_NAME(  \
     const INDEX_TYPENAME *ids, \
-    const size_t ids_dim_size, \
     const TYPENAME *inp, \
     TYPENAME *out, \
     const size_t left_size, \
     const size_t src_dim_size, \
     const size_t dst_dim_size, \
     const size_t right_size \
-) { scatter_add(ids, ids_dim_size, inp, out, left_size, src_dim_size, dst_dim_size, right_size); } \
+) { scatter_add(ids, inp, out, left_size, src_dim_size, dst_dim_size, right_size); } \
 
 
 #if __CUDA_ARCH__ >= 800
