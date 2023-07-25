@@ -65,7 +65,7 @@ pub use dtype::{DType, IntDType, WithDType};
 pub use error::{Error, Result};
 pub use indexer::IndexOp;
 pub use layout::Layout;
-pub use op::CustomOp1;
+pub use op::{CustomOp1, CustomOp2, CustomOp3};
 pub use shape::{Shape, D};
 pub use storage::Storage;
 pub use strided_index::{StridedBlocks, StridedIndex};
