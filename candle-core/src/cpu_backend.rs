@@ -815,7 +815,9 @@ impl<'a, I: IntDType> Map2 for IndexAdd<'a, I> {
         };
         let dim = self.dim;
         let max_idx = l1.dims()[dim];
-        let stride = src_l.stride()[dim];
+        let pre_dim = src_l.dims()[..dim].iter().product::<usize>();
+        let src_dim_sz = src_l.dims()[dim];
+        let post_dim = src_l.dims()[dim + 1..].iter().product::<usize>();
         if dim == 0 {
             for (src_idx, dst_idx) in self.ids.iter().enumerate() {
                 let dst_idx = dst_idx.as_usize();
@@ -826,17 +828,15 @@ impl<'a, I: IntDType> Map2 for IndexAdd<'a, I> {
                         size: max_idx,
                     })?
                 }
-                let src_idx = src_idx * stride;
-                let dst_idx = dst_idx * stride;
-                let src = &src[src_idx..src_idx + stride];
-                let dst = &mut dst[dst_idx..dst_idx + stride];
+                let src_idx = src_idx * post_dim;
+                let dst_idx = dst_idx * post_dim;
+                let src = &src[src_idx..src_idx + post_dim];
+                let dst = &mut dst[dst_idx..dst_idx + post_dim];
                 for (d, &s) in dst.iter_mut().zip(src.iter()) {
                     *d += s
                 }
             }
         } else {
-            let pre_dim = src_l.dims()[..dim].iter().product::<usize>();
-            let post_dim = src_l.dims()[dim + 1..].iter().product::<usize>();
             for (src_idx, dst_idx) in self.ids.iter().enumerate() {
                 let dst_idx = dst_idx.as_usize();
                 if dst_idx >= max_idx {
@@ -847,9 +847,8 @@ impl<'a, I: IntDType> Map2 for IndexAdd<'a, I> {
                     })?
                 }
                 for pre_i in 0..pre_dim {
-                    let pre_i = pre_i * stride;
-                    let pre_src_i = (pre_i + src_idx) * post_dim;
-                    let pre_dst_i = (pre_i + dst_idx) * post_dim;
+                    let pre_src_i = (pre_i * src_dim_sz + src_idx) * post_dim;
+                    let pre_dst_i = (pre_i * max_idx + dst_idx) * post_dim;
                     let src = &src[pre_src_i..pre_src_i + post_dim];
                     let dst = &mut dst[pre_dst_i..pre_dst_i + post_dim];
                     for (d, &s) in dst.iter_mut().zip(src.iter()) {

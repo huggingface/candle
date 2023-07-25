@@ -346,6 +346,49 @@ fn index_select(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn index_add(device: &Device) -> Result<()> {
+    let ids = Tensor::new(&[0u32, 1u32, 1u32], device)?;
+    let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
+    let init = Tensor::ones((4, 2), DType::F32, device)?;
+    let hs = init.index_add(&ids, &t, 1)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[[1.0, 4.0], [4.0, 10.0], [7.0, 16.0], [10.0, 22.0]],
+    );
+    let init = Tensor::zeros((4, 2), DType::F32, device)?;
+    let ids = Tensor::new(&[1u32, 0u32, 0u32], device)?;
+    let hs = init.index_add(&ids, &t, 1)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[[3.0, 0.0], [9.0, 3.0], [15.0, 6.0], [21.0, 9.0]],
+    );
+
+    let init = Tensor::zeros((6, 3), DType::F32, device)?;
+    let ids = Tensor::new(&[5u32, 0u32, 1u32, 0u32], device)?;
+    let hs = init.index_add(&ids, &t, 0)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[
+            [12.0, 14.0, 16.0],
+            [6.0, 7.0, 8.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 2.0]
+        ]
+    );
+    Ok(())
+}
+
 fn gather(device: &Device) -> Result<()> {
     let ids = Tensor::new(&[[0u32], [2u32], [1u32], [0u32]], device)?;
     let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
@@ -543,4 +586,5 @@ test_device!(cmp, cmp_cpu, cmp_gpu);
 test_device!(matmul, matmul_cpu, matmul_gpu);
 test_device!(broadcasting, broadcasting_cpu, broadcasting_gpu);
 test_device!(index_select, index_select_cpu, index_select_gpu);
+test_device!(index_add, index_add_cpu, index_add_gpu);
 test_device!(gather, gather_cpu, gather_gpu);
