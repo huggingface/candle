@@ -512,3 +512,51 @@ impl UnaryOpT for Relu {
         v
     }
 }
+
+#[derive(Clone)]
+pub struct BackpropOp(Option<Op>);
+
+impl BackpropOp {
+    pub(crate) fn none() -> Self {
+        BackpropOp(None)
+    }
+
+    pub(crate) fn new1(arg: &Tensor, f: impl Fn(Tensor) -> Op) -> Self {
+        let op = if arg.track_op() {
+            Some(f(arg.clone()))
+        } else {
+            None
+        };
+        Self(op)
+    }
+
+    pub(crate) fn new2(arg1: &Tensor, arg2: &Tensor, f: impl Fn(Tensor, Tensor) -> Op) -> Self {
+        let op = if arg1.track_op() || arg2.track_op() {
+            Some(f(arg1.clone(), arg2.clone()))
+        } else {
+            None
+        };
+        Self(op)
+    }
+
+    pub(crate) fn new3(
+        arg1: &Tensor,
+        arg2: &Tensor,
+        arg3: &Tensor,
+        f: impl Fn(Tensor, Tensor, Tensor) -> Op,
+    ) -> Self {
+        let op = if arg1.track_op() || arg2.track_op() || arg3.track_op() {
+            Some(f(arg1.clone(), arg2.clone(), arg3.clone()))
+        } else {
+            None
+        };
+        Self(op)
+    }
+}
+
+impl std::ops::Deref for BackpropOp {
+    type Target = Option<Op>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
