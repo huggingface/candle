@@ -13,10 +13,11 @@ pub struct Config {
     pub n_head: usize,
     pub n_embd: usize,
     pub n_key_value_head: usize,
+    pub use_flash_attn: bool,
 }
 
 impl Config {
-    pub fn config_7b() -> Self {
+    pub fn config_7b(use_flash_attn: bool) -> Self {
         Self {
             hidden_size: 4096,
             intermediate_size: 11008,
@@ -25,11 +26,11 @@ impl Config {
             n_head: 32,
             n_embd: 4096,
             n_key_value_head: 32,
+            use_flash_attn,
         }
     }
 }
 
-#[allow(unused)]
 #[derive(Clone)]
 pub struct Cache {
     masks: Arc<Mutex<HashMap<usize, Tensor>>>,
@@ -69,7 +70,6 @@ impl Cache {
         })
     }
 
-    #[allow(unused)]
     fn mask(&self, t: usize) -> Result<Tensor> {
         let mut masks = self.masks.lock().unwrap();
         if let Some(mask) = masks.get(&t) {
@@ -142,6 +142,17 @@ struct CausalSelfAttention {
     n_key_value_head: usize,
     head_dim: usize,
     cache: Cache,
+    use_flash_attn: bool,
+}
+
+#[cfg(feature = "flash-attn")]
+fn flash_attn(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+    q.custom_op3(k, v, candle_flash_attn::FlashHdim32Sm80)
+}
+
+#[cfg(not(feature = "flash-attn"))]
+fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor) -> Result<Tensor> {
+    unimplemented!("compile with '--features flash-attn'")
 }
 
 impl CausalSelfAttention {
@@ -205,8 +216,9 @@ impl CausalSelfAttention {
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
-        #[cfg(not(feature = "flash-attn"))]
-        let y = {
+        let y = if self.use_flash_attn {
+            flash_attn(&q, &k, &v)?
+        } else {
             let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
             let mask = self.cache.mask(seq_len)?.broadcast_as(att.shape())?;
             let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
@@ -214,9 +226,6 @@ impl CausalSelfAttention {
             // Convert to contiguous as matmul doesn't support strided vs for now.
             att.matmul(&v.contiguous()?)?
         };
-        #[cfg(feature = "flash-attn")]
-        let y = q.custom_op3(&k, &v, candle_flash_attn::FlashHdim32Sm80)?;
-
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = y.to_dtype(x_dtype)?;
         let y = self.o_proj.forward(&y)?;
@@ -254,11 +263,11 @@ impl CausalSelfAttention {
             n_key_value_head: cfg.n_key_value_head,
             head_dim: cfg.hidden_size / cfg.n_head,
             cache: cache.clone(),
+            use_flash_attn: cfg.use_flash_attn,
         })
     }
 }
 
-#[allow(unused)]
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
