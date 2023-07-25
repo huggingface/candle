@@ -9,11 +9,18 @@ struct KernelDirectories {
     include_dirs: &'static [&'static str],
 }
 
-const DIRS: [KernelDirectories; 1] = [KernelDirectories {
-    kernel_dir: "examples/custom-ops/kernels/",
-    rust_target: "examples/custom-ops/cuda_kernels.rs",
-    include_dirs: &[],
-}];
+const DIRS: [KernelDirectories; 2] = [
+    KernelDirectories {
+        kernel_dir: "examples/custom-ops/kernels/",
+        rust_target: "examples/custom-ops/cuda_kernels.rs",
+        include_dirs: &[],
+    },
+    KernelDirectories {
+        kernel_dir: "examples/flash-attn/kernels/",
+        rust_target: "examples/flash-attn/flash_attn.rs",
+        include_dirs: &["examples/flash-attn/cutlass/include"],
+    },
+];
 
 impl KernelDirectories {
     fn maybe_build_ptx(
@@ -39,6 +46,7 @@ impl KernelDirectories {
                 command
                     .arg(format!("--gpu-architecture=sm_{compute_cap}"))
                     .arg("--ptx")
+                    .arg("--expt-relaxed-constexpr")
                     .args(["--default-stream", "per-thread"])
                     .args(["--output-directory", out_dir.to_str().unwrap()])
                     .arg(format!("-I/{}", self.kernel_dir))

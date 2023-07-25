@@ -9,6 +9,7 @@ members = [
     "candle-wasm-examples/whisper",
 ]
 exclude = [
+    "candle-flash-attn",
     "candle-kernels",
 ]
 
