@@ -59,6 +59,8 @@ fn main() -> Result<()> {
     }
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=flashattention");
+    println!("cargo:rustc-link-lib=dylib=cudart");
+    println!("cargo:rustc-link-lib=dylib=stdc++");
 
     /* laurent: I tried using the cc cuda integration as below but this lead to ptaxs never
        finishing to run for some reason. Calling nvcc manually worked fine.

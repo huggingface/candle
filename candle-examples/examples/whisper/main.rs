@@ -258,11 +258,6 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
-    let op = candle_flash_attn::FlashHdim32Sm80;
-    let t = Tensor::zeros((3, 2), DType::F16, &device)?;
-    let t2 = Tensor::zeros((3, 2), DType::F16, &device)?;
-    let t3 = Tensor::zeros((3, 2), DType::F16, &device)?;
-    t.custom_op3(&t2, &t3, op);
     let default_model = "openai/whisper-tiny.en".to_string();
     let path = std::path::PathBuf::from(default_model.clone());
     let default_revision = "refs/pr/15".to_string();
