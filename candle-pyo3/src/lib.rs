@@ -11,11 +11,8 @@ pub fn wrap_err(err: ::candle::Error) -> PyErr {
 }
 
 #[derive(Clone)]
-#[pyclass(name = "Tensor")]
+#[pyclass(name = "Tensor", unsendable)]
 struct PyTensor(Tensor);
-
-unsafe impl Send for PyTensor {}
-unsafe impl Sync for PyTensor {}
 
 impl std::ops::Deref for PyTensor {
     type Target = Tensor;
