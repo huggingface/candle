@@ -103,7 +103,7 @@ pub enum Op {
 }
 
 /// Unary ops that can be defined in user-land.
-pub trait CustomOp1: Send + Sync {
+pub trait CustomOp1 {
     // Box<dyn> does not support const yet, so use a function to get the name.
     fn name(&self) -> &'static str;
 
