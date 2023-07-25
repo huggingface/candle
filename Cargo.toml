@@ -3,7 +3,7 @@ members = [
     "candle-core",
     "candle-examples",
     "candle-nn",
-    # "candle-pyo3",
+    "candle-pyo3",
     "candle-transformers",
     "candle-wasm-examples/llama2-c",
     "candle-wasm-examples/whisper",

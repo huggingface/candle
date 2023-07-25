@@ -14,6 +14,9 @@ pub fn wrap_err(err: ::candle::Error) -> PyErr {
 #[pyclass(name = "Tensor")]
 struct PyTensor(Tensor);
 
+unsafe impl Send for PyTensor {}
+unsafe impl Sync for PyTensor {}
+
 impl std::ops::Deref for PyTensor {
     type Target = Tensor;
 
