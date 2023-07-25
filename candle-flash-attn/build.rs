@@ -3,140 +3,47 @@ use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::PathBuf;
 
-struct KernelDirectories {
-    kernel_dir: &'static str,
-    rust_target: &'static str,
-    include_dirs: &'static [&'static str],
-}
-
-const DIRS: [KernelDirectories; 2] = [
-    KernelDirectories {
-        kernel_dir: "examples/custom-ops/kernels/",
-        rust_target: "examples/custom-ops/cuda_kernels.rs",
-        include_dirs: &[],
-    },
-    KernelDirectories {
-        kernel_dir: "examples/flash-attn/kernels/",
-        rust_target: "examples/flash-attn/flash_attn.rs",
-        include_dirs: &["examples/flash-attn/cutlass/include"],
-    },
-];
-
-impl KernelDirectories {
-    fn maybe_build_ptx(
-        &self,
-        cu_file: &std::path::Path,
-        ptx_file: &std::path::Path,
-        compute_cap: usize,
-    ) -> Result<()> {
-        let should_compile = if ptx_file.exists() {
-            let ptx_modified = ptx_file.metadata()?.modified()?;
-            let cu_modified = cu_file.metadata()?.modified()?;
-            cu_modified.duration_since(ptx_modified).is_ok()
-        } else {
-            true
-        };
-        if should_compile {
-            #[cfg(feature = "cuda")]
-            {
-                let mut command = std::process::Command::new("nvcc");
-                let out_dir = ptx_file.parent().context("no parent for ptx file")?;
-                let include_dirs: Vec<String> =
-                    self.include_dirs.iter().map(|c| format!("-I{c}")).collect();
-                command
-                    .arg(format!("--gpu-architecture=sm_{compute_cap}"))
-                    .arg("--ptx")
-                    .arg("--expt-relaxed-constexpr")
-                    .args(["--default-stream", "per-thread"])
-                    .args(["--output-directory", out_dir.to_str().unwrap()])
-                    .arg(format!("-I/{}", self.kernel_dir))
-                    .args(include_dirs)
-                    .arg(cu_file);
-                let output = command
-                    .spawn()
-                    .context("failed spawning nvcc")?
-                    .wait_with_output()?;
-                if !output.status.success() {
-                    anyhow::bail!(
-                    "nvcc error while compiling {cu_file:?}:\n\n# stdout\n{:#}\n\n# stderr\n{:#}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                )
-                }
-            }
-            #[cfg(not(feature = "cuda"))]
-            std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .open(ptx_file)?;
-        }
-        Ok(())
-    }
-    fn process(&self, out_dir: &std::path::Path, compute_cap: usize) -> Result<()> {
-        println!("cargo:rerun-if-changed={}", self.kernel_dir);
-        let kernel_dir = PathBuf::from(self.kernel_dir);
-        let out_dir = out_dir.join(self.kernel_dir);
-        if !out_dir.exists() {
-            std::fs::create_dir_all(&out_dir)?;
-        }
-        let mut cu_files = vec![];
-        let mut cuh_files = vec![];
-        for file in std::fs::read_dir(kernel_dir)?.flatten() {
-            let file = file.path();
-            match file.extension().and_then(|v| v.to_str()) {
-                Some("cu") => cu_files.push(file),
-                Some("cuh") => cuh_files.push(file),
-                _ => {}
-            }
-        }
-
-        let mut ptx_paths = vec![];
-        for cu_file in cu_files.iter() {
-            let file_stem = cu_file
-                .file_stem()
-                .with_context(|| format!("no stem {cu_file:?}"))?;
-            let file_stem = file_stem.to_string_lossy().into_owned();
-            let ptx_file = out_dir.join(&format!("{file_stem}.ptx"));
-            self.maybe_build_ptx(cu_file, &ptx_file, compute_cap)?;
-            ptx_paths.push(ptx_file);
-        }
-
-        let regenerate_rs_file = true;
-        if regenerate_rs_file {
-            let mut file = std::fs::File::create(self.rust_target)?;
-            for ptx_path in ptx_paths {
-                let name = ptx_path
-                    .file_stem()
-                    .context("empty stem")?
-                    .to_string_lossy();
-                file.write_all(b"#[rustfmt::skip]\n")?;
-                let const_definition = format!(
-                    r#"pub const {}: &str = include_str!(concat!(env!("OUT_DIR"), "/{}/{name}.ptx"));"#,
-                    name.to_uppercase().replace('.', "_"),
-                    self.kernel_dir,
-                );
-                file.write_all(const_definition.as_bytes())?;
-                file.write_all(b"\n")?;
-            }
-        }
-        Ok(())
-    }
-}
-
 fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=kernels/flash_fwd_hdim32_fp16_sm80.cu");
+    println!("cargo:rerun-if-changed=kernels/flash_fwd_kernel.h");
+    println!("cargo:rerun-if-changed=kernels/flash_fwd_launch_template.h");
+    println!("cargo:rerun-if-changed=kernels/flash.h");
+    println!("cargo:rerun-if-changed=kernels/philox.cuh");
+    println!("cargo:rerun-if-changed=kernels/softmax.h");
+    println!("cargo:rerun-if-changed=kernels/utils.h");
+    println!("cargo:rerun-if-changed=kernels/kernel_traits.h");
+    println!("cargo:rerun-if-changed=kernels/block_info.h");
+    println!("cargo:rerun-if-changed=kernels/static_switch.h");
 
     let out_dir = std::env::var("OUT_DIR").context("OUT_DIR not set")?;
     let out_dir = PathBuf::from(out_dir);
-    #[cfg(feature = "cuda")]
     set_cuda_include_dir()?;
-    #[cfg(feature = "cuda")]
     let compute_cap = compute_cap()?;
-    #[cfg(not(feature = "cuda"))]
-    let compute_cap = 0;
-    for d in DIRS {
-        d.process(&out_dir, compute_cap)?
-    }
+
+    /* For some reason the cuda mode hangs on my computer when running ptxas
+       while calling nvcc directly works so we don't use the cuda mode here.
+    cc::Build::new()
+        .cuda(true)
+        .cudart("static")
+        .include("cutlass/include")
+        .flag("--expt-relaxed-constexpr")
+        .flag(&format!("--gpu-architecture=sm_{compute_cap}"))
+        .file("kernels/flash_fwd_hdim32_fp16_sm80.cu")
+        .compile("flashattn");
+    */
+
+    cc::Build::new()
+        .compiler("nvcc")
+        // Sadly the cc crate inserts some flags that nvcc doesn't handle, e.g.
+        // -function-sections so disable all of them
+        .no_default_flags(true)
+        .warnings(false)
+        .include("cutlass/include")
+        .flag("--expt-relaxed-constexpr")
+        .flag(&format!("--gpu-architecture=sm_{compute_cap}"))
+        .file("kernels/flash_fwd_hdim32_fp16_sm80.cu")
+        .compile("flashattn");
     Ok(())
 }
 

@@ -2,6 +2,7 @@
 members = [
     "candle-core",
     "candle-examples",
+    "candle-flash-attn",
     "candle-nn",
     "candle-pyo3",
     "candle-transformers",
