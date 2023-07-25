@@ -1434,11 +1434,16 @@ impl Tensor {
     /// Compared to clone, this copies the actual storage but may fail because of running out of
     /// memory.
     pub fn copy(&self) -> Result<Tensor> {
+        let op = if self.track_op() {
+            Some(Op::Copy(self.clone()))
+        } else {
+            None
+        };
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: Arc::new(RwLock::new(self.storage().try_clone(self.layout())?)),
             layout: self.layout.clone(),
-            op: Some(Op::Copy(self.clone())),
+            op,
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -1571,12 +1576,12 @@ impl Tensor {
             let mut storage = self.device().zeros(shape, self.dtype())?;
             self.storage()
                 .copy_strided_src(&mut storage, 0, self.layout())?;
-            Ok(from_storage(
-                storage,
-                shape.clone(),
-                Some(Op::Copy(self.clone())),
-                false,
-            ))
+            let op = if self.track_op() {
+                Some(Op::Copy(self.clone()))
+            } else {
+                None
+            };
+            Ok(from_storage(storage, shape.clone(), op, false))
         }
     }
 
