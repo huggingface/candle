@@ -16,4 +16,3 @@ half = { workspace = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
-cc = "1.0"

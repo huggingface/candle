@@ -17,7 +17,11 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=kernels/static_switch.h");
 
     let out_dir = std::env::var("OUT_DIR").context("OUT_DIR not set")?;
-    let out_dir = PathBuf::from(out_dir);
+    let mut out_dir = PathBuf::from(out_dir);
+    // TODO: Getting up two levels avoid having to recompile this too often, however it's likely
+    // not a safe assumption.
+    out_dir.pop();
+    out_dir.pop();
     set_cuda_include_dir()?;
     let compute_cap = compute_cap()?;
 
@@ -28,7 +32,7 @@ fn main() -> Result<()> {
     let should_compile = if out_file.exists() {
         let out_modified = out_file.metadata()?.modified()?;
         let in_modified = cu_file.metadata()?.modified()?;
-        out_modified.duration_since(in_modified).is_ok()
+        in_modified.duration_since(out_modified).is_ok()
     } else {
         true
     };
@@ -56,25 +60,10 @@ fn main() -> Result<()> {
     println!("cargo:rustc-link-search={}", out_dir.display());
     println!("cargo:rustc-link-lib=flashattention");
 
-    /*
+    /* laurent: I tried using the cc cuda integration as below but this lead to ptaxs never
+       finishing to run for some reason. Calling nvcc manually worked fine.
     cc::Build::new()
         .cuda(true)
-        .include("cutlass/include")
-        .flag("--expt-relaxed-constexpr")
-        .flag("--default-stream")
-        .flag("per-thread")
-        .flag(&format!("--gpu-architecture=sm_{compute_cap}"))
-        .file("kernels/flash_fwd_hdim32_fp16_sm80.cu")
-        .compile("flashattn");
-    */
-
-    /* cc
-    cc::Build::new()
-        .compiler("nvcc")
-        // Sadly the cc crate inserts some flags that nvcc doesn't handle, e.g.
-        // -function-sections so disable all of them
-        .no_default_flags(true)
-        .warnings(false)
         .include("cutlass/include")
         .flag("--expt-relaxed-constexpr")
         .flag("--default-stream")
