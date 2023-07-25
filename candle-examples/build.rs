@@ -8,10 +8,16 @@ struct KernelDirectories {
     rust_target: &'static str,
 }
 
-const DIRS: [KernelDirectories; 1] = [KernelDirectories {
-    kernel_dir: "examples/custom-ops/kernels/",
-    rust_target: "examples/custom-ops/cuda_kernels.rs",
-}];
+const DIRS: [KernelDirectories; 2] = [
+    KernelDirectories {
+        kernel_dir: "examples/custom-ops/kernels/",
+        rust_target: "examples/custom-ops/cuda_kernels.rs",
+    },
+    KernelDirectories {
+        kernel_dir: "examples/flash-attn/kernels/",
+        rust_target: "examples/flash-attn/flash_attn.rs",
+    },
+];
 
 impl KernelDirectories {
     fn maybe_build_ptx(
