@@ -6,16 +6,19 @@ use std::path::PathBuf;
 struct KernelDirectories {
     kernel_dir: &'static str,
     rust_target: &'static str,
+    include_dirs: &'static [&'static str],
 }
 
 const DIRS: [KernelDirectories; 2] = [
     KernelDirectories {
         kernel_dir: "examples/custom-ops/kernels/",
         rust_target: "examples/custom-ops/cuda_kernels.rs",
+        include_dirs: &[],
     },
     KernelDirectories {
         kernel_dir: "examples/flash-attn/kernels/",
         rust_target: "examples/flash-attn/flash_attn.rs",
+        include_dirs: &["examples/flash-attn/cutlass/include"],
     },
 ];
 
@@ -38,12 +41,16 @@ impl KernelDirectories {
             {
                 let mut command = std::process::Command::new("nvcc");
                 let out_dir = ptx_file.parent().context("no parent for ptx file")?;
+                let include_dirs: Vec<String> =
+                    self.include_dirs.iter().map(|c| format!("-I{c}")).collect();
                 command
                     .arg(format!("--gpu-architecture=sm_{compute_cap}"))
                     .arg("--ptx")
+                    .arg("--expt-relaxed-constexpr")
                     .args(["--default-stream", "per-thread"])
                     .args(["--output-directory", out_dir.to_str().unwrap()])
                     .arg(format!("-I/{}", self.kernel_dir))
+                    .args(include_dirs)
                     .arg(cu_file);
                 let output = command
                     .spawn()

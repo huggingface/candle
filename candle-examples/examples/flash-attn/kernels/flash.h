@@ -7,13 +7,13 @@
 #include <cuda.h>
 #include <vector>
 
-#ifdef OLD_GENERATOR_PATH
-#include <ATen/CUDAGeneratorImpl.h>
-#else
-#include <ATen/cuda/CUDAGeneratorImpl.h>
-#endif
-
-#include <ATen/cuda/CUDAGraphsUtils.cuh>
+// #ifdef OLD_GENERATOR_PATH
+// #include <ATen/CUDAGeneratorImpl.h>
+// #else
+// #include <ATen/cuda/CUDAGeneratorImpl.h>
+// #endif
+//
+// #include <ATen/cuda/CUDAGraphsUtils.cuh>
 
 
 constexpr int TOTAL_DIM = 0;
@@ -89,7 +89,7 @@ struct Flash_fwd_params : public Qkv_params {
     float scale_softmax_rp_dropout;
 
     // Random state.
-    at::PhiloxCudaState philox_args;
+    // at::PhiloxCudaState philox_args;
 
     bool is_bf16;
     bool is_causal;

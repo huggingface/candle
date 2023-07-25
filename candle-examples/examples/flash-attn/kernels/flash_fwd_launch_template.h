@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <ATen/cuda/CUDAContext.h>
+// #include <ATen/cuda/CUDAContext.h>
 
 #include "static_switch.h"
 #include "flash.h"
@@ -37,16 +37,16 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
                 // Will only return softmax if dropout, to reduce compilation time.
                 auto kernel = &flash_fwd_kernel<Kernel_traits, Is_dropout, Is_causal, IsEvenNConst, IsEvenKConst, ReturnSoftmaxConst && Is_dropout>;
                 // auto kernel = &flash_fwd_kernel<Kernel_traits, Is_dropout, Is_causal, IsEvenNConst, true, ReturnSoftmaxConst && Is_dropout>;
-                if (smem_size >= 48 * 1024) {
-                    C10_CUDA_CHECK(cudaFuncSetAttribute(
-                        kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
-                }
+                // if (smem_size >= 48 * 1024) {
+                //     C10_CUDA_CHECK(cudaFuncSetAttribute(
+                //         kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+                // }
                 int ctas_per_sm;
                 cudaError status_ = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
                     &ctas_per_sm, kernel, Kernel_traits::kNThreads, smem_size);
                 // printf("smem_size = %d, CTAs per SM = %d\n", int(smem_size), ctas_per_sm);
                 kernel<<<grid, Kernel_traits::kNThreads, smem_size, stream>>>(params);
-                C10_CUDA_KERNEL_LAUNCH_CHECK();
+                // C10_CUDA_KERNEL_LAUNCH_CHECK();
             });
         });
     });
@@ -87,8 +87,8 @@ void run_mha_fwd_hdim64(Flash_fwd_params &params, cudaStream_t stream) {
 template<typename T>
 void run_mha_fwd_hdim96(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr int Headdim = 96;
-    auto dprops = at::cuda::getCurrentDeviceProperties();
-    bool is_sm8x = dprops->major == 8 && dprops->minor > 0;
+    // auto dprops = at::cuda::getCurrentDeviceProperties();
+    bool is_sm8x = true; // dprops->major == 8 && dprops->minor > 0;
     BOOL_SWITCH(params.p_dropout < 1.f, Is_dropout, [&] {
         BOOL_SWITCH(params.is_causal, Is_causal, [&] {
             // For sm86 or sm89, 64 x 64 is the fastest for causal (because it's square),
@@ -113,8 +113,8 @@ void run_mha_fwd_hdim96(Flash_fwd_params &params, cudaStream_t stream) {
 template<typename T>
 void run_mha_fwd_hdim128(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr int Headdim = 128;
-    auto dprops = at::cuda::getCurrentDeviceProperties();
-    bool is_sm8x = dprops->major == 8 && dprops->minor > 0;
+    // auto dprops = at::cuda::getCurrentDeviceProperties();
+    bool is_sm8x = true; // dprops->major == 8 && dprops->minor > 0;
     BOOL_SWITCH(params.p_dropout < 1.f, Is_dropout, [&] {
         BOOL_SWITCH(params.is_causal, Is_causal, [&] {
             if constexpr(!Is_dropout) {
@@ -150,8 +150,8 @@ void run_mha_fwd_hdim128(Flash_fwd_params &params, cudaStream_t stream) {
 template<typename T>
 void run_mha_fwd_hdim160(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr int Headdim = 160;
-    auto dprops = at::cuda::getCurrentDeviceProperties();
-    bool is_sm8x = dprops->major == 8 && dprops->minor > 0;
+    // auto dprops = at::cuda::getCurrentDeviceProperties();
+    bool is_sm8x = true; // dprops->major == 8 && dprops->minor > 0;
     BOOL_SWITCH(params.p_dropout < 1.f, Is_dropout, [&] {
         BOOL_SWITCH(params.is_causal, Is_causal, [&] {
             // For A100, H100, 128 x 32 is the fastest.

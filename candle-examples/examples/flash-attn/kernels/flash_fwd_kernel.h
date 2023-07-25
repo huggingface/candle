@@ -304,9 +304,11 @@ inline __device__ void compute_attn_1rowblock(const Params &params, const int bi
         copy(smem_thr_copy_Q, tSsQ, tSrQ_copy_view);
     }
 
-    auto seeds = at::cuda::philox::unpack(params.philox_args);
-    unsigned long long seed = std::get<0>(seeds);
-    unsigned long long offset = std::get<1>(seeds) + (bidb * params.h + bidh) * 32 + tidx % 32;
+    // auto seeds = at::cuda::philox::unpack(params.philox_args);
+    // unsigned long long seed = std::get<0>(seeds);
+    // unsigned long long offset = std::get<1>(seeds) + (bidb * params.h + bidh) * 32 + tidx % 32;
+    unsigned long long seed = 0;
+    unsigned long long offset = 0;
 
     clear(acc_o);
 
