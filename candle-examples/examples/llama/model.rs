@@ -29,6 +29,7 @@ impl Config {
     }
 }
 
+#[allow(unused)]
 #[derive(Clone)]
 pub struct Cache {
     masks: Arc<Mutex<HashMap<usize, Tensor>>>,
@@ -68,6 +69,7 @@ impl Cache {
         })
     }
 
+    #[allow(unused)]
     fn mask(&self, t: usize) -> Result<Tensor> {
         let mut masks = self.masks.lock().unwrap();
         if let Some(mask) = masks.get(&t) {
@@ -202,12 +204,19 @@ impl CausalSelfAttention {
 
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
-        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-        let mask = self.cache.mask(seq_len)?.broadcast_as(att.shape())?;
-        let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
-        let att = att.softmax(D::Minus1)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
-        let y = att.matmul(&v.contiguous()?)?;
+
+        #[cfg(not(feature = "flash-attn"))]
+        let y = {
+            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+            let mask = self.cache.mask(seq_len)?.broadcast_as(att.shape())?;
+            let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
+            let att = att.softmax(D::Minus1)?;
+            // Convert to contiguous as matmul doesn't support strided vs for now.
+            att.matmul(&v.contiguous()?)?
+        };
+        #[cfg(feature = "flash-attn")]
+        let y = q.custom_op3(&k, &v, candle_flash_attn::FlashHdim32Sm80)?;
+
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = y.to_dtype(x_dtype)?;
         let y = self.o_proj.forward(&y)?;
@@ -249,6 +258,7 @@ impl CausalSelfAttention {
     }
 }
 
+#[allow(unused)]
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
