@@ -846,7 +846,7 @@ impl<'a> Map2InPlace for ScatterAdd<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
         dst: &mut CudaSlice<T>,
-        _dst_shape: &Shape,
+        dst_shape: &Shape,
         src: &CudaSlice<T>,
         src_l: &Layout,
         dev: &CudaDevice,
@@ -874,11 +874,11 @@ impl<'a> Map2InPlace for ScatterAdd<'a> {
         let left_sz: usize = src_l.dims()[..dim].iter().product();
         let right_sz: usize = src_l.dims()[dim + 1..].iter().product();
         let src_dim_sz = src_l.dims()[dim];
-        let ids_dim_sz = ids_l.dims()[dim];
+        let dst_dim_sz = dst_shape.dims()[dim];
         let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
-        let params = (ids, &src, dst, left_sz, src_dim_sz, ids_dim_sz, right_sz);
+        let params = (ids, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz);
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }.w()?;
         Ok(())
