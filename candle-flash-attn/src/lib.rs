@@ -6,7 +6,7 @@ use candle::cuda_backend::WrapErr;
 use candle::{CpuStorage, Error, Layout, Result, Shape};
 use half::f16;
 
-struct FlashHdim32Sm80;
+pub struct FlashHdim32Sm80;
 
 impl candle::CustomOp3 for FlashHdim32Sm80 {
     fn name(&self) -> &'static str {

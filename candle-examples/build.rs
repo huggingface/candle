@@ -226,6 +226,14 @@ fn compute_cap() -> Result<usize> {
     }
 
     println!("cargo:rerun-if-env-changed=CUDA_COMPUTE_CAP");
+
+    // TODO: Having to specify these manually on all binary packages would be annoying. We should
+    // check e.g. in the cc codebase how to ensure that these flags get propagated from the
+    // flash-attn crate to the binary crate that uses it.
+    #[cfg(feature = "flash-attn")]
+    println!("cargo:rustc-link-lib=dylib=cudart");
+    #[cfg(feature = "flash-attn")]
+    println!("cargo:rustc-link-lib=dylib=stdc++");
     if let Ok(compute_cap_str) = std::env::var("CUDA_COMPUTE_CAP") {
         compute_cap = compute_cap_str
             .parse::<usize>()
