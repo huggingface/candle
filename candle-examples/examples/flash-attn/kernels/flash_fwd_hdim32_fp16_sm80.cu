@@ -23,7 +23,7 @@ void run_mha_fwd_<cutlass::half_t, 32>(Flash_fwd_params &params, cudaStream_t st
 }
 
 
-extern "C" __global__ void run_mha(
+extern "C" void run_mha(
     void *q_ptr,
     void *k_ptr,
     void *v_ptr,
