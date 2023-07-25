@@ -58,7 +58,7 @@ pub enum UnaryOp {
 }
 
 #[derive(Clone)]
-pub(crate) enum Op {
+pub enum Op {
     Binary(Tensor, Tensor, BinaryOp),
     Unary(Tensor, UnaryOp),
     Cmp(Tensor, CmpOp),
@@ -513,6 +513,8 @@ impl UnaryOpT for Relu {
     }
 }
 
+/// `BackpropOp` is a wrapper around `Option<Op>`. The main goal is to ensure that dependencies are
+/// properly checked when creating a new value
 #[derive(Clone)]
 pub struct BackpropOp(Option<Op>);
 
@@ -547,6 +549,16 @@ impl BackpropOp {
     ) -> Self {
         let op = if arg1.track_op() || arg2.track_op() || arg3.track_op() {
             Some(f(arg1.clone(), arg2.clone(), arg3.clone()))
+        } else {
+            None
+        };
+        Self(op)
+    }
+
+    pub(crate) fn new<A: AsRef<Tensor>>(args: &[A], f: impl Fn(Vec<Tensor>) -> Op) -> Self {
+        let op = if args.iter().any(|arg| arg.as_ref().track_op()) {
+            let args: Vec<Tensor> = args.iter().map(|arg| arg.as_ref().clone()).collect();
+            Some(f(args))
         } else {
             None
         };
