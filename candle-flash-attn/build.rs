@@ -21,18 +21,54 @@ fn main() -> Result<()> {
     set_cuda_include_dir()?;
     let compute_cap = compute_cap()?;
 
-    /* For some reason the cuda mode hangs on my computer when running ptxas
-       while calling nvcc directly works so we don't use the cuda mode here.
+    let mut command = std::process::Command::new("nvcc");
+    let out_file = out_dir.join("libflashattention.a");
+
+    let cu_file = PathBuf::from("kernels/flash_fwd_hdim32_fp16_sm80.cu");
+    let should_compile = if out_file.exists() {
+        let out_modified = out_file.metadata()?.modified()?;
+        let in_modified = cu_file.metadata()?.modified()?;
+        out_modified.duration_since(in_modified).is_ok()
+    } else {
+        true
+    };
+    if should_compile {
+        command
+            .arg(format!("--gpu-architecture=sm_{compute_cap}"))
+            .arg("--lib")
+            .args(["-o", out_file.to_str().unwrap()])
+            .args(["--default-stream", "per-thread"])
+            .arg("-Icutlass/include")
+            .arg("--expt-relaxed-constexpr")
+            .arg(cu_file);
+        let output = command
+            .spawn()
+            .context("failed spawning nvcc")?
+            .wait_with_output()?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "nvcc error while compiling:\n\n# stdout\n{:#}\n\n# stderr\n{:#}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        }
+    }
+    println!("cargo:rustc-link-search={}", out_dir.display());
+    println!("cargo:rustc-link-lib=flashattention");
+
+    /*
     cc::Build::new()
         .cuda(true)
-        .cudart("static")
         .include("cutlass/include")
         .flag("--expt-relaxed-constexpr")
+        .flag("--default-stream")
+        .flag("per-thread")
         .flag(&format!("--gpu-architecture=sm_{compute_cap}"))
         .file("kernels/flash_fwd_hdim32_fp16_sm80.cu")
         .compile("flashattn");
     */
 
+    /* cc
     cc::Build::new()
         .compiler("nvcc")
         // Sadly the cc crate inserts some flags that nvcc doesn't handle, e.g.
@@ -41,9 +77,12 @@ fn main() -> Result<()> {
         .warnings(false)
         .include("cutlass/include")
         .flag("--expt-relaxed-constexpr")
+        .flag("--default-stream")
+        .flag("per-thread")
         .flag(&format!("--gpu-architecture=sm_{compute_cap}"))
         .file("kernels/flash_fwd_hdim32_fp16_sm80.cu")
         .compile("flashattn");
+    */
     Ok(())
 }
 
