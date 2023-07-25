@@ -79,11 +79,7 @@ macro_rules! unary_op {
             let storage = self
                 .storage()
                 .unary_impl::<crate::op::$op_name>(self.layout())?;
-            let op = if self.track_op() {
-                Some(Op::Unary(self.clone(), UnaryOp::$op_name))
-            } else {
-                None
-            };
+            let op = crate::op::BackpropOp::new1(self, |s| Op::Unary(s, UnaryOp::$op_name));
             Ok(from_storage(storage, shape.clone(), op, false))
         }
     };
@@ -98,11 +94,9 @@ macro_rules! binary_op {
                 self.layout(),
                 rhs.layout(),
             )?;
-            let op = if self.track_op() || rhs.track_op() {
-                Some(Op::Binary(self.clone(), rhs.clone(), BinaryOp::$op_name))
-            } else {
-                None
-            };
+            let op = crate::op::BackpropOp::new2(self, rhs, |t1, t2| {
+                Op::Binary(t1, t2, BinaryOp::$op_name)
+            });
             Ok(from_storage(storage, shape.clone(), op, false))
         }
     };
@@ -1789,11 +1783,7 @@ impl Tensor {
         let (storage, shape) = self
             .storage()
             .custom_op1(self.layout(), c.as_ref().as_ref())?;
-        let op = if self.track_op() {
-            Some(Op::CustomOp1(self.clone(), c))
-        } else {
-            None
-        };
+        let op = crate::op::BackpropOp::new1(self, |s| Op::CustomOp1(s, c));
         Ok(from_storage(storage, shape, op, false))
     }
 
@@ -1809,11 +1799,7 @@ impl Tensor {
             rhs.layout(),
             c.as_ref().as_ref(),
         )?;
-        let op = if self.track_op() {
-            Some(Op::CustomOp2(self.clone(), rhs.clone(), c))
-        } else {
-            None
-        };
+        let op = crate::op::BackpropOp::new2(self, rhs, |t1, t2| Op::CustomOp2(t1, t2, c));
         Ok(from_storage(storage, shape, op, false))
     }
 
@@ -1831,11 +1817,8 @@ impl Tensor {
             t3.layout(),
             c.as_ref().as_ref(),
         )?;
-        let op = if self.track_op() {
-            Some(Op::CustomOp3(self.clone(), t2.clone(), t3.clone(), c))
-        } else {
-            None
-        };
+        let op =
+            crate::op::BackpropOp::new3(self, t2, t3, |t1, t2, t3| Op::CustomOp3(t1, t2, t3, c));
         Ok(from_storage(storage, shape, op, false))
     }
 
