@@ -77,6 +77,12 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
         if expected_kv != v_l.shape().dims4()? {
             candle::bail!("shape mismatch q {:?} and v {:?}", q_l.shape(), v_l.shape())
         }
+        if head_size_og > 256 {
+            candle::bail!("only supports head dimension at most 256 (got {head_size_og})")
+        }
+        if num_heads % num_heads_k != 0 {
+            candle::bail!("number of k/v heads {num_heads_k} must divide number of heads in query {num_heads}")
+        }
 
         let head_size = round_multiple(head_size_og, 8);
         let head_size_rounded = round_multiple(head_size, 32);
