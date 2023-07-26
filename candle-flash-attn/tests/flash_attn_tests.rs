@@ -60,7 +60,7 @@ fn flash_attn_acausal() -> Result<()> {
 
     let ys = candle_flash_attn::flash_attn(&q, &k, &v, 0.5, false)?;
     let ys = ys.i(0)?.to_dtype(DType::F32)?;
-    assert_eq!(ys.dims(), &[1]);
+    assert_eq!(ys.dims(), &[3, 2, 4]);
     assert_eq!(to_vec3_round(ys, 4)?, &[[[0f32]]]);
     Ok(())
 }

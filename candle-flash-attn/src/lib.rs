@@ -87,6 +87,10 @@ impl candle::CustomOp3 for FlashAttn {
         if head_size_og > 256 {
             candle::bail!("only supports head dimension at most 256 (got {head_size_og})")
         }
+        if head_size_og % 8 != 0 {
+            // TODO: Handle head sizes that are not a multiple of 8 via some padding.
+            candle::bail!("only supports head sizes that are a multiple of 8 (got {head_size_og})")
+        }
         if num_heads % num_heads_k != 0 {
             candle::bail!("number of k/v heads {num_heads_k} must divide number of heads in query {num_heads}")
         }
