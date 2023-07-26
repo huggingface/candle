@@ -147,14 +147,7 @@ struct CausalSelfAttention {
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(softmax_scale: f32, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
-    q.custom_op3(
-        k,
-        v,
-        candle_flash_attn::FlashHdim32Sm80 {
-            softmax_scale,
-            causal: true,
-        },
-    )
+    candle_flash_attn::flash_attn(softmax_scale, q, k, v)
 }
 
 #[cfg(not(feature = "flash-attn"))]

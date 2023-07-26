@@ -3,7 +3,7 @@ mod ffi;
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::cuda_backend::WrapErr;
-use candle::{CpuStorage, Error, Layout, Result, Shape};
+use candle::{CpuStorage, Error, Layout, Result, Shape, Tensor};
 use half::f16;
 
 pub struct FlashHdim32Sm80 {
@@ -143,4 +143,15 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
         let dst = candle::CudaStorage::wrap_cuda_slice(dst, dev.clone());
         Ok((dst, out_shape))
     }
+}
+
+pub fn flash_attn(softmax_scale: f32, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+    q.custom_op3(
+        k,
+        v,
+        FlashHdim32Sm80 {
+            softmax_scale,
+            causal: true,
+        },
+    )
 }
