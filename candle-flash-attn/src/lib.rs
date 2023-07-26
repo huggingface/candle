@@ -6,7 +6,7 @@ use candle::cuda_backend::WrapErr;
 use candle::{CpuStorage, Layout, Result, Shape, Tensor};
 use half::f16;
 
-pub struct FlashHdim32Sm80 {
+pub struct FlashAttn {
     pub softmax_scale: f32,
     pub causal: bool,
 }
@@ -15,7 +15,7 @@ fn round_multiple(x: usize, m: usize) -> usize {
     (x + m - 1) / m * m
 }
 
-impl candle::CustomOp3 for FlashHdim32Sm80 {
+impl candle::CustomOp3 for FlashAttn {
     fn name(&self) -> &'static str {
         "flash-hdim32-sm80"
     }
@@ -152,12 +152,9 @@ pub fn flash_attn(
     softmax_scale: f32,
     causal: bool,
 ) -> Result<Tensor> {
-    q.custom_op3(
-        k,
-        v,
-        FlashHdim32Sm80 {
-            softmax_scale,
-            causal,
-        },
-    )
+    let op = FlashAttn {
+        softmax_scale,
+        causal,
+    };
+    q.custom_op3(k, v, op)
 }
