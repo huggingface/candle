@@ -8,6 +8,10 @@ use half::f16;
 
 pub struct FlashHdim32Sm80;
 
+fn round_multiple(x: usize, m: usize) -> usize {
+    (x + m - 1) / m * m
+}
+
 impl candle::CustomOp3 for FlashHdim32Sm80 {
     fn name(&self) -> &'static str {
         "flash-hdim32-sm80"
@@ -36,7 +40,7 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
     ) -> Result<(candle::CudaStorage, Shape)> {
         // https://github.com/Dao-AILab/flash-attention/blob/b252072409e69c25f2b9d473cc534e49b24decd2/csrc/flash_attn/flash_api.cpp#L187
         let dev = q.device();
-        let out_shape = Shape::from(&[1]);
+        let out_shape = q_l.shape().clone();
         let q = q.as_cuda_slice::<f16>()?;
         let k = k.as_cuda_slice::<f16>()?;
         let v = v.as_cuda_slice::<f16>()?;
@@ -55,8 +59,30 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
             )
         }
         if q_stride[q_rank - 1] != 1 {
-            Err(Error::Wrapped("the last dim of q must be contiguous".into()).bt())?
+            candle::bail!("the last dim of q must be contiguous {q_stride:?}")
         }
+        if k_stride[k_rank - 1] != 1 {
+            candle::bail!("the last dim of k must be contiguous {k_stride:?}")
+        }
+        if v_stride[v_rank - 1] != 1 {
+            candle::bail!("the last dim of v must be contiguous {v_stride:?}")
+        }
+
+        let (b_sz, seqlen_q, num_heads, head_size_og) = q_l.shape().dims4()?;
+        let (_b_sz, seqlen_k, num_heads_k, _head_size_og) = k_l.shape().dims4()?;
+        let expected_kv = (b_sz, seqlen_k, num_heads_k, head_size_og);
+        if expected_kv != k_l.shape().dims4()? {
+            candle::bail!("shape mismatch q {:?} and k {:?}", q_l.shape(), k_l.shape())
+        }
+        if expected_kv != v_l.shape().dims4()? {
+            candle::bail!("shape mismatch q {:?} and v {:?}", q_l.shape(), v_l.shape())
+        }
+
+        let head_size = round_multiple(head_size_og, 8);
+        let head_size_rounded = round_multiple(head_size, 32);
+        let seqlen_q_rounded = round_multiple(seqlen_q, 128);
+        let seqlen_k_rounded = round_multiple(seqlen_k, 128);
+
         let elem_count = out_shape.elem_count();
         let dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
 
@@ -79,16 +105,16 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
                 /* q_head_stride */ q_stride[q_rank - 2] as u32,
                 /* k_head_stride */ k_stride[k_rank - 2] as u32,
                 /* v_head_stride */ v_stride[v_rank - 2] as u32,
-                /* b */ 1,
-                /* h */ 1,
-                /* k */ 1,
-                /* d */ 1,
-                /* d_rounded */ 1,
+                /* b */ b_sz as u32,
+                /* h */ num_heads as u32,
+                /* h_k */ num_heads_k as u32,
+                /* d */ head_size as u32,
+                /* d_rounded */ head_size_rounded as u32,
                 /* softmax_scale*/ 1.0,
-                /* seqlen_q */ 1,
-                /* seqlen_k */ 1,
-                /* seqlen_q_rounded */ 1,
-                /* seqlen_k_rounded */ 1,
+                /* seqlen_q */ seqlen_q as u32,
+                /* seqlen_k */ seqlen_k as u32,
+                /* seqlen_q_rounded */ seqlen_q_rounded as u32,
+                /* seqlen_k_rounded */ seqlen_k_rounded as u32,
                 /* is_causal */ 1,
             )
         }
