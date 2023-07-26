@@ -116,6 +116,9 @@ struct Args {
 
     #[arg(long)]
     v2: bool,
+
+    #[arg(long)]
+    use_flash_attn: bool,
 }
 
 fn main() -> Result<()> {
@@ -124,7 +127,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let device = candle_examples::device(args.cpu)?;
-    let config = Config::config_7b();
+    let config = Config::config_7b(args.use_flash_attn);
     let cache = model::Cache::new(!args.no_kv_cache, &config, &device)?;
     let dtype = if args.use_f32 { DType::F32 } else { DType::F16 };
     let (llama, tokenizer_filename) = match args.npy {
