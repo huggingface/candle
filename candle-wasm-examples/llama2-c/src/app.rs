@@ -43,6 +43,7 @@ pub struct CurrentDecode {
 
 pub struct App {
     status: String,
+    loaded: bool,
     temperature: std::rc::Rc<std::cell::RefCell<f64>>,
     generated: String,
     n_tokens: usize,
@@ -81,6 +82,7 @@ impl Component for App {
             generated: String::new(),
             current_decode: None,
             worker,
+            loaded: false,
         }
     }
 
@@ -102,6 +104,7 @@ impl Component for App {
         match msg {
             Msg::SetModel(md) => {
                 self.status = "weights loaded succesfully!".to_string();
+                self.loaded = true;
                 console_log!("loaded weights");
                 self.worker.send(WorkerInput::ModelData(md));
                 true
@@ -186,7 +189,15 @@ impl Component for App {
                 </p>
                 </div>
                 {"temperature: "}<input type="range" min="0." max="1.2" step="0.1" value={self.temperature.borrow().to_string()} {oninput} id="temp"/>
-                <button class="button" onclick={ctx.link().callback(move |_| Msg::Run)}> { "run" }</button>
+
+                <br/ >
+                {
+                    if self.loaded{
+                        html!(<button class="button" onclick={ctx.link().callback(move |_| Msg::Run)}> { "run" }</button>)
+                    }else{
+                        html! { <progress id="progress-bar" aria-label="Loading weights..."></progress> }
+                    }
+                }
                 <br/ >
                 <h3>
                   {&self.status}
