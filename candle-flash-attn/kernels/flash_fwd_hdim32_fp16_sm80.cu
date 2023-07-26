@@ -21,6 +21,67 @@ template<>
 void run_mha_fwd_<cutlass::half_t, 32>(Flash_fwd_params &params, cudaStream_t stream) {
     run_mha_fwd_hdim32<cutlass::half_t>(params, stream);
 }
+template<>
+void run_mha_fwd_<cutlass::half_t, 64>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim64<cutlass::half_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::half_t, 96>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim96<cutlass::half_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::half_t, 128>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim128<cutlass::half_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::half_t, 160>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim160<cutlass::half_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::half_t, 192>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim192<cutlass::half_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::half_t, 224>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim224<cutlass::half_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::half_t, 256>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim256<cutlass::half_t>(params, stream);
+}
+
+template<>
+void run_mha_fwd_<cutlass::bfloat16_t, 32>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim32<cutlass::bfloat16_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::bfloat16_t, 64>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim64<cutlass::bfloat16_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::bfloat16_t, 96>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim96<cutlass::bfloat16_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::bfloat16_t, 128>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim128<cutlass::bfloat16_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::bfloat16_t, 160>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim160<cutlass::bfloat16_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::bfloat16_t, 192>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim192<cutlass::bfloat16_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::bfloat16_t, 224>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim224<cutlass::bfloat16_t>(params, stream);
+}
+template<>
+void run_mha_fwd_<cutlass::bfloat16_t, 256>(Flash_fwd_params &params, cudaStream_t stream) {
+    run_mha_fwd_hdim256<cutlass::bfloat16_t>(params, stream);
+}
 
 void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     FP16_SWITCH(!params.is_bf16, [&] {
