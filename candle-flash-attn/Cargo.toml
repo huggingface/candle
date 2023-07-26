@@ -16,3 +16,5 @@ half = { version = "2.3.1", features = ["num-traits"] }
 
 [build-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
+num_cpus = "1.15.0"
+rayon = "1.7.0"
