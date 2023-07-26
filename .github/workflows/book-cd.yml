@@ -9,9 +9,9 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-      # permissions:
-      #   contents: write  # To push a branch 
-      #   pull-requests: write  # To create a PR from that branch
+    permissions:
+      contents: write  # To push a branch 
+      pull-requests: write  # To create a PR from that branch
     steps:
     - uses: actions/checkout@v3
       with:
