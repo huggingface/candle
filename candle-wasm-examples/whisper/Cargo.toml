@@ -15,7 +15,6 @@ candle = { path = "../../candle-core" }
 candle-nn = { path = "../../candle-nn" }
 num-traits = { workspace = true }
 tokenizers = { workspace = true, features = ["unstable_wasm"] }
-safetensors = { workspace = true }
 
 # App crates.
 anyhow = { workspace = true }
@@ -24,6 +23,7 @@ rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wav = { workspace = true }
+safetensors = { workspace = true }
 
 # Wasm specific crates.
 getrandom = { version = "0.2", features = ["js"] }
