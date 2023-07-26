@@ -6,7 +6,10 @@ use candle::cuda_backend::WrapErr;
 use candle::{CpuStorage, Error, Layout, Result, Shape};
 use half::f16;
 
-pub struct FlashHdim32Sm80;
+pub struct FlashHdim32Sm80 {
+    pub softmax_scale: f32,
+    pub causal: bool,
+}
 
 fn round_multiple(x: usize, m: usize) -> usize {
     (x + m - 1) / m * m
@@ -97,6 +100,8 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
         let dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
         let softmax_lse = dev.alloc_zeros::<f32>(b_sz * num_heads * seqlen_q).w()?;
 
+        let causal = if self.causal { 1 } else { 0 };
+
         unsafe {
             let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
             let k_ptr = *k.device_ptr() as *const core::ffi::c_void;
@@ -126,12 +131,12 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
                 /* h_k */ num_heads_k as u32,
                 /* d */ head_size as u32,
                 /* d_rounded */ head_size_rounded as u32,
-                /* softmax_scale*/ 1.0,
+                /* softmax_scale*/ self.softmax_scale,
                 /* seqlen_q */ seqlen_q as u32,
                 /* seqlen_k */ seqlen_k as u32,
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
                 /* seqlen_k_rounded */ seqlen_k_rounded as u32,
-                /* is_causal */ 1,
+                /* is_causal */ causal,
             )
         }
 

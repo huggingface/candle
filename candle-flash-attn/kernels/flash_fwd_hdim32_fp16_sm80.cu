@@ -103,6 +103,11 @@ extern "C" void run_mha(
     params.scale_softmax = softmax_scale;
     params.scale_softmax_log2 = softmax_scale * M_LOG2E;
 
+    params.p_dropout = 1.; // probability to keep
+    params.p_dropout_in_uint8_t = uint8_t(std::floor(params.p_dropout * 255.0));
+    params.rp_dropout = 1.f / params.p_dropout;
+    params.scale_softmax_rp_dropout = params.rp_dropout * params.scale_softmax;
+
     cudaStream_t stream = 0; // Use the default stream.
     run_mha_fwd_<cutlass::half_t, 32>(params, stream);
 }
