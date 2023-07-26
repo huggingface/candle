@@ -115,7 +115,7 @@ struct Args {
     model_id: Option<String>,
 
     #[arg(long)]
-    v2: bool,
+    v1: bool,
 
     #[arg(long)]
     use_flash_attn: bool,
@@ -139,10 +139,10 @@ fn main() -> Result<()> {
         None => {
             let api = Api::new()?;
             let model_id = args.model_id.unwrap_or_else(|| {
-                if args.v2 {
-                    "meta-llama/Llama-2-7b-hf".to_string()
-                } else {
+                if args.v1 {
                     "Narsil/amall-7b".to_string()
+                } else {
+                    "meta-llama/Llama-2-7b-hf".to_string()
                 }
             });
             println!("loading the model weights from {model_id}");
