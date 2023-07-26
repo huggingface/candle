@@ -1,12 +1,19 @@
 #include "flash_fwd_launch_template.h"
 
+// TODO: Switch back to handling bf16.
 void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
-    FP16_SWITCH(!params.is_bf16, [&] {
-        FWD_HEADDIM_SWITCH(params.d, [&] {
-            run_mha_fwd_<elem_type, kHeadDim>(params, stream);
-        });
+    FWD_HEADDIM_SWITCH(params.d, [&] {
+        run_mha_fwd_<cutlass::half_t, kHeadDim>(params, stream);
     });
 }
+
+// void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+//     FP16_SWITCH(!params.is_bf16, [&] {
+//         FWD_HEADDIM_SWITCH(params.d, [&] {
+//             run_mha_fwd_<elem_type, kHeadDim>(params, stream);
+//         });
+//     });
+// }
 
 extern "C" void run_mha(
     void *q_ptr,
