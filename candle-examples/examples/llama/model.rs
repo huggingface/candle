@@ -43,7 +43,7 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn new(use_kv_cache: bool, config: &Config, device: &Device) -> Result<Self> {
+    pub fn new(use_kv_cache: bool, dtype: DType, config: &Config, device: &Device) -> Result<Self> {
         // precompute freqs_cis
         let n_elem = config.n_embd / config.n_head;
         let theta: Vec<_> = (0..n_elem)
@@ -58,8 +58,8 @@ impl Cache {
         // This is different from the paper, see:
         // https://github.com/huggingface/transformers/blob/6112b1c6442aaf7affd2b0676a1cd4eee30c45cf/src/transformers/models/llama/modeling_llama.py#L112
         let idx_theta = Tensor::cat(&[&idx_theta, &idx_theta], D::Minus1)?;
-        let cos = idx_theta.cos()?;
-        let sin = idx_theta.sin()?;
+        let cos = idx_theta.cos()?.to_dtype(dtype)?;
+        let sin = idx_theta.sin()?.to_dtype(dtype)?;
         Ok(Self {
             masks: Arc::new(Mutex::new(HashMap::new())),
             use_kv_cache,
@@ -170,7 +170,6 @@ impl CausalSelfAttention {
     }
 
     fn forward(&self, x: &Tensor, index_pos: usize, block_idx: usize) -> Result<Tensor> {
-        let x_dtype = x.dtype();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let q = self.q_proj.forward(x)?;
         let k = self.k_proj.forward(x)?;
@@ -178,16 +177,13 @@ impl CausalSelfAttention {
 
         let q = q
             .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?
-            .to_dtype(DType::F32)?;
+            .transpose(1, 2)?;
         let k = k
             .reshape((b_sz, seq_len, self.n_key_value_head, self.head_dim))?
-            .transpose(1, 2)?
-            .to_dtype(DType::F32)?;
+            .transpose(1, 2)?;
         let mut v = v
             .reshape((b_sz, seq_len, self.n_key_value_head, self.head_dim))?
-            .transpose(1, 2)?
-            .to_dtype(DType::F32)?;
+            .transpose(1, 2)?;
 
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let mut k = self.apply_rotary_emb(&k, index_pos)?;
@@ -219,15 +215,18 @@ impl CausalSelfAttention {
         let y = if self.use_flash_attn {
             flash_attn(&q, &k, &v)?
         } else {
+            let in_dtype = q.dtype();
+            let q = q.to_dtype(DType::F32)?;
+            let k = k.to_dtype(DType::F32)?;
+            let v = v.to_dtype(DType::F32)?;
             let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
             let mask = self.cache.mask(seq_len)?.broadcast_as(att.shape())?;
             let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
             let att = att.softmax(D::Minus1)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
-            att.matmul(&v.contiguous()?)?
+            att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
         };
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = y.to_dtype(x_dtype)?;
         let y = self.o_proj.forward(&y)?;
         Ok(y)
     }
