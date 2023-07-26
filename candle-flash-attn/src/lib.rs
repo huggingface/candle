@@ -41,6 +41,8 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
         // https://github.com/Dao-AILab/flash-attention/blob/b252072409e69c25f2b9d473cc534e49b24decd2/csrc/flash_attn/flash_api.cpp#L187
         let dev = q.device();
         let out_shape = q_l.shape().clone();
+        let out_l = Layout::contiguous(&out_shape);
+
         let q = q.as_cuda_slice::<f16>()?;
         let k = k.as_cuda_slice::<f16>()?;
         let v = v.as_cuda_slice::<f16>()?;
@@ -48,10 +50,12 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
         let q_stride = q_l.stride();
         let k_stride = k_l.stride();
         let v_stride = v_l.stride();
+        let o_stride = out_l.stride();
 
         let q_rank = q_stride.len();
         let k_rank = k_stride.len();
         let v_rank = v_stride.len();
+        let o_rank = o_stride.len();
 
         if q_rank != 4 || k_rank != 4 || v_rank != 4 {
             candle::bail!(
@@ -105,12 +109,15 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
                 /* q_batch_stride */ q_stride[0] as u32,
                 /* k_batch_stride */ k_stride[0] as u32,
                 /* v_batch_stride */ v_stride[0] as u32,
+                /* o_batch_stride */ o_stride[0] as u32,
                 /* q_row_stride */ q_stride[q_rank - 3] as u32,
                 /* k_row_stride */ k_stride[k_rank - 3] as u32,
                 /* v_row_stride  */ v_stride[v_rank - 3] as u32,
+                /* o_row_stride  */ o_stride[o_rank - 3] as u32,
                 /* q_head_stride */ q_stride[q_rank - 2] as u32,
                 /* k_head_stride */ k_stride[k_rank - 2] as u32,
                 /* v_head_stride */ v_stride[v_rank - 2] as u32,
+                /* o_head_stride */ o_stride[o_rank - 2] as u32,
                 /* b */ b_sz as u32,
                 /* h */ num_heads as u32,
                 /* h_k */ num_heads_k as u32,

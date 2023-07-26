@@ -32,12 +32,17 @@ extern "C" void run_mha(
     uint32_t q_batch_stride,
     uint32_t k_batch_stride,
     uint32_t v_batch_stride,
+    uint32_t o_batch_stride,
+
     uint32_t q_row_stride,
     uint32_t k_row_stride,
     uint32_t v_row_stride,
+    uint32_t o_row_stride,
+
     uint32_t q_head_stride,
     uint32_t k_head_stride,
     uint32_t v_head_stride,
+    uint32_t o_head_stride,
 
     uint32_t b,
     uint32_t h,
@@ -61,14 +66,22 @@ extern "C" void run_mha(
     params.q_ptr = q_ptr;
     params.k_ptr = k_ptr;
     params.v_ptr = v_ptr;
+    params.o_ptr = o_ptr;
+
     // All stride are in elements, not bytes.
+    params.q_batch_stride = q_batch_stride;
+    params.k_batch_stride = k_batch_stride;
+    params.v_batch_stride = v_batch_stride;
+    params.o_batch_stride = o_batch_stride;
+
     params.q_row_stride = q_row_stride;
     params.k_row_stride = k_row_stride;
     params.v_row_stride = v_row_stride;
+    params.o_row_stride = o_row_stride;
     params.q_head_stride = q_head_stride;
     params.k_head_stride = k_head_stride;
     params.v_head_stride = v_head_stride;
-    params.o_ptr = o_ptr;
+    params.o_head_stride = o_head_stride;
 
     // Set the dimensions.
     params.b = b;
