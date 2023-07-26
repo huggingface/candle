@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-const KERNEL_FILES: [&'static str; 16] = [
+const KERNEL_FILES: [&'static str; 17] = [
     "flash_api.cu",
     "flash_fwd_hdim128_bf16_sm80.cu",
     "flash_fwd_hdim128_fp16_sm80.cu",
