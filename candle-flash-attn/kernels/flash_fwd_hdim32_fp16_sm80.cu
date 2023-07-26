@@ -28,6 +28,7 @@ extern "C" void run_mha(
     void *k_ptr,
     void *v_ptr,
     void *o_ptr,
+    void *softmax_lse_ptr,
 
     uint32_t q_batch_stride,
     uint32_t k_batch_stride,
@@ -67,6 +68,8 @@ extern "C" void run_mha(
     params.k_ptr = k_ptr;
     params.v_ptr = v_ptr;
     params.o_ptr = o_ptr;
+
+    params.softmax_lse_ptr = softmax_lse_ptr;
 
     // All stride are in elements, not bytes.
     params.q_batch_stride = q_batch_stride;

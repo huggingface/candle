@@ -95,17 +95,20 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
 
         let elem_count = out_shape.elem_count();
         let dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+        let softmax_lse = dev.alloc_zeros::<f32>(b_sz * num_heads * seqlen_q).w()?;
 
         unsafe {
             let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
             let k_ptr = *k.device_ptr() as *const core::ffi::c_void;
             let v_ptr = *v.device_ptr() as *const core::ffi::c_void;
             let dst_ptr = *dst.device_ptr() as *const core::ffi::c_void;
+            let softmax_lse_ptr = *softmax_lse.device_ptr() as *const core::ffi::c_void;
             ffi::run_mha(
                 q_ptr,
                 k_ptr,
                 v_ptr,
                 dst_ptr,
+                softmax_lse_ptr,
                 /* q_batch_stride */ q_stride[0] as u32,
                 /* k_batch_stride */ k_stride[0] as u32,
                 /* v_batch_stride */ v_stride[0] as u32,
