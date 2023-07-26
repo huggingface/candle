@@ -43,8 +43,10 @@ pub struct CurrentDecode {
 
 pub struct App {
     status: String,
+    loaded: bool,
     temperature: std::rc::Rc<std::cell::RefCell<f64>>,
     generated: String,
+    n_tokens: usize,
     current_decode: Option<CurrentDecode>,
     worker: Box<dyn Bridge<Worker>>,
 }
@@ -75,10 +77,12 @@ impl Component for App {
         let worker = Worker::bridge(std::rc::Rc::new(cb));
         Self {
             status,
+            n_tokens: 0,
             temperature: std::rc::Rc::new(std::cell::RefCell::new(0.)),
             generated: String::new(),
             current_decode: None,
             worker,
+            loaded: false,
         }
     }
 
@@ -100,6 +104,7 @@ impl Component for App {
         match msg {
             Msg::SetModel(md) => {
                 self.status = "weights loaded succesfully!".to_string();
+                self.loaded = true;
                 console_log!("loaded weights");
                 self.worker.send(WorkerInput::ModelData(md));
                 true
@@ -111,6 +116,7 @@ impl Component for App {
                     let start_time = performance_now();
                     self.current_decode = Some(CurrentDecode { start_time });
                     self.status = "generating...".to_string();
+                    self.n_tokens = 0;
                     self.generated.clear();
                     let temp = *self.temperature.borrow();
                     console_log!("temp: {}", temp);
@@ -134,11 +140,18 @@ impl Component for App {
                         });
                         self.status = match dt {
                             None => "generation succeeded!".to_string(),
-                            Some(dt) => format!("generation succeeded in {:.2}s", dt),
+                            Some(dt) => format!(
+                                "generation succeeded in {:.2}s ({:.1} ms/token)",
+                                dt,
+                                dt * 1000.0 / (self.n_tokens as f64)
+                            ),
                         };
                         self.current_decode = None
                     }
-                    Ok(WorkerOutput::Generated(token)) => self.generated.push_str(&token),
+                    Ok(WorkerOutput::Generated(token)) => {
+                        self.n_tokens += 1;
+                        self.generated.push_str(&token)
+                    }
                     Err(err) => {
                         self.status = format!("error in worker {err:?}");
                     }
@@ -176,7 +189,15 @@ impl Component for App {
                 </p>
                 </div>
                 {"temperature: "}<input type="range" min="0." max="1.2" step="0.1" value={self.temperature.borrow().to_string()} {oninput} id="temp"/>
-                <button class="button" onclick={ctx.link().callback(move |_| Msg::Run)}> { "run" }</button>
+
+                <br/ >
+                {
+                    if self.loaded{
+                        html!(<button class="button" onclick={ctx.link().callback(move |_| Msg::Run)}> { "run" }</button>)
+                    }else{
+                        html! { <progress id="progress-bar" aria-label="Loading weights..."></progress> }
+                    }
+                }
                 <br/ >
                 <h3>
                   {&self.status}

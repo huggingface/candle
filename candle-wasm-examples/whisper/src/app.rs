@@ -47,6 +47,7 @@ pub struct CurrentDecode {
 
 pub struct App {
     status: String,
+    loaded: bool,
     segments: Vec<Segment>,
     current_decode: Option<CurrentDecode>,
     worker: Box<dyn Bridge<Worker>>,
@@ -86,6 +87,7 @@ impl Component for App {
             segments: vec![],
             current_decode: None,
             worker,
+            loaded: false,
         }
     }
 
@@ -107,6 +109,7 @@ impl Component for App {
         match msg {
             Msg::SetDecoder(md) => {
                 self.status = "weights loaded succesfully!".to_string();
+                self.loaded = true;
                 console_log!("loaded weights");
                 self.worker.send(WorkerInput::ModelData(md));
                 true
@@ -186,7 +189,10 @@ impl Component for App {
                 <tr>
                   <th>{name}</th>
                   <th><audio controls=true src={format!("./{name}")}></audio></th>
-                  <th><button class="button" onclick={ctx.link().callback(move |_| Msg::Run(i))}> { "run" }</button></th>
+                  { if self.loaded {
+                      html!(<th><button class="button" onclick={ctx.link().callback(move |_| Msg::Run(i))}> { "run" }</button></th>)
+                       }else{html!()}
+                  }
                 </tr>
                     }
                     }).collect::<Html>()
@@ -197,7 +203,9 @@ impl Component for App {
                   {&self.status}
                 </h2>
                 {
-                    if self.current_decode.is_some() {
+                    if !self.loaded{
+                        html! { <progress id="progress-bar" aria-label="loading weights…"></progress> }
+                    } else if self.current_decode.is_some() {
                         html! { <progress id="progress-bar" aria-label="decoding…"></progress> }
                     } else { html!{
                 <blockquote>
