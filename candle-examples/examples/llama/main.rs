@@ -128,8 +128,8 @@ fn main() -> Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
     let config = Config::config_7b(args.use_flash_attn);
-    let cache = model::Cache::new(!args.no_kv_cache, &config, &device)?;
     let dtype = if args.use_f32 { DType::F32 } else { DType::F16 };
+    let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;
     let (llama, tokenizer_filename) = match args.npy {
         Some(filename) => {
             let vb = VarBuilder::from_npz(filename, dtype, &device)?;
