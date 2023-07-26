@@ -14,7 +14,7 @@ use clap::Parser;
 
 use candle::backend::BackendStorage;
 use candle::cpu_backend;
-use candle::{CpuStorage, CustomOp1, DType, Device, Error, Layout, Result, Shape, Tensor};
+use candle::{CpuStorage, CustomOp1, DType, Device, Layout, Result, Shape, Tensor};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -37,7 +37,7 @@ impl CustomOp1 for LayerNorm {
         let (dim1, dim2) = layout.shape().dims2()?;
         let slice = storage.as_slice::<f32>()?;
         let src = match layout.contiguous_offsets() {
-            None => Err(Error::Wrapped("input has to be contiguous".into()))?,
+            None => candle::bail!("input has to be contiguous"),
             Some((o1, o2)) => &slice[o1..o2],
         };
         let mut dst = Vec::with_capacity(dim1 * dim2);
@@ -65,7 +65,7 @@ impl CustomOp1 for LayerNorm {
         let dev = storage.device().clone();
         let slice = storage.as_cuda_slice::<f32>()?;
         let slice = match layout.contiguous_offsets() {
-            None => Err(Error::Wrapped("input has to be contiguous".into()))?,
+            None => candle::bail!("input has to be contiguous"),
             Some((o1, o2)) => slice.slice(o1..o2),
         };
         let elem_count = layout.shape().elem_count();

@@ -3,7 +3,7 @@ mod ffi;
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::cuda_backend::WrapErr;
-use candle::{CpuStorage, Error, Layout, Result, Shape, Tensor};
+use candle::{CpuStorage, Layout, Result, Shape, Tensor};
 use half::f16;
 
 pub struct FlashHdim32Sm80 {
@@ -29,7 +29,7 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
         _: &CpuStorage,
         _: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        Err(Error::Wrapped("no cpu support for flash-attn".into()))
+        candle::bail!("no cpu support for flash-attn")
     }
 
     fn cuda_fwd(

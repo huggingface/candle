@@ -174,6 +174,7 @@ pub enum Error {
     #[error("unsupported safetensor dtype {0:?}")]
     UnsupportedSafeTensorDtype(safetensors::Dtype),
 
+    /// Arbitrary errors wrapping.
     #[error(transparent)]
     Wrapped(Box<dyn std::error::Error + Send + Sync>),
 
@@ -182,6 +183,10 @@ pub enum Error {
         inner: Box<Self>,
         backtrace: Box<std::backtrace::Backtrace>,
     },
+
+    /// User generated error message, typically created via `bail!`.
+    #[error("{0}")]
+    Msg(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -207,12 +212,12 @@ impl Error {
 #[macro_export]
 macro_rules! bail {
     ($msg:literal $(,)?) => {
-        return Err($crate::Error::Wrapped(format!($msg).into()).bt())
+        return Err($crate::Error::Msg(format!($msg).into()).bt())
     };
     ($err:expr $(,)?) => {
-        return Err($crate::Error::Wrapped(format!($err).into()).bt())
+        return Err($crate::Error::Msg(format!($err).into()).bt())
     };
     ($fmt:expr, $($arg:tt)*) => {
-        return Err($crate::Error::Wrapped(format!($fmt, $($arg)*).into()).bt())
+        return Err($crate::Error::Msg(format!($fmt, $($arg)*).into()).bt())
     };
 }
