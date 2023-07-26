@@ -1,9 +1,10 @@
 name: Deploy
 on:
   pull-request:
-  push:
-    branches:
-      - main
+    # TODO put this back only when merging after this PR lands.
+    # push:
+    #   branches:
+    #     - main
 
 jobs:
   deploy:
