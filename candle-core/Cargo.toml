@@ -30,6 +30,6 @@ zip = { workspace = true }
 anyhow = { workspace = true }
 
 [features]
-default = ["cuda"]
+default = []
 cuda = ["dep:cudarc", "dep:candle-kernels"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
