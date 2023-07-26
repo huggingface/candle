@@ -203,3 +203,16 @@ impl Error {
         }
     }
 }
+
+#[macro_export]
+macro_rules! bail {
+    ($msg:literal $(,)?) => {
+        return Err($crate::Error::Wrapped(format!($msg).into()).bt())
+    };
+    ($err:expr $(,)?) => {
+        return Err($crate::Error::Wrapped(format!($err).into()).bt())
+    };
+    ($fmt:expr, $($arg:tt)*) => {
+        return Err($crate::Error::Wrapped(format!($fmt, $($arg)*).into()).bt())
+    };
+}
