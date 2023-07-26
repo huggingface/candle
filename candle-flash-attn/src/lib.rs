@@ -145,13 +145,19 @@ impl candle::CustomOp3 for FlashHdim32Sm80 {
     }
 }
 
-pub fn flash_attn(softmax_scale: f32, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+pub fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    causal: bool,
+) -> Result<Tensor> {
     q.custom_op3(
         k,
         v,
         FlashHdim32Sm80 {
             softmax_scale,
-            causal: true,
+            causal,
         },
     )
 }
