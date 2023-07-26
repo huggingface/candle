@@ -1,17 +1,17 @@
-name: Deploy
+name: Deploy Rust book
 on:
-  pull-request:
-    # TODO put this back only when merging after this PR lands.
-    # push:
-    #   branches:
-    #     - main
+  # TODO put this back only when merging after this PR lands.
+  pull_request:
+  push:
+    branches:
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # To push a branch 
-      pull-requests: write  # To create a PR from that branch
+      # permissions:
+      #   contents: write  # To push a branch 
+      #   pull-requests: write  # To create a PR from that branch
     steps:
     - uses: actions/checkout@v3
       with:
