@@ -22,6 +22,13 @@ void run_mha_fwd_<cutlass::half_t, 32>(Flash_fwd_params &params, cudaStream_t st
     run_mha_fwd_hdim32<cutlass::half_t>(params, stream);
 }
 
+void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+    FP16_SWITCH(!params.is_bf16, [&] {
+        FWD_HEADDIM_SWITCH(params.d, [&] {
+            run_mha_fwd_<elem_type, kHeadDim>(params, stream);
+        });
+    });
+}
 
 extern "C" void run_mha(
     void *q_ptr,
@@ -113,5 +120,5 @@ extern "C" void run_mha(
     params.p_ptr = nullptr;
 
     cudaStream_t stream = 0; // Use the default stream.
-    run_mha_fwd_<cutlass::half_t, 32>(params, stream);
+    run_mha_fwd(params, stream);
 }
