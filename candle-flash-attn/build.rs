@@ -4,6 +4,7 @@
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 const KERNEL_FILES: [&'static str; 16] = [
     "flash_api.cu",
@@ -25,6 +26,16 @@ const KERNEL_FILES: [&'static str; 16] = [
 ];
 
 fn main() -> Result<()> {
+    let num_cpus = std::env::var("RAYON_NUM_THREADS").map_or_else(
+        |_| num_cpus::get_physical(),
+        |s| usize::from_str(&s).unwrap(),
+    );
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_cpus)
+        .build_global()
+        .unwrap();
+
     println!("cargo:rerun-if-changed=build.rs");
     for kernel_file in KERNEL_FILES.iter() {
         println!("cargo:rerun-if-changed=kernels/{kernel_file}");
@@ -96,8 +107,7 @@ fn main() -> Result<()> {
         let obj_files = cu_files.iter().map(|c| c.1.clone()).collect::<Vec<_>>();
         let mut command = std::process::Command::new("nvcc");
         command
-            .arg(format!("--gpu-architecture=sm_{compute_cap}"))
-            .arg("-c")
+            .arg("--lib")
             .args(["-o", out_file.to_str().unwrap()])
             .args(obj_files);
         let output = command
