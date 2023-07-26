@@ -45,6 +45,7 @@ pub struct App {
     status: String,
     temperature: std::rc::Rc<std::cell::RefCell<f64>>,
     generated: String,
+    n_tokens: usize,
     current_decode: Option<CurrentDecode>,
     worker: Box<dyn Bridge<Worker>>,
 }
@@ -75,6 +76,7 @@ impl Component for App {
         let worker = Worker::bridge(std::rc::Rc::new(cb));
         Self {
             status,
+            n_tokens: 0,
             temperature: std::rc::Rc::new(std::cell::RefCell::new(0.)),
             generated: String::new(),
             current_decode: None,
@@ -134,11 +136,18 @@ impl Component for App {
                         });
                         self.status = match dt {
                             None => "generation succeeded!".to_string(),
-                            Some(dt) => format!("generation succeeded in {:.2}s", dt),
+                            Some(dt) => format!(
+                                "generation succeeded in {:.2}s ({:.1} ms/token)",
+                                dt,
+                                dt * 1000.0 / (self.n_tokens as f64)
+                            ),
                         };
                         self.current_decode = None
                     }
-                    Ok(WorkerOutput::Generated(token)) => self.generated.push_str(&token),
+                    Ok(WorkerOutput::Generated(token)) => {
+                        self.n_tokens += 1;
+                        self.generated.push_str(&token)
+                    }
                     Err(err) => {
                         self.status = format!("error in worker {err:?}");
                     }
@@ -147,6 +156,7 @@ impl Component for App {
             }
             Msg::WorkerInMsg(inp) => {
                 self.worker.send(inp);
+                self.n_tokens = 0;
                 true
             }
             Msg::UpdateStatus(status) => {
