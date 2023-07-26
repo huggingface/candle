@@ -116,6 +116,7 @@ impl Component for App {
                     let start_time = performance_now();
                     self.current_decode = Some(CurrentDecode { start_time });
                     self.status = "generating...".to_string();
+                    self.n_tokens = 0;
                     self.generated.clear();
                     let temp = *self.temperature.borrow();
                     console_log!("temp: {}", temp);
@@ -159,7 +160,6 @@ impl Component for App {
             }
             Msg::WorkerInMsg(inp) => {
                 self.worker.send(inp);
-                self.n_tokens = 0;
                 true
             }
             Msg::UpdateStatus(status) => {
