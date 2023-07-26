@@ -20,10 +20,8 @@ clap = { version = "4.2.4", features = ["derive"] }
 # Re-enable this once 0.9.13 as been released as it would include the cublas-f16 changes
 # cudarc = { version = "0.9.13", optional = true, features = ["f16"] }
 cudarc = { git = "https://github.com/LaurentMazare/cudarc.git", branch = "cublas-bf16", features = ["f16"] }
-# TODO: Switch back to the official gemm implementation once the following are available.
-# https://github.com/sarah-ek/gemm/pull/8.
-# https://github.com/sarah-ek/gemm/pull/9.
-gemm = { git = "https://github.com/LaurentMazare/gemm.git", branch = "f16-vec-plus-wasm-simd" }
+# TODO: Switch back to the official gemm implementation if we manage to upstream the changes.
+gemm = { git = "https://github.com/LaurentMazare/gemm.git" }
 hf-hub = "0.1.3"
 half = { version = "2.3.1", features = ["num-traits"] }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
