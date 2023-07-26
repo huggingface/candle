@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-const KERNEL_FILES: [&'static str; 9] = [
+const KERNEL_FILES: [&str; 9] = [
     "flash_api.cu",
     "flash_fwd_hdim128_fp16_sm80.cu",
     "flash_fwd_hdim160_fp16_sm80.cu",
@@ -52,7 +52,11 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=kernels/static_switch.h");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").context("OUT_DIR not set")?);
     let build_dir = match std::env::var("CANDLE_FLASH_ATTN_BUILD_DIR") {
-        Err(_) => out_dir.clone(),
+        Err(_) =>
+        {
+            #[allow(clippy::redundant_clone)]
+            out_dir.clone()
+        }
         Ok(build_dir) => PathBuf::from(build_dir),
     };
     set_cuda_include_dir()?;
