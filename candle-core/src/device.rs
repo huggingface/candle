@@ -71,8 +71,7 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize> NdArray
     }
 
     fn to_cpu_storage(&self) -> CpuStorage {
-        let mut vec = Vec::new();
-        vec.reserve(N1 * N2 * N3);
+        let mut vec = Vec::with_capacity(N1 * N2 * N3);
         for i1 in 0..N1 {
             for i2 in 0..N2 {
                 vec.extend(self[i1][i2])

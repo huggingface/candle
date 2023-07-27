@@ -369,8 +369,7 @@ pub fn unary_map<T: Copy, U: Copy, F: FnMut(T) -> U>(
             block_start_index,
             block_len,
         } => {
-            let mut result = vec![];
-            result.reserve(layout.shape().elem_count());
+            let mut result = Vec::with_capacity(layout.shape().elem_count());
             // Specialize the case where block_len is one to avoid the second loop.
             if block_len == 1 {
                 for index in block_start_index {
