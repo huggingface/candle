@@ -58,6 +58,19 @@ fn range_index() -> Result<()> {
     let result = tensor.i(..=1)?;
     assert_eq!(result.dims(), &[2, 3]);
     assert_eq!(result.to_vec2::<u32>()?, &[[0, 1, 2], [3, 4, 5]]);
+
+    // Empty range
+    let result = tensor.i(1..1)?;
+    assert_eq!(result.dims(), &[0, 3]);
+    let empty: [[u32; 3]; 0] = [];
+    assert_eq!(result.to_vec2::<u32>()?, &empty);
+
+    // Similar to PyTorch, allow empty ranges when the computed length is negative.
+    #[allow(clippy::reversed_empty_ranges)]
+    let result = tensor.i(1..0)?;
+    assert_eq!(result.dims(), &[0, 3]);
+    let empty: [[u32; 3]; 0] = [];
+    assert_eq!(result.to_vec2::<u32>()?, &empty);
     Ok(())
 }
 
