@@ -69,10 +69,11 @@ impl Args {
             )
         } else {
             let api = Api::new()?;
+            let api = api.repo(repo);
             (
-                api.get(&repo, "config.json")?,
-                api.get(&repo, "tokenizer.json")?,
-                api.get(&repo, "model.safetensors")?,
+                api.get("config.json")?,
+                api.get("tokenizer.json")?,
+                api.get("model.safetensors")?,
             )
         };
         let config = std::fs::read_to_string(config_filename)?;

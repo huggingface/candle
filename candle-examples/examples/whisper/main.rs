@@ -282,28 +282,23 @@ fn main() -> Result<()> {
             std::path::PathBuf::from(args.input.expect("You didn't specify a file to read from yet, are using a local model, please add `--input example.wav` to read some audio file")),
         )
     } else {
-        let repo = Repo::with_revision(model_id, RepoType::Model, revision);
         let api = Api::new()?;
+        let dataset = api.dataset("Narsil/candle-examples".to_string());
+        let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
         let sample = if let Some(input) = args.input {
             if let Some(sample) = input.strip_prefix("sample:") {
-                api.get(
-                    &Repo::new("Narsil/candle-examples".to_string(), RepoType::Dataset),
-                    &format!("samples_{sample}.wav"),
-                )?
+                dataset.get(&format!("samples_{sample}.wav"))?
             } else {
                 std::path::PathBuf::from(input)
             }
         } else {
             println!("No audio file submitted: Downloading https://huggingface.co/datasets/Narsil/candle_demo/blob/main/samples_jfk.wav");
-            api.get(
-                &Repo::new("Narsil/candle-examples".to_string(), RepoType::Dataset),
-                "samples_jfk.wav",
-            )?
+            dataset.get("samples_jfk.wav")?
         };
         (
-            api.get(&repo, "config.json")?,
-            api.get(&repo, "tokenizer.json")?,
-            api.get(&repo, "model.safetensors")?,
+            repo.get("config.json")?,
+            repo.get("tokenizer.json")?,
+            repo.get("model.safetensors")?,
             sample,
         )
     };
