@@ -48,6 +48,8 @@ trunk serve --release --public-url /candle-llama2/ --port 8081
 And then browse to
 [http://localhost:8081/candle-llama2](http://localhost:8081/candle-llama2).
 
+<!--- ANCHOR: features --->
+
 ## Features
 
 - Simple syntax, looks and like PyTorch.
@@ -60,8 +62,11 @@ And then browse to
 - Embed user-defined ops/kernels, such as [flash-attention
   v2](https://github.com/LaurentMazare/candle/blob/89ba005962495f2bfbda286e185e9c3c7f5300a3/candle-flash-attn/src/lib.rs#L152).
 
+<!--- ANCHOR_END: features --->
+
 ## How to use ?
 
+<!--- ANCHOR: cheatsheet --->
 Cheatsheet:
 
 |            | Using PyTorch                            | Using Candle                                                     |
@@ -75,6 +80,8 @@ Cheatsheet:
 | Dtype      | `tensor.to(dtype=torch.float16)`         | `tensor.to_dtype(&DType::F16)?`                                  |
 | Saving     | `torch.save({"A": A}, "model.bin")`      | `tensor.save_safetensors("A", "model.safetensors")?`             |
 | Loading    | `weights = torch.load("model.bin")`      | TODO (see the examples for now)                                  |
+
+<!--- ANCHOR_END: cheatsheet --->
 
 
 ## Structure

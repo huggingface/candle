@@ -24,6 +24,6 @@ jobs:
         curl -sSL $url | tar -xz --directory=bin
         echo "$(pwd)/bin" >> $GITHUB_PATH
     - name: Run tests
-      run: cd candle-book && mdbook test
+      run: cd candle-book && cargo build && mdbook test -L ../target/debug/deps/
 
 
