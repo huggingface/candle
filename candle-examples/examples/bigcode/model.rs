@@ -24,14 +24,35 @@ fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
 
 #[derive(Debug)]
 pub struct Config {
-    vocab_size: usize,
-    max_position_embeddings: usize,
-    num_hidden_layers: usize,
-    hidden_size: usize,
-    layer_norm_epsilon: f64,
-    n_inner: Option<usize>,
-    num_attention_heads: usize,
-    multi_query: bool,
+    pub vocab_size: usize,
+    // max_position_embeddings aka n_positions
+    pub max_position_embeddings: usize,
+    // num_hidden_layers aka n_layer
+    pub num_hidden_layers: usize,
+    // hidden_size aka n_embd
+    pub hidden_size: usize,
+    pub layer_norm_epsilon: f64,
+    pub n_inner: Option<usize>,
+    // num_attention_heads aka n_head
+    pub num_attention_heads: usize,
+    pub multi_query: bool,
+    pub use_cache: bool,
+}
+
+impl Config {
+    pub fn starcoder() -> Self {
+        Self {
+            vocab_size: 49152,
+            max_position_embeddings: 8192,
+            num_hidden_layers: 40,
+            hidden_size: 6144,
+            layer_norm_epsilon: 1e-5,
+            n_inner: Some(24576),
+            num_attention_heads: 48,
+            multi_query: true,
+            use_cache: true,
+        }
+    }
 }
 
 struct Attention {
