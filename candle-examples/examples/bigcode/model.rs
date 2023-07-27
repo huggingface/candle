@@ -58,6 +58,8 @@ impl Config {
 struct Attention {
     c_attn: Linear,
     c_proj: Linear,
+    kv_cache: Option<Tensor>,
+    use_cache: bool,
     embed_dim: usize,
     kv_dim: usize,
     num_heads: usize,
@@ -81,6 +83,8 @@ impl Attention {
             c_proj,
             c_attn,
             embed_dim: hidden_size,
+            kv_cache: None,
+            use_cache: cfg.use_cache,
             kv_dim,
             head_dim,
             num_heads: cfg.num_attention_heads,
@@ -111,6 +115,7 @@ impl Attention {
             let attn_shape = (b_sz, self.num_heads, query_len, key_len);
             (query, key, attn_shape)
         };
+
         let attn_weights = (query.matmul(&key)? * scale_factor)?.reshape(attn_shape)?;
         let attn_weights = attn_weights.softmax(D::Minus1)?;
         let attn_output = if self.multi_query {
@@ -124,7 +129,7 @@ impl Attention {
         Ok(attn_output)
     }
 
-    fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&mut self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let qkv = self.c_attn.forward(hidden_states)?;
         let (query, key_value) = if self.multi_query {
             let query = qkv.i((.., .., ..self.embed_dim))?;
@@ -140,7 +145,16 @@ impl Attention {
             let key_value = qkv.i((.., .., .., self.head_dim..))?;
             (query, key_value)
         };
-        // TODO: layer past
+        let mut key_value = key_value;
+        if self.use_cache {
+            if let Some(kv_cache) = &self.kv_cache {
+                // TODO: we could trim the tensors to MAX_SEQ_LEN so that this would work for
+                // arbitrarily large sizes.
+                key_value = Tensor::cat(&[kv_cache, &key_value], D::Minus2)?.contiguous()?;
+            }
+            self.kv_cache = Some(key_value.clone())
+        }
+
         let key = key_value.narrow(D::Minus1, 0, self.head_dim)?;
         let value = key_value.narrow(D::Minus1, self.head_dim, self.head_dim)?;
         let attn_output = self.attn(&query, &key.t()?, &value, attention_mask)?;
