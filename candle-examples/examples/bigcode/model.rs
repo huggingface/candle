@@ -22,6 +22,14 @@ fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
     Ok(LayerNorm::new(weight, bias, eps))
 }
 
+fn make_causal_mask(t: usize) -> Result<Tensor> {
+    let mask: Vec<_> = (0..t)
+        .flat_map(|i| (0..t).map(move |j| u32::from(j > i)))
+        .collect();
+    let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
+    Ok(mask)
+}
+
 #[derive(Debug)]
 pub struct Config {
     pub vocab_size: usize,
@@ -232,6 +240,7 @@ pub struct GPTBigCode {
     blocks: Vec<Block>,
     ln_f: LayerNorm,
     lm_head: Linear,
+    bias: Tensor,
     config: Config,
 }
 
@@ -249,12 +258,14 @@ impl GPTBigCode {
             .collect::<Result<Vec<_>>>()?;
         let ln_f = layer_norm(hidden_size, cfg.layer_norm_epsilon, vb.pp("ln_f"))?;
         let lm_head = linear(hidden_size, cfg.vocab_size, false, vb.pp("lm_head"))?;
+        let bias = make_causal_mask(cfg.max_position_embeddings)?;
         Ok(Self {
             wte,
             wpe,
             blocks,
             lm_head,
             ln_f,
+            bias,
             config: cfg,
         })
     }
@@ -262,11 +273,19 @@ impl GPTBigCode {
     pub fn forward(&mut self, input_ids: &Tensor, past_len: usize) -> Result<Tensor> {
         let dev = input_ids.device();
         let (b_sz, seq_len) = input_ids.dims2()?;
-        let attention_mask = Tensor::zeros(1, DType::F32, input_ids.device())?; // TODO
+
+        let key_len = past_len + seq_len;
+        let attention_mask = self.bias.i((past_len..key_len, ..key_len))?.unsqueeze(0)?;
+        // MQA models: (batch_size, query_length, n_heads, key_length)
+        // MHA models: (batch_size, n_heads, query_length, key_length)
+        let seq_len_dim = if self.config.multi_query { 2 } else { 1 };
+        let attention_mask = attention_mask.unsqueeze(seq_len_dim)?;
+
         let position_ids = Tensor::arange(past_len as u32, (past_len + seq_len) as u32, dev)?;
         let position_ids = position_ids.unsqueeze(0)?.broadcast_as((b_sz, seq_len))?;
         let input_embeds = self.wte.forward(input_ids)?;
         let position_embeds = self.wpe.forward(&position_ids)?;
+
         let mut hidden_states = (&input_embeds + &position_embeds)?;
         for block in self.blocks.iter_mut() {
             hidden_states = block.forward(&hidden_states, &attention_mask)?;
