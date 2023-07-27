@@ -232,29 +232,27 @@ impl Tensor {
         Tensor::zeros(self.shape(), self.dtype(), self.device())
     }
 
-    pub(crate) fn rand_impl<S: Into<Shape>>(
+    pub(crate) fn rand_impl<S: Into<Shape>, T: crate::FloatDType>(
+        lo: T,
+        up: T,
         s: S,
-        dtype: DType,
         device: &Device,
-        lo: f64,
-        up: f64,
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform(&s, dtype, lo, up)?;
+        let storage = device.rand_uniform(lo, up, &s)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
 
     /// Creates a new tensor initialized with values sampled uniformly between `lo` and `up`.
-    pub fn rand<S: Into<Shape>>(
+    pub fn rand<S: Into<Shape>, T: crate::FloatDType>(
+        lo: T,
+        up: T,
         s: S,
-        dtype: DType,
         device: &Device,
-        lo: f64,
-        up: f64,
     ) -> Result<Self> {
-        Self::rand_impl(s, dtype, device, lo, up, false)
+        Self::rand_impl(lo, up, s, device, false)
     }
 
     pub(crate) fn randn_impl<S: Into<Shape>, T: crate::FloatDType>(

@@ -1844,7 +1844,7 @@ impl BackendDevice for CpuDevice {
         let mut rng = rand::thread_rng();
         match dtype {
             DType::U8 | DType::U32 | DType::BF16 | DType::F16 => {
-                Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal").bt())
+                Err(Error::UnsupportedDTypeForOp(dtype, "rand_uniform").bt())
             }
             DType::F32 => {
                 let mut data = Vec::new();

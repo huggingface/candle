@@ -34,14 +34,13 @@ impl Var {
         Ok(Self(inner))
     }
 
-    pub fn rand<S: Into<Shape>>(
+    pub fn rand<S: Into<Shape>, T: crate::FloatDType>(
+        lo: T,
+        up: T,
         s: S,
-        dtype: DType,
         device: &Device,
-        lo: f64,
-        up: f64,
     ) -> Result<Self> {
-        let inner = Tensor::rand_impl(s, dtype, device, lo, up, true)?;
+        let inner = Tensor::rand_impl(lo, up, s, device, true)?;
         Ok(Self(inner))
     }
 
