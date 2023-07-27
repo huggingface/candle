@@ -6,7 +6,7 @@ Open `src/main.rs` and fill in with these contents:
 
 ```rust
 # extern crate candle;
-use candle::{DType, Device, Result, Tensor};
+use candle::{DType, Device, Result, Tensor, xx};
 
 struct Model {
     first: Tensor,
