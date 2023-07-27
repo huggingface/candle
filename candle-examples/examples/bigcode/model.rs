@@ -46,6 +46,10 @@ pub struct Config {
 struct Attention {
     c_attn: Linear,
     c_proj: Linear,
+    embed_dim: usize,
+    kv_dim: usize,
+    head_dim: usize,
+    multi_query: bool,
 }
 
 impl Attention {
@@ -60,10 +64,40 @@ impl Attention {
         let kv_dim = kv_heads * head_dim;
         let c_attn = linear(hidden_size, hidden_size + 2 * kv_dim, true, vb.pp("c_attn"))?;
         let c_proj = linear(hidden_size, hidden_size, true, vb.pp("c_proj"))?;
-        Ok(Self { c_proj, c_attn })
+        Ok(Self {
+            c_proj,
+            c_attn,
+            embed_dim: hidden_size,
+            kv_dim,
+            head_dim,
+            multi_query: cfg.multi_query,
+        })
     }
 
-    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    fn attn(&self, query: &Tensor, key: &Tensor, value: &Tensor) -> Result<(Tensor, Tensor)> {
+        todo!()
+    }
+
+    fn forward(&mut self, hidden_states: &Tensor) -> Result<Tensor> {
+        let qkv = self.c_attn.forward(hidden_states)?;
+        let (query, key_value) = if self.multi_query {
+            let query = qkv.i((.., .., ..self.embed_dim))?;
+            let key_value = qkv.i((.., .., self.embed_dim..))?;
+            (query, key_value)
+        } else {
+            let mut dims = qkv.dims().to_vec();
+            dims.pop();
+            dims.push(self.embed_dim);
+            dims.push(self.head_dim * 3);
+            let qkv = qkv.reshape(dims)?.transpose(1, 2)?;
+            let query = qkv.i((.., .., .., ..self.head_dim))?;
+            let key_value = qkv.i((.., .., .., self.head_dim..))?;
+            (query, key_value)
+        };
+        // TODO: layer past
+        let key = key_value.narrow(D::Minus1, 0, self.head_dim)?;
+        let value = key_value.narrow(D::Minus1, self.head_dim, self.head_dim)?;
+        let (attn_output, attn_weights) = self.attn(&query, &key.t()?, &value)?; // TODO: masks
         todo!()
     }
 }
@@ -80,10 +114,10 @@ impl Mlp {
         Ok(Self { c_fc, c_proj })
     }
 
-    fn forward(&mut self, x: &Tensor) -> Result<Tensor> {
-        let x = self.c_fc.forward(x)?.gelu()?;
-        let x = self.c_proj.forward(&x)?;
-        Ok(x)
+    fn forward(&mut self, hidden_states: &Tensor) -> Result<Tensor> {
+        let hidden_states = self.c_fc.forward(hidden_states)?.gelu()?;
+        let hidden_states = self.c_proj.forward(&hidden_states)?;
+        Ok(hidden_states)
     }
 }
 
@@ -111,16 +145,16 @@ impl Block {
         })
     }
 
-    fn forward(&mut self, x: &Tensor) -> Result<Tensor> {
-        let residual = x;
-        let x = self.ln_1.forward(x)?;
-        let attn_outputs = self.attn.forward(&x)?;
-        let x = (&attn_outputs + residual)?;
-        let residual = &x;
-        let x = self.ln_2.forward(&x)?;
-        let x = self.mlp.forward(&x)?;
-        let x = (&x + residual)?;
-        Ok(x)
+    fn forward(&mut self, hidden_states: &Tensor) -> Result<Tensor> {
+        let residual = hidden_states;
+        let hidden_states = self.ln_1.forward(hidden_states)?;
+        let attn_outputs = self.attn.forward(&hidden_states)?;
+        let hidden_states = (&attn_outputs + residual)?;
+        let residual = &hidden_states;
+        let hidden_states = self.ln_2.forward(&hidden_states)?;
+        let hidden_states = self.mlp.forward(&hidden_states)?;
+        let hidden_states = (&hidden_states + residual)?;
+        Ok(hidden_states)
     }
 }
 
