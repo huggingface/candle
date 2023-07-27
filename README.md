@@ -2,10 +2,11 @@
 ML framework for Rust
 
 ```rust
-let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-let b = Tensor::zeros((3, 4), DType::F32, &Device::Cpu)?;
+let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
+let b = Tensor::randn(0f32, 1., (3, 4), &Device::Cpu)?;
 
 let c = a.matmul(&b)?;
+println!("{c}");
 ```
 
 ## Check out our examples
@@ -45,13 +46,15 @@ And then browse to
 
 ## Features
 
-- Simple syntax (looks and like PyTorch)
-- CPU and Cuda backends, m1, f16, bf16 (and tentatively wasm)
+- Simple syntax, looks and like PyTorch.
+- CPU and Cuda backends, m1, f16, bf16.
 - Enable serverless (CPU), small and fast deployments
-- Model training
-- Distributed computing (NCCL).
-- Models out of the box (Llama, Whisper, Falcon, ...)
-- Emphasis on enabling users to use custom ops/kernels
+- WASM support, run your models in a browser.
+- Model training.
+- Distributed computing using NCCL.
+- Models out of the box: Llama, Whisper, Falcon, BERT...
+- Embed user-defined ops/kernels, such as [flash-attention
+  v2](https://github.com/LaurentMazare/candle/blob/89ba005962495f2bfbda286e185e9c3c7f5300a3/candle-flash-attn/src/lib.rs#L152).
 
 ## How to use ?
 
@@ -59,9 +62,7 @@ Cheatsheet:
 
 |            | Using PyTorch                            | Using Candle                                                     |
 |------------|------------------------------------------|------------------------------------------------------------------|
-| Creation   | `torch.Tensor([[1, 2], [3, 4]])`         | `Tensor::new(`                                                   |
-|            |                                          | `  &[[1f32, 2.]], [3., 4.]],`                                    |
-|            |                                          | `  &Device::Cpu)?`                                               |
+| Creation   | `torch.Tensor([[1, 2], [3, 4]])`         | `Tensor::new(&[[1f32, 2.]], [3., 4.]], &Device::Cpu)?`           |
 | Indexing   | `tensor[:, :4]`                          | `tensor.i((.., ..4))?`                                           |
 | Operations | `tensor.view((2, 2))`                    | `tensor.reshape((2, 2))?`                                        |
 | Operations | `a.matmul(b)`                            | `a.matmul(&b)?`                                                  |

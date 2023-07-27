@@ -136,20 +136,21 @@ impl Device {
         }
     }
 
-    pub(crate) fn rand_normal(
+    pub(crate) fn rand_normal<T: crate::FloatDType>(
         &self,
+        mean: T,
+        std: T,
         shape: &Shape,
-        dtype: DType,
-        mean: f64,
-        std: f64,
     ) -> Result<Storage> {
+        let mean = mean.to_f64();
+        let std = std.to_f64();
         match self {
             Device::Cpu => {
-                let storage = CpuDevice.rand_normal(shape, dtype, mean, std)?;
+                let storage = CpuDevice.rand_normal(shape, T::DTYPE, mean, std)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
-                let storage = device.rand_normal(shape, dtype, mean, std)?;
+                let storage = device.rand_normal(shape, T::DTYPE, mean, std)?;
                 Ok(Storage::Cuda(storage))
             }
         }

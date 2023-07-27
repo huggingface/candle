@@ -257,30 +257,28 @@ impl Tensor {
         Self::rand_impl(s, dtype, device, lo, up, false)
     }
 
-    pub(crate) fn randn_impl<S: Into<Shape>>(
+    pub(crate) fn randn_impl<S: Into<Shape>, T: crate::FloatDType>(
+        mean: T,
+        std: T,
         s: S,
-        dtype: DType,
         device: &Device,
-        mean: f64,
-        std: f64,
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_normal(&s, dtype, mean, std)?;
+        let storage = device.rand_normal(mean, std, &s)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
 
     /// Creates a new tensor initialized with values sampled from a normal distribution with the
     /// specified `mean` and standard deviation `std`.
-    pub fn randn<S: Into<Shape>>(
+    pub fn randn<S: Into<Shape>, T: crate::FloatDType>(
+        mean: T,
+        std: T,
         s: S,
-        dtype: DType,
         device: &Device,
-        mean: f64,
-        std: f64,
     ) -> Result<Self> {
-        Self::randn_impl(s, dtype, device, mean, std, false)
+        Self::randn_impl(mean, std, s, device, false)
     }
 
     pub(crate) fn new_impl<A: crate::device::NdArray>(
