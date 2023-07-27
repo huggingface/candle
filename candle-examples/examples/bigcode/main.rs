@@ -51,14 +51,14 @@ impl TextGeneration {
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let start_gen = std::time::Instant::now();
-            let context_size = if self.model.config().use_cache && index > 0 {
-                1
+            let (context_size, past_len) = if self.model.config().use_cache && index > 0 {
+                (1, tokens.len().saturating_sub(1))
             } else {
-                tokens.len()
+                (tokens.len(), 0)
             };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input)?;
+            let logits = self.model.forward(&input, past_len)?;
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
 
             let next_token = self.logits_processor.sample(&logits)?;

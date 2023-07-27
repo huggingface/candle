@@ -259,10 +259,12 @@ impl GPTBigCode {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor, past_len: usize) -> Result<Tensor> {
+        let dev = input_ids.device();
+        let (b_sz, seq_len) = input_ids.dims2()?;
         let attention_mask = Tensor::zeros(1, DType::F32, input_ids.device())?; // TODO
-        let position_ids = Tensor::zeros(1, DType::F32, input_ids.device())?; // TODO
-        let (_b_sz, seq_len) = input_ids.dims2()?;
+        let position_ids = Tensor::arange(past_len as u32, (past_len + seq_len) as u32, dev)?;
+        let position_ids = position_ids.unsqueeze(0)?.broadcast_as((b_sz, seq_len))?;
         let input_embeds = self.wte.forward(input_ids)?;
         let position_embeds = self.wpe.forward(&position_ids)?;
         let mut hidden_states = (&input_embeds + &position_embeds)?;
