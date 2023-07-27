@@ -129,6 +129,9 @@ impl Attention {
         };
 
         let attn_weights = (query.matmul(&key)? * scale_factor)?.reshape(attn_shape)?;
+        let mask_value =
+            Tensor::new(f32::NEG_INFINITY, query.device())?.broadcast_as(attention_mask.shape())?;
+        let attn_weights = attention_mask.where_cond(&attn_weights, &mask_value)?;
         let attn_weights = attn_weights.softmax(D::Minus1)?;
         let attn_output = if self.multi_query {
             attn_weights
@@ -145,7 +148,7 @@ impl Attention {
         let qkv = self.c_attn.forward(hidden_states)?;
         let (query, key_value) = if self.multi_query {
             let query = qkv.i((.., .., ..self.embed_dim))?;
-            let key_value = qkv.i((.., .., self.embed_dim..))?;
+            let key_value = qkv.i((.., .., self.embed_dim..self.embed_dim + 2 * self.kv_dim))?;
             (query, key_value)
         } else {
             let mut dims = qkv.dims().to_vec();
@@ -154,7 +157,7 @@ impl Attention {
             dims.push(self.head_dim * 3);
             let qkv = qkv.reshape(dims)?.transpose(1, 2)?;
             let query = qkv.i((.., .., .., ..self.head_dim))?;
-            let key_value = qkv.i((.., .., .., self.head_dim..))?;
+            let key_value = qkv.i((.., .., .., self.head_dim..3 * self.head_dim))?;
             (query, key_value)
         };
         let mut key_value = key_value;
