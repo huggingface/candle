@@ -187,6 +187,9 @@ impl<'a> VarBuilder<'a> {
                 let start = rank * block_size;
                 let stop = (rank + 1) * block_size;
 
+                // Everything is expressed in tensor dimension
+                // bytes offsets is handled automatically for safetensors.
+
                 let iterator = if dim == 0 {
                     view.slice(start..stop).map_err(|_| Error::Msg(format!("Cannot slice tensor {tensor_name} ({shape:?} along dim {dim} with {start}..{stop}")))?
                 } else if dim == 1 {
