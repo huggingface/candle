@@ -19,10 +19,8 @@ fn fft<T: Float>(inp: &[T]) -> Vec<T> {
     }
     let mut out = vec![zero; n * 2];
 
-    let mut even = vec![];
-    even.reserve(n / 2);
-    let mut odd = vec![];
-    odd.reserve(n / 2);
+    let mut even = Vec::with_capacity(n / 2);
+    let mut odd = Vec::with_capacity(n / 2);
 
     for (i, &inp) in inp.iter().enumerate() {
         if i % 2 == 0 {
