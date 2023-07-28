@@ -161,17 +161,19 @@ impl Attention {
         let scale_factor = 1f64 / (self.head_dim as f64).sqrt();
         let initial_query_shape = query.shape();
         let key_len = key.dim(D::Minus1)?;
-        let (query, key, attn_shape) = if self.multi_query {
+        let (query, key, attn_shape, attn_view) = if self.multi_query {
             let (b_sz, query_len, _) = query.dims3()?;
-            let query = query.reshape((b_sz, query_len * self.num_heads, key_len))?;
+            let query = query.reshape((b_sz, query_len * self.num_heads, self.head_dim))?;
             let attn_shape = (b_sz, query_len, self.num_heads, key_len);
-            (query, key.clone(), attn_shape)
+            let attn_view = (b_sz, query_len * self.num_heads, key_len);
+            (query, key.clone(), attn_shape, attn_view)
         } else {
             let (b_sz, _num_heads, query_len, _head_dim) = query.dims4()?;
-            let query = query.reshape((b_sz, query_len * self.num_heads, key_len))?;
+            let query = query.reshape((b_sz, query_len * self.num_heads, self.head_dim))?;
             let key = key.reshape((b_sz * self.num_heads, self.head_dim, key_len))?;
             let attn_shape = (b_sz, self.num_heads, query_len, key_len);
-            (query, key, attn_shape)
+            let attn_view = (b_sz * self.num_heads, query_len, key_len);
+            (query, key, attn_shape, attn_view)
         };
 
         let attn_weights = (query.matmul(&key)? * scale_factor)?.reshape(attn_shape)?;
@@ -181,7 +183,7 @@ impl Attention {
         let attn_weights = attn_weights.softmax(D::Minus1)?;
         let attn_output = if self.multi_query {
             attn_weights
-                .reshape(query.shape())?
+                .reshape(attn_view)?
                 .matmul(value)?
                 .reshape(initial_query_shape)?
         } else {
