@@ -13,16 +13,20 @@ println!("{c}");
 
 Check out our [examples](./candle-examples/examples/):
 
-- [Whisper](./candle-examples/examples/whisper/)
-- [Llama and Llama-v2](./candle-examples/examples/llama/)
-- [Bert](./candle-examples/examples/bert/) (Useful for sentence embeddings)
-- [Falcon](./candle-examples/examples/falcon/)
+- [Whisper](./candle-examples/examples/whisper/): speech recognition model.
+- [Llama and Llama-v2](./candle-examples/examples/llama/): general LLM.
+- [Falcon](./candle-examples/examples/falcon/): general LLM.
+- [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
+- [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code
+  generation.
 
+Run them using the following commands:
 ```
-cargo run --example bert --release
 cargo run --example whisper --release
 cargo run --example llama --release
 cargo run --example falcon --release
+cargo run --example bert --release
+cargo run --example bigcode --release
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line.
@@ -52,7 +56,7 @@ And then browse to
 - WASM support, run your models in a browser.
 - Model training.
 - Distributed computing using NCCL.
-- Models out of the box: Llama, Whisper, Falcon, BERT...
+- Models out of the box: Llama, Whisper, Falcon, StarCoder...
 - Embed user-defined ops/kernels, such as [flash-attention
   v2](https://github.com/LaurentMazare/candle/blob/89ba005962495f2bfbda286e185e9c3c7f5300a3/candle-flash-attn/src/lib.rs#L152).
 
