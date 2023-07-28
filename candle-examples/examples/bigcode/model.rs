@@ -48,6 +48,52 @@ pub struct Config {
 }
 
 impl Config {
+    #[allow(dead_code)]
+    pub fn starcoder_1b() -> Self {
+        Self {
+            vocab_size: 49152,
+            max_position_embeddings: 8192,
+            num_hidden_layers: 24,
+            hidden_size: 2048,
+            layer_norm_epsilon: 1e-5,
+            n_inner: Some(8192),
+            num_attention_heads: 16,
+            multi_query: true,
+            use_cache: true,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn starcoder_3b() -> Self {
+        Self {
+            vocab_size: 49152,
+            max_position_embeddings: 8192,
+            num_hidden_layers: 36,
+            hidden_size: 2816,
+            layer_norm_epsilon: 1e-5,
+            n_inner: Some(11264),
+            num_attention_heads: 22,
+            multi_query: true,
+            use_cache: true,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn starcoder_7b() -> Self {
+        Self {
+            vocab_size: 49152,
+            max_position_embeddings: 8192,
+            num_hidden_layers: 42,
+            hidden_size: 4096,
+            layer_norm_epsilon: 1e-5,
+            n_inner: Some(16384),
+            num_attention_heads: 32,
+            multi_query: true,
+            use_cache: true,
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn starcoder() -> Self {
         Self {
             vocab_size: 49152,

@@ -105,7 +105,7 @@ struct Args {
     #[arg(long, default_value_t = 100)]
     sample_len: usize,
 
-    #[arg(long, default_value = "bigcode/starcoder")]
+    #[arg(long, default_value = "bigcode/starcoderbase-1b")]
     model_id: String,
 
     #[arg(long, default_value = "main")]
@@ -139,7 +139,7 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
     let vb = VarBuilder::from_safetensors(weights, DType::F32, &device);
-    let config = Config::starcoder();
+    let config = Config::starcoder_1b();
     let model = GPTBigCode::load(vb, config)?;
     println!("loaded the model in {:?}", start.elapsed());
 
