@@ -347,7 +347,9 @@ impl GPTBigCode {
             hidden_states = block.forward(&hidden_states, &attention_mask)?;
         }
         let hidden_states = self.ln_f.forward(&hidden_states)?;
-        let hidden_states = hidden_states.i((.., seq_len - 1, seq_len))?;
+        let hidden_states = hidden_states
+            .reshape((b_sz, seq_len, self.config.hidden_size))?
+            .narrow(1, seq_len - 1, 1)?;
         let logits = self.lm_head.forward(&hidden_states)?.squeeze(1)?;
         Ok(logits)
     }
