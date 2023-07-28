@@ -110,6 +110,9 @@ struct Args {
 
     #[arg(long, default_value = "main")]
     revision: String,
+
+    #[arg(long)]
+    weight_file: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -123,11 +126,16 @@ fn main() -> Result<()> {
         args.revision,
     ));
     let tokenizer_filename = repo.get("tokenizer.json")?;
-    let mut filenames = vec![];
-    for rfilename in [] {
-        let filename = repo.get(rfilename)?;
-        filenames.push(filename);
-    }
+    let filenames = match args.weight_file {
+        Some(weight_file) => vec![std::path::PathBuf::from(weight_file.clone())],
+        None => {
+            let repo_filenames: Vec<String> = vec![];
+            repo_filenames
+                .iter()
+                .map(|f| repo.get(f))
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        }
+    };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 

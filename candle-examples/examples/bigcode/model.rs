@@ -307,12 +307,13 @@ impl GPTBigCode {
 
     pub fn load(vb: VarBuilder, cfg: Config) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
-        let wte = embedding(cfg.vocab_size, hidden_size, vb.pp("wte"))?;
-        let wpe = embedding(cfg.max_position_embeddings, hidden_size, vb.pp("wpe"))?;
+        let vb_t = vb.pp("transformer");
+        let wte = embedding(cfg.vocab_size, hidden_size, vb_t.pp("wte"))?;
+        let wpe = embedding(cfg.max_position_embeddings, hidden_size, vb_t.pp("wpe"))?;
         let blocks = (0..cfg.num_hidden_layers)
-            .map(|i| Block::load(vb.pp(&format!("h.{i}")), &cfg))
+            .map(|i| Block::load(vb_t.pp(&format!("h.{i}")), &cfg))
             .collect::<Result<Vec<_>>>()?;
-        let ln_f = layer_norm(hidden_size, cfg.layer_norm_epsilon, vb.pp("ln_f"))?;
+        let ln_f = layer_norm(hidden_size, cfg.layer_norm_epsilon, vb_t.pp("ln_f"))?;
         let lm_head = linear(hidden_size, cfg.vocab_size, false, vb.pp("lm_head"))?;
         let bias = make_causal_mask(cfg.max_position_embeddings)?;
         Ok(Self {
