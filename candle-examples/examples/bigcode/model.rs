@@ -177,8 +177,9 @@ impl Attention {
         };
 
         let attn_weights = (query.matmul(&key)? * scale_factor)?.reshape(attn_shape)?;
+        let attention_mask = attention_mask.broadcast_as(attn_shape)?;
         let mask_value =
-            Tensor::new(f32::NEG_INFINITY, query.device())?.broadcast_as(attention_mask.shape())?;
+            Tensor::new(f32::NEG_INFINITY, query.device())?.broadcast_as(attn_shape)?;
         let attn_weights = attention_mask.where_cond(&attn_weights, &mask_value)?;
         let attn_weights = attn_weights.softmax(D::Minus1)?;
         let attn_output = if self.multi_query {
