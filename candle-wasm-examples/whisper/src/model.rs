@@ -200,7 +200,7 @@ impl MultiHeadAttention {
         }
         let w = {
             let _timer = crate::Timer::new("qk::softmax");
-            qk.softmax(candle::D::Minus1)?
+            candle_nn::ops::softmax(&qk, candle::D::Minus1)?
         };
         let wv = {
             let _timer = crate::Timer::new("wv::matmul");

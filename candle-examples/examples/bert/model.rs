@@ -333,7 +333,7 @@ impl BertSelfAttention {
         let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
         let attention_probs = {
             let _enter_sm = self.span_softmax.enter();
-            attention_scores.softmax(candle::D::Minus1)?
+            candle_nn::ops::softmax(&attention_scores, candle::D::Minus1)?
         };
         let attention_probs = self.dropout.forward(&attention_probs)?;
 

@@ -21,8 +21,6 @@ pub trait BackendStorage: Sized {
 
     fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self>;
 
-    fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) -> Result<()>;
-
     fn to_dtype(&self, _: &Layout, _: DType) -> Result<Self>;
 
     fn unary_impl<B: UnaryOpT>(&self, _: &Layout) -> Result<Self>;

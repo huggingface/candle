@@ -125,15 +125,6 @@ impl Storage {
         }
     }
 
-    // This assumes a contiguous layout and no offset.
-    pub(crate) fn divide_by_sum_over_dim(&mut self, shape: &Shape, dim: usize) -> Result<()> {
-        match self {
-            Storage::Cpu(storage) => storage.divide_by_sum_over_dim(shape, dim)?,
-            Self::Cuda(storage) => storage.divide_by_sum_over_dim(shape, dim)?,
-        }
-        Ok(())
-    }
-
     pub(crate) fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         match self {
             Storage::Cpu(storage) => {

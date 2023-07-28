@@ -187,7 +187,7 @@ impl MusicgenAttention {
         let attn_weights = attn_weights
             .reshape((b_sz, self.num_heads, tgt_len, src_len))?
             .broadcast_add(attention_mask)?;
-        let attn_weights = attn_weights.softmax(D::Minus1)?;
+        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
         // TODO: layer_head_mask?
         let attn_output = attn_weights
             .matmul(&value_states)?

@@ -1,6 +1,5 @@
 mod test_utils;
 use candle::{DType, Device, IndexOp, Result, Tensor};
-use test_utils::to_vec3_round;
 
 fn zeros(device: &Device) -> Result<()> {
     let tensor = Tensor::zeros((5, 2), DType::F32, device)?;
@@ -65,42 +64,6 @@ fn transpose(device: &Device) -> Result<()> {
     assert_eq!(tensor.t()?.to_vec2::<f32>()?, data);
     assert_eq!(tensor.contiguous()?.t()?.to_vec2::<f32>()?, data);
     assert_eq!(((tensor + 1.)?.t()? - 1.)?.to_vec2::<f32>()?, data);
-    Ok(())
-}
-
-fn softmax(device: &Device) -> Result<()> {
-    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
-    let tensor = Tensor::new(data, device)?;
-    let t0 = tensor.log()?.softmax(0)?;
-    let t1 = tensor.log()?.softmax(1)?;
-    let t2 = tensor.log()?.softmax(2)?;
-    assert_eq!(
-        to_vec3_round(t0, 4)?,
-        &[
-            // 3/5, 1/2, 4/11
-            [[0.6, 0.5, 0.3636], [0.1111, 0.7143, 0.5294]],
-            // 2/5, 1/2, 7/11
-            [[0.4, 0.5, 0.6364], [0.8889, 0.2857, 0.4706]]
-        ]
-    );
-    assert_eq!(
-        to_vec3_round(t1, 4)?,
-        &[
-            // 3/4, 1/6, 4/13
-            [[0.75, 0.1667, 0.3077], [0.25, 0.8333, 0.6923]],
-            // 2/10, 1/3, 7/15
-            [[0.2, 0.3333, 0.4667], [0.8, 0.6667, 0.5333]]
-        ]
-    );
-    assert_eq!(
-        to_vec3_round(t2, 4)?,
-        &[
-            // (3, 1, 4) / 8, (1, 5, 9) / 15
-            [[0.375, 0.125, 0.5], [0.0667, 0.3333, 0.6]],
-            // (2, 1, 7) / 10, (8, 2, 8) / 18
-            [[0.2, 0.1, 0.7], [0.4444, 0.1111, 0.4444]]
-        ]
-    );
     Ok(())
 }
 
@@ -620,7 +583,6 @@ test_device!(cat, cat_cpu, cat_gpu);
 test_device!(sum, sum_cpu, sum_gpu);
 test_device!(transpose, transpose_cpu, transpose_gpu);
 test_device!(binary_op, binary_op_cpu, binary_op_gpu);
-test_device!(softmax, softmax_cpu, softmax_gpu);
 test_device!(embeddings, embeddings_cpu, embeddings_gpu);
 test_device!(cmp, cmp_cpu, cmp_gpu);
 test_device!(matmul, matmul_cpu, matmul_gpu);
