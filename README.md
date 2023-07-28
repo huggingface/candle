@@ -56,7 +56,7 @@ And then browse to
 - WASM support, run your models in a browser.
 - Model training.
 - Distributed computing using NCCL.
-- Models out of the box: Llama, Whisper, Falcon, BERT...
+- Models out of the box: Llama, Whisper, Falcon, StarCoder...
 - Embed user-defined ops/kernels, such as [flash-attention
   v2](https://github.com/LaurentMazare/candle/blob/89ba005962495f2bfbda286e185e9c3c7f5300a3/candle-flash-attn/src/lib.rs#L152).
 
