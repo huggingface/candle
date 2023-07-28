@@ -117,11 +117,15 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let repo = Repo::with_revision(args.model_id, RepoType::Model, args.revision);
-    let tokenizer_filename = api.get(&repo, "tokenizer.json")?;
+    let repo = api.repo(Repo::with_revision(
+        args.model_id,
+        RepoType::Model,
+        args.revision,
+    ));
+    let tokenizer_filename = repo.get("tokenizer.json")?;
     let mut filenames = vec![];
     for rfilename in [] {
-        let filename = api.get(&repo, rfilename)?;
+        let filename = repo.get(rfilename)?;
         filenames.push(filename);
     }
     println!("retrieved the files in {:?}", start.elapsed());
