@@ -106,7 +106,7 @@ struct Args {
     #[arg(long, default_value = "bigcode/starcoderbase-1b")]
     model_id: String,
 
-    #[arg(long, default_value = "refs/pr/1")]
+    #[arg(long, default_value = "main")]
     revision: String,
 
     #[arg(long)]
