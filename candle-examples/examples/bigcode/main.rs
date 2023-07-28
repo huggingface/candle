@@ -106,7 +106,7 @@ struct Args {
     #[arg(long, default_value = "bigcode/starcoderbase-1b")]
     model_id: String,
 
-    #[arg(long, default_value = "main")]
+    #[arg(long, default_value = "refs/pr/1")]
     revision: String,
 
     #[arg(long)]
@@ -126,13 +126,10 @@ fn main() -> Result<()> {
     let tokenizer_filename = repo.get("tokenizer.json")?;
     let filenames = match args.weight_file {
         Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
-        None => {
-            let repo_filenames: Vec<String> = vec![];
-            repo_filenames
-                .iter()
-                .map(|f| repo.get(f))
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        }
+        None => ["model.safetensors"]
+            .iter()
+            .map(|f| repo.get(f))
+            .collect::<std::result::Result<Vec<_>, _>>()?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;

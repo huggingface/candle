@@ -316,7 +316,7 @@ impl GPTBigCode {
             .map(|i| Block::load(vb_t.pp(&format!("h.{i}")), &cfg))
             .collect::<Result<Vec<_>>>()?;
         let ln_f = layer_norm(hidden_size, cfg.layer_norm_epsilon, vb_t.pp("ln_f"))?;
-        let lm_head = linear(hidden_size, cfg.vocab_size, false, vb.pp("lm_head"))?;
+        let lm_head = linear(hidden_size, cfg.vocab_size, false, vb_t.pp("wte"))?;
         let bias = make_causal_mask(cfg.max_position_embeddings, vb.device())?;
         Ok(Self {
             wte,
