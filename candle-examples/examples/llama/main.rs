@@ -18,7 +18,7 @@ use clap::Parser;
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::api::sync::Api;
 
 mod model;
 use model::{Config, Llama};
@@ -146,14 +146,14 @@ fn main() -> Result<()> {
                 }
             });
             println!("loading the model weights from {model_id}");
-            let repo = Repo::new(model_id, RepoType::Model);
-            let tokenizer_filename = api.get(&repo, "tokenizer.json")?;
+            let api = api.model(model_id);
+            let tokenizer_filename = api.get("tokenizer.json")?;
             let mut filenames = vec![];
             for rfilename in [
                 "model-00001-of-00002.safetensors",
                 "model-00002-of-00002.safetensors",
             ] {
-                let filename = api.get(&repo, rfilename)?;
+                let filename = api.get(rfilename)?;
                 filenames.push(filename);
             }
 
