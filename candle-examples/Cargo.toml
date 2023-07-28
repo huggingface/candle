@@ -42,7 +42,7 @@ default = []
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
-nccl = ["dep:cudarc", "dep:half"]
+nccl = ["dep:cudarc", "cudarc/nccl", "dep:half"]
 
 [[example]]
 name = "llama_multiprocess"
