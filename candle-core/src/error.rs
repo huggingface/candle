@@ -79,6 +79,13 @@ pub enum Error {
         nth_shape: Shape,
     },
 
+    #[error("Cannot divide tensor of shape {shape:?} equally along dim {dim} into {n_parts}")]
+    ShapeMismatchSplit {
+        shape: Shape,
+        dim: usize,
+        n_parts: usize,
+    },
+
     #[error("{op} can only be performed on a single dimension")]
     OnlySingleDimension { op: &'static str, dims: Vec<usize> },
 
