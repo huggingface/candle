@@ -21,3 +21,4 @@ rayon = "1.7.0"
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
+candle-nn = { path = "../candle-nn", features = ["cuda"] }

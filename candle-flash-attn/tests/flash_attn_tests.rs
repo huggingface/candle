@@ -21,7 +21,7 @@ fn fa_acausal(q: &Tensor, k: &Tensor, v: &Tensor, softmax_scale: f32) -> Result<
     let k = k.to_dtype(DType::F32)?;
     let v = v.to_dtype(DType::F32)?;
     let att = (q.matmul(&k.t()?)? * softmax_scale as f64)?;
-    let att = att.softmax(D::Minus1)?;
+    let att = candle_nn::ops::softmax(&att, D::Minus1)?;
     // Convert to contiguous as matmul doesn't support strided vs for now.
     let output = att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?;
     Ok(output)
