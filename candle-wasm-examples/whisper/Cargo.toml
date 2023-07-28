@@ -23,6 +23,7 @@ rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wav = { workspace = true }
+safetensors = { workspace = true }
 
 # Wasm specific crates.
 getrandom = { version = "0.2", features = ["js"] }

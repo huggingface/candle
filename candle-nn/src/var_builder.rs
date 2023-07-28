@@ -1,7 +1,5 @@
-use candle::{
-    safetensors::{Load, SafeTensors},
-    DType, Device, Error, Result, Shape, Tensor,
-};
+use candle::{safetensors::Load, DType, Device, Error, Result, Shape, Tensor};
+use safetensors::{slice::IndexOp, tensor::SafeTensors};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -137,6 +135,80 @@ impl<'a> VarBuilder<'a> {
 }
 
 impl<'a> VarBuilder<'a> {
+    /// Get part of a tensor, typically used to do Tensor Parallelism sharding.
+    ///
+    /// If the tensor is of size (1024, 1024).
+    ///
+    /// `dim` corresponds to the dimension to slice into
+    /// `rank` is the rank of the current process
+    /// `world_size` is the total number of ranks in the process group
+    ///
+    /// `get_sharded("tensor", 0, 0, 2)` means `tensor.i((..512))`
+    /// `get_sharded("tensor", 0, 1, 2)` means `tensor.i((512..))`
+    /// `get_sharded("tensor", 1, 0, 2)` means `tensor.i((.., ..512))`
+    pub fn get_sharded(
+        &self,
+        tensor_name: &str,
+        dim: usize,
+        rank: usize,
+        world_size: usize,
+    ) -> Result<Tensor> {
+        let data = self.data.as_ref();
+        let path = if self.path.is_empty() {
+            tensor_name.to_string()
+        } else {
+            [&self.path.join("."), tensor_name].join(".")
+        };
+        let tensor = match &self.data.tensors {
+            Tensors::SafeTensorWithRouting {
+                routing,
+                safetensors,
+            } => {
+                let index = routing.get(&path).ok_or_else(|| {
+                    Error::CannotFindTensor {
+                        path: path.to_string(),
+                    }
+                    .bt()
+                })?;
+
+                let view = safetensors[*index].tensor(&path)?;
+                let dtype = view.dtype();
+                let mut shape = view.shape().to_vec();
+                let size = shape[dim];
+
+                if size % world_size != 0 {
+                    return Err(Error::ShapeMismatchSplit {
+                        shape: shape.into(),
+                        dim,
+                        n_parts: world_size,
+                    });
+                }
+                let block_size = size / world_size;
+                let start = rank * block_size;
+                let stop = (rank + 1) * block_size;
+
+                // Everything is expressed in tensor dimension
+                // bytes offsets is handled automatically for safetensors.
+
+                let iterator = if dim == 0 {
+                    view.slice(start..stop).map_err(|_| Error::Msg(format!("Cannot slice tensor {tensor_name} ({shape:?} along dim {dim} with {start}..{stop}")))?
+                } else if dim == 1 {
+                    view.slice((.., start..stop)).map_err(|_| Error::Msg(format!("Cannot slice tensor {tensor_name} ({shape:?} along dim {dim} with {start}..{stop}")))?
+                } else {
+                    candle::bail!("Get sharded on dimensions != 0 or 1")
+                };
+
+                shape[dim] = block_size;
+
+                let dtype: DType = dtype.try_into()?;
+
+                let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
+                Tensor::from_raw_buffer(&raw, dtype, &shape, &data.device)?
+            }
+            _ => unimplemented!(),
+        };
+        Ok(tensor)
+    }
     pub fn get<S: Into<Shape>>(&self, s: S, tensor_name: &str) -> Result<Tensor> {
         let data = self.data.as_ref();
         let s: Shape = s.into();
