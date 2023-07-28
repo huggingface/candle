@@ -24,10 +24,20 @@ fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
 
 fn make_causal_mask(t: usize) -> Result<Tensor> {
     let mask: Vec<_> = (0..t)
-        .flat_map(|i| (0..t).map(move |j| u32::from(j > i)))
+        .flat_map(|i| (0..t).map(move |j| u32::from(j <= i)))
         .collect();
     let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
     Ok(mask)
+}
+
+// TODO: Use a numerically stable implementation by default.
+fn softmax<D: candle::shape::Dim>(xs: &Tensor, d: D) -> Result<Tensor> {
+    let d = d.to_index(xs.shape(), "log-softmax")?;
+    let max = xs.max_keepdim(d)?;
+    let diff = xs.broadcast_sub(&max)?;
+    let num = diff.exp()?;
+    let den = num.sum_keepdim(d)?;
+    num.broadcast_div(&den)
 }
 
 #[derive(Debug)]
@@ -176,19 +186,21 @@ impl Attention {
             (query, key, attn_shape, attn_view)
         };
 
-        let attn_weights = (query.matmul(&key)? * scale_factor)?.reshape(attn_shape)?;
+        let attn_weights =
+            (query.matmul(&key.contiguous()?)? * scale_factor)?.reshape(attn_shape)?;
         let attention_mask = attention_mask.broadcast_as(attn_shape)?;
         let mask_value =
             Tensor::new(f32::NEG_INFINITY, query.device())?.broadcast_as(attn_shape)?;
         let attn_weights = attention_mask.where_cond(&attn_weights, &mask_value)?;
-        let attn_weights = attn_weights.softmax(D::Minus1)?;
+        let attn_weights = softmax(&attn_weights, D::Minus1)?;
+        let value = value.contiguous()?;
         let attn_output = if self.multi_query {
             attn_weights
                 .reshape(attn_view)?
-                .matmul(value)?
+                .matmul(&value)?
                 .reshape(initial_query_shape)?
         } else {
-            attn_weights.matmul(value)?
+            attn_weights.matmul(&value)?
         };
         Ok(attn_output)
     }

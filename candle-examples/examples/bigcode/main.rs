@@ -127,7 +127,7 @@ fn main() -> Result<()> {
     ));
     let tokenizer_filename = repo.get("tokenizer.json")?;
     let filenames = match args.weight_file {
-        Some(weight_file) => vec![std::path::PathBuf::from(weight_file.clone())],
+        Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
         None => {
             let repo_filenames: Vec<String> = vec![];
             repo_filenames
