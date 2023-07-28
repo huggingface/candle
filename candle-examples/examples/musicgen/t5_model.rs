@@ -223,7 +223,7 @@ impl T5Attention {
             .transpose(1, 2)?;
         let scores = q.matmul(&k.t()?)?;
         // TODO: position_bias_masked
-        let attn_weights = scores.softmax(D::Minus1)?;
+        let attn_weights = candle_nn::ops::softmax(&scores, D::Minus1)?;
         let attn_output = attn_weights.matmul(&v)?;
         let attn_output = self.o.forward(&attn_output)?;
         Ok(attn_output)

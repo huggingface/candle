@@ -1,7 +1,7 @@
 use crate::model::{Cache, Config, Llama};
 use byteorder::{LittleEndian, ReadBytesExt};
 use candle::{DType, Device, IndexOp, Result, Shape, Tensor, D};
-use candle_nn::VarBuilder;
+use candle_nn::{ops::softmax, VarBuilder};
 use rand::{distributions::Distribution, SeedableRng};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -88,7 +88,7 @@ impl LogitsProcessor {
     pub fn sample(&mut self, logits: &Tensor) -> Result<u32> {
         let logits = logits.to_dtype(DType::F32)?;
         let next_token = if let Some(temperature) = self.temperature {
-            let prs = (&logits / temperature)?.softmax(D::Minus1)?;
+            let prs = softmax(&(&logits / temperature)?, D::Minus1)?;
             let prs: Vec<f32> = prs.to_vec1()?;
             let distr =
                 rand::distributions::WeightedIndex::new(prs).map_err(candle::Error::wrap)?;

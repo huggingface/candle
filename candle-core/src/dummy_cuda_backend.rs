@@ -49,10 +49,6 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn divide_by_sum_over_dim(&mut self, _: &Shape, _: usize) -> Result<()> {
-        Err(Error::NotCompiledWithCudaSupport)
-    }
-
     fn to_dtype(&self, _: &Layout, _: DType) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }

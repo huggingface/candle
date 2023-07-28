@@ -93,7 +93,6 @@ pub enum Op {
     Broadcast(Tensor),
     Narrow(Tensor, usize, usize, usize),
     Reshape(Tensor),
-    Softmax(Tensor, usize),
     ToDevice(Tensor),
     Transpose(Tensor, usize, usize),
     Elu(Tensor, f64),
