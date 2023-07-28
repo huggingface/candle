@@ -18,7 +18,21 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn config_7b(use_flash_attn: bool) -> Self {
+    pub fn config_7b_v1(use_flash_attn: bool) -> Self {
+        Self {
+            hidden_size: 4096,
+            intermediate_size: 11008,
+            vocab_size: 32000,
+            n_layer: 32,
+            n_head: 32,
+            n_embd: 4096,
+            n_key_value_head: 32,
+            use_flash_attn,
+            rms_norm_eps: 1e-6,
+        }
+    }
+
+    pub fn config_7b_v2(use_flash_attn: bool) -> Self {
         Self {
             hidden_size: 4096,
             intermediate_size: 11008,

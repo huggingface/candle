@@ -127,7 +127,11 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let device = candle_examples::device(args.cpu)?;
-    let config = Config::config_7b(args.use_flash_attn);
+    let config = if args.v1 {
+        Config::config_7b_v1(args.use_flash_attn)
+    } else {
+        Config::config_7b_v2(args.use_flash_attn)
+    };
     let dtype = if args.use_f32 { DType::F32 } else { DType::F16 };
     let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;
     let (llama, tokenizer_filename) = match args.npy {
