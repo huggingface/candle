@@ -705,7 +705,8 @@ impl<'a, I: IntDType> Map1 for IndexSelect<'a, I> {
                 expected: 1,
                 got: d.len(),
                 shape: self.ids_l.shape().clone(),
-            })?,
+            }
+            .bt())?,
         };
         let stride_ids = self.ids_l.stride()[0];
         let mut dst_dims = layout.dims().to_vec();
