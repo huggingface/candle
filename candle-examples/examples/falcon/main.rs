@@ -123,14 +123,18 @@ fn main() -> Result<()> {
     let device = candle_examples::device(args.cpu)?;
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let repo = Repo::with_revision(args.model_id, RepoType::Model, args.revision);
-    let tokenizer_filename = api.get(&repo, "tokenizer.json")?;
+    let repo = api.repo(Repo::with_revision(
+        args.model_id,
+        RepoType::Model,
+        args.revision,
+    ));
+    let tokenizer_filename = repo.get("tokenizer.json")?;
     let mut filenames = vec![];
     for rfilename in [
         "model-00001-of-00002.safetensors",
         "model-00002-of-00002.safetensors",
     ] {
-        let filename = api.get(&repo, rfilename)?;
+        let filename = repo.get(rfilename)?;
         filenames.push(filename);
     }
     println!("retrieved the files in {:?}", start.elapsed());
