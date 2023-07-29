@@ -209,6 +209,7 @@ impl<'a> VarBuilder<'a> {
         };
         Ok(tensor)
     }
+
     pub fn get<S: Into<Shape>>(&self, s: S, tensor_name: &str) -> Result<Tensor> {
         let data = self.data.as_ref();
         let s: Shape = s.into();
