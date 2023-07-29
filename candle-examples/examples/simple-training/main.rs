@@ -135,7 +135,10 @@ impl Model for Mlp {
     }
 }
 
-fn training_loop<M: Model>(m: candle_nn::vision::Dataset) -> anyhow::Result<()> {
+fn training_loop<M: Model>(
+    m: candle_nn::vision::Dataset,
+    learning_rate: f64,
+) -> anyhow::Result<()> {
     let dev = candle::Device::cuda_if_available(0)?;
 
     let train_labels = m.train_labels;
@@ -147,7 +150,7 @@ fn training_loop<M: Model>(m: candle_nn::vision::Dataset) -> anyhow::Result<()> 
 
     let all_vars = vs.all_vars();
     let all_vars = all_vars.iter().collect::<Vec<_>>();
-    let sgd = candle_nn::SGD::new(&all_vars, 1.0);
+    let sgd = candle_nn::SGD::new(&all_vars, learning_rate);
     let test_images = m.test_images;
     let test_labels = m.test_labels.to_dtype(DType::U32)?;
     for epoch in 1..200 {
@@ -183,6 +186,9 @@ enum WhichModel {
 struct Args {
     #[clap(value_enum, default_value_t = WhichModel::Linear)]
     model: WhichModel,
+
+    #[arg(long)]
+    learning_rate: Option<f64>,
 }
 
 pub fn main() -> anyhow::Result<()> {
@@ -195,7 +201,7 @@ pub fn main() -> anyhow::Result<()> {
     println!("test-labels: {:?}", m.test_labels.shape());
 
     match args.model {
-        WhichModel::Linear => training_loop::<LinearModel>(m),
-        WhichModel::Mlp => training_loop::<Mlp>(m),
+        WhichModel::Linear => training_loop::<LinearModel>(m, args.learning_rate.unwrap_or(1.)),
+        WhichModel::Mlp => training_loop::<Mlp>(m, args.learning_rate.unwrap_or(0.01)),
     }
 }
