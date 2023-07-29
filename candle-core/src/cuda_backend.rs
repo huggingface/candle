@@ -940,16 +940,22 @@ impl<'a> Map2 for WhereCond<'a> {
         dev: &CudaDevice,
     ) -> Result<CudaSlice<T>> {
         let ids_l = &self.1;
-        let ids = match &self.0.slice {
-            CudaStorageSlice::U32(slice) => slice.slice(ids_l.start_offset()..),
+        let (ids, name) = match &self.0.slice {
+            CudaStorageSlice::U8(slice) => {
+                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                (ptr, "where_u8")
+            }
+            CudaStorageSlice::U32(slice) => {
+                let ptr = *slice.slice(ids_l.start_offset()..).device_ptr();
+                (ptr, "where_u32")
+            }
             _ => Err(CudaError::UnexpectedDType {
-                msg: "where conditions should be u32",
+                msg: "where conditions should be u8 or u32",
                 expected: DType::U32,
                 got: self.0.dtype(),
             })
             .w()?,
         };
-        let ids = &ids;
         let shape = ids_l.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
@@ -959,7 +965,7 @@ impl<'a> Map2 for WhereCond<'a> {
             .w()?;
         let t = &t.slice(layout_t.start_offset()..);
         let f = &f.slice(layout_f.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("where"), kernels::TERNARY)?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::TERNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (el, dims.len(), &ds, ids, t, f, &out);

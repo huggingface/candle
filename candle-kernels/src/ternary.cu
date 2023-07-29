@@ -1,12 +1,12 @@
 #include "cuda_utils.cuh"
 #include<stdint.h>
 
-#define WHERE_OP(TYPENAME, FN_NAME) \
+#define WHERE_OP(TYPENAME, ID_TYPENAME, FN_NAME) \
 extern "C" __global__ void FN_NAME(  \
     const size_t numel,  \
     const size_t num_dims, \
     const size_t *info, \
-    const uint32_t *ids, \
+    const ID_TYPENAME *ids, \
     const TYPENAME *t, \
     const TYPENAME *f, \
     TYPENAME *out \
@@ -33,14 +33,21 @@ extern "C" __global__ void FN_NAME(  \
 } \
 
 #if __CUDA_ARCH__ >= 800
-WHERE_OP(__nv_bfloat16, where_bf16)
+WHERE_OP(__nv_bfloat16, uint32_t, where_u32_bf16)
+WHERE_OP(__nv_bfloat16, uint8_t, where_u8_bf16)
 #endif
 
 #if __CUDA_ARCH__ >= 530
-WHERE_OP(__half, where_f16)
+WHERE_OP(__half, uint32_t, where_u32_f16)
+WHERE_OP(__half, uint8_t, where_u8_f16)
 #endif
 
-WHERE_OP(float, where_f32)
-WHERE_OP(double, where_f64)
-WHERE_OP(uint8_t, where_u8)
-WHERE_OP(uint32_t, where_u32)
+WHERE_OP(float, uint32_t, where_u32_f32)
+WHERE_OP(double, uint32_t, where_u32_f64)
+WHERE_OP(uint8_t, uint32_t, where_u32_u8)
+WHERE_OP(uint32_t, uint32_t, where_u32_u32)
+
+WHERE_OP(float, uint8_t, where_u8_f32)
+WHERE_OP(double, uint8_t, where_u8_f64)
+WHERE_OP(uint8_t, uint8_t, where_u8_u8)
+WHERE_OP(uint8_t, uint32_t, where_u8_u32)
