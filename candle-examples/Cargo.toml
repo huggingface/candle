@@ -46,4 +46,4 @@ nccl = ["cuda", "cudarc/nccl", "dep:half"]
 
 [[example]]
 name = "llama_multiprocess"
-required-features = ["cuda", "nccl"]
+required-features = ["cuda", "nccl", "flash-attn"]
