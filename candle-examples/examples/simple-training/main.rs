@@ -2,6 +2,8 @@
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+use clap::{Parser, ValueEnum};
+
 use candle::{DType, Device, Result, Shape, Tensor, Var, D};
 use candle_nn::{loss, ops, Linear};
 use std::sync::{Arc, Mutex};
@@ -77,19 +79,22 @@ impl VarStore {
     }
 }
 
-fn linear(dim1: usize, dim2: usize, vs: VarStore) -> Result<Linear> {
-    let ws = vs.get((dim2, dim1), "weight")?;
-    let bs = vs.get(dim2, "bias")?;
+fn linear(in_dim: usize, out_dim: usize, vs: VarStore) -> Result<Linear> {
+    let ws = vs.get((out_dim, in_dim), "weight")?;
+    let bs = vs.get(out_dim, "bias")?;
     Ok(Linear::new(ws, Some(bs)))
 }
 
-#[allow(unused)]
+trait Model: Sized {
+    fn new(vs: VarStore) -> Result<Self>;
+    fn forward(&self, xs: &Tensor) -> Result<Tensor>;
+}
+
 struct LinearModel {
     linear: Linear,
 }
 
-#[allow(unused)]
-impl LinearModel {
+impl Model for LinearModel {
     fn new(vs: VarStore) -> Result<Self> {
         let linear = linear(IMAGE_DIM, LABELS, vs)?;
         Ok(Self { linear })
@@ -100,14 +105,12 @@ impl LinearModel {
     }
 }
 
-#[allow(unused)]
 struct Mlp {
     ln1: Linear,
     ln2: Linear,
 }
 
-#[allow(unused)]
-impl Mlp {
+impl Model for Mlp {
     fn new(vs: VarStore) -> Result<Self> {
         let ln1 = linear(IMAGE_DIM, 100, vs.pp("ln1"))?;
         let ln2 = linear(100, LABELS, vs.pp("ln2"))?;
@@ -121,22 +124,15 @@ impl Mlp {
     }
 }
 
-pub fn main() -> anyhow::Result<()> {
+fn training_loop<M: Model>(m: candle_nn::vision::Dataset) -> anyhow::Result<()> {
     let dev = candle::Device::cuda_if_available(0)?;
 
-    // Load the dataset
-    let m = candle_nn::vision::mnist::load_dir("data")?;
-    println!("train-images: {:?}", m.train_images.shape());
-    println!("train-labels: {:?}", m.train_labels.shape());
-    println!("test-images: {:?}", m.test_images.shape());
-    println!("test-labels: {:?}", m.test_labels.shape());
     let train_labels = m.train_labels;
     let train_images = m.train_images;
     let train_labels = train_labels.to_dtype(DType::U32)?.unsqueeze(1)?;
 
     let vs = VarStore::new(DType::F32, dev);
-    let model = LinearModel::new(vs.clone())?;
-    // let model = Mlp::new(vs)?;
+    let model = M::new(vs.clone())?;
 
     let all_vars = vs.all_vars();
     let all_vars = all_vars.iter().collect::<Vec<_>>();
@@ -164,4 +160,31 @@ pub fn main() -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+#[derive(ValueEnum, Clone)]
+enum WhichModel {
+    Linear,
+    Mlp,
+}
+
+#[derive(Parser)]
+struct Args {
+    #[clap(value_enum, default_value_t = WhichModel::Linear)]
+    model: WhichModel,
+}
+
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    // Load the dataset
+    let m = candle_nn::vision::mnist::load_dir("data")?;
+    println!("train-images: {:?}", m.train_images.shape());
+    println!("train-labels: {:?}", m.train_labels.shape());
+    println!("test-images: {:?}", m.test_images.shape());
+    println!("test-labels: {:?}", m.test_labels.shape());
+
+    match args.model {
+        WhichModel::Linear => training_loop::<LinearModel>(m),
+        WhichModel::Mlp => training_loop::<Mlp>(m),
+    }
 }
