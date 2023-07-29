@@ -142,17 +142,20 @@ fn training_loop<M: Model>(
     let dev = candle::Device::cuda_if_available(0)?;
 
     let train_labels = m.train_labels;
-    let train_images = m.train_images;
-    let train_labels = train_labels.to_dtype(DType::U32)?.unsqueeze(1)?;
+    let train_images = m.train_images.to_device(&dev)?;
+    let train_labels = train_labels
+        .to_dtype(DType::U32)?
+        .unsqueeze(1)?
+        .to_device(&dev)?;
 
-    let vs = VarStore::new(DType::F32, dev);
+    let vs = VarStore::new(DType::F32, dev.clone());
     let model = M::new(vs.clone())?;
 
     let all_vars = vs.all_vars();
     let all_vars = all_vars.iter().collect::<Vec<_>>();
     let sgd = candle_nn::SGD::new(&all_vars, learning_rate);
-    let test_images = m.test_images;
-    let test_labels = m.test_labels.to_dtype(DType::U32)?;
+    let test_images = m.test_images.to_device(&dev)?;
+    let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
     for epoch in 1..200 {
         let logits = model.forward(&train_images)?;
         let log_sm = ops::log_softmax(&logits, D::Minus1)?;
