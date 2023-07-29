@@ -424,7 +424,7 @@ pub struct Falcon {
 
 fn make_causal_mask(t: usize) -> Result<Tensor> {
     let mask: Vec<_> = (0..t)
-        .flat_map(|i| (0..t).map(move |j| u32::from(j > i)))
+        .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
         .collect();
     let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
     Ok(mask)
