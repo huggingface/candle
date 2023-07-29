@@ -244,7 +244,7 @@ impl ReduceIndex {
                             val = s
                         }
                     }
-                    dst[unstr_index] = g(val, acc)
+                    dst_to_set[unstr_index] = g(val, acc)
                 }
             }
         }
