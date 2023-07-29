@@ -34,6 +34,33 @@ impl Var {
         Ok(Self(inner))
     }
 
+    pub fn from_tensor(t: &Tensor) -> Result<Self> {
+        let inner = t.make_var()?;
+        Ok(Self(inner))
+    }
+
+    pub fn rand_f64<S: Into<Shape>>(
+        lo: f64,
+        up: f64,
+        s: S,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Self> {
+        let inner = Tensor::rand_f64_impl(lo, up, s, dtype, device, true)?;
+        Ok(Self(inner))
+    }
+
+    pub fn randn_f64<S: Into<Shape>>(
+        mean: f64,
+        std: f64,
+        s: S,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Self> {
+        let inner = Tensor::randn_f64_impl(mean, std, s, dtype, device, true)?;
+        Ok(Self(inner))
+    }
+
     pub fn rand<S: Into<Shape>, T: crate::FloatDType>(
         lo: T,
         up: T,
