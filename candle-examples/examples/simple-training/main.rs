@@ -5,7 +5,7 @@ extern crate intel_mkl_src;
 use clap::{Parser, ValueEnum};
 
 use candle::{DType, Device, Result, Shape, Tensor, Var, D};
-use candle_nn::{loss, ops, Linear};
+use candle_nn::{loss, ops, Init, Linear};
 use std::sync::{Arc, Mutex};
 
 const IMAGE_DIM: usize = 784;
@@ -46,7 +46,7 @@ impl VarStore {
         }
     }
 
-    fn get<S: Into<Shape>>(&self, shape: S, tensor_name: &str) -> Result<Tensor> {
+    fn get<S: Into<Shape>>(&self, shape: S, tensor_name: &str, init: Init) -> Result<Tensor> {
         let shape = shape.into();
         let path = if self.path.is_empty() {
             tensor_name.to_string()
@@ -61,8 +61,7 @@ impl VarStore {
             }
             return Ok(tensor.as_tensor().clone());
         }
-        // TODO: Proper initialization using the `Init` enum.
-        let var = Var::zeros(shape, tensor_data.dtype, &tensor_data.device)?;
+        let var = init.var(shape, tensor_data.dtype, &tensor_data.device)?;
         let tensor = var.as_tensor().clone();
         tensor_data.tensors.insert(path, var);
         Ok(tensor)
@@ -79,9 +78,21 @@ impl VarStore {
     }
 }
 
+fn linear_z(in_dim: usize, out_dim: usize, vs: VarStore) -> Result<Linear> {
+    let ws = vs.get((out_dim, in_dim), "weight", candle_nn::init::ZERO)?;
+    let bs = vs.get(out_dim, "bias", candle_nn::init::ZERO)?;
+    Ok(Linear::new(ws, Some(bs)))
+}
+
 fn linear(in_dim: usize, out_dim: usize, vs: VarStore) -> Result<Linear> {
-    let ws = vs.get((out_dim, in_dim), "weight")?;
-    let bs = vs.get(out_dim, "bias")?;
+    let init_ws = candle_nn::init::DEFAULT_KAIMING_NORMAL;
+    let ws = vs.get((out_dim, in_dim), "weight", init_ws)?;
+    let bound = 1. / (in_dim as f64).sqrt();
+    let init_bs = Init::Uniform {
+        lo: -bound,
+        up: bound,
+    };
+    let bs = vs.get(out_dim, "bias", init_bs)?;
     Ok(Linear::new(ws, Some(bs)))
 }
 
@@ -96,7 +107,7 @@ struct LinearModel {
 
 impl Model for LinearModel {
     fn new(vs: VarStore) -> Result<Self> {
-        let linear = linear(IMAGE_DIM, LABELS, vs)?;
+        let linear = linear_z(IMAGE_DIM, LABELS, vs)?;
         Ok(Self { linear })
     }
 

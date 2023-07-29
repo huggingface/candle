@@ -93,6 +93,9 @@ pub enum Init {
     },
 }
 
+pub const ZERO: Init = Init::Const(0.);
+pub const ONE: Init = Init::Const(1.);
+
 pub const DEFAULT_KAIMING_UNIFORM: Init = Init::Kaiming {
     dist: NormalOrUniform::Uniform,
     fan: FanInOut::FanIn,
