@@ -288,6 +288,154 @@ fn max(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn argmin(device: &Device) -> Result<()> {
+    let data = &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(
+        tensor.argmin_keepdim(2)?.to_vec3::<u32>()?,
+        &[[[1], [0]], [[1], [1]]]
+    );
+    assert_eq!(
+        tensor.argmin_keepdim(0)?.to_vec3::<u32>()?,
+        &[[[1, 0, 0], [0, 1, 1]]],
+    );
+    let data: Vec<u32> = (200..4000u32).collect();
+    let tensor = Tensor::new(data.as_slice(), device)?;
+    assert_eq!(tensor.argmin_keepdim(0)?.to_vec1::<u32>()?, &[0]);
+    let tensor = tensor.reshape((1900, 2))?;
+    assert_eq!(
+        tensor
+            .argmin_keepdim(0)?
+            .argmin_keepdim(1)?
+            .to_vec2::<u32>()?,
+        &[[0]]
+    );
+    assert_eq!(
+        tensor
+            .argmin_keepdim(1)?
+            .argmin_keepdim(0)?
+            .to_vec2::<u32>()?,
+        &[[0]]
+    );
+    assert_eq!(tensor.argmin_keepdim(0)?.to_vec2::<u32>()?, &[[0, 0]]);
+
+    // Make the tensor non contiguous.
+    let tensor = tensor.t()?.contiguous()?.t()?;
+    assert_eq!(
+        tensor
+            .argmin_keepdim(0)?
+            .argmin_keepdim(1)?
+            .to_vec2::<u32>()?,
+        &[[0]]
+    );
+    assert_eq!(
+        tensor
+            .argmin_keepdim(1)?
+            .argmin_keepdim(0)?
+            .to_vec2::<u32>()?,
+        &[[0]]
+    );
+    assert_eq!(tensor.argmin_keepdim(0)?.to_vec2::<u32>()?, &[[0, 0]]);
+
+    let t1 = tensor.reshape((190, 5, 4))?;
+    let t2 = t1.transpose(0, 2)?.contiguous()?.transpose(0, 2)?;
+    for tensor in [t1, t2] {
+        assert_eq!(
+            tensor
+                .argmin_keepdim(0)?
+                .argmin_keepdim(2)?
+                .argmin_keepdim(1)?
+                .to_vec3::<u32>()?,
+            &[[[0]]]
+        );
+        assert_eq!(
+            tensor.argmin_keepdim(0)?.to_vec3::<u32>()?,
+            &[[
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+                [0, 0, 0, 0],
+            ]]
+        );
+    }
+    Ok(())
+}
+
+fn argmax(device: &Device) -> Result<()> {
+    let data = &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(
+        tensor.argmax_keepdim(2)?.to_vec3::<u32>()?,
+        &[[[2], [2]], [[2], [0]]]
+    );
+    assert_eq!(
+        tensor.argmax_keepdim(0)?.to_vec3::<u32>()?,
+        &[[[0, 0, 1], [1, 0, 0]]],
+    );
+    let data: Vec<u32> = (200..4000u32).collect();
+    let tensor = Tensor::new(data.as_slice(), device)?;
+    assert_eq!(tensor.argmax_keepdim(0)?.to_vec1::<u32>()?, &[3799]);
+    let tensor = tensor.reshape((1900, 2))?;
+    assert_eq!(
+        tensor
+            .argmax_keepdim(0)?
+            .argmax_keepdim(1)?
+            .to_vec2::<u32>()?,
+        &[[0]]
+    );
+    assert_eq!(
+        tensor
+            .argmax_keepdim(1)?
+            .argmax_keepdim(0)?
+            .to_vec2::<u32>()?,
+        &[[0]]
+    );
+    assert_eq!(tensor.argmax_keepdim(0)?.to_vec2::<u32>()?, &[[1899, 1899]]);
+
+    // Make the tensor non contiguous.
+    let tensor = tensor.t()?.contiguous()?.t()?;
+    assert_eq!(
+        tensor
+            .argmax_keepdim(0)?
+            .argmax_keepdim(1)?
+            .to_vec2::<u32>()?,
+        &[[0]]
+    );
+    assert_eq!(
+        tensor
+            .argmax_keepdim(1)?
+            .argmax_keepdim(0)?
+            .to_vec2::<u32>()?,
+        &[[0]]
+    );
+    assert_eq!(tensor.argmax_keepdim(0)?.to_vec2::<u32>()?, &[[1899, 1899]]);
+
+    let t1 = tensor.reshape((190, 5, 4))?;
+    let t2 = t1.transpose(0, 2)?.contiguous()?.transpose(0, 2)?;
+    for tensor in [t1, t2] {
+        assert_eq!(
+            tensor
+                .argmax_keepdim(0)?
+                .argmax_keepdim(2)?
+                .argmax_keepdim(1)?
+                .to_vec3::<u32>()?,
+            &[[[0]]]
+        );
+        assert_eq!(
+            tensor.argmax_keepdim(0)?.to_vec3::<u32>()?,
+            &[[
+                [189, 189, 189, 189],
+                [189, 189, 189, 189],
+                [189, 189, 189, 189],
+                [189, 189, 189, 189],
+                [189, 189, 189, 189],
+            ]]
+        );
+    }
+    Ok(())
+}
+
 fn narrow(device: &Device) -> Result<()> {
     let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
     let tensor = Tensor::new(data, device)?;
@@ -707,6 +855,8 @@ test_device!(cat, cat_cpu, cat_gpu);
 test_device!(sum, sum_cpu, sum_gpu);
 test_device!(min, min_cpu, min_gpu);
 test_device!(max, max_cpu, max_gpu);
+test_device!(argmax, argmax_cpu, argmax_gpu);
+test_device!(argmin, argmin_cpu, argmin_gpu);
 test_device!(transpose, transpose_cpu, transpose_gpu);
 test_device!(binary_op, binary_op_cpu, binary_op_gpu);
 test_device!(embeddings, embeddings_cpu, embeddings_gpu);
