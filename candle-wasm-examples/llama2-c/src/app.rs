@@ -30,6 +30,7 @@ async fn fetch_url(url: &str) -> Result<Vec<u8>, JsValue> {
 }
 
 pub enum Msg {
+    Refresh,
     Run,
     UpdateStatus(String),
     SetModel(ModelData),
@@ -166,18 +167,20 @@ impl Component for App {
                 self.status = status;
                 true
             }
+            Msg::Refresh => true,
         }
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         use yew::TargetCast;
         let temperature = self.temperature.clone();
-        let oninput = move |e: yew::InputEvent| {
+        let oninput = ctx.link().callback(move |e: yew::InputEvent| {
             let input: web_sys::HtmlInputElement = e.target_unchecked_into();
             if let Ok(temp) = f64::from_str(&input.value()) {
                 *temperature.borrow_mut() = temp
             }
-        };
+            Msg::Refresh
+        });
         html! {
             <div style="margin: 2%;">
                 <div><p>{"Running "}
@@ -188,8 +191,9 @@ impl Component for App {
                 <p>{"Once the weights have loaded, click on the run button to start generating content."}
                 </p>
                 </div>
-                {"temperature: "}<input type="range" min="0." max="1.2" step="0.1" value={self.temperature.borrow().to_string()} {oninput} id="temp"/>
-
+                {"temperature  \u{00a0} "}
+                <input type="range" min="0." max="1.2" step="0.1" value={self.temperature.borrow().to_string()} {oninput} id="temp"/>
+                {format!(" \u{00a0} {}", self.temperature.borrow())}
                 <br/ >
                 {
                     if self.loaded{
