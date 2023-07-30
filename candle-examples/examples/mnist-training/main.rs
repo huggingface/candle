@@ -76,6 +76,13 @@ impl VarStore {
             .map(|c| c.clone())
             .collect::<Vec<_>>()
     }
+
+    fn save<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
+        let tensor_data = self.data.lock().unwrap();
+        let data = tensor_data.tensors.iter().map(|(k, v)| (k, v.as_tensor()));
+        safetensors::tensor::serialize_to_file(data, &None, path.as_ref())?;
+        Ok(())
+    }
 }
 
 fn linear_z(in_dim: usize, out_dim: usize, vs: VarStore) -> Result<Linear> {
@@ -138,6 +145,7 @@ impl Model for Mlp {
 fn training_loop<M: Model>(
     m: candle_nn::vision::Dataset,
     learning_rate: f64,
+    save: Option<String>,
 ) -> anyhow::Result<()> {
     let dev = candle::Device::cuda_if_available(0)?;
 
@@ -176,6 +184,10 @@ fn training_loop<M: Model>(
             100. * test_accuracy
         );
     }
+    if let Some(save) = save {
+        println!("saving trained weights in {save}");
+        vs.save(&save)?
+    }
     Ok(())
 }
 
@@ -192,6 +204,10 @@ struct Args {
 
     #[arg(long)]
     learning_rate: Option<f64>,
+
+    /// The file where to save the trained weights, in safetensors format.
+    #[arg(long)]
+    save: Option<String>,
 }
 
 pub fn main() -> anyhow::Result<()> {
@@ -204,7 +220,9 @@ pub fn main() -> anyhow::Result<()> {
     println!("test-labels: {:?}", m.test_labels.shape());
 
     match args.model {
-        WhichModel::Linear => training_loop::<LinearModel>(m, args.learning_rate.unwrap_or(1.)),
-        WhichModel::Mlp => training_loop::<Mlp>(m, args.learning_rate.unwrap_or(0.01)),
+        WhichModel::Linear => {
+            training_loop::<LinearModel>(m, args.learning_rate.unwrap_or(1.), args.save)
+        }
+        WhichModel::Mlp => training_loop::<Mlp>(m, args.learning_rate.unwrap_or(0.01), args.save),
     }
 }
