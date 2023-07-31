@@ -6,7 +6,7 @@
 extern crate intel_mkl_src;
 
 mod model;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use anyhow::{Error as E, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -14,6 +14,7 @@ use candle::{DType, Device, Error, IndexOp, Layout, Shape, Tensor};
 use candle_nn::{Embedding, Linear, VarBuilder};
 use candle_transformers::generation::LogitsProcessor;
 use std::io::Write;
+use tokenizers::Tokenizer;
 
 use model::{Config, Llama};
 
@@ -172,9 +173,20 @@ impl TransformerWeights {
     }
 }
 
+#[derive(ValueEnum, Debug, Clone)]
+enum Task {
+    Inference,
+    Evaluation,
+    Training,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// The task to be performed, inference, training or evaluation.
+    #[clap(value_enum, default_value_t = Task::Inference)]
+    task: Task,
+
     /// Run on CPU rather than on GPU.
     #[arg(long)]
     cpu: bool,
@@ -205,8 +217,6 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
-    use tokenizers::Tokenizer;
-
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
     let config_path = match &args.config {
@@ -214,17 +224,16 @@ fn main() -> anyhow::Result<()> {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
             println!("loading the model weights from {}", args.model_id);
-            let api = api.model(args.model_id);
+            let api = api.model(args.model_id.clone());
             api.get(&args.which_model)?
         }
     };
-    let mut file = std::fs::File::open(&config_path)?;
+    let mut file = std::fs::File::open(config_path)?;
     let config = Config::from_reader(&mut file)?;
-    println!("config: {config:?}");
     let weights = TransformerWeights::from_reader(&mut file, &config, &device)?;
     let vb = weights.var_builder(&config, &device)?;
     let cache = model::Cache::new(true, &config, vb.pp("rot"))?;
-    let model = Llama::load(vb, &cache, &config)?;
+    let model = Llama::load(vb, &cache, config)?;
 
     let tokenizer_path = match &args.tokenizer {
         Some(config) => std::path::PathBuf::from(config),
@@ -234,9 +243,35 @@ fn main() -> anyhow::Result<()> {
             api.get("tokenizer.json")?
         }
     };
-    println!("{tokenizer_path:?}");
     let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(E::msg)?;
 
+    match args.task {
+        Task::Inference => run_inference(tokenizer, model, &device, args)?,
+        Task::Evaluation => run_evaluation(tokenizer, model, &device, args)?,
+        Task::Training => todo!(),
+    }
+    Ok(())
+}
+
+fn run_evaluation(
+    tokenizer: Tokenizer,
+    _model: Llama,
+    _device: &Device,
+    _args: Args,
+) -> Result<()> {
+    let api = hf_hub::api::sync::Api::new()?;
+    let model_id = "roneneldan/TinyStories"; // TODO: Make this configurable.
+    println!("loading the evaluation dataset from {}", model_id);
+    let api = api.dataset(model_id.to_string());
+    let dataset_path = api.get("TinyStories-valid.txt")?;
+    let data = std::fs::read_to_string(dataset_path)?;
+    println!("dataset loaded: {} chars", data.len());
+    let data = tokenizer.encode(data, false).map_err(E::msg)?;
+    println!("dataset encoded: {} tokens", data.len());
+    Ok(())
+}
+
+fn run_inference(tokenizer: Tokenizer, model: Llama, device: &Device, args: Args) -> Result<()> {
     println!("starting the inference loop");
     let mut logits_processor = LogitsProcessor::new(299792458, args.temperature);
     let mut index_pos = 0;
@@ -250,17 +285,13 @@ fn main() -> anyhow::Result<()> {
 
     let start_gen = std::time::Instant::now();
     for index in 0.. {
-        if tokens.len() >= config.seq_len {
+        if tokens.len() >= model.config.seq_len {
             break;
         }
         let start_gen = std::time::Instant::now();
-        let context_size = if cache.use_kv_cache && index > 0 {
-            1
-        } else {
-            tokens.len()
-        };
+        let context_size = if index > 0 { 1 } else { tokens.len() };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-        let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
+        let input = Tensor::new(ctxt, device)?.unsqueeze(0)?;
         let logits = model.forward(&input, index_pos)?;
         let logits = logits.squeeze(0)?;
         index_pos += ctxt.len();
