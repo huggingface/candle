@@ -266,7 +266,8 @@ fn run_eval(tokenizer: Tokenizer, config_path: &std::path::PathBuf, args: Args) 
     let file = std::io::BufReader::new(file);
     let mut tokens = vec![];
     for line in file.lines() {
-        let line = tokenizer.encode(line?, false).map_err(E::msg)?;
+        let line = line?.replace("<|endoftext|>", "");
+        let line = tokenizer.encode(line, false).map_err(E::msg)?;
         tokens.push(line.get_ids().to_vec())
     }
     let tokens = tokens.concat();
