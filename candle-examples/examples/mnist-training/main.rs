@@ -260,7 +260,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let default_learning_rate = match args.model {
         WhichModel::Linear => 1.,
-        WhichModel::Mlp => 0.01,
+        WhichModel::Mlp => 0.05,
     };
     let training_args = TrainingArgs {
         epochs: args.epochs,
