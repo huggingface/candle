@@ -118,6 +118,8 @@ impl candle::CustomOp3 for FlashAttn {
                 v_ptr,
                 dst_ptr,
                 softmax_lse_ptr,
+                /* cu_seqlens_q_tr */ std::ptr::null(),
+                /* cu_seqlens_k_tr */ std::ptr::null(),
                 /* q_batch_stride */ q_stride[0] as u32,
                 /* k_batch_stride */ k_stride[0] as u32,
                 /* v_batch_stride */ v_stride[0] as u32,
