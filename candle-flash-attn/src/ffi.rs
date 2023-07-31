@@ -7,6 +7,8 @@ extern "C" {
         v_ptr: *const c_void,
         o_ptr: *const c_void,
         softmax_lse_ptr: *const c_void,
+        cu_seqlens_q_ptr: *const i32,
+        cu_seqlens_k_ptr: *const i32,
 
         q_batch_stride: u32,
         k_batch_stride: u32,
