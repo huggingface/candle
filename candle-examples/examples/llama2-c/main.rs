@@ -259,15 +259,22 @@ fn run_evaluation(
     _device: &Device,
     _args: Args,
 ) -> Result<()> {
+    use std::io::BufRead;
+
     let api = hf_hub::api::sync::Api::new()?;
     let model_id = "roneneldan/TinyStories"; // TODO: Make this configurable.
     println!("loading the evaluation dataset from {}", model_id);
     let api = api.dataset(model_id.to_string());
     let dataset_path = api.get("TinyStories-valid.txt")?;
-    let data = std::fs::read_to_string(dataset_path)?;
-    println!("dataset loaded: {} chars", data.len());
-    let data = tokenizer.encode(data, false).map_err(E::msg)?;
-    println!("dataset encoded: {} tokens", data.len());
+    let file = std::fs::File::open(dataset_path)?;
+    let file = std::io::BufReader::new(file);
+    let mut tokens = vec![];
+    for line in file.lines() {
+        let line = tokenizer.encode(line?, false).map_err(E::msg)?;
+        tokens.push(line.get_ids().to_vec())
+    }
+    let tokens = tokens.concat();
+    println!("dataset loaded and encoded: {} tokens", tokens.len());
     Ok(())
 }
 
