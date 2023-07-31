@@ -89,7 +89,8 @@ fn flash_attn_acausal() -> Result<()> {
     Ok(())
 }
 
-fn _flash_attn_varlen() -> Result<()> {
+#[test]
+fn flash_attn_varlen() -> Result<()> {
     let device = Device::new_cuda(0)?;
     let q = Tensor::arange(0u32, 48, &device)?
         .to_dtype(DType::F16)?
@@ -98,8 +99,8 @@ fn _flash_attn_varlen() -> Result<()> {
     let v = (&q / 50.)?;
     let q = (&q / 30.)?;
 
-    let seqlens_q = Tensor::new(&[2u32], &device)?;
-    let seqlens_k = Tensor::new(&[2u32], &device)?;
+    let seqlens_q = Tensor::new(&[0u32, 2u32], &device)?;
+    let seqlens_k = Tensor::new(&[0u32, 2u32], &device)?;
 
     let ys = {
         let q = q.transpose(0, 1)?;
@@ -110,7 +111,7 @@ fn _flash_attn_varlen() -> Result<()> {
         )?
         .transpose(0, 1)?
     };
-    let ys = ys.i(0)?.to_dtype(DType::F32)?;
+    let ys = ys.to_dtype(DType::F32)?;
 
     assert_eq!(ys.dims(), &[3, 2, 8]);
     assert_eq!(

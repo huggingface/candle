@@ -154,7 +154,7 @@ impl candle::CustomOp3 for FlashAttn {
     }
 }
 
-/// Flash-attention v2 layer using flash-attention.
+/// Flash-attention v2 layer.
 ///
 /// This implements scaled dot-product attention, `softmax(Q @ K^T . softmax_scale) @ V`.
 /// Multi-query and grouped-query attention are supported by using tensors k and v with fewer heads
@@ -293,7 +293,15 @@ impl candle::CustomOp3 for FlashAttnVarLen {
             candle::bail!("number of k/v heads {num_heads_k} must divide number of heads in query {num_heads}")
         }
 
-        let batch_size = seqlens_q_layout.shape().dims1()?;
+        let nseqlens_q = seqlens_q_layout.shape().dims1()?;
+        if nseqlens_q < 2 {
+            candle::bail!("seqlens_q should have a len >= 2 {nseqlens_q}")
+        }
+        let nseqlens_k = seqlens_k_layout.shape().dims1()?;
+        if nseqlens_k != nseqlens_q {
+            candle::bail!("seqlens_q and seqlens_k should have the same number of elements {nseqlens_q} <> {nseqlens_k}")
+        }
+        let batch_size = nseqlens_q - 1;
         let head_size = round_multiple(head_size_og, 8);
         let head_size_rounded = round_multiple(head_size, 32);
         let seqlen_q_rounded = round_multiple(self.max_seqlen_q, 128);
@@ -355,6 +363,26 @@ impl candle::CustomOp3 for FlashAttnVarLen {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Flash-attention v2 layer with variable-length batching.
+///
+/// This implements scaled dot-product attention, `softmax(Q @ K^T . softmax_scale) @ V`.
+/// Multi-query and grouped-query attention are supported by using tensors k and v with fewer heads
+/// than q, the number of heads in k and v has to be divisible by the number of heads in q.
+///
+/// # Arguments
+///
+/// * `q` - Query tensor with shape `(total_q, num_heads_q, head_size)`.
+/// * `k` - Key tensor with shape `(total_kv, num_heads_kv, head_size)`.
+/// * `v` - Value tensor with shape `(total_kv, num_heads_kv, head_size)`.
+/// * `seqlens_q` - The cumulative lengths of the sequences in the batch, used to index in q.
+/// * `seqlens_k` - The cumulative lengths of the sequences in the batch, used to index in k and v.
+/// * `max_seqlen_q` - The maximum query sequence length for q in the batch.
+/// * `max_seqlen_k` - The maximum query sequence length for k and v in the batch.
+///
+/// `seqlens_q` and `seqlens_k` contain `batch_size + 1` elements, typically `0`, `seqlen_1`,
+/// `seqlen_1 + seqlen_2`, etc.
+///
+/// The resulting tensor has dimensions `(total_q, num_heads_q, head_size)`.
 pub fn flash_attn_varlen(
     q: &Tensor,
     k: &Tensor,
