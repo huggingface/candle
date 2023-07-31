@@ -218,7 +218,6 @@ struct Args {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    let device = candle_examples::device(args.cpu)?;
     let config_path = match &args.config {
         Some(config) => std::path::PathBuf::from(config),
         None => {
@@ -228,12 +227,6 @@ fn main() -> anyhow::Result<()> {
             api.get(&args.which_model)?
         }
     };
-    let mut file = std::fs::File::open(config_path)?;
-    let config = Config::from_reader(&mut file)?;
-    let weights = TransformerWeights::from_reader(&mut file, &config, &device)?;
-    let vb = weights.var_builder(&config, &device)?;
-    let cache = model::Cache::new(true, &config, vb.pp("rot"))?;
-    let model = Llama::load(vb, &cache, config)?;
 
     let tokenizer_path = match &args.tokenizer {
         Some(config) => std::path::PathBuf::from(config),
@@ -246,20 +239,23 @@ fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(E::msg)?;
 
     match args.task {
-        Task::Inference => run_inference(tokenizer, model, &device, args)?,
-        Task::Evaluation => run_evaluation(tokenizer, model, &device, args)?,
+        Task::Inference => run_inference(tokenizer, &config_path, args)?,
+        Task::Evaluation => run_eval(tokenizer, &config_path, args)?,
         Task::Training => todo!(),
     }
     Ok(())
 }
 
-fn run_evaluation(
-    tokenizer: Tokenizer,
-    _model: Llama,
-    _device: &Device,
-    _args: Args,
-) -> Result<()> {
+fn run_eval(tokenizer: Tokenizer, config_path: &std::path::PathBuf, args: Args) -> Result<()> {
     use std::io::BufRead;
+
+    let device = candle_examples::device(args.cpu)?;
+    let mut file = std::fs::File::open(config_path)?;
+    let config = Config::from_reader(&mut file)?;
+    let weights = TransformerWeights::from_reader(&mut file, &config, &device)?;
+    let vb = weights.var_builder(&config, &device)?;
+    let cache = model::Cache::new(false, &config, vb.pp("rot"))?;
+    let model = Llama::load(vb, &cache, config)?;
 
     let api = hf_hub::api::sync::Api::new()?;
     let model_id = "roneneldan/TinyStories"; // TODO: Make this configurable.
@@ -275,10 +271,31 @@ fn run_evaluation(
     }
     let tokens = tokens.concat();
     println!("dataset loaded and encoded: {} tokens", tokens.len());
+    let seq_len = 256;
+    for start_idx in (0..tokens.len()).step_by(seq_len) {
+        if start_idx + seq_len + 1 > tokens.len() {
+            break;
+        }
+        let tokens = &tokens[start_idx..start_idx + seq_len + 1];
+        let inputs = Tensor::new(&tokens[..seq_len], &device)?.unsqueeze(0)?;
+        let targets = Tensor::new(&tokens[1..], &device)?;
+        let logits = model.forward(&inputs, 0)?.squeeze(0)?;
+        let loss = candle_nn::loss::cross_entropy(&logits, &targets)?;
+        println!("{start_idx} {}", loss.to_vec0::<f32>()?);
+    }
     Ok(())
 }
 
-fn run_inference(tokenizer: Tokenizer, model: Llama, device: &Device, args: Args) -> Result<()> {
+fn run_inference(tokenizer: Tokenizer, config_path: &std::path::PathBuf, args: Args) -> Result<()> {
+    let device = candle_examples::device(args.cpu)?;
+
+    let mut file = std::fs::File::open(config_path)?;
+    let config = Config::from_reader(&mut file)?;
+    let weights = TransformerWeights::from_reader(&mut file, &config, &device)?;
+    let vb = weights.var_builder(&config, &device)?;
+    let cache = model::Cache::new(true, &config, vb.pp("rot"))?;
+    let model = Llama::load(vb, &cache, config)?;
+
     println!("starting the inference loop");
     let mut logits_processor = LogitsProcessor::new(299792458, args.temperature);
     let mut index_pos = 0;
@@ -298,9 +315,9 @@ fn run_inference(tokenizer: Tokenizer, model: Llama, device: &Device, args: Args
         let start_gen = std::time::Instant::now();
         let context_size = if index > 0 { 1 } else { tokens.len() };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-        let input = Tensor::new(ctxt, device)?.unsqueeze(0)?;
+        let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
         let logits = model.forward(&input, index_pos)?;
-        let logits = logits.squeeze(0)?;
+        let logits = logits.i((0, logits.dim(1)? - 1))?;
         index_pos += ctxt.len();
 
         let next_token = logits_processor.sample(&logits)?;

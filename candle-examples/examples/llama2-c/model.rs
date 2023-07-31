@@ -297,7 +297,6 @@ impl Llama {
             x = block.forward(&x, index_pos, block_idx)?;
         }
         let x = self.ln_f.forward(&x)?;
-        let x = x.i((.., seq_len - 1, ..))?;
         let logits = self.lm_head.forward(&x)?;
         logits.to_dtype(DType::F32)
     }
