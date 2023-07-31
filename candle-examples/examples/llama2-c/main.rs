@@ -199,6 +199,9 @@ struct Args {
     /// https://huggingface.co/karpathy/tinyllamas/tree/main
     #[arg(long, default_value = "stories15M.bin")]
     which_model: String,
+
+    #[arg(long, default_value = "")]
+    prompt: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -232,15 +235,24 @@ fn main() -> anyhow::Result<()> {
         }
     };
     println!("{tokenizer_path:?}");
-    let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)?;
+    let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(E::msg)?;
 
     println!("starting the inference loop");
     let mut logits_processor = LogitsProcessor::new(299792458, args.temperature);
     let mut index_pos = 0;
-    let mut tokens = vec![1u32];
+
+    print!("{}", args.prompt);
+    let mut tokens = tokenizer
+        .encode(args.prompt, true)
+        .map_err(E::msg)?
+        .get_ids()
+        .to_vec();
 
     let start_gen = std::time::Instant::now();
-    for index in 0..config.seq_len - 10 {
+    for index in 0.. {
+        if tokens.len() >= config.seq_len {
+            break;
+        }
         let start_gen = std::time::Instant::now();
         let context_size = if cache.use_kv_cache && index > 0 {
             1

@@ -112,8 +112,10 @@ struct CausalSelfAttention {
 impl CausalSelfAttention {
     fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (b_sz, seq_len, h, n_embd) = x.dims4()?;
-        let cos = self.cache.cos.narrow(0, index_pos, seq_len)?;
-        let sin = self.cache.sin.narrow(0, index_pos, seq_len)?;
+        let cos = self.cache.cos.i(index_pos..index_pos + seq_len)?;
+        let sin = self.cache.sin.i(index_pos..index_pos + seq_len)?;
+        let cos = cos.unsqueeze(1)?;
+        let sin = sin.unsqueeze(1)?;
         let cos = cos.broadcast_as((b_sz, seq_len, 1, n_embd / 2, 1))?;
         let sin = sin.broadcast_as((b_sz, seq_len, 1, n_embd / 2, 1))?;
         let x = x.reshape((b_sz, seq_len, h, n_embd / 2, 2))?;
