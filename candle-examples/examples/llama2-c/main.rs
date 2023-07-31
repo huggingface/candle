@@ -193,6 +193,12 @@ struct Args {
 
     #[arg(long, default_value = "karpathy/tinyllamas")]
     model_id: String,
+
+    /// The model to be used when getting it from the hub. Possible
+    /// values are 'stories15M.bin', 'stories42M.bin', see more at:
+    /// https://huggingface.co/karpathy/tinyllamas/tree/main
+    #[arg(long, default_value = "stories15M.bin")]
+    which_model: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -206,7 +212,7 @@ fn main() -> anyhow::Result<()> {
             let api = hf_hub::api::sync::Api::new()?;
             println!("loading the model weights from {}", args.model_id);
             let api = api.model(args.model_id);
-            api.get("stories15M.bin")?
+            api.get(&args.which_model)?
         }
     };
     let mut file = std::fs::File::open(&config_path)?;
