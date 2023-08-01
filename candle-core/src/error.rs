@@ -228,3 +228,11 @@ macro_rules! bail {
         return Err($crate::Error::Msg(format!($fmt, $($arg)*).into()).bt())
     };
 }
+
+pub fn zip<T, U>(r1: Result<T>, r2: Result<U>) -> Result<(T, U)> {
+    match (r1, r2) {
+        (Ok(r1), Ok(r2)) => Ok((r1, r2)),
+        (Err(e), _) => Err(e),
+        (_, Err(e)) => Err(e),
+    }
+}

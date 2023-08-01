@@ -15,6 +15,21 @@ pub struct Config {
     pub norm_eps: f64,
 }
 
+impl Config {
+    pub fn tiny() -> Self {
+        Self {
+            dim: 288,
+            hidden_dim: 768,
+            n_layers: 6,
+            n_heads: 6,
+            n_kv_heads: 6,
+            vocab_size: 32000,
+            seq_len: 256,
+            norm_eps: 1e-5,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Cache {
     masks: Arc<Mutex<HashMap<usize, Tensor>>>,
