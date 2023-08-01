@@ -28,3 +28,15 @@ impl Embedding {
         Ok(values)
     }
 }
+
+pub fn embedding(in_size: usize, out_size: usize, vb: crate::VarBuilder) -> Result<Embedding> {
+    let embeddings = vb.get_or_init(
+        (in_size, out_size),
+        "weight",
+        crate::Init::Randn {
+            mean: 0.,
+            stdev: 1.,
+        },
+    )?;
+    Ok(Embedding::new(embeddings, out_size))
+}

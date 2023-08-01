@@ -4,128 +4,20 @@ extern crate intel_mkl_src;
 
 use clap::{Parser, ValueEnum};
 
-use candle::{DType, Device, Result, Shape, Tensor, Var, D};
-use candle_nn::{loss, ops, Init, Linear};
-use std::sync::{Arc, Mutex};
+use candle::{DType, Result, Tensor, D};
+use candle_nn::{loss, ops, Linear, VarBuilder, VarMap};
 
 const IMAGE_DIM: usize = 784;
 const LABELS: usize = 10;
 
-struct TensorData {
-    tensors: std::collections::HashMap<String, Var>,
-    pub dtype: DType,
-    pub device: Device,
-}
-
-// A variant of candle_nn::VarBuilder for initializing variables before training.
-#[derive(Clone)]
-struct VarStore {
-    data: Arc<Mutex<TensorData>>,
-    path: Vec<String>,
-}
-
-impl VarStore {
-    fn new(dtype: DType, device: Device) -> Self {
-        let data = TensorData {
-            tensors: std::collections::HashMap::new(),
-            dtype,
-            device,
-        };
-        Self {
-            data: Arc::new(Mutex::new(data)),
-            path: vec![],
-        }
-    }
-
-    fn pp(&self, s: &str) -> Self {
-        let mut path = self.path.clone();
-        path.push(s.to_string());
-        Self {
-            data: self.data.clone(),
-            path,
-        }
-    }
-
-    fn get<S: Into<Shape>>(&self, shape: S, tensor_name: &str, init: Init) -> Result<Tensor> {
-        let shape = shape.into();
-        let path = if self.path.is_empty() {
-            tensor_name.to_string()
-        } else {
-            [&self.path.join("."), tensor_name].join(".")
-        };
-        let mut tensor_data = self.data.lock().unwrap();
-        if let Some(tensor) = tensor_data.tensors.get(&path) {
-            let tensor_shape = tensor.shape();
-            if &shape != tensor_shape {
-                candle::bail!("shape mismatch on {path}: {shape:?} <> {tensor_shape:?}")
-            }
-            return Ok(tensor.as_tensor().clone());
-        }
-        let var = init.var(shape, tensor_data.dtype, &tensor_data.device)?;
-        let tensor = var.as_tensor().clone();
-        tensor_data.tensors.insert(path, var);
-        Ok(tensor)
-    }
-
-    fn all_vars(&self) -> Vec<Var> {
-        let tensor_data = self.data.lock().unwrap();
-        #[allow(clippy::map_clone)]
-        tensor_data
-            .tensors
-            .values()
-            .map(|c| c.clone())
-            .collect::<Vec<_>>()
-    }
-
-    fn save<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
-        let tensor_data = self.data.lock().unwrap();
-        let data = tensor_data.tensors.iter().map(|(k, v)| (k, v.as_tensor()));
-        safetensors::tensor::serialize_to_file(data, &None, path.as_ref())?;
-        Ok(())
-    }
-
-    fn load<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<()> {
-        use candle::safetensors::Load;
-
-        let path = path.as_ref();
-        let data = unsafe { candle::safetensors::MmapedFile::new(path)? };
-        let data = data.deserialize()?;
-        let mut tensor_data = self.data.lock().unwrap();
-        for (name, var) in tensor_data.tensors.iter_mut() {
-            match data.tensor(name) {
-                Ok(data) => {
-                    let data: Tensor = data.load(var.device())?;
-                    if let Err(err) = var.set(&data) {
-                        candle::bail!("error setting {name} using data from {path:?}: {err}",)
-                    }
-                }
-                Err(_) => candle::bail!("cannot find tensor for {name}"),
-            }
-        }
-        Ok(())
-    }
-}
-
-fn linear_z(in_dim: usize, out_dim: usize, vs: VarStore) -> Result<Linear> {
-    let ws = vs.get((out_dim, in_dim), "weight", candle_nn::init::ZERO)?;
-    let bs = vs.get(out_dim, "bias", candle_nn::init::ZERO)?;
-    Ok(Linear::new(ws, Some(bs)))
-}
-
-fn linear(in_dim: usize, out_dim: usize, vs: VarStore) -> Result<Linear> {
-    let init_ws = candle_nn::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get((out_dim, in_dim), "weight", init_ws)?;
-    let bound = 1. / (in_dim as f64).sqrt();
-    let init_bs = Init::Uniform {
-        lo: -bound,
-        up: bound,
-    };
-    let bs = vs.get(out_dim, "bias", init_bs)?;
+fn linear_z(in_dim: usize, out_dim: usize, vs: VarBuilder) -> Result<Linear> {
+    let ws = vs.get_or_init((out_dim, in_dim), "weight", candle_nn::init::ZERO)?;
+    let bs = vs.get_or_init(out_dim, "bias", candle_nn::init::ZERO)?;
     Ok(Linear::new(ws, Some(bs)))
 }
 
 trait Model: Sized {
-    fn new(vs: VarStore) -> Result<Self>;
+    fn new(vs: VarBuilder) -> Result<Self>;
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
 }
 
@@ -134,7 +26,7 @@ struct LinearModel {
 }
 
 impl Model for LinearModel {
-    fn new(vs: VarStore) -> Result<Self> {
+    fn new(vs: VarBuilder) -> Result<Self> {
         let linear = linear_z(IMAGE_DIM, LABELS, vs)?;
         Ok(Self { linear })
     }
@@ -150,9 +42,9 @@ struct Mlp {
 }
 
 impl Model for Mlp {
-    fn new(vs: VarStore) -> Result<Self> {
-        let ln1 = linear(IMAGE_DIM, 100, vs.pp("ln1"))?;
-        let ln2 = linear(100, LABELS, vs.pp("ln2"))?;
+    fn new(vs: VarBuilder) -> Result<Self> {
+        let ln1 = candle_nn::linear(IMAGE_DIM, 100, vs.pp("ln1"))?;
+        let ln2 = candle_nn::linear(100, LABELS, vs.pp("ln2"))?;
         Ok(Self { ln1, ln2 })
     }
 
@@ -180,17 +72,16 @@ fn training_loop<M: Model>(
     let train_images = m.train_images.to_device(&dev)?;
     let train_labels = train_labels.to_dtype(DType::U32)?.to_device(&dev)?;
 
-    let mut vs = VarStore::new(DType::F32, dev.clone());
+    let mut varmap = VarMap::new();
+    let vs = VarBuilder::from_varmap(&varmap, DType::F32, &dev);
     let model = M::new(vs.clone())?;
 
     if let Some(load) = &args.load {
         println!("loading weights from {load}");
-        vs.load(load)?
+        varmap.load(load)?
     }
 
-    let all_vars = vs.all_vars();
-    let all_vars = all_vars.iter().collect::<Vec<_>>();
-    let sgd = candle_nn::SGD::new(&all_vars, args.learning_rate);
+    let sgd = candle_nn::SGD::new(varmap.all_vars(), args.learning_rate);
     let test_images = m.test_images.to_device(&dev)?;
     let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
     for epoch in 1..args.epochs {
@@ -215,7 +106,7 @@ fn training_loop<M: Model>(
     }
     if let Some(save) = &args.save {
         println!("saving trained weights in {save}");
-        vs.save(save)?
+        varmap.save(save)?
     }
     Ok(())
 }

@@ -1,5 +1,6 @@
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, Linear, VarBuilder};
+use candle_nn::linear_no_bias as linear;
+use candle_nn::{embedding, Embedding, Linear, VarBuilder};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -43,8 +44,25 @@ pub struct Cache {
 
 impl Cache {
     pub fn new(use_kv_cache: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let freq_cis_real = vb.get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_real")?;
-        let freq_cis_imag = vb.get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_imag")?;
+        let n_elem = cfg.dim / cfg.n_heads;
+        let theta: Vec<_> = (0..n_elem)
+            .step_by(2)
+            .map(|i| 1f32 / 10000f32.powf(i as f32 / n_elem as f32))
+            .collect();
+        let theta = Tensor::new(theta.as_slice(), vb.device())?;
+        let idx_theta = Tensor::arange(0, cfg.seq_len as u32, vb.device())?
+            .to_dtype(DType::F32)?
+            .reshape((cfg.seq_len, 1))?
+            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+        let precomputed_cos = idx_theta.cos()?;
+        let precomputed_sin = idx_theta.sin()?;
+
+        let freq_cis_real = vb
+            .get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_real")
+            .unwrap_or(precomputed_cos);
+        let freq_cis_imag = vb
+            .get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_imag")
+            .unwrap_or(precomputed_sin);
         let cos = freq_cis_real.reshape((cfg.seq_len, cfg.head_size() / 2, 1))?;
         let sin = freq_cis_imag.reshape((cfg.seq_len, cfg.head_size() / 2, 1))?;
         Ok(Self {
@@ -76,16 +94,6 @@ fn silu(xs: &Tensor) -> Result<Tensor> {
     xs / (xs.neg()?.exp()? + 1.0)?
 }
 
-fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let weight = vb.get((size2, size1), "weight")?;
-    Ok(Linear::new(weight, None))
-}
-
-fn embedding(cfg: &Config, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((cfg.vocab_size, cfg.dim), "weight")?;
-    Ok(Embedding::new(embeddings, cfg.dim))
-}
-
 struct RmsNorm {
     scale: Tensor,
     eps: f64,
@@ -93,7 +101,7 @@ struct RmsNorm {
 
 impl RmsNorm {
     fn load(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let scale = vb.get(size, "weight")?;
+        let scale = vb.get_or_init(size, "weight", candle_nn::Init::Const(1.))?;
         Ok(Self { scale, eps })
     }
 
@@ -315,7 +323,7 @@ impl Llama {
     }
 
     pub fn load(vb: VarBuilder, cache: &Cache, cfg: Config) -> Result<Self> {
-        let wte = embedding(&cfg, vb.pp("model.embed_tokens"))?;
+        let wte = embedding(cfg.vocab_size, cfg.dim, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.dim, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::load(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.n_layers)
