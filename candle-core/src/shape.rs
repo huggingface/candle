@@ -41,6 +41,12 @@ impl From<usize> for Shape {
     }
 }
 
+impl From<(usize,)> for Shape {
+    fn from(d1: (usize,)) -> Self {
+        Self(vec![d1.0])
+    }
+}
+
 impl From<(usize, usize)> for Shape {
     fn from(d12: (usize, usize)) -> Self {
         Self(vec![d12.0, d12.1])
