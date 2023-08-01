@@ -536,6 +536,8 @@ fn embeddings(device: &Device) -> Result<()> {
     let t = Tensor::new(&[[0f32, 1f32], [2f32, 3f32], [4f32, 5f32]], device)?;
     let hs = Tensor::embedding(&ids, &t)?;
     assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]);
+    let hs = t.index_select(&ids, 0)?;
+    assert_eq!(hs.to_vec2::<f32>()?, &[[0.0, 1.0], [4.0, 5.0], [2.0, 3.0]]);
     Ok(())
 }
 
