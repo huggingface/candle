@@ -1,8 +1,8 @@
-# Hello world !
+# Hello world!
 
 We will now create the hello world of the ML world, building a model capable of solving MNIST dataset.
 
-Open `src/main.rs` and fill in with this content:
+Open `src/main.rs` and fill in this content:
 
 ```rust
 # extern crate candle;
@@ -127,7 +127,7 @@ fn main() -> Result<()> {
 }
 ```
 
-Now it works, great and is a great way to create your own layers.
+Now it works, it is a great way to create your own layers.
 But most of the classical layers are already implemented in [candle-nn](https://github.com/LaurentMazare/candle/tree/main/candle-nn).
 
 ## Using `candle_nn`.

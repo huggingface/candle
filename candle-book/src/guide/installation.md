@@ -21,4 +21,4 @@ cargo build
 ```
 
 
-You can also see feature `mkl` which could be interesting to get faster inference on CPU. [Using mkl](./advanced/mkl.md)
+You can also see the `mkl` feature which could be interesting to get faster inference on CPU. [Using mkl](./advanced/mkl.md)
