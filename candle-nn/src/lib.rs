@@ -20,4 +20,4 @@ pub use init::Init;
 pub use layer_norm::LayerNorm;
 pub use linear::Linear;
 pub use optim::SGD;
-pub use var_builder::VarBuilder;
+pub use var_builder::{VarBuilder, VarMap};
