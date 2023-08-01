@@ -1,5 +1,6 @@
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, Linear, VarBuilder};
+use candle_nn::linear_no_bias as linear;
+use candle_nn::{embedding, Embedding, Linear, VarBuilder};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -76,16 +77,6 @@ fn silu(xs: &Tensor) -> Result<Tensor> {
     xs / (xs.neg()?.exp()? + 1.0)?
 }
 
-fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let weight = vb.get((size2, size1), "weight")?;
-    Ok(Linear::new(weight, None))
-}
-
-fn embedding(cfg: &Config, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((cfg.vocab_size, cfg.dim), "weight")?;
-    Ok(Embedding::new(embeddings, cfg.dim))
-}
-
 struct RmsNorm {
     scale: Tensor,
     eps: f64,
@@ -93,7 +84,7 @@ struct RmsNorm {
 
 impl RmsNorm {
     fn load(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let scale = vb.get(size, "weight")?;
+        let scale = vb.get_or_init(size, "weight", candle_nn::Init::Const(1.))?;
         Ok(Self { scale, eps })
     }
 
@@ -315,7 +306,7 @@ impl Llama {
     }
 
     pub fn load(vb: VarBuilder, cache: &Cache, cfg: Config) -> Result<Self> {
-        let wte = embedding(&cfg, vb.pp("model.embed_tokens"))?;
+        let wte = embedding(cfg.vocab_size, cfg.dim, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.dim, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::load(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.n_layers)

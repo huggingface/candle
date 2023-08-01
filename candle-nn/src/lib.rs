@@ -15,7 +15,7 @@ pub mod vision;
 
 pub use activation::Activation;
 pub use conv::{Conv1d, Conv1dConfig};
-pub use embedding::Embedding;
+pub use embedding::{embedding, Embedding};
 pub use init::Init;
 pub use layer_norm::{layer_norm, LayerNorm};
 pub use linear::{linear, linear_no_bias, Linear};
