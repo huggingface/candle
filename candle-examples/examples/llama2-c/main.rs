@@ -224,6 +224,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
 
     let mut file = std::fs::File::open(config_path)?;
     let config = Config::from_reader(&mut file)?;
+    println!("{config:?}");
     let weights = TransformerWeights::from_reader(&mut file, &config, &device)?;
     let vb = weights.var_builder(&config, &device)?;
     let cache = model::Cache::new(true, &config, vb.pp("rot"))?;

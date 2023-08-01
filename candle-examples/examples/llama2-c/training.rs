@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused)]
-use crate::model::Llama;
-use candle::{Device, Result, Tensor};
+use crate::model::{Cache, Config, Llama};
+use candle::{DType, Device, Result, Tensor};
 
 pub struct Dataset {
     valid_tokens: Vec<memmap2::Mmap>,
@@ -114,7 +114,7 @@ impl<'a> Iterator for DatasetRandomIter<'a> {
     }
 }
 
-fn _valid_loss(
+fn valid_loss(
     dataset: &Dataset,
     model: &Llama,
     args: &crate::TrainingCmd,
@@ -128,7 +128,6 @@ fn _valid_loss(
         let (inp, tgt) = inp_tgt?;
         let logits = model.forward(&inp, 0)?;
         let loss = candle_nn::loss::cross_entropy(&logits.flatten_to(1)?, &tgt.flatten_to(1)?)?;
-        println!("{}", loss.to_vec0::<f32>()?);
         sum_ce += loss.to_vec0::<f32>()? as f64;
         cnt += 1;
     }
@@ -136,12 +135,18 @@ fn _valid_loss(
 }
 
 pub fn run(args: &crate::TrainingCmd, common_args: &crate::Args) -> Result<()> {
-    let _device = candle_examples::device(common_args.cpu)?;
+    let device = candle_examples::device(common_args.cpu)?;
     let dataset = Dataset::new(&args.pretokenized_dir)?;
     println!(
         "loaded dataset, train: {} files, valid: {} files",
         dataset.train_tokens.len(),
         dataset.valid_tokens.len()
     );
+    let vb = candle_nn::VarBuilder::zeros(DType::F32, &device);
+    let config = Config::tiny();
+    let cache = Cache::new(false, &config, vb.pp("rot"))?;
+    let model = Llama::load(vb, &cache, config)?;
+    let loss = valid_loss(&dataset, &model, args, &device)?;
+    println!("{loss}");
     Ok(())
 }
