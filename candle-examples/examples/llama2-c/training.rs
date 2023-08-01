@@ -142,15 +142,15 @@ pub fn run(args: &crate::TrainingCmd, common_args: &crate::Args) -> Result<()> {
         dataset.train_tokens.len(),
         dataset.valid_tokens.len()
     );
-    let vb = candle_nn::VarBuilder::zeros(DType::F32, &device);
+    let varmap = candle_nn::VarMap::new();
+    let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
     let config = Config::tiny();
     let iter = DatasetRandomIter::new(&dataset, false, config.seq_len, device.clone());
     let batch_iter = candle_nn::dataset::Batcher::new_r2(iter).batch_size(args.batch_size);
 
     let cache = Cache::new(false, &config, vb.pp("rot"))?;
     let model = Llama::load(vb, &cache, config)?;
-    let all_vars = vec![]; // TODO: Propagate the variables from the VarBuilder to here.
-    let sgd = candle_nn::SGD::new(&all_vars, args.learning_rate);
+    let sgd = candle_nn::SGD::new(varmap.all_vars(), args.learning_rate);
     for (batch_index, batch) in batch_iter.enumerate() {
         let (inp, tgt) = batch?;
         let logits = model.forward(&inp, 0)?;

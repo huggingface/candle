@@ -81,9 +81,7 @@ fn training_loop<M: Model>(
         varmap.load(load)?
     }
 
-    let all_vars = varmap.all_vars();
-    let all_vars = all_vars.iter().collect::<Vec<_>>();
-    let sgd = candle_nn::SGD::new(&all_vars, args.learning_rate);
+    let sgd = candle_nn::SGD::new(varmap.all_vars(), args.learning_rate);
     let test_images = m.test_images.to_device(&dev)?;
     let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
     for epoch in 1..args.epochs {
