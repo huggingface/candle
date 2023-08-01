@@ -44,8 +44,25 @@ pub struct Cache {
 
 impl Cache {
     pub fn new(use_kv_cache: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let freq_cis_real = vb.get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_real")?;
-        let freq_cis_imag = vb.get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_imag")?;
+        let n_elem = cfg.dim / cfg.n_heads;
+        let theta: Vec<_> = (0..n_elem)
+            .step_by(2)
+            .map(|i| 1f32 / 10000f32.powf(i as f32 / n_elem as f32))
+            .collect();
+        let theta = Tensor::new(theta.as_slice(), vb.device())?;
+        let idx_theta = Tensor::arange(0, cfg.seq_len as u32, vb.device())?
+            .to_dtype(DType::F32)?
+            .reshape((cfg.seq_len, 1))?
+            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+        let precomputed_cos = idx_theta.cos()?;
+        let precomputed_sin = idx_theta.sin()?;
+
+        let freq_cis_real = vb
+            .get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_real")
+            .unwrap_or(precomputed_cos);
+        let freq_cis_imag = vb
+            .get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_imag")
+            .unwrap_or(precomputed_sin);
         let cos = freq_cis_real.reshape((cfg.seq_len, cfg.head_size() / 2, 1))?;
         let sin = freq_cis_imag.reshape((cfg.seq_len, cfg.head_size() / 2, 1))?;
         Ok(Self {
