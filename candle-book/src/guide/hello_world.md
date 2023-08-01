@@ -2,7 +2,7 @@
 
 We will now create the hello world of the ML world, building a model capable of solving MNIST dataset.
 
-Open `src/main.rs` and fill in with these contents:
+Open `src/main.rs` and fill in with this content:
 
 ```rust
 # extern crate candle;
@@ -45,7 +45,7 @@ cargo run --release
 
 ## Using a `Linear` layer.
 
-Now that we have this, we might want to complexity a little, for instance by adding `bias` and creating
+Now that we have this, we might want to complexify things a bit, for instance by adding `bias` and creating
 the classical `Linear` layer. We can do as such
 
 ```rust
@@ -76,7 +76,7 @@ impl Model {
 }
 ```
 
-This will change the loading code into a new function
+This will change the model running code into a new function
 
 ```rust
 # extern crate candle;
@@ -106,8 +106,10 @@ This will change the loading code into a new function
 # }
 fn main() -> Result<()> {
     // Use Device::new_cuda(0)?; to use the GPU.
-    let device = Device::Cpu;
+    // Use Device::Cpu; to use the CPU.
+    let device = Device::cuda_if_available(0)?;
 
+    // Creating a dummy model
     let weight = Tensor::zeros((784, 100), DType::F32, &device)?;
     let bias = Tensor::zeros((100, ), DType::F32, &device)?;
     let first = Linear{weight, bias};
@@ -118,6 +120,7 @@ fn main() -> Result<()> {
 
     let dummy_image = Tensor::zeros((1, 784), DType::F32, &device)?;
 
+    // Inference on the model
     let digit = model.forward(&dummy_image)?;
     println!("Digit {digit:?} digit");
     Ok(())

@@ -9,7 +9,7 @@ cargo add --git https://github.com/LaurentMazare/candle.git candle
 ```
 
 At this point, candle will be built **without** CUDA support.
-To get CUDA support use the feature `cuda`
+To get CUDA support use the `cuda` feature
 ```bash
 cargo add --git https://github.com/LaurentMazare/candle.git candle --features cuda
 ```
