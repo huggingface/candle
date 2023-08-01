@@ -249,7 +249,7 @@ pub fn load<P: AsRef<Path>>(filename: P, device: &Device) -> Result<HashMap<Stri
         .collect()
 }
 
-pub fn save<P: AsRef<Path>>(tensors: HashMap<&str, Tensor>, filename: P) -> Result<()> {
+pub fn save<P: AsRef<Path>>(tensors: &HashMap<&str, Tensor>, filename: P) -> Result<()> {
     Ok(st::serialize_to_file(tensors, &None, filename.as_ref())?)
 }
 
@@ -293,7 +293,7 @@ mod tests {
         let t = Tensor::zeros((2, 2), DType::F32, &Device::Cpu).unwrap();
         let u = Tensor::zeros((1, 2), DType::F32, &Device::Cpu).unwrap();
         let map: HashMap<_, _> = [("t", t), ("u", u)].into_iter().collect();
-        save(map, "multi.safetensors").unwrap();
+        save(&map, "multi.safetensors").unwrap();
 
         let weights = load("multi.safetensors", &Device::Cpu).unwrap();
         assert_eq!(weights.get("t").unwrap().dims(), &[2, 2]);

@@ -79,7 +79,7 @@ Cheatsheet:
 | Arithmetic | `a + b`                                  | `&a + &b`                                                        |
 | Device     | `tensor.to(device="cuda")`               | `tensor.to_device(&Device::Cuda(0))?`                            |
 | Dtype      | `tensor.to(dtype=torch.float16)`         | `tensor.to_dtype(&DType::F16)?`                                  |
-| Saving     | `torch.save({"A": A}, "model.bin")`      | `candle::safetensors::save(HashMap::from([("A", A)]), "model.safetensors")?` |
+| Saving     | `torch.save({"A": A}, "model.bin")`      | `candle::safetensors::save(&HashMap::from([("A", A)]), "model.safetensors")?` |
 | Loading    | `weights = torch.load("model.bin")`      | `candle::safetensors::load("model.safetensors", &device)`        |
 
 <!--- ANCHOR_END: cheatsheet --->
