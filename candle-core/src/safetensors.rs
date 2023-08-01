@@ -242,7 +242,11 @@ fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
 
 pub fn load<P: AsRef<Path>>(filename: P, device: &Device) -> Result<HashMap<String, Tensor>> {
     let data = std::fs::read(filename.as_ref())?;
-    let st = safetensors::SafeTensors::deserialize(&data)?;
+    load_buffer(&data[..], device)
+}
+
+pub fn load_buffer(data: &[u8], device: &Device) -> Result<HashMap<String, Tensor>> {
+    let st = safetensors::SafeTensors::deserialize(data)?;
     st.tensors()
         .into_iter()
         .map(|(name, view)| Ok((name, view.load(device)?)))

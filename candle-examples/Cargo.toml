@@ -25,6 +25,7 @@ half = { workspace = true, optional = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 byteorder = { workspace = true }
+hf-hub = { workspace = true, features=["tokio"]}
 clap = { workspace = true }
 hf-hub = { workspace = true }
 memmap2 = { workspace = true }
@@ -34,6 +35,9 @@ tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
 wav = { workspace = true }
+# Necessary to disambiguate with tokio in wasm examples which are 1.28.1
+tokio = "1.29.1"
+memmap2.workspace = true
 
 [build-dependencies]
 anyhow = { workspace = true }
