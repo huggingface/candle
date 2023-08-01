@@ -5,7 +5,7 @@ extern crate intel_mkl_src;
 use clap::{Parser, ValueEnum};
 
 use candle::{DType, Result, Tensor, D};
-use candle_nn::{loss, ops, Init, Linear, VarBuilder, VarMap};
+use candle_nn::{loss, ops, Linear, VarBuilder, VarMap};
 
 const IMAGE_DIM: usize = 784;
 const LABELS: usize = 10;
@@ -13,18 +13,6 @@ const LABELS: usize = 10;
 fn linear_z(in_dim: usize, out_dim: usize, vs: VarBuilder) -> Result<Linear> {
     let ws = vs.get_or_init((out_dim, in_dim), "weight", candle_nn::init::ZERO)?;
     let bs = vs.get_or_init(out_dim, "bias", candle_nn::init::ZERO)?;
-    Ok(Linear::new(ws, Some(bs)))
-}
-
-fn linear(in_dim: usize, out_dim: usize, vs: VarBuilder) -> Result<Linear> {
-    let init_ws = candle_nn::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_or_init((out_dim, in_dim), "weight", init_ws)?;
-    let bound = 1. / (in_dim as f64).sqrt();
-    let init_bs = Init::Uniform {
-        lo: -bound,
-        up: bound,
-    };
-    let bs = vs.get_or_init(out_dim, "bias", init_bs)?;
     Ok(Linear::new(ws, Some(bs)))
 }
 
@@ -55,8 +43,8 @@ struct Mlp {
 
 impl Model for Mlp {
     fn new(vs: VarBuilder) -> Result<Self> {
-        let ln1 = linear(IMAGE_DIM, 100, vs.pp("ln1"))?;
-        let ln2 = linear(100, LABELS, vs.pp("ln2"))?;
+        let ln1 = candle_nn::linear(IMAGE_DIM, 100, vs.pp("ln1"))?;
+        let ln2 = candle_nn::linear(100, LABELS, vs.pp("ln2"))?;
         Ok(Self { ln1, ln2 })
     }
 

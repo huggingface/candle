@@ -62,3 +62,9 @@ impl LayerNorm {
         Ok(x)
     }
 }
+
+pub fn layer_norm(size: usize, eps: f64, vb: crate::VarBuilder) -> Result<LayerNorm> {
+    let weight = vb.get_or_init(size, "weight", crate::Init::Const(1.))?;
+    let bias = vb.get_or_init(size, "bias", crate::Init::Const(0.))?;
+    Ok(LayerNorm::new(weight, bias, eps))
+}
