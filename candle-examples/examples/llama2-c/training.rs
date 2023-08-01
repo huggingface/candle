@@ -43,6 +43,7 @@ impl Dataset {
 }
 
 struct DatasetRandomIter<'a> {
+    all_tokens: &'a [memmap2::Mmap],
     tokens: Vec<&'a memmap2::Mmap>,
     current_tokens: &'a memmap2::Mmap,
     indexes_in_bytes: Vec<usize>,
@@ -55,11 +56,12 @@ impl<'a> DatasetRandomIter<'a> {
         use rand::seq::SliceRandom;
         use rand::thread_rng;
 
-        let mut tokens: Vec<_> = if valid {
-            ds.valid_tokens.iter().collect()
+        let all_tokens = if valid {
+            &ds.valid_tokens
         } else {
-            ds.train_tokens.iter().collect()
+            &ds.train_tokens
         };
+        let mut tokens = all_tokens.iter().collect::<Vec<_>>();
         tokens.shuffle(&mut thread_rng());
         let current_tokens = tokens.pop().unwrap();
         let seq_len_in_bytes = seq_len * 2;
@@ -68,6 +70,7 @@ impl<'a> DatasetRandomIter<'a> {
             .collect::<Vec<_>>();
         indexes_in_bytes.shuffle(&mut thread_rng());
         Self {
+            all_tokens,
             tokens,
             current_tokens,
             indexes_in_bytes,
@@ -82,9 +85,22 @@ impl<'a> Iterator for DatasetRandomIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         use byteorder::{LittleEndian, ReadBytesExt};
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
 
         let seq_len = self.seq_len;
-        if self.indexes_in_bytes.is_empty() {}
+        if self.indexes_in_bytes.is_empty() {
+            if self.tokens.is_empty() {
+                self.tokens = self.all_tokens.iter().collect();
+                self.tokens.shuffle(&mut thread_rng());
+            }
+            self.current_tokens = self.tokens.pop().unwrap();
+            let seq_len_in_bytes = self.seq_len * 2;
+            self.indexes_in_bytes = (0..self.current_tokens.len() - seq_len_in_bytes)
+                .step_by(seq_len_in_bytes)
+                .collect::<Vec<_>>();
+            self.indexes_in_bytes.shuffle(&mut thread_rng());
+        }
         let start_idx = self.indexes_in_bytes.pop().unwrap();
         let bytes = &self.current_tokens[start_idx..start_idx + 2 * (seq_len + 1)];
         let mut tokens = vec![0u16; bytes.len() / 2];
@@ -98,33 +114,25 @@ impl<'a> Iterator for DatasetRandomIter<'a> {
     }
 }
 
-fn _eval(_dataset: &Dataset, _model: &Llama) -> Result<()> {
-    // use std::io::BufRead;
-
-    // let mut tokens = vec![0u16; bytes.len() / 2];
-    // std::io::Cursor::new(bytes).read_u16_into::<LittleEndian>(&mut tokens)?;
-    // tokens.into_iter().map(|u| u as u32).collect::<Vec<u32>>();
-    // println!("dataset loaded and encoded: {} tokens", tokens.len());
-
-    // let seq_len = model.config.seq_len;
-    // let iter = (0..tokens.len()).step_by(seq_len).flat_map(|start_idx| {
-    //     if start_idx + seq_len + 1 > tokens.len() {
-    //         None
-    //     } else {
-    //         let tokens = &tokens[start_idx..start_idx + seq_len + 1];
-    //         let inputs = Tensor::new(&tokens[..seq_len], &device);
-    //         let targets = Tensor::new(&tokens[1..], &device);
-    //         Some(inputs.and_then(|inputs| targets.map(|targets| (inputs, targets))))
-    //     }
-    // });
-    // let batch_iter = candle_nn::dataset::Batcher::new_r2(iter).batch_size(args.batch_size);
-    // for inp_tgt in batch_iter {
-    //     let (inp, tgt) = inp_tgt?;
-    //     let logits = model.forward(&inp, 0)?;
-    //     let loss = candle_nn::loss::cross_entropy(&logits.flatten_to(1)?, &tgt.flatten_to(1)?)?;
-    //     println!("{}", loss.to_vec0::<f32>()?);
-    // }
-    Ok(())
+fn _valid_loss(
+    dataset: &Dataset,
+    model: &Llama,
+    args: &crate::TrainingCmd,
+    device: &Device,
+) -> Result<f64> {
+    let iter = DatasetRandomIter::new(dataset, true, model.config.seq_len, device.clone());
+    let batch_iter = candle_nn::dataset::Batcher::new_r2(iter).batch_size(args.batch_size);
+    let mut sum_ce = 0f64;
+    let mut cnt = 0usize;
+    for inp_tgt in batch_iter.take(50) {
+        let (inp, tgt) = inp_tgt?;
+        let logits = model.forward(&inp, 0)?;
+        let loss = candle_nn::loss::cross_entropy(&logits.flatten_to(1)?, &tgt.flatten_to(1)?)?;
+        println!("{}", loss.to_vec0::<f32>()?);
+        sum_ce += loss.to_vec0::<f32>()? as f64;
+        cnt += 1;
+    }
+    Ok(sum_ce / cnt as f64)
 }
 
 pub fn run(args: &crate::TrainingCmd, common_args: &crate::Args) -> Result<()> {
