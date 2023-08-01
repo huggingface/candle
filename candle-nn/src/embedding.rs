@@ -23,7 +23,7 @@ impl Embedding {
         let mut final_dims = indexes.dims().to_vec();
         final_dims.push(self.hidden_size);
         let indexes = indexes.flatten_all()?;
-        let values = Tensor::embedding(&indexes, &self.embeddings)?;
+        let values = self.embeddings.index_select(&indexes, 0)?;
         let values = values.reshape(final_dims)?;
         Ok(values)
     }
