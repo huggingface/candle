@@ -74,6 +74,9 @@ pub struct TrainingCmd {
 
     #[arg(long, default_value_t = 32)]
     batch_size: usize,
+
+    #[arg(long, default_value_t = 0.001)]
+    learning_rate: f64,
 }
 
 #[derive(Subcommand, Debug, Clone)]
