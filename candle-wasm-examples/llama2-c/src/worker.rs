@@ -99,7 +99,10 @@ impl Model {
         let mut index_pos = 0;
         let mut tokens = vec![1u32];
 
-        for index in 0..self.config.seq_len - 10 {
+        for index in 0.. {
+            if tokens.len() >= self.config.seq_len {
+                break;
+            }
             let context_size = if self.cache.use_kv_cache && index > 0 {
                 1
             } else {
