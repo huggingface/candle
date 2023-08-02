@@ -54,6 +54,13 @@ impl VersionedMagic {
         };
         Ok(versioned_magic)
     }
+
+    fn align32(&self) -> bool {
+        match self {
+            Self::GgmlUnversioned | Self::GgmfV1 => false,
+            Self::GgjtV1 | Self::GgjtV2 | Self::GgjtV3 => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +152,45 @@ impl GgmlDType {
         };
         Ok(dtype)
     }
+
+    fn type_size(&self) -> usize {
+        match self {
+            Self::F32 => 4,
+            Self::F16 => 2,
+            Self::Q4_0 => 18,
+            Self::Q4_1 => 20,
+            Self::Q5_0 => 22,
+            Self::Q5_1 => 24,
+            // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L932
+            Self::Q8_0 => 34,
+            Self::Q8_1 => 36,
+            Self::Q2K => 256 / 16 + 256 / 4 + 2 * 2,
+            Self::Q3K => 256 / 8 + 256 / 4 + 12 + 2,
+            // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/k_quants.h#L82
+            Self::Q4K => 256 / 2 + 2 + 2 * 2,
+            Self::Q5K => 256 / 8 + 256 / 2 + 2 * 2 + 12,
+            Self::Q6K => 3 * 256 / 4 + 256 / 16 + 2,
+        }
+    }
+
+    fn blck_size(&self) -> usize {
+        match self {
+            Self::F32 => 1,
+            Self::F16 => 1,
+            Self::Q4_0 => 32,
+            Self::Q4_1 => 32,
+            Self::Q5_0 => 32,
+            Self::Q5_1 => 32,
+            Self::Q8_0 => 32,
+            Self::Q8_1 => 32,
+            // Default to QK_K 256 rather than 64.
+            Self::Q2K => 256,
+            Self::Q3K => 256,
+            Self::Q4K => 256,
+            Self::Q5K => 256,
+            Self::Q6K => 256,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -166,13 +212,20 @@ impl Content {
         while reader.stream_position()? != last_position {
             let n_dims = reader.read_u32::<LittleEndian>()?;
             let name_len = reader.read_u32::<LittleEndian>()?;
-            let tensor_type = reader.read_u32::<LittleEndian>()?;
-            let _tensor_type = GgmlDType::from_u32(tensor_type)?;
+            let dtype = reader.read_u32::<LittleEndian>()?;
+            let dtype = GgmlDType::from_u32(dtype)?;
             let mut dims = vec![0u32; n_dims as usize];
             reader.read_u32_into::<LittleEndian>(&mut dims)?;
             let mut name = vec![0u32; name_len as usize];
             reader.read_u32_into::<LittleEndian>(&mut name)?;
-            // pass
+
+            if magic.align32() {
+                let pos = reader.stream_position()?;
+                reader.seek(std::io::SeekFrom::Start((pos + 31) % 32))?;
+            }
+            let tensor_elems = dims.iter().map(|&u| u as usize).product::<usize>();
+            let tensor_size = tensor_elems * dtype.type_size() / dtype.blck_size();
+            reader.seek(std::io::SeekFrom::Current(tensor_size as i64))?;
         }
         Ok(Self {
             magic,
