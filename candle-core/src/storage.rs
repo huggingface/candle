@@ -295,26 +295,6 @@ impl Storage {
         }
     }
 
-    pub(crate) fn embedding(&self, layout: &Layout, rhs: &Self, rhs_l: &Layout) -> Result<Self> {
-        self.same_device(rhs, "embedding")?;
-        match (self, rhs) {
-            (Self::Cpu(lhs), Self::Cpu(rhs)) => {
-                let storage = lhs.embedding(layout, rhs, rhs_l)?;
-                Ok(Self::Cpu(storage))
-            }
-            (Self::Cuda(lhs), Self::Cuda(rhs)) => {
-                let storage = lhs.embedding(layout, rhs, rhs_l)?;
-                Ok(Self::Cuda(storage))
-            }
-            (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
-                lhs: lhs.device().location(),
-                rhs: rhs.device().location(),
-                op: "embedding",
-            }
-            .bt()),
-        }
-    }
-
     pub(crate) fn gather(
         &self,
         l: &Layout,

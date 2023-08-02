@@ -59,7 +59,6 @@ impl Tensor {
                     | Op::Binary(lhs, rhs, _)
                     | Op::Gather(lhs, rhs, _)
                     | Op::IndexSelect(lhs, rhs, _)
-                    | Op::Embedding(lhs, rhs)
                     | Op::Matmul(lhs, rhs) => {
                         let (tg, nodes) = walk(lhs, nodes, already_seen);
                         track_grad |= tg;
@@ -187,9 +186,6 @@ impl Tensor {
                     Op::IndexSelect(arg, indexes, dim) => {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.index_add(indexes, &grad, *dim)?;
-                    }
-                    Op::Embedding(_lhs, _rhs) => {
-                        Err(Error::BackwardNotSupported { op: "embedding" })?
                     }
                     Op::Matmul(lhs, rhs) => {
                         // Skipping checks, the op went ok, we can skip

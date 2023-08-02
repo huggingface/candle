@@ -65,7 +65,6 @@ pub enum Op {
     // The third argument is the reduced shape with `keepdim=true`.
     Reduce(Tensor, ReduceOp, Vec<usize>),
     Matmul(Tensor, Tensor),
-    Embedding(Tensor, Tensor),
     Gather(Tensor, Tensor, usize),
     ScatterAdd(Tensor, Tensor, Tensor, usize),
     IndexSelect(Tensor, Tensor, usize),
