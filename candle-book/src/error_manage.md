@@ -36,4 +36,16 @@ Another thing to note, is that since Rust is compiled it is not necessarily as e
 especially in release builds. We're using [`anyhow`](https://docs.rs/anyhow/latest/anyhow/) for that.
 The library is still young, please [report](https://github.com/LaurentMazare/candle/issues) any issues detecting where an error is coming from.
 
+## Cuda error management
+
+When running a model on Cuda, you might get a stacktrace not really representing the error.
+The reason is that CUDA is async by nature, and therefore the error might be caught while you were sending totally different kernels.
+
+One way to avoid this is to use `CUDA_LAUNCH_BLOCKING=1` as an environment variable. This will force every kernel to be launched sequentially.
+You might still however see the error happening on other kernels as the faulty kernel might exit without an error but spoiling some pointer for which the error will happen when dropping the `CudaSlice` only.
+
+
+If this occurs, you can use [`compute-sanitizer`](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html)
+This tool is like `valgrind` but for cuda. It will help locate the errors in the kernels.
+
 
