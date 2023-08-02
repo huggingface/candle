@@ -91,13 +91,25 @@ impl LogitsProcessor {
 }
 
 impl Model {
-    fn run(&self, link: &WorkerLink<Worker>, id: HandlerId, temp: f64) -> Result<()> {
+    fn run(
+        &self,
+        link: &WorkerLink<Worker>,
+        id: HandlerId,
+        temp: f64,
+        prompt: String,
+    ) -> Result<()> {
         let dev = Device::Cpu;
         let temp = if temp <= 0. { None } else { Some(temp) };
-        console_log!("{temp:?}");
+        console_log!("{temp:?} {prompt}");
         let mut logits_processor = LogitsProcessor::new(299792458, temp);
         let mut index_pos = 0;
-        let mut tokens = vec![1u32];
+        let mut tokens = self
+            .tokenizer
+            .encode(prompt.to_string(), true)
+            .map_err(|m| candle::Error::Msg(m.to_string()))?
+            .get_ids()
+            .to_vec();
+        link.respond(id, Ok(WorkerOutput::Generated(prompt)));
 
         for index in 0..self.config.seq_len - 10 {
             let context_size = if self.cache.use_kv_cache && index > 0 {
@@ -287,7 +299,7 @@ pub struct Worker {
 #[derive(Serialize, Deserialize)]
 pub enum WorkerInput {
     ModelData(ModelData),
-    Run(f64),
+    Run(f64, String),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -320,7 +332,7 @@ impl yew_agent::Worker for Worker {
                 }
                 Err(err) => Err(format!("model creation error {err:?}")),
             },
-            WorkerInput::Run(temp) => match &mut self.model {
+            WorkerInput::Run(temp, prompt) => match &mut self.model {
                 None => Err("model has not been set yet".to_string()),
                 Some(model) => {
                     {
@@ -329,7 +341,9 @@ impl yew_agent::Worker for Worker {
                             *elem = None
                         }
                     }
-                    let result = model.run(&self.link, id, temp).map_err(|e| e.to_string());
+                    let result = model
+                        .run(&self.link, id, temp, prompt)
+                        .map_err(|e| e.to_string());
                     Ok(WorkerOutput::GenerationDone(result))
                 }
             },
