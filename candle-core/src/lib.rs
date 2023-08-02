@@ -45,6 +45,7 @@ pub mod display;
 mod dtype;
 mod dummy_cuda_backend;
 pub mod error;
+pub mod ggml;
 mod indexer;
 pub mod layout;
 #[cfg(feature = "mkl")]
