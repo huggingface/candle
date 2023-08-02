@@ -75,9 +75,6 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn embedding(&self, _: &Layout, _: &Self, _: &Layout) -> Result<Self> {
-        Err(Error::NotCompiledWithCudaSupport)
-    }
     fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }

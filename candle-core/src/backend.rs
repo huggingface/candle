@@ -37,7 +37,6 @@ pub trait BackendStorage: Sized {
         _params: &crate::conv::ParamsConv1D,
     ) -> Result<Self>;
 
-    fn embedding(&self, _: &Layout, _: &Self, _: &Layout) -> Result<Self>;
     fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self>;
     fn scatter_add(
         &self,

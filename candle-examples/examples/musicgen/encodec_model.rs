@@ -142,7 +142,7 @@ impl EncodecEuclideanCodebook {
     }
 
     fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
-        let quantize = Tensor::embedding(embed_ind, &self.embed)?;
+        let quantize = self.embed.embedding(embed_ind)?;
         Ok(quantize)
     }
 }
