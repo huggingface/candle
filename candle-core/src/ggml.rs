@@ -167,7 +167,7 @@ impl GgmlDType {
             Self::Q2K => 256 / 16 + 256 / 4 + 2 * 2,
             Self::Q3K => 256 / 8 + 256 / 4 + 12 + 2,
             // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/k_quants.h#L82
-            Self::Q4K => 256 / 2 + 2 + 2 * 2,
+            Self::Q4K => 256 / 2 + 12 + 2 * 2,
             Self::Q5K => 256 / 8 + 256 / 2 + 2 * 2 + 12,
             Self::Q6K => 3 * 256 / 4 + 256 / 16 + 2,
         }
@@ -222,7 +222,7 @@ impl Content {
 
             if magic.align32() {
                 let pos = reader.stream_position()?;
-                reader.seek(std::io::SeekFrom::Start((pos + 31) % 32))?;
+                reader.seek(std::io::SeekFrom::Current(((32 - pos % 32) % 32) as i64))?;
             }
             let tensor_elems = dims.iter().map(|&u| u as usize).product::<usize>();
             let tensor_size = tensor_elems * dtype.type_size() / dtype.blck_size();
