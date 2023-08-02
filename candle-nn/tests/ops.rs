@@ -1,18 +1,10 @@
-use candle::{Device, Result, Tensor};
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
 
-pub fn to_vec3_round(t: Tensor, digits: i32) -> Result<Vec<Vec<Vec<f32>>>> {
-    let b = 10f32.powi(digits);
-    let t = t.to_vec3::<f32>()?;
-    let t = t
-        .iter()
-        .map(|t| {
-            t.iter()
-                .map(|t| t.iter().map(|t| f32::round(t * b) / b).collect())
-                .collect()
-        })
-        .collect();
-    Ok(t)
-}
+mod test_utils;
+use test_utils::to_vec3_round;
+
+use candle::{Device, Result, Tensor};
 
 #[test]
 fn softmax() -> Result<()> {
