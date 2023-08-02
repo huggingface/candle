@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 use std::str::FromStr;
 
 use anyhow::Result;
-use candle::{Device, Tensor};
+use candle_core::{Device, Tensor};
 
 fn cos_sin(n: usize, device: &Device) -> Result<Tensor> {
     let thetas: Vec<_> = (0..n).map(|i| (i as f32 / n as f32)).collect();

@@ -7,7 +7,7 @@ impl Tensor {
     /// Intended to be use by the trait `.i()`
     ///
     /// ```
-    /// # use candle::{Tensor, DType, Device, IndexOp};
+    /// # use candle_core::{Tensor, DType, Device, IndexOp};
     /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
     ///
     /// let c = a.i(0..1)?;
@@ -22,7 +22,7 @@ impl Tensor {
     /// let c = a.i((.., ..=2))?;
     /// assert_eq!(c.shape().dims(), &[2, 3]);
     ///
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     fn index(&self, indexers: &[TensorIndexer]) -> Result<Self, Error> {
         let mut x = self.clone();

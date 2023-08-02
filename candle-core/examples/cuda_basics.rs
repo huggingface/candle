@@ -2,7 +2,7 @@
 extern crate intel_mkl_src;
 
 use anyhow::Result;
-use candle::{Device, Tensor};
+use candle_core::{Device, Tensor};
 
 fn main() -> Result<()> {
     let device = Device::new_cuda(0)?;

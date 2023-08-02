@@ -11,7 +11,7 @@ license = "MIT/Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-candle = { path = "../../candle-core" }
+candle = { path = "../../candle-core", package = "candle-core" }
 candle-nn = { path = "../../candle-nn" }
 num-traits = { workspace = true }
 

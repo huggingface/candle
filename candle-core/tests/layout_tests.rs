@@ -1,5 +1,6 @@
 mod test_utils;
 use candle::{Device, IndexOp, Result, Tensor};
+use candle_core as candle;
 
 fn contiguous(device: &Device) -> Result<()> {
     let tensor = Tensor::arange(0u32, 24u32, device)?.reshape((2, 3, 4))?;

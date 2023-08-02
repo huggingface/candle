@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use candle::{Result, Tensor};
+use candle_core::{Result, Tensor};
 
 #[macro_export]
 macro_rules! test_device {

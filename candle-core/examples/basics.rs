@@ -2,7 +2,7 @@
 extern crate intel_mkl_src;
 
 use anyhow::Result;
-use candle::{Device, Tensor};
+use candle_core::{Device, Tensor};
 
 fn main() -> Result<()> {
     let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
