@@ -3,6 +3,10 @@
 use crate::Result;
 use byteorder::{LittleEndian, ReadBytesExt};
 
+// Default to QK_K 256 rather than 64.
+pub const QK_K: usize = 256;
+pub const K_SCALE_SIZE: usize = 12;
+
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.h#L37
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Magic {
@@ -164,12 +168,12 @@ impl GgmlDType {
             // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L932
             Self::Q8_0 => 34,
             Self::Q8_1 => 36,
-            Self::Q2K => 256 / 16 + 256 / 4 + 2 * 2,
-            Self::Q3K => 256 / 8 + 256 / 4 + 12 + 2,
+            Self::Q2K => QK_K / 16 + QK_K / 4 + 2 * 2,
+            Self::Q3K => QK_K / 8 + QK_K / 4 + 12 + 2,
             // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/k_quants.h#L82
-            Self::Q4K => 256 / 2 + 12 + 2 * 2,
-            Self::Q5K => 256 / 8 + 256 / 2 + 2 * 2 + 12,
-            Self::Q6K => 3 * 256 / 4 + 256 / 16 + 2,
+            Self::Q4K => QK_K / 2 + K_SCALE_SIZE + 2 * 2,
+            Self::Q5K => QK_K / 8 + QK_K / 2 + 2 * 2 + K_SCALE_SIZE,
+            Self::Q6K => 3 * QK_K / 4 + QK_K / 16 + 2,
         }
     }
 
@@ -183,12 +187,7 @@ impl GgmlDType {
             Self::Q5_1 => 32,
             Self::Q8_0 => 32,
             Self::Q8_1 => 32,
-            // Default to QK_K 256 rather than 64.
-            Self::Q2K => 256,
-            Self::Q3K => 256,
-            Self::Q4K => 256,
-            Self::Q5K => 256,
-            Self::Q6K => 256,
+            Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K => QK_K,
         }
     }
 }
