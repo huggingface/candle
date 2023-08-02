@@ -1,5 +1,12 @@
 # candle
-ML framework for Rust
+[![Latest version](https://img.shields.io/crates/v/candle-core.svg)](https://crates.io/crates/candle-core)
+[![Documentation](https://docs.rs/candle-core/badge.svg)](https://docs.rs/candle-core)
+![License](https://img.shields.io/crates/l/candle-core.svg)
+
+Candle is a minimalist ML framework for Rust with a focus on easiness of use and
+on performance (including GPU support). Try our online demos: 
+[whisper](https://huggingface.co/spaces/lmz/candle-whisper),
+[llama2](https://huggingface.co/spaces/lmz/candle-llama2).
 
 ```rust
 let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
@@ -34,8 +41,8 @@ In order to use **CUDA** add `--features cuda` to the example command line.
 There are also some wasm examples for whisper and
 [llama2.c](https://github.com/karpathy/llama2.c). You can either build them with
 `trunk` or try them online:
-[whisper](https://laurentmazare.github.io/candle-whisper/index.html),
-[llama2](https://laurentmazare.github.io/candle-llama2/index.html).
+[whisper](https://huggingface.co/spaces/lmz/candle-whisper),
+[llama2](https://huggingface.co/spaces/lmz/candle-llama2).
 
 For llama2, run the following command to retrieve the weight files and start a
 test server:
