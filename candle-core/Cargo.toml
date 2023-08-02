@@ -1,13 +1,12 @@
 [package]
 name = "candle-core"
-version = "0.1.0"
-edition = "2021"
-
-description = "Minimalist ML framework."
-repository = "https://github.com/LaurentMazare/candle"
-keywords = ["blas", "tensor", "machine-learning"]
-categories = ["science"]
-license = "MIT/Apache-2.0"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
 readme = "README.md"
 
 [dependencies]
