@@ -4,6 +4,7 @@ use candle::{DType, Device, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{ops::softmax, VarBuilder};
 use rand::{distributions::Distribution, SeedableRng};
 use serde::{Deserialize, Serialize};
+use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
 use yew_agent::{HandlerId, Public, WorkerLink};
 
@@ -46,23 +47,6 @@ fn read_tensor<R: std::io::Read, S: Into<Shape>>(
     r.read_f32_into::<LittleEndian>(&mut data_t)?;
     let tensor = Tensor::from_vec(data_t, shape, dev)?;
     Ok(tensor)
-}
-
-struct Tokenizer {
-    tokens: Vec<String>,
-}
-
-impl Tokenizer {
-    fn from_reader<R: std::io::Read>(r: &mut R, c: &Config) -> Result<Self> {
-        let mut tokens = Vec::with_capacity(c.vocab_size);
-        for _token_index in 0..c.vocab_size {
-            let token_len = read_i32(r)?;
-            let mut token = vec![0u8; token_len as usize];
-            r.read_exact(&mut token)?;
-            tokens.push(String::from_utf8_lossy(&token).into_owned())
-        }
-        Ok(Self { tokens })
-    }
 }
 
 struct Model {
@@ -129,8 +113,10 @@ impl Model {
 
             let next_token = logits_processor.sample(&logits)?;
             tokens.push(next_token);
-            let token = self.tokenizer.tokens[next_token as usize].clone();
-            link.respond(id, Ok(WorkerOutput::Generated(token)));
+            if let Some(text) = self.tokenizer.id_to_token(next_token) {
+                let text = text.replace('▁', " ").replace("<0x0A>", "\n");
+                link.respond(id, Ok(WorkerOutput::Generated(text)));
+            }
         }
         Ok(())
     }
@@ -282,8 +268,8 @@ impl Model {
         let vb = weights.var_builder(&config, &dev)?;
         let cache = Cache::new(true, &config, vb.pp("rot"))?;
         let llama = Llama::load(vb, &cache, &config)?;
-        let mut tokenizer = std::io::Cursor::new(md.tokenizer);
-        let tokenizer = Tokenizer::from_reader(&mut tokenizer, &config)?;
+        let tokenizer =
+            Tokenizer::from_bytes(&md.tokenizer).map_err(|m| candle::Error::Msg(m.to_string()))?;
         Ok(Self {
             cache,
             config,

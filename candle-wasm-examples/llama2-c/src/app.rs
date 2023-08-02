@@ -53,7 +53,7 @@ pub struct App {
 }
 
 async fn model_data_load() -> Result<ModelData, JsValue> {
-    let tokenizer = fetch_url("tokenizer.bin").await?;
+    let tokenizer = fetch_url("tokenizer.json").await?;
     let model = fetch_url("model.bin").await?;
     console_log!("{}", model.len());
     Ok(ModelData { tokenizer, model })
