@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle::{DType, Device::Cpu, Tensor};
+use candle_core::{DType, Device::Cpu, Tensor};
 
 #[test]
 fn display_scalar() -> Result<()> {

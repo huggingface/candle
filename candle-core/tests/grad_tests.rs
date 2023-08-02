@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use candle::{Device, Shape, Tensor, Var};
+use candle_core::{Device, Shape, Tensor, Var};
 mod test_utils;
 
 fn simple_grad(device: &Device) -> Result<()> {

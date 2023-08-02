@@ -1,6 +1,6 @@
-use candle::backend::BackendStorage;
-use candle::cpu_backend;
-use candle::{CpuStorage, CustomOp1, DType, Device, Error, Layout, Result, Shape, Tensor};
+use candle_core::backend::BackendStorage;
+use candle_core::cpu_backend;
+use candle_core::{CpuStorage, CustomOp1, DType, Device, Error, Layout, Result, Shape, Tensor};
 
 mod test_utils;
 use test_utils::to_vec1_round;
@@ -24,7 +24,7 @@ impl CustomOp1 for Elu {
     }
 
     fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
-        let storage = candle::map_dtype!(
+        let storage = candle_core::map_dtype!(
             "elu",
             s,
             |s| cpu_backend::unary_map(s, l, |v| fwd(v, self.alpha)),
@@ -67,7 +67,7 @@ impl CustomOp1 for EluBackward {
     }
 
     fn cpu_fwd(&self, s: &CpuStorage, l: &Layout) -> Result<(CpuStorage, Shape)> {
-        let storage = candle::map_dtype!(
+        let storage = candle_core::map_dtype!(
             "elu-bwd",
             s,
             |s| cpu_backend::unary_map(s, l, |v| bwd(v, self.alpha)),
@@ -104,7 +104,7 @@ impl CustomOp1 for EluWithBackward {
 #[test]
 fn custom_op1_with_backward() -> Result<()> {
     let cpu = &Device::Cpu;
-    let t = candle::Var::new(&[-2f32, 0f32, 2f32], cpu)?;
+    let t = candle_core::Var::new(&[-2f32, 0f32, 2f32], cpu)?;
     let elu_t = t.custom_op1(EluWithBackward::new(2.))?;
     assert_eq!(to_vec1_round(&elu_t, 4)?, &[-1.7293, 0.0, 2.0]);
 

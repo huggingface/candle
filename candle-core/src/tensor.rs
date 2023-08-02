@@ -54,13 +54,13 @@ impl AsRef<Tensor> for Tensor {
 /// The core struct for manipulating tensors.
 ///
 /// ```rust
-/// use candle::{Tensor, DType, Device};
+/// use candle_core::{Tensor, DType, Device};
 ///
 /// let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
 /// let b = Tensor::arange(0f32, 12f32, &Device::Cpu)?.reshape((3, 4))?;
 ///
 /// let c = a.matmul(&b)?;
-/// # Ok::<(), candle::Error>(())
+/// # Ok::<(), candle_core::Error>(())
 /// ```
 ///
 /// Tensors are reference counted with [`Arc`] so cloning them is cheap.
@@ -163,11 +163,11 @@ impl Tensor {
     /// Creates a new tensor filled with ones.
     ///
     /// ```rust
-    /// use candle::{Tensor, DType, Device};
+    /// use candle_core::{Tensor, DType, Device};
     /// let a = Tensor::ones((2, 3), DType::F32, &Device::Cpu)?;
     /// let b = Tensor::from_slice(&[1.0f32, 1.0, 1.0, 1.0, 1.0, 1.0], (2, 3), &Device::Cpu)?;
     /// // a == b
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn ones<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
         Self::ones_impl(shape, dtype, device, false)
@@ -176,11 +176,11 @@ impl Tensor {
     /// Creates a new tensor filled with ones with same shape, dtype, and device as the other tensor.
     ///
     /// ```rust
-    /// use candle::{Tensor, DType, Device};
+    /// use candle_core::{Tensor, DType, Device};
     /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
     /// let b = a.ones_like()?;
     /// // b == a + 1
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn ones_like(&self) -> Result<Self> {
         Tensor::ones(self.shape(), self.dtype(), self.device())
@@ -208,11 +208,11 @@ impl Tensor {
     /// Creates a new tensor filled with zeros.
     ///
     /// ```rust
-    /// use candle::{Tensor, DType, Device};
+    /// use candle_core::{Tensor, DType, Device};
     /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
     /// let b = Tensor::from_slice(&[0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0], (2, 3), &Device::Cpu)?;
     /// // a == b
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn zeros<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
         Self::zeros_impl(shape, dtype, device, false)
@@ -222,11 +222,11 @@ impl Tensor {
     /// tensor.
     ///
     /// ```rust
-    /// use candle::{Tensor, DType, Device};
+    /// use candle_core::{Tensor, DType, Device};
     /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
     /// let b = a.zeros_like()?;
     /// // b is on CPU f32.
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn zeros_like(&self) -> Result<Self> {
         Tensor::zeros(self.shape(), self.dtype(), self.device())
@@ -516,11 +516,11 @@ impl Tensor {
     /// be performed.
     ///
     /// ```rust
-    /// use candle::{Tensor, Device};
+    /// use candle_core::{Tensor, Device};
     /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &Device::Cpu)?;
     /// let a = a.affine(4., -2.)?;
     /// assert_eq!(a.to_vec2::<f32>()?, &[[-2.0, 2.0], [6.0, 10.0]]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn affine(&self, mul: f64, add: f64) -> Result<Self> {
         let storage = self.storage().affine(self.layout(), mul, add)?;
@@ -642,7 +642,7 @@ impl Tensor {
     /// that the number of elements for each dimension index in `sum_dims` is 1.
     ///
     /// ```rust
-    /// use candle::{Tensor, Device};
+    /// use candle_core::{Tensor, Device};
     /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &Device::Cpu)?;
     /// let s = a.sum_keepdim(0)?;
     /// assert_eq!(s.to_vec2::<f32>()?, &[[2., 4.]]);
@@ -650,7 +650,7 @@ impl Tensor {
     /// assert_eq!(s.to_vec2::<f32>()?, &[[1.], [5.]]);
     /// let s = a.sum_keepdim((0, 1))?;
     /// assert_eq!(s.to_vec2::<f32>()?, &[[6.]]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn sum_keepdim<D: Dims>(&self, sum_dims: D) -> Result<Self> {
         self.sum_impl(sum_dims, true)
@@ -854,12 +854,12 @@ impl Tensor {
     /// vocabulary size, and `h` the hidden size.
     ///
     /// ```rust
-    /// use candle::{Tensor, Device};
+    /// use candle_core::{Tensor, Device};
     /// let values = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
     /// let ids = Tensor::new(&[2u32, 1u32, 2u32], &Device::Cpu)?;
     /// let emb = values.embedding(&ids)?;
     /// assert_eq!(emb.to_vec2::<f32>()?, &[[4., 5.], [2., 3.], [4., 5.]]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn embedding(&self, ids: &Self) -> Result<Self> {
         if self.rank() != 2 || ids.rank() != 1 {
@@ -1191,11 +1191,11 @@ impl Tensor {
     /// scalar with zero dimensions.
     ///
     /// ```rust
-    /// use candle::{Tensor, Device};
+    /// use candle_core::{Tensor, Device};
     /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
     /// let tensor = tensor.sum_all()?;
     /// assert_eq!(tensor.to_scalar::<f32>()?, 15.);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn sum_all(&self) -> Result<Tensor> {
         let dims: Vec<_> = (0..self.rank()).collect();
@@ -1252,11 +1252,11 @@ impl Tensor {
     /// Flattens the input tensor by reshaping it into a one dimension tensor.
     ///
     /// ```rust
-    /// use candle::{Tensor, Device};
+    /// use candle_core::{Tensor, Device};
     /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
     /// let tensor = tensor.flatten_all()?;
     /// assert_eq!(tensor.to_vec1::<f32>()?, &[0., 1., 2., 3., 4., 5.]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn flatten_all(&self) -> Result<Tensor> {
         self.flatten_(None::<usize>, None::<usize>)
@@ -1265,13 +1265,13 @@ impl Tensor {
     /// Returns the sub-tensor fixing the index at `i` on the first dimension.
     ///
     /// ```rust
-    /// use candle::{Tensor, Device};
+    /// use candle_core::{Tensor, Device};
     /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
     /// let t = tensor.get(0)?;
     /// assert_eq!(t.to_vec1::<f32>()?, &[0., 1.]);
     /// let t = tensor.get(1)?;
     /// assert_eq!(t.to_vec1::<f32>()?, &[2., 3.]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn get(&self, i: usize) -> Result<Tensor> {
         let dims = self.dims();
@@ -1286,11 +1286,11 @@ impl Tensor {
     /// input are swapped.
     ///
     /// ```rust
-    /// use candle::{Tensor, Device};
+    /// use candle_core::{Tensor, Device};
     /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
     /// let tensor = tensor.t()?;
     /// assert_eq!(tensor.to_vec2::<f32>()?, &[[0.0, 2.0, 4.0], [1.0, 3.0, 5.0]]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn t(&self) -> Result<Tensor> {
         let rank = self.rank();
@@ -1433,12 +1433,12 @@ impl Tensor {
     /// Casts the input tensor to the target `dtype`.
     ///
     /// ```rust
-    /// use candle::{Tensor, Device};
+    /// use candle_core::{Tensor, Device};
     /// let tensor = Tensor::new(3.14159265358979f64, &Device::Cpu)?;
     /// assert_eq!(tensor.to_scalar::<f64>()?, 3.14159265358979);
-    /// let tensor = tensor.to_dtype(candle::DType::F32)?;
+    /// let tensor = tensor.to_dtype(candle_core::DType::F32)?;
     /// assert_eq!(tensor.to_scalar::<f32>()?, 3.1415927);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
         if self.dtype() == dtype {
@@ -1483,7 +1483,7 @@ impl Tensor {
     /// a new storage and copies the data over, the returned tensor is always contiguous.
     ///
     /// ```rust
-    /// # use candle::{Tensor, DType, Device, D};
+    /// # use candle_core::{Tensor, DType, Device, D};
     /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
     ///
     /// let c = a.reshape((1, 6))?;
@@ -1491,7 +1491,7 @@ impl Tensor {
     ///
     /// let c = a.reshape((3, 2))?;
     /// assert_eq!(c.shape().dims(), &[3, 2]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn reshape<S: Into<Shape>>(&self, shape: S) -> Result<Tensor> {
         let shape = shape.into();
@@ -1526,7 +1526,7 @@ impl Tensor {
     /// Creates a new tensor with the specified dimension removed if its size was one.
     ///
     /// ```rust
-    /// # use candle::{Tensor, DType, Device, D};
+    /// # use candle_core::{Tensor, DType, Device, D};
     /// let a = Tensor::zeros((2, 3, 1), DType::F32, &Device::Cpu)?;
     ///
     /// let c = a.squeeze(2)?;
@@ -1534,7 +1534,7 @@ impl Tensor {
     ///
     /// let c = a.squeeze(D::Minus1)?;
     /// assert_eq!(c.shape().dims(), &[2, 3]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn squeeze<D: Dim>(&self, dim: D) -> Result<Self> {
         // The PyTorch semantics are to return the same tensor if the target dimension
@@ -1553,7 +1553,7 @@ impl Tensor {
     /// Creates a new tensor with a dimension of size one inserted at the specified position.
     ///
     /// ```rust
-    /// # use candle::{Tensor, DType, Device, D};
+    /// # use candle_core::{Tensor, DType, Device, D};
     /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
     ///
     /// let c = a.unsqueeze(0)?;
@@ -1561,7 +1561,7 @@ impl Tensor {
     ///
     /// let c = a.unsqueeze(D::Minus1)?;
     /// assert_eq!(c.shape().dims(), &[2, 3, 1]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn unsqueeze<D: Dim>(&self, dim: D) -> Result<Self> {
         let mut dims = self.dims().to_vec();
@@ -1576,7 +1576,7 @@ impl Tensor {
     /// All tensors must have the same rank, and the output has one additional rank
     ///
     /// ```rust
-    /// # use candle::{Tensor, DType, Device};
+    /// # use candle_core::{Tensor, DType, Device};
     /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
     /// let b = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
     ///
@@ -1585,7 +1585,7 @@ impl Tensor {
     ///
     /// let c = Tensor::stack(&[&a, &b], 2)?;
     /// assert_eq!(c.shape().dims(), &[2, 3, 2]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn stack<A: AsRef<Tensor>, D: Dim>(args: &[A], dim: D) -> Result<Self> {
         if args.is_empty() {
@@ -1605,7 +1605,7 @@ impl Tensor {
     /// the same rank
     ///
     /// ```rust
-    /// # use candle::{Tensor, DType, Device};
+    /// # use candle_core::{Tensor, DType, Device};
     /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
     /// let b = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
     ///
@@ -1614,7 +1614,7 @@ impl Tensor {
     ///
     /// let c = Tensor::cat(&[&a, &b], 1)?;
     /// assert_eq!(c.shape().dims(), &[2, 6]);
-    /// # Ok::<(), candle::Error>(())
+    /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn cat<A: AsRef<Tensor>, D: Dim>(args: &[A], dim: D) -> Result<Self> {
         if args.is_empty() {

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle::{Device, IndexOp, Tensor};
+use candle_core::{Device, IndexOp, Tensor};
 
 mod test_utils;
 
