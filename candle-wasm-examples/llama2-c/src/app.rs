@@ -46,6 +46,7 @@ pub struct App {
     status: String,
     loaded: bool,
     temperature: std::rc::Rc<std::cell::RefCell<f64>>,
+    prompt: std::rc::Rc<std::cell::RefCell<String>>,
     generated: String,
     n_tokens: usize,
     current_decode: Option<CurrentDecode>,
@@ -80,6 +81,7 @@ impl Component for App {
             status,
             n_tokens: 0,
             temperature: std::rc::Rc::new(std::cell::RefCell::new(0.)),
+            prompt: std::rc::Rc::new(std::cell::RefCell::new("".to_string())),
             generated: String::new(),
             current_decode: None,
             worker,
@@ -120,9 +122,10 @@ impl Component for App {
                     self.n_tokens = 0;
                     self.generated.clear();
                     let temp = *self.temperature.borrow();
-                    console_log!("temp: {}", temp);
+                    let prompt = self.prompt.borrow().clone();
+                    console_log!("temp: {}, prompt: {}", temp, prompt);
                     ctx.link()
-                        .send_message(Msg::WorkerInMsg(WorkerInput::Run(temp)))
+                        .send_message(Msg::WorkerInMsg(WorkerInput::Run(temp, prompt)))
                 }
                 true
             }
@@ -181,6 +184,12 @@ impl Component for App {
             }
             Msg::Refresh
         });
+        let prompt = self.prompt.clone();
+        let oninput_prompt = ctx.link().callback(move |e: yew::InputEvent| {
+            let input: web_sys::HtmlInputElement = e.target_unchecked_into();
+            *prompt.borrow_mut() = input.value();
+            Msg::Refresh
+        });
         html! {
             <div style="margin: 2%;">
                 <div><p>{"Running "}
@@ -194,6 +203,8 @@ impl Component for App {
                 {"temperature  \u{00a0} "}
                 <input type="range" min="0." max="1.2" step="0.1" value={self.temperature.borrow().to_string()} {oninput} id="temp"/>
                 {format!(" \u{00a0} {}", self.temperature.borrow())}
+                <br/ >
+                {"prompt: "}<input type="text" value={self.prompt.borrow().to_string()} oninput={oninput_prompt} id="prompt"/>
                 <br/ >
                 {
                     if self.loaded{
