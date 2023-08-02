@@ -1,5 +1,5 @@
 [workspace]
-members = [
+default-members = [
     "candle-core",
     "candle-examples",
     "candle-nn",
@@ -8,7 +8,16 @@ members = [
     "candle-wasm-examples/llama2-c",
     "candle-wasm-examples/whisper",
 ]
-exclude = [
+members = [
+    "candle-core",
+    "candle-examples",
+    "candle-nn",
+    "candle-pyo3",
+    "candle-transformers",
+    "candle-wasm-examples/llama2-c",
+    "candle-wasm-examples/whisper",
+    "candle-kernels",
+    "candle-flash-attn",
 ]
 
 [workspace.dependencies]
