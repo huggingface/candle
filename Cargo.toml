@@ -18,10 +18,8 @@ anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
 clap = { version = "4.2.4", features = ["derive"] }
 cudarc = { version = "0.9.13", features = ["f16"] }
-# TODO: Switch back to the official gemm implementation once the following are available.
-# https://github.com/sarah-ek/gemm/pull/8.
-# https://github.com/sarah-ek/gemm/pull/9.
-gemm = { git = "https://github.com/LaurentMazare/gemm.git" }
+# TODO: Switch back to the official gemm implementation once it has caught up.
+gemm = { version = "0.15.5", package = "candle-gemm" }
 hf-hub = "0.2.0"
 half = { version = "2.3.1", features = ["num-traits", "rand_distr"] }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"] }
