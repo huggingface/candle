@@ -216,8 +216,9 @@ impl Content {
             let dtype = GgmlDType::from_u32(dtype)?;
             let mut dims = vec![0u32; n_dims as usize];
             reader.read_u32_into::<LittleEndian>(&mut dims)?;
-            let mut name = vec![0u32; name_len as usize];
-            reader.read_u32_into::<LittleEndian>(&mut name)?;
+            let mut name = vec![0u8; name_len as usize];
+            reader.read_exact(&mut name)?;
+            let name = String::from_utf8_lossy(&name).into_owned();
 
             if magic.align32() {
                 let pos = reader.stream_position()?;
@@ -225,6 +226,7 @@ impl Content {
             }
             let tensor_elems = dims.iter().map(|&u| u as usize).product::<usize>();
             let tensor_size = tensor_elems * dtype.type_size() / dtype.blck_size();
+            println!("{name} {dtype:?} {dims:?}");
             reader.seek(std::io::SeekFrom::Current(tensor_size as i64))?;
         }
         Ok(Self {
