@@ -73,8 +73,8 @@ let mmap = unsafe { Mmap::map(&file).unwrap() };
 // Use safetensors directly
 let tensors = SafeTensors::deserialize(&mmap[..]).unwrap();
 let view = tensors
-.tensor("bert.encoder.layer.0.attention.self.query.weight")
-.unwrap();
+    .tensor("bert.encoder.layer.0.attention.self.query.weight")
+    .unwrap();
 
 // We're going to load shard with rank 1, within a world_size of 4
 // We're going to split along dimension 0 doing VIEW[start..stop, :]
@@ -86,7 +86,7 @@ let mut tp_shape = view.shape().to_vec();
 let size = tp_shape[0];
 
 if size % world_size != 0 {
-panic!("The dimension is not divisble by `world_size`");
+    panic!("The dimension is not divisble by `world_size`");
 }
 let block_size = size / world_size;
 let start = rank * block_size;
@@ -102,7 +102,7 @@ tp_shape[dim] = block_size;
 // Convert safetensors Dtype to candle DType
 let dtype: DType = dtype.try_into().unwrap();
 
-// TODO: Implement from_buffer_iterator to we can skip the extra CPU alloc.
+// TODO: Implement from_buffer_iterator so we can skip the extra CPU alloc.
 let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
 let tp_tensor = Tensor::from_raw_buffer(&raw, dtype, &tp_shape, &Device::Cpu).unwrap();
 // ANCHOR_END: book_hub_3
