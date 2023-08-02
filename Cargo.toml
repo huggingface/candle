@@ -17,9 +17,7 @@ exclude = [
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
 clap = { version = "4.2.4", features = ["derive"] }
-# Re-enable this once 0.9.13 as been released as it would include the cublas-f16 changes
-# cudarc = { version = "0.9.13", optional = true, features = ["f16"] }
-cudarc = { git = "https://github.com/coreylowman/cudarc.git", features = ["f16"] }
+cudarc = { version = "0.9.13", features = ["f16"] }
 # TODO: Switch back to the official gemm implementation once the following are available.
 # https://github.com/sarah-ek/gemm/pull/8.
 # https://github.com/sarah-ek/gemm/pull/9.
