@@ -13,6 +13,15 @@ exclude = [
     "candle-kernels",
 ]
 
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+description = "Minimalist ML framework."
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT/Apache-2.0"
+
 [workspace.dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"

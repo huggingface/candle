@@ -1,14 +1,12 @@
 [package]
 name = "candle-wasm-example-llama2"
-version = "0.1.0"
-edition = "2021"
-
-description = "Wasm example for the candle ML framework."
-repository = "https://github.com/LaurentMazare/candle"
-keywords = ["blas", "tensor", "machine-learning"]
-categories = ["science"]
-license = "MIT/Apache-2.0"
-readme = "README.md"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
 
 [dependencies]
 candle = { path = "../../candle-core", version = "0.1.0", package = "candle-core" }

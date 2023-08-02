@@ -186,7 +186,7 @@ impl Component for App {
                 <div><p>{"Running "}
                 <a href="https://github.com/karpathy/llama2.c" target="_blank">{"llama2.c"}</a>
                 {" in the browser using rust/wasm with "}
-                <a href="https://github.com/LaurentMazare/candle" target="_blank">{"candle!"}</a>
+                <a href="https://github.com/huggingface/candle" target="_blank">{"candle!"}</a>
                 </p>
                 <p>{"Once the weights have loaded, click on the run button to start generating content."}
                 </p>
