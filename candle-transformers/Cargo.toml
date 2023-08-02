@@ -11,9 +11,9 @@ license = "MIT/Apache-2.0"
 readme = "README.md"
 
 [dependencies]
-candle = { path = "../candle-core", package = "candle-core" }
+candle = { workspace = true }
+candle-nn = { workspace = true }
 hf-hub = { workspace = true}
-candle-nn = { path = "../candle-nn" }
 intel-mkl-src = { workspace = true, optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
 rand = { workspace = true }

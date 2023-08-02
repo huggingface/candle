@@ -9,13 +9,16 @@ members = [
     "candle-wasm-examples/whisper",
 ]
 exclude = [
-    "candle-flash-attn",
-    "candle-kernels",
 ]
 
 [workspace.dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
+candle = { path = "candle-core", version = "0.1.0", package = "candle-core" }
+candle-flash-attn = { path = "candle-flash-attn", version = "0.1.0" }
+candle-kernels = { path = "candle-kernels", version = "0.1.0" }
+candle-nn = { path = "candle-nn", version = "0.1.0" }
+candle-transformers = { path = "candle-transformers", version = "0.1.0" }
 clap = { version = "4.2.4", features = ["derive"] }
 cudarc = { version = "0.9.13", features = ["f16"] }
 # TODO: Switch back to the official gemm implementation once the following are available.

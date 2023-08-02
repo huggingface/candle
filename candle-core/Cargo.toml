@@ -12,7 +12,7 @@ readme = "README.md"
 
 [dependencies]
 byteorder = { workspace = true }
-candle-kernels = { path = "../candle-kernels", optional = true }
+candle-kernels = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 gemm = { workspace = true }
 half = { workspace = true }
