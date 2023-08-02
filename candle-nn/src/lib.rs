@@ -19,5 +19,5 @@ pub use embedding::{embedding, Embedding};
 pub use init::Init;
 pub use layer_norm::{layer_norm, LayerNorm};
 pub use linear::{linear, linear_no_bias, Linear};
-pub use optim::SGD;
+pub use optim::{AdamW, ParamsAdamW, SGD};
 pub use var_builder::{VarBuilder, VarMap};
