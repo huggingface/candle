@@ -117,10 +117,10 @@ fn dequantize_row_q2k(xs: &[BlockQ2K], ys: &mut [f32]) -> Result<()> {
         crate::bail!("dequantize_row_q2k: {k} is not divisible by {QK_K}")
     }
     let mut ys_index = 0;
-    for i in 0..(k / QK_K) {
-        let d = xs[i].d.to_f32();
-        let min = xs[i].dmin.to_f32();
-        let q = &xs[i].qs;
+    for x in xs {
+        let d = x.d.to_f32();
+        let min = x.dmin.to_f32();
+        let q = &x.qs;
 
         let mut is = 0;
         for n in (0..QK_K).step_by(128) {
@@ -128,7 +128,7 @@ fn dequantize_row_q2k(xs: &[BlockQ2K], ys: &mut [f32]) -> Result<()> {
             let q = &q[n / 4..];
             let mut shift = 0;
             for _j in 0..4 {
-                let sc = xs[i].scales[is];
+                let sc = x.scales[is];
                 is += 1;
                 let dl = d * (sc & 0xF) as f32;
                 let ml = min * (sc >> 4) as f32;
@@ -138,7 +138,7 @@ fn dequantize_row_q2k(xs: &[BlockQ2K], ys: &mut [f32]) -> Result<()> {
                     ys_index += 1;
                 }
 
-                let sc = xs[i].scales[is];
+                let sc = x.scales[is];
                 is += 1;
                 let dl = d * (sc & 0xF) as f32;
                 let ml = min * (sc >> 4) as f32;
@@ -162,7 +162,7 @@ fn get_scale_min_k4(j: usize, q: &[u8]) -> (u8, u8) {
         (d, m)
     } else {
         let d = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
-        let m = (q[j + 4] >> 4) | ((q[j - 0] >> 6) << 4);
+        let m = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
         (d, m)
     }
 }
@@ -173,17 +173,17 @@ fn dequantize_row_q4k(xs: &[BlockQ4K], ys: &mut [f32]) -> Result<()> {
         crate::bail!("dequantize_row_q2k: {k} is not divisible by {QK_K}")
     }
     let mut ys_index = 0;
-    for i in 0..(k / QK_K) {
-        let d = xs[i].d.to_f32();
-        let min = xs[i].dmin.to_f32();
-        let q = &xs[i].qs;
+    for x in xs.iter() {
+        let d = x.d.to_f32();
+        let min = x.dmin.to_f32();
+        let q = &x.qs;
         let mut is = 0;
         for j in (0..QK_K).step_by(64) {
             let q = &q[j / 2..j / 2 + 32];
-            let (sc, m) = get_scale_min_k4(is, &xs[i].scales);
+            let (sc, m) = get_scale_min_k4(is, &x.scales);
             let d1 = d * sc as f32;
             let m1 = min * m as f32;
-            let (sc, m) = get_scale_min_k4(is + 1, &xs[i].scales);
+            let (sc, m) = get_scale_min_k4(is + 1, &x.scales);
             let d2 = d * sc as f32;
             let m2 = min * m as f32;
             for q in q {
