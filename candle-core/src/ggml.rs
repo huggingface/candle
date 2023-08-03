@@ -2,10 +2,121 @@
 
 use crate::Result;
 use byteorder::{LittleEndian, ReadBytesExt};
+use half::f16;
 
 // Default to QK_K 256 rather than 64.
 pub const QK_K: usize = 256;
 pub const K_SCALE_SIZE: usize = 12;
+
+pub const QK4_0: usize = 32;
+pub const QK4_1: usize = 32;
+pub const QK5_0: usize = 32;
+pub const QK5_1: usize = 32;
+pub const QK8_0: usize = 32;
+pub const QK8_1: usize = 32;
+
+#[repr(C)]
+struct BlockQ4_0 {
+    d: f16,
+    qs: [u8; QK4_0 / 2],
+}
+// Hacky static_assert
+const _: [u8; 18] = [0; std::mem::size_of::<BlockQ4_0>()];
+
+#[repr(C)]
+struct BlockQ4_1 {
+    d: f16,
+    m: f16,
+    qs: [u8; QK4_1 / 2],
+}
+const _: [u8; 20] = [0; std::mem::size_of::<BlockQ4_1>()];
+
+#[repr(C)]
+struct BlockQ5_0 {
+    d: f16,
+    qh: [u8; 4],
+    qs: [u8; QK5_0 / 2],
+}
+const _: [u8; 22] = [0; std::mem::size_of::<BlockQ5_0>()];
+
+#[repr(C)]
+struct BlockQ5_1 {
+    d: f16,
+    m: f16,
+    qh: [u8; 4],
+    qs: [u8; QK5_1 / 2],
+}
+const _: [u8; 24] = [0; std::mem::size_of::<BlockQ5_1>()];
+
+#[repr(C)]
+struct BlockQ8_0 {
+    d: f16,
+    qs: [u8; QK8_0],
+}
+const _: [u8; 34] = [0; std::mem::size_of::<BlockQ8_0>()];
+
+#[repr(C)]
+struct BlockQ8_1 {
+    d: f16,
+    s: f16,
+    qs: [u8; QK8_1],
+}
+const _: [u8; 36] = [0; std::mem::size_of::<BlockQ8_1>()];
+
+#[repr(C)]
+struct BlockQ2K {
+    scales: [u8; QK_K / 16],
+    qs: [u8; QK_K / 4],
+    d: f16,
+    dmin: f16,
+}
+const _: [u8; QK_K / 16 + QK_K / 4 + 2 * 2] = [0; std::mem::size_of::<BlockQ2K>()];
+
+#[repr(C)]
+struct BlockQ3K {
+    hmask: [u8; QK_K / 8],
+    qs: [u8; QK_K / 4],
+    scales: [u8; 12],
+    d: f16,
+}
+const _: [u8; QK_K / 8 + QK_K / 4 + 12 + 2] = [0; std::mem::size_of::<BlockQ3K>()];
+
+// https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/k_quants.h#L82
+#[repr(C)]
+struct BlockQ4K {
+    d: f16,
+    dmin: f16,
+    scales: [u8; K_SCALE_SIZE],
+    qs: [u8; QK_K / 2],
+}
+const _: [u8; QK_K / 2 + K_SCALE_SIZE + 2 * 2] = [0; std::mem::size_of::<BlockQ4K>()];
+
+#[repr(C)]
+struct BlockQ5K {
+    d: f16,
+    dmin: f16,
+    scales: [u8; K_SCALE_SIZE],
+    qh: [u8; QK_K / 8],
+    qs: [u8; QK_K / 2],
+}
+const _: [u8; QK_K / 8 + QK_K / 2 + 2 * 2 + K_SCALE_SIZE] = [0; std::mem::size_of::<BlockQ5K>()];
+
+#[repr(C)]
+struct BlockQ6K {
+    ql: [u8; QK_K / 2],
+    qh: [u8; QK_K / 4],
+    scales: [i8; QK_K / 16],
+    d: f16,
+}
+const _: [u8; 3 * QK_K / 4 + QK_K / 16 + 2] = [0; std::mem::size_of::<BlockQ6K>()];
+
+/*
+            Self::Q2K => QK_K / 16 + QK_K / 4 + 2 * 2,
+            Self::Q3K => QK_K / 8 + QK_K / 4 + 12 + 2,
+            Self::Q4K => QK_K / 2 + K_SCALE_SIZE + 2 * 2,
+            Self::Q5K => QK_K / 8 + QK_K / 2 + 2 * 2 + K_SCALE_SIZE,
+            Self::Q6K => 3 * QK_K / 4 + QK_K / 16 + 2,
+*/
 
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.h#L37
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,19 +272,18 @@ impl GgmlDType {
         match self {
             Self::F32 => 4,
             Self::F16 => 2,
-            Self::Q4_0 => 18,
-            Self::Q4_1 => 20,
-            Self::Q5_0 => 22,
-            Self::Q5_1 => 24,
+            Self::Q4_0 => std::mem::size_of::<BlockQ4_0>(),
+            Self::Q4_1 => std::mem::size_of::<BlockQ4_1>(),
+            Self::Q5_0 => std::mem::size_of::<BlockQ5_0>(),
+            Self::Q5_1 => std::mem::size_of::<BlockQ5_1>(),
             // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L932
-            Self::Q8_0 => 34,
-            Self::Q8_1 => 36,
-            Self::Q2K => QK_K / 16 + QK_K / 4 + 2 * 2,
-            Self::Q3K => QK_K / 8 + QK_K / 4 + 12 + 2,
-            // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/k_quants.h#L82
-            Self::Q4K => QK_K / 2 + K_SCALE_SIZE + 2 * 2,
-            Self::Q5K => QK_K / 8 + QK_K / 2 + 2 * 2 + K_SCALE_SIZE,
-            Self::Q6K => 3 * QK_K / 4 + QK_K / 16 + 2,
+            Self::Q8_0 => std::mem::size_of::<BlockQ8_0>(),
+            Self::Q8_1 => std::mem::size_of::<BlockQ8_1>(),
+            Self::Q2K => std::mem::size_of::<BlockQ2K>(),
+            Self::Q3K => std::mem::size_of::<BlockQ3K>(),
+            Self::Q4K => std::mem::size_of::<BlockQ4K>(),
+            Self::Q5K => std::mem::size_of::<BlockQ5K>(),
+            Self::Q6K => std::mem::size_of::<BlockQ6K>(),
         }
     }
 
@@ -181,12 +291,12 @@ impl GgmlDType {
         match self {
             Self::F32 => 1,
             Self::F16 => 1,
-            Self::Q4_0 => 32,
-            Self::Q4_1 => 32,
-            Self::Q5_0 => 32,
-            Self::Q5_1 => 32,
-            Self::Q8_0 => 32,
-            Self::Q8_1 => 32,
+            Self::Q4_0 => QK4_0,
+            Self::Q4_1 => QK4_1,
+            Self::Q5_0 => QK5_0,
+            Self::Q5_1 => QK5_1,
+            Self::Q8_0 => QK8_0,
+            Self::Q8_1 => QK8_1,
             Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K => QK_K,
         }
     }
