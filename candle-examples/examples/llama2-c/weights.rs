@@ -104,7 +104,7 @@ impl TransformerWeights {
         })
     }
 
-    pub fn var_builder(&self, cfg: &Config, device: &Device) -> Result<VarBuilder> {
+    pub fn var_builder(&self, cfg: &Config, device: &Device) -> Result<VarBuilder<'static>> {
         let mut ws = std::collections::HashMap::new();
         let mut insert = |name: &str, t: Tensor| {
             ws.insert(name.to_string(), t);
