@@ -111,6 +111,10 @@ struct Args {
     #[arg(long)]
     use_f32: bool,
 
+    /// Enable tracing (generates a trace-timestamp.json file).
+    #[arg(long)]
+    tracing: bool,
+
     #[arg(long)]
     model_id: Option<String>,
 
@@ -123,8 +127,18 @@ struct Args {
 
 fn main() -> Result<()> {
     use tokenizers::Tokenizer;
+    use tracing_chrome::ChromeLayerBuilder;
+    use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
+    let _guard = if args.tracing {
+        println!("tracing...");
+        let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
+        tracing_subscriber::registry().with(chrome_layer).init();
+        Some(guard)
+    } else {
+        None
+    };
 
     let device = candle_examples::device(args.cpu)?;
     let config = if args.v1 {
