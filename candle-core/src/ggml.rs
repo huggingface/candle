@@ -20,8 +20,7 @@ struct BlockQ4_0 {
     d: f16,
     qs: [u8; QK4_0 / 2],
 }
-// Hacky static_assert
-const _: [u8; 18] = [0; std::mem::size_of::<BlockQ4_0>()];
+const _: () = assert!(std::mem::size_of::<BlockQ4_0>() == 18);
 
 #[repr(C)]
 struct BlockQ4_1 {
@@ -29,7 +28,7 @@ struct BlockQ4_1 {
     m: f16,
     qs: [u8; QK4_1 / 2],
 }
-const _: [u8; 20] = [0; std::mem::size_of::<BlockQ4_1>()];
+const _: () = assert!(std::mem::size_of::<BlockQ4_1>() == 20);
 
 #[repr(C)]
 struct BlockQ5_0 {
@@ -37,7 +36,7 @@ struct BlockQ5_0 {
     qh: [u8; 4],
     qs: [u8; QK5_0 / 2],
 }
-const _: [u8; 22] = [0; std::mem::size_of::<BlockQ5_0>()];
+const _: () = assert!(std::mem::size_of::<BlockQ5_0>() == 22);
 
 #[repr(C)]
 struct BlockQ5_1 {
@@ -46,14 +45,14 @@ struct BlockQ5_1 {
     qh: [u8; 4],
     qs: [u8; QK5_1 / 2],
 }
-const _: [u8; 24] = [0; std::mem::size_of::<BlockQ5_1>()];
+const _: () = assert!(std::mem::size_of::<BlockQ5_1>() == 24);
 
 #[repr(C)]
 struct BlockQ8_0 {
     d: f16,
     qs: [u8; QK8_0],
 }
-const _: [u8; 34] = [0; std::mem::size_of::<BlockQ8_0>()];
+const _: () = assert!(std::mem::size_of::<BlockQ8_0>() == 34);
 
 #[repr(C)]
 struct BlockQ8_1 {
@@ -61,7 +60,7 @@ struct BlockQ8_1 {
     s: f16,
     qs: [u8; QK8_1],
 }
-const _: [u8; 36] = [0; std::mem::size_of::<BlockQ8_1>()];
+const _: () = assert!(std::mem::size_of::<BlockQ8_1>() == 36);
 
 #[repr(C)]
 struct BlockQ2K {
@@ -70,7 +69,7 @@ struct BlockQ2K {
     d: f16,
     dmin: f16,
 }
-const _: [u8; QK_K / 16 + QK_K / 4 + 2 * 2] = [0; std::mem::size_of::<BlockQ2K>()];
+const _: () = assert!(QK_K / 16 + QK_K / 4 + 2 * 2 == std::mem::size_of::<BlockQ2K>());
 
 #[repr(C)]
 struct BlockQ3K {
@@ -79,7 +78,7 @@ struct BlockQ3K {
     scales: [u8; 12],
     d: f16,
 }
-const _: [u8; QK_K / 8 + QK_K / 4 + 12 + 2] = [0; std::mem::size_of::<BlockQ3K>()];
+const _: () = assert!(QK_K / 8 + QK_K / 4 + 12 + 2 == std::mem::size_of::<BlockQ3K>());
 
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/k_quants.h#L82
 #[repr(C)]
@@ -89,7 +88,7 @@ struct BlockQ4K {
     scales: [u8; K_SCALE_SIZE],
     qs: [u8; QK_K / 2],
 }
-const _: [u8; QK_K / 2 + K_SCALE_SIZE + 2 * 2] = [0; std::mem::size_of::<BlockQ4K>()];
+const _: () = assert!(QK_K / 2 + K_SCALE_SIZE + 2 * 2 == std::mem::size_of::<BlockQ4K>());
 
 #[repr(C)]
 struct BlockQ5K {
@@ -99,7 +98,8 @@ struct BlockQ5K {
     qh: [u8; QK_K / 8],
     qs: [u8; QK_K / 2],
 }
-const _: [u8; QK_K / 8 + QK_K / 2 + 2 * 2 + K_SCALE_SIZE] = [0; std::mem::size_of::<BlockQ5K>()];
+const _: () =
+    assert!(QK_K / 8 + QK_K / 2 + 2 * 2 + K_SCALE_SIZE == std::mem::size_of::<BlockQ5K>());
 
 #[repr(C)]
 struct BlockQ6K {
@@ -108,7 +108,7 @@ struct BlockQ6K {
     scales: [i8; QK_K / 16],
     d: f16,
 }
-const _: [u8; 3 * QK_K / 4 + QK_K / 16 + 2] = [0; std::mem::size_of::<BlockQ6K>()];
+const _: () = assert!(3 * QK_K / 4 + QK_K / 16 + 2 == std::mem::size_of::<BlockQ6K>());
 
 // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L354
 fn dequantize_row_q2k(xs: &[BlockQ2K], ys: &mut [f32]) -> Result<()> {
