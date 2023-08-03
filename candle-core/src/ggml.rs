@@ -1,6 +1,6 @@
 //! Support for the GGML file format.
 
-use crate::Result;
+use crate::{DType, Device, Result, Tensor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use half::f16;
 
@@ -110,13 +110,50 @@ struct BlockQ6K {
 }
 const _: [u8; 3 * QK_K / 4 + QK_K / 16 + 2] = [0; std::mem::size_of::<BlockQ6K>()];
 
-/*
-            Self::Q2K => QK_K / 16 + QK_K / 4 + 2 * 2,
-            Self::Q3K => QK_K / 8 + QK_K / 4 + 12 + 2,
-            Self::Q4K => QK_K / 2 + K_SCALE_SIZE + 2 * 2,
-            Self::Q5K => QK_K / 8 + QK_K / 2 + 2 * 2 + K_SCALE_SIZE,
-            Self::Q6K => 3 * QK_K / 4 + QK_K / 16 + 2,
-*/
+// https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L354
+fn dequantize_row_q2k(xs: &[BlockQ2K], ys: &mut [f32]) -> Result<()> {
+    let k = ys.len();
+    if k % QK_K != 0 {
+        crate::bail!("dequantize_row_q2k: {k} is not divisible by {QK_K}")
+    }
+    let mut ys_index = 0;
+    for i in 0..(k / QK_K) {
+        let d = xs[i].d.to_f32();
+        let min = xs[i].dmin.to_f32();
+        let q = &xs[i].qs;
+
+        let mut is = 0;
+        for n in (0..QK_K).step_by(128) {
+            // Step by 32 over q.
+            let q = &q[n / 4..];
+            let mut shift = 0;
+            for _j in 0..4 {
+                let sc = xs[i].scales[is];
+                is += 1;
+                let dl = d * (sc & 0xF) as f32;
+                let ml = min * (sc >> 4) as f32;
+                for q in &q[..16] {
+                    let y = dl * ((q >> shift) & 3) as i8 as f32 - ml;
+                    ys[ys_index] = y;
+                    ys_index += 1;
+                }
+
+                let sc = xs[i].scales[is];
+                is += 1;
+                let dl = d * (sc & 0xF) as f32;
+                let ml = min * (sc >> 4) as f32;
+                for q in &q[16..32] {
+                    let y = dl * ((q >> shift) & 3) as i8 as f32 - ml;
+                    ys[ys_index] = y;
+                    ys_index += 1;
+                }
+
+                shift += 2;
+            }
+        }
+    }
+    Ok(())
+}
 
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.h#L37
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,41 +344,75 @@ pub struct Content {
     pub magic: VersionedMagic,
     pub hparams: HParams,
     pub vocab: Vocab,
+    pub tensors: Vec<(String, Tensor)>,
+}
+
+fn read_one_tensor<R: std::io::Seek + std::io::Read>(
+    reader: &mut R,
+    magic: VersionedMagic,
+    device: &Device,
+) -> Result<(String, Tensor)> {
+    let n_dims = reader.read_u32::<LittleEndian>()?;
+    let name_len = reader.read_u32::<LittleEndian>()?;
+    let dtype = reader.read_u32::<LittleEndian>()?;
+    let dtype = GgmlDType::from_u32(dtype)?;
+    let mut dims = vec![0u32; n_dims as usize];
+    reader.read_u32_into::<LittleEndian>(&mut dims)?;
+    let mut name = vec![0u8; name_len as usize];
+    reader.read_exact(&mut name)?;
+    let name = String::from_utf8_lossy(&name).into_owned();
+
+    if magic.align32() {
+        let pos = reader.stream_position()?;
+        reader.seek(std::io::SeekFrom::Current(((32 - pos % 32) % 32) as i64))?;
+    }
+    let dims = dims.iter().map(|&u| u as usize).collect::<Vec<_>>();
+    let tensor_elems = dims.iter().product::<usize>();
+    let size_in_bytes = tensor_elems * dtype.type_size() / dtype.blck_size();
+    println!("{name} {dtype:?} {dims:?}");
+    // TODO: Mmap version to avoid copying the data around?
+    let mut raw_data = vec![0u8; size_in_bytes];
+    reader.read_exact(&mut raw_data)?;
+    let tensor = match dtype {
+        GgmlDType::F32 => Tensor::from_raw_buffer(&raw_data, DType::F32, &dims, device)?,
+        GgmlDType::F16 => Tensor::from_raw_buffer(&raw_data, DType::F16, &dims, device)?,
+        GgmlDType::Q2K => {
+            let mut f32_data = vec![0f32; tensor_elems];
+            let raw_data_ptr = raw_data.as_ptr();
+            let n_blocks = size_in_bytes / std::mem::size_of::<BlockQ2K>();
+            let raw_data =
+                unsafe { std::slice::from_raw_parts(raw_data_ptr as *const BlockQ2K, n_blocks) };
+            dequantize_row_q2k(raw_data, &mut f32_data)?;
+            // Maybe we should use bf16 instead?
+            Tensor::from_vec(f32_data, dims, device)?
+        }
+        _ => Tensor::zeros(1, DType::F32, device)?,
+    };
+    Ok((name, tensor))
 }
 
 impl Content {
-    pub fn read<R: std::io::Seek + std::io::Read>(reader: &mut R) -> Result<Content> {
+    pub fn read<R: std::io::Seek + std::io::Read>(
+        reader: &mut R,
+        device: &Device,
+    ) -> Result<Content> {
         // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.cpp#L505
         let last_position = reader.seek(std::io::SeekFrom::End(0))?;
         reader.seek(std::io::SeekFrom::Start(0))?;
         let magic = VersionedMagic::read(reader)?;
         let hparams = HParams::read(reader)?;
         let vocab = Vocab::read(reader, hparams.n_vocab as usize)?;
+        let mut tensors = vec![];
 
         while reader.stream_position()? != last_position {
-            let n_dims = reader.read_u32::<LittleEndian>()?;
-            let name_len = reader.read_u32::<LittleEndian>()?;
-            let dtype = reader.read_u32::<LittleEndian>()?;
-            let dtype = GgmlDType::from_u32(dtype)?;
-            let mut dims = vec![0u32; n_dims as usize];
-            reader.read_u32_into::<LittleEndian>(&mut dims)?;
-            let mut name = vec![0u8; name_len as usize];
-            reader.read_exact(&mut name)?;
-            let name = String::from_utf8_lossy(&name).into_owned();
-
-            if magic.align32() {
-                let pos = reader.stream_position()?;
-                reader.seek(std::io::SeekFrom::Current(((32 - pos % 32) % 32) as i64))?;
-            }
-            let tensor_elems = dims.iter().map(|&u| u as usize).product::<usize>();
-            let tensor_size = tensor_elems * dtype.type_size() / dtype.blck_size();
-            println!("{name} {dtype:?} {dims:?}");
-            reader.seek(std::io::SeekFrom::Current(tensor_size as i64))?;
+            let (name, tensor) = read_one_tensor(reader, magic, device)?;
+            tensors.push((name, tensor))
         }
         Ok(Self {
             magic,
             hparams,
             vocab,
+            tensors,
         })
     }
 }
