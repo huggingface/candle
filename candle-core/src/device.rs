@@ -101,6 +101,13 @@ impl Device {
         }
     }
 
+    pub fn is_cpu(&self) -> bool {
+        match self {
+            Self::Cpu => true,
+            Self::Cuda(_) => false,
+        }
+    }
+
     pub fn is_cuda(&self) -> bool {
         match self {
             Self::Cpu => false,
