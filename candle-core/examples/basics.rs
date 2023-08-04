@@ -5,6 +5,8 @@ use anyhow::Result;
 use candle_core::{Device, Tensor};
 
 fn main() -> Result<()> {
+    let mut file = std::fs::File::open("ggml.bin")?;
+    let data = candle_core::ggml::Content::read(&mut file, &Device::Cpu)?;
     let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
     let b = Tensor::randn(0f32, 1., (3, 4), &Device::Cpu)?;
     let c = a.matmul(&b)?;

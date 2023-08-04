@@ -1010,12 +1010,18 @@ impl Map2 for MatMul {
         };
         let c_skip: usize = m * n;
 
-        let dst_shape: Shape = (m, n).into();
-        let dst_strides = dst_shape.stride_contiguous();
-        let dst_rs = dst_strides[0];
-        let dst_cs = dst_strides[1];
-
         let mut dst = vec![T::zero(); b * m * n];
+
+        let (dst_rs, dst_cs) = if m == 1 {
+            (1, 1)
+        } else if n == 1 {
+            (1, 1)
+        } else {
+            let dst_shape: Shape = (m, n).into();
+            let dst_strides = dst_shape.stride_contiguous();
+            (dst_strides[0], dst_strides[1])
+        };
+
         let num_threads = crate::utils::get_num_threads();
         let parallelism = if num_threads > 1 {
             Parallelism::Rayon(num_threads)

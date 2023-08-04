@@ -111,6 +111,7 @@ impl TransformerWeights {
         // matrix column major rather than row major. This ends up speeding up text generation from
         // 120 token/s to 220 token/s on a Ryzen 2600X.
         let tr = device.is_cpu() && !candle::utils::has_mkl();
+        let tr = false;
         let tr = |x: Tensor| if tr { x.t()?.contiguous()?.t() } else { Ok(x) };
         let mut ws = std::collections::HashMap::new();
         let mut insert = |name: &str, t: Tensor| {
