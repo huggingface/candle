@@ -200,7 +200,7 @@ fn run_eval(args: &EvaluationCmd, common_args: &Args) -> Result<()> {
             Some(inputs.and_then(|inputs| targets.map(|targets| (inputs, targets))))
         }
     });
-    let batch_iter = candle_nn::dataset::Batcher::new_r2(iter).batch_size(args.batch_size);
+    let batch_iter = candle_datasets::Batcher::new_r2(iter).batch_size(args.batch_size);
     for inp_tgt in batch_iter {
         let (inp, tgt) = inp_tgt?;
         let logits = model.forward(&inp, 0)?;

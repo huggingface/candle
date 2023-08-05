@@ -63,7 +63,7 @@ struct TrainingArgs {
 }
 
 fn training_loop<M: Model>(
-    m: candle_nn::vision::Dataset,
+    m: candle_datasets::vision::Dataset,
     args: &TrainingArgs,
 ) -> anyhow::Result<()> {
     let dev = candle::Device::cuda_if_available(0)?;
@@ -140,7 +140,7 @@ struct Args {
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     // Load the dataset
-    let m = candle_nn::vision::mnist::load_dir("data")?;
+    let m = candle_datasets::vision::mnist::load_dir("data")?;
     println!("train-images: {:?}", m.train_images.shape());
     println!("train-labels: {:?}", m.train_labels.shape());
     println!("test-images: {:?}", m.test_images.shape());
