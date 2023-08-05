@@ -1,0 +1,18 @@
+[package]
+name = "candle-datasets"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[dependencies]
+candle = { path = "../candle-core", version = "0.1.0", package = "candle-core" }
+hf-hub = { workspace = true}
+candle-nn = { path = "../candle-nn", version = "0.1.0" }
+intel-mkl-src = { workspace = true, optional = true }
+tokenizers = { workspace = true, features = ["onig"] }
+rand = { workspace = true }

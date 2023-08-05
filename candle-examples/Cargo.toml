@@ -11,6 +11,7 @@ readme = "README.md"
 
 [dependencies]
 candle = { path = "../candle-core", version = "0.1.0", package = "candle-core" }
+candle-datasets = { path = "../candle-datasets", version = "0.1.0" }
 candle-nn = { path = "../candle-nn", version = "0.1.0" }
 candle-transformers = { path = "../candle-transformers", version = "0.1.0" }
 candle-flash-attn = { path = "../candle-flash-attn", version = "0.1.0", optional = true }
