@@ -2,7 +2,6 @@
 // error type if needed or add some specialized cases on the candle-core side.
 pub mod activation;
 pub mod conv;
-pub mod dataset;
 pub mod embedding;
 pub mod init;
 pub mod layer_norm;
@@ -11,7 +10,6 @@ pub mod loss;
 pub mod ops;
 pub mod optim;
 pub mod var_builder;
-pub mod vision;
 
 pub use activation::Activation;
 pub use conv::{Conv1d, Conv1dConfig};
