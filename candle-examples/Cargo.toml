@@ -10,6 +10,7 @@ license.workspace = true
 readme = "README.md"
 
 [dependencies]
+accelerate-src = { workspace = true, optional = true }
 candle = { path = "../candle-core", version = "0.1.0", package = "candle-core" }
 candle-datasets = { path = "../candle-datasets", version = "0.1.0" }
 candle-nn = { path = "../candle-nn", version = "0.1.0" }
@@ -41,6 +42,7 @@ anyhow = { workspace = true }
 
 [features]
 default = []
+accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]

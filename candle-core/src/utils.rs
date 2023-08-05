@@ -11,16 +11,14 @@ pub fn get_num_threads() -> usize {
     }
 }
 
+pub fn has_accelerate() -> bool {
+    cfg!(feature = "accelerate")
+}
+
 pub fn has_mkl() -> bool {
-    #[cfg(feature = "mkl")]
-    return true;
-    #[cfg(not(feature = "mkl"))]
-    return false;
+    cfg!(feature = "mkl")
 }
 
 pub fn cuda_is_available() -> bool {
-    #[cfg(feature = "cuda")]
-    return true;
-    #[cfg(not(feature = "cuda"))]
-    return false;
+    cfg!(feature = "cuda")
 }

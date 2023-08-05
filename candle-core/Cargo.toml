@@ -10,6 +10,7 @@ license.workspace = true
 readme = "README.md"
 
 [dependencies]
+accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { path = "../candle-kernels", version = "0.1.0", optional = true }
 cudarc = { workspace = true, optional = true }
@@ -32,3 +33,4 @@ anyhow = { workspace = true }
 default = []
 cuda = ["dep:cudarc", "dep:candle-kernels"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
+accelerate = ["dep:libc", "dep:accelerate-src"]

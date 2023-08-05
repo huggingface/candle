@@ -10,6 +10,7 @@ license.workspace = true
 readme = "README.md"
 
 [dependencies]
+accelerate-src = { workspace = true, optional = true }
 candle = { path = "../candle-core", version = "0.1.0", package = "candle-core" }
 thiserror = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -20,5 +21,6 @@ anyhow = { workspace = true }
 
 [features]
 default = []
+accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]

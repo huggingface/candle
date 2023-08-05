@@ -9,6 +9,9 @@
 // In order to convert the llama weights to a .npz file, run:
 // python examples/llama/convert_checkpoint.py ..../LLaMA/7B/consolidated.00.pth
 
+#[cfg(feature = "accelerate")]
+extern crate accelerate_src;
+
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
