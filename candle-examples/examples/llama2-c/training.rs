@@ -121,7 +121,7 @@ fn valid_loss(
     device: &Device,
 ) -> Result<f64> {
     let iter = DatasetRandomIter::new(dataset, true, model.config.seq_len, device.clone());
-    let batch_iter = candle_nn::dataset::Batcher::new_r2(iter).batch_size(args.batch_size);
+    let batch_iter = candle_datasets::Batcher::new_r2(iter).batch_size(args.batch_size);
     let mut sum_ce = 0f64;
     let mut cnt = 0usize;
     for inp_tgt in batch_iter.take(50) {
@@ -146,7 +146,7 @@ pub fn run(args: &crate::TrainingCmd, common_args: &crate::Args) -> Result<()> {
     let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
     let config = Config::tiny();
     let iter = DatasetRandomIter::new(&dataset, false, config.seq_len, device.clone());
-    let batch_iter = candle_nn::dataset::Batcher::new_r2(iter).batch_size(args.batch_size);
+    let batch_iter = candle_datasets::Batcher::new_r2(iter).batch_size(args.batch_size);
 
     let cache = Cache::new(false, &config, vb.pp("rot"))?;
     let model = Llama::load(vb, &cache, config)?;
