@@ -4,7 +4,11 @@ use libc::{c_char, c_double, c_float, c_int};
 mod ffi {
     use super::*;
     extern "C" {
-        pub fn sgemm_(
+        // It would be nice to be able to switch to the NEWLAPACK version of the function but this
+        // seems to trigger some link error. Available function names can be seen here:
+        // /Library/Developer/CommandLineTools/SDKs/MacOSX13.3.sdk/System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate.tbd
+        #[link_name = "sgemm_"]
+        pub fn sgemm_ffi(
             transa: *const c_char,
             transb: *const c_char,
             m: *const c_int,
@@ -19,7 +23,8 @@ mod ffi {
             c: *mut c_float,
             ldc: *const c_int,
         );
-        pub fn dgemm_(
+        #[link_name = "dgemm_"]
+        pub fn dgemm_ffi(
             transa: *const c_char,
             transb: *const c_char,
             m: *const c_int,
@@ -54,7 +59,7 @@ pub unsafe fn sgemm(
     c: &mut [f32],
     ldc: i32,
 ) {
-    ffi::sgemm_(
+    ffi::sgemm_ffi(
         &(transa as c_char),
         &(transb as c_char),
         &m,
@@ -88,7 +93,7 @@ pub unsafe fn dgemm(
     c: &mut [f64],
     ldc: i32,
 ) {
-    ffi::dgemm_(
+    ffi::dgemm_ffi(
         &(transa as c_char),
         &(transb as c_char),
         &m,
