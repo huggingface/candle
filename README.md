@@ -98,8 +98,9 @@ Cheatsheet:
 - [candle-nn](./candle-nn/): Facilities to build real models
 - [candle-examples](./candle-examples/): Real-world like examples on how to use the library in real settings
 - [candle-kernels](./candle-kernels/): CUDA custom kernels
-
-
+- [candle-datasets](./candle-datasets/): Datasets and data loaders.
+- [candle-transformers](./candle-transformers): Transformer related utilities.
+- [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
 
 ## FAQ
 
