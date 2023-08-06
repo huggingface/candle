@@ -4,6 +4,7 @@ extern crate intel_mkl_src;
 mod attention;
 mod clip;
 mod embeddings;
+mod resnet;
 
 use anyhow::Result;
 use clap::Parser;
