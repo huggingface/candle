@@ -13,7 +13,7 @@ pub mod optim;
 pub mod var_builder;
 
 pub use activation::Activation;
-pub use conv::{Conv1d, Conv1dConfig, Conv2d, Conv2dConfig};
+pub use conv::{conv1d, conv2d, Conv1d, Conv1dConfig, Conv2d, Conv2dConfig};
 pub use embedding::{embedding, Embedding};
 pub use group_norm::{group_norm, GroupNorm};
 pub use init::Init;

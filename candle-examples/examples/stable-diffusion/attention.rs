@@ -236,7 +236,7 @@ impl Default for SpatialTransformerConfig {
 
 #[derive(Debug)]
 enum Proj {
-    // TODO: Conv2D(nn::Conv2D),
+    Conv2d(nn::Conv2d),
     Linear(nn::Linear),
 }
 
@@ -260,22 +260,16 @@ impl SpatialTransformer {
     ) -> Result<Self> {
         let inner_dim = n_heads * d_head;
         let norm = nn::group_norm(config.num_groups, in_channels, 1e-6, vs.pp("norm"))?;
-        // let conv_cfg = nn::ConvConfig {
-        //     stride: 1,
-        //     padding: 0,
-        //     ..Default::default()
-        // };
         let proj_in = if config.use_linear_projection {
             Proj::Linear(nn::linear(in_channels, inner_dim, vs.pp("proj_in"))?)
         } else {
-            todo!()
-            // Proj::Conv2D(nn::conv2d(
-            //     &vs / "proj_in",
-            //     in_channels,
-            //     inner_dim,
-            //     1,
-            //     conv_cfg,
-            // ))
+            Proj::Conv2d(nn::conv2d(
+                in_channels,
+                inner_dim,
+                1,
+                Default::default(),
+                vs.pp("proj_in"),
+            )?)
         };
         let mut transformer_blocks = vec![];
         let vs_tb = vs.pp("transformer_blocks");
@@ -293,14 +287,13 @@ impl SpatialTransformer {
         let proj_out = if config.use_linear_projection {
             Proj::Linear(nn::linear(in_channels, inner_dim, vs.pp("proj_out"))?)
         } else {
-            todo!()
-            // Proj::Conv2D(nn::conv2d(
-            //     &vs / "proj_out",
-            //     inner_dim,
-            //     in_channels,
-            //     1,
-            //     conv_cfg,
-            // ))
+            Proj::Conv2d(nn::conv2d(
+                inner_dim,
+                in_channels,
+                1,
+                Default::default(),
+                vs.pp("proj_out"),
+            )?)
         };
         Ok(Self {
             norm,
@@ -316,14 +309,15 @@ impl SpatialTransformer {
         let residual = xs;
         let xs = self.norm.forward(xs)?;
         let (inner_dim, xs) = match &self.proj_in {
-            // Proj::Conv2D(p) => {
-            //     let xs = xs.apply(p);
-            //     let inner_dim = xs.size()[1];
-            //     let xs = xs
-            //         .permute([0, 2, 3, 1])
-            //         .view((batch, height * weight, inner_dim));
-            //     (inner_dim, xs)
-            // }
+            Proj::Conv2d(p) => {
+                let xs = p.forward(&xs)?;
+                let inner_dim = xs.dim(1)?;
+                let xs = xs
+                    .transpose(1, 2)?
+                    .t()?
+                    .reshape((batch, height * weight, inner_dim))?;
+                (inner_dim, xs)
+            }
             Proj::Linear(p) => {
                 let inner_dim = xs.dim(1)?;
                 let xs = xs
@@ -338,10 +332,11 @@ impl SpatialTransformer {
             xs = block.forward(&xs, context)?
         }
         let xs = match &self.proj_out {
-            // Proj::Conv2D(p) => xs
-            //     .view((batch, height, weight, inner_dim))
-            //     .permute([0, 3, 1, 2])
-            //     .apply(p),
+            Proj::Conv2d(p) => p.forward(
+                &xs.reshape((batch, height, weight, inner_dim))?
+                    .t()?
+                    .transpose(1, 2)?,
+            )?,
             Proj::Linear(p) => p
                 .forward(&xs)?
                 .reshape((batch, height, weight, inner_dim))?
