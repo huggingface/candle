@@ -48,3 +48,44 @@ impl Conv1d {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Conv2dConfig {
+    pub padding: usize,
+    pub stride: usize,
+}
+
+impl Default for Conv2dConfig {
+    fn default() -> Self {
+        Self {
+            padding: 0,
+            stride: 1,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct Conv2d {
+    weight: Tensor,
+    bias: Option<Tensor>,
+    config: Conv2dConfig,
+}
+
+impl Conv2d {
+    pub fn new(weight: Tensor, bias: Option<Tensor>, config: Conv2dConfig) -> Self {
+        Self {
+            weight,
+            bias,
+            config,
+        }
+    }
+
+    pub fn config(&self) -> &Conv2dConfig {
+        &self.config
+    }
+
+    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+}

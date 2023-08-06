@@ -109,8 +109,6 @@ impl CrossAttention {
         query: &Tensor,
         key: &Tensor,
         value: &Tensor,
-        sequence_length: usize,
-        dim: usize,
         slice_size: usize,
     ) -> Result<Tensor> {
         let batch_size_attention = query.dim(0)?;
@@ -137,12 +135,10 @@ impl CrossAttention {
     }
 
     fn forward(&self, xs: &Tensor, context: Option<&Tensor>) -> Result<Tensor> {
-        let sequence_length = xs.dim(1)?;
         let query = self.to_q.forward(xs)?;
-        let dim = query.dim(D::Minus1)?;
         let context = context.unwrap_or(xs);
-        let key = self.to_k.forward(&context)?;
-        let value = self.to_v.forward(&context)?;
+        let key = self.to_k.forward(context)?;
+        let value = self.to_v.forward(context)?;
         let query = self.reshape_heads_to_batch_dim(&query)?;
         let key = self.reshape_heads_to_batch_dim(&key)?;
         let value = self.reshape_heads_to_batch_dim(&value)?;
@@ -152,7 +148,7 @@ impl CrossAttention {
                 if query.dim(0)? / slice_size <= 1 {
                     self.attention(&query, &key, &value)?
                 } else {
-                    self.sliced_attention(&query, &key, &value, sequence_length, dim, slice_size)?
+                    self.sliced_attention(&query, &key, &value, slice_size)?
                 }
             }
         };
@@ -263,12 +259,7 @@ impl SpatialTransformer {
         config: SpatialTransformerConfig,
     ) -> Result<Self> {
         let inner_dim = n_heads * d_head;
-        let group_cfg = nn::GroupNormConfig {
-            eps: 1e-6,
-            affine: true,
-            ..Default::default()
-        };
-        let norm = nn::group_norm(&vs / "norm", config.num_groups, in_channels, group_cfg);
+        let norm = nn::group_norm(config.num_groups, in_channels, 1e-6, vs.pp("norm"))?;
         // let conv_cfg = nn::ConvConfig {
         //     stride: 1,
         //     padding: 0,
@@ -334,11 +325,12 @@ impl SpatialTransformer {
             //     (inner_dim, xs)
             // }
             Proj::Linear(p) => {
-                let inner_dim = xs.size()[1];
+                let inner_dim = xs.dim(1)?;
                 let xs = xs
-                    .permute([0, 2, 3, 1])
-                    .view((batch, height * weight, inner_dim));
-                (inner_dim, xs.apply(p))
+                    .transpose(1, 2)?
+                    .t()?
+                    .reshape((batch, height * weight, inner_dim))?;
+                (inner_dim, p.forward(&xs)?)
             }
         };
         let mut xs = xs;
@@ -396,12 +388,8 @@ impl AttentionBlock {
     pub fn new(vs: nn::VarBuilder, channels: usize, config: AttentionBlockConfig) -> Result<Self> {
         let num_head_channels = config.num_head_channels.unwrap_or(channels);
         let num_heads = channels / num_head_channels;
-        let group_cfg = nn::GroupNormConfig {
-            eps: config.eps,
-            affine: true,
-            ..Default::default()
-        };
-        let group_norm = nn::group_norm(&vs / "group_norm", config.num_groups, channels, group_cfg);
+        let group_norm =
+            nn::group_norm(config.num_groups, channels, config.eps, vs.pp("group_norm"))?;
         let query = nn::linear(channels, channels, vs.pp("query"))?;
         let key = nn::linear(channels, channels, vs.pp("key"))?;
         let value = nn::linear(channels, channels, vs.pp("value"))?;
