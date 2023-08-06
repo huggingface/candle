@@ -5,7 +5,7 @@
 //! pairs of images with related texts.
 //!
 //! https://github.com/openai/CLIP
-use candle::{DType, Device, Result, Tensor, D};
+use candle::{Device, Result, Tensor, D};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Activation {
@@ -288,9 +288,11 @@ impl ClipTextTransformer {
 
     // https://github.com/huggingface/transformers/blob/674f750a57431222fa2832503a108df3badf1564/src/transformers/models/clip/modeling_clip.py#L678
     fn build_causal_attention_mask(bsz: usize, seq_len: usize, device: &Device) -> Result<Tensor> {
-        let mut _mask = Tensor::ones((bsz, seq_len, seq_len), DType::F32, device)?;
-        // mask.fill_(f32::MIN as f64).triu_(1).unsqueeze(1)
-        todo!()
+        let mask: Vec<_> = (0..seq_len)
+            .flat_map(|i| (0..seq_len).map(move |j| u8::from(j > i)))
+            .collect();
+        let mask = Tensor::from_slice(&mask, (seq_len, seq_len), device)?;
+        mask.broadcast_as((bsz, seq_len, seq_len))
     }
 }
 
