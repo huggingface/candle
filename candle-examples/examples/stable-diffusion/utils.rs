@@ -1,8 +1,8 @@
 use candle::{Device, Result, Tensor};
 
 pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
-    // TODO: Add sigmoid and inv as binary ops.
-    xs.ones_like()? / (xs.neg()?.exp()? - 1.0)?
+    // TODO: Add sigmoid as binary ops.
+    (xs.neg()?.exp()? - 1.0)?.recip()
 }
 
 pub fn avg_pool2d(_: &Tensor) -> Result<Tensor> {
