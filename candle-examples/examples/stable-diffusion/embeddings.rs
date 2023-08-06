@@ -52,14 +52,14 @@ impl Timesteps {
         let emb = (xs.unsqueeze(D::Minus1)? * emb.unsqueeze(0)?)?;
         let (cos, sin) = (emb.cos()?, emb.sin()?);
         let emb = if self.flip_sin_to_cos {
-            Tensor::cat(&[&cos, &sin], D::Minus1)
+            Tensor::cat(&[&cos, &sin], D::Minus1)?
         } else {
-            Tensor::cat(&[&sin, &cos], D::Minus1)
+            Tensor::cat(&[&sin, &cos], D::Minus1)?
         };
         if self.num_channels % 2 == 1 {
-            todo!("emb.pad([0, 1, 0, 0], 'constant', None)")
+            crate::utils::pad(&emb) // ([0, 1, 0, 0], 'constant', None)
         } else {
-            emb
+            Ok(emb)
         }
     }
 }
