@@ -16,10 +16,7 @@ pub enum Activation {
 impl Activation {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Activation::QuickGelu => {
-                // xs * (xs * 1.702).sigmoid()
-                todo!()
-            }
+            Activation::QuickGelu => xs * crate::utils::sigmoid(&(xs * 1.702f64)?)?,
             Activation::Gelu => xs.gelu(),
         }
     }

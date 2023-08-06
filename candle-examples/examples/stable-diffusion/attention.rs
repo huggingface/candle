@@ -409,7 +409,7 @@ impl AttentionBlock {
 }
 
 impl AttentionBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let residual = xs;
         let (batch, channel, height, width) = xs.dims4()?;
         let xs = self
