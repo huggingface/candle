@@ -15,3 +15,7 @@ pub fn pad(_: &Tensor) -> Result<Tensor> {
 pub fn upsample_nearest2d(_: &Tensor) -> Result<Tensor> {
     todo!()
 }
+
+pub fn linspace(_: f64, _: f64, _: usize) -> Result<Tensor> {
+    todo!()
+}
