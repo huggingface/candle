@@ -269,6 +269,10 @@ impl Tensor {
         Self::rand_impl(lo, up, s, device, false)
     }
 
+    pub fn rand_like(&self, lo: f64, up: f64) -> Result<Self> {
+        Tensor::rand_f64_impl(lo, up, self.shape(), self.dtype(), self.device(), false)
+    }
+
     pub(crate) fn randn_impl<S: Into<Shape>, T: crate::FloatDType>(
         mean: T,
         std: T,
@@ -294,6 +298,17 @@ impl Tensor {
         let storage = device.rand_normal_f64(mean, std, &s, dtype)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
+    }
+
+    pub fn randn_like(&self, mean: f64, stdev: f64) -> Result<Self> {
+        Tensor::randn_f64_impl(
+            mean,
+            stdev,
+            self.shape(),
+            self.dtype(),
+            self.device(),
+            false,
+        )
     }
 
     /// Creates a new tensor initialized with values sampled from a normal distribution with the
