@@ -40,21 +40,17 @@ impl std::ops::Deref for PyTensor {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[pyclass(name = "DType")]
 struct PyDType(DType);
 
-impl<'source> FromPyObject<'source> for PyDType {
-    fn extract(ob: &'source PyAny) -> PyResult<Self> {
-        use std::str::FromStr;
-        let dtype: &str = ob.extract()?;
-        let dtype = DType::from_str(dtype)
-            .map_err(|_| PyTypeError::new_err(format!("invalid dtype '{dtype}'")))?;
-        Ok(Self(dtype))
+#[pymethods]
+impl PyDType {
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.0)
     }
-}
 
-impl ToPyObject for PyDType {
-    fn to_object(&self, py: Python<'_>) -> PyObject {
-        self.0.as_str().to_object(py)
+    fn __str__(&self) -> String {
+        self.__repr__()
     }
 }
 
@@ -223,8 +219,8 @@ impl PyTensor {
     }
 
     #[getter]
-    fn dtype(&self, py: Python<'_>) -> PyObject {
-        PyDType(self.0.dtype()).to_object(py)
+    fn dtype(&self) -> PyDType {
+        PyDType(self.0.dtype())
     }
 
     #[getter]
@@ -444,6 +440,13 @@ fn zeros(
 #[pymodule]
 fn candle(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyTensor>()?;
+    m.add_class::<PyDType>()?;
+    m.add("u8", PyDType(DType::U8))?;
+    m.add("u32", PyDType(DType::U32))?;
+    m.add("bf16", PyDType(DType::BF16))?;
+    m.add("f16", PyDType(DType::F16))?;
+    m.add("f32", PyDType(DType::F32))?;
+    m.add("f64", PyDType(DType::F64))?;
     m.add_function(wrap_pyfunction!(cat, m)?)?;
     m.add_function(wrap_pyfunction!(ones, m)?)?;
     m.add_function(wrap_pyfunction!(rand, m)?)?;
