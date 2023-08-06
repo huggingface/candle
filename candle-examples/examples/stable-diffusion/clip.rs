@@ -294,7 +294,7 @@ impl ClipTextTransformer {
 }
 
 impl ClipTextTransformer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bsz, seq_len) = xs.dims2()?;
         let xs = self.embeddings.forward(xs)?;
         let causal_attention_mask = Self::build_causal_attention_mask(bsz, seq_len, xs.device())?;

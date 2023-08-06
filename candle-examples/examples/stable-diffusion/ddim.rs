@@ -100,8 +100,8 @@ impl DDIMScheduler {
 
     ///  Ensures interchangeability with schedulers that need to scale the denoising model input
     /// depending on the current timestep.
-    pub fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Tensor {
-        sample
+    pub fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Result<Tensor> {
+        Ok(sample)
     }
 
     /// Performs a backward step during inference.
