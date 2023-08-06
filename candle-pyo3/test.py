@@ -1,6 +1,8 @@
 import os
 import sys
 
+# The "import candle" statement below works if there is a "candle.so" file in sys.path.
+# Here we check for shared libraries that can be used in the build directory.
 BUILD_DIR = "./target/release-with-debug"
 so_file = BUILD_DIR + "/candle.so"
 if os.path.islink(so_file): os.remove(so_file)
@@ -26,6 +28,7 @@ t = t.reshape([2, 4])
 print(t.matmul(t.t()))
 
 print(t.to_dtype(candle.u8))
+print(t.to_dtype("u8"))
 
 t = candle.randn((5, 3))
 print(t)

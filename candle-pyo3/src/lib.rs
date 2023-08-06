@@ -54,6 +54,19 @@ impl PyDType {
     }
 }
 
+impl PyDType {
+    fn from_pyobject(ob: PyObject, py: Python<'_>) -> PyResult<Self> {
+        use std::str::FromStr;
+        if let Ok(dtype) = ob.extract::<&str>(py) {
+            let dtype = DType::from_str(dtype)
+                .map_err(|_| PyTypeError::new_err(format!("invalid dtype '{dtype}'")))?;
+            Ok(Self(dtype))
+        } else {
+            ob.extract(py)
+        }
+    }
+}
+
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -363,7 +376,8 @@ impl PyTensor {
         Ok(PyTensor(self.0.copy().map_err(wrap_err)?))
     }
 
-    fn to_dtype(&self, dtype: PyDType) -> PyResult<Self> {
+    fn to_dtype(&self, dtype: PyObject, py: Python<'_>) -> PyResult<Self> {
+        let dtype = PyDType::from_pyobject(dtype, py)?;
         Ok(PyTensor(self.0.to_dtype(dtype.0).map_err(wrap_err)?))
     }
 
@@ -412,12 +426,15 @@ fn randn(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<
 #[pyfunction]
 #[pyo3(signature = (shape, *, dtype=None, device=None))]
 fn ones(
-    _py: Python<'_>,
+    py: Python<'_>,
     shape: PyShape,
-    dtype: Option<PyDType>,
+    dtype: Option<PyObject>,
     device: Option<PyDevice>,
 ) -> PyResult<PyTensor> {
-    let dtype = dtype.map_or(DType::F32, |dt| dt.0);
+    let dtype = match dtype {
+        None => DType::F32,
+        Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
+    };
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
     let tensor = Tensor::ones(shape.0, dtype, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
@@ -426,12 +443,15 @@ fn ones(
 #[pyfunction]
 #[pyo3(signature = (shape, *, dtype=None, device=None))]
 fn zeros(
-    _py: Python<'_>,
+    py: Python<'_>,
     shape: PyShape,
-    dtype: Option<PyDType>,
+    dtype: Option<PyObject>,
     device: Option<PyDevice>,
 ) -> PyResult<PyTensor> {
-    let dtype = dtype.map_or(DType::F32, |dt| dt.0);
+    let dtype = match dtype {
+        None => DType::F32,
+        Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
+    };
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
     let tensor = Tensor::zeros(shape.0, dtype, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
