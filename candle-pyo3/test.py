@@ -13,3 +13,6 @@ t = t.reshape([2, 4])
 print(t.matmul(t.t()))
 
 print(t.to_dtype("u8"))
+
+t = candle.randn((5, 3))
+print(t)
