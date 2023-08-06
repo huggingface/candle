@@ -5,6 +5,7 @@ mod attention;
 mod clip;
 mod embeddings;
 mod resnet;
+mod unet_2d;
 mod unet_2d_blocks;
 mod utils;
 
