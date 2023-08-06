@@ -9,4 +9,9 @@ clean:
 test:
 	cargo test
 
+pyo3-test:
+	cargo build --profile=release-with-debug --package candle-pyo3
+	ln -f -s ./target/release-with-debug/libcandle.so candle.so
+	PYTHONPATH=. python3 candle-pyo3/test.py
+
 all: test
