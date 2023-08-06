@@ -474,6 +474,7 @@ impl Tensor {
     broadcast_binary_op!(broadcast_sub, sub);
     broadcast_binary_op!(broadcast_div, div);
 
+    unary_op!(recip, Recip);
     unary_op!(neg, Neg);
     unary_op!(exp, Exp);
     unary_op!(log, Log);

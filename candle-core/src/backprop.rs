@@ -291,6 +291,11 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.sub(&grad)?
                     }
+                    Op::Unary(arg, UnaryOp::Recip) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        let grad = (grad / arg.sqr()?)?;
+                        *sum_grad = sum_grad.sub(&grad)?
+                    }
                     &Op::Narrow(ref arg, dim, start_idx, len) => {
                         let arg_dims = arg.dims();
                         let left_pad = if start_idx == 0 {

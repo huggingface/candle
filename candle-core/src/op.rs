@@ -51,6 +51,7 @@ pub enum UnaryOp {
     Cos,
     Abs,
     Neg,
+    Recip,
     Sqr,
     Sqrt,
     Gelu,
@@ -264,6 +265,7 @@ pub(crate) struct Sin;
 pub(crate) struct Cos;
 pub(crate) struct Abs;
 pub(crate) struct Neg;
+pub(crate) struct Recip;
 pub(crate) struct Sqr;
 pub(crate) struct Sqrt;
 pub(crate) struct Gelu;
@@ -410,6 +412,7 @@ unary_op!(Sin, "sin", v, v.sin(), vs_sin, vd_sin);
 unary_op!(Cos, "cos", v, v.cos(), vs_cos, vd_cos);
 unary_op!(Abs, "abs", v, v.abs());
 unary_op!(Neg, "neg", v, -v);
+unary_op!(Recip, "recip", v, v.recip());
 unary_op!(Sqr, "sqr", v, v * v, vs_sqr, vd_sqr);
 unary_op!(Sqrt, "sqrt", v, v.sqrt(), vs_sqrt, vd_sqrt);
 
