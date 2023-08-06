@@ -157,7 +157,7 @@ impl DownEncoderBlock2D {
 }
 
 impl DownEncoderBlock2D {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut xs = xs.clone();
         for resnet in self.resnets.iter() {
             xs = resnet.forward(&xs, None)?
@@ -237,7 +237,7 @@ impl UpDecoderBlock2D {
 }
 
 impl UpDecoderBlock2D {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut xs = xs.clone();
         for resnet in self.resnets.iter() {
             xs = resnet.forward(&xs, None)?

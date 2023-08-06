@@ -8,6 +8,7 @@ mod resnet;
 mod unet_2d;
 mod unet_2d_blocks;
 mod utils;
+mod vae;
 
 use anyhow::Result;
 use clap::Parser;
