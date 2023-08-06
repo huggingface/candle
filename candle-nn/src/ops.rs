@@ -32,3 +32,7 @@ pub fn log_softmax<D: candle::shape::Dim>(xs: &Tensor, d: D) -> Result<Tensor> {
     let log_sm = diff.broadcast_sub(&sum_exp.log()?)?;
     Ok(log_sm)
 }
+
+pub fn silu(xs: &Tensor) -> Result<Tensor> {
+    xs / (xs.neg()?.exp()? + 1.0)?
+}
