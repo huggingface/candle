@@ -3,6 +3,7 @@
 pub mod activation;
 pub mod conv;
 pub mod embedding;
+pub mod group_norm;
 pub mod init;
 pub mod layer_norm;
 pub mod linear;
@@ -12,8 +13,9 @@ pub mod optim;
 pub mod var_builder;
 
 pub use activation::Activation;
-pub use conv::{Conv1d, Conv1dConfig};
+pub use conv::{conv1d, conv2d, Conv1d, Conv1dConfig, Conv2d, Conv2dConfig};
 pub use embedding::{embedding, Embedding};
+pub use group_norm::{group_norm, GroupNorm};
 pub use init::Init;
 pub use layer_norm::{layer_norm, LayerNorm};
 pub use linear::{linear, linear_no_bias, Linear};
