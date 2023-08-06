@@ -548,6 +548,32 @@ impl Tensor {
         }
     }
 
+    /// Split a tensor into the specified number of chunks, this may return less chunks than
+    /// specificed.
+    pub fn chunk<D: Dim>(&self, chunks: usize, dim: D) -> Result<Vec<Self>> {
+        let dim = dim.to_index(self.shape(), "chunk")?;
+        let size = self.dim(dim)?;
+        if size < chunks {
+            (0..size).map(|i| self.narrow(dim, i, 1)).collect()
+        } else {
+            let chunk_size = size / chunks;
+            let cnt_additional = size % chunks;
+            let mut tensors = vec![];
+            let mut sum_chunk_size = 0;
+            for i in 0..chunks {
+                let chunk_size = if i < cnt_additional {
+                    chunk_size + 1
+                } else {
+                    chunk_size
+                };
+                let tensor = self.narrow(dim, sum_chunk_size, chunk_size)?;
+                tensors.push(tensor);
+                sum_chunk_size += chunk_size
+            }
+            Ok(tensors)
+        }
+    }
+
     /// Returns a new tensor that is a narrowed version of the input, the dimension `dim`
     /// ranges from `start` to `start + len`.
     pub fn narrow<D: Dim>(&self, dim: D, start: usize, len: usize) -> Result<Self> {
