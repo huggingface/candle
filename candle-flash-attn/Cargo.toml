@@ -7,7 +7,7 @@ description = "Flash attention layer for the candle ML framework."
 repository = "https://github.com/huggingface/candle"
 keywords = ["blas", "tensor", "machine-learning"]
 categories = ["science"]
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
