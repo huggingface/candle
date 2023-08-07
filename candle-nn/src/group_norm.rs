@@ -41,7 +41,7 @@ impl GroupNorm {
             candle::bail!("input rank for GroupNorm should be at least 3");
         }
         let (b_sz, n_channels) = (x_shape[0], x_shape[1]);
-        let hidden_size = x_shape[2..].iter().product::<usize>() * self.num_groups;
+        let hidden_size = x_shape[2..].iter().product::<usize>() * n_channels / self.num_groups;
         if n_channels != self.num_channels {
             candle::bail!(
                 "unexpected num-channels in GroupNorm ({n_channels} <> {}",
@@ -53,7 +53,7 @@ impl GroupNorm {
             DType::F16 | DType::BF16 => DType::F32,
             d => d,
         };
-        let x = x.reshape((b_sz, n_channels / self.num_groups, hidden_size))?;
+        let x = x.reshape((b_sz, self.num_groups, hidden_size))?;
         let x = x.to_dtype(internal_dtype)?;
         let mean_x = (x.sum_keepdim(2)? / hidden_size as f64)?;
         let x = x.broadcast_sub(&mean_x)?;
