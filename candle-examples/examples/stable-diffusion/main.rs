@@ -57,13 +57,9 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     vae_weights: Option<String>,
 
-    #[arg(
-        long,
-        value_name = "FILE",
-        default_value = "data/bpe_simple_vocab_16e6.txt"
-    )]
-    /// The file specifying the vocabulary to used for tokenization.
-    vocab_file: String,
+    #[arg(long, value_name = "FILE")]
+    /// The file specifying the tokenizer to used for tokenization.
+    tokenizer: String,
 
     /// The size of the sliced attention or 0 for automatic slicing (disabled by default)
     #[arg(long)]
@@ -165,7 +161,7 @@ fn run(args: Args) -> Result<()> {
         height,
         width,
         n_steps,
-        vocab_file,
+        tokenizer,
         final_image,
         sliced_attention_size,
         num_samples,
@@ -184,7 +180,7 @@ fn run(args: Args) -> Result<()> {
     let scheduler = sd_config.build_scheduler(n_steps)?;
     let device = candle_examples::device(cpu)?;
 
-    let tokenizer = Tokenizer::from_file(vocab_file).map_err(E::msg)?;
+    let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
     println!("Running with prompt \"{prompt}\".");
     let tokens = tokenizer
         .encode(prompt, true)
