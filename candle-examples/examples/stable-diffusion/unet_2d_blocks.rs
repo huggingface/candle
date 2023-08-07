@@ -39,7 +39,7 @@ impl Downsample2D {
             None => crate::utils::avg_pool2d(xs), // [2, 2], [2, 2], [0, 0], false, true, None),
             Some(conv) => {
                 if self.padding == 0 {
-                    let xs = crate::utils::pad(xs)?; // [0, 1, 0, 1], "constant", Some(0.))?;
+                    let xs = xs.pad_with_zeros(0, 0, 1)?.pad_with_zeros(1, 0, 1)?;
                     conv.forward(&xs)
                 } else {
                     conv.forward(xs)
