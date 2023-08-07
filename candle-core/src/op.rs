@@ -80,6 +80,13 @@ pub enum Op {
         stride: usize,
     },
 
+    AvgPool2D {
+        arg: Tensor,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+    },
+    UpsampleNearest2D(Tensor),
+
     Cat(Vec<Tensor>, usize),
 
     #[allow(dead_code)] // add is currently unused.

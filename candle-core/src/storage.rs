@@ -266,6 +266,24 @@ impl Storage {
         }
     }
 
+    pub(crate) fn avg_pool2d(
+        &self,
+        _layout: &Layout,
+        _kernel_size: (usize, usize),
+        _stride: (usize, usize),
+    ) -> Result<Self> {
+        todo!()
+    }
+
+    pub(crate) fn upsample_nearest2d(
+        &self,
+        _layout: &Layout,
+        _h: usize,
+        _w: usize,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     pub(crate) fn where_cond(
         &self,
         layout: &Layout,

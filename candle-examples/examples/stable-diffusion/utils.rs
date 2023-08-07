@@ -1,13 +1,5 @@
 use candle::{Device, Result, Tensor};
 
-pub fn avg_pool2d(_: &Tensor) -> Result<Tensor> {
-    todo!()
-}
-
-pub fn upsample_nearest2d(_: &Tensor) -> Result<Tensor> {
-    todo!()
-}
-
 pub fn linspace(start: f64, stop: f64, steps: usize) -> Result<Tensor> {
     if steps < 1 {
         candle::bail!("cannot use linspace with steps {steps} <= 1")
