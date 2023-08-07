@@ -6,6 +6,7 @@
 //!
 //! https://github.com/openai/CLIP
 use candle::{Device, Result, Tensor, D};
+use candle_nn as nn;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Activation {
@@ -16,7 +17,7 @@ pub enum Activation {
 impl Activation {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Activation::QuickGelu => xs * crate::utils::sigmoid(&(xs * 1.702f64)?)?,
+            Activation::QuickGelu => xs * nn::ops::sigmoid(&(xs * 1.702f64)?)?,
             Activation::Gelu => xs.gelu(),
         }
     }
