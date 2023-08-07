@@ -40,7 +40,17 @@ pub struct ParamsConv2D {
 }
 
 impl ParamsConv2D {
+    pub(crate) fn out_h(&self) -> usize {
+        let dilation = 1;
+        (self.i_h + 2 * self.padding - dilation * (self.k_h - 1) - 1) / self.stride + 1
+    }
+
+    pub(crate) fn out_w(&self) -> usize {
+        let dilation = 1;
+        (self.i_w + 2 * self.padding - dilation * (self.k_w - 1) - 1) / self.stride + 1
+    }
+
     pub(crate) fn out_dims(&self) -> Vec<usize> {
-        todo!()
+        vec![self.b_size, self.c_out, self.out_h(), self.out_w()]
     }
 }
