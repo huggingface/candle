@@ -34,5 +34,11 @@ pub fn log_softmax<D: candle::shape::Dim>(xs: &Tensor, d: D) -> Result<Tensor> {
 }
 
 pub fn silu(xs: &Tensor) -> Result<Tensor> {
+    // TODO: Should we have a specialized op for this?
     xs / (xs.neg()?.exp()? + 1.0)?
+}
+
+pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
+    // TODO: Should we have a specialized op for this?
+    (xs.neg()?.exp()? + 1.0)?.recip()
 }
