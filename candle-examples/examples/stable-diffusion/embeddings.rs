@@ -57,7 +57,7 @@ impl Timesteps {
             Tensor::cat(&[&sin, &cos], D::Minus1)?
         };
         if self.num_channels % 2 == 1 {
-            emb.pad_with_zeros(1, 0, 1)
+            emb.pad_with_zeros(D::Minus2, 0, 1)
         } else {
             Ok(emb)
         }
