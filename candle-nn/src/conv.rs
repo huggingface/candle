@@ -85,8 +85,16 @@ impl Conv2d {
         &self.config
     }
 
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
-        todo!()
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x = x.conv2d(&self.weight, self.config.padding, self.config.stride)?;
+        match &self.bias {
+            None => Ok(x),
+            Some(bias) => {
+                let b = bias.dims1()?;
+                let bias = bias.reshape((1, b, 1, 1))?;
+                Ok(x.broadcast_add(&bias)?)
+            }
+        }
     }
 }
 

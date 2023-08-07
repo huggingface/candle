@@ -55,6 +55,11 @@ impl Tensor {
                         kernel: rhs,
                         ..
                     }
+                    | Op::Conv2D {
+                        arg: lhs,
+                        kernel: rhs,
+                        ..
+                    }
                     | Op::CustomOp2(lhs, rhs, _)
                     | Op::Binary(lhs, rhs, _)
                     | Op::Gather(lhs, rhs, _)
@@ -165,6 +170,7 @@ impl Tensor {
                         *f_sum_grad = f_sum_grad.add(&f_grad)?;
                     }
                     Op::Conv1D { .. } => Err(Error::BackwardNotSupported { op: "conv1d" })?,
+                    Op::Conv2D { .. } => Err(Error::BackwardNotSupported { op: "conv2d" })?,
                     Op::AvgPool2D { .. } => Err(Error::BackwardNotSupported { op: "avg-pool2d" })?,
                     Op::UpsampleNearest2D { .. } => Err(Error::BackwardNotSupported {
                         op: "upsample-nearest2d",

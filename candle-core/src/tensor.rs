@@ -817,6 +817,10 @@ impl Tensor {
         Ok(from_storage(storage, out_dims, op, false))
     }
 
+    pub fn conv2d(&self, _kernel: &Self, _padding: usize, _stride: usize) -> Result<Self> {
+        todo!()
+    }
+
     pub fn upsample_nearest2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
         let (n, c, _h, _w) = self.dims4()?;
         let op = BackpropOp::new1(self, Op::UpsampleNearest2D);
