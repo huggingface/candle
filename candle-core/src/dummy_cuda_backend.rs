@@ -119,6 +119,10 @@ impl crate::backend::BackendStorage for CudaStorage {
     fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
 
 impl crate::backend::BackendDevice for CudaDevice {

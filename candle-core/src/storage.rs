@@ -268,11 +268,20 @@ impl Storage {
 
     pub(crate) fn avg_pool2d(
         &self,
-        _layout: &Layout,
-        _kernel_size: (usize, usize),
-        _stride: (usize, usize),
+        layout: &Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
     ) -> Result<Self> {
-        todo!()
+        match self {
+            Storage::Cpu(storage) => {
+                let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::Cpu(storage))
+            }
+            Self::Cuda(storage) => {
+                let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::Cuda(storage))
+            }
+        }
     }
 
     pub(crate) fn upsample_nearest2d(
