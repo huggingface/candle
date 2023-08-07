@@ -284,13 +284,17 @@ impl Storage {
         }
     }
 
-    pub(crate) fn upsample_nearest2d(
-        &self,
-        _layout: &Layout,
-        _h: usize,
-        _w: usize,
-    ) -> Result<Self> {
-        todo!()
+    pub(crate) fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
+        match self {
+            Storage::Cpu(storage) => {
+                let storage = storage.upsample_nearest2d(layout, h, w)?;
+                Ok(Self::Cpu(storage))
+            }
+            Self::Cuda(storage) => {
+                let storage = storage.upsample_nearest2d(layout, h, w)?;
+                Ok(Self::Cuda(storage))
+            }
+        }
     }
 
     pub(crate) fn where_cond(

@@ -1385,6 +1385,10 @@ impl BackendStorage for CudaStorage {
         todo!()
     }
 
+    fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
+        todo!()
+    }
+
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
         let device = self.device().clone();
         let slice = IndexSelect(ids, ids_l, dim).map(&self.slice, &device, l)?;
