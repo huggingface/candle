@@ -1059,7 +1059,7 @@ impl<'a> Map2 for Conv2D<'a> {
                 let dst_idx = dst_idx + dst_c_idx * out_h * out_w;
                 for dst_h in 0..out_h {
                     let dst_idx = dst_idx + dst_h * out_w;
-                    for dst_w in 0..out_h {
+                    for dst_w in 0..out_w {
                         let dst_idx = dst_idx + dst_w;
                         let mut d = T::zero();
                         for offset_h in 0..p.k_h {
