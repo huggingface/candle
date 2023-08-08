@@ -20,7 +20,7 @@ impl Tensor {
     /// elements having dependencies on the latter ones, e.g. the first element if any is the
     /// argument.
     /// This assumes that the op graph is a DAG.
-    fn sorted_nodes(&self) -> Vec<&Tensor> {
+    fn sorted_nodes(&self) -> Vec<&Self> {
         // The vec of sorted nodes is passed as an owned value rather than a mutable reference
         // to get around some lifetime limitations.
         fn walk<'a>(
@@ -412,7 +412,7 @@ pub struct GradStore(HashMap<TensorId, Tensor>);
 
 impl GradStore {
     fn new() -> Self {
-        GradStore(HashMap::new())
+        Self(HashMap::new())
     }
 
     pub fn get_id(&self, id: TensorId) -> Option<&Tensor> {

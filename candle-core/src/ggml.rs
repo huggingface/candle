@@ -454,8 +454,7 @@ impl GgmlDType {
 
     fn blck_size(&self) -> usize {
         match self {
-            Self::F32 => 1,
-            Self::F16 => 1,
+            Self::F32 | Self::F16 => 1,
             Self::Q4_0 => QK4_0,
             Self::Q4_1 => QK4_1,
             Self::Q5_0 => QK5_0,
@@ -556,10 +555,7 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
 }
 
 impl Content {
-    pub fn read<R: std::io::Seek + std::io::Read>(
-        reader: &mut R,
-        device: &Device,
-    ) -> Result<Content> {
+    pub fn read<R: std::io::Seek + std::io::Read>(reader: &mut R, device: &Device) -> Result<Self> {
         // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.cpp#L505
         let last_position = reader.seek(std::io::SeekFrom::End(0))?;
         reader.seek(std::io::SeekFrom::Start(0))?;

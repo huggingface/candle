@@ -230,14 +230,14 @@ fn convert(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
 fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
     // TODO: This makes an unnecessary copy when the tensor is on the cpu.
     let tensor = tensor.flatten_all()?;
-    match tensor.dtype() {
-        DType::U8 => Ok(convert_back_::<u8>(tensor.to_vec1()?)),
-        DType::U32 => Ok(convert_back_::<u32>(tensor.to_vec1()?)),
-        DType::F16 => Ok(convert_back_::<half::f16>(tensor.to_vec1()?)),
-        DType::BF16 => Ok(convert_back_::<half::bf16>(tensor.to_vec1()?)),
-        DType::F32 => Ok(convert_back_::<f32>(tensor.to_vec1()?)),
-        DType::F64 => Ok(convert_back_::<f64>(tensor.to_vec1()?)),
-    }
+    Ok(match tensor.dtype() {
+        DType::U8 => convert_back_::<u8>(tensor.to_vec1()?),
+        DType::U32 => convert_back_::<u32>(tensor.to_vec1()?),
+        DType::F16 => convert_back_::<half::f16>(tensor.to_vec1()?),
+        DType::BF16 => convert_back_::<half::bf16>(tensor.to_vec1()?),
+        DType::F32 => convert_back_::<f32>(tensor.to_vec1()?),
+        DType::F64 => convert_back_::<f64>(tensor.to_vec1()?),
+    })
 }
 
 pub fn load<P: AsRef<Path>>(filename: P, device: &Device) -> Result<HashMap<String, Tensor>> {
