@@ -23,7 +23,7 @@ impl VarMap {
     pub fn all_vars(&self) -> Vec<Var> {
         let tensor_data = self.data.lock().unwrap();
         #[allow(clippy::map_clone)]
-        tensor_data.values().map(|c| c.clone()).collect::<Vec<_>>()
+        tensor_data.values().map(|c| c.clone()).collect()
     }
 
     /// Save the map in the safetensors format.
@@ -167,7 +167,7 @@ impl<'a> VarBuilder<'a> {
     pub fn from_safetensors(st: Vec<SafeTensors<'a>>, dtype: DType, device: &Device) -> Self {
         let data = TensorData::from_safetensors(st, dtype, device);
         Self {
-            data: Arc::new(data),
+            data: data.into(),
             path: vec![],
         }
     }
@@ -175,7 +175,7 @@ impl<'a> VarBuilder<'a> {
     pub fn zeros(dtype: DType, device: &Device) -> Self {
         let data = TensorData::zeros(dtype, device);
         Self {
-            data: Arc::new(data),
+            data: data.into(),
             path: vec![],
         }
     }
@@ -183,7 +183,7 @@ impl<'a> VarBuilder<'a> {
     pub fn from_tensors(ts: HashMap<String, Tensor>, dtype: DType, device: &Device) -> Self {
         let data = TensorData::from_tensors(ts, dtype, device);
         Self {
-            data: Arc::new(data),
+            data: data.into(),
             path: vec![],
         }
     }
@@ -191,7 +191,7 @@ impl<'a> VarBuilder<'a> {
     pub fn from_varmap(varmap: &VarMap, dtype: DType, device: &Device) -> Self {
         let data = TensorData::from_varmap(varmap, dtype, device);
         Self {
-            data: Arc::new(data),
+            data: data.into(),
             path: vec![],
         }
     }
@@ -203,7 +203,7 @@ impl<'a> VarBuilder<'a> {
     ) -> Result<Self> {
         let data = TensorData::from_npz(file, dtype, device)?;
         Ok(Self {
-            data: Arc::new(data),
+            data: data.into(),
             path: vec![],
         })
     }

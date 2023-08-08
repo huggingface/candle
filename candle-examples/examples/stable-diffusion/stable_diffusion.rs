@@ -70,7 +70,7 @@ impl StableDiffusionConfig {
             height,
             clip: clip::Config::v1_5(),
             autoencoder,
-            scheduler: Default::default(),
+            scheduler: <_>::default(),
             unet,
         }
     }
