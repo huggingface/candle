@@ -141,7 +141,7 @@ fn main() -> Result<()> {
         } else {
             let pp = PaddingParams {
                 strategy: tokenizers::PaddingStrategy::BatchLongest,
-                ..Default::default()
+                ..<_>::default()
             };
             tokenizer.with_padding(Some(pp));
         }

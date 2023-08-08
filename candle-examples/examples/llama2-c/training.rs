@@ -40,7 +40,7 @@ pub fn run(args: &crate::TrainingCmd, common_args: &crate::Args) -> Result<()> {
     let model = Llama::load(vb, &cache, config)?;
     let params = candle_nn::ParamsAdamW {
         lr: args.learning_rate,
-        ..Default::default()
+        ..<_>::default()
     };
     let mut opt = candle_nn::AdamW::new(varmap.all_vars(), params)?;
     for (batch_index, batch) in batch_iter.enumerate() {

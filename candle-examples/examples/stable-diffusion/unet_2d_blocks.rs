@@ -61,7 +61,7 @@ impl Upsample2D {
     fn new(vs: nn::VarBuilder, in_channels: usize, out_channels: usize) -> Result<Self> {
         let config = nn::Conv2dConfig {
             padding: 1,
-            ..Default::default()
+            ..<_>::default()
         };
         let conv = nn::conv2d(in_channels, out_channels, 3, config, vs.pp("conv"))?;
         Ok(Self { conv })
@@ -126,7 +126,7 @@ impl DownEncoderBlock2D {
                 groups: config.resnet_groups,
                 output_scale_factor: config.output_scale_factor,
                 temb_channels: None,
-                ..Default::default()
+                ..<_>::default()
             };
             (0..(config.num_layers))
                 .map(|i| {
@@ -211,7 +211,7 @@ impl UpDecoderBlock2D {
                 groups: config.resnet_groups,
                 output_scale_factor: config.output_scale_factor,
                 temb_channels: None,
-                ..Default::default()
+                ..<_>::default()
             };
             (0..(config.num_layers))
                 .map(|i| {
@@ -294,7 +294,7 @@ impl UNetMidBlock2D {
             groups: resnet_groups,
             output_scale_factor: config.output_scale_factor,
             temb_channels,
-            ..Default::default()
+            ..<_>::default()
         };
         let resnet = ResnetBlock2D::new(vs_resnets.pp("0"), in_channels, resnet_cfg)?;
         let attn_cfg = AttentionBlockConfig {
@@ -381,7 +381,7 @@ impl UNetMidBlock2DCrossAttn {
             groups: resnet_groups,
             output_scale_factor: config.output_scale_factor,
             temb_channels,
-            ..Default::default()
+            ..<_>::default()
         };
         let resnet = ResnetBlock2D::new(vs_resnets.pp("0"), in_channels, resnet_cfg)?;
         let n_heads = config.attn_num_head_channels;
@@ -475,7 +475,7 @@ impl DownBlock2D {
             eps: config.resnet_eps,
             output_scale_factor: config.output_scale_factor,
             temb_channels,
-            ..Default::default()
+            ..<_>::default()
         };
         let resnets = (0..config.num_layers)
             .map(|i| {
@@ -662,7 +662,7 @@ impl UpBlock2D {
             temb_channels,
             eps: config.resnet_eps,
             output_scale_factor: config.output_scale_factor,
-            ..Default::default()
+            ..<_>::default()
         };
         let resnets = (0..config.num_layers)
             .map(|i| {

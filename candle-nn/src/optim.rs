@@ -122,7 +122,7 @@ impl AdamW {
     pub fn new_lr(vars: Vec<Var>, learning_rate: f64) -> Result<Self> {
         let params = ParamsAdamW {
             lr: learning_rate,
-            ..ParamsAdamW::default()
+            ..<_>::default()
         };
         Self::new(vars, params)
     }

@@ -115,7 +115,7 @@ impl StableDiffusionConfig {
         };
         let scheduler = ddim::DDIMSchedulerConfig {
             prediction_type,
-            ..Default::default()
+            ..<_>::default()
         };
 
         let height = if let Some(height) = height {

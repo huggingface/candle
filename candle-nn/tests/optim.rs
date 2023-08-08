@@ -106,7 +106,7 @@ fn adamw_linear_regression() -> Result<()> {
     let b = Var::new(0f32, &Device::Cpu)?;
     let params = ParamsAdamW {
         lr: 0.1,
-        ..Default::default()
+        ..<_>::default()
     };
     let mut opt = AdamW::new(vec![w.clone(), b.clone()], params)?;
     let lin = Linear::new(w.as_tensor().clone(), Some(b.as_tensor().clone()));

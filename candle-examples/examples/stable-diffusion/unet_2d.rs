@@ -144,7 +144,7 @@ impl UNet2DConditionModel {
                     resnet_groups: config.norm_num_groups,
                     add_downsample: i < n_blocks - 1,
                     downsample_padding: config.downsample_padding,
-                    ..Default::default()
+                    ..<_>::default()
                 };
                 if use_cross_attn {
                     let config = CrossAttnDownBlock2DConfig {
@@ -182,7 +182,7 @@ impl UNet2DConditionModel {
             attn_num_head_channels: bl_attention_head_dim,
             resnet_groups: Some(config.norm_num_groups),
             use_linear_projection: config.use_linear_projection,
-            ..Default::default()
+            ..<_>::default()
         };
         let mid_block = UNetMidBlock2DCrossAttn::new(
             vs.pp("mid_block"),
@@ -224,7 +224,7 @@ impl UNet2DConditionModel {
                     resnet_eps: config.norm_eps,
                     resnet_groups: config.norm_num_groups,
                     add_upsample: i < n_blocks - 1,
-                    ..Default::default()
+                    ..<_>::default()
                 };
                 if use_cross_attn {
                     let config = CrossAttnUpBlock2DConfig {

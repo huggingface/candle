@@ -16,7 +16,7 @@ impl VarMap {
     /// Create a new empty `VarMap`.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        Self::default()
+        <_>::default()
     }
 
     /// Retrieve all the variables currently stored in the map.

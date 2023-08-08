@@ -76,7 +76,7 @@ impl Encoder {
                 resnet_groups: config.norm_num_groups,
                 add_downsample: !is_final,
                 downsample_padding: 0,
-                ..Default::default()
+                ..<_>::default()
             };
             let down_block = DownEncoderBlock2D::new(
                 vs_down_blocks.pp(&index.to_string()),
@@ -92,7 +92,7 @@ impl Encoder {
             output_scale_factor: 1.,
             attn_num_head_channels: None,
             resnet_groups: Some(config.norm_num_groups),
-            ..Default::default()
+            ..<_>::default()
         };
         let mid_block =
             UNetMidBlock2D::new(vs.pp("mid_block"), last_block_out_channels, None, mid_cfg)?;
@@ -109,7 +109,7 @@ impl Encoder {
         };
         let conv_cfg = nn::Conv2dConfig {
             padding: 1,
-            ..Default::default()
+            ..<_>::default()
         };
         let conv_out = nn::conv2d(
             last_block_out_channels,
@@ -196,7 +196,7 @@ impl Decoder {
             output_scale_factor: 1.,
             attn_num_head_channels: None,
             resnet_groups: Some(config.norm_num_groups),
-            ..Default::default()
+            ..<_>::default()
         };
         let mid_block =
             UNetMidBlock2D::new(vs.pp("mid_block"), last_block_out_channels, None, mid_cfg)?;
@@ -217,7 +217,7 @@ impl Decoder {
                 resnet_eps: 1e-6,
                 resnet_groups: config.norm_num_groups,
                 add_upsample: !is_final,
-                ..Default::default()
+                ..<_>::default()
             };
             let up_block = UpDecoderBlock2D::new(
                 vs_up_blocks.pp(&index.to_string()),
@@ -235,7 +235,7 @@ impl Decoder {
         )?;
         let conv_cfg = nn::Conv2dConfig {
             padding: 1,
-            ..Default::default()
+            ..<_>::default()
         };
         let conv_out = nn::conv2d(
             config.block_out_channels[0],
