@@ -102,17 +102,11 @@ impl Device {
     }
 
     pub fn is_cpu(&self) -> bool {
-        match self {
-            Self::Cpu => true,
-            Self::Cuda(_) => false,
-        }
+        matches!(self, Self::Cpu)
     }
 
     pub fn is_cuda(&self) -> bool {
-        match self {
-            Self::Cpu => false,
-            Self::Cuda(_) => true,
-        }
+        matches!(self, Self::Cuda(_))
     }
 
     pub fn cuda_if_available(ordinal: usize) -> Result<Self> {

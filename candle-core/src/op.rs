@@ -12,6 +12,19 @@ pub enum CmpOp {
     Gt,
 }
 
+impl CmpOp {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Eq => "eq",
+            Self::Ne => "ne",
+            Self::Lt => "lt",
+            Self::Le => "le",
+            Self::Gt => "gt",
+            Self::Ge => "ge",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReduceOp {
     Sum,

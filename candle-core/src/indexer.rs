@@ -63,7 +63,7 @@ pub enum TensorIndexer {
 
 impl From<usize> for TensorIndexer {
     fn from(index: usize) -> Self {
-        TensorIndexer::Select(index)
+        Self::Select(index)
     }
 }
 

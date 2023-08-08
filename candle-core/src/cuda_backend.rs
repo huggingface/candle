@@ -1015,14 +1015,7 @@ impl Map2Any for Cmp {
             .w()?;
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
-        let name = match self.0 {
-            CmpOp::Eq => "eq",
-            CmpOp::Ne => "ne",
-            CmpOp::Lt => "lt",
-            CmpOp::Le => "le",
-            CmpOp::Gt => "gt",
-            CmpOp::Ge => "ge",
-        };
+        let name = self.0.name();
         let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;

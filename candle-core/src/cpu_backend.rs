@@ -121,14 +121,17 @@ impl Map2U8 for Cmp {
         rhs: &[T],
         rhs_l: &Layout,
     ) -> Result<Vec<u8>> {
-        Ok(binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| match self.0 {
-            CmpOp::Eq => x == y,
-            CmpOp::Ne => x != y,
-            CmpOp::Lt => x < y,
-            CmpOp::Le => x <= y,
-            CmpOp::Gt => x > y,
-            CmpOp::Ge => x >= y,
-        }.into()))
+        Ok(binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| {
+            match self.0 {
+                CmpOp::Eq => x == y,
+                CmpOp::Ne => x != y,
+                CmpOp::Lt => x < y,
+                CmpOp::Le => x <= y,
+                CmpOp::Gt => x > y,
+                CmpOp::Ge => x >= y,
+            }
+            .into()
+        }))
     }
 }
 

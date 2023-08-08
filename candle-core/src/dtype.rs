@@ -43,11 +43,8 @@ impl DType {
 
     pub fn size_in_bytes(&self) -> usize {
         match self {
-            Self::U8 => 4,
-            Self::U32 => 4,
-            Self::BF16 => 2,
-            Self::F16 => 2,
-            Self::F32 => 4,
+            Self::U8 | Self::U32 | Self::F32 => 4,
+            Self::BF16 | Self::F16 => 2,
             Self::F64 => 8,
         }
     }
@@ -130,7 +127,7 @@ impl IntDType for u32 {
         *self != 0
     }
     fn as_usize(&self) -> usize {
-        *self as usize
+        *self as _
     }
 }
 
@@ -139,7 +136,7 @@ impl IntDType for u8 {
         *self != 0
     }
     fn as_usize(&self) -> usize {
-        *self as usize
+        *self as _
     }
 }
 
