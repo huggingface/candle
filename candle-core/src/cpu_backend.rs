@@ -1011,7 +1011,7 @@ impl<'a> Map2 for Conv1D<'a> {
                     let dst_idx = dst_idx + dst_l;
                     let mut d = T::zero();
                     for offset in 0..p.k_size {
-                        let src_l_plus = p.stride * dst_l + offset;
+                        let src_l_plus = p.stride * dst_l + offset + k_over_2 - p.padding;
                         // inp[bidx, src_c_idx, dst_l + offset - k//2] * k[dst_c_idx, src_c_idx, offset]
                         if k_over_2 <= src_l_plus && src_l_plus < k_over_2 + p.l_in {
                             let src_l = src_l_plus - k_over_2;
