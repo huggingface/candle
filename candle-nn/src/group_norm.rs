@@ -59,11 +59,15 @@ impl GroupNorm {
         let x = x.broadcast_sub(&mean_x)?;
         let norm_x = (x.sqr()?.sum_keepdim(2)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
+        let mut w_dims = vec![1; x.rank()];
+        w_dims[1] = n_channels;
+        let weight = self.weight.reshape(w_dims.clone())?;
+        let bias = self.bias.reshape(w_dims)?;
         x_normed
             .to_dtype(x_dtype)?
-            .broadcast_mul(&self.weight)?
-            .broadcast_add(&self.bias)?
-            .reshape(x_shape)
+            .reshape(x_shape)?
+            .broadcast_mul(&weight)?
+            .broadcast_add(&bias)
     }
 }
 
