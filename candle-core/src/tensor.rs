@@ -82,7 +82,7 @@ macro_rules! unary_op {
                 .storage()
                 .unary_impl::<crate::op::$op_name>(self.layout())?;
             let op = BackpropOp::new1(self, |s| Op::Unary(s, UnaryOp::$op_name));
-            Ok(from_storage(storage, shape.clone(), op, false))
+            Ok(from_storage_op(storage, shape.clone(), op))
         }
     };
 }
@@ -97,7 +97,7 @@ macro_rules! binary_op {
                 rhs.layout(),
             )?;
             let op = BackpropOp::new2(self, rhs, |t1, t2| Op::Binary(t1, t2, BinaryOp::$op_name));
-            Ok(from_storage(storage, shape.clone(), op, false))
+            Ok(from_storage_op(storage, shape.clone(), op))
         }
     };
 }
@@ -140,6 +140,14 @@ fn from_storage<S: Into<Shape>>(
         dtype,
         device,
     }.into()
+}
+
+fn from_storage_op<S: Into<Shape>>(
+    storage: Storage,
+    shape: S,
+    op: impl Into<Option<BackpropOp>>,
+) -> Tensor {
+    from_storage(storage, shape, op, false)
 }
 
 impl From<Tensor_> for Tensor {
@@ -541,14 +549,14 @@ impl Tensor {
     pub fn affine(&self, mul: f64, add: f64) -> Result<Self> {
         let storage = self.storage().affine(self.layout(), mul, add)?;
         let op = BackpropOp::new1(self, |arg| Op::Affine { arg, mul, add });
-        Ok(from_storage(storage, self.shape(), op, false))
+        Ok(from_storage_op(storage, self.shape(), op))
     }
 
     /// Applies the Exponential Linear Unit (ELU) function on each element of the input tensor.
     pub fn elu(&self, alpha: f64) -> Result<Self> {
         let storage = self.storage().elu(self.layout(), alpha)?;
         let op = BackpropOp::new1(self, |t| Op::Elu(t, alpha));
-        Ok(from_storage(storage, self.shape(), op, false))
+        Ok(from_storage_op(storage, self.shape(), op))
     }
 
     fn check_dim(&self, dim: usize, op: &'static str) -> Result<()> {
@@ -650,7 +658,7 @@ impl Tensor {
         let mut dims = self.dims().to_vec();
         dims[dim] = 1;
         let op = BackpropOp::new1(self, |arg| Op::Reduce(arg, op, dims.to_vec()));
-        let res = from_storage(storage, dims, op, false);
+        let res = from_storage_op(storage, dims, op);
         if keepdim {
             Ok(res)
         } else {
@@ -668,7 +676,7 @@ impl Tensor {
             dims[sum_dim] = 1
         }
         let op = BackpropOp::new1(self, |a| Op::Reduce(a, ReduceOp::Sum, dims.to_vec()));
-        let sum = from_storage(storage, dims, op, false);
+        let sum = from_storage_op(storage, dims, op);
         if keepdim {
             Ok(sum)
         } else {
@@ -742,7 +750,7 @@ impl Tensor {
             .storage()
             .cmp(op, &rhs.storage(), self.layout(), rhs.layout())?;
         let op = BackpropOp::new1(self, |a| Op::Cmp(a, op));
-        Ok(from_storage(storage, shape.dims(), op, false))
+        Ok(from_storage_op(storage, shape.dims(), op))
     }
 
     pub fn eq(&self, rhs: &Self) -> Result<Self> {
@@ -813,7 +821,7 @@ impl Tensor {
             stride,
         });
         let out_dims = params.out_dims();
-        Ok(from_storage(storage, out_dims, op, false))
+        Ok(from_storage_op(storage, out_dims, op))
     }
 
     pub fn conv2d(&self, kernel: &Self, padding: usize, stride: usize) -> Result<Self> {
@@ -843,7 +851,7 @@ impl Tensor {
             stride,
         });
         let out_dims = params.out_dims();
-        Ok(from_storage(storage, out_dims, op, false))
+        Ok(from_storage_op(storage, out_dims, op))
     }
 
     pub fn upsample_nearest2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
@@ -852,7 +860,7 @@ impl Tensor {
         let storage = self
             .storage()
             .upsample_nearest2d(self.layout(), target_h, target_w)?;
-        Ok(from_storage(storage, (n, c, target_h, target_w), op, false))
+        Ok(from_storage_op(storage, (n, c, target_h, target_w), op))
     }
 
     pub fn avg_pool2d(&self, kernel_size: (usize, usize), stride: (usize, usize)) -> Result<Self> {
@@ -868,7 +876,7 @@ impl Tensor {
         let storage = self
             .storage()
             .avg_pool2d(self.layout(), kernel_size, stride)?;
-        Ok(from_storage(storage, (n, c, h_out, w_out), op, false))
+        Ok(from_storage_op(storage, (n, c, h_out, w_out), op))
     }
 
     /// Returns the matrix-multiplication of the input tensor with the other provided tensor.
@@ -918,7 +926,7 @@ impl Tensor {
             rhs.layout(),
         )?;
         let op = BackpropOp::new2(self, rhs, Op::Matmul);
-        Ok(from_storage(storage, c_shape, op, false))
+        Ok(from_storage_op(storage, c_shape, op))
     }
 
     /// Returns a tensor with the same shape as the input tensor, the values are taken from
@@ -935,7 +943,7 @@ impl Tensor {
             on_false.layout(),
         )?;
         let op = BackpropOp::new3(self, on_true, on_false, Op::WhereCond);
-        Ok(from_storage(storage, shape, op, false))
+        Ok(from_storage_op(storage, shape, op))
     }
 
     /// Returns a tensor with the values from the `self` tensor at the index corresponding to the
@@ -1010,7 +1018,7 @@ impl Tensor {
         let op = BackpropOp::new3(self, indexes, source, |t1, t2, t3| {
             Op::ScatterAdd(t1, t2, t3, dim)
         });
-        Ok(from_storage(storage, self.shape(), op, false))
+        Ok(from_storage_op(storage, self.shape(), op))
     }
 
     pub fn index_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
@@ -1058,7 +1066,7 @@ impl Tensor {
         let op = BackpropOp::new3(self, indexes, source, |t1, t2, t3| {
             Op::IndexAdd(t1, t2, t3, dim)
         });
-        Ok(from_storage(storage, self.shape(), op, false))
+        Ok(from_storage_op(storage, self.shape(), op))
     }
 
     pub fn gather<D: Dim>(&self, indexes: &Self, dim: D) -> Result<Self> {
@@ -1088,7 +1096,7 @@ impl Tensor {
             self.storage()
                 .gather(self.layout(), &indexes.storage(), indexes.layout(), dim)?;
         let op = BackpropOp::new2(self, indexes, |t1, t2| Op::Gather(t1, t2, dim));
-        Ok(from_storage(storage, indexes.shape(), op, false))
+        Ok(from_storage_op(storage, indexes.shape(), op))
     }
 
     pub fn index_select<D: Dim>(&self, indexes: &Self, dim: D) -> Result<Self> {
@@ -1111,7 +1119,7 @@ impl Tensor {
         let mut dims = self.dims().to_vec();
         dims[dim] = indexes_len;
         let op = BackpropOp::new2(self, indexes, |t1, t2| Op::IndexSelect(t1, t2, dim));
-        Ok(from_storage(storage, dims, op, false))
+        Ok(from_storage_op(storage, dims, op))
     }
 
     /// Returns an iterator over position of the elements in the storage when ranging over the
@@ -1538,7 +1546,7 @@ impl Tensor {
             let shape = self.shape();
             let storage = self.storage().to_dtype(self.layout(), dtype)?;
             let op = BackpropOp::new1(self, Op::ToDType);
-            Ok(from_storage(storage, shape.clone(), op, false))
+            Ok(from_storage_op(storage, shape.clone(), op))
         }
     }
 
@@ -1553,7 +1561,7 @@ impl Tensor {
             self.storage()
                 .copy_strided_src(&mut storage, 0, self.layout())?;
             let op = BackpropOp::new1(self, Op::Copy);
-            Ok(from_storage(storage, shape.clone(), op, false))
+            Ok(from_storage_op(storage, shape.clone(), op))
         }
     }
 
@@ -1609,7 +1617,7 @@ impl Tensor {
             let mut storage = self.device().zeros(&shape, self.dtype())?;
             self.storage()
                 .copy_strided_src(&mut storage, 0, self.layout())?;
-            Ok(from_storage(storage, shape, op, false))
+            Ok(from_storage_op(storage, shape, op))
         }
     }
 
@@ -1804,7 +1812,7 @@ impl Tensor {
             arg.storage()
                 .copy_strided_src(&mut storage, offset, arg.layout())?;
         }
-        Ok(from_storage(storage, shape, op, false))
+        Ok(from_storage_op(storage, shape, op))
     }
 
     pub fn pad_with_zeros<D: Dim>(&self, dim: D, left: usize, right: usize) -> Result<Self> {
@@ -1864,7 +1872,7 @@ impl Tensor {
             .storage()
             .custom_op1(self.layout(), c.as_ref().as_ref())?;
         let op = BackpropOp::new1(self, |s| Op::CustomOp1(s, c.clone()));
-        Ok(from_storage(storage, shape, op, false))
+        Ok(from_storage_op(storage, shape, op))
     }
 
     pub fn custom_op1<C: 'static + CustomOp1>(&self, c: C) -> Result<Self> {
@@ -1880,7 +1888,7 @@ impl Tensor {
             c.as_ref().as_ref(),
         )?;
         let op = BackpropOp::new2(self, rhs, |t1, t2| Op::CustomOp2(t1, t2, c.clone()));
-        Ok(from_storage(storage, shape, op, false))
+        Ok(from_storage_op(storage, shape, op))
     }
 
     pub fn custom_op2<C: 'static + CustomOp2>(&self, r: &Self, c: C) -> Result<Self> {
@@ -1900,7 +1908,7 @@ impl Tensor {
         let op = BackpropOp::new3(self, t2, t3, |t1, t2, t3| {
             Op::CustomOp3(t1, t2, t3, c.clone())
         });
-        Ok(from_storage(storage, shape, op, false))
+        Ok(from_storage_op(storage, shape, op))
     }
 
     pub fn custom_op3<C: 'static + CustomOp3>(&self, t2: &Self, t3: &Self, c: C) -> Result<Self> {
