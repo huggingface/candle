@@ -157,6 +157,18 @@ impl From<Tensor_> for Tensor {
     }
 }
 
+fn dim_match(dim: usize, a: &[usize], b: &[usize]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for (i, (&d1, &d2)) in a.iter().zip(b.iter()).enumerate() {
+        if i != dim && d1 != d2 {
+            return false;
+        }
+    }
+    true
+}
+
 impl Tensor {
     pub(crate) fn ones_impl<S: Into<Shape>>(
         shape: S,
@@ -981,19 +993,9 @@ impl Tensor {
         let dim = dim.to_index(self.shape(), "scatter-add")?;
         let source_dims = source.dims();
         let self_dims = self.dims();
-        let mismatch = if source_dims.len() != self_dims.len() {
-            true
-        } else {
-            let mut mismatch = false;
-            for (i, (&d1, &d2)) in self_dims.iter().zip(source_dims.iter()).enumerate() {
-                if i != dim && d1 != d2 {
-                    mismatch = true;
-                    break;
-                }
-            }
-            mismatch
-        };
-        if mismatch {
+
+        let dim_match = dim_match(dim, self_dims, source_dims);
+        if !dim_match {
             Err(Error::ShapeMismatchBinaryOp {
                 op: "scatter-add (self, src)",
                 lhs: self.shape().clone(),
@@ -1025,19 +1027,8 @@ impl Tensor {
         let dim = dim.to_index(self.shape(), "index-add")?;
         let source_dims = source.dims();
         let self_dims = self.dims();
-        let mismatch = if source_dims.len() != self_dims.len() {
-            true
-        } else {
-            let mut mismatch = false;
-            for (i, (&d1, &d2)) in self_dims.iter().zip(source_dims.iter()).enumerate() {
-                if i != dim && d1 != d2 {
-                    mismatch = true;
-                    break;
-                }
-            }
-            mismatch
-        };
-        if mismatch {
+        let dim_match = dim_match(dim, self_dims, source_dims);
+        if !dim_match {
             Err(Error::ShapeMismatchBinaryOp {
                 op: "index-add (self, source)",
                 lhs: self.shape().clone(),
@@ -1073,19 +1064,9 @@ impl Tensor {
         let dim = dim.to_index(self.shape(), "gather")?;
         let self_dims = self.dims();
         let indexes_dims = indexes.dims();
-        let mismatch = if indexes_dims.len() != self_dims.len() {
-            true
-        } else {
-            let mut mismatch = false;
-            for (i, (&d1, &d2)) in self_dims.iter().zip(indexes_dims.iter()).enumerate() {
-                if i != dim && d1 != d2 {
-                    mismatch = true;
-                    break;
-                }
-            }
-            mismatch
-        };
-        if mismatch {
+
+        let dim_match = dim_match(dim, self_dims, indexes_dims);
+        if !dim_match {
             Err(Error::ShapeMismatchBinaryOp {
                 op: "gather",
                 lhs: self.shape().clone(),
