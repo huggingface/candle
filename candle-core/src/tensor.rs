@@ -133,14 +133,14 @@ fn from_storage<S: Into<Shape>>(
     let device = storage.device();
     let tensor_ = Tensor_ {
         id: TensorId::new(),
-        storage: Arc::new(RwLock::new(storage)),
+        storage: RwLock::new(storage).into(),
         layout: Layout::contiguous(shape),
         op,
         is_variable,
         dtype,
         device,
     };
-    Tensor(Arc::new(tensor_))
+    Tensor(tensor_.into())
 }
 
 impl Tensor {
@@ -613,7 +613,7 @@ impl Tensor {
                 dtype: self.dtype,
                 device: self.device.clone(),
             };
-            Ok(Self(Arc::new(tensor_)))
+            Ok(Self(tensor_.into()))
         }
     }
 
@@ -1411,7 +1411,7 @@ impl Tensor {
             dtype: self.dtype,
             device: self.device.clone(),
         };
-        Ok(Self(Arc::new(tensor_)))
+        Ok(Self(tensor_.into()))
     }
 
     /// Returns true if the data is stored in a C contiguous (aka row major) way.
@@ -1430,14 +1430,14 @@ impl Tensor {
         let op = BackpropOp::new1(self, Op::Copy);
         let tensor_ = Tensor_ {
             id: TensorId::new(),
-            storage: Arc::new(RwLock::new(self.storage().try_clone(self.layout())?)),
+            storage: RwLock::new(self.storage().try_clone(self.layout())?).into(),
             layout: self.layout.clone(),
             op,
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
         };
-        Ok(Self(Arc::new(tensor_)))
+        Ok(Self(tensor_.into()))
     }
 
     /// Returns a new tensor detached from the current graph, gradient are not propagated through
@@ -1452,7 +1452,7 @@ impl Tensor {
             dtype: self.dtype,
             device: self.device.clone(),
         };
-        Ok(Self(Arc::new(tensor_)))
+        Ok(Self(tensor_.into()))
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
@@ -1476,14 +1476,14 @@ impl Tensor {
             let op = BackpropOp::new1(self, Op::ToDevice);
             let tensor_ = Tensor_ {
                 id: TensorId::new(),
-                storage: Arc::new(RwLock::new(storage)),
+                storage: RwLock::new(storage).into(),
                 layout: self.layout.clone(),
                 op,
                 is_variable: false,
                 dtype: self.dtype,
                 device: device.clone(),
             };
-            Ok(Self(Arc::new(tensor_)))
+            Ok(Self(tensor_.into()))
         }
     }
 
@@ -1513,7 +1513,7 @@ impl Tensor {
             dtype: self.dtype,
             device: self.device.clone(),
         };
-        Ok(Self(Arc::new(tensor_)))
+        Ok(Self(tensor_.into()))
     }
 
     /// An alias for broadcast_as.
@@ -1605,7 +1605,7 @@ impl Tensor {
                 dtype: self.dtype,
                 device: self.device.clone(),
             };
-            Ok(Self(Arc::new(tensor_)))
+            Ok(Self(tensor_.into()))
         } else {
             let mut storage = self.device().zeros(&shape, self.dtype())?;
             self.storage()
