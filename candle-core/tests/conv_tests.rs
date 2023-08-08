@@ -57,3 +57,36 @@ fn conv2d() -> Result<()> {
     );
     Ok(())
 }
+
+/* This test is based on the following script.
+import torch
+torch.manual_seed(4242)
+
+t = torch.randn((1, 2, 3, 3))
+w = torch.randn((1, 2, 1, 1))
+print(t.flatten())
+print(w.flatten())
+res = torch.nn.functional.conv2d(t, w)
+print(res.flatten())
+*/
+#[test]
+fn conv2d_small() -> Result<()> {
+    let dev = &Device::Cpu;
+    let t = Tensor::new(
+        &[
+            0.4056f32, -0.8689, 0.6843, 0.2395, 1.2279, -0.9287, -1.7030, 0.1370, 0.1866, 0.4145,
+            -0.6266, 0.3529, 2.2013, -0.6836, 0.2477, 1.3127, -0.6957, 0.3278,
+        ],
+        dev,
+    )?;
+    let w = Tensor::new(&[-0.9259f32, 1.3017], dev)?;
+    let t = t.reshape((1, 2, 3, 3))?;
+    let w = w.reshape((1, 2, 1, 1))?;
+    let res = t.conv2d(&w, 0, 1)?;
+    assert_eq!(res.dims(), [1, 1, 3, 3]);
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        [0.164, -0.0111, -0.1742, 2.6437, -2.0268, 1.1823, 3.2855, -1.0324, 0.2539]
+    );
+    Ok(())
+}
