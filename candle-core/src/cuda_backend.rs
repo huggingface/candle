@@ -1381,6 +1381,16 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn conv2d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
         todo!()
     }
