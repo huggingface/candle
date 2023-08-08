@@ -42,7 +42,7 @@ pub struct Tensor_ {
 }
 
 impl AsRef<Tensor> for Tensor {
-    fn as_ref(&self) -> &Tensor {
+    fn as_ref(&self) -> &Self {
         self
     }
 }
@@ -183,7 +183,7 @@ impl Tensor {
     /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn ones_like(&self) -> Result<Self> {
-        Tensor::ones(self.shape(), self.dtype(), self.device())
+        Self::ones(self.shape(), self.dtype(), self.device())
     }
 
     // Do not expose outside of the crate, the `is_variable=true` case should only be accessed from
@@ -229,7 +229,7 @@ impl Tensor {
     /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn zeros_like(&self) -> Result<Self> {
-        Tensor::zeros(self.shape(), self.dtype(), self.device())
+        Self::zeros(self.shape(), self.dtype(), self.device())
     }
 
     pub(crate) fn rand_impl<S: Into<Shape>, T: crate::FloatDType>(
@@ -270,7 +270,7 @@ impl Tensor {
     }
 
     pub fn rand_like(&self, lo: f64, up: f64) -> Result<Self> {
-        Tensor::rand_f64_impl(lo, up, self.shape(), self.dtype(), self.device(), false)
+        Self::rand_f64_impl(lo, up, self.shape(), self.dtype(), self.device(), false)
     }
 
     pub(crate) fn randn_impl<S: Into<Shape>, T: crate::FloatDType>(
@@ -301,7 +301,7 @@ impl Tensor {
     }
 
     pub fn randn_like(&self, mean: f64, stdev: f64) -> Result<Self> {
-        Tensor::randn_f64_impl(
+        Self::randn_f64_impl(
             mean,
             stdev,
             self.shape(),

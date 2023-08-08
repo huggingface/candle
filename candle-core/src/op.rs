@@ -536,7 +536,7 @@ pub struct BackpropOp(Option<Op>);
 
 impl BackpropOp {
     pub(crate) fn none() -> Self {
-        BackpropOp(None)
+        Self(None)
     }
 
     pub(crate) fn new1(arg: &Tensor, f: impl Fn(Tensor) -> Op) -> Self {

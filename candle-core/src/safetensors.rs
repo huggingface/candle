@@ -8,12 +8,12 @@ use std::path::Path;
 impl From<DType> for st::Dtype {
     fn from(value: DType) -> Self {
         match value {
-            DType::U8 => st::Dtype::U8,
-            DType::U32 => st::Dtype::U32,
-            DType::BF16 => st::Dtype::BF16,
-            DType::F16 => st::Dtype::F16,
-            DType::F32 => st::Dtype::F32,
-            DType::F64 => st::Dtype::F64,
+            DType::U8 => Self::U8,
+            DType::U32 => Self::U32,
+            DType::BF16 => Self::BF16,
+            DType::F16 => Self::F16,
+            DType::F32 => Self::F32,
+            DType::F64 => Self::F64,
         }
     }
 }
@@ -22,12 +22,12 @@ impl TryFrom<st::Dtype> for DType {
     type Error = Error;
     fn try_from(value: st::Dtype) -> Result<Self> {
         match value {
-            st::Dtype::U8 => Ok(DType::U8),
-            st::Dtype::U32 => Ok(DType::U32),
-            st::Dtype::BF16 => Ok(DType::BF16),
-            st::Dtype::F16 => Ok(DType::F16),
-            st::Dtype::F32 => Ok(DType::F32),
-            st::Dtype::F64 => Ok(DType::F64),
+            st::Dtype::U8 => Ok(Self::U8),
+            st::Dtype::U32 => Ok(Self::U32),
+            st::Dtype::BF16 => Ok(Self::BF16),
+            st::Dtype::F16 => Ok(Self::F16),
+            st::Dtype::F32 => Ok(Self::F32),
+            st::Dtype::F64 => Ok(Self::F64),
             dtype => Err(Error::UnsupportedSafeTensorDtype(dtype)),
         }
     }

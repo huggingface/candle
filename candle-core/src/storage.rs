@@ -57,7 +57,7 @@ impl Storage {
 
     pub(crate) fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
         match self {
-            Storage::Cpu(storage) => {
+            Self::Cpu(storage) => {
                 let storage = storage.affine(layout, mul, add)?;
                 Ok(Self::Cpu(storage))
             }
@@ -70,7 +70,7 @@ impl Storage {
 
     pub(crate) fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
         match self {
-            Storage::Cpu(storage) => {
+            Self::Cpu(storage) => {
                 let storage = storage.elu(layout, alpha)?;
                 Ok(Self::Cpu(storage))
             }
@@ -91,7 +91,7 @@ impl Storage {
         self.same_device(rhs, "cmp")?;
         self.same_dtype(rhs, "cmp")?;
         match (self, rhs) {
-            (Storage::Cpu(lhs), Storage::Cpu(rhs)) => {
+            (Self::Cpu(lhs), Self::Cpu(rhs)) => {
                 let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Cpu(storage))
             }
