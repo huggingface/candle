@@ -352,7 +352,7 @@ impl<'a> Reduce<'a> {
 impl<'a> Map1 for Reduce<'a> {
     #[inline(always)]
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
-        self.fold_impl(src, src_l, T::zero(), |x, y| x + y)
+        self.fold_impl(src, src_l, T::zero(), T::add)
     }
 }
 

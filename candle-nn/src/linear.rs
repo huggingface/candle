@@ -35,9 +35,8 @@ impl Linear {
             &[bsize, _, _] => self.weight.broadcast_left(bsize)?.t()?,
             _ => self.weight.t()?,
         };
-        let x = x.matmul(&w)?;
         match &self.bias {
-            None => Ok(x),
+            None => Ok(x.matmul(&w)?),
             Some(bias) => x.broadcast_add(bias),
         }
     }

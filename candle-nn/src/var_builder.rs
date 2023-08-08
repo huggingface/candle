@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 /// and new variables can be added by providing some initialization config in case they are
 /// missing.
 /// `VarMap` structures can be serialized in the safetensors format.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct VarMap {
     data: Arc<Mutex<HashMap<String, Var>>>,
 }
@@ -16,8 +16,7 @@ impl VarMap {
     /// Create a new empty `VarMap`.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        let data = Arc::new(Mutex::new(HashMap::new()));
-        Self { data }
+        Self::default()
     }
 
     /// Retrieve all the variables currently stored in the map.
@@ -110,6 +109,7 @@ impl<'a> TensorData<'a> {
                 routing.insert(k.to_string(), index);
             }
         }
+
         let tensors = Tensors::SafeTensorWithRouting {
             routing,
             safetensors,

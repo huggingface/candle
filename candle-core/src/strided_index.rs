@@ -19,7 +19,7 @@ impl<'a> StridedIndex<'a> {
             // This applies to the scalar case.
             Some(start_offset)
         };
-        StridedIndex {
+        Self {
             next_storage_index,
             multi_index: vec![0; dims.len()],
             dims,
