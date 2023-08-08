@@ -68,8 +68,8 @@ impl GroupNorm {
 }
 
 pub fn group_norm(
-    num_channels: usize,
     num_groups: usize,
+    num_channels: usize,
     eps: f64,
     vb: crate::VarBuilder,
 ) -> Result<GroupNorm> {
