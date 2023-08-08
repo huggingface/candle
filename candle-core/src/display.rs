@@ -280,20 +280,11 @@ where
             let mut nonzero_finite_max = S::min_value();
             for &v in values.iter() {
                 let v = v.abs();
-                if v < nonzero_finite_min {
-                    nonzero_finite_min = v
-                }
-                if v > nonzero_finite_max {
-                    nonzero_finite_max = v
-                }
+                nonzero_finite_min = nonzero_finite_min.min(v);
+                nonzero_finite_max = nonzero_finite_max.max(v);
             }
 
-            for &value in values.iter() {
-                if value.ceil() != value {
-                    int_mode = false;
-                    break;
-                }
-            }
+            int_mode = values.iter().all(|value| value.ceil() == *value);
             if let Some(v1) = S::from(1000.) {
                 if let Some(v2) = S::from(1e8) {
                     if let Some(v3) = S::from(1e-4) {
@@ -313,7 +304,7 @@ where
             int_mode,
             sci_mode,
             precision: po.precision,
-            _phantom: std::marker::PhantomData,
+            _phantom: <_>::default(),
         })
     }
 }
@@ -358,7 +349,7 @@ struct IntFormatter<S: WithDType> {
 impl<S: WithDType> IntFormatter<S> {
     fn new() -> Self {
         Self {
-            _phantom: std::marker::PhantomData,
+            _phantom: <_>::default(),
         }
     }
 }
