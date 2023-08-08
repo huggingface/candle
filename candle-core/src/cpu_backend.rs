@@ -144,21 +144,21 @@ impl<'a, I: IntDType> Map2 for WCond<'a, I> {
                 let f = &f[o_f1..o_f2];
                 pred.iter()
                     .zip(t.iter().zip(f.iter()))
-                    .map(|(p, (&t, &f))| if p.is_true() { t } else { f })
-                    .collect::<Vec<_>>()
+                    .map(|(p, (&t, &f))| if p.as_bool() { t } else { f })
+                    .collect()
             }
             _ => self
                 .1
                 .strided_index()
                 .zip(t_l.strided_index().zip(f_l.strided_index()))
                 .map(|(i_p, (i_t, i_f))| {
-                    if self.0[i_p].is_true() {
+                    if self.0[i_p].as_bool() {
                         t[i_t]
                     } else {
                         f[i_f]
                     }
                 })
-                .collect::<Vec<_>>(),
+                .collect(),
         };
         Ok(vs)
     }

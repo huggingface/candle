@@ -1135,7 +1135,7 @@ impl Tensor {
                 Some((o1, o2)) => data[o1..o2].to_vec(),
                 None => self.strided_index().map(|i| data[i]).collect(),
             };
-            Ok::<Vec<_>, Error>(data)
+            Ok(data)
         };
         match &*self.storage() {
             Storage::Cpu(storage) => from_cpu_storage(storage),

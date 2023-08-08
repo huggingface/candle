@@ -118,12 +118,12 @@ with_dtype!(f32, F32, |v: f64| v as f32, |v: f32| v as f64);
 with_dtype!(f64, F64, |v: f64| v, |v: f64| v);
 
 pub trait IntDType: WithDType {
-    fn is_true(&self) -> bool;
+    fn as_bool(&self) -> bool;
     fn as_usize(&self) -> usize;
 }
 
 impl IntDType for u32 {
-    fn is_true(&self) -> bool {
+    fn as_bool(&self) -> bool {
         *self != 0
     }
     fn as_usize(&self) -> usize {
@@ -132,7 +132,7 @@ impl IntDType for u32 {
 }
 
 impl IntDType for u8 {
-    fn is_true(&self) -> bool {
+    fn as_bool(&self) -> bool {
         *self != 0
     }
     fn as_usize(&self) -> usize {
