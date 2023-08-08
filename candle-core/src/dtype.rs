@@ -43,7 +43,7 @@ impl DType {
 
     pub fn size_in_bytes(&self) -> usize {
         match self {
-            Self::U8 => 4,
+            Self::U8 => 1,
             Self::U32 => 4,
             Self::BF16 => 2,
             Self::F16 => 2,
