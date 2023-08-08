@@ -22,14 +22,14 @@ pub trait Map1 {
     fn f<T: WithDType>(&self, vs: &[T], layout: &Layout) -> Result<Vec<T>>;
 
     fn map(&self, vs: &CpuStorage, layout: &Layout) -> Result<CpuStorage> {
-        match vs {
-            CpuStorage::U8(vs) => Ok(CpuStorage::U8(self.f(vs, layout)?)),
-            CpuStorage::U32(vs) => Ok(CpuStorage::U32(self.f(vs, layout)?)),
-            CpuStorage::BF16(vs) => Ok(CpuStorage::BF16(self.f(vs, layout)?)),
-            CpuStorage::F16(vs) => Ok(CpuStorage::F16(self.f(vs, layout)?)),
-            CpuStorage::F32(vs) => Ok(CpuStorage::F32(self.f(vs, layout)?)),
-            CpuStorage::F64(vs) => Ok(CpuStorage::F64(self.f(vs, layout)?)),
-        }
+        Ok(match vs {
+            CpuStorage::U8(vs) => CpuStorage::U8(self.f(vs, layout)?),
+            CpuStorage::U32(vs) => CpuStorage::U32(self.f(vs, layout)?),
+            CpuStorage::BF16(vs) => CpuStorage::BF16(self.f(vs, layout)?),
+            CpuStorage::F16(vs) => CpuStorage::F16(self.f(vs, layout)?),
+            CpuStorage::F32(vs) => CpuStorage::F32(self.f(vs, layout)?),
+            CpuStorage::F64(vs) => CpuStorage::F64(self.f(vs, layout)?),
+        })
     }
 }
 

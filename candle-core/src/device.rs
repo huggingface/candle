@@ -16,6 +16,15 @@ pub enum Device {
     Cuda(crate::CudaDevice),
 }
 
+impl Device {
+    pub fn name(&self) -> &'static str {
+         match self {
+            Self::Cpu => "Cpu",
+            Self::Cuda(_) => "Cuda",
+        }
+    }
+}
+
 // TODO: Should we back the cpu implementation using the NdArray crate or similar?
 pub trait NdArray {
     fn shape(&self) -> Result<Shape>;
@@ -187,37 +196,37 @@ impl Device {
     }
 
     pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
-        match self {
+        Ok(match self {
             Device::Cpu => {
                 let storage = CpuDevice.zeros_impl(shape, dtype)?;
-                Ok(Storage::Cpu(storage))
+                Storage::Cpu(storage)
             }
             Device::Cuda(device) => {
                 let storage = device.zeros_impl(shape, dtype)?;
-                Ok(Storage::Cuda(storage))
+                Storage::Cuda(storage)
             }
-        }
+        })
     }
 
     pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
-        match self {
-            Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
+        Ok(match self {
+            Device::Cpu =>Storage::Cpu(array.to_cpu_storage()),
             Device::Cuda(device) => {
                 let storage = array.to_cpu_storage();
                 let storage = device.storage_from_cpu_storage(&storage)?;
-                Ok(Storage::Cuda(storage))
+                Storage::Cuda(storage)
             }
-        }
+        })
     }
 
     pub(crate) fn storage_owned<S: WithDType>(&self, data: Vec<S>) -> Result<Storage> {
-        match self {
-            Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data))),
+        Ok(match self {
+            Device::Cpu => Storage::Cpu(S::to_cpu_storage_owned(data)),
             Device::Cuda(device) => {
                 let storage = S::to_cpu_storage_owned(data);
                 let storage = device.storage_from_cpu_storage(&storage)?;
-                Ok(Storage::Cuda(storage))
+                Storage::Cuda(storage)
             }
-        }
+        })
     }
 }

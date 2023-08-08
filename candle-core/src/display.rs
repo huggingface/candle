@@ -9,10 +9,7 @@ impl Tensor {
         &self,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        let prefix = match self.device() {
-            crate::Device::Cpu => "Cpu",
-            crate::Device::Cuda(_) => "Cuda",
-        };
+        let prefix = self.device().name();
         write!(f, "{prefix}Tensor[")?;
         match self.dims() {
             [] => {
