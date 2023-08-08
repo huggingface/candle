@@ -118,7 +118,7 @@ impl ResnetBlock2D {
                 .forward(&nn::ops::silu(temb)?)?
                 .unsqueeze(D::Minus1)?
                 .unsqueeze(D::Minus1)?
-                .add(&xs)?,
+                .broadcast_add(&xs)?,
             _ => xs,
         };
         let xs = self
