@@ -139,7 +139,8 @@ fn from_storage<S: Into<Shape>>(
         is_variable,
         dtype,
         device,
-    }.into()
+    }
+    .into()
 }
 
 fn from_storage_op<S: Into<Shape>>(
@@ -638,7 +639,8 @@ impl Tensor {
                 is_variable: false,
                 dtype: self.dtype,
                 device: self.device.clone(),
-            }.into())
+            }
+            .into())
         }
     }
 
@@ -1404,7 +1406,8 @@ impl Tensor {
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
-        }.into())
+        }
+        .into())
     }
 
     /// Returns true if the data is stored in a C contiguous (aka row major) way.
@@ -1429,7 +1432,8 @@ impl Tensor {
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
-        }.into())
+        }
+        .into())
     }
 
     /// Returns a new tensor detached from the current graph, gradient are not propagated through
@@ -1443,7 +1447,8 @@ impl Tensor {
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
-        }.into())
+        }
+        .into())
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
@@ -1473,7 +1478,8 @@ impl Tensor {
                 is_variable: false,
                 dtype: self.dtype,
                 device: device.clone(),
-            }.into())
+            }
+            .into())
         }
     }
 
@@ -1502,7 +1508,8 @@ impl Tensor {
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
-        }.into())
+        }
+        .into())
     }
 
     /// An alias for broadcast_as.
@@ -1593,7 +1600,8 @@ impl Tensor {
                 is_variable: false,
                 dtype: self.dtype,
                 device: self.device.clone(),
-            }.into())
+            }
+            .into())
         } else {
             let mut storage = self.device().zeros(&shape, self.dtype())?;
             self.storage()

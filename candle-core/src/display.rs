@@ -411,13 +411,13 @@ impl std::fmt::Display for Tensor {
         };
         match self.dtype() {
             DType::U8 => {
-                let tf: IntFormatter<u8> = IntFormatter::new();
+                let tf = IntFormatter::<u8>::new();
                 let max_w = tf.max_width(&to_display);
                 tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
                 writeln!(f)?;
             }
             DType::U32 => {
-                let tf: IntFormatter<u32> = IntFormatter::new();
+                let tf = IntFormatter::<u32>::new();
                 let max_w = tf.max_width(&to_display);
                 tf.fmt_tensor(self, 1, max_w, summarize, &po, f)?;
                 writeln!(f)?;
