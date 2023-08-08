@@ -42,14 +42,14 @@ pub trait Map1Any {
     ) -> Result<CpuStorage>;
 
     fn map(&self, vs: &CpuStorage, layout: &Layout) -> Result<CpuStorage> {
-        match vs {
-            CpuStorage::U8(vs) => Ok(self.f(vs, layout, CpuStorage::U8)?),
-            CpuStorage::U32(vs) => Ok(self.f(vs, layout, CpuStorage::U32)?),
-            CpuStorage::BF16(vs) => Ok(self.f(vs, layout, CpuStorage::BF16)?),
-            CpuStorage::F16(vs) => Ok(self.f(vs, layout, CpuStorage::F16)?),
-            CpuStorage::F32(vs) => Ok(self.f(vs, layout, CpuStorage::F32)?),
-            CpuStorage::F64(vs) => Ok(self.f(vs, layout, CpuStorage::F64)?),
-        }
+        Ok(match vs {
+            CpuStorage::U8(vs) => self.f(vs, layout, CpuStorage::U8)?,
+            CpuStorage::U32(vs) => self.f(vs, layout, CpuStorage::U32)?,
+            CpuStorage::BF16(vs) => self.f(vs, layout, CpuStorage::BF16)?,
+            CpuStorage::F16(vs) => self.f(vs, layout, CpuStorage::F16)?,
+            CpuStorage::F32(vs) => self.f(vs, layout, CpuStorage::F32)?,
+            CpuStorage::F64(vs) => self.f(vs, layout, CpuStorage::F64)?,
+        })
     }
 }
 
@@ -121,15 +121,14 @@ impl Map2U8 for Cmp {
         rhs: &[T],
         rhs_l: &Layout,
     ) -> Result<Vec<u8>> {
-        let dst = match self.0 {
-            CmpOp::Eq => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x == y)),
-            CmpOp::Ne => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x != y)),
-            CmpOp::Lt => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x < y)),
-            CmpOp::Le => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x <= y)),
-            CmpOp::Gt => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x > y)),
-            CmpOp::Ge => binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| u8::from(x >= y)),
-        };
-        Ok(dst)
+        Ok(binary_map(lhs_l, rhs_l, lhs, rhs, |x, y| match self.0 {
+            CmpOp::Eq => x == y,
+            CmpOp::Ne => x != y,
+            CmpOp::Lt => x < y,
+            CmpOp::Le => x <= y,
+            CmpOp::Gt => x > y,
+            CmpOp::Ge => x >= y,
+        }.into()))
     }
 }
 

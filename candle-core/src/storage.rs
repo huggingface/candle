@@ -114,7 +114,7 @@ impl Storage {
 
     pub(crate) fn reduce_op(&self, op: ReduceOp, layout: &Layout, s: &[usize]) -> Result<Self> {
         match self {
-            Storage::Cpu(storage) => {
+            Self::Cpu(storage) => {
                 let storage = storage.reduce_op(op, layout, s)?;
                 Ok(Self::Cpu(storage))
             }
@@ -127,7 +127,7 @@ impl Storage {
 
     pub(crate) fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         match self {
-            Storage::Cpu(storage) => {
+            Self::Cpu(storage) => {
                 let storage = storage.to_dtype(layout, dtype)?;
                 Ok(Self::Cpu(storage))
             }
@@ -198,7 +198,7 @@ impl Storage {
 
     pub(crate) fn unary_impl<B: op::UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
         match self {
-            Storage::Cpu(storage) => {
+            Self::Cpu(storage) => {
                 let storage = storage.unary_impl::<B>(layout)?;
                 Ok(Self::Cpu(storage))
             }
@@ -218,7 +218,7 @@ impl Storage {
         self.same_device(rhs, B::NAME)?;
         self.same_dtype(rhs, B::NAME)?;
         match (self, rhs) {
-            (Storage::Cpu(lhs), Storage::Cpu(rhs)) => {
+            (Self::Cpu(lhs), Self::Cpu(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Cpu(storage))
             }
@@ -249,11 +249,11 @@ impl Storage {
         self.same_device(kernel, "conv1d")?;
         self.same_dtype(kernel, "conv1d")?;
         match (self, &kernel) {
-            (Storage::Cpu(inp), Storage::Cpu(kernel)) => {
+            (Self::Cpu(inp), Self::Cpu(kernel)) => {
                 let s = inp.conv1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cpu(s))
             }
-            (Storage::Cuda(inp), Storage::Cuda(kernel)) => {
+            (Self::Cuda(inp), Self::Cuda(kernel)) => {
                 let s = inp.conv1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cuda(s))
             }
@@ -276,11 +276,11 @@ impl Storage {
         self.same_device(kernel, "conv2d")?;
         self.same_dtype(kernel, "conv2d")?;
         match (self, &kernel) {
-            (Storage::Cpu(inp), Storage::Cpu(kernel)) => {
+            (Self::Cpu(inp), Self::Cpu(kernel)) => {
                 let s = inp.conv2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cpu(s))
             }
-            (Storage::Cuda(inp), Storage::Cuda(kernel)) => {
+            (Self::Cuda(inp), Self::Cuda(kernel)) => {
                 let s = inp.conv2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cuda(s))
             }
@@ -300,7 +300,7 @@ impl Storage {
         stride: (usize, usize),
     ) -> Result<Self> {
         match self {
-            Storage::Cpu(storage) => {
+            Self::Cpu(storage) => {
                 let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Cpu(storage))
             }
@@ -313,7 +313,7 @@ impl Storage {
 
     pub(crate) fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
         match self {
-            Storage::Cpu(storage) => {
+            Self::Cpu(storage) => {
                 let storage = storage.upsample_nearest2d(layout, h, w)?;
                 Ok(Self::Cpu(storage))
             }
@@ -336,7 +336,7 @@ impl Storage {
         self.same_device(f, "where")?;
         t.same_dtype(f, "where")?;
         match (self, t, f) {
-            (Storage::Cpu(cond), Storage::Cpu(t), Storage::Cpu(f)) => {
+            (Self::Cpu(cond), Self::Cpu(t), Self::Cpu(f)) => {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
                 Ok(Self::Cpu(storage))
             }

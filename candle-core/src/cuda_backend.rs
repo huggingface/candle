@@ -372,15 +372,14 @@ trait Map1 {
     ) -> Result<CudaSlice<T>>;
 
     fn map(&self, s: &S, d: &CudaDevice, l: &Layout) -> Result<S> {
-        let out = match s {
+        Ok(match s {
             S::U8(s) => S::U8(self.f(s, d, l)?),
             S::U32(s) => S::U32(self.f(s, d, l)?),
             S::BF16(s) => S::BF16(self.f(s, d, l)?),
             S::F16(s) => S::F16(self.f(s, d, l)?),
             S::F32(s) => S::F32(self.f(s, d, l)?),
             S::F64(s) => S::F64(self.f(s, d, l)?),
-        };
-        Ok(out)
+        })
     }
 }
 
@@ -395,7 +394,7 @@ trait Map2 {
     ) -> Result<CudaSlice<T>>;
 
     fn map(&self, s1: &S, l1: &Layout, s2: &S, l2: &Layout, d: &CudaDevice) -> Result<S> {
-        let out = match (s1, s2) {
+        Some(match (s1, s2) {
             (S::U8(s1), S::U8(s2)) => S::U8(self.f(s1, l1, s2, l2, d)?),
             (S::U32(s1), S::U32(s2)) => S::U32(self.f(s1, l1, s2, l2, d)?),
             (S::BF16(s1), S::BF16(s2)) => S::BF16(self.f(s1, l1, s2, l2, d)?),
@@ -403,8 +402,7 @@ trait Map2 {
             (S::F32(s1), S::F32(s2)) => S::F32(self.f(s1, l1, s2, l2, d)?),
             (S::F64(s1), S::F64(s2)) => S::F64(self.f(s1, l1, s2, l2, d)?),
             _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
-        };
-        Ok(out)
+        })
     }
 }
 
