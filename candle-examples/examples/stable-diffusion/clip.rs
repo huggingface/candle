@@ -29,7 +29,7 @@ pub struct Config {
     embed_dim: usize,       // aka config.hidden_size
     activation: Activation, // aka config.hidden_act
     intermediate_size: usize,
-    max_position_embeddings: usize,
+    pub max_position_embeddings: usize,
     // The character to use for padding, use EOS when not set.
     pad_with: Option<String>,
     num_hidden_layers: usize,
@@ -90,7 +90,7 @@ impl ClipTextEmbeddings {
             vs.pp("position_embedding"),
         )?;
         let position_ids =
-            Tensor::arange(0u32, c.max_position_embeddings as u32, vs.device())?.unsqueeze(1)?;
+            Tensor::arange(0u32, c.max_position_embeddings as u32, vs.device())?.unsqueeze(0)?;
         Ok(ClipTextEmbeddings {
             token_embedding,
             position_embedding,

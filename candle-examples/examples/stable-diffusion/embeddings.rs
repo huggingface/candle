@@ -49,7 +49,7 @@ impl Timesteps {
         let exponent = (exponent / (half_dim as f64 - self.downscale_freq_shift))?;
         let emb = exponent.exp()?;
         // emb = timesteps[:, None].float() * emb[None, :]
-        let emb = (xs.unsqueeze(D::Minus1)? * emb.unsqueeze(0)?)?;
+        let emb = xs.unsqueeze(D::Minus1)?.broadcast_mul(&emb.unsqueeze(0)?)?;
         let (cos, sin) = (emb.cos()?, emb.sin()?);
         let emb = if self.flip_sin_to_cos {
             Tensor::cat(&[&cos, &sin], D::Minus1)?

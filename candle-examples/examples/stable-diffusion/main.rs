@@ -181,19 +181,29 @@ fn run(args: Args) -> Result<()> {
     let device = candle_examples::device(cpu)?;
 
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
+    let pad_id = match tokenizer.get_padding() {
+        Some(padding) => padding.pad_id,
+        None => *tokenizer.get_vocab(true).get("<|endoftext|>").unwrap(),
+    };
     println!("Running with prompt \"{prompt}\".");
-    let tokens = tokenizer
+    let mut tokens = tokenizer
         .encode(prompt, true)
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
+    while tokens.len() < sd_config.clip.max_position_embeddings {
+        tokens.push(pad_id)
+    }
     let tokens = Tensor::new(tokens.as_slice(), &device)?.unsqueeze(0)?;
 
-    let uncond_tokens = tokenizer
+    let mut uncond_tokens = tokenizer
         .encode(uncond_prompt, true)
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
+    while uncond_tokens.len() < sd_config.clip.max_position_embeddings {
+        uncond_tokens.push(pad_id)
+    }
     let uncond_tokens = Tensor::new(uncond_tokens.as_slice(), &device)?.unsqueeze(0)?;
 
     println!("Building the Clip transformer.");
@@ -202,6 +212,7 @@ fn run(args: Args) -> Result<()> {
     let uncond_embeddings = text_model.forward(&uncond_tokens)?;
     let text_embeddings = Tensor::cat(&[uncond_embeddings, text_embeddings], 0)?;
 
+    println!("text-embeddings: {text_embeddings:?}");
     println!("Building the autoencoder.");
     let vae = sd_config.build_vae(&vae_weights, &device)?;
     println!("Building the unet.");
