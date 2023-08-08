@@ -131,7 +131,7 @@ fn from_storage<S: Into<Shape>>(
     let op = op.into().unwrap_or_default();
     let dtype = storage.dtype();
     let device = storage.device();
-    let tensor_ = Tensor_ {
+    Tensor_ {
         id: TensorId::new(),
         storage: RwLock::new(storage).into(),
         layout: Layout::contiguous(shape),
@@ -139,8 +139,14 @@ fn from_storage<S: Into<Shape>>(
         is_variable,
         dtype,
         device,
-    };
-    Tensor(tensor_.into())
+    }.into()
+}
+
+impl From<Tensor_> for Tensor {
+    #[inline]
+    fn from(value: Tensor_) -> Self {
+        Self(value.into())
+    }
 }
 
 impl Tensor {
@@ -604,7 +610,7 @@ impl Tensor {
         } else {
             let op = BackpropOp::new1(self, |t| Op::Narrow(t, dim, start, len));
             let layout = self.layout().narrow(dim, start, len)?;
-            let tensor_ = Tensor_ {
+            Ok(Tensor_ {
                 id: TensorId::new(),
                 storage: self.storage.clone(),
                 layout,
@@ -612,8 +618,7 @@ impl Tensor {
                 is_variable: false,
                 dtype: self.dtype,
                 device: self.device.clone(),
-            };
-            Ok(Self(tensor_.into()))
+            }.into())
         }
     }
 
@@ -1402,7 +1407,7 @@ impl Tensor {
         let dim1 = dim1.to_index(self.shape(), "transpose")?;
         let dim2 = dim2.to_index(self.shape(), "transpose")?;
         let op = BackpropOp::new1(self, |t| Op::Transpose(t, dim1, dim2));
-        let tensor_ = Tensor_ {
+        Ok(Tensor_ {
             id: TensorId::new(),
             storage: self.storage.clone(),
             layout: self.layout.transpose(dim1, dim2)?,
@@ -1410,8 +1415,7 @@ impl Tensor {
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
-        };
-        Ok(Self(tensor_.into()))
+        }.into())
     }
 
     /// Returns true if the data is stored in a C contiguous (aka row major) way.
@@ -1428,7 +1432,7 @@ impl Tensor {
     /// memory.
     pub fn copy(&self) -> Result<Self> {
         let op = BackpropOp::new1(self, Op::Copy);
-        let tensor_ = Tensor_ {
+        Ok(Tensor_ {
             id: TensorId::new(),
             storage: RwLock::new(self.storage().try_clone(self.layout())?).into(),
             layout: self.layout.clone(),
@@ -1436,14 +1440,13 @@ impl Tensor {
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
-        };
-        Ok(Self(tensor_.into()))
+        }.into())
     }
 
     /// Returns a new tensor detached from the current graph, gradient are not propagated through
     /// this new node. The storage of this tensor is shared with the initial tensor.
     pub fn detach(&self) -> Result<Self> {
-        let tensor_ = Tensor_ {
+        Ok(Tensor_ {
             id: TensorId::new(),
             storage: self.storage.clone(),
             layout: self.layout.clone(),
@@ -1451,8 +1454,7 @@ impl Tensor {
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
-        };
-        Ok(Self(tensor_.into()))
+        }.into())
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
@@ -1474,7 +1476,7 @@ impl Tensor {
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
             };
             let op = BackpropOp::new1(self, Op::ToDevice);
-            let tensor_ = Tensor_ {
+            Ok(Tensor_ {
                 id: TensorId::new(),
                 storage: RwLock::new(storage).into(),
                 layout: self.layout.clone(),
@@ -1482,8 +1484,7 @@ impl Tensor {
                 is_variable: false,
                 dtype: self.dtype,
                 device: device.clone(),
-            };
-            Ok(Self(tensor_.into()))
+            }.into())
         }
     }
 
@@ -1504,7 +1505,7 @@ impl Tensor {
     /// any value, the dimension `t_a` must be equal to `i_a` if `i_a` is different from 1. If
     /// `i_a` is equal to 1, any value can be used.
     pub fn broadcast_as<S: Into<Shape>>(&self, shape: S) -> Result<Self> {
-        let tensor_ = Tensor_ {
+        Ok(Tensor_ {
             id: TensorId::new(),
             storage: self.storage.clone(),
             layout: self.layout.broadcast_as(shape)?,
@@ -1512,8 +1513,7 @@ impl Tensor {
             is_variable: false,
             dtype: self.dtype,
             device: self.device.clone(),
-        };
-        Ok(Self(tensor_.into()))
+        }.into())
     }
 
     /// An alias for broadcast_as.
@@ -1596,7 +1596,7 @@ impl Tensor {
         }
         let op = BackpropOp::new1(self, Op::Reshape);
         if self.is_contiguous() {
-            let tensor_ = Tensor_ {
+            Ok(Tensor_ {
                 id: TensorId::new(),
                 storage: self.storage.clone(),
                 layout: Layout::contiguous_with_offset(shape, self.layout.start_offset()),
@@ -1604,8 +1604,7 @@ impl Tensor {
                 is_variable: false,
                 dtype: self.dtype,
                 device: self.device.clone(),
-            };
-            Ok(Self(tensor_.into()))
+            }.into())
         } else {
             let mut storage = self.device().zeros(&shape, self.dtype())?;
             self.storage()
