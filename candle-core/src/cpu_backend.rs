@@ -1063,6 +1063,7 @@ impl<'a> Map2 for Conv2D<'a> {
                         let dst_idx = dst_idx + dst_w;
                         let mut d = T::zero();
                         for offset_h in 0..p.k_h {
+                            // TODO: Handle the case where padding is larger than p.k_h / 2.
                             let src_h_plus = p.stride * dst_h + offset_h + p.k_h / 2 - p.padding;
                             if p.k_h / 2 <= src_h_plus && src_h_plus < p.k_h / 2 + p.i_h {
                                 let src_h = src_h_plus - p.k_h / 2;
