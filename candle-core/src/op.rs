@@ -544,7 +544,7 @@ impl UnaryOpT for Relu {
 
 /// `BackpropOp` is a wrapper around `Option<Op>`. The main goal is to ensure that dependencies are
 /// properly checked when creating a new value
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct BackpropOp(Option<Op>);
 
 impl BackpropOp {
