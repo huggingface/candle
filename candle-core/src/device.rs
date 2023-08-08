@@ -18,7 +18,7 @@ pub enum Device {
 
 impl Device {
     pub fn name(&self) -> &'static str {
-         match self {
+        match self {
             Self::Cpu => "Cpu",
             Self::Cuda(_) => "Cuda",
         }
@@ -210,7 +210,7 @@ impl Device {
 
     pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
         Ok(match self {
-            Device::Cpu =>Storage::Cpu(array.to_cpu_storage()),
+            Device::Cpu => Storage::Cpu(array.to_cpu_storage()),
             Device::Cuda(device) => {
                 let storage = array.to_cpu_storage();
                 let storage = device.storage_from_cpu_storage(&storage)?;

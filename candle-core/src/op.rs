@@ -23,6 +23,17 @@ impl CmpOp {
             Self::Ge => "ge",
         }
     }
+
+    pub fn apply<T: PartialOrd>(&self, x: T, y: T) -> bool {
+        match self {
+            Self::Eq => x == y,
+            Self::Ne => x != y,
+            Self::Lt => x < y,
+            Self::Le => x <= y,
+            Self::Gt => x > y,
+            Self::Ge => x >= y,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
