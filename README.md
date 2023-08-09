@@ -3,8 +3,8 @@
 [![Documentation](https://docs.rs/candle-core/badge.svg)](https://docs.rs/candle-core)
 ![License](https://img.shields.io/crates/l/candle-core.svg)
 
-Candle is a minimalist ML framework for Rust with a focus on easiness of use and
-on performance (including GPU support). Try our online demos: 
+Candle is a minimalist ML framework for Rust with a focus on performance (including GPU support) 
+and ease of use. Try our online demos: 
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
 [llama2](https://huggingface.co/spaces/lmz/candle-llama2).
 
@@ -52,26 +52,26 @@ wget https://karpathy.ai/llama2c/model.bin
 wget https://github.com/karpathy/llama2.c/raw/master/tokenizer.bin
 trunk serve --release --public-url /candle-llama2/ --port 8081
 ```
-And then browse to
+And then head over to
 [http://localhost:8081/candle-llama2](http://localhost:8081/candle-llama2).
 
 <!--- ANCHOR: features --->
 
 ## Features
 
-- Simple syntax, looks and like PyTorch.
+- Simple syntax, looks like PyTorch.
 - CPU and Cuda backends, m1, f16, bf16.
-- Enable serverless (CPU), small and fast deployments
+- Serverless (on CPU), small and fast deployments
 - WASM support, run your models in a browser.
 - Model training.
 - Distributed computing using NCCL.
-- Models out of the box: Llama, Whisper, Falcon, StarCoder...
+- Model support out of the box: Llama, Whisper, Falcon, StarCoder...
 - Embed user-defined ops/kernels, such as [flash-attention
   v2](https://github.com/huggingface/candle/blob/89ba005962495f2bfbda286e185e9c3c7f5300a3/candle-flash-attn/src/lib.rs#L152).
 
 <!--- ANCHOR_END: features --->
 
-## How to use ?
+## How to use
 
 <!--- ANCHOR: cheatsheet --->
 Cheatsheet:
@@ -95,41 +95,41 @@ Cheatsheet:
 ## Structure
 
 - [candle-core](./candle-core): Core ops, devices, and `Tensor` struct definition
-- [candle-nn](./candle-nn/): Facilities to build real models
-- [candle-examples](./candle-examples/): Real-world like examples on how to use the library in real settings
+- [candle-nn](./candle-nn/): Tools to build real models
+- [candle-examples](./candle-examples/): Examples of using the library in realistic settings
 - [candle-kernels](./candle-kernels/): CUDA custom kernels
 - [candle-datasets](./candle-datasets/): Datasets and data loaders.
-- [candle-transformers](./candle-transformers): Transformer related utilities.
+- [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
 
 ## FAQ
 
-### Why Candle?
+### Why should I use Candle?
 
-Candle stems from the need to reduce binary size in order to *enable serverless*
-possible by making the whole engine smaller than PyTorch very large library volume.
-This enables creating runtimes on a cluster much faster.
+Candle's core goal is to *make serverless inference possible*. Full machine learning frameworks like PyTorch
+are very large, which makes creating instances on a cluster slow. Candle allows deployment of lightweight
+binaries.
 
-And simply *removing Python* from production workloads.
-Python can really add overhead in more complex workflows and the [GIL](https://www.backblaze.com/blog/the-python-gil-past-present-and-future/) is a notorious source of headaches.
+Secondly, Candle lets you *remove Python* from production workloads. Python overhead can seriously hurt performance,
+and the [GIL](https://www.backblaze.com/blog/the-python-gil-past-present-and-future/) is a notorious source of headaches.
 
-Rust is cool, and a lot of the HF ecosystem already has Rust crates [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers).
+Finally, Rust is cool! A lot of the HF ecosystem already has Rust crates, like [safetensors](https://github.com/huggingface/safetensors) and [tokenizers](https://github.com/huggingface/tokenizers).
 
 
 ### Other ML frameworks
 
 - [dfdx](https://github.com/coreylowman/dfdx) is a formidable crate, with shapes being included
-  in types preventing a lot of headaches by getting compiler to complain about shape mismatch right off the bat
-  However we found that some features still require nightly and writing code can be a bit daunting for non rust experts.
+  in types. This prevents a lot of headaches by getting the compiler to complain about shape mismatches right off the bat.
+  However, we found that some features still require nightly, and writing code can be a bit daunting for non rust experts.
 
   We're leveraging and contributing to other core crates for the runtime so hopefully both crates can benefit from each
-  other
+  other.
 
 - [burn](https://github.com/burn-rs/burn) is a general crate that can leverage multiple backends so you can choose the best
-  engine for your workload
+  engine for your workload.
 
 - [tch-rs](https://github.com/LaurentMazare/tch-rs.git) Bindings to the torch library in Rust. Extremely versatile, but they 
-  do bring in the entire torch library into the runtime. The main contributor of `tch-rs` is also involved in the development
+  bring in the entire torch library into the runtime. The main contributor of `tch-rs` is also involved in the development
   of `candle`.
 
 ### Missing symbols when compiling with the mkl feature.
@@ -145,13 +145,13 @@ features, e.g.:
   = note: use the `cargo:rustc-link-lib` directive to specify the native libraries to link with Cargo (see https://doc.rust-lang.org/cargo/reference/build-scripts.html#cargorustc-link-libkindname)
 ```
 
-This is likely due to some missing linker flag that enable the mkl library. You
+This is likely due to a missing linker flag that was needed to enable the mkl library. You
 can try adding the following at the top of your binary:
 ```
 extern crate intel_mkl_src;
 ```
 
-### How to know where an error comes from.
+### Tracking down errors
 
 You can set `RUST_BACKTRACE=1` to be provided with backtraces when a candle
 error is generated.
