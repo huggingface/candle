@@ -1,4 +1,4 @@
-name: Build and push docker image to internal registry
+name: CI / cuda
 
 on:
   workflow_dispatch:
