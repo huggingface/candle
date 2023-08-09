@@ -88,6 +88,7 @@ impl Tensor {
                     Op::Reshape(node)
                     | Op::UpsampleNearest2D(node)
                     | Op::AvgPool2D { arg: node, .. }
+                    | Op::MaxPool2D { arg: node, .. }
                     | Op::Copy(node)
                     | Op::Broadcast(node)
                     | Op::Cmp(node, _)
@@ -172,6 +173,7 @@ impl Tensor {
                     Op::Conv1D { .. } => Err(Error::BackwardNotSupported { op: "conv1d" })?,
                     Op::Conv2D { .. } => Err(Error::BackwardNotSupported { op: "conv2d" })?,
                     Op::AvgPool2D { .. } => Err(Error::BackwardNotSupported { op: "avg-pool2d" })?,
+                    Op::MaxPool2D { .. } => Err(Error::BackwardNotSupported { op: "max-pool2d" })?,
                     Op::UpsampleNearest2D { .. } => Err(Error::BackwardNotSupported {
                         op: "upsample-nearest2d",
                     })?,

@@ -1395,6 +1395,10 @@ impl BackendStorage for CudaStorage {
         todo!()
     }
 
+    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
+        todo!()
+    }
+
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
         todo!()
     }
