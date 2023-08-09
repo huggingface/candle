@@ -59,11 +59,9 @@ jobs:
       - name: Install Rust Stable
         run: curl https://sh.rustup.rs -sSf | sh -s -- -y
       - uses: Swatinem/rust-cache@v2
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
+      - run: apt update -y && apt install libssl-dev -y
       - name: Test (cuda)
-        run: PATH=$PATH:/usr/local/cuda-11.8/bin/ /root/.cargo/bin/cargo test --fe
-atures cuda
+        run: PATH=$PATH:/usr/local/cuda-11.8/bin/ /root/.cargo/bin/cargo test --features cuda
   stop-runner:
     name: Stop self-hosted EC2 runner
     needs:
