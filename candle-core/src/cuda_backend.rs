@@ -904,7 +904,7 @@ impl<'a> Map2 for Conv1D<'a> {
         let dims = shape.dims();
         let el = shape.elem_count();
         let l_out = p.l_out();
-        let dst_el = p.c_out * l_out * p.b_size.unwrap_or(1);
+        let dst_el = p.c_out * l_out * p.b_size;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
