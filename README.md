@@ -120,7 +120,7 @@ Rust is cool, and a lot of the HF ecosystem already has Rust crates [safetensors
 
 - [dfdx](https://github.com/coreylowman/dfdx) is a formidable crate, with shapes being included
   in types preventing a lot of headaches by getting compiler to complain about shape mismatch right off the bat
-  However we found that some features still require nightly and writing code can be a bit dauting for non rust experts.
+  However we found that some features still require nightly and writing code can be a bit daunting for non rust experts.
 
   We're leveraging and contributing to other core crates for the runtime so hopefully both crates can benefit from each
   other
