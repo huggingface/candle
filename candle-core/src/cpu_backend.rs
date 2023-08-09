@@ -1060,7 +1060,6 @@ impl<'a> Map2 for Conv2D<'a> {
                         let dst_idx = dst_idx + dst_w;
                         let mut d = T::zero();
                         for offset_h in 0..p.k_h {
-                            // TODO: Handle the case where padding is larger than p.k_h / 2.
                             let src_h = (p.stride * dst_h + offset_h)
                                 .saturating_sub(p.padding)
                                 .min(p.i_h - 1);
