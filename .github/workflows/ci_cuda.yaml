@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AWS_REGION: us-east-1
-      EC2_AMI_ID: ami-06fa4e191ed73d026
+      EC2_AMI_ID: ami-03cfed9ea28f4b002
       EC2_INSTANCE_TYPE: g5.xlarge
       EC2_SUBNET_ID: subnet-931b34f5,subnet-ecb993cd,subnet-943dc2d8,subnet-45371f1a,subnet-ee93e0df,subnet-fddc3dfc
       EC2_SECURITY_GROUP: sg-030175c435ac141d6
@@ -63,8 +63,10 @@ jobs:
           components: rustfmt, clippy
           override: true
       - uses: Swatinem/rust-cache@v2
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
       - name: Test (cuda)
-        run: $HOME/.cargo/bin/cargo test --features cuda
+        run: cargo test --features cuda
   stop-runner:
     name: Stop self-hosted EC2 runner
     needs:
