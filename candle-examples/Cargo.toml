@@ -23,6 +23,7 @@ num-traits = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 half = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -51,3 +52,7 @@ nccl = ["cuda", "cudarc/nccl", "dep:half"]
 [[example]]
 name = "llama_multiprocess"
 required-features = ["cuda", "nccl", "flash-attn"]
+
+[[example]]
+name = "stable-diffusion"
+required-features = ["image"]
