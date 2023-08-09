@@ -1,7 +1,5 @@
 name: Deploy Rust book
 on:
-  # TODO put this back only when merging after this PR lands.
-  pull_request:
   push:
     branches:
       - main
