@@ -31,7 +31,7 @@ pub struct Config {
     intermediate_size: usize,
     pub max_position_embeddings: usize,
     // The character to use for padding, use EOS when not set.
-    pad_with: Option<String>,
+    pub pad_with: Option<String>,
     num_hidden_layers: usize,
     num_attention_heads: usize,
     #[allow(dead_code)]
@@ -257,7 +257,7 @@ impl ClipEncoder {
     fn forward(&self, xs: &Tensor, causal_attention_mask: &Tensor) -> Result<Tensor> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
-            xs = layer.forward(&xs, causal_attention_mask)?
+            xs = layer.forward(&xs, causal_attention_mask)?;
         }
         Ok(xs)
     }

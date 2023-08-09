@@ -181,8 +181,8 @@ fn run(args: Args) -> Result<()> {
     let device = candle_examples::device(cpu)?;
 
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
-    let pad_id = match tokenizer.get_padding() {
-        Some(padding) => padding.pad_id,
+    let pad_id = match &sd_config.clip.pad_with {
+        Some(padding) => *tokenizer.get_vocab(true).get(padding.as_str()).unwrap(),
         None => *tokenizer.get_vocab(true).get("<|endoftext|>").unwrap(),
     };
     println!("Running with prompt \"{prompt}\".");
@@ -212,7 +212,6 @@ fn run(args: Args) -> Result<()> {
     let uncond_embeddings = text_model.forward(&uncond_tokens)?;
     let text_embeddings = Tensor::cat(&[uncond_embeddings, text_embeddings], 0)?;
 
-    println!("text-embeddings: {text_embeddings:?}");
     println!("Building the autoencoder.");
     let vae = sd_config.build_vae(&vae_weights, &device)?;
     println!("Building the unet.");
