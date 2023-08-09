@@ -660,6 +660,8 @@ impl Map1 for AvgPool2D {
                         let mut sum = T::zero();
                         for m in 0..k_h {
                             for n in 0..k_w {
+                                let m = k_h * h_idx + m;
+                                let n = k_w * w_idx + n;
                                 sum += src[src_index + m * stride_h + n * stride_w]
                             }
                         }
