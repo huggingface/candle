@@ -245,10 +245,10 @@ fn run(args: Args) -> Result<()> {
             if args.intermediary_images {
                 let image = vae.decode(&(&latents / 0.18215)?)?;
                 let image = ((image / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
-                let _image = (image * 255.)?.to_dtype(DType::U8);
-                let _image_filename =
+                let image = (image * 255.)?.to_dtype(DType::U8)?;
+                let image_filename =
                     output_filename(&final_image, idx + 1, num_samples, Some(timestep_index + 1));
-                // TODO: save igame
+                crate::utils::save_image(&image, image_filename)?
             }
         }
 
@@ -260,9 +260,9 @@ fn run(args: Args) -> Result<()> {
         let image = vae.decode(&(&latents / 0.18215)?)?;
         // TODO: Add the clamping between 0 and 1.
         let image = ((image / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
-        let _image = (image * 255.)?.to_dtype(DType::U8);
-        let _image_filename = output_filename(&final_image, idx + 1, num_samples, None);
-        // TODO: save image.
+        let image = (image * 255.)?.to_dtype(DType::U8)?;
+        let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
+        crate::utils::save_image(&image, image_filename)?
     }
     Ok(())
 }
