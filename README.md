@@ -59,7 +59,7 @@ And then browse to
 
 ## Features
 
-- Simple syntax, looks and like PyTorch.
+- Simple syntax, looks and feels like PyTorch.
 - CPU and Cuda backends, m1, f16, bf16.
 - Enable serverless (CPU), small and fast deployments
 - WASM support, run your models in a browser.
