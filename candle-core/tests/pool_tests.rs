@@ -43,5 +43,7 @@ fn avg_pool2d_pytorch() -> anyhow::Result<()> {
             [[0.1835, -0.1606], [0.6249, 0.3217]]
         ]
     );
+    let pool = t.avg_pool2d((3, 3), (3, 3))?.squeeze(0)?;
+    assert_eq!(test_utils::to_vec3_round(pool, 4)?, [[[0.085]], [[0.0078]]]);
     Ok(())
 }
