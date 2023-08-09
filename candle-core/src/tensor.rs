@@ -142,6 +142,24 @@ fn from_storage<S: Into<Shape>>(
     Tensor(Arc::new(tensor_))
 }
 
+pub trait To<T> 
+where Self: Sized 
+{
+    fn to(self, to: T) -> Result<Self>;
+}
+
+impl To<&Device> for Tensor {
+    fn to(self, device: &Device) -> Result<Self> {
+        self.to_device(device)
+    }
+}
+
+impl To<DType> for Tensor {
+    fn to(self, dtype: DType) -> Result<Self> {
+        self.to_dtype(dtype)
+    }
+}
+
 impl Tensor {
     pub(crate) fn ones_impl<S: Into<Shape>>(
         shape: S,
