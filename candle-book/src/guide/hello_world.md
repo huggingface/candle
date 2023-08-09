@@ -128,17 +128,17 @@ fn main() -> Result<()> {
 ```
 
 Now it works, it is a great way to create your own layers.
-But most of the classical layers are already implemented in [candle-nn](https://github.com/LaurentMazare/candle/tree/main/candle-nn).
+But most of the classical layers are already implemented in [candle-nn](https://github.com/huggingface/candle/tree/main/candle-nn).
 
 ## Using `candle_nn`.
 
-For instance [Linear](https://github.com/LaurentMazare/candle/blob/main/candle-nn/src/linear.rs) is already there.
+For instance [Linear](https://github.com/huggingface/candle/blob/main/candle-nn/src/linear.rs) is already there.
 This Linear is coded with PyTorch layout in mind, to reuse better existing models out there, so it uses the transpose of the weights and not the weights directly.
 
 So instead we can simplify our example:
 
 ```bash
-cargo add --git https://github.com/LaurentMazare/candle.git candle-nn
+cargo add --git https://github.com/huggingface/candle.git candle-nn
 ```
 
 And rewrite our examples using it

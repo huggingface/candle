@@ -5,13 +5,13 @@ Start by creating a new app:
 ```bash
 cargo new myapp
 cd myapp
-cargo add --git https://github.com/LaurentMazare/candle.git candle
+cargo add --git https://github.com/huggingface/candle.git candle-core
 ```
 
 At this point, candle will be built **without** CUDA support.
 To get CUDA support use the `cuda` feature
 ```bash
-cargo add --git https://github.com/LaurentMazare/candle.git candle --features cuda
+cargo add --git https://github.com/huggingface/candle.git candle-core --features cuda
 ```
 
 You can check everything works properly:
