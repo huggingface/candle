@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamsConv1D {
-    pub(crate) b_size: Option<usize>,
+    pub(crate) b_size: usize,
     // Maybe we should have a version without l_in as this bit depends on the input and not only on
     // the weights.
     pub(crate) l_in: usize,
@@ -19,10 +19,7 @@ impl ParamsConv1D {
 
     pub(crate) fn out_dims(&self) -> Vec<usize> {
         let l_out = self.l_out();
-        match self.b_size {
-            None => vec![self.c_out, l_out],
-            Some(n) => vec![n, self.c_out, l_out],
-        }
+        vec![self.b_size, self.c_out, l_out]
     }
 }
 
