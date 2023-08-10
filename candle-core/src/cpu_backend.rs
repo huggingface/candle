@@ -1129,9 +1129,8 @@ impl<'a> Map2 for Conv2D<'a> {
                                 let src_w = (p.stride * dst_w + offset_w)
                                     .saturating_sub(p.padding)
                                     .min(p.i_w - 1);
-                                let inp_cont = &inp_cont[b_idx * p.c_in * p.i_h * p.i_w
-                                    + src_h * p.c_in * p.i_w
-                                    + src_w * p.c_in..];
+                                let inp_cont = &inp_cont
+                                    [b_idx * cont_s0 + src_h * cont_s1 + src_w * cont_s2..];
                                 assert!(inp_cont.len() >= p.c_in);
                                 assert!(k_cont.len() >= p.c_in);
                                 let mut d = T::zero();
