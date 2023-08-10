@@ -54,7 +54,13 @@ impl DType {
 }
 
 pub trait WithDType:
-    Sized + Copy + num_traits::NumAssign + std::cmp::PartialOrd + std::fmt::Display + 'static
+    Sized
+    + Copy
+    + num_traits::NumAssign
+    + std::cmp::PartialOrd
+    + std::fmt::Display
+    + 'static
+    + crate::cpu_kernels::VecDot
 {
     const DTYPE: DType;
 

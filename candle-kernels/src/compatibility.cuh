@@ -6,24 +6,6 @@
 
 // FIXME: the minimum compute capabilities are just guesses since the table is not specific enough
 
-// #if __CUDA_ARCH__ < 600
-// __device__ __forceinline__ __half __hmax(__half a, __half b) {
-//     return __float2half(fmaxf(__half2float(a), __half2float(b)));
-// }
-// __device__ __forceinline__ __half __hmin(__half a, __half b) {
-//     return __float2half(fminf(__half2float(a), __half2float(b)));
-// }
-// #endif
-
-#if __CUDA_ARCH__ < 800
-__device__ __forceinline__ __half __hmax_nan(__half a, __half b) {
-    // return __hisnan(a) ? a : (__hisnan(b) ? b : __hmax(a, b));
-}
-__device__ __forceinline__ __half __hmin_nan(__half a, __half b) {
-    // return __hisnan(a) ? a : (__hisnan(b) ? b : __hmin(a, b));
-}
-#endif
-
 #if __CUDA_ARCH__ < 600
 // Copied from https://docs.nvidia.com/cuda/cuda-c-programming-guide/#atomic-functions
 __device__ double atomicAdd(double* address, double val) {
