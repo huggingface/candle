@@ -257,7 +257,10 @@ pub fn save<P: AsRef<Path>>(tensors: &HashMap<&str, Tensor>, filename: P) -> Res
     Ok(st::serialize_to_file(tensors, &None, filename.as_ref())?)
 }
 
-pub struct MmapedFile(memmap2::Mmap);
+pub struct MmapedFile {
+    path: std::path::PathBuf,
+    inner: memmap2::Mmap,
+}
 
 impl MmapedFile {
     /// Creates a wrapper around a memory mapped file from which you can retrieve
@@ -267,13 +270,20 @@ impl MmapedFile {
     ///
     /// The unsafe is inherited from [`memmap2::MmapOptions`].
     pub unsafe fn new<P: AsRef<std::path::Path>>(p: P) -> Result<Self> {
-        let file = std::fs::File::open(p)?;
-        let mmap = memmap2::MmapOptions::new().map(&file)?;
-        Ok(Self(mmap))
+        let p = p.as_ref();
+        let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
+        let inner = memmap2::MmapOptions::new()
+            .map(&file)
+            .map_err(|e| Error::from(e).with_path(p))?;
+        Ok(Self {
+            inner,
+            path: p.to_path_buf(),
+        })
     }
 
     pub fn deserialize(&self) -> Result<SafeTensors<'_>> {
-        let st = safetensors::SafeTensors::deserialize(&self.0)?;
+        let st = safetensors::SafeTensors::deserialize(&self.inner)
+            .map_err(|e| Error::from(e).with_path(&self.path))?;
         Ok(st)
     }
 }
