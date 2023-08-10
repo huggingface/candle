@@ -22,6 +22,7 @@ memmap2 = { workspace = true }
 num-traits = { workspace = true }
 num_cpus = { workspace = true }
 rand = { workspace = true }
+rand_distr = { workspace = true }
 safetensors = { workspace = true }
 thiserror = { workspace = true }
 zip = { workspace = true }
