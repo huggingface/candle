@@ -18,6 +18,7 @@ trait Benchmark {
     const ITERS: usize;
 }
 
+// Conv1d example as used in whisper.
 struct Conv1d;
 impl Benchmark for Conv1d {
     type PreProcessData = (Tensor, Tensor);
@@ -35,6 +36,7 @@ impl Benchmark for Conv1d {
     const ITERS: usize = 5;
 }
 
+// Conv2d example as used in stable-diffusion.
 struct Conv2d;
 impl Benchmark for Conv2d {
     type PreProcessData = (Tensor, Tensor);
