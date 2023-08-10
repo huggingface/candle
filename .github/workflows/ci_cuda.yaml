@@ -61,7 +61,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: apt update -y && apt install libssl-dev -y
       - name: Test (cuda)
-        run: PATH=$PATH:/usr/local/cuda-11.8/bin/ /root/.cargo/bin/cargo test --features cuda --release
+        run: PATH=$PATH:/usr/local/cuda-11.8/bin/ /root/.cargo/bin/cargo test --features cuda
   stop-runner:
     name: Stop self-hosted EC2 runner
     needs:
