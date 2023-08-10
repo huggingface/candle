@@ -144,7 +144,7 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     // Load the dataset
-    let m = if let Some(data_dir) =  args.data_dir {
+    let m = if let Some(data_dir) = args.data_dir {
         candle_datasets::vision::mnist::load_dir(data_dir)?
     } else {
         candle_datasets::vision::mnist::load().await?

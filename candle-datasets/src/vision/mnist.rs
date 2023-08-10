@@ -3,10 +3,10 @@
 //! The files can be obtained from the following link:
 //! <http://yann.lecun.com/exdb/mnist/>
 use candle::{DType, Device, Result, Tensor};
+use flate2::read::GzDecoder;
+use opendal::{services, Operator};
 use std::fs::File;
 use std::io::{self, BufReader, Read};
-use opendal::{services, Operator};
-use flate2::read::GzDecoder;
 
 fn read_u32<T: Read>(reader: &mut T) -> Result<u32> {
     let mut b = vec![0u8; 4];
