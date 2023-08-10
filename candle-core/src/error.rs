@@ -185,6 +185,13 @@ pub enum Error {
     #[error(transparent)]
     Wrapped(Box<dyn std::error::Error + Send + Sync>),
 
+    /// Adding path information to an error.
+    #[error("path: {path:?} {inner}")]
+    WithPath {
+        inner: Box<Self>,
+        path: std::path::PathBuf,
+    },
+
     #[error("{inner}\n{backtrace}")]
     WithBacktrace {
         inner: Box<Self>,
@@ -212,6 +219,13 @@ impl Error {
                 inner: Box::new(self),
                 backtrace: Box::new(backtrace),
             },
+        }
+    }
+
+    pub fn with_path<P: AsRef<std::path::Path>>(self, p: P) -> Self {
+        Self::WithPath {
+            inner: Box::new(self),
+            path: p.as_ref().to_path_buf(),
         }
     }
 }
