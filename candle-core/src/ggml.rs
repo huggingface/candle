@@ -612,6 +612,104 @@ where
     Tensor::from_vec(f32_data, dims, device)
 }
 
+/// Creates a [Tensor] from a raw GGML tensor.
+pub fn tensor_from_ggml(
+    dtype: GgmlDType,
+    raw_data: &[u8],
+    dims: Vec<usize>,
+    device: &Device,
+) -> Result<Tensor> {
+    let tensor_elems = dims.iter().product::<usize>();
+    let size_in_bytes = tensor_elems * dtype.type_size() / dtype.blck_size();
+
+    match dtype {
+        GgmlDType::F32 => Tensor::from_raw_buffer(raw_data, DType::F32, &dims, device),
+        GgmlDType::F16 => Tensor::from_raw_buffer(raw_data, DType::F16, &dims, device),
+        GgmlDType::Q4_0 => dequantize_and_create_tensor(
+            raw_data,
+            tensor_elems,
+            size_in_bytes,
+            dims,
+            device,
+            dequantize_row_q4_0,
+        ),
+        GgmlDType::Q4_1 => dequantize_and_create_tensor(
+            raw_data,
+            tensor_elems,
+            size_in_bytes,
+            dims,
+            device,
+            dequantize_row_q4_1,
+        ),
+        GgmlDType::Q5_0 => dequantize_and_create_tensor(
+            raw_data,
+            tensor_elems,
+            size_in_bytes,
+            dims,
+            device,
+            dequantize_row_q5_0,
+        ),
+        GgmlDType::Q5_1 => dequantize_and_create_tensor(
+            raw_data,
+            tensor_elems,
+            size_in_bytes,
+            dims,
+            device,
+            dequantize_row_q5_1,
+        ),
+        GgmlDType::Q8_0 => dequantize_and_create_tensor(
+            raw_data,
+            tensor_elems,
+            size_in_bytes,
+            dims,
+            device,
+            dequantize_row_q8_0,
+        ),
+        GgmlDType::Q2K => dequantize_and_create_tensor(
+            raw_data,
+            tensor_elems,
+            size_in_bytes,
+            dims,
+            device,
+            dequantize_row_q2k,
+        ),
+        GgmlDType::Q3K => dequantize_and_create_tensor(
+            raw_data,
+            tensor_elems,
+            size_in_bytes,
+            dims,
+            device,
+            dequantize_row_q3k,
+        ),
+        GgmlDType::Q4K => dequantize_and_create_tensor(
+            raw_data,
+            tensor_elems,
+            size_in_bytes,
+            dims,
+            device,
+            dequantize_row_q4k,
+        ),
+        GgmlDType::Q5K => dequantize_and_create_tensor(
+            raw_data,
+            tensor_elems,
+            size_in_bytes,
+            dims,
+            device,
+            dequantize_row_q5k,
+        ),
+        GgmlDType::Q6K => dequantize_and_create_tensor(
+            raw_data,
+            tensor_elems,
+            size_in_bytes,
+            dims,
+            device,
+            dequantize_row_q6k,
+        ),
+
+        _ => crate::bail!("quantized type {dtype:?} is not supported yet"),
+    }
+}
+
 fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     reader: &mut R,
     magic: VersionedMagic,
@@ -638,93 +736,10 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     // TODO: Mmap version to avoid copying the data around?
     let mut raw_data = vec![0u8; size_in_bytes];
     reader.read_exact(&mut raw_data)?;
-    let tensor = match dtype {
-        GgmlDType::F32 => Tensor::from_raw_buffer(&raw_data, DType::F32, &dims, device)?,
-        GgmlDType::F16 => Tensor::from_raw_buffer(&raw_data, DType::F16, &dims, device)?,
-        GgmlDType::Q4_0 => dequantize_and_create_tensor(
-            &raw_data,
-            tensor_elems,
-            size_in_bytes,
-            dims,
-            device,
-            dequantize_row_q4_0,
-        )?,
-        GgmlDType::Q4_1 => dequantize_and_create_tensor(
-            &raw_data,
-            tensor_elems,
-            size_in_bytes,
-            dims,
-            device,
-            dequantize_row_q4_1,
-        )?,
-        GgmlDType::Q5_0 => dequantize_and_create_tensor(
-            &raw_data,
-            tensor_elems,
-            size_in_bytes,
-            dims,
-            device,
-            dequantize_row_q5_0,
-        )?,
-        GgmlDType::Q5_1 => dequantize_and_create_tensor(
-            &raw_data,
-            tensor_elems,
-            size_in_bytes,
-            dims,
-            device,
-            dequantize_row_q5_1,
-        )?,
-        GgmlDType::Q8_0 => dequantize_and_create_tensor(
-            &raw_data,
-            tensor_elems,
-            size_in_bytes,
-            dims,
-            device,
-            dequantize_row_q8_0,
-        )?,
-        GgmlDType::Q2K => dequantize_and_create_tensor(
-            &raw_data,
-            tensor_elems,
-            size_in_bytes,
-            dims,
-            device,
-            dequantize_row_q2k,
-        )?,
-        GgmlDType::Q3K => dequantize_and_create_tensor(
-            &raw_data,
-            tensor_elems,
-            size_in_bytes,
-            dims,
-            device,
-            dequantize_row_q3k,
-        )?,
-        GgmlDType::Q4K => dequantize_and_create_tensor(
-            &raw_data,
-            tensor_elems,
-            size_in_bytes,
-            dims,
-            device,
-            dequantize_row_q4k,
-        )?,
-        GgmlDType::Q5K => dequantize_and_create_tensor(
-            &raw_data,
-            tensor_elems,
-            size_in_bytes,
-            dims,
-            device,
-            dequantize_row_q5k,
-        )?,
-        GgmlDType::Q6K => dequantize_and_create_tensor(
-            &raw_data,
-            tensor_elems,
-            size_in_bytes,
-            dims,
-            device,
-            dequantize_row_q6k,
-        )?,
-
-        _ => crate::bail!("quantized type {dtype:?} used in {name} is not supported yet"),
-    };
-    Ok((name, tensor))
+    match tensor_from_ggml(dtype, &raw_data, dims, device) {
+        Ok(tensor) => Ok((name, tensor)),
+        Err(e) => crate::bail!("Error creating tensor {name}: {e}"),
+    }
 }
 
 impl Content {
