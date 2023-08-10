@@ -48,8 +48,8 @@ For llama2, run the following command to retrieve the weight files and start a
 test server:
 ```bash
 cd candle-wasm-examples/llama2-c
-wget https://karpathy.ai/llama2c/model.bin
-wget https://github.com/karpathy/llama2.c/raw/master/tokenizer.bin
+wget https://huggingface.co/spaces/lmz/candle-llama2/resolve/main/model.bin
+wget https://huggingface.co/spaces/lmz/candle-llama2/resolve/main/tokenizer.json
 trunk serve --release --public-url /candle-llama2/ --port 8081
 ```
 And then browse to
