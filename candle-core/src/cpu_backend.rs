@@ -1023,14 +1023,7 @@ struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
 
 impl<'a> Map2 for Conv1D<'a> {
     const OP: &'static str = "conv1d";
-    fn f<T: 'static + num_traits::NumAssign + Copy>(
-        &self,
-        inp: &[T],
-        inp_l: &Layout,
-        k: &[T],
-        k_l: &Layout,
-    ) -> Result<Vec<T>> {
-        // TODO: Optimize this (proper algorithm, simd, multithread, remove bound checks, etc).
+    fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
         let inp = &inp[inp_l.start_offset()..];
         let k = &k[k_l.start_offset()..];
@@ -1066,11 +1059,7 @@ impl<'a> Map2 for Conv1D<'a> {
                         assert!(inp_cont.len() >= p.c_in);
                         assert!(k_cont.len() >= p.c_in);
                         let mut d = T::zero();
-                        for dot_idx in 0..p.c_in {
-                            d += unsafe {
-                                *inp_cont.get_unchecked(dot_idx) * *k_cont.get_unchecked(dot_idx)
-                            }
-                        }
+                        unsafe { T::vec_dot(inp_cont.as_ptr(), k_cont.as_ptr(), &mut d, p.c_in) }
                         dst[dst_idx] += d
                     }
                 }
