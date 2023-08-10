@@ -18,3 +18,5 @@ intel-mkl-src = { workspace = true, optional = true }
 memmap2 = { workspace = true }
 tokenizers = { workspace = true, features = ["onig"] }
 rand = { workspace = true }
+opendal = { workspace = true }
+flate2 = { workspace = true }

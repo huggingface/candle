@@ -128,6 +128,9 @@ struct Args {
     #[arg(long, default_value_t = 200)]
     epochs: usize,
 
+    #[arg(long)]
+    data_dir: Option<String>,
+
     /// The file where to save the trained weights, in safetensors format.
     #[arg(long)]
     save: Option<String>,
@@ -137,10 +140,16 @@ struct Args {
     load: Option<String>,
 }
 
-pub fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     // Load the dataset
-    let m = candle_datasets::vision::mnist::load_dir("data")?;
+    let m = if let Some(data_dir) =  args.data_dir {
+        candle_datasets::vision::mnist::load_dir(data_dir)?
+    } else {
+        candle_datasets::vision::mnist::load().await?
+    };
+
     println!("train-images: {:?}", m.train_images.shape());
     println!("train-labels: {:?}", m.train_labels.shape());
     println!("test-images: {:?}", m.test_images.shape());

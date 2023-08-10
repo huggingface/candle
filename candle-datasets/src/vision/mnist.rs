@@ -5,6 +5,8 @@
 use candle::{DType, Device, Result, Tensor};
 use std::fs::File;
 use std::io::{self, BufReader, Read};
+use opendal::{services, Operator};
+use flate2::read::GzDecoder;
 
 fn read_u32<T: Read>(reader: &mut T) -> Result<u32> {
     let mut b = vec![0u8; 4];
@@ -28,23 +30,31 @@ fn check_magic_number<T: Read>(reader: &mut T, expected: u32) -> Result<()> {
 
 fn read_labels(filename: &std::path::Path) -> Result<Tensor> {
     let mut buf_reader = BufReader::new(File::open(filename)?);
-    check_magic_number(&mut buf_reader, 2049)?;
-    let samples = read_u32(&mut buf_reader)?;
+    read_labels_from_reader(&mut buf_reader)
+}
+
+fn read_labels_from_reader<T: Read>(reader: &mut T) -> Result<Tensor> {
+    check_magic_number(reader, 2049)?;
+    let samples = read_u32(reader)?;
     let mut data = vec![0u8; samples as usize];
-    buf_reader.read_exact(&mut data)?;
+    reader.read_exact(&mut data)?;
     let samples = data.len();
     Tensor::from_vec(data, samples, &Device::Cpu)
 }
 
 fn read_images(filename: &std::path::Path) -> Result<Tensor> {
     let mut buf_reader = BufReader::new(File::open(filename)?);
-    check_magic_number(&mut buf_reader, 2051)?;
-    let samples = read_u32(&mut buf_reader)? as usize;
-    let rows = read_u32(&mut buf_reader)? as usize;
-    let cols = read_u32(&mut buf_reader)? as usize;
+    read_images_from_reader(&mut buf_reader)
+}
+
+fn read_images_from_reader<T: Read>(reader: &mut T) -> Result<Tensor> {
+    check_magic_number(reader, 2051)?;
+    let samples = read_u32(reader)? as usize;
+    let rows = read_u32(reader)? as usize;
+    let cols = read_u32(reader)? as usize;
     let data_len = samples * rows * cols;
     let mut data = vec![0u8; data_len];
-    buf_reader.read_exact(&mut data)?;
+    reader.read_exact(&mut data)?;
     let tensor = Tensor::from_vec(data, (samples, rows * cols), &Device::Cpu)?;
     tensor.to_dtype(DType::F32)? / 255.
 }
@@ -55,6 +65,31 @@ pub fn load_dir<T: AsRef<std::path::Path>>(dir: T) -> Result<crate::vision::Data
     let train_labels = read_labels(&dir.join("train-labels-idx1-ubyte"))?;
     let test_images = read_images(&dir.join("t10k-images-idx3-ubyte"))?;
     let test_labels = read_labels(&dir.join("t10k-labels-idx1-ubyte"))?;
+    Ok(crate::vision::Dataset {
+        train_images,
+        train_labels,
+        test_images,
+        test_labels,
+        labels: 10,
+    })
+}
+
+pub async fn load() -> Result<crate::vision::Dataset> {
+    // reference https://huggingface.co/datasets/mnist/blob/main/mnist.py
+    let mut builder = services::Http::default();
+    builder.endpoint("https://storage.googleapis.com");
+    builder.root("/cvdf-datasets/mnist");
+
+    let op: Operator = Operator::new(builder)?.finish();
+    let train_images_buf = op.read("train-images-idx3-ubyte.gz").await?;
+    let train_labels_buf = op.read("train-labels-idx1-ubyte.gz").await?;
+    let test_images_buf = op.read("t10k-images-idx3-ubyte.gz").await?;
+    let test_labels_buf = op.read("t10k-labels-idx1-ubyte.gz").await?;
+
+    let train_images = read_images_from_reader(&mut GzDecoder::new(train_images_buf.as_slice()))?;
+    let train_labels = read_labels_from_reader(&mut GzDecoder::new(train_labels_buf.as_slice()))?;
+    let test_images = read_images_from_reader(&mut GzDecoder::new(test_images_buf.as_slice()))?;
+    let test_labels = read_labels_from_reader(&mut GzDecoder::new(test_labels_buf.as_slice()))?;
     Ok(crate::vision::Dataset {
         train_images,
         train_labels,

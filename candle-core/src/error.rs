@@ -178,6 +178,10 @@ pub enum Error {
     #[error(transparent)]
     SafeTensor(#[from] safetensors::SafeTensorError),
 
+    /// OpenDAL error.
+    #[error(transparent)]
+    OpenDal(#[from] opendal::Error),
+
     #[error("unsupported safetensor dtype {0:?}")]
     UnsupportedSafeTensorDtype(safetensors::Dtype),
 
