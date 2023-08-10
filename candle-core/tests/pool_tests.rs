@@ -79,3 +79,15 @@ fn upsample_nearest2d() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn downsample_nearest2d() -> anyhow::Result<()> {
+    let t = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((1, 1, 2, 3))?;
+    let upsampled = t.upsample_nearest2d(4, 6)?;
+    let downsampled = upsampled.upsample_nearest2d(2, 3)?;
+    assert_eq!(
+        downsampled.i(0)?.i(0)?.to_vec2::<f32>()?,
+        [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]
+    );
+    Ok(())
+}
