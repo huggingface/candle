@@ -432,7 +432,7 @@ impl AttentionBlock {
             (query_states * scale)?.matmul(&(key_states.t()? * scale)?)?;
         let attention_probs = nn::ops::softmax(&attention_scores, D::Minus1)?;
 
-        let xs = attention_probs.matmul(&value_states)?;
+        let xs = attention_probs.matmul(&value_states.contiguous()?)?;
         let xs = xs.transpose(1, 2)?.contiguous()?;
         let xs = xs.flatten_from(D::Minus2)?;
         let xs = self
