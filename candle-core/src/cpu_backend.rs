@@ -727,7 +727,7 @@ impl Map1 for UpsampleNearest2D {
         let scale_w = dst_w as f64 / src_w as f64;
         let mut dst = vec![T::zero(); b_sz * c * dst_h * dst_w];
 
-        for idx in 0..(b_sz * c * dst_h * dst_w) {
+        for (idx, dst_val) in dst.iter_mut().enumerate() {
             let b_idx = idx / (c * dst_h * dst_w);
             let c_idx = (idx / (dst_h * dst_w)) % c;
             let h_idx = (idx / dst_w) % dst_h;
@@ -738,8 +738,8 @@ impl Map1 for UpsampleNearest2D {
                 + b_idx * stride[0]
                 + c_idx * stride[1]
                 + src_h_idx * stride[2]
-                + src_w_idx * stride[3];
-            dst[idx] = src[src_index];
+                + src_w_idx * stride[3] ;
+            *dst_val = src[src_index];
         }
         Ok(dst)
     }
