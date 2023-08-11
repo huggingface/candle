@@ -36,7 +36,7 @@ cargo run --example llama --release
 cargo run --example falcon --release
 cargo run --example bert --release
 cargo run --example bigcode --release
-cargo run --example stable-diffusion --release -- --prompt "a rusty robot holding a fire torch"
+cargo run --example stable-diffusion --release --features image -- --prompt "a rusty robot holding a fire torch"
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line.
