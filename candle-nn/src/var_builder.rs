@@ -81,6 +81,10 @@ impl VarMap {
         tensor_data.insert(path.to_string(), var);
         Ok(tensor)
     }
+
+    pub fn data(&self) -> &Mutex<HashMap<String, Var>> {
+        &self.data
+    }
 }
 
 // TODO: Maybe we would want the storage to be generic, e.g. with Box<dyn> to avoid too many
