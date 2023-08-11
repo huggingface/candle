@@ -178,10 +178,6 @@ pub enum Error {
     #[error(transparent)]
     SafeTensor(#[from] safetensors::SafeTensorError),
 
-    /// Error in the request
-    #[error("request error: {0}")]
-    RequestError(#[from] Box<ureq::Error>),
-
     #[error("unsupported safetensor dtype {0:?}")]
     UnsupportedSafeTensorDtype(safetensors::Dtype),
 

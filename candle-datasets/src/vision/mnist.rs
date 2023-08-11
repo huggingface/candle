@@ -2,7 +2,7 @@
 //!
 //! The files can be obtained from the following link:
 //! <http://yann.lecun.com/exdb/mnist/>
-use candle::{DType, Device, Result, Tensor};
+use candle::{DType, Device, Error, Result, Tensor};
 use flate2::read::GzDecoder;
 use std::fs::File;
 use std::io::{self, BufReader, Read};
@@ -78,28 +78,28 @@ pub fn load() -> Result<crate::vision::Dataset> {
     let train_images_buf =
         ureq::get("https://storage.googleapis.com/cvdf-datasets/mnist/train-images-idx3-ubyte.gz")
             .call()
-            .map_err(Box::new)?
+            .map_err(Error::wrap)?
             .into_reader();
     let train_images = read_images_from_reader(&mut GzDecoder::new(train_images_buf))?;
 
     let train_labels_buf =
         ureq::get("https://storage.googleapis.com/cvdf-datasets/mnist/train-labels-idx1-ubyte.gz")
             .call()
-            .map_err(Box::new)?
+            .map_err(Error::wrap)?
             .into_reader();
     let train_labels = read_labels_from_reader(&mut GzDecoder::new(train_labels_buf))?;
 
     let test_images_buf =
         ureq::get("https://storage.googleapis.com/cvdf-datasets/mnist/t10k-images-idx3-ubyte.gz")
             .call()
-            .map_err(Box::new)?
+            .map_err(Error::wrap)?
             .into_reader();
     let test_images = read_images_from_reader(&mut GzDecoder::new(test_images_buf))?;
 
     let test_labels_buf =
         ureq::get("https://storage.googleapis.com/cvdf-datasets/mnist/t10k-labels-idx1-ubyte.gz")
             .call()
-            .map_err(Box::new)?
+            .map_err(Error::wrap)?
             .into_reader();
     let test_labels = read_labels_from_reader(&mut GzDecoder::new(test_labels_buf))?;
 
