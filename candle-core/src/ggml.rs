@@ -122,8 +122,8 @@ fn dequantize_row_q4_0(xs: &[BlockQ4_0], ys: &mut [f32]) -> Result<()> {
         let d = xs[i].d.to_f32();
 
         for j in 0..(QK4_0 / 2) {
-            let x0 = (xs[i].qs[j] & 0x0F) - 8;
-            let x1 = (xs[i].qs[j] >> 4) - 8;
+            let x0 = (xs[i].qs[j] & 0x0F) as i16 - 8;
+            let x1 = (xs[i].qs[j] >> 4) as i16 - 8;
 
             ys[i * QK4_0 + j] = (x0 as f32) * d;
             ys[i * QK4_0 + j + QK4_0 / 2] = (x1 as f32) * d;
@@ -171,8 +171,8 @@ fn dequantize_row_q5_0(xs: &[BlockQ5_0], ys: &mut [f32]) -> Result<()> {
             let xh_0 = (((qh >> j) << 4) & 0x10) as u8;
             let xh_1 = ((qh >> (j + 12)) & 0x10) as u8;
 
-            let x0 = ((xs[i].qs[j] & 0x0F) | xh_0) - 16;
-            let x1 = ((xs[i].qs[j] >> 4) | xh_1) - 16;
+            let x0 = ((xs[i].qs[j] & 0x0F) | xh_0) as i32 - 16;
+            let x1 = ((xs[i].qs[j] >> 4) | xh_1) as i32 - 16;
 
             ys[i * QK5_0 + j] = (x0 as f32) * d;
             ys[i * QK5_0 + j + QK5_0 / 2] = (x1 as f32) * d;
@@ -585,14 +585,6 @@ impl GgmlDType {
     }
 }
 
-#[derive(Debug)]
-pub struct Content {
-    pub magic: VersionedMagic,
-    pub hparams: HParams,
-    pub vocab: Vocab,
-    pub tensors: Vec<(String, Tensor)>,
-}
-
 fn dequantize_and_create_tensor<T, F>(
     raw_data: &[u8],
     tensor_elems: usize,
@@ -614,15 +606,16 @@ where
 
 /// Creates a [Tensor] from a raw GGML tensor.
 pub fn tensor_from_ggml(
-    dtype: GgmlDType,
+    ggml_dtype: GgmlDType,
     raw_data: &[u8],
     dims: Vec<usize>,
+    dtype: DType,
     device: &Device,
 ) -> Result<Tensor> {
     let tensor_elems = dims.iter().product::<usize>();
-    let size_in_bytes = tensor_elems * dtype.type_size() / dtype.blck_size();
+    let size_in_bytes = tensor_elems * ggml_dtype.type_size() / ggml_dtype.blck_size();
 
-    match dtype {
+    let tensor = match ggml_dtype {
         GgmlDType::F32 => Tensor::from_raw_buffer(raw_data, DType::F32, &dims, device),
         GgmlDType::F16 => Tensor::from_raw_buffer(raw_data, DType::F16, &dims, device),
         GgmlDType::Q4_0 => dequantize_and_create_tensor(
@@ -707,18 +700,25 @@ pub fn tensor_from_ggml(
         ),
 
         _ => crate::bail!("quantized type {dtype:?} is not supported yet"),
+    }?;
+    //We only have ggml-quant to f32 conversions, meaning we have to convert to the desired type
+    if tensor.dtype() != dtype {
+        tensor.to_dtype(dtype)
+    } else {
+        Ok(tensor)
     }
 }
 
 fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     reader: &mut R,
     magic: VersionedMagic,
+    dtype: DType,
     device: &Device,
 ) -> Result<(String, Tensor)> {
     let n_dims = reader.read_u32::<LittleEndian>()?;
     let name_len = reader.read_u32::<LittleEndian>()?;
-    let dtype = reader.read_u32::<LittleEndian>()?;
-    let dtype = GgmlDType::from_u32(dtype)?;
+    let ggml_dtype = reader.read_u32::<LittleEndian>()?;
+    let ggml_dtype = GgmlDType::from_u32(ggml_dtype)?;
     let mut dims = vec![0u32; n_dims as usize];
     reader.read_u32_into::<LittleEndian>(&mut dims)?;
     let mut name = vec![0u8; name_len as usize];
@@ -731,20 +731,29 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     }
     let dims = dims.iter().map(|&u| u as usize).collect::<Vec<_>>();
     let tensor_elems = dims.iter().product::<usize>();
-    let size_in_bytes = tensor_elems * dtype.type_size() / dtype.blck_size();
-    println!("{name} {dtype:?} {dims:?}");
+    let size_in_bytes = tensor_elems * ggml_dtype.type_size() / ggml_dtype.blck_size();
+    println!("{name} {ggml_dtype:?} {dims:?}");
     // TODO: Mmap version to avoid copying the data around?
     let mut raw_data = vec![0u8; size_in_bytes];
     reader.read_exact(&mut raw_data)?;
-    match tensor_from_ggml(dtype, &raw_data, dims, device) {
+    match tensor_from_ggml(ggml_dtype, &raw_data, dims, dtype, device) {
         Ok(tensor) => Ok((name, tensor)),
         Err(e) => crate::bail!("Error creating tensor {name}: {e}"),
     }
 }
 
+#[derive(Debug)]
+pub struct Content {
+    pub magic: VersionedMagic,
+    pub hparams: HParams,
+    pub vocab: Vocab,
+    pub tensors: Vec<(String, Tensor)>,
+}
+
 impl Content {
     pub fn read<R: std::io::Seek + std::io::Read>(
         reader: &mut R,
+        dtype: DType,
         device: &Device,
     ) -> Result<Content> {
         // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.cpp#L505
@@ -756,7 +765,7 @@ impl Content {
         let mut tensors = vec![];
 
         while reader.stream_position()? != last_position {
-            let (name, tensor) = read_one_tensor(reader, magic, device)?;
+            let (name, tensor) = read_one_tensor(reader, magic, dtype, device)?;
             tensors.push((name, tensor))
         }
         Ok(Self {
