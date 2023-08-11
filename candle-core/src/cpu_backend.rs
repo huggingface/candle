@@ -1077,7 +1077,6 @@ struct Conv2D<'a>(&'a crate::conv::ParamsConv2D);
 impl<'a> Map2 for Conv2D<'a> {
     const OP: &'static str = "conv2d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
-        use rayon::prelude::*;
         let p = self.0;
         let inp = &inp[inp_l.start_offset()..];
         let (inp_s0, inp_s1, inp_s2, inp_s3) = crate::shape::dims4(inp_l.stride())?;
@@ -1106,9 +1105,11 @@ impl<'a> Map2 for Conv2D<'a> {
             }
         }
 
+        let num_threads = crate::utils::get_num_threads();
+
         for offset_h in 0..p.k_h {
             for offset_w in 0..p.k_w {
-                (0..p.c_out).into_par_iter().for_each(|dst_c_idx| {
+                crate::cpu_kernels::par_range(0, p.c_out, num_threads, |dst_c_idx| {
                     let dst_idx = dst_c_idx * out_w * out_h;
                     let k_cont = (0..p.c_in)
                         .map(|c_in_idx| {
