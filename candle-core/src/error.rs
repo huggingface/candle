@@ -178,9 +178,9 @@ pub enum Error {
     #[error(transparent)]
     SafeTensor(#[from] safetensors::SafeTensorError),
 
-    /// OpenDAL error.
+    /// ureq error.
     #[error(transparent)]
-    OpenDal(#[from] opendal::Error),
+    Ureq(#[from] ureq::Error),
 
     #[error("unsupported safetensor dtype {0:?}")]
     UnsupportedSafeTensorDtype(safetensors::Dtype),

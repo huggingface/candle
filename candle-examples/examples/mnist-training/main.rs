@@ -140,14 +140,13 @@ struct Args {
     load: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     // Load the dataset
     let m = if let Some(data_dir) = args.data_dir {
         candle_datasets::vision::mnist::load_dir(data_dir)?
     } else {
-        candle_datasets::vision::mnist::load().await?
+        candle_datasets::vision::mnist::load()?
     };
 
     println!("train-images: {:?}", m.train_images.shape());

@@ -27,7 +27,7 @@ rand_distr = { workspace = true }
 safetensors = { workspace = true }
 thiserror = { workspace = true }
 zip = { workspace = true }
-opendal = { workspace = true }
+ureq = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
