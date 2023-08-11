@@ -60,6 +60,8 @@ pub trait WithDType:
     + std::cmp::PartialOrd
     + std::fmt::Display
     + 'static
+    + Send
+    + Sync
     + crate::cpu_kernels::VecDot
 {
     const DTYPE: DType;

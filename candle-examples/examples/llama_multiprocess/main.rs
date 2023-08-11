@@ -5,9 +5,6 @@
 //
 // The tokenizer config can be retrieved from:
 // https://huggingface.co/hf-internal-testing/llama-tokenizer/raw/main/tokenizer.json
-//
-// In order to convert the llama weights to a .npz file, run:
-// python examples/llama/convert_checkpoint.py ..../LLaMA/7B/consolidated.00.pth
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
