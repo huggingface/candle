@@ -26,6 +26,8 @@ Check out our [examples](./candle-examples/examples/):
 - [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code
   generation.
+- [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
+  image generative model, only cpu support at the moment and on the slow side.
 
 Run them using the following commands:
 ```
@@ -34,6 +36,7 @@ cargo run --example llama --release
 cargo run --example falcon --release
 cargo run --example bert --release
 cargo run --example bigcode --release
+cargo run --example stable-diffusion --release -- --prompt "a rusty robot holding a fire torch"
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line.
