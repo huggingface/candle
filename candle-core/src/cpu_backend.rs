@@ -1066,6 +1066,9 @@ impl<'a> Map2 for Conv1D<'a> {
                         let mut d = T::zero();
                         unsafe { T::vec_dot(inp_cont.as_ptr(), k_cont.as_ptr(), &mut d, p.c_in) }
                         let dst_p = dst.as_ptr();
+                        // Safety: dst_idx are uniques per dst_c_idx which is used to parallelise
+                        // the different tasks so no two threads can try to write at the same
+                        // location.
                         unsafe {
                             let ptr = dst_p.add(dst_idx) as *mut T;
                             *ptr += d
@@ -1146,6 +1149,9 @@ impl<'a> Map2 for Conv2D<'a> {
                                     T::vec_dot(inp_cont.as_ptr(), k_cont.as_ptr(), &mut d, p.c_in)
                                 }
                                 let dst_p = dst.as_ptr();
+                                // Safety: dst_idx are uniques per dst_c_idx which is used to parallelise
+                                // the different tasks so no two threads can try to write at the same
+                                // location.
                                 unsafe {
                                     let ptr = dst_p.add(dst_idx) as *mut T;
                                     *ptr += d
