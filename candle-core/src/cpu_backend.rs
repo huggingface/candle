@@ -729,10 +729,10 @@ impl Map1 for UpsampleNearest2D {
         let scale_h = src_h as f64 / dst_h as f64;
         let scale_w = src_w as f64 / dst_w as f64;
         let mut dst = vec![T::zero(); b_sz * c * dst_h * dst_w];
-        let src_h_idxs = (0..dst_h)
+        let src_h_idxs = (0..src_h)
             .map(|h_idx| usize::min(src_h - 1, (h_idx as f64 * scale_h) as usize))
             .collect::<Vec<_>>();
-        let src_w_idxs = (0..dst_w)
+        let src_w_idxs = (0..src_w)
             .map(|w_idx| usize::min(src_w - 1, (w_idx as f64 * scale_w) as usize))
             .collect::<Vec<_>>();
         for b_idx in 0..b_sz {

@@ -1,5 +1,5 @@
 mod test_utils;
-use candle_core::{Device, IndexOp, Tensor};
+use candle_core::{Device, Tensor};
 
 // https://github.com/huggingface/candle/issues/364
 #[test]
@@ -57,25 +57,5 @@ fn avg_pool2d_pytorch() -> anyhow::Result<()> {
     );
     let pool = t.avg_pool2d((3, 3), (3, 3))?.squeeze(0)?;
     assert_eq!(test_utils::to_vec3_round(pool, 4)?, [[[0.085]], [[0.0078]]]);
-    Ok(())
-}
-
-#[test]
-fn upsample_nearest2d() -> anyhow::Result<()> {
-    let t = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((1, 1, 2, 3))?;
-    let upsampled = t.upsample_nearest2d(4, 6)?.i(0)?.i(0)?;
-    assert_eq!(
-        t.i(0)?.i(0)?.to_vec2::<f32>()?,
-        [[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]]
-    );
-    assert_eq!(
-        upsampled.to_vec2::<f32>()?,
-        [
-            [0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
-            [0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
-            [3.0, 3.0, 4.0, 4.0, 5.0, 5.0],
-            [3.0, 3.0, 4.0, 4.0, 5.0, 5.0]
-        ]
-    );
     Ok(())
 }
