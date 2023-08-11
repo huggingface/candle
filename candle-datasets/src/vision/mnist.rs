@@ -77,25 +77,29 @@ pub fn load() -> Result<crate::vision::Dataset> {
     // reference https://huggingface.co/datasets/mnist/blob/main/mnist.py
     let train_images_buf =
         ureq::get("https://storage.googleapis.com/cvdf-datasets/mnist/train-images-idx3-ubyte.gz")
-            .call()?
+            .call()
+            .map_err(Box::new)?
             .into_reader();
     let train_images = read_images_from_reader(&mut GzDecoder::new(train_images_buf))?;
 
     let train_labels_buf =
         ureq::get("https://storage.googleapis.com/cvdf-datasets/mnist/train-labels-idx1-ubyte.gz")
-            .call()?
+            .call()
+            .map_err(Box::new)?
             .into_reader();
     let train_labels = read_labels_from_reader(&mut GzDecoder::new(train_labels_buf))?;
 
     let test_images_buf =
         ureq::get("https://storage.googleapis.com/cvdf-datasets/mnist/t10k-images-idx3-ubyte.gz")
-            .call()?
+            .call()
+            .map_err(Box::new)?
             .into_reader();
     let test_images = read_images_from_reader(&mut GzDecoder::new(test_images_buf))?;
 
     let test_labels_buf =
         ureq::get("https://storage.googleapis.com/cvdf-datasets/mnist/t10k-labels-idx1-ubyte.gz")
-            .call()?
+            .call()
+            .map_err(Box::new)?
             .into_reader();
     let test_labels = read_labels_from_reader(&mut GzDecoder::new(test_labels_buf))?;
 
