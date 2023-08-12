@@ -108,19 +108,20 @@ pub fn detect_language(model: &Whisper, tokenizer: &Tokenizer, mel: &Tensor) -> 
     let device = mel.device();
     let language_token_ids = LANGUAGES
         .iter()
-        .map(|(t, _)| match tokenizer.token_to_id(&format!("<|{t}|>")) {
-            None => candle::bail!("no special token for {t}"),
-            Some(id) => Ok(id),
-        })
+        .map(|(t, _)| crate::token_id(tokenizer, &format!("<|{t}|>")))
         .collect::<Result<Vec<_>>>()?;
+    let sot_token = crate::token_id(tokenizer, crate::SOT_TOKEN)?;
     let audio_features = model.encoder.forward(mel)?;
-    let tokens = Tensor::new(&[[crate::SOT_TOKEN]], device)?;
+    let tokens = Tensor::new(&[[sot_token]], device)?;
     let language_token_ids = Tensor::new(language_token_ids.as_slice(), device)?;
+    println!("{tokens}");
+    println!("{audio_features}");
     let logits = model
         .decoder
         .forward(&tokens, &audio_features)?
         .i(0)?
         .i(0)?;
+    println!("{logits}");
     let logits = logits.index_select(&language_token_ids, 0)?;
     let logits = candle_nn::ops::softmax(&logits, D::Minus1)?;
     let logits = logits.to_vec1::<f32>()?;
