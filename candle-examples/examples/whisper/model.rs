@@ -381,6 +381,10 @@ impl Whisper {
             config,
         })
     }
+    // https://github.com/openai/whisper/blob/main/whisper/model.py#L271
+    pub fn is_multilingual(&self) -> bool {
+        self.config.vocab_size == 51865
+    }
 
     #[allow(dead_code)]
     pub fn forward(&self, mel: &Tensor, tokens: &Tensor) -> Result<Tensor> {

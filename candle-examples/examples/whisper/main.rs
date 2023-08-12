@@ -250,12 +250,6 @@ enum WhichModel {
 }
 
 impl WhichModel {
-    fn is_multilingual(&self) -> bool {
-        match self {
-            Self::Tiny | Self::Base | Self::LargeV2 => true,
-            Self::TinyEn | Self::BaseEn | Self::SmallEn | Self::MediumEn => false,
-        }
-    }
     fn model_and_revision(&self) -> (&'static str, &'static str) {
         match self {
             Self::Tiny => ("openai/whisper-tiny", "main"),
@@ -391,7 +385,7 @@ fn main() -> Result<()> {
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
     let model = Whisper::load(&vb, config)?;
 
-    let language_token = if args.model.is_multilingual() {
+    let language_token = if model.is_multilingual() {
         Some(multilingual::detect_language(&model, &tokenizer, &mel)?)
     } else {
         None
