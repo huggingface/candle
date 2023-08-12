@@ -19,6 +19,7 @@ use tokenizers::Tokenizer;
 mod audio;
 mod model;
 use model::{Config, Whisper};
+mod multilingual;
 
 const DTYPE: DType = DType::F32;
 
@@ -219,16 +220,24 @@ impl Decoder {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum WhichModel {
     Tiny,
-    Small,
-    Medium,
+    TinyEn,
+    SmallEn,
+    MediumEn,
 }
 
 impl WhichModel {
+    fn is_multilingual(&self) -> bool {
+        match self {
+            Self::Tiny => true,
+            Self::TinyEn | Self::SmallEn | Self::MediumEn => false,
+        }
+    }
     fn model_and_revision(&self) -> (&'static str, &'static str) {
         match self {
-            Self::Tiny => ("openai/whisper-tiny.en", "refs/pr/15"),
-            Self::Small => ("openai/whisper-small.en", "refs/pr/10"),
-            Self::Medium => ("openai/whisper-medium.en", "refs/pr/11"),
+            Self::Tiny => ("openai/whisper-tiny", "main"),
+            Self::TinyEn => ("openai/whisper-tiny.en", "refs/pr/15"),
+            Self::SmallEn => ("openai/whisper-small.en", "refs/pr/10"),
+            Self::MediumEn => ("openai/whisper-medium.en", "refs/pr/11"),
         }
     }
 }
@@ -249,7 +258,7 @@ struct Args {
     revision: Option<String>,
 
     /// The model to be used, can be tiny, small, medium.
-    #[arg(long, default_value = "tiny")]
+    #[arg(long, default_value = "tiny-en")]
     model: WhichModel,
 
     /// The input to be processed, in wav format, will default to `jfk.wav`. Alternatively
@@ -354,7 +363,12 @@ fn main() -> Result<()> {
     let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &device);
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
     let model = Whisper::load(&vb, config)?;
-    let mut dc = Decoder::new(model, tokenizer, args.seed, &device)?;
-    dc.run(&mel)?;
+
+    if args.model.is_multilingual() {
+        multilingual::detect_language(&model, &tokenizer, &mel)?
+    } else {
+        let mut dc = Decoder::new(model, tokenizer, args.seed, &device)?;
+        dc.run(&mel)?;
+    }
     Ok(())
 }
