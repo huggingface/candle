@@ -74,7 +74,13 @@ struct Decoder {
 }
 
 impl Decoder {
-    fn new(model: Whisper, tokenizer: Tokenizer, seed: u64, device: &Device) -> Result<Self> {
+    fn new(
+        model: Whisper,
+        tokenizer: Tokenizer,
+        seed: u64,
+        device: &Device,
+        language_token: Option<u32>,
+    ) -> Result<Self> {
         let suppress_tokens: Vec<f32> = (0..model.config.vocab_size as u32)
             .map(|i| {
                 if model.config.suppress_tokens.contains(&i) {
@@ -98,7 +104,7 @@ impl Decoder {
             transcribe_token,
             eot_token,
             no_speech_token,
-            language_token: None,
+            language_token,
         })
     }
 
@@ -385,10 +391,12 @@ fn main() -> Result<()> {
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
     let model = Whisper::load(&vb, config)?;
 
-    if args.model.is_multilingual() {
-        multilingual::detect_language(&model, &tokenizer, &mel)?
-    }
-    let mut dc = Decoder::new(model, tokenizer, args.seed, &device)?;
+    let language_token = if args.model.is_multilingual() {
+        Some(multilingual::detect_language(&model, &tokenizer, &mel)?)
+    } else {
+        None
+    };
+    let mut dc = Decoder::new(model, tokenizer, args.seed, &device, language_token)?;
     dc.run(&mel)?;
     Ok(())
 }
