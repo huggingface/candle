@@ -1,7 +1,6 @@
 // https://github.com/openai/whisper/blob/main/whisper/model.py
 // TODO:
 // - kv-cache support?
-// - Language detection?
 // - Batch size greater than 1.
 // - More token filters (SuppressBlanks, ApplyTimestampRules).
 
