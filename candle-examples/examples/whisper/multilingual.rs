@@ -123,9 +123,11 @@ pub fn detect_language(model: &Whisper, tokenizer: &Tokenizer, mel: &Tensor) -> 
         .i(0)?;
     println!("{logits}");
     let logits = logits.index_select(&language_token_ids, 0)?;
-    let logits = candle_nn::ops::softmax(&logits, D::Minus1)?;
-    let logits = logits.to_vec1::<f32>()?;
-    for ((_, language), p) in LANGUAGES.iter().zip(logits.iter()) {
+    let probs = candle_nn::ops::softmax(&logits, D::Minus1)?;
+    let probs = probs.to_vec1::<f32>()?;
+    let mut probs = LANGUAGES.iter().zip(probs.iter()).collect::<Vec<_>>();
+    probs.sort_by(|(_, p1), (_, p2)| p2.total_cmp(p1));
+    for ((_, language), p) in probs.iter().take(5) {
         println!("{language}: {p}")
     }
     Ok(())

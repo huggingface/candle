@@ -382,9 +382,8 @@ fn main() -> Result<()> {
 
     if args.model.is_multilingual() {
         multilingual::detect_language(&model, &tokenizer, &mel)?
-    } else {
-        let mut dc = Decoder::new(model, tokenizer, args.seed, &device)?;
-        dc.run(&mel)?;
     }
+    let mut dc = Decoder::new(model, tokenizer, args.seed, &device)?;
+    dc.run(&mel)?;
     Ok(())
 }
