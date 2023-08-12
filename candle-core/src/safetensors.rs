@@ -253,7 +253,10 @@ pub fn load_buffer(data: &[u8], device: &Device) -> Result<HashMap<String, Tenso
         .collect()
 }
 
-pub fn save<P: AsRef<Path>>(tensors: &HashMap<&str, Tensor>, filename: P) -> Result<()> {
+pub fn save<K: AsRef<str> + Ord + std::fmt::Display, P: AsRef<Path>>(
+    tensors: &HashMap<K, Tensor>,
+    filename: P,
+) -> Result<()> {
     Ok(st::serialize_to_file(tensors, &None, filename.as_ref())?)
 }
 
