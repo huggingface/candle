@@ -5,6 +5,7 @@
 //! timestep and return a denoised version of the input.
 use crate::embeddings::{TimestepEmbedding, Timesteps};
 use crate::unet_2d_blocks::*;
+use crate::utils::{conv2d, Conv2d};
 use candle::{DType, Result, Tensor};
 use candle_nn as nn;
 
@@ -85,14 +86,14 @@ enum UNetUpBlock {
 
 #[derive(Debug)]
 pub struct UNet2DConditionModel {
-    conv_in: nn::Conv2d,
+    conv_in: Conv2d,
     time_proj: Timesteps,
     time_embedding: TimestepEmbedding,
     down_blocks: Vec<UNetDownBlock>,
     mid_block: UNetMidBlock2DCrossAttn,
     up_blocks: Vec<UNetUpBlock>,
     conv_norm_out: nn::GroupNorm,
-    conv_out: nn::Conv2d,
+    conv_out: Conv2d,
     config: UNet2DConditionModelConfig,
 }
 
@@ -112,7 +113,7 @@ impl UNet2DConditionModel {
             stride: 1,
             padding: 1,
         };
-        let conv_in = nn::conv2d(in_channels, b_channels, 3, conv_cfg, vs.pp("conv_in"))?;
+        let conv_in = conv2d(in_channels, b_channels, 3, conv_cfg, vs.pp("conv_in"))?;
 
         let time_proj = Timesteps::new(b_channels, config.flip_sin_to_cos, config.freq_shift);
         let time_embedding =
@@ -263,7 +264,7 @@ impl UNet2DConditionModel {
             config.norm_eps,
             vs.pp("conv_norm_out"),
         )?;
-        let conv_out = nn::conv2d(b_channels, out_channels, 3, conv_cfg, vs.pp("conv_out"))?;
+        let conv_out = conv2d(b_channels, out_channels, 3, conv_cfg, vs.pp("conv_out"))?;
         Ok(Self {
             conv_in,
             time_proj,

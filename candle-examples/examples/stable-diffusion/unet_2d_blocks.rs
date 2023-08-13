@@ -5,12 +5,13 @@ use crate::attention::{
     AttentionBlock, AttentionBlockConfig, SpatialTransformer, SpatialTransformerConfig,
 };
 use crate::resnet::{ResnetBlock2D, ResnetBlock2DConfig};
+use crate::utils::{conv2d, Conv2d};
 use candle::{Result, Tensor, D};
 use candle_nn as nn;
 
 #[derive(Debug)]
 struct Downsample2D {
-    conv: Option<nn::Conv2d>,
+    conv: Option<Conv2d>,
     padding: usize,
 }
 
@@ -24,7 +25,7 @@ impl Downsample2D {
     ) -> Result<Self> {
         let conv = if use_conv {
             let config = nn::Conv2dConfig { stride: 2, padding };
-            let conv = nn::conv2d(in_channels, out_channels, 3, config, vs.pp("conv"))?;
+            let conv = conv2d(in_channels, out_channels, 3, config, vs.pp("conv"))?;
             Some(conv)
         } else {
             None
@@ -54,7 +55,7 @@ impl Downsample2D {
 // This does not support the conv-transpose mode.
 #[derive(Debug)]
 struct Upsample2D {
-    conv: nn::Conv2d,
+    conv: Conv2d,
 }
 
 impl Upsample2D {
@@ -63,7 +64,7 @@ impl Upsample2D {
             padding: 1,
             ..Default::default()
         };
-        let conv = nn::conv2d(in_channels, out_channels, 3, config, vs.pp("conv"))?;
+        let conv = conv2d(in_channels, out_channels, 3, config, vs.pp("conv"))?;
         Ok(Self { conv })
     }
 }
