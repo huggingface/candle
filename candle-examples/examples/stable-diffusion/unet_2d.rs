@@ -94,6 +94,7 @@ pub struct UNet2DConditionModel {
     up_blocks: Vec<UNetUpBlock>,
     conv_norm_out: nn::GroupNorm,
     conv_out: Conv2d,
+    span: tracing::Span,
     config: UNet2DConditionModelConfig,
 }
 
@@ -265,6 +266,7 @@ impl UNet2DConditionModel {
             vs.pp("conv_norm_out"),
         )?;
         let conv_out = conv2d(b_channels, out_channels, 3, conv_cfg, vs.pp("conv_out"))?;
+        let span = tracing::span!(tracing::Level::TRACE, "unet2d");
         Ok(Self {
             conv_in,
             time_proj,
@@ -274,18 +276,18 @@ impl UNet2DConditionModel {
             up_blocks,
             conv_norm_out,
             conv_out,
+            span,
             config,
         })
     }
-}
 
-impl UNet2DConditionModel {
     pub fn forward(
         &self,
         xs: &Tensor,
         timestep: f64,
         encoder_hidden_states: &Tensor,
     ) -> Result<Tensor> {
+        let _enter = self.span.enter();
         self.forward_with_additional_residuals(xs, timestep, encoder_hidden_states, None, None)
     }
 
