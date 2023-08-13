@@ -364,11 +364,13 @@ pub struct TextDecoder {
     ln: LayerNorm,
     mask: Tensor,
     span: tracing::Span,
+    span_final: tracing::Span,
 }
 
 impl TextDecoder {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "text-decoder");
+        let span_final = tracing::span!(tracing::Level::TRACE, "text-decoder-final");
         let n_state = cfg.d_model;
         let n_head = cfg.decoder_attention_heads;
         let n_ctx = cfg.max_target_positions;
@@ -384,7 +386,6 @@ impl TextDecoder {
             .flat_map(|i| (0..n_ctx).map(move |j| if j > i { f32::NEG_INFINITY } else { 0f32 }))
             .collect();
         let mask = Tensor::from_vec(mask, (n_ctx, n_ctx), vb.device())?;
-
         Ok(Self {
             token_embedding,
             positional_embedding,
@@ -392,6 +393,7 @@ impl TextDecoder {
             ln,
             mask,
             span,
+            span_final,
         })
     }
 
@@ -405,12 +407,16 @@ impl TextDecoder {
         for block in self.blocks.iter_mut() {
             x = block.forward(&x, Some(xa), Some(&self.mask), flush_kv_cache)?;
         }
-        let x = self.ln.forward(&x)?;
-        let w = self
-            .token_embedding
-            .embeddings()
-            .broadcast_left(x_dims[0])?;
-        let logits = x.matmul(&w.t()?)?;
+        self.ln.forward(&x)
+    }
+
+    pub fn final_linear(&self, x: &Tensor) -> Result<Tensor> {
+        let b_size = x.dim(0)?;
+        let w = self.token_embedding.embeddings().broadcast_left(b_size)?;
+        let logits = {
+            let _enter = self.span_final.enter();
+            x.matmul(&w.t()?)?
+        };
         Ok(logits)
     }
 }
@@ -431,17 +437,5 @@ impl Whisper {
             decoder,
             config,
         })
-    }
-
-    #[allow(dead_code)]
-    pub fn forward(
-        &mut self,
-        mel: &Tensor,
-        tokens: &Tensor,
-        flush_kv_cache: bool,
-    ) -> Result<Tensor> {
-        let enc = self.encoder.forward(mel, flush_kv_cache)?;
-        let dec = self.decoder.forward(tokens, &enc, flush_kv_cache)?;
-        Ok(dec)
     }
 }

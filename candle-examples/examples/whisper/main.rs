@@ -10,7 +10,7 @@ extern crate accelerate_src;
 extern crate intel_mkl_src;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, Tensor};
+use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn::{ops::softmax, VarBuilder};
 use clap::{Parser, ValueEnum};
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -128,21 +128,24 @@ impl Decoder {
             // The model expects a batch dim but this inference loop does not handle
             // it so we add it at this point.
             let tokens_t = tokens_t.unsqueeze(0)?;
-            let logits = model.decoder.forward(&tokens_t, &audio_features, i == 0)?;
-            let logits = logits.squeeze(0)?;
+            let ys = model.decoder.forward(&tokens_t, &audio_features, i == 0)?;
 
             // Extract the no speech probability on the first iteration by looking at the first
             // token logits and the probability for the according token.
             if i == 0 {
-                no_speech_prob = softmax(&logits.get(0)?, 0)?
-                    .get(self.no_speech_token as usize)?
+                let logits = model.decoder.final_linear(&ys.i(..1)?)?.i(0)?.i(0)?;
+                no_speech_prob = softmax(&logits, 0)?
+                    .i(self.no_speech_token as usize)?
                     .to_scalar::<f32>()? as f64;
             }
 
-            let (seq_len, _) = logits.dims2()?;
-            let logits = logits
-                .get(seq_len - 1)?
-                .broadcast_add(&self.suppress_tokens)?;
+            let (_, seq_len, _) = ys.dims3()?;
+            let logits = model
+                .decoder
+                .final_linear(&ys.i((..1, seq_len - 1..))?)?
+                .i(0)?
+                .i(0)?;
+            let logits = logits.broadcast_add(&self.suppress_tokens)?;
             let next_token = if t > 0f64 {
                 let prs = softmax(&(&logits / t)?, 0)?;
                 let logits_v: Vec<f32> = prs.to_vec1()?;
@@ -159,7 +162,7 @@ impl Decoder {
             };
             tokens.push(next_token);
             let prob = softmax(&logits, candle::D::Minus1)?
-                .get(next_token as usize)?
+                .i(next_token as usize)?
                 .to_scalar::<f32>()? as f64;
             if next_token == self.eot_token || tokens.len() > model.config.max_target_positions {
                 break;
