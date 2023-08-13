@@ -5,8 +5,17 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{Device, Result, Tensor, D};
 use clap::{Parser, Subcommand};
+
+fn softmax<D: candle_core::shape::Dim>(xs: &Tensor, dim: D) -> Result<Tensor> {
+    let dim = dim.to_index(xs.shape(), "softmax")?;
+    let max = xs.max_keepdim(dim)?;
+    let diff = xs.broadcast_sub(&max)?;
+    let num = diff.exp()?;
+    let den = num.sum_keepdim(dim)?;
+    num.broadcast_div(&den)
+}
 
 trait Benchmark {
     type PreProcessData;
@@ -72,6 +81,23 @@ impl Benchmark for Matmul {
     const ITERS: usize = 100;
 }
 
+struct Softmax;
+impl Benchmark for Softmax {
+    type PreProcessData = Tensor;
+    type RunResult = Tensor;
+    fn preprocess() -> Result<Self::PreProcessData> {
+        // Typical whisper tiny size.
+        let x = Tensor::randn(0f32, 1., (1, 6, 200, 1500), &Device::Cpu)?;
+        Ok(x)
+    }
+
+    fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
+        softmax(d, D::Minus1)
+    }
+
+    const ITERS: usize = 100;
+}
+
 fn run<B: Benchmark>(iters: Option<usize>) -> Result<()> {
     use std::hint::black_box;
 
@@ -90,6 +116,7 @@ enum Task {
     Conv1d,
     Conv2d,
     Matmul,
+    Softmax,
 }
 
 #[derive(Parser, Debug)]
@@ -109,6 +136,7 @@ fn main() -> Result<()> {
         Task::Conv1d => run::<Conv1d>(args.iters)?,
         Task::Conv2d => run::<Conv2d>(args.iters)?,
         Task::Matmul => run::<Matmul>(args.iters)?,
+        Task::Softmax => run::<Softmax>(args.iters)?,
     }
     Ok(())
 }
