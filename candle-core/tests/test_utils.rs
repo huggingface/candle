@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+#[cfg(feature = "accelerate")]
+extern crate accelerate_src;
+
 use candle_core::{Result, Tensor};
 
 #[macro_export]

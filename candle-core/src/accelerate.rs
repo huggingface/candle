@@ -326,10 +326,11 @@ macro_rules! binary_op {
                 );
             }
             unsafe {
+                // Weird quirk of accelerate, the rhs comes before the lhs.
                 ffi::$accelerate_name(
-                    a.as_ptr(),
-                    1,
                     b.as_ptr(),
+                    1,
+                    a.as_ptr(),
                     1,
                     y.as_mut_ptr(),
                     1,
