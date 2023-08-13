@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use libc::{c_char, c_double, c_float, c_int};
+use libc::{c_char, c_double, c_float, c_int, c_long, c_ulong};
 
 mod ffi {
     use super::*;
@@ -50,6 +50,79 @@ mod ffi {
         pub fn vvcos(dst: *mut c_double, src: *const c_double, len: *const c_int);
         pub fn vvlogf(dst: *mut c_float, src: *const c_float, len: *const c_int);
         pub fn vvlog(dst: *mut c_double, src: *const c_double, len: *const c_int);
+
+        pub fn vDSP_vaddD(
+            _: *const c_double,
+            _: c_long,
+            _: *const c_double,
+            _: c_long,
+            _: *mut c_double,
+            _: c_long,
+            _: c_ulong,
+        );
+        pub fn vDSP_vadd(
+            _: *const c_float,
+            _: c_long,
+            _: *const c_float,
+            _: c_long,
+            _: *mut c_float,
+            _: c_long,
+            _: c_ulong,
+        );
+        pub fn vDSP_vsubD(
+            _: *const c_double,
+            _: c_long,
+            _: *const c_double,
+            _: c_long,
+            _: *mut c_double,
+            _: c_long,
+            _: c_ulong,
+        );
+        pub fn vDSP_vsub(
+            _: *const c_float,
+            _: c_long,
+            _: *const c_float,
+            _: c_long,
+            _: *mut c_float,
+            _: c_long,
+            _: c_ulong,
+        );
+        pub fn vDSP_vmulD(
+            _: *const c_double,
+            _: c_long,
+            _: *const c_double,
+            _: c_long,
+            _: *mut c_double,
+            _: c_long,
+            _: c_ulong,
+        );
+        pub fn vDSP_vmul(
+            _: *const c_float,
+            _: c_long,
+            _: *const c_float,
+            _: c_long,
+            _: *mut c_float,
+            _: c_long,
+            _: c_ulong,
+        );
+        pub fn vDSP_vdivD(
+            _: *const c_double,
+            _: c_long,
+            _: *const c_double,
+            _: c_long,
+            _: *mut c_double,
+            _: c_long,
+            _: c_ulong,
+        );
+        pub fn vDSP_vdiv(
+            _: *const c_float,
+            _: c_long,
+            _: *const c_float,
+            _: c_long,
+            _: *mut c_float,
+            _: c_long,
+            _: c_ulong,
+        );
     }
 }
 
@@ -238,3 +311,39 @@ pub fn vd_sqr(a: &[f64], y: &mut [f64]) {
     }
     y.iter_mut().zip(a.iter()).for_each(|(y, a)| *y = *a * *a)
 }
+
+macro_rules! binary_op {
+    ($fn_name:ident, $ty:ty, $accelerate_name:ident) => {
+        #[inline]
+        pub fn $fn_name(a: &[$ty], b: &[$ty], y: &mut [$ty]) {
+            let a_len = a.len();
+            let b_len = b.len();
+            let y_len = y.len();
+            if a_len != y_len || b_len != y_len {
+                panic!(
+                    "{} a,b,y len mismatch {a_len} {b_len} {y_len}",
+                    stringify!($fn_name)
+                );
+            }
+            unsafe {
+                ffi::$accelerate_name(
+                    a.as_ptr(),
+                    1,
+                    b.as_ptr(),
+                    1,
+                    y.as_mut_ptr(),
+                    1,
+                    a_len as u64,
+                )
+            }
+        }
+    };
+}
+binary_op!(vs_add, f32, vDSP_vadd);
+binary_op!(vd_add, f64, vDSP_vaddD);
+binary_op!(vs_sub, f32, vDSP_vsub);
+binary_op!(vd_sub, f64, vDSP_vsubD);
+binary_op!(vs_mul, f32, vDSP_vmul);
+binary_op!(vd_mul, f64, vDSP_vmulD);
+binary_op!(vs_div, f32, vDSP_vdiv);
+binary_op!(vd_div, f64, vDSP_vdivD);

@@ -338,6 +338,21 @@ macro_rules! bin_op {
             fn f64_vec(xs1: &[f64], xs2: &[f64], ys: &mut [f64]) {
                 crate::mkl::$f64_vec(xs1, xs2, ys)
             }
+
+            #[cfg(feature = "accelerate")]
+            const F32_VEC: bool = true;
+            #[cfg(feature = "accelerate")]
+            const F64_VEC: bool = true;
+            #[cfg(feature = "accelerate")]
+            #[inline(always)]
+            fn f32_vec(xs1: &[f32], xs2: &[f32], ys: &mut [f32]) {
+                crate::accelerate::$f32_vec(xs1, xs2, ys)
+            }
+            #[cfg(feature = "accelerate")]
+            #[inline(always)]
+            fn f64_vec(xs1: &[f64], xs2: &[f64], ys: &mut [f64]) {
+                crate::accelerate::$f64_vec(xs1, xs2, ys)
+            }
         }
     };
 }
