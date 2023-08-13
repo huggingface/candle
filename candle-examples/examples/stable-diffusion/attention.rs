@@ -71,6 +71,7 @@ struct CrossAttention {
     scale: f64,
     slice_size: Option<usize>,
     span: tracing::Span,
+    span_attn: tracing::Span,
 }
 
 impl CrossAttention {
@@ -91,6 +92,7 @@ impl CrossAttention {
         let to_v = nn::linear_no_bias(context_dim, inner_dim, vs.pp("to_v"))?;
         let to_out = nn::linear(inner_dim, query_dim, vs.pp("to_out.0"))?;
         let span = tracing::span!(tracing::Level::TRACE, "xa");
+        let span_attn = tracing::span!(tracing::Level::TRACE, "xa-attn");
         Ok(Self {
             to_q,
             to_k,
@@ -100,6 +102,7 @@ impl CrossAttention {
             scale,
             slice_size,
             span,
+            span_attn,
         })
     }
 
@@ -142,6 +145,7 @@ impl CrossAttention {
     }
 
     fn attention(&self, query: &Tensor, key: &Tensor, value: &Tensor) -> Result<Tensor> {
+        let _enter = self.span_attn.enter();
         let xs = query.matmul(&(key.transpose(D::Minus1, D::Minus2)? * self.scale)?)?;
         let xs = nn::ops::softmax(&xs, D::Minus1)?.matmul(value)?;
         self.reshape_batch_dim_to_heads(&xs)
