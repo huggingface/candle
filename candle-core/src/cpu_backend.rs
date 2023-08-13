@@ -310,12 +310,11 @@ impl<'a> Reduce<'a> {
                         .iter()
                         .map(|(u, _)| u)
                         .product::<usize>();
-                    let mut src_i = 0;
-                    for dst_v in dst.iter_mut() {
+                    for (dst_i, dst_v) in dst.iter_mut().enumerate() {
+                        let src_i = dst_i * reduce_sz;
                         for &s in src[src_i..src_i + reduce_sz].iter() {
                             *dst_v = f(*dst_v, s)
                         }
-                        src_i += reduce_sz
                     }
                     return Ok(dst);
                 };
