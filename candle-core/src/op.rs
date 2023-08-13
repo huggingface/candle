@@ -424,6 +424,21 @@ macro_rules! unary_op {
             fn f64_vec(xs: &[f64], ys: &mut [f64]) {
                 crate::mkl::$f64_vec(xs, ys)
             }
+
+            #[cfg(feature = "accelerate")]
+            const F32_VEC: bool = true;
+            #[cfg(feature = "accelerate")]
+            const F64_VEC: bool = true;
+            #[cfg(feature = "accelerate")]
+            #[inline(always)]
+            fn f32_vec(xs: &[f32], ys: &mut [f32]) {
+                crate::accelerate::$f32_vec(xs, ys)
+            }
+            #[cfg(feature = "accelerate")]
+            #[inline(always)]
+            fn f64_vec(xs: &[f64], ys: &mut [f64]) {
+                crate::accelerate::$f64_vec(xs, ys)
+            }
         }
     };
 }

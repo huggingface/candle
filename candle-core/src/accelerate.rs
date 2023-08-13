@@ -39,6 +39,17 @@ mod ffi {
             c: *mut c_double,
             ldc: *const c_int,
         );
+
+        pub fn vvexpf(dst: *mut c_float, src: *const c_float, len: *const c_int);
+        pub fn vvexp(dst: *mut c_double, src: *const c_double, len: *const c_int);
+        pub fn vvsqrtf(dst: *mut c_float, src: *const c_float, len: *const c_int);
+        pub fn vvsqrt(dst: *mut c_double, src: *const c_double, len: *const c_int);
+        pub fn vvsinf(dst: *mut c_float, src: *const c_float, len: *const c_int);
+        pub fn vvsin(dst: *mut c_double, src: *const c_double, len: *const c_int);
+        pub fn vvcosf(dst: *mut c_float, src: *const c_float, len: *const c_int);
+        pub fn vvcos(dst: *mut c_double, src: *const c_double, len: *const c_int);
+        pub fn vvlogf(dst: *mut c_float, src: *const c_float, len: *const c_int);
+        pub fn vvlog(dst: *mut c_double, src: *const c_double, len: *const c_int);
     }
 }
 
@@ -108,4 +119,122 @@ pub unsafe fn dgemm(
         c.as_mut_ptr(),
         &ldc,
     )
+}
+
+#[inline]
+pub fn vs_exp(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvexpf(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vd_exp(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvexp(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vs_sqrt(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvsqrtf(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vd_sqrt(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvsqrt(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vs_sin(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvsinf(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vd_sin(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvsin(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+#[inline]
+pub fn vs_cos(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvcosf(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vd_cos(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvcos(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+#[inline]
+pub fn vs_ln(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvlogf(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vd_ln(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    unsafe { ffi::vvlog(y.as_mut_ptr(), a.as_ptr(), &(a_len as i32)) }
+}
+
+#[inline]
+pub fn vs_sqr(a: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    y.iter_mut().zip(a.iter()).for_each(|(y, a)| *y = *a * *a)
+}
+
+#[inline]
+pub fn vd_sqr(a: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let y_len = y.len();
+    if a_len != y_len {
+        panic!("a and y have different lengths {a_len} <> {y_len}")
+    }
+    y.iter_mut().zip(a.iter()).for_each(|(y, a)| *y = *a * *a)
 }
