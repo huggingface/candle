@@ -1,8 +1,10 @@
 // https://github.com/openai/whisper/blob/main/whisper/model.py/rgs
 // TODO:
-// - kv-cache support?
 // - Batch size greater than 1.
 // - More token filters (SuppressBlanks, ApplyTimestampRules).
+
+#[cfg(feature = "accelerate")]
+extern crate accelerate_src;
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
