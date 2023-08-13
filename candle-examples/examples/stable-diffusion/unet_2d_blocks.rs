@@ -679,6 +679,7 @@ impl Default for UpBlock2DConfig {
 pub struct UpBlock2D {
     pub resnets: Vec<ResnetBlock2D>,
     upsampler: Option<Upsample2D>,
+    span: tracing::Span,
     pub config: UpBlock2DConfig,
 }
 
@@ -722,9 +723,11 @@ impl UpBlock2D {
         } else {
             None
         };
+        let span = tracing::span!(tracing::Level::TRACE, "up2d");
         Ok(Self {
             resnets,
             upsampler,
+            span,
             config,
         })
     }
@@ -736,6 +739,7 @@ impl UpBlock2D {
         temb: Option<&Tensor>,
         upsample_size: Option<(usize, usize)>,
     ) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let mut xs = xs.clone();
         for (index, resnet) in self.resnets.iter().enumerate() {
             xs = Tensor::cat(&[&xs, &res_xs[res_xs.len() - index - 1]], 1)?;
@@ -774,6 +778,7 @@ impl Default for CrossAttnUpBlock2DConfig {
 pub struct CrossAttnUpBlock2D {
     pub upblock: UpBlock2D,
     pub attentions: Vec<SpatialTransformer>,
+    span: tracing::Span,
     pub config: CrossAttnUpBlock2DConfig,
 }
 
@@ -814,9 +819,11 @@ impl CrossAttnUpBlock2D {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        let span = tracing::span!(tracing::Level::TRACE, "xa-up2d");
         Ok(Self {
             upblock,
             attentions,
+            span,
             config,
         })
     }
@@ -829,6 +836,7 @@ impl CrossAttnUpBlock2D {
         upsample_size: Option<(usize, usize)>,
         encoder_hidden_states: Option<&Tensor>,
     ) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let mut xs = xs.clone();
         for (index, resnet) in self.upblock.resnets.iter().enumerate() {
             xs = Tensor::cat(&[&xs, &res_xs[res_xs.len() - index - 1]], 1)?;
