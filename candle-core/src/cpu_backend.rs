@@ -283,17 +283,17 @@ impl Map1Any for ReduceIndex {
     }
 }
 
-struct Reduce<'a> {
+struct ReduceSum<'a> {
     dst_shape: &'a Shape,
     reduce_dims: &'a [usize],
     reduce_dims_and_stride: Vec<(usize, usize)>,
 }
 
-impl<'a> Reduce<'a> {
+impl<'a> ReduceSum<'a> {
     #[inline(always)]
     fn fold_impl<T, F>(&self, src: &[T], src_l: &Layout, start_elt: T, f: F) -> Result<Vec<T>>
     where
-        T: Clone + Copy,
+        T: WithDType,
         F: Fn(T, T) -> T,
     {
         let mut dst = vec![start_elt; self.dst_shape.elem_count()];
@@ -315,12 +315,15 @@ impl<'a> Reduce<'a> {
                         .iter()
                         .map(|(u, _)| u)
                         .product::<usize>();
-                    let mut src_i = 0;
-                    for dst_v in dst.iter_mut() {
-                        for &s in src[src_i..src_i + reduce_sz].iter() {
-                            *dst_v = f(*dst_v, s)
-                        }
-                        src_i += reduce_sz
+                    for (dst_i, dst_v) in dst.iter_mut().enumerate() {
+                        let src_i = dst_i * reduce_sz;
+                        unsafe {
+                            T::vec_reduce_sum(
+                                src[src_i..src_i + reduce_sz].as_ptr(),
+                                dst_v,
+                                reduce_sz,
+                            )
+                        };
                     }
                     return Ok(dst);
                 };
@@ -352,7 +355,7 @@ impl<'a> Reduce<'a> {
     }
 }
 
-impl<'a> Map1 for Reduce<'a> {
+impl<'a> Map1 for ReduceSum<'a> {
     #[inline(always)]
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         self.fold_impl(src, src_l, T::zero(), |x, y| x + y)
@@ -1756,7 +1759,7 @@ impl BackendStorage for CpuStorage {
                     .iter()
                     .map(|&d| (src_dims[d], src_dims[d + 1..].iter().product::<usize>()))
                     .collect();
-                Reduce {
+                ReduceSum {
                     dst_shape: &dst_shape,
                     reduce_dims: &reduce_dims,
                     reduce_dims_and_stride,
