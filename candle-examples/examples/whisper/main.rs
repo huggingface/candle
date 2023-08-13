@@ -1,6 +1,5 @@
 // https://github.com/openai/whisper/blob/main/whisper/model.py/rgs
 // TODO:
-// - kv-cache support?
 // - Batch size greater than 1.
 // - More token filters (SuppressBlanks, ApplyTimestampRules).
 
