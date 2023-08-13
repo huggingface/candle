@@ -10,6 +10,7 @@ impl From<DType> for st::Dtype {
         match value {
             DType::U8 => st::Dtype::U8,
             DType::U32 => st::Dtype::U32,
+            DType::I32 => st::Dtype::I32,
             DType::BF16 => st::Dtype::BF16,
             DType::F16 => st::Dtype::F16,
             DType::F32 => st::Dtype::F32,
@@ -24,6 +25,7 @@ impl TryFrom<st::Dtype> for DType {
         match value {
             st::Dtype::U8 => Ok(DType::U8),
             st::Dtype::U32 => Ok(DType::U32),
+            st::Dtype::I32 => Ok(DType::I32),
             st::Dtype::BF16 => Ok(DType::BF16),
             st::Dtype::F16 => Ok(DType::F16),
             st::Dtype::F32 => Ok(DType::F32),
@@ -189,6 +191,7 @@ impl Tensor {
         match dtype {
             DType::U8 => convert_slice::<u8>(data, shape, device),
             DType::U32 => convert_slice::<u32>(data, shape, device),
+            DType::I32 => convert_slice::<i32>(data, shape, device),
             DType::BF16 => convert_slice::<half::bf16>(data, shape, device),
             DType::F16 => convert_slice::<half::f16>(data, shape, device),
             DType::F32 => convert_slice::<f32>(data, shape, device),
@@ -233,6 +236,7 @@ fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
     match tensor.dtype() {
         DType::U8 => Ok(convert_back_::<u8>(tensor.to_vec1()?)),
         DType::U32 => Ok(convert_back_::<u32>(tensor.to_vec1()?)),
+        DType::I32 => Ok(convert_back_::<i32>(tensor.to_vec1()?)),
         DType::F16 => Ok(convert_back_::<half::f16>(tensor.to_vec1()?)),
         DType::BF16 => Ok(convert_back_::<half::bf16>(tensor.to_vec1()?)),
         DType::F32 => Ok(convert_back_::<f32>(tensor.to_vec1()?)),

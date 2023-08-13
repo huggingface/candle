@@ -273,6 +273,33 @@ impl Tensor {
         Tensor::rand_f64_impl(lo, up, self.shape(), self.dtype(), self.device(), false)
     }
 
+    pub(crate) fn randint_impl<S: Into<Shape>, T: crate::IntDType>(
+        lo: T,
+        up: T,
+        s: S,
+        device: &Device,
+        is_variable: bool,
+    ) -> Result<Self> {
+        let s = s.into();
+        let storage = device.rand_uniform_i32(lo, up, &s)?;
+        let none = BackpropOp::none();
+        Ok(from_storage(storage, s, none, is_variable))
+    }
+
+    /// Creates a new tensor initialized with integer values sampled uniformly between `lo` and `up`.
+    pub fn randint<S: Into<Shape>, T: crate::IntDType>(
+        lo: T,
+        up: T,
+        s: S,
+        device: &Device,
+    ) -> Result<Self> {
+        Self::randint_impl(lo, up, s, device, false)
+    }
+
+    pub fn randint_like(&self, lo: i32, up: i32) -> Result<Self> {
+        Tensor::randint_impl(lo, up, self.shape(), self.device(), false)
+    }
+
     pub(crate) fn randn_impl<S: Into<Shape>, T: crate::FloatDType>(
         mean: T,
         std: T,

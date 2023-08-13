@@ -85,6 +85,7 @@ impl Header {
             DType::F16 => "f2",
             DType::F32 => "f4",
             DType::F64 => "f8",
+            DType::I32 => "i4",
             DType::U32 => "u4",
             DType::U8 => "u1",
         };
@@ -159,7 +160,7 @@ impl Header {
                     "e" | "f2" => DType::F16,
                     "f" | "f4" => DType::F32,
                     "d" | "f8" => DType::F64,
-                    // "i" | "i4" => DType::S32,
+                    "i" | "i4" => DType::I32,
                     // "q" | "i8" => DType::S64,
                     // "h" | "i2" => DType::S16,
                     // "b" | "i1" => DType::S8,
@@ -227,6 +228,11 @@ impl Tensor {
             DType::U32 => {
                 let mut data_t = vec![0u32; elem_count];
                 reader.read_u32_into::<LittleEndian>(&mut data_t)?;
+                Tensor::from_vec(data_t, shape, &Device::Cpu)
+            }
+            DType::I32 => {
+                let mut data_t = vec![0i32; elem_count];
+                reader.read_i32_into::<LittleEndian>(&mut data_t)?;
                 Tensor::from_vec(data_t, shape, &Device::Cpu)
             }
         }

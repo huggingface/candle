@@ -26,6 +26,7 @@ impl VecDot for half::bf16 {}
 impl VecDot for half::f16 {}
 impl VecDot for u8 {}
 impl VecDot for u32 {}
+impl VecDot for i32 {}
 
 #[inline(always)]
 pub fn par_for_each(n_threads: usize, func: impl Fn(usize) + Send + Sync) {

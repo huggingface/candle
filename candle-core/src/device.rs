@@ -123,6 +123,25 @@ impl Device {
         }
     }
 
+    pub(crate) fn rand_uniform_i32<T: crate::IntDType>(
+        &self,
+        lo: T,
+        up: T,
+        shape: &Shape,
+    ) -> Result<Storage> {
+        match self {
+            Device::Cpu => {
+                let storage = CpuDevice.rand_uniform_int(shape, T::DTYPE, lo.to_i32(), up.to_i32())?;
+
+                Ok(Storage::Cpu(storage))
+            }
+            Device::Cuda(device) => {
+                let storage = device.rand_uniform_int(shape, T::DTYPE, lo.to_i32(), up.to_i32())?;
+                Ok(Storage::Cuda(storage))
+            }
+        }
+    }
+
     pub(crate) fn rand_uniform_f64(
         &self,
         lo: f64,
@@ -132,11 +151,11 @@ impl Device {
     ) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = CpuDevice.rand_uniform(shape, dtype, lo, up)?;
+                let storage = CpuDevice.rand_uniform_float(shape, dtype, lo, up)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
-                let storage = device.rand_uniform(shape, dtype, lo, up)?;
+                let storage = device.rand_uniform_float(shape, dtype, lo, up)?;
                 Ok(Storage::Cuda(storage))
             }
         }

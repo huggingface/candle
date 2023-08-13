@@ -169,7 +169,13 @@ impl crate::backend::BackendDevice for CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn rand_uniform_float<T>(
+            &self, _shape: &Shape, _dtype: DType, _lo: T, _up: T) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn rand_uniform_int<T>(
+            &self, _shape: &Shape, _dtype: DType, _lo: T, _up: T) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

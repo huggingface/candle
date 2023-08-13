@@ -132,6 +132,18 @@ pub enum Error {
     #[error("cannot set variable {msg}")]
     CannotSetVar { msg: &'static str },
 
+    #[error("the upper bound value {up:?} must be greater than the lower bound value {lo:?}")]
+    RandIntBoundsInvalid {
+        lo: i32,
+        up: i32,
+    },
+
+    #[error("the upper bound value {up:?} must be greater than the lower bound value {lo:?}")]
+    RandFloatBoundsInvalid {
+        lo: f64,
+        up: f64,
+    },
+
     // Box indirection to avoid large variant.
     #[error("{0:?}")]
     MatMulUnexpectedStriding(Box<MatMulUnexpectedStriding>),

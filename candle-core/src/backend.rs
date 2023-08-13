@@ -1,5 +1,5 @@
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Layout, Result, Shape};
+use crate::{CpuStorage, DType, Layout, Result, Shape, IntDType, FloatDType};
 
 pub trait BackendStorage: Sized {
     type Device: BackendDevice;
@@ -97,7 +97,11 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
 
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage>;
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
+    fn rand_uniform_float<T: Copy + PartialOrd + FloatDType>(
+        &self, _shape: &Shape, _dtype: DType, _lo: T, _up: T) -> Result<Self::Storage>;
+
+    fn rand_uniform_int<T: Copy + PartialOrd + IntDType>(
+        &self, _shape: &Shape, _dtype: DType, _lo: T, _up: T) -> Result<Self::Storage>;
 
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
 }

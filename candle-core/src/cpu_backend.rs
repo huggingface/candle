@@ -1,6 +1,6 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
+use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType, FloatDType};
 use half::{bf16, f16};
 
 // TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
@@ -9,6 +9,7 @@ use half::{bf16, f16};
 pub enum CpuStorage {
     U8(Vec<u8>),
     U32(Vec<u32>),
+    I32(Vec<i32>),
     BF16(Vec<bf16>),
     F16(Vec<f16>),
     F32(Vec<f32>),
@@ -25,6 +26,7 @@ pub trait Map1 {
         match vs {
             CpuStorage::U8(vs) => Ok(CpuStorage::U8(self.f(vs, layout)?)),
             CpuStorage::U32(vs) => Ok(CpuStorage::U32(self.f(vs, layout)?)),
+            CpuStorage::I32(vs) => Ok(CpuStorage::I32(self.f(vs, layout)?)),
             CpuStorage::BF16(vs) => Ok(CpuStorage::BF16(self.f(vs, layout)?)),
             CpuStorage::F16(vs) => Ok(CpuStorage::F16(self.f(vs, layout)?)),
             CpuStorage::F32(vs) => Ok(CpuStorage::F32(self.f(vs, layout)?)),
@@ -45,6 +47,7 @@ pub trait Map1Any {
         match vs {
             CpuStorage::U8(vs) => Ok(self.f(vs, layout, CpuStorage::U8)?),
             CpuStorage::U32(vs) => Ok(self.f(vs, layout, CpuStorage::U32)?),
+            CpuStorage::I32(vs) => Ok(self.f(vs, layout, CpuStorage::I32)?),
             CpuStorage::BF16(vs) => Ok(self.f(vs, layout, CpuStorage::BF16)?),
             CpuStorage::F16(vs) => Ok(self.f(vs, layout, CpuStorage::F16)?),
             CpuStorage::F32(vs) => Ok(self.f(vs, layout, CpuStorage::F32)?),
@@ -68,6 +71,7 @@ pub trait Map2 {
         match (v1, v2) {
             (C::U8(v1), C::U8(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
             (C::U32(v1), C::U32(v2)) => Ok(C::U32(self.f(v1, l1, v2, l2)?)),
+            (C::I32(v1), C::I32(v2)) => Ok(C::I32(self.f(v1, l1, v2, l2)?)),
             (C::BF16(v1), C::BF16(v2)) => Ok(C::BF16(self.f(v1, l1, v2, l2)?)),
             (C::F16(v1), C::F16(v2)) => Ok(C::F16(self.f(v1, l1, v2, l2)?)),
             (C::F32(v1), C::F32(v2)) => Ok(C::F32(self.f(v1, l1, v2, l2)?)),
@@ -96,6 +100,7 @@ pub trait Map2U8 {
         match (v1, v2) {
             (C::U8(v1), C::U8(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
             (C::U32(v1), C::U32(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
+            (C::I32(v1), C::I32(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
             (C::BF16(v1), C::BF16(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
             (C::F16(v1), C::F16(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
             (C::F32(v1), C::F32(v2)) => Ok(C::U8(self.f(v1, l1, v2, l2)?)),
@@ -1524,6 +1529,7 @@ impl BackendStorage for CpuStorage {
         match self {
             Self::U8(_) => DType::U8,
             Self::U32(_) => DType::U32,
+            Self::I32(_) => DType::I32,
             Self::BF16(_) => DType::BF16,
             Self::F16(_) => DType::F16,
             Self::F32(_) => DType::F32,
@@ -1539,6 +1545,10 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::BF16(data))
             }
             (Self::U32(storage), DType::BF16) => {
+                let data = unary_map(storage, layout, |v| bf16::from_f32(v as f32));
+                Ok(Self::BF16(data))
+            }
+            (Self::I32(storage), DType::BF16) => {
                 let data = unary_map(storage, layout, |v| bf16::from_f32(v as f32));
                 Ok(Self::BF16(data))
             }
@@ -1566,6 +1576,10 @@ impl BackendStorage for CpuStorage {
                 let data = unary_map(storage, layout, |v| f16::from_f32(v as f32));
                 Ok(Self::F16(data))
             }
+            (Self::I32(storage), DType::F16) => {
+                let data = unary_map(storage, layout, |v| f16::from_f32(v as f32));
+                Ok(Self::F16(data))
+            }
             (Self::BF16(storage), DType::F16) => {
                 let data = unary_map(storage, layout, |v| f16::from_f32(v.to_f32()));
                 Ok(Self::F16(data))
@@ -1587,6 +1601,10 @@ impl BackendStorage for CpuStorage {
                 Ok(Self::F32(data))
             }
             (Self::U32(storage), DType::F32) => {
+                let data = unary_map(storage, layout, |v| v as f32);
+                Ok(Self::F32(data))
+            }
+            (Self::I32(storage), DType::F32) => {
                 let data = unary_map(storage, layout, |v| v as f32);
                 Ok(Self::F32(data))
             }
@@ -1630,7 +1648,15 @@ impl BackendStorage for CpuStorage {
                 let data = unary_map(storage, layout, |v| v as u32);
                 Ok(Self::U32(data))
             }
+            (Self::U8(storage), DType::I32) => {
+                let data = unary_map(storage, layout, |v| v as i32);
+                Ok(Self::I32(data))
+            }
             (Self::U32(storage), DType::U8) => {
+                let data = unary_map(storage, layout, |v| v as u8);
+                Ok(Self::U8(data))
+            }
+            (Self::I32(storage), DType::U8) => {
                 let data = unary_map(storage, layout, |v| v as u8);
                 Ok(Self::U8(data))
             }
@@ -1638,27 +1664,59 @@ impl BackendStorage for CpuStorage {
                 let data = unary_map(storage, layout, |v| v);
                 Ok(Self::U32(data))
             }
+            (Self::U32(storage), DType::I32) => {
+                let data = unary_map(storage, layout, |v| v as i32);
+                Ok(Self::I32(data))
+            }
+            (Self::I32(storage), DType::U32) => {
+                let data = unary_map(storage, layout, |v| v as u32);
+                Ok(Self::U32(data))
+            }
+            (Self::I32(storage), DType::I32) => {
+                let data = unary_map(storage, layout, |v| v);
+                Ok(Self::I32(data))
+            }
             (Self::BF16(storage), DType::U32) => {
                 let data = unary_map(storage, layout, |v| v.to_f32() as u32);
                 Ok(Self::U32(data))
+            }
+            (Self::BF16(storage), DType::I32) => {
+                let data = unary_map(storage, layout, |v| v.to_f32() as i32);
+                Ok(Self::I32(data))
             }
             (Self::F16(storage), DType::U32) => {
                 let data = unary_map(storage, layout, |v| v.to_f32() as u32);
                 Ok(Self::U32(data))
             }
+            (Self::F16(storage), DType::I32) => {
+                let data = unary_map(storage, layout, |v| v.to_f32() as i32);
+                Ok(Self::I32(data))
+            }
             (Self::F32(storage), DType::U32) => {
                 let data = unary_map(storage, layout, |v| v as u32);
                 Ok(Self::U32(data))
             }
+            (Self::F32(storage), DType::I32) => {
+                let data = unary_map(storage, layout, |v| v as i32);
+                Ok(Self::I32(data))
+            }
             (Self::F64(storage), DType::U32) => {
                 let data = unary_map(storage, layout, |v| v as u32);
                 Ok(Self::U32(data))
+            }
+            (Self::F64(storage), DType::I32) => {
+                let data = unary_map(storage, layout, |v| v as i32);
+                Ok(Self::I32(data))
             }
             (Self::U8(storage), DType::F64) => {
                 let data = unary_map(storage, layout, |v| v as f64);
                 Ok(Self::F64(data))
             }
             (Self::U32(storage), DType::F64) => {
+                let data = unary_map(storage, layout, |v| v as f64);
+                Ok(Self::F64(data))
+            }
+            (Self::I32(storage), DType::F64) => {
                 let data = unary_map(storage, layout, |v| v as f64);
                 Ok(Self::F64(data))
             }
@@ -1788,6 +1846,7 @@ impl BackendStorage for CpuStorage {
             }
             Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
             Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt()),
+            Self::I32(_) => Err(Error::UnsupportedDTypeForOp(DType::I32, "elu").bt()),
         }
     }
 
@@ -1836,6 +1895,10 @@ impl BackendStorage for CpuStorage {
             Self::U32(storage) => {
                 let data = unary_map(storage, layout, B::u32);
                 Ok(Self::U32(data))
+            }
+            Self::I32(storage) => {
+                let data = unary_map(storage, layout, B::i32);
+                Ok(Self::I32(data))
             }
         }
     }
@@ -2065,17 +2128,27 @@ impl BackendDevice for CpuDevice {
         Ok(Self)
     }
 
-    fn rand_uniform(&self, shape: &Shape, dtype: DType, min: f64, max: f64) -> Result<CpuStorage> {
+    fn rand_uniform_float<T>(&self, shape: &Shape, dtype: DType, min: T, max: T) -> Result<CpuStorage>
+    where
+        T: Copy + PartialOrd + FloatDType
+    {
         use rand::prelude::*;
+
+        if min >= max {
+            return Err(Error::RandFloatBoundsInvalid { lo: min.to_f64(), up: max.to_f64()}.bt());
+        }
 
         let elem_count = shape.elem_count();
         let mut rng = rand::thread_rng();
         match dtype {
-            DType::U8 | DType::U32 => Err(Error::UnsupportedDTypeForOp(dtype, "rand_uniform").bt()),
+            DType::U8 | DType::U32 | DType::I32 => {
+                Err(Error::UnsupportedDTypeForOp(dtype, "rand_uniform_float").bt())
+            }
             DType::BF16 => {
                 let mut data = Vec::with_capacity(elem_count);
                 let uniform =
-                    rand::distributions::Uniform::new(bf16::from_f64(min), bf16::from_f64(max));
+                    rand::distributions::Uniform::new(
+                        bf16::from_f64(min.to_f64()), bf16::from_f64(max.to_f64()));
                 for _i in 0..elem_count {
                     data.push(rng.sample::<bf16, _>(uniform))
                 }
@@ -2084,7 +2157,8 @@ impl BackendDevice for CpuDevice {
             DType::F16 => {
                 let mut data = Vec::with_capacity(elem_count);
                 let uniform =
-                    rand::distributions::Uniform::new(f16::from_f64(min), f16::from_f64(max));
+                    rand::distributions::Uniform::new(
+                        f16::from_f64(min.to_f64()), f16::from_f64(max.to_f64()));
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f16, _>(uniform))
                 }
@@ -2092,7 +2166,7 @@ impl BackendDevice for CpuDevice {
             }
             DType::F32 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distributions::Uniform::new(min as f32, max as f32);
+                let uniform = rand::distributions::Uniform::new(min.to_f64() as f32, max.to_f64() as f32);
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f32, _>(uniform))
                 }
@@ -2100,11 +2174,54 @@ impl BackendDevice for CpuDevice {
             }
             DType::F64 => {
                 let mut data = Vec::with_capacity(elem_count);
-                let uniform = rand::distributions::Uniform::new(min, max);
+                let uniform = rand::distributions::Uniform::new(min.to_f64(), max.to_f64());
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f64, _>(uniform))
                 }
                 Ok(CpuStorage::F64(data))
+            }
+        }
+    }
+
+    fn rand_uniform_int<T>(&self, shape: &Shape, dtype: DType, min: T, max: T) -> Result<CpuStorage>
+    where
+        T: Copy + PartialOrd + IntDType,
+    {
+        use rand::prelude::*;
+
+        if min >= max {
+            return Err(Error::RandIntBoundsInvalid { lo: min.to_i32(), up: max.to_i32()}.bt());
+        }
+
+        let elem_count = shape.elem_count();
+        let mut rng = rand::thread_rng();
+        match dtype {
+            DType::BF16 | DType::F16 | DType::F32 | DType::F64 => {
+                Err(Error::UnsupportedDTypeForOp(dtype, "rand_uniform_int").bt())
+            }
+            DType::U8 =>  {
+                let mut data = Vec::with_capacity(elem_count);
+                let uniform = rand::distributions::Uniform::new(min.to_i32() as u8, max.to_i32() as u8);
+                for _i in 0..elem_count {
+                    data.push(rng.sample::<u8, _>(uniform))
+                }
+                Ok(CpuStorage::U8(data))
+            }
+            DType::U32 => {
+                let mut data = Vec::with_capacity(elem_count);
+                let uniform = rand::distributions::Uniform::new(min.to_i32() as u32, max.to_i32() as u32);
+                for _i in 0..elem_count {
+                    data.push(rng.sample::<u32, _>(uniform))
+                }
+                Ok(CpuStorage::U32(data))
+            }
+            DType::I32 => {
+                let mut data = Vec::with_capacity(elem_count);
+                let uniform = rand::distributions::Uniform::new(min.to_i32(), max.to_i32() as i32);
+                for _i in 0..elem_count {
+                    data.push(rng.sample::<i32, _>(uniform))
+                }
+                Ok(CpuStorage::I32(data))
             }
         }
     }
@@ -2115,7 +2232,9 @@ impl BackendDevice for CpuDevice {
         let elem_count = shape.elem_count();
         let mut rng = rand::thread_rng();
         match dtype {
-            DType::U8 | DType::U32 => Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal").bt()),
+            DType::U8 | DType::U32 | DType::I32 => {
+                Err(Error::UnsupportedDTypeForOp(dtype, "rand_normal").bt())
+            }
             DType::BF16 => {
                 let mut data = Vec::with_capacity(elem_count);
                 let normal = rand_distr::Normal::new(bf16::from_f64(mean), bf16::from_f64(std))
@@ -2159,6 +2278,7 @@ impl BackendDevice for CpuDevice {
         let storage = match dtype {
             DType::U8 => CpuStorage::U8(vec![1u8; elem_count]),
             DType::U32 => CpuStorage::U32(vec![1u32; elem_count]),
+            DType::I32 => CpuStorage::I32(vec![1i32; elem_count]),
             DType::BF16 => CpuStorage::BF16(vec![bf16::ONE; elem_count]),
             DType::F16 => CpuStorage::F16(vec![f16::ONE; elem_count]),
             DType::F32 => CpuStorage::F32(vec![1f32; elem_count]),
@@ -2172,6 +2292,7 @@ impl BackendDevice for CpuDevice {
         let storage = match dtype {
             DType::U8 => CpuStorage::U8(vec![0u8; elem_count]),
             DType::U32 => CpuStorage::U32(vec![0u32; elem_count]),
+            DType::I32 => CpuStorage::I32(vec![0i32; elem_count]),
             DType::BF16 => CpuStorage::BF16(vec![bf16::ZERO; elem_count]),
             DType::F16 => CpuStorage::F16(vec![f16::ZERO; elem_count]),
             DType::F32 => CpuStorage::F32(vec![0f32; elem_count]),
