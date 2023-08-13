@@ -1,5 +1,8 @@
 // TODO: Add an offline mode.
 
+#[cfg(feature = "accelerate")]
+extern crate accelerate_src;
+
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
