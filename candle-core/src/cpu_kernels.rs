@@ -12,6 +12,20 @@ pub trait VecDot: num_traits::NumAssign + Copy {
             *res += *lhs.add(i) * *rhs.add(i)
         }
     }
+
+    /// Sum of all elements in a vector.
+    ///
+    /// # Safety
+    ///
+    /// The length of `xs` must be at least `len`. `res` has to point to a valid
+    /// element.
+    #[inline(always)]
+    unsafe fn vec_reduce_sum(xs: *const Self, res: *mut Self, len: usize) {
+        *res = Self::zero();
+        for i in 0..len {
+            *res += *xs.add(i)
+        }
+    }
 }
 
 impl VecDot for f32 {
@@ -19,6 +33,12 @@ impl VecDot for f32 {
     unsafe fn vec_dot(lhs: *const Self, rhs: *const Self, res: *mut Self, len: usize) {
         ggblas::ggml::vec_dot_f32(lhs, rhs, res, len)
     }
+
+    // TODO: enable the following once the updated ggblas is available.
+    // #[inline(always)]
+    // unsafe fn vec_reduce_sum(xs: *const Self, res: *mut Self, len: usize) {
+    //    ggblas::ggml::vec_reduce_sum(xs, res, len)
+    // }
 }
 
 impl VecDot for f64 {}
