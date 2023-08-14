@@ -78,9 +78,7 @@ print(w.flatten())
 res = torch.nn.functional.conv2d(t, w)
 print(res.flatten())
 */
-#[test]
-fn conv2d() -> Result<()> {
-    let dev = &Device::Cpu;
+fn conv2d(dev: &Device) -> Result<()> {
     let t = Tensor::new(
         &[
             0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,
@@ -134,9 +132,7 @@ print(w.flatten())
 res = torch.nn.functional.conv2d(t, w)
 print(res.flatten())
 */
-#[test]
-fn conv2d_small() -> Result<()> {
-    let dev = &Device::Cpu;
+fn conv2d_small(dev: &Device) -> Result<()> {
     let t = Tensor::new(
         &[
             0.4056f32, -0.8689, 0.6843, 0.2395, 1.2279, -0.9287, -1.7030, 0.1370, 0.1866, 0.4145,
@@ -156,9 +152,7 @@ fn conv2d_small() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn conv2d_smaller() -> Result<()> {
-    let dev = &Device::Cpu;
+fn conv2d_smaller(dev: &Device) -> Result<()> {
     let t = Tensor::new(
         &[
             0.4056f32, -0.8689, 0.6843, 0.2395, 1.2279, -0.9287, -1.7030, 0.1370, 0.1866,
@@ -179,3 +173,6 @@ fn conv2d_smaller() -> Result<()> {
 
 test_device!(conv1d, conv1d_cpu, conv1d_gpu);
 test_device!(conv1d_small, conv1d_small_cpu, conv1d_small_gpu);
+test_device!(conv2d, conv2d_cpu, conv2d_gpu);
+test_device!(conv2d_small, conv2d_small_cpu, conv2d_small_gpu);
+test_device!(conv2d_smaller, conv2d_smaller_cpu, conv2d_smaller_gpu);
