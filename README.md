@@ -64,14 +64,17 @@ And then head over to
 ## Features
 
 - Simple syntax, looks and feels like PyTorch.
-- CPU and Cuda backends, m1, f16, bf16.
-- Serverless (on CPU), small and fast deployments
-- WASM support, run your models in a browser.
-- Model training.
-- Distributed computing using NCCL.
-- Model support out of the box: Llama, Whisper, Falcon, StarCoder...
-- Embed user-defined ops/kernels, such as [flash-attention
-  v2](https://github.com/huggingface/candle/blob/89ba005962495f2bfbda286e185e9c3c7f5300a3/candle-flash-attn/src/lib.rs#L152).
+    - Model training.
+    - Embed user-defined ops/kernels, such as [flash-attention v2](https://github.com/huggingface/candle/blob/89ba005962495f2bfbda286e185e9c3c7f5300a3/candle-flash-attn/src/lib.rs#L152).
+- Backends.
+    - Optimized CPU backend with optional MKL support for x86 and Accelerate for macs.
+    - CUDA backend for efficiently running on GPUs, multiple GPU distribution via NCCL.
+    - WASM support, run your models in a browser.
+- Model support out of the box.
+    - LLMs: Llama v1 and v2, Falcon, StarCoder.
+    - Whisper.
+    - Stable Diffusion.
+- Serverless (on CPU), small and fast deployments.
 
 <!--- ANCHOR_END: features --->
 
