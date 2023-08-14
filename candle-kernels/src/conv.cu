@@ -24,6 +24,9 @@ __device__ void conv1d(
   const size_t c_out = k_dims[0];
   const size_t c_in = src_dims[1];
   const size_t l_in = src_dims[2];
+  if (dst_i >= src_dims[0] * c_out * l_out) {
+    return;
+  }
 
   // TODO
   const size_t b_idx = dst_i / (l_out * c_out);
@@ -73,6 +76,9 @@ __device__ void conv2d(
   const size_t c_in = src_dims[1];
   const size_t w_in = src_dims[2];
   const size_t h_in = src_dims[3];
+  if (dst_i >= src_dims[0] * c_out * w_out * h_out) {
+    return;
+  }
 
   // TODO
   const size_t b_idx = dst_i / (w_out * h_out * c_out);
@@ -126,6 +132,9 @@ __device__ void avg_pool2d(
 
   const size_t w_out = (w_in - w_k) / w_stride + 1;
   const size_t h_out = (h_in - h_k) / h_stride + 1;
+  if (dst_i >= src_dims[0] * c * w_out * h_out) {
+    return;
+  }
 
   // TODO: Improve this.
   const size_t b_idx = dst_i / (w_out * h_out * c);
