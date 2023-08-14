@@ -28,6 +28,7 @@ pub(crate) fn launch_conv2d<
     T: DeviceRepr + WithDType + ValidAsZeroBits + cudarc::cudnn::CudnnDataType,
 >(
     src: &CudaView<T>,
+    src_l: &crate::Layout,
     filter: &CudaView<T>,
     dst: &mut CudaSlice<T>,
     params: &crate::conv::ParamsConv2D,
@@ -50,15 +51,25 @@ pub(crate) fn launch_conv2d<
         /* dilation */ [1, 1],
         cudarc::cudnn::sys::cudnnConvolutionMode_t::CUDNN_CROSS_CORRELATION,
     )?;
-    let x = cudnn.create_4d_tensor(
-        cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
-        [
-            params.b_size as i32,
-            params.c_in as i32,
-            params.i_w as i32,
-            params.i_h as i32,
-        ],
-    )?;
+    let x_shape = [
+        params.b_size as i32,
+        params.c_in as i32,
+        params.i_w as i32,
+        params.i_h as i32,
+    ];
+    // Note that `src` already starts at the proper offset.
+    let x = if src_l.is_contiguous() {
+        cudnn.create_4d_tensor(
+            cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
+            x_shape,
+        )?
+    } else {
+        let s = src_l.stride();
+        cudnn.create_4d_tensor_ex(
+            x_shape,
+            [s[0] as i32, s[1] as i32, s[2] as i32, s[3] as i32],
+        )?
+    };
     let w = cudnn.create_4d_filter(
         cudarc::cudnn::sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
         [

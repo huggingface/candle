@@ -64,7 +64,7 @@ impl From<CudaError> for crate::Error {
 
 /// Unique identifier for cuda devices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct DeviceId(usize);
+pub struct DeviceId(usize);
 
 impl DeviceId {
     fn new() -> Self {
@@ -111,11 +111,11 @@ impl<O, E: Into<CudaError>> WrapErr<O> for std::result::Result<O, E> {
 }
 
 impl CudaDevice {
-    pub(crate) fn cuda_device(&self) -> Arc<cudarc::driver::CudaDevice> {
+    pub fn cuda_device(&self) -> Arc<cudarc::driver::CudaDevice> {
         self.device.clone()
     }
 
-    pub(crate) fn id(&self) -> DeviceId {
+    pub fn id(&self) -> DeviceId {
         self.id
     }
 
@@ -952,22 +952,6 @@ impl<'a> Map2 for Conv2D<'a> {
         let dims = shape.dims();
         let el = shape.elem_count();
 
-        #[cfg(feature = "cudnn")]
-        if inp_l.is_contiguous() && k_l.is_contiguous() {
-            let mut out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-            unsafe {
-                crate::cudnn::launch_conv2d::<f32>(
-                    std::mem::transmute(inp),
-                    std::mem::transmute(k),
-                    std::mem::transmute(&mut out),
-                    p,
-                    dev,
-                )
-                .map_err(crate::Error::wrap)?
-            };
-            return Ok(out);
-        }
-
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
@@ -1533,6 +1517,7 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    #[cfg(not(feature = "cudnn"))]
     fn conv2d(
         &self,
         l: &Layout,
@@ -1542,6 +1527,69 @@ impl BackendStorage for CudaStorage {
     ) -> Result<Self> {
         let device = self.device().clone();
         let slice = Conv2D(params).map(&self.slice, l, &kernel.slice, kernel_l, &device)?;
+        Ok(Self { slice, device })
+    }
+
+    #[cfg(feature = "cudnn")]
+    fn conv2d(
+        &self,
+        inp_l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
+    ) -> Result<Self> {
+        let device = self.device().clone();
+        if kernel_l.is_contiguous() {
+            let slice = Conv2D(params).map(&self.slice, inp_l, &kernel.slice, kernel_l, &device)?;
+            return Ok(Self { slice, device });
+        }
+        let (out_w, out_h) = (params.out_w(), params.out_h());
+        let dst_el = params.c_out * out_w * out_h * params.b_size;
+        let slice = match (&self.slice, &kernel.slice) {
+            (S::U8(inp), S::U8(k)) => {
+                let inp = &inp.slice(inp_l.start_offset()..);
+                let k = &k.slice(kernel_l.start_offset()..);
+                let mut out = unsafe { device.alloc::<u8>(dst_el) }.w()?;
+                crate::cudnn::launch_conv2d::<u8>(inp, inp_l, k, &mut out, params, &device)
+                    .map_err(crate::Error::wrap)?;
+                S::U8(out)
+            }
+            (S::BF16(inp), S::BF16(k)) => {
+                let inp = &inp.slice(inp_l.start_offset()..);
+                let k = &k.slice(kernel_l.start_offset()..);
+                let mut out = unsafe { device.alloc::<bf16>(dst_el) }.w()?;
+                crate::cudnn::launch_conv2d::<bf16>(inp, inp_l, k, &mut out, params, &device)
+                    .map_err(crate::Error::wrap)?;
+                S::BF16(out)
+            }
+            (S::F16(inp), S::F16(k)) => {
+                let inp = &inp.slice(inp_l.start_offset()..);
+                let k = &k.slice(kernel_l.start_offset()..);
+                let mut out = unsafe { device.alloc::<f16>(dst_el) }.w()?;
+                crate::cudnn::launch_conv2d::<f16>(inp, inp_l, k, &mut out, params, &device)
+                    .map_err(crate::Error::wrap)?;
+                S::F16(out)
+            }
+
+            (S::F32(inp), S::F32(k)) => {
+                let inp = &inp.slice(inp_l.start_offset()..);
+                let k = &k.slice(kernel_l.start_offset()..);
+                let mut out = unsafe { device.alloc::<f32>(dst_el) }.w()?;
+                crate::cudnn::launch_conv2d::<f32>(inp, inp_l, k, &mut out, params, &device)
+                    .map_err(crate::Error::wrap)?;
+                S::F32(out)
+            }
+            (S::F64(inp), S::F64(k)) => {
+                let inp = &inp.slice(inp_l.start_offset()..);
+                let k = &k.slice(kernel_l.start_offset()..);
+                let mut out = unsafe { device.alloc::<f64>(dst_el) }.w()?;
+                crate::cudnn::launch_conv2d::<f64>(inp, inp_l, k, &mut out, params, &device)
+                    .map_err(crate::Error::wrap)?;
+                S::F64(out)
+            }
+            (S::U32(_), S::U32(_)) => Err(CudaError::InternalError("conv2d does not support u32"))?,
+            _ => Err(CudaError::InternalError("dtype mismatch in conv2d"))?,
+        };
         Ok(Self { slice, device })
     }
 
