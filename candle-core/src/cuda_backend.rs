@@ -111,6 +111,14 @@ impl<O, E: Into<CudaError>> WrapErr<O> for std::result::Result<O, E> {
 }
 
 impl CudaDevice {
+    pub(crate) fn cuda_device(&self) -> Arc<cudarc::driver::CudaDevice> {
+        self.device.clone()
+    }
+
+    pub(crate) fn id(&self) -> DeviceId {
+        self.id
+    }
+
     fn const_impl(&self, v: f64, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
@@ -953,6 +961,7 @@ impl<'a> Map2 for Conv2D<'a> {
                     std::mem::transmute(k),
                     std::mem::transmute(&mut out),
                     p,
+                    dev,
                 )
                 .map_err(crate::Error::wrap)?
             };

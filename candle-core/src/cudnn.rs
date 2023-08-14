@@ -2,7 +2,15 @@ use crate::WithDType;
 use cudarc;
 use cudarc::cudnn::safe::{Conv2dForward, Cudnn};
 use cudarc::driver::{CudaSlice, CudaView, DeviceRepr, ValidAsZeroBits};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
+
+// The cudnn handles are stored per thread here rather than on the CudaDevice as they are neither
+// send nor sync.
+thread_local! {
+    static CUDNN: RefCell<HashMap<crate::cuda_backend::DeviceId, Arc<Cudnn>>> = HashMap::new().into();
+}
 
 impl From<cudarc::cudnn::CudnnError> for crate::Error {
     fn from(err: cudarc::cudnn::CudnnError) -> Self {
@@ -23,8 +31,19 @@ pub(crate) fn launch_conv2d<
     filter: &CudaView<T>,
     dst: &mut CudaSlice<T>,
     params: &crate::conv::ParamsConv2D,
+    dev: &crate::cuda_backend::CudaDevice,
 ) -> crate::Result<()> {
-    let cudnn = Arc::new(Cudnn::new(dst.device())?);
+    let device_id = dev.id();
+    let cudnn = CUDNN.with(|cudnn| {
+        if let Some(cudnn) = cudnn.borrow().get(&device_id) {
+            return Ok(cudnn.clone());
+        }
+        let c = Cudnn::new(dev.cuda_device());
+        if let Ok(c) = &c {
+            cudnn.borrow_mut().insert(device_id, c.clone());
+        }
+        c
+    })?;
     let conv = cudnn.create_conv2d::<T>(
         /* pad */ [params.padding as i32, params.padding as i32],
         /* stride */ [params.stride as i32, params.stride as i32],
@@ -62,7 +81,7 @@ pub(crate) fn launch_conv2d<
     };
     let alg = conv2d.pick_algorithm()?;
     let workspace_size = conv2d.get_workspace_size(alg)?;
-    let mut workspace = dst.device().alloc_zeros::<u8>(workspace_size)?;
+    let mut workspace = dev.cuda_device().alloc_zeros::<u8>(workspace_size)?;
     unsafe {
         conv2d.launch::<CudaSlice<u8>, _, _, _>(
             alg,
