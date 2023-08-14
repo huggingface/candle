@@ -147,16 +147,8 @@ __device__ void avg_pool2d(
   A d = 0;
   for (size_t w_offset = 0; w_offset < w_k; ++w_offset) {
     size_t src_w = w_stride * dst_w + w_offset;
-    if (src_w < w_k / 2 || src_w >= w_in + w_k / 2) {
-      continue;
-    }
-    src_w -= w_k / 2;
     for (size_t h_offset = 0; h_offset < h_k; ++h_offset) {
       size_t src_h = h_stride * dst_h + h_offset;
-      if (src_h < h_k / 2 || src_h >= h_in + h_k / 2) {
-        continue;
-      }
-      src_h -= h_k / 2;
       const size_t src_idx = src_idx0 + c_idx * src_s[1] + src_w * src_s[2] + src_h * src_s[3];
       d += static_cast<A>(src[src_idx]);
     }
