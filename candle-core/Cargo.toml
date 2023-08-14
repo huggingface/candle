@@ -35,6 +35,7 @@ clap = { workspace = true }
 
 [features]
 default = []
-cuda = ["dep:cudarc", "dep:candle-kernels"]
+cuda = ["cudarc", "dep:candle-kernels"]
+cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
