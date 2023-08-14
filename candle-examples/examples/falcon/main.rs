@@ -72,16 +72,14 @@ impl TextGeneration {
                 "{} token: {} '{}'",
                 index + 1,
                 next_token,
-                self.tokenizer
-                    .decode(vec![next_token], true)
-                    .map_err(E::msg)?
+                self.tokenizer.decode(&[next_token], true).map_err(E::msg)?
             );
         }
         let dt = start_gen.elapsed();
         println!(
             "{sample_len} tokens generated ({} token/s)\n----\n{}\n----",
             sample_len as f64 / dt.as_secs_f64(),
-            self.tokenizer.decode(new_tokens, true).map_err(E::msg)?
+            self.tokenizer.decode(&new_tokens, true).map_err(E::msg)?
         );
         Ok(())
     }
