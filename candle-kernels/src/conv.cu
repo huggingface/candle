@@ -1,11 +1,13 @@
 #include "cuda_utils.cuh"
 #include<stdint.h>
 
+// Naive implementation of conv1d.
 template <typename T, typename A>
 __device__ void conv1d(
     const size_t src_numel,
     const size_t l_out,
-    const size_t stride, 
+    const size_t stride,
+    const size_t padding,
     const size_t *info,
     const T *src,
     const T *kernel,
@@ -19,7 +21,6 @@ __device__ void conv1d(
   const size_t *k_s = info + 9;
   const size_t dst_i = blockIdx.x * blockDim.x + threadIdx.x;
   const size_t k_size = k_dims[2];
-  const size_t k_over_2 = k_size / 2;
   const size_t c_out = k_dims[0];
   const size_t c_in = src_dims[1];
   const size_t l_in = src_dims[2];
@@ -32,12 +33,73 @@ __device__ void conv1d(
   const size_t src_idx0 = b_idx * src_s[0];
   A d = 0;
   for (size_t offset = 0; offset < k_size; ++offset) {
-    const size_t src_l_plus = stride * dst_l + offset;
-    if (k_over_2 <= src_l_plus && src_l_plus < l_in + k_over_2) {
-      const size_t src_l = src_l_plus - k_over_2;
+    size_t src_l = stride * dst_l + offset;
+    if (src_l < padding || src_l >= padding + l_in) {
+      continue;
+    }
+    src_l -= padding;
+    for (size_t src_c_idx = 0; src_c_idx < c_in; ++src_c_idx) {
+      const size_t src_idx = src_idx0 + src_c_idx * src_s[1] + src_l * src_s[2];
+      const size_t k_idx = dst_c_idx * k_s[0] + src_c_idx * k_s[1] + offset * k_s[2];
+      d += static_cast<A>(src[src_idx]) * static_cast<A>(kernel[k_idx]);
+    }
+  }
+  dst[dst_i] = static_cast<T>(d);
+}
+
+// Naive implementation of conv2d.
+template <typename T, typename A>
+__device__ void conv2d(
+    const size_t src_numel,
+    const size_t w_out,
+    const size_t h_out,
+    const size_t stride,
+    const size_t padding,
+    const size_t *info,
+    const T *src,
+    const T *kernel,
+    T *dst
+) {
+  const size_t dst_i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (dst_i >= src_numel) {
+    return;
+  }
+  // src: (b_size, c_in, w_in, h_in)
+  // k: (c_out, c_in, w_k, h_k)
+  const size_t *src_dims = info;
+  const size_t *src_s = info + 4;
+  const size_t *k_dims = info + 8;
+  const size_t *k_s = info + 12;
+  const size_t w_k = k_dims[2];
+  const size_t h_k = k_dims[3];
+  const size_t c_out = k_dims[0];
+  const size_t c_in = src_dims[1];
+  const size_t w_in = src_dims[2];
+  const size_t h_in = src_dims[3];
+
+  // TODO
+  const size_t b_idx = dst_i / (w_out * h_out * c_out);
+  const size_t dst_c_idx = (dst_i / (w_out * h_out)) % c_out;
+  const size_t dst_w = (dst_i / h_out) % w_out;
+  const size_t dst_h = dst_i % h_out;
+
+  const size_t src_idx0 = b_idx * src_s[0];
+  A d = 0;
+  for (size_t w_offset = 0; w_offset < w_k; ++w_offset) {
+    size_t src_w = stride * dst_w + w_offset;
+    if (src_w < padding || src_w >= w_in + padding) {
+      continue;
+    }
+    src_w -= padding;
+    for (size_t h_offset = 0; h_offset < h_k; ++h_offset) {
+      size_t src_h = stride * dst_h + h_offset;
+      if (src_h < padding || src_h >= h_in + padding) {
+        continue;
+      }
+      src_h -= padding;
       for (size_t src_c_idx = 0; src_c_idx < c_in; ++src_c_idx) {
-        const size_t src_idx = src_idx0 + src_c_idx * src_s[1] + src_l * src_s[2];
-        const size_t k_idx = dst_c_idx * k_s[0] + src_c_idx * k_s[1] + offset * k_s[2];
+        const size_t src_idx = src_idx0 + src_c_idx * src_s[1] + src_w * src_s[2] + src_h * src_s[3];
+        const size_t k_idx = dst_c_idx * k_s[0] + src_c_idx * k_s[1] + w_offset * k_s[2] + h_offset * k_s[3];
         d += static_cast<A>(src[src_idx]) * static_cast<A>(kernel[k_idx]);
       }
     }
@@ -51,24 +113,47 @@ extern "C" __global__ void FN_NAME(  \
     const size_t src_numel, \
     const size_t num_dims, \
     const size_t stride, \
+    const size_t padding, \
     const size_t *info, \
     const TYPENAME *src, \
     const TYPENAME *kernel, \
     TYPENAME *dst \
 ) {  \
-  conv1d<TYPENAME, TYPEACC>(src_numel, num_dims, stride, info, src, kernel, dst); \
+  conv1d<TYPENAME, TYPEACC>(src_numel, num_dims, stride, padding, info, src, kernel, dst); \
+} \
+
+#define CONV2D_OP(TYPENAME, TYPEACC, FN_NAME) \
+extern "C" __global__ void FN_NAME(  \
+    const size_t src_numel, \
+    const size_t w_out, \
+    const size_t h_out, \
+    const size_t stride, \
+    const size_t padding, \
+    const size_t *info, \
+    const TYPENAME *src, \
+    const TYPENAME *kernel, \
+    TYPENAME *dst \
+) {  \
+  conv2d<TYPENAME, TYPEACC>(src_numel, w_out, h_out, stride, padding, info, src, kernel, dst); \
 } \
 
 #if __CUDA_ARCH__ >= 800
 CONV1D_OP(__nv_bfloat16, float, conv1d_bf16)
+CONV2D_OP(__nv_bfloat16, float, conv2d_bf16)
 #endif
 
 #if __CUDA_ARCH__ >= 530
 CONV1D_OP(__half, float, conv1d_f16)
+CONV2D_OP(__half, float, conv2d_f16)
 #endif
 
 CONV1D_OP(float, float, conv1d_f32)
 CONV1D_OP(double, double, conv1d_f64)
 CONV1D_OP(uint8_t, uint8_t, conv1d_u8)
 CONV1D_OP(uint32_t, uint32_t, conv1d_u32)
+
+CONV2D_OP(float, float, conv2d_f32)
+CONV2D_OP(double, double, conv2d_f64)
+CONV2D_OP(uint8_t, uint8_t, conv2d_u8)
+CONV2D_OP(uint32_t, uint32_t, conv2d_u32)
 
