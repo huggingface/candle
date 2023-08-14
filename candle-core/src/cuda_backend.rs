@@ -897,7 +897,6 @@ impl<'a> Map2 for Conv1D<'a> {
         // Kernel shape: (c_out, c_in_k, k_size)
         // Input shape: (b_size, c_in, l_in) or (c_in, l_in)
         let p = &self.0;
-
         let inp = &inp.slice(inp_l.start_offset()..);
         let k = &k.slice(k_l.start_offset()..);
         let shape = inp_l.shape();
@@ -917,7 +916,44 @@ impl<'a> Map2 for Conv1D<'a> {
             panic!("unexpected input shape for conv1d {dims:?}")
         };
         let ds = dev.htod_copy(ds).w()?;
-        let params = (el, l_out, p.stride, &ds, inp, k, &out);
+        let params = (el, l_out, p.stride, p.padding, &ds, inp, k, &out);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }.w()?;
+        Ok(out)
+    }
+}
+
+struct Conv2D<'a>(&'a crate::conv::ParamsConv2D);
+impl<'a> Map2 for Conv2D<'a> {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        inp: &CudaSlice<T>,
+        inp_l: &Layout,
+        k: &CudaSlice<T>,
+        k_l: &Layout,
+        dev: &CudaDevice,
+    ) -> Result<CudaSlice<T>> {
+        // Kernel shape: (c_out, c_in_k, w_k, h_k)
+        // Input shape: (b_size, c_in, w_in, c_in)
+        let p = &self.0;
+        let inp = &inp.slice(inp_l.start_offset()..);
+        let k = &k.slice(k_l.start_offset()..);
+        let shape = inp_l.shape();
+        let dims = shape.dims();
+        let el = shape.elem_count();
+        let (out_w, out_h) = (p.out_w(), p.out_h());
+        let dst_el = p.c_out * out_w * out_h * p.b_size;
+        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), kernels::CONV)?;
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let ds = if dims.len() == 4 {
+            [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
+        } else {
+            panic!("unexpected input shape for conv1d {dims:?}")
+        };
+        let ds = dev.htod_copy(ds).w()?;
+        let params = (el, out_w, out_h, p.stride, p.padding, &ds, inp, k, &out);
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }.w()?;
         Ok(out)
@@ -1383,12 +1419,14 @@ impl BackendStorage for CudaStorage {
 
     fn conv2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConv2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        todo!()
+        let device = self.device().clone();
+        let slice = Conv2D(params).map(&self.slice, l, &kernel.slice, kernel_l, &device)?;
+        Ok(Self { slice, device })
     }
 
     fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
