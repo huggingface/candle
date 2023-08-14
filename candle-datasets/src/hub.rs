@@ -22,7 +22,7 @@ fn sibling_to_parquet(
     repo: &ApiRepo,
 ) -> Result<SerializedFileReader<File>, Error> {
     let local = repo.get(rfilename)?;
-    let file = File::open(&local)?;
+    let file = File::open(local)?;
     let reader = SerializedFileReader::new(file)?;
     Ok(reader)
 }

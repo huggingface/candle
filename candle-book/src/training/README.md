@@ -6,12 +6,36 @@ start with the Hello world dataset of machine learning, MNIST.
 
 Let's start with downloading `MNIST` from [huggingface](https://huggingface.co/datasets/mnist).
 
+This requires `candle-datasets` with the `hub` feature.
+```bash
+cargo add candle-datasets --features hub
+cargo add hf-hub
+```
 
-```rust
-use candle_datasets::from_hub;
 
-
-let dataset = from_hub("mnist")?;
+```rust,ignore
+{{#include ../../../candle-examples/src/lib.rs:book_training_1}}
 ```
 
 This uses the standardized `parquet` files from the `refs/convert/parquet` branch on every dataset.
+`files` is now a `Vec` of [`parquet::file::serialized_reader::SerializedFileReader`].
+
+We can inspect the content of the files with:
+
+```rust,ignore
+{{#include ../../../candle-examples/src/lib.rs:book_training_2}}
+```
+
+You should see something like:
+
+```bash
+Column id 1, name label, value 6
+Column id 0, name image, value {bytes: [137, ....]
+Column id 1, name label, value 8
+Column id 0, name image, value {bytes: [137, ....]
+```
+
+So each row contains 2 columns (image, label) with image being saved as bytes.
+Let's put them into a useful struct.
+
+
