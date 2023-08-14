@@ -111,7 +111,10 @@ fn main() -> Result<()> {
     let device = &model.device;
 
     if let Some(prompt) = args.prompt {
-        let tokenizer = tokenizer.with_padding(None).with_truncation(None);
+        let tokenizer = tokenizer
+            .with_padding(None)
+            .with_truncation(None)
+            .map_err(E::msg)?;
         let tokens = tokenizer
             .encode(prompt, true)
             .map_err(E::msg)?

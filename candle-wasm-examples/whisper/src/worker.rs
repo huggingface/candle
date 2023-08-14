@@ -159,10 +159,7 @@ impl Decoder {
             }
             sum_logprob += prob.ln();
         }
-        let text = self
-            .tokenizer
-            .decode(tokens.clone(), true)
-            .map_err(E::msg)?;
+        let text = self.tokenizer.decode(&tokens, true).map_err(E::msg)?;
         let avg_logprob = sum_logprob / tokens.len() as f64;
 
         Ok(DecodingResult {

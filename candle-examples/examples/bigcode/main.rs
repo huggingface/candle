@@ -65,10 +65,7 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             new_tokens.push(next_token);
-            let token = self
-                .tokenizer
-                .decode(vec![next_token], true)
-                .map_err(E::msg)?;
+            let token = self.tokenizer.decode(&[next_token], true).map_err(E::msg)?;
             print!("{token}");
             std::io::stdout().flush()?;
         }
