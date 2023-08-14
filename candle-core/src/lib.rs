@@ -43,6 +43,8 @@ pub mod cpu_backend;
 pub mod cpu_kernels;
 #[cfg(feature = "cuda")]
 pub mod cuda_backend;
+#[cfg(feature = "cudnn")]
+pub mod cudnn;
 mod device;
 pub mod display;
 mod dtype;

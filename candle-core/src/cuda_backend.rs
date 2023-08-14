@@ -936,17 +936,33 @@ impl<'a> Map2 for Conv2D<'a> {
         // Kernel shape: (c_out, c_in_k, w_k, h_k)
         // Input shape: (b_size, c_in, w_in, c_in)
         let p = &self.0;
+        let (out_w, out_h) = (p.out_w(), p.out_h());
+        let dst_el = p.c_out * out_w * out_h * p.b_size;
         let inp = &inp.slice(inp_l.start_offset()..);
         let k = &k.slice(k_l.start_offset()..);
         let shape = inp_l.shape();
         let dims = shape.dims();
         let el = shape.elem_count();
-        let (out_w, out_h) = (p.out_w(), p.out_h());
-        let dst_el = p.c_out * out_w * out_h * p.b_size;
-        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), kernels::CONV)?;
+
+        #[cfg(feature = "cudnn")]
+        if inp_l.is_contiguous() && k_l.is_contiguous() {
+            let mut out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+            unsafe {
+                crate::cudnn::launch_conv2d::<f32>(
+                    std::mem::transmute(inp),
+                    std::mem::transmute(k),
+                    std::mem::transmute(&mut out),
+                    p,
+                )
+                .map_err(crate::Error::wrap)?
+            };
+            return Ok(out);
+        }
+
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), kernels::CONV)?;
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {

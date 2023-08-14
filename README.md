@@ -28,7 +28,7 @@ Check out our [examples](./candle-examples/examples/):
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code
   generation.
 - [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
-  image generative model, only cpu support at the moment and on the slow side.
+  image generative model, yet to be optimized.
 
 Run them using the following commands:
 ```
