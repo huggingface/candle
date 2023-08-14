@@ -19,7 +19,5 @@ memmap2 = { workspace = true }
 tokenizers = { workspace = true, features = ["onig"] }
 rand = { workspace = true }
 thiserror = { workspace = true }
-parquet = { version = "45.0.0", optional = true }
-
-[features]
-hub = ["dep:parquet"]
+parquet = { version = "45.0.0"}
+image = { workspace = true }
