@@ -14,7 +14,7 @@
     - [Using the hub](inference/hub.md)
 - [Error management](error_manage.md)
 - [Training](training/README.md)
-    - [MNIST]()
+    - [MNIST](training/mnist.md)
     - [Fine-tuning]()
     - [Serialization]()
 - [Advanced Cuda usage]()
