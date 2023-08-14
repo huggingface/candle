@@ -1539,7 +1539,7 @@ impl BackendStorage for CudaStorage {
         params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
         let device = self.device().clone();
-        if kernel_l.is_contiguous() {
+        if !kernel_l.is_contiguous() {
             let slice = Conv2D(params).map(&self.slice, inp_l, &kernel.slice, kernel_l, &device)?;
             return Ok(Self { slice, device });
         }
