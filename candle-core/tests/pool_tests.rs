@@ -12,12 +12,11 @@ fn avg_pool2d(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn max_pool2d() -> Result<()> {
+fn max_pool2d(dev: &Device) -> Result<()> {
     let data: Vec<f32> = vec![
         1., 2., 1., 3., 0., 0., 1., 1., 1., 1., 1., 1., 5., 1., 1., 1.,
     ];
-    let t = Tensor::from_vec(data, (1, 1, 4, 4), &Device::Cpu)?;
+    let t = Tensor::from_vec(data, (1, 1, 4, 4), dev)?;
 
     let pool = t.max_pool2d((2, 2), (2, 2))?.squeeze(0)?.squeeze(0)?;
     assert_eq!(pool.to_vec2::<f32>()?, [[2f32, 3.], [5., 1.]]);
@@ -83,3 +82,4 @@ test_device!(
     avg_pool2d_pytorch_cpu,
     avg_pool2d_pytorch_gpu
 );
+test_device!(max_pool2d, max_pool2d_cpu, max_pool2d_gpu);

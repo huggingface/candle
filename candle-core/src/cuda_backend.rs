@@ -960,11 +960,17 @@ impl<'a> Map2 for Conv2D<'a> {
     }
 }
 
+enum PoolOp {
+    Max,
+    Avg,
+}
+
 struct Pool2D {
     w_k: usize,
     h_k: usize,
     w_stride: usize,
     h_stride: usize,
+    op: PoolOp,
 }
 
 impl Map1 for Pool2D {
@@ -988,7 +994,11 @@ impl Map1 for Pool2D {
         let out_h = (dims[3] - self.h_k) / self.h_stride + 1;
         let dst_el = out_w * out_h * dims[0] * dims[1];
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("avg_pool2d"), kernels::CONV)?;
+        let kname = match self.op {
+            PoolOp::Max => "max_pool2d",
+            PoolOp::Avg => "avg_pool2d",
+        };
+        let func = dev.get_or_load_func(&kernel_name::<T>(kname), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let ds = dev.htod_copy(ds).w()?;
@@ -1484,13 +1494,23 @@ impl BackendStorage for CudaStorage {
             h_k: k.1,
             w_stride: stride.0,
             h_stride: stride.1,
+            op: PoolOp::Avg,
         }
         .map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
 
-    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        todo!()
+    fn max_pool2d(&self, l: &Layout, k: (usize, usize), stride: (usize, usize)) -> Result<Self> {
+        let device = self.device().clone();
+        let slice = Pool2D {
+            w_k: k.0,
+            h_k: k.1,
+            w_stride: stride.0,
+            h_stride: stride.1,
+            op: PoolOp::Max,
+        }
+        .map(&self.slice, &device, l)?;
+        Ok(Self { slice, device })
     }
 
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
