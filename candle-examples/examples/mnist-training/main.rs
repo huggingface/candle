@@ -138,12 +138,20 @@ struct Args {
     /// The file where to load the trained weights from, in safetensors format.
     #[arg(long)]
     load: Option<String>,
+
+    /// The file where to load the trained weights from, in safetensors format.
+    #[arg(long)]
+    local_mnist: Option<String>,
 }
 
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     // Load the dataset
-    let m = candle_datasets::vision::mnist::load()?;
+    let m = if let Some(directory) = args.local_mnist {
+        candle_datasets::vision::mnist::load_dir(directory)?
+    } else {
+        candle_datasets::vision::mnist::load()?
+    };
     println!("train-images: {:?}", m.train_images.shape());
     println!("train-labels: {:?}", m.train_labels.shape());
     println!("test-images: {:?}", m.test_images.shape());
