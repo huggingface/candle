@@ -403,6 +403,8 @@ fn dequantize_row_q6k(xs: &[BlockQ6K], ys: &mut [f32]) -> Result<()> {
 
 pub trait GgmlType: Sized {
     const DTYPE: GgmlDType;
+    const BLCK_SIZE: usize;
+
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()>;
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()>;
 
@@ -413,6 +415,7 @@ pub trait GgmlType: Sized {
 
 impl GgmlType for BlockQ4_0 {
     const DTYPE: GgmlDType = GgmlDType::Q4_0;
+    const BLCK_SIZE: usize = QK8_0;
 
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
         dequantize_row_q4_0(xs, ys)
@@ -452,6 +455,7 @@ impl GgmlType for BlockQ4_0 {
 
 impl GgmlType for BlockQ8_0 {
     const DTYPE: GgmlDType = GgmlDType::Q8_0;
+    const BLCK_SIZE: usize = QK8_0;
 
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
         dequantize_row_q8_0(xs, ys)
@@ -474,22 +478,33 @@ const BLCK1: usize = 16;
 // This implementation is in-line with the ggml one and keeps the same variable names.
 // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L10605
 pub fn forward_mul_mat<T: GgmlType>(src0: &[T], src1: &[f32], dst: &mut [f32]) -> Result<()> {
-    let (ne00, _ne01, ne02, ne03) = (1, 1, 1, 1);
+    let (ne00, ne01, ne02, ne03) = (1, 1, 1, 1);
     let (ne10, ne11, ne12, ne13) = (1, 1, 1, 1);
     // The strides are in bytes in ggml, however we use the number of elements in candle.
     let (_, nb1, nb2, nb3) = (1, 1, 1, 1);
     let (_, nb01, nb02, nb03) = (1, 1, 1, 1);
     let (_, nb11, nb12, nb13) = (1, 1, 1, 1);
+
+    let nr0 = ne01; // src0 rows
+    let nr1 = ne11 * ne12 * ne13;
+
+    // TODO: Either add multi-threading or remove these bits.
     let ir010 = 0;
-    let ir011 = 1024;
+    let ir011 = nr0;
     let ir110 = 0;
-    let ir111 = 1024;
+    let ir111 = nr1;
     let r2 = ne12 / ne02;
     let r3 = ne13 / ne03;
 
     // TODO: Pre-allocate this.
     let wdata = &mut [];
-    let row_size = ne10; // * TYPE_SIZE / BLCK_SIZE
+    if ne10 % T::BLCK_SIZE != 0 {
+        crate::bail!(
+            "forward_mul_mat: ne10 {ne10} is not divisible by block size {}",
+            T::BLCK_SIZE
+        )
+    }
+    let row_size = ne10 / T::BLCK_SIZE;
     for i13 in 0..ne13 {
         for i12 in 0..ne12 {
             for i11 in 0..ne11 {
