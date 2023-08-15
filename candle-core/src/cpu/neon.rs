@@ -69,9 +69,6 @@ impl Cpu<ARR> for CurrentCpu {
         for i in 0..ARR / 4 {
             x[4 * i] = vaddq_f32(x[4 * i], x[4 * i + 2]);
         }
-        for i in 0..ARR / 8 {
-            x[8 * i] = vaddq_f32(x[8 * i], x[8 * i + 4]);
-        }
         *y = Self::reduce_one(x[0]);
     }
 }
