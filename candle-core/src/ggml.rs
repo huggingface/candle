@@ -401,13 +401,27 @@ fn dequantize_row_q6k(xs: &[BlockQ6K], ys: &mut [f32]) -> Result<()> {
     Ok(())
 }
 
-pub trait VecDot: Sized {
-    type VecDotType;
+pub trait GgmlType: Sized {
+    const DTYPE: GgmlDType;
+    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()>;
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()>;
+
+    type VecDotType: GgmlType;
     // Dot product used as a building block for quantized mat-mul.
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32>;
 }
 
-impl VecDot for BlockQ4_0 {
+impl GgmlType for BlockQ4_0 {
+    const DTYPE: GgmlDType = GgmlDType::Q4_0;
+
+    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
+        dequantize_row_q4_0(xs, ys)
+    }
+
+    fn from_float(_: &[f32], _: &mut [Self]) -> Result<()> {
+        todo!()
+    }
+
     type VecDotType = BlockQ8_0;
 
     // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L2361C10-L2361C122
@@ -434,6 +448,84 @@ impl VecDot for BlockQ4_0 {
         }
         Ok(sumf)
     }
+}
+
+impl GgmlType for BlockQ8_0 {
+    const DTYPE: GgmlDType = GgmlDType::Q8_0;
+
+    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
+        dequantize_row_q8_0(xs, ys)
+    }
+
+    fn from_float(_: &[f32], _: &mut [Self]) -> Result<()> {
+        todo!()
+    }
+
+    type VecDotType = BlockQ8_0;
+
+    fn vec_dot(_: usize, _: &[Self], _: &[Self::VecDotType]) -> Result<f32> {
+        todo!()
+    }
+}
+
+const BLCK0: usize = 16;
+const BLCK1: usize = 16;
+
+// This implementation is in-line with the ggml one and keeps the same variable names.
+// https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L10605
+pub fn forward_mul_mat<T: GgmlType>(src0: &[T], src1: &[f32], dst: &mut [f32]) -> Result<()> {
+    let (ne00, _ne01, ne02, ne03) = (1, 1, 1, 1);
+    let (ne10, ne11, ne12, ne13) = (1, 1, 1, 1);
+    // The strides are in bytes in ggml, however we use the number of elements in candle.
+    let (_, nb1, nb2, nb3) = (1, 1, 1, 1);
+    let (_, nb01, nb02, nb03) = (1, 1, 1, 1);
+    let (_, nb11, nb12, nb13) = (1, 1, 1, 1);
+    let ir010 = 0;
+    let ir011 = 1024;
+    let ir110 = 0;
+    let ir111 = 1024;
+    let r2 = ne12 / ne02;
+    let r3 = ne13 / ne03;
+
+    // TODO: Pre-allocate this.
+    let wdata = &mut [];
+    let row_size = ne10; // * TYPE_SIZE / BLCK_SIZE
+    for i13 in 0..ne13 {
+        for i12 in 0..ne12 {
+            for i11 in 0..ne11 {
+                let wdata_idx = i11 + i12 * ne11 + i13 * ne11 * ne12;
+                let wdata = &mut wdata[wdata_idx..wdata_idx + row_size];
+                let src1 = &src1[i13 * nb13 + i12 * nb12 + i11 * nb11..];
+                T::VecDotType::from_float(src1, wdata)?
+            }
+        }
+    }
+    for iir1 in (ir110..ir111).step_by(BLCK1) {
+        for iir0 in (ir010..ir011).step_by(BLCK0) {
+            for ir1 in iir1..usize::min(iir1 + BLCK1, ir111) {
+                let i13 = ir1 / (ne12 * ne11);
+                let i12 = (ir1 - i13 * ne12 * ne11) / ne11;
+                let i11 = ir1 - i13 * ne12 * ne11 - i12 * ne11;
+
+                let i03 = i13 / r3;
+                let i02 = i12 / r2;
+
+                let i1 = i11;
+                let i2 = i12;
+                let i3 = i13;
+
+                let src0_row = &src0[i02 * nb02 + i03 * nb03..];
+                let src1_col = &wdata[(i11 + i12 * ne11 + i13 * ne12 * ne11) * row_size..];
+                let dst_col = &mut dst[i1 * nb1 + i2 * nb2 + i3 * nb3..];
+                for ir0 in iir0..usize::min(iir0 + BLCK0, ir011) {
+                    let src0_row = &src0_row[ir0 * nb01..];
+                    let v = T::vec_dot(ne00, src0_row, src1_col)?;
+                    dst_col[ir0 - iir0] += v
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.h#L37
