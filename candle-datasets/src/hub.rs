@@ -57,6 +57,7 @@ pub fn from_hub(api: &Api, dataset_id: String) -> Result<Vec<SerializedFileReade
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parquet::file::reader::FileReader;
 
     #[test]
     fn test_dataset() {
@@ -67,28 +68,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(files.len(), 1);
-
-        let mut rows = files.into_iter().flat_map(|r| r.into_iter());
-
-        let row = rows.next().unwrap().unwrap();
-        let mut col_iter = row.get_column_iter();
-
-        // First element is an image
-        col_iter.next();
-        assert_eq!(
-            col_iter.next().unwrap().1,
-            &parquet::record::Field::Str("a drawing of a green pokemon with red eyes".to_string())
-        );
-
-        // Keep for now to showcase how to use.
-        for row in rows {
-            if let Ok(row) = row {
-                for (_idx, (_name, field)) in row.get_column_iter().enumerate() {
-                    if let parquet::record::Field::Str(value) = field {
-                        println!("Value {value:?}");
-                    }
-                }
-            }
-        }
+        assert_eq!(files[0].metadata().file_metadata().num_rows(), 20);
     }
 }

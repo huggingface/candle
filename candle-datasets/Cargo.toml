@@ -9,9 +9,6 @@ categories.workspace = true
 license.workspace = true
 readme = "README.md"
 
-[lib]
-crate-type=["dylib"]
-
 [dependencies]
 byteorder = { workspace = true }
 candle = { path = "../candle-core", version = "0.2.0", package = "candle-core" }
@@ -22,5 +19,5 @@ memmap2 = { workspace = true }
 tokenizers = { workspace = true, features = ["onig"] }
 rand = { workspace = true }
 thiserror = { workspace = true }
-parquet = { version = "45.0.0"}
+parquet = { workspace = true}
 image = { workspace = true }

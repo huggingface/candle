@@ -41,7 +41,6 @@ tracing-subscriber = { workspace = true }
 wav = { workspace = true }
 # Necessary to disambiguate with tokio in wasm examples which are 1.28.1
 tokio = "1.29.1"
-parquet = "45.0.0"
 image.workspace = true
 
 [build-dependencies]
