@@ -96,8 +96,8 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, default_value_t = 100)]
-    sample_len: usize,
+    #[arg(long, default_value_t = 4096)]
+    max_sample_len: usize,
 
     /// Disable the key-value cache.
     #[arg(long)]
@@ -123,6 +123,9 @@ struct Args {
 
     #[arg(long)]
     use_flash_attn: bool,
+
+    #[arg(long)]
+    local_weights: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -131,6 +134,8 @@ fn main() -> Result<()> {
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
+    println!("{:?}", args);
+
     let _guard = if args.tracing {
         println!("tracing...");
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -165,14 +170,30 @@ fn main() -> Result<()> {
             });
             println!("loading the model weights from {model_id}");
             let api = api.model(model_id);
-            let tokenizer_filename = api.get("tokenizer.json")?;
+
+            let tokenizer_filename = match &args.local_weights {
+                Some(path) => {
+                    (path.to_owned() + "tokenizer.json").into()
+                }
+                _=> {
+                    api.get("tokenizer.json")?
+                }
+            };
+
             let mut filenames = vec![];
             for rfilename in [
                 "model-00001-of-00002.safetensors",
                 "model-00002-of-00002.safetensors",
             ] {
-                let filename = api.get(rfilename)?;
-                filenames.push(filename);
+                match &args.local_weights {
+                    Some(path) => {
+                        filenames.push((path.to_owned() + rfilename).into());
+                    }
+                    _=> {
+                        let filename = api.get(rfilename)?;
+                        filenames.push(filename);
+                    }
+                };
             }
 
             println!("building the model");
@@ -189,8 +210,18 @@ fn main() -> Result<()> {
             (Llama::load(vb, &cache, &config)?, tokenizer_filename)
         }
     };
+
+    let prompt = match &args.prompt {
+        Some(pt) => {
+            pt.as_str()
+        }
+        _=> {
+            DEFAULT_PROMPT
+        }
+    };
+
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-    let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
+    let prompt = args.prompt.as_ref().map_or(prompt, |p| p.as_str());
     let mut tokens = tokenizer
         .encode(prompt, true)
         .map_err(E::msg)?
@@ -202,8 +233,8 @@ fn main() -> Result<()> {
     let mut new_tokens = vec![];
     let start_gen = std::time::Instant::now();
     let mut index_pos = 0;
-    for index in 0..args.sample_len {
-        let start_gen = std::time::Instant::now();
+    let mut token_generated = 0;
+    for index in 0..args.max_sample_len {
         let context_size = if cache.use_kv_cache && index > 0 {
             1
         } else {
@@ -216,22 +247,28 @@ fn main() -> Result<()> {
         index_pos += ctxt.len();
 
         let next_token = logits_processor.sample(&logits)?;
+        token_generated += 1;
         tokens.push(next_token);
         new_tokens.push(next_token);
-        println!("> {:?}", start_gen.elapsed());
-        println!(
-            "{} token: {} '{}'",
-            index + 1,
-            next_token,
-            tokenizer.decode(&[next_token], true).map_err(E::msg)?
-        );
+
+        let tk = tokenizer.decode(&[next_token], true).map_err(E::msg)?;
+        if [",", ".", ":", "?", "'", "\""].contains(&tk.as_str()) || index == args.max_sample_len-1 || next_token==2 { //2 for end token
+            print!(
+                "{} ",
+                tokenizer.decode(&new_tokens, true).map_err(E::msg)?
+            );
+            new_tokens.clear();
+        }
+
+        if next_token == 2 {
+            break;
+        }
     }
     let dt = start_gen.elapsed();
     println!(
-        "{} tokens generated ({} token/s)\n----\n{}\n----",
-        args.sample_len,
-        args.sample_len as f64 / dt.as_secs_f64(),
-        tokenizer.decode(&new_tokens, true).map_err(E::msg)?
+        "\n\n{} tokens generated ({} token/s)\n",
+        token_generated,
+        token_generated as f64 / dt.as_secs_f64(),
     );
     Ok(())
 }
