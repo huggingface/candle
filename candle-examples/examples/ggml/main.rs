@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 use std::fs::File;
 
-use candle::ggml::Content;
+use candle::quantized::ggml_file::Content;
 use candle::{DType, Device};
 
 #[derive(Parser, Debug)]

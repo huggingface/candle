@@ -50,13 +50,13 @@ pub mod display;
 mod dtype;
 mod dummy_cuda_backend;
 pub mod error;
-pub mod ggml;
 mod indexer;
 pub mod layout;
 #[cfg(feature = "mkl")]
 mod mkl;
 pub mod npy;
 mod op;
+pub mod quantized;
 pub mod safetensors;
 pub mod shape;
 mod storage;
