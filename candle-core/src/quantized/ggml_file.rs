@@ -116,7 +116,7 @@ impl Vocab {
     }
 }
 
-fn from_raw_data<T: super::GgmlType + 'static>(
+fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
     raw_data: &[u8],
     size_in_bytes: usize,
     dims: Vec<usize>,
