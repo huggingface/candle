@@ -88,6 +88,7 @@ fn main() -> Result<()> {
             .map(|(cu_file, obj_file)| {
                 let mut command = std::process::Command::new("nvcc");
                 command
+                    .arg("-std=c++17")
                     .arg(format!("--gpu-architecture=sm_{compute_cap}"))
                     .arg("-c")
                     .args(["-o", obj_file.to_str().unwrap()])
