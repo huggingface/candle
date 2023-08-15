@@ -18,6 +18,7 @@ pub const QK8_1: usize = 32;
 pub trait GgmlType: Sized + Clone {
     const DTYPE: GgmlDType;
     const BLCK_SIZE: usize;
+    type VecDotType: GgmlType;
 
     // This is only safe for types that include immediate values such as float/int/...
     fn zeros() -> Self {
@@ -26,8 +27,8 @@ pub trait GgmlType: Sized + Clone {
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()>;
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()>;
 
-    type VecDotType: GgmlType;
-    // Dot product used as a building block for quantized mat-mul.
+    /// Dot product used as a building block for quantized mat-mul.
+    /// n is the number of elements to be considered.
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32>;
 }
 
@@ -660,77 +661,36 @@ impl GgmlType for BlockQ8_1 {
     }
 }
 
-const BLCK0: usize = 16;
-const BLCK1: usize = 16;
-
-// This implementation is in-line with the ggml one and keeps the same variable names.
 // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L10605
-pub fn forward_mul_mat<T: GgmlType>(src0: &[T], src1: &[f32], dst: &mut [f32]) -> Result<()> {
-    // TODO: Use the proper sizes here.
-    let (ne00, ne01, ne02, ne03) = (1, 1, 1, 1);
-    let (ne10, ne11, ne12, ne13) = (1, 1, 1, 1);
-    // The strides are in bytes in ggml, however we use the number of elements in candle.
-    let (_, nb1, nb2, nb3) = (1, 1, 1, 1);
-    let (_, nb01, nb02, nb03) = (1, 1, 1, 1);
-    let (_, nb11, nb12, nb13) = (1, 1, 1, 1);
-
-    let nr0 = ne01; // src0 rows
-    let nr1 = ne11 * ne12 * ne13;
-
-    // TODO: Either add multi-threading or remove these bits.
-    let ir010 = 0;
-    let ir011 = nr0;
-    let ir110 = 0;
-    let ir111 = nr1;
-    let r2 = ne12 / ne02;
-    let r3 = ne13 / ne03;
-
-    if ne10 % T::BLCK_SIZE != 0 {
-        crate::bail!(
-            "forward_mul_mat: ne10 {ne10} is not divisible by block size {}",
-            T::BLCK_SIZE
-        )
+pub fn matmul<T: GgmlType>(
+    mkn: (usize, usize, usize),
+    lhs: &[f32],
+    rhs_t: &[T],
+    dst: &mut [f32],
+) -> Result<()> {
+    let (m, k, n) = mkn;
+    if m * k == lhs.len() {
+        crate::bail!("unexpected lhs length {} {mkn:?}", lhs.len());
     }
-    let row_size = ne10 / T::BLCK_SIZE;
 
+    let k_in_lhs_blocks = (k + T::BLCK_SIZE - 1) / T::BLCK_SIZE;
+    let k_in_rhs_blocks = (k + T::VecDotType::BLCK_SIZE - 1) / T::VecDotType::BLCK_SIZE;
     // TODO: Do not make this copy if the DotType is f32.
     // TODO: Pre-allocate this.
-    let mut wdata = vec![T::VecDotType::zeros(); src1.len()];
-    for i13 in 0..ne13 {
-        for i12 in 0..ne12 {
-            for i11 in 0..ne11 {
-                let wdata_idx = i11 + i12 * ne11 + i13 * ne11 * ne12;
-                let wdata = &mut wdata[wdata_idx..wdata_idx + row_size];
-                let src1 = &src1[i13 * nb13 + i12 * nb12 + i11 * nb11..];
-                T::VecDotType::from_float(src1, wdata)?
-            }
-        }
+    let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_lhs_blocks];
+    for row_idx in 0..m {
+        let lhs_b = &mut lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
+        let lhs = &lhs[row_idx * k..(row_idx + 1) * k];
+        T::VecDotType::from_float(lhs, lhs_b)?
     }
-    let wdata = wdata.as_slice();
+    let lhs_b = lhs_b.as_slice();
 
-    for iir1 in (ir110..ir111).step_by(BLCK1) {
-        for iir0 in (ir010..ir011).step_by(BLCK0) {
-            for ir1 in iir1..usize::min(iir1 + BLCK1, ir111) {
-                let i13 = ir1 / (ne12 * ne11);
-                let i12 = (ir1 - i13 * ne12 * ne11) / ne11;
-                let i11 = ir1 - i13 * ne12 * ne11 - i12 * ne11;
-
-                let i03 = i13 / r3;
-                let i02 = i12 / r2;
-
-                let i1 = i11;
-                let i2 = i12;
-                let i3 = i13;
-
-                let src0_row = &src0[i02 * nb02 + i03 * nb03..];
-                let src1_col = &wdata[(i11 + i12 * ne11 + i13 * ne12 * ne11) * row_size..];
-                let dst_col = &mut dst[i1 * nb1 + i2 * nb2 + i3 * nb3..];
-                for ir0 in iir0..usize::min(iir0 + BLCK0, ir011) {
-                    let src0_row = &src0_row[ir0 * nb01..];
-                    let v = T::vec_dot(ne00, src0_row, src1_col)?;
-                    dst_col[ir0 - iir0] += v
-                }
-            }
+    for row_idx in 0..m {
+        let lhs_row = &lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
+        let dst_row = &mut dst[row_idx * n..(row_idx + 1) * n];
+        for (col_idx, dst) in dst_row.iter_mut().enumerate() {
+            let rhs_col = &rhs_t[col_idx * k_in_rhs_blocks..(col_idx + 1) * k_in_rhs_blocks];
+            *dst = T::vec_dot(k, rhs_col, lhs_row)?;
         }
     }
     Ok(())
