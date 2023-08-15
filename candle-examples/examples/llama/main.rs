@@ -96,8 +96,8 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, default_value_t = 4096)]
-    max_sample_len: usize,
+    #[arg(long, default_value_t = 100)]
+    sample_len: usize,
 
     /// Disable the key-value cache.
     #[arg(long)]
@@ -124,6 +124,8 @@ struct Args {
     #[arg(long)]
     use_flash_attn: bool,
 
+    /// The folder name that contains safetensor weights and json files 
+    /// (same structure as huggingface online)
     #[arg(long)]
     local_weights: Option<String>,
 }
@@ -134,8 +136,6 @@ fn main() -> Result<()> {
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
-    println!("{:?}", args);
-
     let _guard = if args.tracing {
         println!("tracing...");
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -210,18 +210,8 @@ fn main() -> Result<()> {
             (Llama::load(vb, &cache, &config)?, tokenizer_filename)
         }
     };
-
-    let prompt = match &args.prompt {
-        Some(pt) => {
-            pt.as_str()
-        }
-        _=> {
-            DEFAULT_PROMPT
-        }
-    };
-
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-    let prompt = args.prompt.as_ref().map_or(prompt, |p| p.as_str());
+    let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
     let mut tokens = tokenizer
         .encode(prompt, true)
         .map_err(E::msg)?
@@ -234,7 +224,7 @@ fn main() -> Result<()> {
     let start_gen = std::time::Instant::now();
     let mut index_pos = 0;
     let mut token_generated = 0;
-    for index in 0..args.max_sample_len {
+    for index in 0..args.sample_len {
         let context_size = if cache.use_kv_cache && index > 0 {
             1
         } else {
@@ -252,7 +242,7 @@ fn main() -> Result<()> {
         new_tokens.push(next_token);
 
         let tk = tokenizer.decode(&[next_token], true).map_err(E::msg)?;
-        if [",", ".", ":", "?", "'", "\""].contains(&tk.as_str()) || index == args.max_sample_len-1 || next_token==2 { //2 for end token
+        if [",", ".", ":", "?", "'", "\""].contains(&tk.as_str()) || index == args.sample_len-1 || next_token==2 { //2 for end token
             print!(
                 "{} ",
                 tokenizer.decode(&new_tokens, true).map_err(E::msg)?
