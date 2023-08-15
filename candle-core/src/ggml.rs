@@ -122,10 +122,18 @@ pub struct BlockQ6K {
 }
 const _: () = assert!(3 * QK_K / 4 + QK_K / 16 + 2 == std::mem::size_of::<BlockQ6K>());
 
+#[repr(C)]
+pub struct BlockQ8K {
+    d: f32,
+    qs: [i8; QK_K],
+    bsums: [i16; QK_K / 16],
+}
+const _: () = assert!(4 + QK_K + QK_K / 16 * 2 == std::mem::size_of::<BlockQ8K>());
+
 impl GgmlType for BlockQ4_1 {
     const DTYPE: GgmlDType = GgmlDType::Q4_1;
     const BLCK_SIZE: usize = QK4_1;
-    type VecDotType = Self;
+    type VecDotType = BlockQ8_1;
 
     fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
         todo!()
@@ -162,7 +170,7 @@ impl GgmlType for BlockQ4_1 {
 impl GgmlType for BlockQ5_0 {
     const DTYPE: GgmlDType = GgmlDType::Q5_0;
     const BLCK_SIZE: usize = QK5_0;
-    type VecDotType = Self;
+    type VecDotType = BlockQ8_0;
 
     fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
         todo!()
@@ -202,7 +210,7 @@ impl GgmlType for BlockQ5_0 {
 impl GgmlType for BlockQ5_1 {
     const DTYPE: GgmlDType = GgmlDType::Q5_1;
     const BLCK_SIZE: usize = QK5_1;
-    type VecDotType = Self;
+    type VecDotType = BlockQ8_1;
 
     fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
         todo!()
@@ -243,7 +251,7 @@ impl GgmlType for BlockQ5_1 {
 impl GgmlType for BlockQ2K {
     const DTYPE: GgmlDType = GgmlDType::Q2K;
     const BLCK_SIZE: usize = QK_K;
-    type VecDotType = Self;
+    type VecDotType = BlockQ8K;
 
     fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
         todo!()
@@ -313,7 +321,7 @@ fn get_scale_min_k4(j: usize, q: &[u8]) -> (u8, u8) {
 impl GgmlType for BlockQ4K {
     const DTYPE: GgmlDType = GgmlDType::Q4K;
     const BLCK_SIZE: usize = QK_K;
-    type VecDotType = Self;
+    type VecDotType = BlockQ8K;
 
     fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
         todo!()
@@ -362,7 +370,7 @@ impl GgmlType for BlockQ4K {
 impl GgmlType for BlockQ3K {
     const DTYPE: GgmlDType = GgmlDType::Q3K;
     const BLCK_SIZE: usize = QK_K;
-    type VecDotType = Self;
+    type VecDotType = BlockQ8K;
 
     fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
         todo!()
@@ -373,7 +381,7 @@ impl GgmlType for BlockQ3K {
     }
 
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L533
-    fn to_float(_xs: &[BlockQ3K], _ys: &mut [f32]) -> Result<()> {
+    fn to_float(_xs: &[Self], _ys: &mut [f32]) -> Result<()> {
         todo!()
     }
 }
@@ -382,7 +390,7 @@ impl GgmlType for BlockQ3K {
 impl GgmlType for BlockQ5K {
     const DTYPE: GgmlDType = GgmlDType::Q5K;
     const BLCK_SIZE: usize = QK_K;
-    type VecDotType = Self;
+    type VecDotType = BlockQ8K;
 
     fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
         todo!()
@@ -437,7 +445,7 @@ impl GgmlType for BlockQ5K {
 impl GgmlType for BlockQ6K {
     const DTYPE: GgmlDType = GgmlDType::Q6K;
     const BLCK_SIZE: usize = QK_K;
-    type VecDotType = Self;
+    type VecDotType = BlockQ8K;
 
     fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
         todo!()
@@ -481,9 +489,29 @@ impl GgmlType for BlockQ6K {
     }
 }
 
+impl GgmlType for BlockQ8K {
+    const DTYPE: GgmlDType = GgmlDType::Q8K;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8K;
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
+        todo!()
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
+        todo!()
+    }
+
+    // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L533
+    fn to_float(_xs: &[Self], _ys: &mut [f32]) -> Result<()> {
+        todo!()
+    }
+}
+
 impl GgmlType for BlockQ4_0 {
     const DTYPE: GgmlDType = GgmlDType::Q4_0;
     const BLCK_SIZE: usize = QK4_0;
+    type VecDotType = BlockQ8_0;
 
     // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1525
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
@@ -510,8 +538,6 @@ impl GgmlType for BlockQ4_0 {
     fn from_float(_: &[f32], _: &mut [Self]) -> Result<()> {
         todo!()
     }
-
-    type VecDotType = BlockQ8_0;
 
     // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L2361C10-L2361C122
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
@@ -542,6 +568,7 @@ impl GgmlType for BlockQ4_0 {
 impl GgmlType for BlockQ8_0 {
     const DTYPE: GgmlDType = GgmlDType::Q8_0;
     const BLCK_SIZE: usize = QK8_0;
+    type VecDotType = BlockQ8_0;
 
     // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1619
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
@@ -593,9 +620,26 @@ impl GgmlType for BlockQ8_0 {
         Ok(())
     }
 
-    type VecDotType = BlockQ8_0;
-
     fn vec_dot(_: usize, _: &[Self], _: &[Self::VecDotType]) -> Result<f32> {
+        todo!()
+    }
+}
+
+impl GgmlType for BlockQ8_1 {
+    const DTYPE: GgmlDType = GgmlDType::Q3K;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8_1;
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
+        todo!()
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
+        todo!()
+    }
+
+    // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L533
+    fn to_float(_xs: &[Self], _ys: &mut [f32]) -> Result<()> {
         todo!()
     }
 }
@@ -798,6 +842,7 @@ pub enum GgmlDType {
     Q4K,
     Q5K,
     Q6K,
+    Q8K,
 }
 
 impl GgmlDType {
@@ -816,6 +861,7 @@ impl GgmlDType {
             12 => Self::Q4K,
             13 => Self::Q5K,
             14 => Self::Q6K,
+            15 => Self::Q8K,
             _ => crate::bail!("unknown dtype for tensor {u}"),
         };
         Ok(dtype)
@@ -837,6 +883,7 @@ impl GgmlDType {
             Self::Q4K => std::mem::size_of::<BlockQ4K>(),
             Self::Q5K => std::mem::size_of::<BlockQ5K>(),
             Self::Q6K => std::mem::size_of::<BlockQ6K>(),
+            Self::Q8K => std::mem::size_of::<BlockQ8K>(),
         }
     }
 
@@ -850,7 +897,7 @@ impl GgmlDType {
             Self::Q5_1 => QK5_1,
             Self::Q8_0 => QK8_0,
             Self::Q8_1 => QK8_1,
-            Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K => QK_K,
+            Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K | Self::Q8K => QK_K,
         }
     }
 }
