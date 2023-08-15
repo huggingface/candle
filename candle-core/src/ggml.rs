@@ -16,14 +16,14 @@ pub const QK8_0: usize = 32;
 pub const QK8_1: usize = 32;
 
 #[repr(C)]
-struct BlockQ4_0 {
+pub struct BlockQ4_0 {
     d: f16,
     qs: [u8; QK4_0 / 2],
 }
 const _: () = assert!(std::mem::size_of::<BlockQ4_0>() == 18);
 
 #[repr(C)]
-struct BlockQ4_1 {
+pub struct BlockQ4_1 {
     d: f16,
     m: f16,
     qs: [u8; QK4_1 / 2],
@@ -31,7 +31,7 @@ struct BlockQ4_1 {
 const _: () = assert!(std::mem::size_of::<BlockQ4_1>() == 20);
 
 #[repr(C)]
-struct BlockQ5_0 {
+pub struct BlockQ5_0 {
     d: f16,
     qh: [u8; 4],
     qs: [u8; QK5_0 / 2],
@@ -39,7 +39,7 @@ struct BlockQ5_0 {
 const _: () = assert!(std::mem::size_of::<BlockQ5_0>() == 22);
 
 #[repr(C)]
-struct BlockQ5_1 {
+pub struct BlockQ5_1 {
     d: f16,
     m: f16,
     qh: [u8; 4],
@@ -48,14 +48,14 @@ struct BlockQ5_1 {
 const _: () = assert!(std::mem::size_of::<BlockQ5_1>() == 24);
 
 #[repr(C)]
-struct BlockQ8_0 {
+pub struct BlockQ8_0 {
     d: f16,
     qs: [u8; QK8_0],
 }
 const _: () = assert!(std::mem::size_of::<BlockQ8_0>() == 34);
 
 #[repr(C)]
-struct BlockQ8_1 {
+pub struct BlockQ8_1 {
     d: f16,
     s: f16,
     qs: [u8; QK8_1],
@@ -63,7 +63,7 @@ struct BlockQ8_1 {
 const _: () = assert!(std::mem::size_of::<BlockQ8_1>() == 36);
 
 #[repr(C)]
-struct BlockQ2K {
+pub struct BlockQ2K {
     scales: [u8; QK_K / 16],
     qs: [u8; QK_K / 4],
     d: f16,
@@ -72,7 +72,7 @@ struct BlockQ2K {
 const _: () = assert!(QK_K / 16 + QK_K / 4 + 2 * 2 == std::mem::size_of::<BlockQ2K>());
 
 #[repr(C)]
-struct BlockQ3K {
+pub struct BlockQ3K {
     hmask: [u8; QK_K / 8],
     qs: [u8; QK_K / 4],
     scales: [u8; 12],
@@ -82,7 +82,7 @@ const _: () = assert!(QK_K / 8 + QK_K / 4 + 12 + 2 == std::mem::size_of::<BlockQ
 
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/k_quants.h#L82
 #[repr(C)]
-struct BlockQ4K {
+pub struct BlockQ4K {
     d: f16,
     dmin: f16,
     scales: [u8; K_SCALE_SIZE],
@@ -91,7 +91,7 @@ struct BlockQ4K {
 const _: () = assert!(QK_K / 2 + K_SCALE_SIZE + 2 * 2 == std::mem::size_of::<BlockQ4K>());
 
 #[repr(C)]
-struct BlockQ5K {
+pub struct BlockQ5K {
     d: f16,
     dmin: f16,
     scales: [u8; K_SCALE_SIZE],
@@ -102,7 +102,7 @@ const _: () =
     assert!(QK_K / 8 + QK_K / 2 + 2 * 2 + K_SCALE_SIZE == std::mem::size_of::<BlockQ5K>());
 
 #[repr(C)]
-struct BlockQ6K {
+pub struct BlockQ6K {
     ql: [u8; QK_K / 2],
     qh: [u8; QK_K / 4],
     scales: [i8; QK_K / 16],
@@ -399,6 +399,41 @@ fn dequantize_row_q6k(xs: &[BlockQ6K], ys: &mut [f32]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub trait VecDot: Sized {
+    type VecDotType;
+    // Dot product used as a building block for quantized mat-mul.
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32>;
+}
+
+impl VecDot for BlockQ4_0 {
+    type VecDotType = BlockQ8_0;
+
+    // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L2361C10-L2361C122
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        let qk = QK8_0;
+        let nb = n / qk;
+        if n % QK8_0 != 0 {
+            crate::bail!("vec_dot_q4_0_q8_0: {n} is not divisible by {qk}")
+        }
+        if nb % 2 != 0 {
+            crate::bail!("vec_dot_q4_0_q8_0: {nb} is not even")
+        }
+
+        // Generic implementation.
+        let mut sumf = 0f32;
+        for i in 0..nb {
+            let mut sum_i = 0;
+            for j in 0..qk / 2 {
+                let v0 = (xs[i].qs[j] & 0x0F) - 8;
+                let v1 = (xs[i].qs[j] >> 4) - 8;
+                sum_i += v0 * ys[i].qs[j] + v1 * ys[i].qs[j + qk / 2]
+            }
+            sumf += sum_i as f32 * f16::to_f32(xs[i].d) * f16::to_f32(ys[i].d)
+        }
+        Ok(sumf)
+    }
 }
 
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.h#L37
