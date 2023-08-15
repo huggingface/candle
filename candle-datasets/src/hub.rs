@@ -81,14 +81,14 @@ mod tests {
         );
 
         // Keep for now to showcase how to use.
-        //for row in rows {
-        //    if let Ok(row) = row {
-        //        for (_idx, (_name, field)) in row.get_column_iter().enumerate() {
-        //            if let parquet::record::Field::Str(value) = field {
-        //                println!("Value {value:?}");
-        //            }
-        //        }
-        //    }
-        //}
+        for row in rows {
+            if let Ok(row) = row {
+                for (_idx, (_name, field)) in row.get_column_iter().enumerate() {
+                    if let parquet::record::Field::Str(value) = field {
+                        println!("Value {value:?}");
+                    }
+                }
+            }
+        }
     }
 }

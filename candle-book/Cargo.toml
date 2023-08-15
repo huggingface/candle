@@ -1,0 +1,49 @@
+[package]
+name = "candle-book"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[dependencies]
+accelerate-src = { workspace = true, optional = true }
+candle = { path = "../candle-core", version = "0.1.0", package = "candle-core" }
+candle-datasets = { path = "../candle-datasets", version = "0.1.0" }
+candle-nn = { path = "../candle-nn", version = "0.1.0" }
+candle-transformers = { path = "../candle-transformers", version = "0.1.0" }
+candle-flash-attn = { path = "../candle-flash-attn", version = "0.1.0", optional = true }
+safetensors = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+num-traits = { workspace = true }
+intel-mkl-src = { workspace = true, optional = true }
+cudarc = { workspace = true, optional = true }
+half = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+byteorder = { workspace = true }
+hf-hub = { workspace = true, features=["tokio"]}
+clap = { workspace = true }
+memmap2 = { workspace = true }
+rand = { workspace = true }
+tokenizers = { workspace = true, features = ["onig"] }
+tracing = { workspace = true }
+tracing-chrome = { workspace = true }
+tracing-subscriber = { workspace = true }
+wav = { workspace = true }
+# Necessary to disambiguate with tokio in wasm examples which are 1.28.1
+tokio = "1.29.1"
+parquet = { workspace = true }
+image = { workspace = true }
+
+[build-dependencies]
+anyhow = { workspace = true }
+
+[features]
+default = []

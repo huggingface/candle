@@ -9,6 +9,9 @@ categories.workspace = true
 license.workspace = true
 readme = "README.md"
 
+[lib]
+crate-type=["dylib"]
+
 [dependencies]
 byteorder = { workspace = true }
 candle = { path = "../candle-core", version = "0.2.0", package = "candle-core" }

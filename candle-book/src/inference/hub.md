@@ -39,7 +39,7 @@ cargo add hf-hub --features tokio
 ```rust,ignore
 # This is tested directly in examples crate because it needs external dependencies unfortunately:
 # See [this](https://github.com/rust-lang/mdBook/issues/706)
-{{#include ../../../candle-examples/src/lib.rs:book_hub_1}}
+{{#include ../lib.rs:book_hub_1}}
 ```
 
 
@@ -81,7 +81,7 @@ For more efficient loading, instead of reading the file, you could use [`memmap2
 and will definitely be slower on network mounted disk, because it will issue more read calls.
 
 ```rust,ignore
-{{#include ../../../candle-examples/src/lib.rs:book_hub_2}}
+{{#include ../lib.rs:book_hub_2}}
 ```
 
 **Note**: This operation is **unsafe**. [See the safety notice](https://docs.rs/memmap2/latest/memmap2/struct.Mmap.html#safety).
@@ -100,5 +100,5 @@ cargo add safetensors
 
 
 ```rust,ignore
-{{#include ../../../candle-examples/src/lib.rs:book_hub_3}}
+{{#include ../lib.rs:book_hub_3}}
 ```
