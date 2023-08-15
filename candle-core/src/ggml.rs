@@ -555,7 +555,7 @@ impl GgmlType for BlockQ4_0 {
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
         // quantize_row_q4_0
         let qk = Self::BLCK_SIZE;
-        let k = ys.len();
+        let k = xs.len();
         if k % qk != 0 {
             crate::bail!("{k} is not divisible by {}", qk);
         };
@@ -579,8 +579,8 @@ impl GgmlType for BlockQ4_0 {
             ys.d = f16::from_f32(d);
 
             for (j, q) in ys.qs.iter_mut().enumerate() {
-                let x0 = xs[i * qk + j] * id;
-                let x1 = xs[i * qk + qk / 2 + j] * id;
+                let x0 = xs[j] * id;
+                let x1 = xs[qk / 2 + j] * id;
                 let xi0 = u8::min(15, (x0 + 8.5) as u8);
                 let xi1 = u8::min(15, (x1 + 8.5) as u8);
                 *q = xi0 | (xi1 << 4)
@@ -641,7 +641,7 @@ impl GgmlType for BlockQ8_0 {
 
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
         // quantize_row_q8_0
-        let k = ys.len();
+        let k = xs.len();
         if k % Self::BLCK_SIZE != 0 {
             crate::bail!("{k} is not divisible by {}", Self::BLCK_SIZE);
         };
@@ -702,7 +702,7 @@ pub fn matmul<T: GgmlType>(
     dst: &mut [f32],
 ) -> Result<()> {
     let (m, k, n) = mkn;
-    if m * k == lhs.len() {
+    if m * k != lhs.len() {
         crate::bail!("unexpected lhs length {} {mkn:?}", lhs.len());
     }
 
