@@ -62,7 +62,7 @@ pub trait WithDType:
     + 'static
     + Send
     + Sync
-    + crate::cpu_kernels::VecDot
+    + crate::cpu::kernels::VecDot
 {
     const DTYPE: DType;
 
