@@ -42,10 +42,10 @@ pub mod avx;
 #[cfg(target_feature = "avx")]
 pub use avx::{CurrentCpu, CurrentCpuF16};
 
-#[cfg(any(target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 #[cfg(target_feature = "simd128")]
 pub mod simd128;
-#[cfg(any(target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 #[cfg(target_feature = "simd128")]
 pub use simd128::CurrentCpu;
 
@@ -139,7 +139,7 @@ pub(crate) unsafe fn vec_sum(row: *const f32, b: *mut f32, k: usize) {
     }
 }
 
-#[cfg(any(target_feature = "avx",))]
+#[cfg(target_feature = "avx")]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f32, k: usize) {
     let mut sumf = 0.0f32;
@@ -167,7 +167,7 @@ pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f
     *c = sumf;
 }
 
-#[cfg(not(any(target_feature = "avx",)))]
+#[cfg(not(target_feature = "avx"))]
 #[inline(always)]
 pub(crate) unsafe fn vec_dot_f16(a_row: *const f16, b_row: *const f16, c: *mut f32, k: usize) {
     // leftovers
