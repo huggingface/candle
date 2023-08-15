@@ -461,8 +461,35 @@ impl GgmlType for BlockQ8_0 {
         dequantize_row_q8_0(xs, ys)
     }
 
-    fn from_float(_: &[f32], _: &mut [Self]) -> Result<()> {
-        todo!()
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        // quantize_row_q8_0
+        let k = ys.len();
+        if k % Self::BLCK_SIZE != 0 {
+            crate::bail!("{k} is not divisible by {}", Self::BLCK_SIZE);
+        };
+        let nb = k / Self::BLCK_SIZE;
+        if ys.len() != nb {
+            crate::bail!(
+                "size mismatch {} {} {}",
+                xs.len(),
+                ys.len(),
+                Self::BLCK_SIZE
+            )
+        }
+        for (i, ys) in ys.iter_mut().enumerate() {
+            let mut amax = 0f32;
+            let xs = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
+            for &x in xs.iter() {
+                amax = amax.max(x)
+            }
+            let d = amax / ((1 << 7) - 1) as f32;
+            let id = if d != 0f32 { 1. / d } else { 0. };
+            ys.d = f16::from_f32(d);
+            for (y, &x) in ys.qs.iter_mut().zip(xs.iter()) {
+                *y = f32::round(x * id) as u8
+            }
+        }
+        Ok(())
     }
 
     type VecDotType = BlockQ8_0;
