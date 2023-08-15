@@ -650,6 +650,7 @@ const BLCK1: usize = 16;
 // This implementation is in-line with the ggml one and keeps the same variable names.
 // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L10605
 pub fn forward_mul_mat<T: GgmlType>(src0: &[T], src1: &[f32], dst: &mut [f32]) -> Result<()> {
+    // TODO: Use the proper sizes here.
     let (ne00, ne01, ne02, ne03) = (1, 1, 1, 1);
     let (ne10, ne11, ne12, ne13) = (1, 1, 1, 1);
     // The strides are in bytes in ggml, however we use the number of elements in candle.
