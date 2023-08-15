@@ -135,7 +135,7 @@ pub(crate) unsafe fn vec_sum(row: *const f32, b: *mut f32, k: usize) {
 pub(crate) unsafe fn vec_sum(row: *const f32, b: *mut f32, k: usize) {
     *b = 0f32;
     for i in 0..k {
-        *b += *a_row.add(i)
+        *b += *row.add(i)
     }
 }
 
