@@ -15,10 +15,14 @@ pub const QK5_1: usize = 32;
 pub const QK8_0: usize = 32;
 pub const QK8_1: usize = 32;
 
-pub trait GgmlType: Sized {
+pub trait GgmlType: Sized + Clone {
     const DTYPE: GgmlDType;
     const BLCK_SIZE: usize;
 
+    // This is only safe for types that include immediate values such as float/int/...
+    fn zeros() -> Self {
+        unsafe { std::mem::MaybeUninit::zeroed().assume_init() }
+    }
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()>;
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()>;
 
@@ -27,6 +31,7 @@ pub trait GgmlType: Sized {
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32>;
 }
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ4_0 {
     d: f16,
@@ -34,6 +39,7 @@ pub struct BlockQ4_0 {
 }
 const _: () = assert!(std::mem::size_of::<BlockQ4_0>() == 18);
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ4_1 {
     d: f16,
@@ -42,6 +48,7 @@ pub struct BlockQ4_1 {
 }
 const _: () = assert!(std::mem::size_of::<BlockQ4_1>() == 20);
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ5_0 {
     d: f16,
@@ -50,6 +57,7 @@ pub struct BlockQ5_0 {
 }
 const _: () = assert!(std::mem::size_of::<BlockQ5_0>() == 22);
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ5_1 {
     d: f16,
@@ -59,6 +67,7 @@ pub struct BlockQ5_1 {
 }
 const _: () = assert!(std::mem::size_of::<BlockQ5_1>() == 24);
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ8_0 {
     d: f16,
@@ -66,6 +75,7 @@ pub struct BlockQ8_0 {
 }
 const _: () = assert!(std::mem::size_of::<BlockQ8_0>() == 34);
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ8_1 {
     d: f16,
@@ -74,6 +84,7 @@ pub struct BlockQ8_1 {
 }
 const _: () = assert!(std::mem::size_of::<BlockQ8_1>() == 36);
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ2K {
     scales: [u8; QK_K / 16],
@@ -83,6 +94,7 @@ pub struct BlockQ2K {
 }
 const _: () = assert!(QK_K / 16 + QK_K / 4 + 2 * 2 == std::mem::size_of::<BlockQ2K>());
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ3K {
     hmask: [u8; QK_K / 8],
@@ -92,6 +104,7 @@ pub struct BlockQ3K {
 }
 const _: () = assert!(QK_K / 8 + QK_K / 4 + 12 + 2 == std::mem::size_of::<BlockQ3K>());
 
+#[derive(Debug, Clone, PartialEq)]
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/k_quants.h#L82
 #[repr(C)]
 pub struct BlockQ4K {
@@ -102,6 +115,7 @@ pub struct BlockQ4K {
 }
 const _: () = assert!(QK_K / 2 + K_SCALE_SIZE + 2 * 2 == std::mem::size_of::<BlockQ4K>());
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ5K {
     d: f16,
@@ -113,6 +127,7 @@ pub struct BlockQ5K {
 const _: () =
     assert!(QK_K / 8 + QK_K / 2 + 2 * 2 + K_SCALE_SIZE == std::mem::size_of::<BlockQ5K>());
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ6K {
     ql: [u8; QK_K / 2],
@@ -122,6 +137,7 @@ pub struct BlockQ6K {
 }
 const _: () = assert!(3 * QK_K / 4 + QK_K / 16 + 2 == std::mem::size_of::<BlockQ6K>());
 
+#[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
 pub struct BlockQ8K {
     d: f32,
@@ -669,8 +685,6 @@ pub fn forward_mul_mat<T: GgmlType>(src0: &[T], src1: &[f32], dst: &mut [f32]) -
     let r2 = ne12 / ne02;
     let r3 = ne13 / ne03;
 
-    // TODO: Pre-allocate this.
-    let wdata = &mut [];
     if ne10 % T::BLCK_SIZE != 0 {
         crate::bail!(
             "forward_mul_mat: ne10 {ne10} is not divisible by block size {}",
@@ -678,6 +692,10 @@ pub fn forward_mul_mat<T: GgmlType>(src0: &[T], src1: &[f32], dst: &mut [f32]) -
         )
     }
     let row_size = ne10 / T::BLCK_SIZE;
+
+    // TODO: Do not make this copy if the DotType is f32.
+    // TODO: Pre-allocate this.
+    let mut wdata = vec![T::VecDotType::zeros(); src1.len()];
     for i13 in 0..ne13 {
         for i12 in 0..ne12 {
             for i11 in 0..ne11 {
@@ -688,6 +706,8 @@ pub fn forward_mul_mat<T: GgmlType>(src0: &[T], src1: &[f32], dst: &mut [f32]) -
             }
         }
     }
+    let wdata = wdata.as_slice();
+
     for iir1 in (ir110..ir111).step_by(BLCK1) {
         for iir0 in (ir010..ir011).step_by(BLCK0) {
             for ir1 in iir1..usize::min(iir1 + BLCK1, ir111) {
