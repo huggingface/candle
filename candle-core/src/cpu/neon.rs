@@ -50,6 +50,10 @@ impl Cpu<ARR> for CurrentCpu {
         vld1q_f32(mem_addr)
     }
 
+    unsafe fn vec_add(a: Self::Unit, b: Self::Unit) -> Self::Unit {
+        vaddq_f32(a, b)
+    }
+
     unsafe fn vec_fma(a: Self::Unit, b: Self::Unit, c: Self::Unit) -> Self::Unit {
         vfmaq_f32(a, b, c)
     }

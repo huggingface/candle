@@ -34,6 +34,10 @@ impl Cpu<ARR> for CurrentCpu {
         v128_load(mem_addr as *mut v128)
     }
 
+    unsafe fn vec_add(a: Self::Unit, b: Self::Unit) -> Self::Unit {
+        f32x4_add(a, b)
+    }
+
     unsafe fn vec_fma(a: Self::Unit, b: Self::Unit, c: Self::Unit) -> Self::Unit {
         f32x4_add(f32x4_mul(b, c), a)
     }

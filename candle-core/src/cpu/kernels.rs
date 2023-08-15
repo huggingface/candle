@@ -34,11 +34,10 @@ impl VecDot for f32 {
         super::vec_dot_f32(lhs, rhs, res, len)
     }
 
-    // TODO: enable the following once the updated ggblas is available.
-    // #[inline(always)]
-    // unsafe fn vec_reduce_sum(xs: *const Self, res: *mut Self, len: usize) {
-    //    ggblas::ggml::vec_reduce_sum(xs, res, len)
-    // }
+    #[inline(always)]
+    unsafe fn vec_reduce_sum(xs: *const Self, res: *mut Self, len: usize) {
+        super::vec_sum(xs, res, len)
+    }
 }
 
 impl VecDot for half::f16 {

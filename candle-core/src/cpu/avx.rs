@@ -39,6 +39,10 @@ impl Cpu<ARR> for CurrentCpu {
         _mm256_loadu_ps(mem_addr)
     }
 
+    unsafe fn vec_add(a: Self::Unit, b: Self::Unit) -> Self::Unit {
+        _mm256_add_ps(a, b)
+    }
+
     unsafe fn vec_fma(a: Self::Unit, b: Self::Unit, c: Self::Unit) -> Self::Unit {
         _mm256_add_ps(_mm256_mul_ps(b, c), a)
     }
@@ -100,6 +104,10 @@ impl CpuF16<ARR> for CurrentCpuF16 {
             tmp[i] = (*mem_addr.add(i)).to_f32();
         }
         _mm_loadu_ps(tmp.as_ptr())
+    }
+
+    unsafe fn vec_add(a: Self::Unit, b: Self::Unit) -> Self::Unit {
+        _mm256_add_ps(a, b)
     }
 
     unsafe fn vec_fma(a: Self::Unit, b: Self::Unit, c: Self::Unit) -> Self::Unit {
