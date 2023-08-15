@@ -124,7 +124,7 @@ struct Args {
     #[arg(long)]
     use_flash_attn: bool,
 
-    /// The folder name that contains safetensor weights and json files 
+    /// The folder name that contains safetensor weights and json files
     /// (same structure as huggingface online)
     #[arg(long)]
     local_weights: Option<String>,
@@ -172,12 +172,8 @@ fn main() -> Result<()> {
             let api = api.model(model_id);
 
             let tokenizer_filename = match &args.local_weights {
-                Some(path) => {
-                    (path.to_owned() + "tokenizer.json").into()
-                }
-                _=> {
-                    api.get("tokenizer.json")?
-                }
+                Some(path) => (path.to_owned() + "tokenizer.json").into(),
+                _ => api.get("tokenizer.json")?,
             };
 
             let mut filenames = vec![];
@@ -189,7 +185,7 @@ fn main() -> Result<()> {
                     Some(path) => {
                         filenames.push((path.to_owned() + rfilename).into());
                     }
-                    _=> {
+                    _ => {
                         let filename = api.get(rfilename)?;
                         filenames.push(filename);
                     }
@@ -242,11 +238,12 @@ fn main() -> Result<()> {
         new_tokens.push(next_token);
 
         let tk = tokenizer.decode(&[next_token], true).map_err(E::msg)?;
-        if [",", ".", ":", "?", "'", "\""].contains(&tk.as_str()) || index == args.sample_len-1 || next_token==2 { //2 for end token
-            print!(
-                "{} ",
-                tokenizer.decode(&new_tokens, true).map_err(E::msg)?
-            );
+        if [",", ".", ":", "?", "'", "\""].contains(&tk.as_str())
+            || index == args.sample_len - 1
+            || next_token == 2
+        {
+            //2 for end token
+            print!("{} ", tokenizer.decode(&new_tokens, true).map_err(E::msg)?);
             new_tokens.clear();
         }
 
