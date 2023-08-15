@@ -15,7 +15,6 @@ byteorder = { workspace = true }
 candle-kernels = { path = "../candle-kernels", version = "0.1.0", optional = true }
 cudarc = { workspace = true, optional = true }
 gemm = { workspace = true }
-ggblas = { workspace = true }
 half = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }

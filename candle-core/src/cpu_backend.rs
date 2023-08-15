@@ -1051,7 +1051,7 @@ impl<'a> Map2 for Conv1D<'a> {
         let num_threads = crate::utils::get_num_threads();
 
         for offset in 0..p.k_size {
-            crate::cpu_kernels::par_range(0, p.c_out, num_threads, |dst_c_idx| {
+            crate::cpu::kernels::par_range(0, p.c_out, num_threads, |dst_c_idx| {
                 let dst_idx = dst_c_idx * l_out;
                 let k_cont = (0..p.c_in)
                     .map(|c_in_idx| k[dst_c_idx * k_s0 + c_in_idx * k_s1 + offset * k_s2])
@@ -1123,7 +1123,7 @@ impl<'a> Map2 for Conv2D<'a> {
 
         for offset_h in 0..p.k_h {
             for offset_w in 0..p.k_w {
-                crate::cpu_kernels::par_range(0, p.c_out, num_threads, |dst_c_idx| {
+                crate::cpu::kernels::par_range(0, p.c_out, num_threads, |dst_c_idx| {
                     let dst_idx = dst_c_idx * out_w * out_h;
                     let k_cont = (0..p.c_in)
                         .map(|c_in_idx| {
