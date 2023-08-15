@@ -1,18 +1,18 @@
-use candle_core::{ggml, Device, Result, Tensor};
-use ggml::GgmlType;
+use candle_core::{quantized, Device, Result, Tensor};
+use quantized::{k_quants, GgmlType};
 
 #[test]
-fn ggml_matmul() -> Result<()> {
+fn quantized_matmul() -> Result<()> {
     let cpu = &Device::Cpu;
     let (m, k, n) = (3, 64, 4);
     let lhs = (0..(m * k)).map(|v| v as f32).collect::<Vec<_>>();
     let tensor_lhs = Tensor::from_slice(&lhs, (m, k), cpu)?;
     let mut dst = vec![42.; 3 * 4];
-    let mut rhs_t = vec![ggml::BlockQ4_0::zeros(); 8];
+    let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); 8];
     let rhs = (0..(k * n)).map(|v| v as f32).collect::<Vec<_>>();
     let tensor_rhs = Tensor::from_slice(&rhs, (n, k), cpu)?.t()?;
-    ggml::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
-    ggml::matmul((m, k, n), &lhs, &rhs_t, &mut dst)?;
+    k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
+    k_quants::matmul((m, k, n), &lhs, &rhs_t, &mut dst)?;
     assert_eq!(
         dst,
         &[
