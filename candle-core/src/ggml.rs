@@ -552,8 +552,41 @@ impl GgmlType for BlockQ4_0 {
         Ok(())
     }
 
-    fn from_float(_: &[f32], _: &mut [Self]) -> Result<()> {
-        todo!()
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        // quantize_row_q4_0
+        let qk = Self::BLCK_SIZE;
+        let k = ys.len();
+        if k % qk != 0 {
+            crate::bail!("{k} is not divisible by {}", qk);
+        };
+        let nb = k / qk;
+        if ys.len() != nb {
+            crate::bail!("size mismatch {} {} {}", xs.len(), ys.len(), qk,)
+        }
+        for (i, ys) in ys.iter_mut().enumerate() {
+            let mut amax = 0f32;
+            let mut max = 0f32;
+
+            let xs = &xs[i * qk..(i + 1) * qk];
+            for &x in xs.iter() {
+                if amax < x.abs() {
+                    amax = x.abs();
+                    max = x;
+                }
+            }
+            let d = max / -8.0;
+            let id = if d != 0f32 { 1. / d } else { 0. };
+            ys.d = f16::from_f32(d);
+
+            for (j, q) in ys.qs.iter_mut().enumerate() {
+                let x0 = xs[i * qk + j] * id;
+                let x1 = xs[i * qk + qk / 2 + j] * id;
+                let xi0 = u8::min(15, (x0 + 8.5) as u8);
+                let xi1 = u8::min(15, (x1 + 8.5) as u8);
+                *q = xi0 | (xi1 << 4)
+            }
+        }
+        Ok(())
     }
 
     // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L2361C10-L2361C122
@@ -625,7 +658,7 @@ impl GgmlType for BlockQ8_0 {
             let mut amax = 0f32;
             let xs = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
             for &x in xs.iter() {
-                amax = amax.max(x)
+                amax = amax.max(x.abs())
             }
             let d = amax / ((1 << 7) - 1) as f32;
             let id = if d != 0f32 { 1. / d } else { 0. };
