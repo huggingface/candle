@@ -3,7 +3,6 @@ use clap::Parser;
 use std::fs::File;
 
 use candle::quantized::ggml_file::Content;
-use candle::{DType, Device};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -18,7 +17,7 @@ fn main() -> Result<()> {
 
     let mut file = File::open(args.model)?;
     let start = std::time::Instant::now();
-    let model = Content::read(&mut file, DType::F16, &Device::Cpu)?;
+    let model = Content::read(&mut file)?;
 
     println!(
         "Loaded {:?} tensors in {:?}",

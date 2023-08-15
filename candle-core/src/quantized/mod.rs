@@ -1,9 +1,14 @@
-use crate::Result;
+use crate::{Device, Result, Shape, Tensor};
 
 pub mod ggml_file;
 pub mod k_quants;
 
 pub use k_quants::GgmlType;
+
+pub struct QTensor {
+    data: Box<dyn QuantizedType>,
+    shape: Shape,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GgmlDType {
@@ -78,5 +83,40 @@ impl GgmlDType {
             Self::Q8_1 => k_quants::QK8_1,
             Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K | Self::Q8K => k_quants::QK_K,
         }
+    }
+}
+
+// A version of GgmlType without `vec_dot` so that it can be dyn boxed.
+pub trait QuantizedType {
+    fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()>;
+    fn to_float(&self, ys: &mut [f32]) -> Result<()>;
+}
+
+impl<T: k_quants::GgmlType> QuantizedType for Vec<T> {
+    fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()> {
+        k_quants::matmul(mkn, lhs, self.as_slice(), dst)
+    }
+
+    fn to_float(&self, ys: &mut [f32]) -> Result<()> {
+        T::to_float(self.as_slice(), ys)
+    }
+}
+
+impl QTensor {
+    pub fn new<S: Into<Shape>, T: k_quants::GgmlType + 'static>(data: Vec<T>, shape: S) -> Self {
+        Self {
+            data: Box::new(data),
+            shape: shape.into(),
+        }
+    }
+
+    pub fn shape(&self) -> &Shape {
+        &self.shape
+    }
+
+    pub fn dequantize(&self, device: &Device) -> Result<Tensor> {
+        let mut f32_data = vec![0f32; self.shape.elem_count()];
+        self.data.to_float(&mut f32_data)?;
+        Tensor::from_vec(f32_data, &self.shape, device)
     }
 }
