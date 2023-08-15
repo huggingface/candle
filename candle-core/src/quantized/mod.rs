@@ -88,6 +88,7 @@ impl GgmlDType {
 
 // A version of GgmlType without `vec_dot` so that it can be dyn boxed.
 pub trait QuantizedType {
+    fn dtype(&self) -> GgmlDType;
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()>;
     fn to_float(&self, ys: &mut [f32]) -> Result<()>;
 }
@@ -97,8 +98,18 @@ impl<T: k_quants::GgmlType> QuantizedType for Vec<T> {
         k_quants::matmul(mkn, lhs, self.as_slice(), dst)
     }
 
+    fn dtype(&self) -> GgmlDType {
+        T::DTYPE
+    }
+
     fn to_float(&self, ys: &mut [f32]) -> Result<()> {
         T::to_float(self.as_slice(), ys)
+    }
+}
+
+impl std::fmt::Debug for QTensor {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "QTensor[{:?}; {:?}]", self.shape, self.dtype())
     }
 }
 
@@ -108,6 +119,10 @@ impl QTensor {
             data: Box::new(data),
             shape: shape.into(),
         }
+    }
+
+    pub fn dtype(&self) -> GgmlDType {
+        self.data.dtype()
     }
 
     pub fn shape(&self) -> &Shape {
