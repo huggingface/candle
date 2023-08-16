@@ -167,7 +167,8 @@ impl crate::CustomOp1 for QTensor {
             crate::bail!("input tensor is not contiguous {layout:?}")
         }
         let src_shape = layout.shape();
-        let (k, n) = self.shape.dims2()?;
+        // self is transposed so n is first then k.
+        let (n, k) = self.shape.dims2()?;
         if src_shape.rank() < 2 {
             crate::bail!("input tensor has only one dimension {layout:?}")
         }

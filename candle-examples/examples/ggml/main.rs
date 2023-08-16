@@ -154,7 +154,7 @@ impl ModelWeights {
         let tok_embeddings = tok_embeddings.dequantize(cpu)?;
         let norm = RmsNorm::new(ct.remove("norm.weight")?)?;
         let output = ct.remove("output.weight")?;
-        let output = candle_nn::Linear::new(output.dequantize(cpu)?.t()?, None);
+        let output = candle_nn::Linear::new(output.dequantize(cpu)?, None);
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
         for layer_idx in 0..ct.hparams.n_layer {
             let prefix = format!("layers.{layer_idx}");

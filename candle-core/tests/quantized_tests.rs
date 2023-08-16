@@ -30,7 +30,7 @@ fn quantized_matmul() -> Result<()> {
         ]
     );
 
-    let qtensor = quantized::QTensor::new(rhs_t, (64, 4));
+    let qtensor = quantized::QTensor::new(rhs_t, (4, 64));
     let matmul = quantized::QMatMul::from_qtensor(qtensor);
     let res = matmul.forward(&tensor_lhs)?;
     assert_eq!(
