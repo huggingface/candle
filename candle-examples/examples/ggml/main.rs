@@ -19,10 +19,27 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let model = Content::read(&mut file)?;
 
+    let mut total_size_in_bytes = 0;
+    for (_, tensor) in model.tensors.iter() {
+        let elem_count = tensor.shape().elem_count();
+        total_size_in_bytes += elem_count * tensor.dtype().type_size() / tensor.dtype().blck_size();
+    }
+    let total_size = if total_size_in_bytes < 1_000 {
+        format!("{}B", total_size_in_bytes)
+    } else if total_size_in_bytes < 1_000_000 {
+        format!("{:.2}KB", total_size_in_bytes as f64 / 1e3)
+    } else if total_size_in_bytes < 1_000_000_000 {
+        format!("{:.2}MB", total_size_in_bytes as f64 / 1e6)
+    } else {
+        format!("{:.2}GB", total_size_in_bytes as f64 / 1e9)
+    };
+
     println!(
-        "Loaded {:?} tensors in {:?}",
+        "loaded {:?} tensors ({}) in {:.2}s",
         model.tensors.len(),
-        start.elapsed()
+        total_size,
+        start.elapsed().as_secs_f32(),
     );
+    println!("params: {:?}", model.hparams);
     Ok(())
 }

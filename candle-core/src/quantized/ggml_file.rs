@@ -174,7 +174,6 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     let dims = dims.iter().map(|&u| u as usize).collect::<Vec<_>>();
     let tensor_elems = dims.iter().product::<usize>();
     let size_in_bytes = tensor_elems * ggml_dtype.type_size() / ggml_dtype.blck_size();
-    println!("{name} {ggml_dtype:?} {dims:?}");
     // TODO: Mmap version to avoid copying the data around?
     let mut raw_data = vec![0u8; size_in_bytes];
     reader.read_exact(&mut raw_data)?;

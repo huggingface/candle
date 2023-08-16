@@ -50,7 +50,8 @@ impl GgmlDType {
         Ok(dtype)
     }
 
-    fn type_size(&self) -> usize {
+    /// The type size for blocks in bytes.
+    pub fn type_size(&self) -> usize {
         use k_quants::*;
         match self {
             Self::F32 => 4,
@@ -71,7 +72,8 @@ impl GgmlDType {
         }
     }
 
-    fn blck_size(&self) -> usize {
+    /// The block size, i.e. the number of elements stored in each block.
+    pub fn blck_size(&self) -> usize {
         match self {
             Self::F32 => 1,
             Self::F16 => 1,
