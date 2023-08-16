@@ -95,7 +95,6 @@ impl LayerWeights {
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
 
-        // TODO: KV cache.
         let (k, v) = match &self.kv_cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {

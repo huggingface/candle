@@ -70,7 +70,7 @@ const _: () = assert!(std::mem::size_of::<BlockQ5_1>() == 24);
 #[repr(C)]
 pub struct BlockQ8_0 {
     d: f16,
-    qs: [u8; QK8_0],
+    qs: [i8; QK8_0],
 }
 const _: () = assert!(std::mem::size_of::<BlockQ8_0>() == 34);
 
@@ -663,7 +663,7 @@ impl GgmlType for BlockQ8_0 {
             let id = if d != 0f32 { 1. / d } else { 0. };
             ys.d = f16::from_f32(d);
             for (y, &x) in ys.qs.iter_mut().zip(xs.iter()) {
-                *y = f32::round(x * id) as u8
+                *y = f32::round(x * id) as i8
             }
         }
         Ok(())
