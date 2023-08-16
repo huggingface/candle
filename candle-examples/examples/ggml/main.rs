@@ -114,7 +114,8 @@ struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
     norm: RmsNorm,
-    output: QMatMul,
+    // TODO: Switch to using QMatMul instead of linear once we have support for Q6K/Q8K.
+    output: candle_nn::Linear,
     masks: HashMap<usize, Tensor>,
 }
 
@@ -152,7 +153,8 @@ impl ModelWeights {
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(cpu)?.t()?.contiguous()?;
         let norm = RmsNorm::new(ct.remove("norm.weight")?)?;
-        let output = QMatMul::from_qtensor(ct.remove("output.weight")?);
+        let output = ct.remove("output.weight")?;
+        let output = candle_nn::Linear::new(output.dequantize(cpu)?.t()?, None);
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
         for layer_idx in 0..ct.hparams.n_layer {
             let prefix = format!("layers.{layer_idx}");
@@ -204,7 +206,6 @@ impl ModelWeights {
     }
 
     fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
-        println!("{:?}", x.shape());
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = self.mask(seq_len)?;
         let mut layer_in = self.tok_embeddings.forward(x)?;
