@@ -510,16 +510,59 @@ impl GgmlType for BlockQ8K {
     type VecDotType = BlockQ8K;
 
     fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
-        todo!()
+        unreachable!()
     }
 
-    fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
-        todo!()
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        let k = xs.len();
+        if k % QK_K != 0 {
+            crate::bail!("quantize_row_q8k: {k} is not divisible by {QK_K}")
+        }
+        for (i, y) in ys.iter_mut().enumerate() {
+            let mut max = 0f32;
+            let mut amax = 0f32;
+            let xs = &xs[i * QK_K..(i + 1) * QK_K];
+            for &x in xs.iter() {
+                if amax < x.abs() {
+                    amax = x.abs();
+                    max = x;
+                }
+            }
+            if amax == 0f32 {
+                y.d = 0f32;
+                y.qs.fill(0)
+            } else {
+                let iscale = -128f32 / max;
+                for (j, q) in y.qs.iter_mut().enumerate() {
+                    // ggml uses nearest_int with bit magic here, maybe we want the same
+                    // but we would have to test and benchmark it.
+                    let v = (iscale * xs[j]).round();
+                    *q = v.min(127.) as i8
+                }
+                for j in 0..QK_K / 16 {
+                    let mut sum = 0i32;
+                    for ii in 0..16 {
+                        sum += y.qs[j * 16 + ii] as i32
+                    }
+                    y.bsums[j] = sum as i16
+                }
+                y.d = 1.0 / iscale
+            }
+        }
+        Ok(())
     }
 
-    // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L533
-    fn to_float(_xs: &[Self], _ys: &mut [f32]) -> Result<()> {
-        todo!()
+    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
+        let k = ys.len();
+        if k % QK_K != 0 {
+            crate::bail!("dequantize_row_q8k: {k} is not divisible by {QK_K}")
+        }
+        for (i, x) in xs.iter().enumerate() {
+            for (j, &q) in x.qs.iter().enumerate() {
+                ys[i * QK_K + j] = x.d * q as f32
+            }
+        }
+        Ok(())
     }
 }
 
