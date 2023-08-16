@@ -103,11 +103,26 @@ impl ModelWeights {
 
     fn forward(&self, x: &Tensor, _index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
-        let x = self.tok_embeddings.forward(x)?;
-        for (_layer_idx, _layer) in self.layers.iter().enumerate() {
-            // pass
+        let mut layer_in = self.tok_embeddings.forward(x)?;
+        for (_layer_idx, layer) in self.layers.iter().enumerate() {
+            let x = layer_in;
+            let residual = &x;
+            let x = layer.attention_norm.forward(&x)?;
+            // TODO: implement the attention bit.
+            let attn = x.clone();
+            let x = (attn + residual)?;
+
+            // MLP
+            let residual = &x;
+            let x = layer.ffn_norm.forward(&x)?;
+            let w1 = layer.feed_forward_w1.forward(&x)?;
+            let w3 = layer.feed_forward_w3.forward(&x)?;
+            let mlp = layer
+                .feed_forward_w2
+                .forward(&(candle_nn::ops::silu(&w1)? * w3)?)?;
+            layer_in = (mlp + residual)?;
         }
-        let x = self.norm.forward(&x)?;
+        let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         self.output.forward(&x)
     }
