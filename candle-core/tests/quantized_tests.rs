@@ -31,8 +31,8 @@ fn quantized_matmul() -> Result<()> {
     );
 
     let qtensor = quantized::QTensor::new(rhs_t, (64, 4));
-    let op = quantized::QMatMul::new(std::sync::Arc::new(qtensor));
-    let res = tensor_lhs.custom_op1(op)?;
+    let matmul = quantized::QMatMul::from_qtensor(qtensor);
+    let res = matmul.forward(&tensor_lhs)?;
     assert_eq!(
         res.to_vec2::<f32>()?,
         &[

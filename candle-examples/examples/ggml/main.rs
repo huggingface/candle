@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use candle::quantized::ggml_file::Content;
 use candle::quantized::{QMatMul, QTensor};
-use candle::{DType, Device, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Embedding;
 
 struct RmsNorm {
@@ -99,6 +99,17 @@ impl ModelWeights {
             norm,
             output,
         })
+    }
+
+    fn forward(&self, x: &Tensor, _index_pos: usize) -> Result<Tensor> {
+        let (_b_sz, seq_len) = x.dims2()?;
+        let x = self.tok_embeddings.forward(x)?;
+        for (_layer_idx, _layer) in self.layers.iter().enumerate() {
+            // pass
+        }
+        let x = self.norm.forward(&x)?;
+        let x = x.i((.., seq_len - 1, ..))?;
+        self.output.forward(&x)
     }
 }
 
