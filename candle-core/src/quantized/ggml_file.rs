@@ -164,6 +164,8 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     let ggml_dtype = GgmlDType::from_u32(ggml_dtype)?;
     let mut dims = vec![0u32; n_dims as usize];
     reader.read_u32_into::<LittleEndian>(&mut dims)?;
+    // The dimensions are stored in reverse order, see for example:
+    // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/convert.py#L969
     dims.reverse();
     let mut name = vec![0u8; name_len as usize];
     reader.read_exact(&mut name)?;

@@ -151,7 +151,7 @@ impl ModelWeights {
         let sin = idx_theta.sin()?;
 
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
-        let tok_embeddings = tok_embeddings.dequantize(cpu)?.t()?.contiguous()?;
+        let tok_embeddings = tok_embeddings.dequantize(cpu)?;
         let norm = RmsNorm::new(ct.remove("norm.weight")?)?;
         let output = ct.remove("output.weight")?;
         let output = candle_nn::Linear::new(output.dequantize(cpu)?.t()?, None);
