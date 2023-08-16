@@ -123,3 +123,25 @@ fn quantize_q4_0() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn quantize_q8k() -> Result<()> {
+    use k_quants::BlockQ8K;
+
+    let src = (0..256 * 4)
+        .map(|v| (v as f32 - 512.) / 1024.)
+        .collect::<Vec<_>>();
+    let mut dst = vec![0f32; 256 * 4];
+    let mut quant = vec![BlockQ8K::zeros(); 4];
+    BlockQ8K::from_float(&src, &mut quant)?;
+    BlockQ8K::to_float(&quant, dst.as_mut_slice())?;
+    assert_eq!(
+        [src[0], src[128], src[256], src[512], src[800], src[1023]],
+        [-0.5, -0.375, -0.25, 0.0, 0.28125, 0.49902344]
+    );
+    assert_eq!(
+        [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
+        [-0.5, -0.375, -0.25, -0.0, 0.28070068, 0.49902344]
+    );
+    Ok(())
+}
