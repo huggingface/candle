@@ -7,6 +7,8 @@ use candle::quantized::{QMatMul, QTensor};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Embedding;
 
+const MAX_SEQ_LEN: usize = 4096;
+
 struct RmsNorm {
     scale: Tensor,
     eps: f64,
@@ -43,6 +45,66 @@ struct LayerWeights {
     feed_forward_w2: QMatMul,
     feed_forward_w3: QMatMul,
     ffn_norm: RmsNorm,
+    n_head: usize,
+    head_dim: usize,
+    cos: Tensor,
+    sin: Tensor,
+}
+
+fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+    let shape = mask.shape();
+    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
+    let m = mask.where_cond(&on_true, on_false)?;
+    Ok(m)
+}
+
+impl LayerWeights {
+    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+        let (b_sz, _, seq_len, n_embd) = x.dims4()?;
+        let cos = self.cos.narrow(0, index_pos, seq_len)?;
+        let sin = self.sin.narrow(0, index_pos, seq_len)?;
+        let cos = cos.broadcast_as((b_sz, 1, seq_len, n_embd))?;
+        let sin = sin.broadcast_as((b_sz, 1, seq_len, n_embd))?;
+        let x1 = x.narrow(D::Minus1, 0, n_embd / 2)?;
+        let x2 = x.narrow(D::Minus1, n_embd / 2, n_embd / 2)?;
+        let rotate_x = Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)?;
+        let rope = (x.broadcast_mul(&cos)? + rotate_x.broadcast_mul(&sin)?)?;
+        Ok(rope)
+    }
+
+    fn forward_attn(&self, x: &Tensor, mask: &Tensor, index_pos: usize) -> Result<Tensor> {
+        let (b_sz, seq_len, n_embd) = x.dims3()?;
+        let q = self.attention_wq.forward(x)?;
+        let k = self.attention_wk.forward(x)?;
+        let v = self.attention_wv.forward(x)?;
+
+        let q = q
+            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .transpose(1, 2)?;
+        let k = k
+            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .transpose(1, 2)?;
+        let v = v
+            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+            .transpose(1, 2)?;
+
+        let q = self.apply_rotary_emb(&q, index_pos)?;
+        let k = self.apply_rotary_emb(&k, index_pos)?;
+
+        // TODO: KV cache.
+
+        // If we start supporting MQA, we need to repeat the k and v tensors here.
+
+        let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+        let mask = mask.broadcast_as(att.shape())?;
+        let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
+        let att = candle_nn::ops::softmax(&att, D::Minus1)?;
+        // Convert to contiguous as matmul doesn't support strided vs for now.
+        let y = att.matmul(&v.contiguous()?)?;
+        let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
+        let y = self.attention_wo.forward(&y)?;
+        Ok(y)
+    }
 }
 
 struct ModelWeights {
@@ -50,6 +112,7 @@ struct ModelWeights {
     layers: Vec<LayerWeights>,
     norm: RmsNorm,
     output: QMatMul,
+    masks: HashMap<usize, Tensor>,
 }
 
 struct WeightMap(HashMap<String, QTensor>);
@@ -65,6 +128,24 @@ impl WeightMap {
 impl ModelWeights {
     fn new(mut ct: Content) -> Result<Self> {
         let cpu = &Device::Cpu;
+        let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
+
+        // precompute freqs_cis
+        let theta: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / 10000f32.powf(i as f32 / head_dim as f32))
+            .collect();
+        let theta = Tensor::new(theta.as_slice(), &Device::Cpu)?;
+        let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, &Device::Cpu)?
+            .to_dtype(DType::F32)?
+            .reshape((MAX_SEQ_LEN, 1))?
+            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+        // This is different from the paper, see:
+        // https://github.com/huggingface/transformers/blob/6112b1c6442aaf7affd2b0676a1cd4eee30c45cf/src/transformers/models/llama/modeling_llama.py#L112
+        let idx_theta = Tensor::cat(&[&idx_theta, &idx_theta], D::Minus1)?;
+        let cos = idx_theta.cos()?;
+        let sin = idx_theta.sin()?;
+
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(cpu)?;
         let norm = RmsNorm::new(ct.remove("norm.weight")?)?;
@@ -91,6 +172,10 @@ impl ModelWeights {
                 feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2),
                 feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3),
                 ffn_norm: RmsNorm::new(ffn_norm)?,
+                n_head: ct.hparams.n_head as usize,
+                head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
+                cos: cos.clone(),
+                sin: sin.clone(),
             })
         }
         Ok(Self {
@@ -98,18 +183,32 @@ impl ModelWeights {
             layers,
             norm,
             output,
+            masks: HashMap::new(),
         })
     }
 
-    fn forward(&self, x: &Tensor, _index_pos: usize) -> Result<Tensor> {
+    fn mask(&mut self, t: usize) -> Result<Tensor> {
+        if let Some(mask) = self.masks.get(&t) {
+            Ok(mask.clone())
+        } else {
+            let mask: Vec<_> = (0..t)
+                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .collect();
+            let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
+            self.masks.insert(t, mask.clone());
+            Ok(mask)
+        }
+    }
+
+    fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
+        let mask = self.mask(seq_len)?;
         let mut layer_in = self.tok_embeddings.forward(x)?;
         for (_layer_idx, layer) in self.layers.iter().enumerate() {
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
-            // TODO: implement the attention bit.
-            let attn = x.clone();
+            let attn = layer.forward_attn(&x, &mask, index_pos)?;
             let x = (attn + residual)?;
 
             // MLP
