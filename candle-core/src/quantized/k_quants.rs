@@ -557,8 +557,7 @@ unsafe fn hsum_float_8(x: __m256) -> f32 {
 #[inline(always)]
 unsafe fn bytes_from_nibbles_32(rsi: *const u8) -> __m256i {
     let tmp = _mm_loadu_si128(rsi as *const __m128i);
-    // This uses a macro in llama.cpp
-    let bytes = _mm256_set_m128i(_mm_srli_epi16(tmp, 4), tmp);
+    let bytes = _mm256_insertf128_si256::<1>(_mm256_castsi128_si256(tmp), _mm_srli_epi16(tmp, 4));
     let low_mask = _mm256_set1_epi8(0xF);
     _mm256_and_si256(low_mask, bytes)
 }
@@ -650,12 +649,12 @@ impl GgmlType for BlockQ4_0 {
         unsafe {
             // Generic implementation.
             let mut acc = _mm256_setzero_ps();
-            for i in 0..nb {
-                let d = _mm256_set1_ps(f16::to_f32(xs[i].d) * f16::to_f32(ys[i].d));
-                let bx = bytes_from_nibbles_32(xs[i].qs.as_ptr());
+            for (x, y) in xs.iter().zip(ys.iter()) {
+                let d = _mm256_set1_ps(f16::to_f32(x.d) * f16::to_f32(y.d));
+                let bx = bytes_from_nibbles_32(x.qs.as_ptr());
                 let off = _mm256_set1_epi8(8);
                 let bx = _mm256_sub_epi8(bx, off);
-                let by = _mm256_loadu_si256(ys[i].qs.as_ptr() as *const __m256i);
+                let by = _mm256_loadu_si256(y.qs.as_ptr() as *const __m256i);
                 let q = mul_sum_i8_pairs_float(bx, by);
                 acc = _mm256_fmadd_ps(d, q, acc);
             }
