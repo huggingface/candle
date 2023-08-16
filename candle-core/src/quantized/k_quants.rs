@@ -1,3 +1,8 @@
+#[cfg(target_arch = "x86")]
+use core::arch::x86::*;
+#[cfg(target_arch = "x86_64")]
+use core::arch::x86_64::*;
+
 use super::GgmlDType;
 use crate::Result;
 use half::f16;
@@ -523,6 +528,49 @@ impl GgmlType for BlockQ8K {
     }
 }
 
+#[cfg(target_feature = "avx")]
+#[inline(always)]
+unsafe fn sum_i16_pairs_float(x: __m256i) -> __m256 {
+    let ones = _mm256_set1_epi16(1);
+    let summed_pairs = _mm256_madd_epi16(ones, x);
+    _mm256_cvtepi32_ps(summed_pairs)
+}
+
+#[cfg(target_feature = "avx")]
+#[inline(always)]
+unsafe fn mul_sum_us8_pairs_float(ax: __m256i, sy: __m256i) -> __m256 {
+    let dot = _mm256_maddubs_epi16(ax, sy);
+    sum_i16_pairs_float(dot)
+}
+
+#[cfg(target_feature = "avx")]
+#[inline(always)]
+unsafe fn hsum_float_8(x: __m256) -> f32 {
+    let mut res = _mm256_extractf128_ps(x, 1);
+    res = _mm_add_ps(res, _mm256_castps256_ps128(x));
+    res = _mm_add_ps(res, _mm_movehl_ps(res, res));
+    res = _mm_add_ss(res, _mm_movehdup_ps(res));
+    _mm_cvtss_f32(res)
+}
+
+#[cfg(target_feature = "avx")]
+#[inline(always)]
+unsafe fn bytes_from_nibbles_32(rsi: *const u8) -> __m256i {
+    let tmp = _mm_loadu_si128(rsi as *const __m128i);
+    // This uses a macro in llama.cpp
+    let bytes = _mm256_set_m128i(_mm_srli_epi16(tmp, 4), tmp);
+    let low_mask = _mm256_set1_epi8(0xF);
+    _mm256_and_si256(low_mask, bytes)
+}
+
+#[cfg(target_feature = "avx")]
+#[inline(always)]
+unsafe fn mul_sum_i8_pairs_float(x: __m256i, y: __m256i) -> __m256 {
+    let ax = _mm256_sign_epi8(x, x);
+    let sy = _mm256_sign_epi8(y, x);
+    mul_sum_us8_pairs_float(ax, sy)
+}
+
 impl GgmlType for BlockQ4_0 {
     const DTYPE: GgmlDType = GgmlDType::Q4_0;
     const BLCK_SIZE: usize = QK4_0;
@@ -588,7 +636,35 @@ impl GgmlType for BlockQ4_0 {
         Ok(())
     }
 
+    #[cfg(target_feature = "avx")]
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        let qk = QK8_0;
+        let nb = n / qk;
+        if n % QK8_0 != 0 {
+            crate::bail!("vec_dot_q4_0_q8_0: {n} is not divisible by {qk}")
+        }
+        if nb % 2 != 0 {
+            crate::bail!("vec_dot_q4_0_q8_0: {nb} is not even")
+        }
+
+        unsafe {
+            // Generic implementation.
+            let mut acc = _mm256_setzero_ps();
+            for i in 0..nb {
+                let d = _mm256_set1_ps(f16::to_f32(xs[i].d) * f16::to_f32(ys[i].d));
+                let bx = bytes_from_nibbles_32(xs[i].qs.as_ptr());
+                let off = _mm256_set1_epi8(8);
+                let bx = _mm256_sub_epi8(bx, off);
+                let by = _mm256_loadu_si256(ys[i].qs.as_ptr() as *const __m256i);
+                let q = mul_sum_i8_pairs_float(bx, by);
+                acc = _mm256_fmadd_ps(d, q, acc);
+            }
+            Ok(hsum_float_8(acc))
+        }
+    }
+
     // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L2361C10-L2361C122
+    #[cfg(not(target_feature = "avx"))]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         let qk = QK8_0;
         let nb = n / qk;
