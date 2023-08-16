@@ -149,6 +149,10 @@ impl QTensor {
 pub struct QMatMul(std::sync::Arc<QTensor>);
 
 impl QMatMul {
+    pub fn from_qtensor(qtensor: QTensor) -> Self {
+        Self(std::sync::Arc::new(qtensor))
+    }
+
     pub fn new(qtensor: std::sync::Arc<QTensor>) -> Self {
         Self(qtensor)
     }
