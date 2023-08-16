@@ -1,5 +1,6 @@
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{linear, AdamW, Linear, ParamsAdamW, VarBuilder, VarMap};
+use candle_nn::init::{DefaultInit, ModelInitializer};
+use candle_nn::{AdamW, Linear, ParamsAdamW};
 
 fn gen_data() -> Result<(Tensor, Tensor)> {
     // Generate some sample linear data.
@@ -15,14 +16,15 @@ fn main() -> Result<()> {
     let (sample_xs, sample_ys) = gen_data()?;
 
     // Use backprop to run a linear regression between samples and get the coefficients back.
-    let varmap = VarMap::new();
-    let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
-    let model = linear(2, 1, vb.pp("linear"))?;
+    // let varmap = VarMap::new();
+    // let vb = VarBuilder::from_varmap(&varmap, DType::F32, &Device::Cpu);
+    let mut initializer = DefaultInit::new(DType::F32, Device::Cpu);
+    let model = Linear::init(&mut initializer, ((2, 1), true))?;
     let params = ParamsAdamW {
         lr: 0.1,
         ..Default::default()
     };
-    let mut opt = AdamW::new(varmap.all_vars(), params)?;
+    let mut opt = AdamW::new(initializer.vars().to_vec(), params)?;
     for step in 0..10000 {
         let ys = model.forward(&sample_xs)?;
         let loss = ys.sub(&sample_ys)?.sqr()?.sum_all()?;
