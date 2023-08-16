@@ -313,6 +313,7 @@ fn main() -> anyhow::Result<()> {
         .to_vec();
     let mut index_pos = 0;
     let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature);
+    print!("{prompt}");
     for index in 0..args.sample_len {
         let context_size = if index == 0 { tokens.len() } else { 1 };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
