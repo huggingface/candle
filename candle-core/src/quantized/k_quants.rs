@@ -601,14 +601,14 @@ impl GgmlType for BlockQ4_0 {
 
         // Generic implementation.
         let mut sumf = 0f32;
-        for i in 0..nb {
+        for (xs, ys) in xs.iter().zip(ys.iter()) {
             let mut sum_i = 0;
             for j in 0..qk / 2 {
-                let v0 = (xs[i].qs[j] & 0x0F) as i32 - 8;
-                let v1 = (xs[i].qs[j] >> 4) as i32 - 8;
-                sum_i += v0 * ys[i].qs[j] as i32 + v1 * ys[i].qs[j + qk / 2] as i32
+                let v0 = (xs.qs[j] & 0x0F) as i32 - 8;
+                let v1 = (xs.qs[j] >> 4) as i32 - 8;
+                sum_i += v0 * ys.qs[j] as i32 + v1 * ys.qs[j + qk / 2] as i32
             }
-            sumf += sum_i as f32 * f16::to_f32(xs[i].d) * f16::to_f32(ys[i].d)
+            sumf += sum_i as f32 * f16::to_f32(xs.d) * f16::to_f32(ys.d)
         }
         Ok(sumf)
     }
