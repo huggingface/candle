@@ -58,7 +58,7 @@ fn quantized_matmul_neg() -> Result<()> {
     let mut dst = vec![42.; 3 * 4];
     let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); 8];
     let rhs = (0..k * n)
-        .map(|v| (v as f32 - (k * n) as f32 / 3.0) as f32)
+        .map(|v| v as f32 - (k * n) as f32 / 3.0)
         .collect::<Vec<_>>();
     let tensor_rhs = Tensor::from_slice(&rhs, (n, k), cpu)?.t()?;
     k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
