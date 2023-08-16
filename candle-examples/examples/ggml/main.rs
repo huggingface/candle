@@ -63,26 +63,24 @@ impl WeightMap {
 }
 
 impl ModelWeights {
-    fn new(content: Content) -> Result<Self> {
+    fn new(mut ct: Content) -> Result<Self> {
         let cpu = &Device::Cpu;
-        let p = content.hparams;
-        let mut wm = WeightMap(content.tensors.into_iter().collect::<HashMap<_, _>>());
-        let tok_embeddings = wm.get("tok_embeddings.weight")?;
+        let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(cpu)?;
-        let norm = RmsNorm::new(wm.get("norm.weight")?)?;
-        let output = QMatMul::from_qtensor(wm.get("output.weight")?);
-        let mut layers = Vec::with_capacity(p.n_layer as usize);
-        for layer_idx in 0..p.n_layer {
+        let norm = RmsNorm::new(ct.remove("norm.weight")?)?;
+        let output = QMatMul::from_qtensor(ct.remove("output.weight")?);
+        let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
+        for layer_idx in 0..ct.hparams.n_layer {
             let prefix = format!("layers.{layer_idx}");
-            let attention_wq = wm.get(&format!("layers.{layer_idx}.attention.wq.weight"))?;
-            let attention_wk = wm.get(&format!("{prefix}.attention.wk.weight"))?;
-            let attention_wv = wm.get(&format!("{prefix}.attention.wv.weight"))?;
-            let attention_wo = wm.get(&format!("{prefix}.attention.wo.weight"))?;
-            let feed_forward_w1 = wm.get(&format!("{prefix}.feed_forward.w1.weight"))?;
-            let feed_forward_w2 = wm.get(&format!("{prefix}.feed_forward.w2.weight"))?;
-            let feed_forward_w3 = wm.get(&format!("{prefix}.feed_forward.w3.weight"))?;
-            let attention_norm = wm.get(&format!("{prefix}.attention_norm.weight"))?;
-            let ffn_norm = wm.get(&format!("{prefix}.ffn_norm.weight"))?;
+            let attention_wq = ct.remove(&format!("layers.{layer_idx}.attention.wq.weight"))?;
+            let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
+            let attention_wv = ct.remove(&format!("{prefix}.attention.wv.weight"))?;
+            let attention_wo = ct.remove(&format!("{prefix}.attention.wo.weight"))?;
+            let feed_forward_w1 = ct.remove(&format!("{prefix}.feed_forward.w1.weight"))?;
+            let feed_forward_w2 = ct.remove(&format!("{prefix}.feed_forward.w2.weight"))?;
+            let feed_forward_w3 = ct.remove(&format!("{prefix}.feed_forward.w3.weight"))?;
+            let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
+            let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
             layers.push(LayerWeights {
                 attention_wq: QMatMul::from_qtensor(attention_wq),
                 attention_wk: QMatMul::from_qtensor(attention_wk),
@@ -96,7 +94,7 @@ impl ModelWeights {
             })
         }
         Ok(Self {
-            tok_embeddings: Embedding::new(tok_embeddings, p.n_vocab as usize),
+            tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_vocab as usize),
             layers,
             norm,
             output,

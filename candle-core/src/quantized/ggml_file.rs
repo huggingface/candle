@@ -3,6 +3,7 @@
 use super::{k_quants, GgmlDType};
 use crate::Result;
 use byteorder::{LittleEndian, ReadBytesExt};
+use std::collections::HashMap;
 
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.h#L37
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,7 +188,7 @@ pub struct Content {
     pub magic: VersionedMagic,
     pub hparams: HParams,
     pub vocab: Vocab,
-    pub tensors: Vec<(String, super::QTensor)>,
+    pub tensors: HashMap<String, super::QTensor>,
 }
 
 impl Content {
@@ -198,11 +199,11 @@ impl Content {
         let magic = VersionedMagic::read(reader)?;
         let hparams = HParams::read(reader)?;
         let vocab = Vocab::read(reader, hparams.n_vocab as usize)?;
-        let mut tensors = vec![];
+        let mut tensors = HashMap::new();
 
         while reader.stream_position()? != last_position {
             let (name, tensor) = read_one_tensor(reader, magic)?;
-            tensors.push((name, tensor))
+            tensors.insert(name, tensor);
         }
         Ok(Self {
             magic,
@@ -210,5 +211,12 @@ impl Content {
             vocab,
             tensors,
         })
+    }
+
+    pub fn remove(&mut self, name: &str) -> Result<super::QTensor> {
+        match self.tensors.remove(name) {
+            None => crate::bail!("cannot find tensor with name '{name}'"),
+            Some(tensor) => Ok(tensor),
+        }
     }
 }
