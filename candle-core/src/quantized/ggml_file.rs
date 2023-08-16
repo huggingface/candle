@@ -164,6 +164,7 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     let ggml_dtype = GgmlDType::from_u32(ggml_dtype)?;
     let mut dims = vec![0u32; n_dims as usize];
     reader.read_u32_into::<LittleEndian>(&mut dims)?;
+    dims.reverse();
     let mut name = vec![0u8; name_len as usize];
     reader.read_exact(&mut name)?;
     let name = String::from_utf8_lossy(&name).into_owned();
