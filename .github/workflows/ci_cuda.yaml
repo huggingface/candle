@@ -59,7 +59,7 @@ jobs:
       - name: Install Rust Stable
         run: curl https://sh.rustup.rs -sSf | sh -s -- -y
       - uses: Swatinem/rust-cache@v2
-      - run: apt update -y && apt install libssl-dev -y
+      - run: apt-get update -y && apt-get install libssl-dev -y
       - name: Test (cuda)
         run: PATH=$PATH:/usr/local/cuda-11.8/bin/ /root/.cargo/bin/cargo test --features cuda
   stop-runner:
