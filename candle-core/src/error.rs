@@ -210,6 +210,10 @@ impl Error {
         Self::Wrapped(Box::new(err))
     }
 
+    pub fn msg(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Msg(err.to_string())
+    }
+
     pub fn bt(self) -> Self {
         let backtrace = std::backtrace::Backtrace::capture();
         match backtrace.status() {

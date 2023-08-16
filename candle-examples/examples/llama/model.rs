@@ -140,10 +140,6 @@ impl Cache {
     }
 }
 
-fn silu(xs: &Tensor) -> Result<Tensor> {
-    xs / (xs.neg()?.exp()? + 1.0)?
-}
-
 fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
     let span = tracing::span!(tracing::Level::TRACE, "linear");
     let inner = candle_nn::linear_no_bias(size1, size2, vb)?;
@@ -358,7 +354,7 @@ struct Mlp {
 impl Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let x = (silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
+        let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
         self.c_proj.forward(&x)
     }
 

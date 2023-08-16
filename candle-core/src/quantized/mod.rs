@@ -50,7 +50,8 @@ impl GgmlDType {
         Ok(dtype)
     }
 
-    fn type_size(&self) -> usize {
+    /// The type size for blocks in bytes.
+    pub fn type_size(&self) -> usize {
         use k_quants::*;
         match self {
             Self::F32 => 4,
@@ -71,7 +72,8 @@ impl GgmlDType {
         }
     }
 
-    fn blck_size(&self) -> usize {
+    /// The block size, i.e. the number of elements stored in each block.
+    pub fn blck_size(&self) -> usize {
         match self {
             Self::F32 => 1,
             Self::F16 => 1,
@@ -143,16 +145,15 @@ impl QTensor {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct QMatMul(std::sync::Arc<QTensor>);
+pub struct QMatMul(std::sync::Arc<Box<dyn crate::CustomOp1>>);
 
 impl QMatMul {
-    pub fn new(qtensor: std::sync::Arc<QTensor>) -> Self {
-        Self(qtensor)
+    pub fn from_qtensor(qtensor: QTensor) -> Self {
+        Self(std::sync::Arc::new(Box::new(qtensor)))
     }
 }
 
-impl crate::CustomOp1 for QMatMul {
+impl crate::CustomOp1 for QTensor {
     fn name(&self) -> &'static str {
         "qmatmul"
     }
@@ -166,17 +167,15 @@ impl crate::CustomOp1 for QMatMul {
             crate::bail!("input tensor is not contiguous {layout:?}")
         }
         let src_shape = layout.shape();
-        let (k, n) = self.0.shape.dims2()?;
+        // self is transposed so n is first then k.
+        let (n, k) = self.shape.dims2()?;
         if src_shape.rank() < 2 {
             crate::bail!("input tensor has only one dimension {layout:?}")
         }
         let mut dst_shape = src_shape.dims().to_vec();
         let last_k = dst_shape.pop().unwrap();
         if last_k != k {
-            crate::bail!(
-                "input tensor {layout:?} incompatible with {:?}",
-                self.0.shape
-            )
+            crate::bail!("input tensor {layout:?} incompatible with {:?}", self.shape)
         }
         dst_shape.push(n);
         let dst_shape = Shape::from(dst_shape);
@@ -184,11 +183,17 @@ impl crate::CustomOp1 for QMatMul {
         let storage =
             &storage[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
         let mut dst_storage = vec![0f32; dst_shape.elem_count()];
-        self.0.matmul_t(
+        self.matmul_t(
             (dst_shape.elem_count() / n, k, n),
             storage,
             &mut dst_storage,
         )?;
         Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
+    }
+}
+
+impl QMatMul {
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.custom_op1_arc(self.0.clone())
     }
 }
