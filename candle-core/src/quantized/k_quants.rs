@@ -531,20 +531,21 @@ impl GgmlType for BlockQ4_0 {
     // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1525
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
         let k = ys.len();
-        if k % QK4_0 != 0 {
-            crate::bail!("dequantize_row_q4_0: {k} is not divisible by {QK4_0}")
+        let qk = Self::BLCK_SIZE;
+        if k % qk != 0 {
+            crate::bail!("dequantize_row_q4_0: {k} is not divisible by {qk}")
         }
 
-        let nb = k / QK4_0;
+        let nb = k / qk;
         for i in 0..nb {
             let d = xs[i].d.to_f32();
 
-            for j in 0..(QK4_0 / 2) {
+            for j in 0..(qk / 2) {
                 let x0 = (xs[i].qs[j] & 0x0F) as i16 - 8;
                 let x1 = (xs[i].qs[j] >> 4) as i16 - 8;
 
-                ys[i * QK4_0 + j] = (x0 as f32) * d;
-                ys[i * QK4_0 + j + QK4_0 / 2] = (x1 as f32) * d;
+                ys[i * qk + j] = (x0 as f32) * d;
+                ys[i * qk + j + qk / 2] = (x1 as f32) * d;
             }
         }
         Ok(())
