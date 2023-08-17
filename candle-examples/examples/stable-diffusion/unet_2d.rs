@@ -5,7 +5,7 @@
 use crate::embeddings::{TimestepEmbedding, Timesteps};
 use crate::unet_2d_blocks::*;
 use crate::utils::{conv2d, Conv2d};
-use candle::{DType, Result, Tensor};
+use candle::{Result, Tensor};
 use candle_nn as nn;
 
 #[derive(Debug, Clone, Copy)]
@@ -316,7 +316,7 @@ impl UNet2DConditionModel {
             xs.clone()
         };
         // 1. time
-        let emb = (Tensor::ones(bsize, DType::F32, device)? * timestep)?;
+        let emb = (Tensor::ones(bsize, xs.dtype(), device)? * timestep)?;
         let emb = self.time_proj.forward(&emb)?;
         let emb = self.time_embedding.forward(&emb)?;
         // 2. pre-process

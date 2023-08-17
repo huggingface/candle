@@ -93,6 +93,9 @@ struct Args {
 
     #[arg(long)]
     use_flash_attn: bool,
+
+    #[arg(long)]
+    use_f16: bool,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -117,21 +120,39 @@ impl StableDiffusionVersion {
         }
     }
 
-    fn unet_file(&self) -> &'static str {
+    fn unet_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V2_1 => "unet/diffusion_pytorch_model.safetensors",
+            Self::V1_5 | Self::V2_1 => {
+                if use_f16 {
+                    "unet/diffusion_pytorch_model.fp16.safetensors"
+                } else {
+                    "unet/diffusion_pytorch_model.safetensors"
+                }
+            }
         }
     }
 
-    fn vae_file(&self) -> &'static str {
+    fn vae_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V2_1 => "vae/diffusion_pytorch_model.safetensors",
+            Self::V1_5 | Self::V2_1 => {
+                if use_f16 {
+                    "vae/diffusion_pytorch_model.fp16.safetensors"
+                } else {
+                    "vae/diffusion_pytorch_model.safetensors"
+                }
+            }
         }
     }
 
-    fn clip_file(&self) -> &'static str {
+    fn clip_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V2_1 => "text_encoder/model.safetensors",
+            Self::V1_5 | Self::V2_1 => {
+                if use_f16 {
+                    "text_encoder/model.fp16.safetensors"
+                } else {
+                    "text_encoder/model.safetensors"
+                }
+            }
         }
     }
 }
@@ -144,6 +165,7 @@ impl ModelFile {
         &self,
         filename: Option<String>,
         version: StableDiffusionVersion,
+        use_f16: bool,
     ) -> Result<std::path::PathBuf> {
         use hf_hub::api::sync::Api;
         match filename {
@@ -151,9 +173,9 @@ impl ModelFile {
             None => {
                 let (repo, path) = match self {
                     Self::Tokenizer => (Self::TOKENIZER_REPO, Self::TOKENIZER_PATH),
-                    Self::Clip => (version.repo(), version.clip_file()),
-                    Self::Unet => (version.repo(), version.unet_file()),
-                    Self::Vae => (version.repo(), version.vae_file()),
+                    Self::Clip => (version.repo(), version.clip_file(use_f16)),
+                    Self::Unet => (version.repo(), version.unet_file(use_f16)),
+                    Self::Vae => (version.repo(), version.vae_file(use_f16)),
                 };
                 let filename = Api::new()?.model(repo.to_string()).get(path)?;
                 Ok(filename)
@@ -209,6 +231,8 @@ fn run(args: Args) -> Result<()> {
         vae_weights,
         unet_weights,
         tracing,
+        use_f16,
+        use_flash_attn,
         ..
     } = args;
 
@@ -220,6 +244,7 @@ fn run(args: Args) -> Result<()> {
         None
     };
 
+    let dtype = if use_f16 { DType::F16 } else { DType::F32 };
     let sd_config = match sd_version {
         StableDiffusionVersion::V1_5 => {
             stable_diffusion::StableDiffusionConfig::v1_5(sliced_attention_size, height, width)
@@ -232,7 +257,7 @@ fn run(args: Args) -> Result<()> {
     let scheduler = sd_config.build_scheduler(n_steps)?;
     let device = candle_examples::device(cpu)?;
 
-    let tokenizer = ModelFile::Tokenizer.get(tokenizer, sd_version)?;
+    let tokenizer = ModelFile::Tokenizer.get(tokenizer, sd_version, use_f16)?;
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
     let pad_id = match &sd_config.clip.pad_with {
         Some(padding) => *tokenizer.get_vocab(true).get(padding.as_str()).unwrap(),
@@ -260,18 +285,20 @@ fn run(args: Args) -> Result<()> {
     let uncond_tokens = Tensor::new(uncond_tokens.as_slice(), &device)?.unsqueeze(0)?;
 
     println!("Building the Clip transformer.");
-    let clip_weights = ModelFile::Clip.get(clip_weights, sd_version)?;
-    let text_model = sd_config.build_clip_transformer(&clip_weights, &device)?;
-    let text_embeddings = text_model.forward(&tokens)?;
-    let uncond_embeddings = text_model.forward(&uncond_tokens)?;
-    let text_embeddings = Tensor::cat(&[uncond_embeddings, text_embeddings], 0)?;
+    let text_embeddings = {
+        let clip_weights = ModelFile::Clip.get(clip_weights, sd_version, false)?;
+        let text_model = sd_config.build_clip_transformer(&clip_weights, &device, DType::F32)?;
+        let text_embeddings = text_model.forward(&tokens)?;
+        let uncond_embeddings = text_model.forward(&uncond_tokens)?;
+        Tensor::cat(&[uncond_embeddings, text_embeddings], 0)?.to_dtype(dtype)?
+    };
 
     println!("Building the autoencoder.");
-    let vae_weights = ModelFile::Vae.get(vae_weights, sd_version)?;
-    let vae = sd_config.build_vae(&vae_weights, &device)?;
+    let vae_weights = ModelFile::Vae.get(vae_weights, sd_version, use_f16)?;
+    let vae = sd_config.build_vae(&vae_weights, &device, dtype)?;
     println!("Building the unet.");
-    let unet_weights = ModelFile::Unet.get(unet_weights, sd_version)?;
-    let unet = sd_config.build_unet(&unet_weights, &device, 4, args.use_flash_attn)?;
+    let unet_weights = ModelFile::Unet.get(unet_weights, sd_version, use_f16)?;
+    let unet = sd_config.build_unet(&unet_weights, &device, 4, use_flash_attn, dtype)?;
 
     let bsize = 1;
     for idx in 0..num_samples {
@@ -280,7 +307,8 @@ fn run(args: Args) -> Result<()> {
             1f32,
             (bsize, 4, sd_config.height / 8, sd_config.width / 8),
             &device,
-        )?;
+        )?
+        .to_dtype(dtype)?;
 
         // scale the initial noise by the standard deviation required by the scheduler
         latents = (latents * scheduler.init_noise_sigma())?;
