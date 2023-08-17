@@ -285,11 +285,13 @@ fn run(args: Args) -> Result<()> {
     let uncond_tokens = Tensor::new(uncond_tokens.as_slice(), &device)?.unsqueeze(0)?;
 
     println!("Building the Clip transformer.");
-    let clip_weights = ModelFile::Clip.get(clip_weights, sd_version, use_f16)?;
-    let text_model = sd_config.build_clip_transformer(&clip_weights, &device, dtype)?;
-    let text_embeddings = text_model.forward(&tokens)?;
-    let uncond_embeddings = text_model.forward(&uncond_tokens)?;
-    let text_embeddings = Tensor::cat(&[uncond_embeddings, text_embeddings], 0)?;
+    let text_embeddings = {
+        let clip_weights = ModelFile::Clip.get(clip_weights, sd_version, false)?;
+        let text_model = sd_config.build_clip_transformer(&clip_weights, &device, DType::F32)?;
+        let text_embeddings = text_model.forward(&tokens)?;
+        let uncond_embeddings = text_model.forward(&uncond_tokens)?;
+        Tensor::cat(&[uncond_embeddings, text_embeddings], 0)?.to_dtype(dtype)?
+    };
 
     println!("Building the autoencoder.");
     let vae_weights = ModelFile::Vae.get(vae_weights, sd_version, use_f16)?;
