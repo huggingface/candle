@@ -823,15 +823,18 @@ pub fn matmul<T: GgmlType>(
         let lhs_row = &lhs_b[row_idx * k_in_lhs_blocks..(row_idx + 1) * k_in_lhs_blocks];
         let dst_row = &mut dst[row_idx * n..(row_idx + 1) * n];
 
-        dst_row
+        let result: Result<Vec<_>> = dst_row
             .into_par_iter()
             .enumerate()
             .with_min_len(128)
             .with_max_len(512)
-            .for_each(|(col_idx, dst)| {
+            .map(|(col_idx, dst)| {
                 let rhs_col = &rhs_t[col_idx * k_in_rhs_blocks..(col_idx + 1) * k_in_rhs_blocks];
-                *dst = T::vec_dot(k, rhs_col, lhs_row).unwrap();
-            });
+                T::vec_dot(k, rhs_col, lhs_row).map(|value| *dst = value)
+            })
+            .collect();
+
+        result?;
     }
     Ok(())
 }
