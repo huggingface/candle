@@ -124,7 +124,7 @@ pub fn conv2d(
     vb: crate::VarBuilder,
 ) -> Result<Conv2d> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_or_init(
+    let ws = vb.get_or_init(
         (out_channels, in_channels, kernel_size, kernel_size),
         "weight",
         init_ws,
@@ -134,6 +134,6 @@ pub fn conv2d(
         lo: -bound,
         up: bound,
     };
-    let bs = vs.get_or_init(out_channels, "bias", init_bs)?;
+    let bs = vb.get_or_init(out_channels, "bias", init_bs)?;
     Ok(Conv2d::new(ws, Some(bs), cfg))
 }
