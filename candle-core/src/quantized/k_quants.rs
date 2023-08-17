@@ -484,7 +484,7 @@ unsafe fn make_qx_quants(n: usize, nmax: i32, x: *const f32, ls: *mut i8, rmse_t
         for i in 0..n {
             let x = *x.add(i);
             let l = nearest_int(iscale * x);
-            *ls.add(i) = (nmax + i32::max(-nmax, i32::min(nmax - 1, l))) as i8;
+            *ls.add(i) = (nmax + l.clamp(-nmax, nmax - 1)) as i8;
         }
         return 1.0 / iscale;
     }
@@ -494,7 +494,7 @@ unsafe fn make_qx_quants(n: usize, nmax: i32, x: *const f32, ls: *mut i8, rmse_t
     for i in 0..n {
         let x = *x.add(i);
         let l = nearest_int(iscale * x);
-        let l = i32::max(-nmax, i32::min(nmax - 1, l));
+        let l = l.clamp(-nmax, nmax - 1);
         *ls.add(i) = (l + nmax) as i8;
         let w = if weight_type == 1 { x * x } else { 1.0 };
         let l = l as f32;
@@ -511,7 +511,7 @@ unsafe fn make_qx_quants(n: usize, nmax: i32, x: *const f32, ls: *mut i8, rmse_t
         for i in 0..n {
             let x = *x.add(i);
             let l = nearest_int(iscale * x);
-            let l = i32::max(-nmax, i32::min(nmax - 1, l));
+            let l = l.clamp(-nmax, nmax - 1);
             if l + nmax != *ls.add(i) as i32 {
                 changed = true;
             }
@@ -526,7 +526,7 @@ unsafe fn make_qx_quants(n: usize, nmax: i32, x: *const f32, ls: *mut i8, rmse_t
         for i in 0..n {
             let x = *x.add(i);
             let l = nearest_int(iscale * x);
-            *ls.add(i) = (nmax + i32::max(-nmax, i32::min(nmax - 1, l))) as i8;
+            *ls.add(i) = (nmax + l.clamp(-nmax, nmax - 1)) as i8;
         }
         sumlx = slx;
         suml2 = sl2;
@@ -543,7 +543,7 @@ unsafe fn make_qx_quants(n: usize, nmax: i32, x: *const f32, ls: *mut i8, rmse_t
             if slx > 0. {
                 let mut sl2 = suml2 - w * l as f32 * l as f32;
                 let new_l = nearest_int(x * sl2 / slx);
-                let new_l = i32::max(-nmax, i32::min(nmax - 1, new_l));
+                let new_l = new_l.clamp(-nmax, nmax - 1);
                 if new_l != l {
                     slx += w * x * new_l as f32;
                     sl2 += w * new_l as f32 * new_l as f32;
@@ -558,7 +558,7 @@ unsafe fn make_qx_quants(n: usize, nmax: i32, x: *const f32, ls: *mut i8, rmse_t
                 }
             }
         }
-        if n_changed > 0 {
+        if n_changed == 0 {
             break;
         }
     }
