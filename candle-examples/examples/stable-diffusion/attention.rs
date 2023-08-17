@@ -165,10 +165,21 @@ impl CrossAttention {
     fn attention(&self, query: &Tensor, key: &Tensor, value: &Tensor) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let xs = if self.use_flash_attn {
-            let q = query.to_dtype(candle::DType::F16)?.transpose(1, 2)?;
-            let k = key.to_dtype(candle::DType::F16)?.transpose(1, 2)?;
-            let v = value.to_dtype(candle::DType::F16)?.transpose(1, 2)?;
-            flash_attn(&q, &k, &v, self.scale as f32, false)?.transpose(1, 2)?
+            let q = query
+                .to_dtype(candle::DType::F16)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let k = key
+                .to_dtype(candle::DType::F16)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let v = value
+                .to_dtype(candle::DType::F16)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            flash_attn(&q, &k, &v, self.scale as f32, false)?
+                .transpose(1, 2)?
+                .squeeze(0)?
         } else {
             let xs = query.matmul(&(key.t()? * self.scale)?)?;
             nn::ops::softmax(&xs, D::Minus1)?.matmul(value)?
