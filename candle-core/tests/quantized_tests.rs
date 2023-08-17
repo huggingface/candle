@@ -145,3 +145,26 @@ fn quantize_q8k() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn quantize_q6k() -> Result<()> {
+    use k_quants::BlockQ6K;
+
+    let src = (0..256 * 4)
+        .map(|v| (v as f32 - 512.) / 1024.)
+        .collect::<Vec<_>>();
+    let mut dst = vec![0f32; 256 * 4];
+    let mut quant = vec![BlockQ6K::zeros(); 4];
+    BlockQ6K::from_float(&src, &mut quant)?;
+    BlockQ6K::to_float(&quant, dst.as_mut_slice())?;
+    assert_eq!(
+        [src[0], src[128], src[256], src[512], src[800], src[1023]],
+        [-0.5, -0.375, -0.25, 0.0, 0.28125, 0.49902344]
+    );
+    // THIS IS BROKEN AT THE MOMENT.
+    assert_eq!(
+        [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
+        [0.47730553, 0.36079788, 0.24171448, -0.0, 0.29268265, 0.49951172]
+    );
+    Ok(())
+}
