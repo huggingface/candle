@@ -303,6 +303,10 @@ struct Args {
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
+
+    /// Display the token for the specified prompt.
+    #[arg(long)]
+    verbose_prompt: bool,
 }
 
 impl Args {
@@ -375,11 +379,15 @@ fn main() -> anyhow::Result<()> {
 
     let tokenizer = args.tokenizer()?;
     let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
-    let mut tokens = tokenizer
-        .encode(prompt, true)
-        .map_err(anyhow::Error::msg)?
-        .get_ids()
-        .to_vec();
+    let tokens = tokenizer.encode(prompt, true).map_err(anyhow::Error::msg)?;
+    if args.verbose_prompt {
+        for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
+            let token = token.replace('▁', " ").replace("<0x0A>", "\n");
+            println!("{id:7} -> '{token}'");
+        }
+    }
+
+    let mut tokens = tokens.get_ids().to_vec();
     let mut index_pos = 0;
     let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature);
     let start_gen = std::time::Instant::now();
