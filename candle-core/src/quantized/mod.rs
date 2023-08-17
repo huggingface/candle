@@ -128,6 +128,26 @@ impl QTensor {
         }
     }
 
+    pub fn quantize<T: k_quants::GgmlType + Send + Sync + 'static>(src: &Tensor) -> Result<Self> {
+        let shape = src.shape();
+        let src = src
+            .to_dtype(crate::DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        if src.len() % T::BLCK_SIZE != 0 {
+            crate::bail!(
+                "tensor size ({shape:?}) is not divisible by block size {}",
+                T::BLCK_SIZE
+            )
+        }
+        let mut data = vec![T::zeros(); src.len() / T::BLCK_SIZE];
+        T::from_float(&src, &mut data)?;
+        Ok(Self {
+            data: Box::new(data),
+            shape: shape.clone(),
+        })
+    }
+
     pub fn dtype(&self) -> GgmlDType {
         self.data.dtype()
     }
