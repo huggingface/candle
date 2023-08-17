@@ -147,7 +147,7 @@ impl QTensor {
     }
 }
 
-pub struct QMatMul(std::sync::Arc<Box<dyn crate::CustomOp1>>);
+pub struct QMatMul(std::sync::Arc<Box<dyn crate::CustomOp1 + Send + Sync>>);
 
 impl QMatMul {
     pub fn from_qtensor(qtensor: QTensor) -> Self {
@@ -196,6 +196,6 @@ impl crate::CustomOp1 for QTensor {
 
 impl QMatMul {
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.custom_op1_arc(self.0.clone())
+        xs.apply_op1_arc(self.0.clone())
     }
 }

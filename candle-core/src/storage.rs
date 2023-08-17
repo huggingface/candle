@@ -138,7 +138,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn custom_op1(&self, l: &Layout, c: &dyn CustomOp1) -> Result<(Self, Shape)> {
+    pub(crate) fn apply_op1(&self, l: &Layout, c: &dyn CustomOp1) -> Result<(Self, Shape)> {
         match self {
             Self::Cpu(storage) => {
                 let (storage, shape) = c.cpu_fwd(storage, l)?;
@@ -151,7 +151,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn custom_op2(
+    pub(crate) fn apply_op2(
         &self,
         l1: &Layout,
         t2: &Self,
@@ -172,7 +172,7 @@ impl Storage {
         }
     }
 
-    pub(crate) fn custom_op3(
+    pub(crate) fn apply_op3(
         &self,
         l1: &Layout,
         t2: &Self,

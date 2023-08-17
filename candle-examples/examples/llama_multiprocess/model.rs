@@ -68,7 +68,7 @@ impl CustomOp1 for AllReduce {
 }
 
 fn all_reduce_sum(x: &Tensor, comm: &Rc<Comm>) -> Result<Tensor> {
-    x.custom_op1(AllReduce { comm: comm.clone() })
+    x.apply_op1(AllReduce { comm: comm.clone() })
 }
 
 impl TensorParallelRowLinear {
