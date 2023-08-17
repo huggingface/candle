@@ -165,6 +165,7 @@ impl CrossAttention {
     fn attention(&self, query: &Tensor, key: &Tensor, value: &Tensor) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let xs = if self.use_flash_attn {
+            let init_dtype = query.dtype();
             let q = query
                 .to_dtype(candle::DType::F16)?
                 .unsqueeze(0)?
@@ -180,6 +181,7 @@ impl CrossAttention {
             flash_attn(&q, &k, &v, self.scale as f32, false)?
                 .transpose(1, 2)?
                 .squeeze(0)?
+                .to_dtype(init_dtype)?
         } else {
             let xs = query.matmul(&(key.t()? * self.scale)?)?;
             nn::ops::softmax(&xs, D::Minus1)?.matmul(value)?
