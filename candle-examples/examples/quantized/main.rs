@@ -348,6 +348,14 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
+    println!(
+        "avx: {}, neon: {}, simd128: {}, f16c: {}",
+        candle::utils::with_avx(),
+        candle::utils::with_neon(),
+        candle::utils::with_simd128(),
+        candle::utils::with_f16c()
+    );
+
     let mut file = std::fs::File::open(&args.model()?)?;
     let start = std::time::Instant::now();
     let model = Content::read(&mut file)?;
