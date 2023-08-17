@@ -17,7 +17,7 @@ pub use conv::{conv1d, conv2d, Conv1d, Conv1dConfig, Conv2d, Conv2dConfig};
 pub use embedding::{embedding, Embedding};
 pub use group_norm::{group_norm, GroupNorm};
 pub use init::Init;
-pub use layer_norm::{layer_norm, LayerNorm};
+pub use layer_norm::{layer_norm, rms_norm, LayerNorm, LayerNormConfig};
 pub use linear::{linear, linear_no_bias, Linear};
 pub use optim::{AdamW, ParamsAdamW, SGD};
 pub use var_builder::{VarBuilder, VarMap};
