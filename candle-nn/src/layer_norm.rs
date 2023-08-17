@@ -139,3 +139,12 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
         eps: config.eps,
     })
 }
+
+pub fn rms_norm(size: usize, eps: f64, vb: crate::VarBuilder) -> Result<LayerNorm> {
+    let config = LayerNormConfig {
+        eps,
+        remove_mean: false,
+        affine: false,
+    };
+    layer_norm(size, config, vb)
+}
