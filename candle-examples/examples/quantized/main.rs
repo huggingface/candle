@@ -417,7 +417,7 @@ fn main() -> anyhow::Result<()> {
     }
     let dt = start_gen.elapsed();
     println!(
-        "\n\n{} tokens generated ({} token/s)\n",
+        "\n\n{} tokens generated ({:.2} token/s)\n",
         token_generated,
         token_generated as f64 / dt.as_secs_f64(),
     );
