@@ -180,7 +180,7 @@ fn quantized_matmul_q6k() -> Result<()> {
     let mut rng = StdRng::seed_from_u64(314159265358979);
 
     let cpu = &Device::Cpu;
-    let (m, k, n) = (256, 512, 256);
+    let (m, k, n) = (11, 512, 21);
     let lhs = (0..m * k)
         .map(|_| rng.gen::<f32>() - 0.5)
         .collect::<Vec<_>>();
@@ -198,11 +198,11 @@ fn quantized_matmul_q6k() -> Result<()> {
         .iter()
         .map(|x| (1000. * x).round() / 1000.)
         .collect::<Vec<_>>();
-    assert_eq!(dst, [0.717, 0.312, 0.69, 3.225]);
+    assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
-    let lhs = quantized::QTensor::quantize::<BlockQ6K>(&lhs)?;
-    let lhs = quantized::QMatMul::from_qtensor(lhs);
-    let mm = lhs.forward(&rhs)?;
+    let rhs = quantized::QTensor::quantize::<BlockQ6K>(&rhs)?;
+    let rhs = quantized::QMatMul::from_qtensor(rhs);
+    let mm = rhs.forward(&lhs)?;
 
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
@@ -210,7 +210,7 @@ fn quantized_matmul_q6k() -> Result<()> {
         .iter()
         .map(|x| (1000. * x).round() / 1000.)
         .collect::<Vec<_>>();
-    assert_eq!(dst, [0.694, 0.306, 0.753, 3.181]);
+    assert_eq!(dst, [1.324, 1.49, -0.164, 1.741]);
 
     Ok(())
 }
