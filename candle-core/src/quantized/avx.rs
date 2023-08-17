@@ -80,10 +80,10 @@ const K_SHUFFLE: [u8; 128] = [
 ];
 
 unsafe fn get_scale_shuffle(i: usize) -> __m128i {
-    _mm_loadu_si128(K_SHUFFLE.as_ptr().add(i) as *const __m128i)
+    _mm_loadu_si128((K_SHUFFLE.as_ptr() as *const __m128i).add(i))
 }
 #[inline(always)]
-pub fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Result<f32> {
+pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Result<f32> {
     let qk = QK_K;
     if n % qk != 0 {
         crate::bail!("vec_dot_q6k_8k: {n} is not divisible by {qk}")
