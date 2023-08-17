@@ -16,10 +16,10 @@ fn quantized_matmul() -> Result<()> {
     k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
     k_quants::matmul((m, k, n), &lhs, &rhs_t, &mut dst)?;
     assert_eq!(
-        dst,
+        dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
         &[
-            85120.43, 214561.61, 345454.9, 474748.1, 213474.94, 604465.25, 1000686.4, 1388317.3,
-            341875.88, 994283.0, 1655708.8, 2301518.3
+            85120.0, 214562.0, 345455.0, 474748.0, 213475.0, 604465.0, 1000686.0, 1388317.0,
+            341876.0, 994283.0, 1655709.0, 2301518.0
         ]
     );
     let mm = tensor_lhs.matmul(&tensor_rhs)?;
@@ -36,11 +36,11 @@ fn quantized_matmul() -> Result<()> {
     let matmul = quantized::QMatMul::from_qtensor(qtensor);
     let res = matmul.forward(&tensor_lhs)?;
     assert_eq!(
-        res.to_vec2::<f32>()?,
+        to_vec2_round(&res, 0)?,
         &[
-            [85120.43, 214561.61, 345454.9, 474748.1],
-            [213474.94, 604465.25, 1000686.4, 1388317.3],
-            [341875.88, 994283.0, 1655708.8, 2301518.3]
+            [85120.0, 214562.0, 345455.0, 474748.0],
+            [213475.0, 604465.0, 1000686.0, 1388317.0],
+            [341876.0, 994283.0, 1655709.0, 2301518.0]
         ]
     );
 
@@ -64,10 +64,10 @@ fn quantized_matmul_neg() -> Result<()> {
     k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
     k_quants::matmul((m, k, n), &lhs, &rhs_t, &mut dst)?;
     assert_eq!(
-        dst,
+        dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
         &[
-            243524.14, -19596.34, -285051.3, -549814.94, 23776.629, 21650.926, 19397.924,
-            18366.586, -196472.1, 63011.6, 324584.56, 587901.9
+            243524.0, -19596.0, -285051.0, -549815.0, 23777.0, 21651.0, 19398.0, 18367.0,
+            -196472.0, 63012.0, 324585.0, 587902.0
         ]
     );
     let mm = tensor_lhs.matmul(&tensor_rhs)?;

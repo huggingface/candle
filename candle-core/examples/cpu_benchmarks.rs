@@ -5,6 +5,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
+use candle_core::quantized::GgmlType;
 use candle_core::{Device, Result, Tensor, D};
 use clap::{Parser, Subcommand};
 
@@ -81,6 +82,27 @@ impl Benchmark for Matmul {
     const ITERS: usize = 100;
 }
 
+// This benchmark is similar to:
+// https://github.com/ggerganov/llama.cpp/blob/master/examples/benchmark/benchmark-matmult.cpp
+struct QMatMul;
+impl Benchmark for QMatMul {
+    type PreProcessData = (candle_core::quantized::QMatMul, Tensor);
+    type RunResult = Tensor;
+    fn preprocess() -> Result<Self::PreProcessData> {
+        let zeros = vec![candle_core::quantized::k_quants::BlockQ4_0::zeros(); 4096 * 11008 / 32];
+        let mm = candle_core::quantized::QTensor::new(zeros, (4096, 11008));
+        let mm = candle_core::quantized::QMatMul::from_qtensor(mm);
+        let arg = Tensor::randn(0f32, 1., (128, 11008), &Device::Cpu)?;
+        Ok((mm, arg))
+    }
+
+    fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
+        d.0.forward(&d.1)
+    }
+
+    const ITERS: usize = 100;
+}
+
 struct Softmax;
 impl Benchmark for Softmax {
     type PreProcessData = Tensor;
@@ -116,6 +138,7 @@ enum Task {
     Conv1d,
     Conv2d,
     Matmul,
+    Qmatmul,
     Softmax,
 }
 
@@ -137,6 +160,7 @@ fn main() -> Result<()> {
         Task::Conv2d => run::<Conv2d>(args.iters)?,
         Task::Matmul => run::<Matmul>(args.iters)?,
         Task::Softmax => run::<Softmax>(args.iters)?,
+        Task::Qmatmul => run::<QMatMul>(args.iters)?,
     }
     Ok(())
 }
