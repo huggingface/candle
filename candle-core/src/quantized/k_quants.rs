@@ -672,9 +672,9 @@ impl GgmlType for BlockQ6K {
         }
         let mut l = [0i8; QK_K];
         let mut scales = [0f32; QK_K / 16];
+        let mut x = xs.as_ptr();
         let l = l.as_mut_ptr();
         unsafe {
-            let mut x = xs.as_ptr();
             for y in ys.iter_mut() {
                 let mut max_scale = 0f32;
                 let mut max_abs_scale = 0f32;
@@ -692,7 +692,7 @@ impl GgmlType for BlockQ6K {
                 y.d = f16::from_f32(1.0 / iscale);
 
                 for (y_scale, scale) in y.scales.iter_mut().zip(scales.iter()) {
-                    *y_scale = (iscale * scale).min(127.) as i8
+                    *y_scale = nearest_int(iscale * scale).min(127) as i8
                 }
 
                 for (j, scale) in scales.iter().enumerate() {
@@ -701,9 +701,8 @@ impl GgmlType for BlockQ6K {
                         continue;
                     }
                     for ii in 0..16 {
-                        let ll = *x.add(16 * j + ii) / d;
-                        let ll = (ll.round() as i32 + 32).min(63).max(0);
-                        *l.add(16 * j + ii) = ll as i8
+                        let ll = nearest_int(*x.add(16 * j + ii) / d).clamp(-32, 31);
+                        *l.add(16 * j + ii) = (ll + 32) as i8
                     }
                 }
 
@@ -716,8 +715,8 @@ impl GgmlType for BlockQ6K {
                         let q2 = *l.add(j + l_idx + 32) & 0xF;
                         let q3 = *l.add(j + l_idx + 64) & 0xF;
                         let q4 = *l.add(j + l_idx + 96) & 0xF;
-                        *ql = (q1 | (q3 << 4)) as u8;
-                        *ql.add(32) = (q2 | (q4 << 4)) as u8;
+                        *ql.add(l_idx) = (q1 | (q3 << 4)) as u8;
+                        *ql.add(l_idx + 32) = (q2 | (q4 << 4)) as u8;
                         *qh.add(l_idx) = ((*l.add(j + l_idx) >> 4)
                             | ((*l.add(j + l_idx + 32) >> 4) << 2)
                             | ((*l.add(j + l_idx + 64) >> 4) << 4)
