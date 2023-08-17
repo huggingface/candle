@@ -484,7 +484,7 @@ unsafe fn make_qx_quants(n: usize, nmax: i32, x: *const f32, ls: *mut i8, rmse_t
         for i in 0..n {
             let x = *x.add(i);
             let l = nearest_int(iscale * x);
-            *ls.add(i) = (nmax + i32::max(-nmax, i32::max(nmax - 1, l))) as i8;
+            *ls.add(i) = (nmax + i32::max(-nmax, i32::min(nmax - 1, l))) as i8;
         }
         return 1.0 / iscale;
     }
@@ -570,8 +570,8 @@ unsafe fn make_qx_quants(n: usize, nmax: i32, x: *const f32, ls: *mut i8, rmse_t
             continue;
         }
         iscale = -(nmax as f32 + 0.1f32 * is as f32) / max;
-        sumlx = 0.;
-        suml2 = 0.;
+        let mut sumlx = 0.;
+        let mut suml2 = 0.;
         for i in 0..n {
             let x = *x.add(i);
             let l = nearest_int(iscale * x);
