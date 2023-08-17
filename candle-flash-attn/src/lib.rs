@@ -178,7 +178,7 @@ pub fn flash_attn(
         softmax_scale,
         causal,
     };
-    q.custom_op3(k, v, op)
+    q.apply_op3(k, v, op)
 }
 
 struct FlashAttnVarLen {
@@ -402,5 +402,5 @@ pub fn flash_attn_varlen(
         seqlens_q: seqlens_q.clone(),
         seqlens_k: seqlens_k.clone(),
     };
-    q.custom_op3(k, v, op)
+    q.apply_op3(k, v, op)
 }

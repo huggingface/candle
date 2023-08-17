@@ -89,7 +89,7 @@ fn main() -> anyhow::Result<()> {
     let device = candle_examples::device(args.cpu)?;
     let t = Tensor::arange(0f32, 14f32, &device)?.reshape((2, 7))?;
     println!("{t}");
-    let t = t.custom_op1(LayerNorm { eps: 1e-5 })?;
+    let t = t.apply_op1(LayerNorm { eps: 1e-5 })?;
     println!("{t}");
     Ok(())
 }
