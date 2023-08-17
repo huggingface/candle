@@ -103,16 +103,16 @@ pub fn conv1d(
     out_channels: usize,
     kernel_size: usize,
     cfg: Conv1dConfig,
-    vs: crate::VarBuilder,
+    vb: crate::VarBuilder,
 ) -> Result<Conv1d> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_or_init((out_channels, in_channels, kernel_size), "weight", init_ws)?;
+    let ws = vb.get_or_init((out_channels, in_channels, kernel_size), "weight", init_ws)?;
     let bound = 1. / (in_channels as f64).sqrt();
     let init_bs = crate::Init::Uniform {
         lo: -bound,
         up: bound,
     };
-    let bs = vs.get_or_init(out_channels, "bias", init_bs)?;
+    let bs = vb.get_or_init(out_channels, "bias", init_bs)?;
     Ok(Conv1d::new(ws, Some(bs), cfg))
 }
 
@@ -121,7 +121,7 @@ pub fn conv2d(
     out_channels: usize,
     kernel_size: usize,
     cfg: Conv2dConfig,
-    vs: crate::VarBuilder,
+    vb: crate::VarBuilder,
 ) -> Result<Conv2d> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vs.get_or_init(
