@@ -69,6 +69,7 @@ struct Decoder {
     model: Whisper,
     rng: rand::rngs::StdRng,
     task: Option<Task>,
+    timestamps: bool,
     tokenizer: Tokenizer,
     suppress_tokens: Tensor,
     sot_token: u32,
@@ -88,6 +89,7 @@ impl Decoder {
         device: &Device,
         language_token: Option<u32>,
         task: Option<Task>,
+        timestamps: bool,
     ) -> Result<Self> {
         let suppress_tokens: Vec<f32> = (0..model.config.vocab_size as u32)
             .map(|i| {
@@ -110,6 +112,7 @@ impl Decoder {
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             tokenizer,
             task,
+            timestamps,
             suppress_tokens,
             sot_token,
             transcribe_token,
@@ -139,7 +142,9 @@ impl Decoder {
         if let Some(language_token) = self.language_token {
             tokens.push(language_token);
         }
-        tokens.push(self.no_timestamps_token);
+        if !self.timestamps {
+            tokens.push(self.no_timestamps_token);
+        }
         for i in 0..sample_len {
             let tokens_t = Tensor::new(tokens.as_slice(), mel.device())?;
 
@@ -338,9 +343,14 @@ struct Args {
     #[arg(long)]
     language: Option<String>,
 
-    /// Task.
+    /// Task, when no task is specified, the input tokens contain only the sot token which can
+    /// improve things when in no-timestamp mode.
     #[arg(long)]
     task: Option<Task>,
+
+    /// Timestamps mode, this is not fully implemented yet.
+    #[arg(long)]
+    timestamps: bool,
 }
 
 fn main() -> Result<()> {
@@ -449,6 +459,7 @@ fn main() -> Result<()> {
         &device,
         language_token,
         args.task,
+        args.timestamps,
     )?;
     dc.run(&mel)?;
     Ok(())
