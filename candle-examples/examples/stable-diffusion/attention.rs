@@ -1,5 +1,5 @@
 //! Attention Based Building Blocks
-use candle::{IndexOp, Result, Tensor, D};
+use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn as nn;
 
 #[derive(Debug)]
@@ -183,8 +183,14 @@ impl CrossAttention {
                 .squeeze(0)?
                 .to_dtype(init_dtype)?
         } else {
+            let in_dtype = query.dtype();
+            let query = query.to_dtype(DType::F32)?;
+            let key = key.to_dtype(DType::F32)?;
+            let value = value.to_dtype(DType::F32)?;
             let xs = query.matmul(&(key.t()? * self.scale)?)?;
-            nn::ops::softmax(&xs, D::Minus1)?.matmul(value)?
+            nn::ops::softmax(&xs, D::Minus1)?
+                .matmul(&value)?
+                .to_dtype(in_dtype)?
         };
         self.reshape_batch_dim_to_heads(&xs)
     }
