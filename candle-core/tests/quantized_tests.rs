@@ -171,3 +171,28 @@ fn quantize_q6k() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn quantized_matmul_q6k() -> Result<()> {
+    use rand::prelude::*;
+    let mut rng = StdRng::seed_from_u64(314159265358979);
+
+    let cpu = &Device::Cpu;
+    let (m, k, n) = (256, 512, 256);
+    let lhs = (0..m * k).map(|_| rng.gen::<f32>()).collect::<Vec<_>>();
+    let rhs = (0..n * k).map(|_| rng.gen::<f32>()).collect::<Vec<_>>();
+
+    let lhs = Tensor::from_vec(lhs, (m, k), cpu)?;
+    let rhs = Tensor::from_vec(rhs, (n, k), cpu)?;
+
+    let mm = lhs.matmul(&rhs.t()?)?;
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = [dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]
+        .iter()
+        .map(|x| (1000. * x).round() / 1000.)
+        .collect::<Vec<_>>();
+    assert_eq!(dst, [130.499, 131.039, 129.785, 135.439]);
+
+    Ok(())
+}
