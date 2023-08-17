@@ -585,7 +585,7 @@ unsafe fn make_qx_quants(n: usize, nmax: i32, x: *const f32, ls: *mut i8, rmse_t
             for i in 0..n {
                 let x = *x.add(i);
                 let l = nearest_int(iscale * x);
-                *ls.add(i) = (nmax + i32::max(-nmax, i32::min(nmax - 1, l))) as i8;
+                *ls.add(i) = (nmax + l.clamp(-nmax, nmax - 1)) as i8;
             }
             scale = sumlx / suml2;
             best = scale * sumlx;
@@ -695,8 +695,8 @@ impl GgmlType for BlockQ6K {
                     *y_scale = nearest_int(iscale * scale).min(127) as i8
                 }
 
-                for (j, scale) in scales.iter().enumerate() {
-                    let d = y.d.to_f32() * scale;
+                for (j, &y_scale) in y.scales.iter().enumerate() {
+                    let d = y.d.to_f32() * y_scale as f32;
                     if d == 0. {
                         continue;
                     }
