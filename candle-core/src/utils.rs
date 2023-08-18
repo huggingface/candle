@@ -22,3 +22,19 @@ pub fn has_mkl() -> bool {
 pub fn cuda_is_available() -> bool {
     cfg!(feature = "cuda")
 }
+
+pub fn with_avx() -> bool {
+    cfg!(target_feature = "avx")
+}
+
+pub fn with_neon() -> bool {
+    cfg!(target_feature = "neon")
+}
+
+pub fn with_simd128() -> bool {
+    cfg!(target_feature = "simd128")
+}
+
+pub fn with_f16c() -> bool {
+    cfg!(target_feature = "f16c")
+}

@@ -231,7 +231,7 @@ fn main() -> Result<()> {
                 "{} token: {} '{}'",
                 index + 1,
                 next_token,
-                tokenizer.decode(vec![next_token], true).map_err(E::msg)?
+                tokenizer.decode(&[next_token], true).map_err(E::msg)?
             );
         }
     }
@@ -241,7 +241,9 @@ fn main() -> Result<()> {
             "{} tokens generated ({} token/s)\n----\n{}\n----",
             args.sample_len,
             args.sample_len as f64 / dt.as_secs_f64(),
-            tokenizer.decode(new_tokens, true).map_err(E::msg)?
+            tokenizer
+                .decode(new_tokens.as_slice(), true)
+                .map_err(E::msg)?
         );
     }
     Ok(())
