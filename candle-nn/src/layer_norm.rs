@@ -140,11 +140,29 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     })
 }
 
-pub fn rms_norm(size: usize, eps: f64, vb: crate::VarBuilder) -> Result<LayerNorm> {
+/// RmsNorm is a specialized version of the LayerNorm module.
+#[derive(Debug)]
+pub struct RmsNorm(LayerNorm);
+
+impl RmsNorm {
+    pub fn new(weight: Tensor, eps: f64) -> Self {
+        Self(LayerNorm::rms_norm(weight, eps))
+    }
+
+    pub fn into_inner(self) -> LayerNorm {
+        self.0
+    }
+
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        self.0.forward(xs)
+    }
+}
+
+pub fn rms_norm(size: usize, eps: f64, vb: crate::VarBuilder) -> Result<RmsNorm> {
     let config = LayerNormConfig {
         eps,
         remove_mean: false,
         affine: false,
     };
-    layer_norm(size, config, vb)
+    Ok(RmsNorm(layer_norm(size, config, vb)?))
 }
