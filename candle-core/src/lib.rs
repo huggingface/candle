@@ -56,6 +56,7 @@ pub mod layout;
 mod mkl;
 pub mod npy;
 mod op;
+pub mod pickle;
 pub mod quantized;
 pub mod safetensors;
 pub mod shape;
