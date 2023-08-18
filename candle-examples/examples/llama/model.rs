@@ -152,7 +152,7 @@ fn embedding(cfg: &Config, vb: VarBuilder) -> Result<Embedding> {
 }
 
 struct RmsNorm {
-    inner: candle_nn::LayerNorm,
+    inner: candle_nn::RmsNorm,
     span: tracing::Span,
 }
 

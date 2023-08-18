@@ -70,11 +70,12 @@ And then head over to
     - Optimized CPU backend with optional MKL support for x86 and Accelerate for macs.
     - CUDA backend for efficiently running on GPUs, multiple GPU distribution via NCCL.
     - WASM support, run your models in a browser.
-- Model support out of the box.
+- Included models.
     - LLMs: Llama v1 and v2, Falcon, StarCoder.
-    - Whisper.
+    - Whisper (multi-lingual support).
     - Stable Diffusion.
 - Serverless (on CPU), small and fast deployments.
+- Quantization support using the llama.cpp quantized types.
 
 <!--- ANCHOR_END: features --->
 
