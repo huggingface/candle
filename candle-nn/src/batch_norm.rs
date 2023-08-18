@@ -47,22 +47,40 @@ pub struct BatchNorm {
 }
 
 impl BatchNorm {
-    pub fn new(num_features: usize, weight: Tensor, bias: Tensor, eps: f64) -> Self {
-        Self {
+    pub fn new(num_features: usize, weight: Tensor, bias: Tensor, eps: f64) -> Result<Self> {
+        if eps < 0. {
+            candle::bail!("batch-norm eps cannot be negative")
+        }
+        if weight.dims() != [num_features] {
+            candle::bail!(
+                "batch-norm unexpected weight shape {:?} {num_features}",
+                weight.shape()
+            )
+        }
+        if bias.dims() != [num_features] {
+            candle::bail!(
+                "batch-norm unexpected bias shape {:?} {num_features}",
+                bias.shape()
+            )
+        }
+        Ok(Self {
             weight_and_bias: Some((weight, bias)),
             remove_mean: true,
             eps,
             num_features,
-        }
+        })
     }
 
-    pub fn new_no_bias(num_features: usize, eps: f64) -> Self {
-        Self {
+    pub fn new_no_bias(num_features: usize, eps: f64) -> Result<Self> {
+        if eps < 0. {
+            candle::bail!("batch-norm eps cannot be negative")
+        }
+        Ok(Self {
             weight_and_bias: None,
             remove_mean: true,
             eps,
             num_features,
-        }
+        })
     }
 }
 
@@ -77,6 +95,13 @@ impl crate::Module for BatchNorm {
             candle::bail!(
                 "batch-norm input tensor must have at least two dimensions ({:?})",
                 x.shape()
+            )
+        }
+        if x.dim(1)? != self.num_features {
+            candle::bail!(
+                "batch-norm input doesn't have the expected number of features ({:?} <> {})",
+                x.shape(),
+                self.num_features
             )
         }
         let x = x.to_dtype(internal_dtype)?;

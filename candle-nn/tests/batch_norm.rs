@@ -18,7 +18,7 @@ print(output.flatten())
 */
 #[test]
 fn batch_norm() -> Result<()> {
-    let bn = BatchNorm::new_no_bias(5, 1e-8);
+    let bn = BatchNorm::new_no_bias(5, 1e-8)?;
     let input: [f32; 120] = [
         -0.7493, -1.0410, 1.6977, -0.6579, 1.7982, -0.0087, 0.2812, -0.1190, 0.2908, -0.5975,
         -0.0278, -0.2138, -1.3130, -1.6048, -2.2028, 0.9452, 0.4002, 0.0831, 1.0004, 0.1860,
@@ -59,7 +59,7 @@ fn batch_norm() -> Result<()> {
         Tensor::new(&[0.5f32], &Device::Cpu)?.broadcast_as(5)?,
         Tensor::new(&[-1.5f32], &Device::Cpu)?.broadcast_as(5)?,
         1e-8,
-    );
+    )?;
     let output2 = bn2.forward(&input)?;
     assert_eq!(output2.dims(), &[2, 5, 3, 4]);
     let output2 = output2.flatten_all()?;
