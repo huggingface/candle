@@ -2,6 +2,7 @@ use crate::{Error as E, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::BufRead;
 
+// https://docs.juliahub.com/Pickle/LAUNc/0.1.0/opcode/
 #[repr(u8)]
 pub enum OpCode {
     // https://github.com/python/cpython/blob/ed25f097160b5cbb0c9a1f9a746d2f1bbc96515a/Lib/pickletools.py#L2123
@@ -81,110 +82,147 @@ fn read_to_newline<R: BufRead>(r: &mut R) -> Result<Vec<u8>> {
     Ok(data)
 }
 
-pub fn read<R: BufRead>(r: &mut R) -> Result<bool> {
-    let op_code = r.read_u8()?;
-    match OpCode::try_from(op_code) {
-        Ok(OpCode::Proto) => {
-            let version = r.read_u8()?;
-            println!("proto {version}");
-        }
-        Ok(OpCode::Global) => {
-            let module_name = read_to_newline(r)?;
-            let class_name = read_to_newline(r)?;
-            let module_name = String::from_utf8_lossy(&module_name).to_string();
-            let class_name = String::from_utf8_lossy(&class_name).to_string();
-            println!("global '{}' '{}'", module_name, class_name);
-        }
-        Ok(OpCode::BinInt1) => {
-            let arg = r.read_u8()?;
-            println!("binint1 {arg}");
-        }
-        Ok(OpCode::BinInt2) => {
-            let arg = r.read_u16::<LittleEndian>()?;
-            println!("binint2 {arg}");
-        }
-        Ok(OpCode::BinInt) => {
-            let arg = r.read_u32::<LittleEndian>()?;
-            println!("binint {arg}");
-        }
-        Ok(OpCode::BinUnicode) => {
-            let len = r.read_u32::<LittleEndian>()?;
-            let mut data = vec![0u8; len as usize];
-            r.read_exact(&mut data)?;
-            let data = String::from_utf8(data).map_err(E::wrap)?;
-            println!("binunicode {data}");
-        }
-        Ok(OpCode::BinPersId) => {
-            println!("binpersid");
-        }
-        Ok(OpCode::Tuple) => {
-            println!("tuple");
-        }
-        Ok(OpCode::Tuple1) => {
-            println!("tuple1");
-        }
-        Ok(OpCode::Tuple2) => {
-            println!("tuple2");
-        }
-        Ok(OpCode::Tuple3) => {
-            println!("tuple3");
-        }
-        Ok(OpCode::NewTrue) => {
-            println!("true");
-        }
-        Ok(OpCode::NewFalse) => {
-            println!("false");
-        }
-        Ok(OpCode::SetItem) => {
-            println!("setitem");
-        }
-        Ok(OpCode::SetItems) => {
-            println!("setitems");
-        }
-        Ok(OpCode::None) => {
-            println!("none");
-        }
-        Ok(OpCode::Stop) => {
-            println!("stop");
-            return Ok(false);
-        }
-        Ok(OpCode::Build) => {
-            println!("build");
-        }
-        Ok(OpCode::EmptyDict) => {
-            println!("emptydict");
-        }
-        Ok(OpCode::Dict) => {
-            println!("dict");
-        }
-        Ok(OpCode::Mark) => {
-            println!("mark");
-        }
-        Ok(OpCode::Reduce) => {
-            println!("reduce");
-        }
-        Ok(OpCode::EmptyTuple) => {
-            println!("empty-tuple");
-        }
-        Ok(OpCode::BinGet) => {
-            let arg = r.read_u8()?;
-            println!("binget {arg}");
-        }
-        Ok(OpCode::LongBinGet) => {
-            let arg = r.read_u32::<LittleEndian>()?;
-            println!("binget {arg}");
-        }
-        Ok(OpCode::BinPut) => {
-            let arg = r.read_u8()?;
-            println!("binput {arg}");
-        }
-        Ok(OpCode::LongBinPut) => {
-            let arg = r.read_u32::<LittleEndian>()?;
-            println!("binput {arg}");
-        }
-        Err(op_code) => {
-            crate::bail!("unknown op-code {op_code}")
+#[derive(Debug)]
+enum Object {
+    Class {
+        module_name: String,
+        class_name: String,
+    },
+    Int(i32),
+    Unicode(String),
+}
+
+#[derive(Debug)]
+pub struct Stack {
+    stack: Vec<Object>,
+}
+
+impl Stack {
+    pub fn empty() -> Self {
+        Self {
+            stack: Vec::with_capacity(512),
         }
     }
-    Ok(true)
+
+    pub fn read_loop<R: BufRead>(&mut self, r: &mut R) -> Result<()> {
+        loop {
+            if self.read(r)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn read<R: BufRead>(&mut self, r: &mut R) -> Result<bool> {
+        let op_code = match OpCode::try_from(r.read_u8()?) {
+            Ok(op_code) => op_code,
+            Err(op_code) => {
+                crate::bail!("unknown op-code {op_code}")
+            }
+        };
+        match op_code {
+            OpCode::Proto => {
+                let version = r.read_u8()?;
+                println!("proto {version}");
+            }
+            OpCode::Global => {
+                let module_name = read_to_newline(r)?;
+                let class_name = read_to_newline(r)?;
+                let module_name = String::from_utf8_lossy(&module_name).to_string();
+                let class_name = String::from_utf8_lossy(&class_name).to_string();
+                self.stack.push(Object::Class {
+                    module_name,
+                    class_name,
+                })
+            }
+            OpCode::BinInt1 => {
+                let arg = r.read_u8()?;
+                self.stack.push(Object::Int(arg as i32))
+            }
+            OpCode::BinInt2 => {
+                let arg = r.read_u16::<LittleEndian>()?;
+                self.stack.push(Object::Int(arg as i32))
+            }
+            OpCode::BinInt => {
+                let arg = r.read_i32::<LittleEndian>()?;
+                self.stack.push(Object::Int(arg))
+            }
+            OpCode::BinUnicode => {
+                let len = r.read_u32::<LittleEndian>()?;
+                let mut data = vec![0u8; len as usize];
+                r.read_exact(&mut data)?;
+                let data = String::from_utf8(data).map_err(E::wrap)?;
+                self.stack.push(Object::Unicode(data))
+            }
+            OpCode::BinPersId => {
+                println!("binpersid");
+            }
+            OpCode::Tuple => {
+                println!("tuple");
+            }
+            OpCode::Tuple1 => {
+                println!("tuple1");
+            }
+            OpCode::Tuple2 => {
+                println!("tuple2");
+            }
+            OpCode::Tuple3 => {
+                println!("tuple3");
+            }
+            OpCode::NewTrue => {
+                println!("true");
+            }
+            OpCode::NewFalse => {
+                println!("false");
+            }
+            OpCode::SetItem => {
+                println!("setitem");
+            }
+            OpCode::SetItems => {
+                println!("setitems");
+            }
+            OpCode::None => {
+                println!("none");
+            }
+            OpCode::Stop => {
+                println!("stop");
+                return Ok(true);
+            }
+            OpCode::Build => {
+                println!("build");
+            }
+            OpCode::EmptyDict => {
+                println!("emptydict");
+            }
+            OpCode::Dict => {
+                println!("dict");
+            }
+            OpCode::Mark => {
+                println!("mark");
+            }
+            OpCode::Reduce => {
+                println!("reduce");
+            }
+            OpCode::EmptyTuple => {
+                println!("empty-tuple");
+            }
+            OpCode::BinGet => {
+                let arg = r.read_u8()?;
+                println!("binget {arg}");
+            }
+            OpCode::LongBinGet => {
+                let arg = r.read_u32::<LittleEndian>()?;
+                println!("binget {arg}");
+            }
+            OpCode::BinPut => {
+                let arg = r.read_u8()?;
+                println!("binput {arg}");
+            }
+            OpCode::LongBinPut => {
+                let arg = r.read_u32::<LittleEndian>()?;
+                println!("binput {arg}");
+            }
+        }
+        Ok(false)
+    }
 }
