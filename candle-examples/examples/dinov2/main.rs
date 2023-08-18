@@ -291,7 +291,7 @@ pub fn vit_small(vb: VarBuilder) -> Result<DinoVisionTransformer> {
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
-    model: String,
+    model: Option<String>,
 
     #[arg(long)]
     image: String,
@@ -309,7 +309,15 @@ pub fn main() -> anyhow::Result<()> {
     let image = candle_examples::load_image224(args.image)?;
     println!("loaded image {image:?}");
 
-    let weights = unsafe { candle::safetensors::MmapedFile::new(args.model)? };
+    let model_file = match args.model {
+        None => {
+            let api = hf_hub::api::sync::Api::new()?;
+            let api = api.model("lmz/candle-dino-v2".into());
+            api.get("dinov2_vits14.safetensors")?
+        }
+        Some(model) => model.into(),
+    };
+    let weights = unsafe { candle::safetensors::MmapedFile::new(model_file)? };
     let weights = weights.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
     let model = vit_small(vb)?;
