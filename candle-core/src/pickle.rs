@@ -266,8 +266,7 @@ impl Stack {
                     if objs.len() % 2 != 0 {
                         crate::bail!("setitems: not an even number of objects")
                     }
-                    while !objs.is_empty() {
-                        let value = objs.pop().unwrap();
+                    while let Some(value) = objs.pop() {
                         let key = objs.pop().unwrap();
                         d.push((key, value))
                     }
