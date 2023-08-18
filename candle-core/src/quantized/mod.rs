@@ -184,6 +184,7 @@ impl QTensor {
     }
 }
 
+#[derive(Debug)]
 pub struct QMatMul(QTensor);
 
 impl QMatMul {

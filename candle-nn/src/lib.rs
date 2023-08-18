@@ -32,3 +32,9 @@ pub trait Module: std::fmt::Debug {
     /// dropout or batch-normalization.
     fn set_training(&mut self, _training: bool) {}
 }
+
+impl Module for candle::quantized::QMatMul {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        self.forward(xs)
+    }
+}
