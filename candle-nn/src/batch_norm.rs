@@ -49,7 +49,7 @@ pub struct BatchNorm {
 impl BatchNorm {
     pub fn new(num_features: usize, weight: Tensor, bias: Tensor, eps: f64) -> Result<Self> {
         if eps < 0. {
-            candle::bail!("batch-norm eps cannot be negative")
+            candle::bail!("batch-norm eps cannot be negative {eps}")
         }
         if weight.dims() != [num_features] {
             candle::bail!(
@@ -73,7 +73,7 @@ impl BatchNorm {
 
     pub fn new_no_bias(num_features: usize, eps: f64) -> Result<Self> {
         if eps < 0. {
-            candle::bail!("batch-norm eps cannot be negative")
+            candle::bail!("batch-norm eps cannot be negative {eps}")
         }
         Ok(Self {
             weight_and_bias: None,
@@ -135,6 +135,9 @@ pub fn batch_norm<C: Into<BatchNormConfig>>(
     vb: crate::VarBuilder,
 ) -> Result<BatchNorm> {
     let config = config.into();
+    if config.eps < 0. {
+        candle::bail!("batch-norm eps cannot be negative {}", config.eps)
+    }
     let weight_and_bias = if config.affine {
         let weight = vb.get_or_init(num_features, "weight", crate::Init::Const(1.))?;
         let bias = vb.get_or_init(num_features, "bias", crate::Init::Const(0.))?;
