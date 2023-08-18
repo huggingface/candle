@@ -293,6 +293,9 @@ struct Args {
     #[arg(long)]
     model: String,
 
+    #[arg(long)]
+    image: String,
+
     /// Run on CPU rather than on GPU.
     #[arg(long)]
     cpu: bool,

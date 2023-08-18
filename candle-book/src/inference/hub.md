@@ -58,7 +58,7 @@ Now that we have our weights, we can use them in our bert architecture:
 # 
 # let weights = repo.get("model.safetensors").unwrap();
 use candle_core::{Device, Tensor, DType};
-use candle_nn::Linear;
+use candle_nn::{Linear, Module};
 
 let weights = candle_core::safetensors::load(weights, &Device::Cpu).unwrap();
 
