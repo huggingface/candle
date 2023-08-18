@@ -117,6 +117,7 @@ pub enum Op {
     Reshape(Tensor),
     ToDevice(Tensor),
     Transpose(Tensor, usize, usize),
+    Permute(Tensor, Vec<usize>),
     Elu(Tensor, f64),
     CustomOp1(Tensor, std::sync::Arc<Box<dyn CustomOp1 + Send + Sync>>),
     CustomOp2(

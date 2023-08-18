@@ -13,8 +13,8 @@ pub fn device(cpu: bool) -> Result<Device> {
 }
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
-/// (3, 224, 224). imagenet normaliation is applied.
-pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
+/// (3, 224, 224). imagenet normalization is applied.
+pub fn load_image224<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
     let img = image::io::Reader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?

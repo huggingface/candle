@@ -306,8 +306,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    // TODO: apply imagenet normalization.
-    let image = candle_examples::load_image(args.image)?;
+    let image = candle_examples::load_image224(args.image)?;
     println!("loaded image {image:?}");
 
     let weights = unsafe { candle::safetensors::MmapedFile::new(args.model)? };
