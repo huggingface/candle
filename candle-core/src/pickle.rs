@@ -5,6 +5,7 @@ use std::io::BufRead;
 
 // https://docs.juliahub.com/Pickle/LAUNc/0.1.0/opcode/
 #[repr(u8)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum OpCode {
     // https://github.com/python/cpython/blob/ed25f097160b5cbb0c9a1f9a746d2f1bbc96515a/Lib/pickletools.py#L2123
     Proto = 0x80,
@@ -95,6 +96,11 @@ pub enum Object {
     None,
     Tuple(Vec<Object>),
     Mark,
+    Dict(Vec<(Object, Object)>),
+    Reduce {
+        callable: Box<Object>,
+        args: Box<Object>,
+    },
 }
 
 #[derive(Debug)]
@@ -120,8 +126,19 @@ impl Stack {
         Ok(())
     }
 
+    pub fn push(&mut self, obj: Object) {
+        self.stack.push(obj)
+    }
+
     pub fn pop(&mut self) -> Result<Object> {
         match self.stack.pop() {
+            None => crate::bail!("unexpected empty stack"),
+            Some(obj) => Ok(obj),
+        }
+    }
+
+    pub fn last(&mut self) -> Result<&mut Object> {
+        match self.stack.last_mut() {
             None => crate::bail!("unexpected empty stack"),
             Some(obj) => Ok(obj),
         }
@@ -138,9 +155,14 @@ impl Stack {
     }
 
     pub fn memo_put(&mut self, id: u32) -> Result<()> {
-        let obj = self.pop()?;
+        let obj = self.last()?.clone();
         self.memo.insert(id, obj);
         Ok(())
+    }
+
+    pub fn persistent_load(&mut self, id: Object) -> Result<Object> {
+        println!("persistent-load: {id:?}");
+        Ok(id)
     }
 
     pub fn read<R: BufRead>(&mut self, r: &mut R) -> Result<bool> {
@@ -150,6 +172,8 @@ impl Stack {
                 crate::bail!("unknown op-code {op_code}")
             }
         };
+        // println!("op: {op_code:?}");
+        // println!("{:?}", self.stack);
         match op_code {
             OpCode::Proto => {
                 let version = r.read_u8()?;
@@ -160,32 +184,34 @@ impl Stack {
                 let class_name = read_to_newline(r)?;
                 let module_name = String::from_utf8_lossy(&module_name).to_string();
                 let class_name = String::from_utf8_lossy(&class_name).to_string();
-                self.stack.push(Object::Class {
+                self.push(Object::Class {
                     module_name,
                     class_name,
                 })
             }
             OpCode::BinInt1 => {
                 let arg = r.read_u8()?;
-                self.stack.push(Object::Int(arg as i32))
+                self.push(Object::Int(arg as i32))
             }
             OpCode::BinInt2 => {
                 let arg = r.read_u16::<LittleEndian>()?;
-                self.stack.push(Object::Int(arg as i32))
+                self.push(Object::Int(arg as i32))
             }
             OpCode::BinInt => {
                 let arg = r.read_i32::<LittleEndian>()?;
-                self.stack.push(Object::Int(arg))
+                self.push(Object::Int(arg))
             }
             OpCode::BinUnicode => {
                 let len = r.read_u32::<LittleEndian>()?;
                 let mut data = vec![0u8; len as usize];
                 r.read_exact(&mut data)?;
                 let data = String::from_utf8(data).map_err(E::wrap)?;
-                self.stack.push(Object::Unicode(data))
+                self.push(Object::Unicode(data))
             }
             OpCode::BinPersId => {
-                println!("binpersid");
+                let id = self.pop()?;
+                let obj = self.persistent_load(id)?;
+                self.push(obj)
             }
             OpCode::Tuple => {
                 let mut objs = vec![];
@@ -197,59 +223,88 @@ impl Stack {
                     objs.push(obj)
                 }
                 objs.reverse();
-                self.stack.push(Object::Tuple(objs))
+                self.push(Object::Tuple(objs))
             }
             OpCode::Tuple1 => {
                 let obj = self.pop()?;
-                self.stack.push(Object::Tuple(vec![obj]))
+                self.push(Object::Tuple(vec![obj]))
             }
             OpCode::Tuple2 => {
                 let obj2 = self.pop()?;
                 let obj1 = self.pop()?;
-                self.stack.push(Object::Tuple(vec![obj1, obj2]))
+                self.push(Object::Tuple(vec![obj1, obj2]))
             }
             OpCode::Tuple3 => {
                 let obj3 = self.pop()?;
                 let obj2 = self.pop()?;
                 let obj1 = self.pop()?;
-                self.stack.push(Object::Tuple(vec![obj1, obj2, obj3]))
+                self.push(Object::Tuple(vec![obj1, obj2, obj3]))
             }
-            OpCode::NewTrue => self.stack.push(Object::Bool(true)),
-            OpCode::NewFalse => self.stack.push(Object::Bool(false)),
+            OpCode::NewTrue => self.push(Object::Bool(true)),
+            OpCode::NewFalse => self.push(Object::Bool(false)),
             OpCode::SetItem => {
-                println!("setitem");
+                let value = self.pop()?;
+                let key = self.pop()?;
+                let pydict = self.last()?;
+                if let Object::Dict(d) = pydict {
+                    d.push((key, value))
+                } else {
+                    crate::bail!("expected a dict, got {pydict:?}")
+                }
             }
             OpCode::SetItems => {
-                println!("setitems");
+                let mut objs = vec![];
+                loop {
+                    let obj = self.pop()?;
+                    if obj == Object::Mark {
+                        break;
+                    }
+                    objs.push(obj)
+                }
+                let pydict = self.last()?;
+                if let Object::Dict(d) = pydict {
+                    if objs.len() % 2 != 0 {
+                        crate::bail!("setitems: not an even number of objects")
+                    }
+                    while !objs.is_empty() {
+                        let value = objs.pop().unwrap();
+                        let key = objs.pop().unwrap();
+                        d.push((key, value))
+                    }
+                } else {
+                    crate::bail!("expected a dict, got {pydict:?}")
+                }
             }
-            OpCode::None => self.stack.push(Object::None),
+            OpCode::None => self.push(Object::None),
             OpCode::Stop => {
-                println!("stop");
                 return Ok(true);
             }
             OpCode::Build => {
                 println!("build");
             }
-            OpCode::EmptyDict => {
-                println!("emptydict");
-            }
+            OpCode::EmptyDict => self.push(Object::Dict(vec![])),
             OpCode::Dict => {
                 println!("dict");
             }
-            OpCode::Mark => self.stack.push(Object::Mark),
+            OpCode::Mark => self.push(Object::Mark),
             OpCode::Reduce => {
-                println!("reduce");
+                let args = self.pop()?;
+                let callable = self.pop()?;
+                self.push(Object::Reduce {
+                    callable: Box::new(callable),
+                    args: Box::new(args),
+                })
             }
-            OpCode::EmptyTuple => self.stack.push(Object::Tuple(vec![])),
+            OpCode::EmptyTuple => self.push(Object::Tuple(vec![])),
             OpCode::BinGet => {
                 let arg = r.read_u8()?;
                 let obj = self.memo_get(arg as u32)?;
-                self.stack.push(obj)
+                self.push(obj)
             }
             OpCode::LongBinGet => {
                 let arg = r.read_u32::<LittleEndian>()?;
                 let obj = self.memo_get(arg)?;
-                self.stack.push(obj)
+                self.push(obj)
             }
             OpCode::BinPut => {
                 let arg = r.read_u8()?;
