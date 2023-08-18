@@ -43,22 +43,25 @@ pub struct BatchNorm {
     weight_and_bias: Option<(Tensor, Tensor)>,
     remove_mean: bool,
     eps: f64,
+    num_features: usize,
 }
 
 impl BatchNorm {
-    pub fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
+    pub fn new(num_features: usize, weight: Tensor, bias: Tensor, eps: f64) -> Self {
         Self {
             weight_and_bias: Some((weight, bias)),
             remove_mean: true,
             eps,
+            num_features,
         }
     }
 
-    pub fn new_no_bias(eps: f64) -> Self {
+    pub fn new_no_bias(num_features: usize, eps: f64) -> Self {
         Self {
             weight_and_bias: None,
             remove_mean: true,
             eps,
+            num_features,
         }
     }
 }
@@ -86,26 +89,30 @@ impl crate::Module for BatchNorm {
         } else {
             x
         };
-        let norm_x = x.sqr()?.mean_keepdim(2)?;
+        let norm_x = x.sqr()?.mean_keepdim(1)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
         let x = x_normed.to_dtype(x_dtype)?;
         let x = match &self.weight_and_bias {
             None => x,
-            Some((weight, bias)) => x.broadcast_mul(weight)?.broadcast_add(bias)?,
+            Some((weight, bias)) => {
+                let weight = weight.reshape((self.num_features, 1))?;
+                let bias = bias.reshape((self.num_features, 1))?;
+                x.broadcast_mul(&weight)?.broadcast_add(&bias)?
+            }
         };
         x.reshape(x_dims_post_transpose)?.transpose(0, 1)
     }
 }
 
 pub fn batch_norm<C: Into<BatchNormConfig>>(
-    size: usize,
+    num_features: usize,
     config: C,
     vb: crate::VarBuilder,
 ) -> Result<BatchNorm> {
     let config = config.into();
     let weight_and_bias = if config.affine {
-        let weight = vb.get_or_init(size, "weight", crate::Init::Const(1.))?;
-        let bias = vb.get_or_init(size, "bias", crate::Init::Const(0.))?;
+        let weight = vb.get_or_init(num_features, "weight", crate::Init::Const(1.))?;
+        let bias = vb.get_or_init(num_features, "bias", crate::Init::Const(0.))?;
         Some((weight, bias))
     } else {
         None
@@ -114,5 +121,6 @@ pub fn batch_norm<C: Into<BatchNormConfig>>(
         weight_and_bias,
         remove_mean: config.remove_mean,
         eps: config.eps,
+        num_features,
     })
 }
