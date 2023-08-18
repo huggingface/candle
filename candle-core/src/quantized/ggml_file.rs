@@ -125,7 +125,7 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
     let raw_data_ptr = raw_data.as_ptr();
     let n_blocks = size_in_bytes / std::mem::size_of::<T>();
     let data = unsafe { std::slice::from_raw_parts(raw_data_ptr as *const T, n_blocks) };
-    Ok(super::QTensor::new(data.to_vec(), dims))
+    super::QTensor::new(data.to_vec(), dims)
 }
 
 /// Creates a [Tensor] from a raw GGML tensor.
