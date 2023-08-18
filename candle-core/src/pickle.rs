@@ -126,25 +126,35 @@ impl Stack {
         Ok(())
     }
 
-    pub fn push(&mut self, obj: Object) {
+    fn push(&mut self, obj: Object) {
         self.stack.push(obj)
     }
 
-    pub fn pop(&mut self) -> Result<Object> {
+    fn pop(&mut self) -> Result<Object> {
         match self.stack.pop() {
             None => crate::bail!("unexpected empty stack"),
             Some(obj) => Ok(obj),
         }
     }
 
-    pub fn last(&mut self) -> Result<&mut Object> {
+    fn reduce(&mut self) -> Result<()> {
+        let args = self.pop()?;
+        let callable = self.pop()?;
+        self.push(Object::Reduce {
+            callable: Box::new(callable),
+            args: Box::new(args),
+        });
+        Ok(())
+    }
+
+    fn last(&mut self) -> Result<&mut Object> {
         match self.stack.last_mut() {
             None => crate::bail!("unexpected empty stack"),
             Some(obj) => Ok(obj),
         }
     }
 
-    pub fn memo_get(&self, id: u32) -> Result<Object> {
+    fn memo_get(&self, id: u32) -> Result<Object> {
         match self.memo.get(&id) {
             None => crate::bail!("missing object in memo {id}"),
             Some(obj) => {
@@ -154,15 +164,28 @@ impl Stack {
         }
     }
 
-    pub fn memo_put(&mut self, id: u32) -> Result<()> {
+    fn memo_put(&mut self, id: u32) -> Result<()> {
         let obj = self.last()?.clone();
         self.memo.insert(id, obj);
         Ok(())
     }
 
-    pub fn persistent_load(&mut self, id: Object) -> Result<Object> {
+    fn persistent_load(&mut self, id: Object) -> Result<Object> {
         println!("persistent-load: {id:?}");
         Ok(id)
+    }
+
+    fn pop_to_marker(&mut self) -> Result<Vec<Object>> {
+        let mut objs = vec![];
+        loop {
+            let obj = self.pop()?;
+            if obj == Object::Mark {
+                break;
+            }
+            objs.push(obj)
+        }
+        objs.reverse();
+        Ok(objs)
     }
 
     pub fn read<R: BufRead>(&mut self, r: &mut R) -> Result<bool> {
@@ -214,15 +237,7 @@ impl Stack {
                 self.push(obj)
             }
             OpCode::Tuple => {
-                let mut objs = vec![];
-                loop {
-                    let obj = self.pop()?;
-                    if obj == Object::Mark {
-                        break;
-                    }
-                    objs.push(obj)
-                }
-                objs.reverse();
+                let objs = self.pop_to_marker()?;
                 self.push(Object::Tuple(objs))
             }
             OpCode::Tuple1 => {
@@ -253,14 +268,7 @@ impl Stack {
                 }
             }
             OpCode::SetItems => {
-                let mut objs = vec![];
-                loop {
-                    let obj = self.pop()?;
-                    if obj == Object::Mark {
-                        break;
-                    }
-                    objs.push(obj)
-                }
+                let mut objs = self.pop_to_marker()?;
                 let pydict = self.last()?;
                 if let Object::Dict(d) = pydict {
                     if objs.len() % 2 != 0 {
@@ -283,17 +291,19 @@ impl Stack {
             }
             OpCode::EmptyDict => self.push(Object::Dict(vec![])),
             OpCode::Dict => {
-                println!("dict");
+                let mut objs = self.pop_to_marker()?;
+                let mut pydict = vec![];
+                if objs.len() % 2 != 0 {
+                    crate::bail!("setitems: not an even number of objects")
+                }
+                while let Some(value) = objs.pop() {
+                    let key = objs.pop().unwrap();
+                    pydict.push((key, value))
+                }
+                self.push(Object::Dict(pydict))
             }
             OpCode::Mark => self.push(Object::Mark),
-            OpCode::Reduce => {
-                let args = self.pop()?;
-                let callable = self.pop()?;
-                self.push(Object::Reduce {
-                    callable: Box::new(callable),
-                    args: Box::new(args),
-                })
-            }
+            OpCode::Reduce => self.reduce()?,
             OpCode::EmptyTuple => self.push(Object::Tuple(vec![])),
             OpCode::BinGet => {
                 let arg = r.read_u8()?;
