@@ -1,6 +1,6 @@
 use anyhow::Result;
 use candle::{DType, Device, Tensor, D};
-use candle_nn::{Embedding, LayerNorm, Linear, VarBuilder};
+use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder};
 
 const MAX_SEQ_LEN: usize = 5000;
 

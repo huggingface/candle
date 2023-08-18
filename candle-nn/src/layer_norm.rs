@@ -8,7 +8,7 @@
 //!
 //! ```rust
 //! use candle::{Tensor, Device::Cpu};
-//! use candle_nn::LayerNorm;
+//! use candle_nn::{LayerNorm, Module};
 //! # fn main() -> candle::Result<()> {
 //!
 //! let w = Tensor::new(1f32, &Cpu)?;

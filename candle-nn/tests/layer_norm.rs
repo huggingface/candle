@@ -3,7 +3,7 @@ extern crate intel_mkl_src;
 
 use anyhow::Result;
 use candle::{Device, Tensor};
-use candle_nn::LayerNorm;
+use candle_nn::{LayerNorm, Module};
 
 #[test]
 fn layer_norm() -> Result<()> {

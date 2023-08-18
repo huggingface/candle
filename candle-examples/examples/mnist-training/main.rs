@@ -5,7 +5,7 @@ extern crate intel_mkl_src;
 use clap::{Parser, ValueEnum};
 
 use candle::{DType, Result, Tensor, D};
-use candle_nn::{loss, ops, Linear, VarBuilder, VarMap};
+use candle_nn::{loss, ops, Linear, Module, VarBuilder, VarMap};
 
 const IMAGE_DIM: usize = 784;
 const LABELS: usize = 10;

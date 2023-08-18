@@ -4,6 +4,7 @@
 use crate::nn::{embedding, linear, Dropout, Embedding, HiddenAct, Linear, VarBuilder};
 use anyhow::Result;
 use candle::{DType, Tensor, D};
+use candle_nn::Module;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]

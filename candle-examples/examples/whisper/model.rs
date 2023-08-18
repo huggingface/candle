@@ -1,5 +1,5 @@
 use candle::{Device, IndexOp, Result, Tensor};
-use candle_nn::{ops::softmax, Conv1d, Conv1dConfig, Embedding, LayerNorm, VarBuilder};
+use candle_nn::{ops::softmax, Conv1d, Conv1dConfig, Embedding, LayerNorm, Module, VarBuilder};
 use serde::Deserialize;
 
 // The names in comments correspond to the original implementation:

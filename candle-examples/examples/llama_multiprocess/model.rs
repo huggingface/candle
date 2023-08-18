@@ -1,6 +1,6 @@
 use candle::backend::BackendStorage;
 use candle::{CpuStorage, CustomOp1, DType, Device, IndexOp, Layout, Result, Shape, Tensor, D};
-use candle_nn::{rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
+use candle_nn::{rms_norm, Embedding, Linear, Module, RmsNorm, VarBuilder};
 use cudarc::nccl::safe::{Comm, ReduceOp};
 use half::f16;
 use std::rc::Rc;
