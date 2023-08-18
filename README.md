@@ -28,7 +28,10 @@ Check out our [examples](./candle-examples/examples/):
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code
   generation.
 - [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
-  image generative model, yet to be optimized.
+  image generative model.
+- [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
+  using self-supervision (can be used for imagenet classification, depth
+  evaluation, segmentation).
 
 Run them using the following commands:
 ```
@@ -38,6 +41,7 @@ cargo run --example falcon --release
 cargo run --example bert --release
 cargo run --example bigcode --release
 cargo run --example stable-diffusion --release -- --prompt "a rusty robot holding a fire torch"
+cargo run --example dinov2 --release -- --image path/to/myinput.jpg
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
@@ -75,6 +79,7 @@ And then head over to
     - LLMs: Llama v1 and v2, Falcon, StarCoder.
     - Whisper (multi-lingual support).
     - Stable Diffusion.
+    - Computer Vision: DINOv2.
 - Serverless (on CPU), small and fast deployments.
 - Quantization support using the llama.cpp quantized types.
 
