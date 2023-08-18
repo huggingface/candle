@@ -147,6 +147,32 @@ fn quantize_q8k() -> Result<()> {
 }
 
 #[test]
+fn quantize_q2k() -> Result<()> {
+    use k_quants::BlockQ2K;
+
+    let src = (0..256 * 4)
+        .map(|v| (v as f32 - 512.) / 1024.)
+        .collect::<Vec<_>>();
+    let mut dst = vec![0f32; 256 * 4];
+    let mut quant = vec![BlockQ2K::zeros(); 4];
+    BlockQ2K::from_float(&src, &mut quant)?;
+    BlockQ2K::to_float(&quant, dst.as_mut_slice())?;
+    assert_eq!(
+        [src[0], src[128], src[256], src[512], src[800], src[1023]],
+        [-0.5, -0.375, -0.25, 0.0, 0.28125, 0.49902344]
+    );
+    let dst = dst
+        .iter()
+        .map(|x| (1000. * x).round() / 1000.)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
+        [-0.497, -0.372, -0.25, -0.0, 0.284, 0.5]
+    );
+    Ok(())
+}
+
+#[test]
 fn quantize_q6k() -> Result<()> {
     use k_quants::BlockQ6K;
 
@@ -171,6 +197,8 @@ fn quantize_q6k() -> Result<()> {
     );
     Ok(())
 }
+
+
 
 #[test]
 fn quantized_matmul_q6k() -> Result<()> {

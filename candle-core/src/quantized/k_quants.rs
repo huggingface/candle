@@ -1,3 +1,6 @@
+use std::cmp::{max, self};
+
+use super::utils::{get_scale_min_k4, make_qx_quants, make_qkx1_quants,nearest_int};
 use super::GgmlDType;
 use crate::Result;
 use half::f16;
@@ -273,8 +276,79 @@ impl GgmlType for BlockQ2K {
         todo!()
     }
 
-    fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
-        todo!()
+    // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L279
+    /// Currently doesn't work for positive numbers
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        let k = xs.len();
+        if k % QK_K != 0 {
+            crate::bail!("quantize_row_q2k: {k} is not divisible by {QK_K}")
+        }
+        let nb = k / QK_K;
+
+        let mut l: [u8; QK_K] = [0; QK_K];
+        let mut mins: [f32; QK_K / 16] = [0.0; QK_K / 16];
+        let mut scales: [f32; QK_K / 16] = [0.0; QK_K / 16];
+
+        let q4scale = 15.0;
+
+        for i in 0..nb {
+            //calculate scales and mins
+            let offset = i * QK_K;
+            for j in 0..QK_K / 16 {
+                scales[j] =
+                    make_qkx1_quants(16, 3, &xs[offset + 16 * j..], &mut l[16 * j..], &mut mins[j], 5);
+            }
+            // get max scale and max min and ensure they are >= 0.0
+            let max_scale = scales.iter().fold(0.0, |max, &val| if val > max { val } else { max }); 
+            let max_min = mins.iter().fold(0.0, |max, &val| if val > max { val } else { max });
+
+            if max_scale > 0.0 {
+                let iscale = q4scale / max_scale;
+                for j in 0..QK_K / 16 {
+                    ys[i as usize].scales[j] = nearest_int(iscale * scales[j]) as u8;
+                }
+                ys[i as usize].d = f16::from_f32(max_scale / q4scale);
+            } else {
+                for j in 0..QK_K / 16 {
+                    ys[i as usize].scales[j] = 0;
+                }
+                ys[i as usize].d = f16::from_f32(0.0);
+            }
+            
+            if max_min > 0.0 {
+                let iscale = q4scale / max_min;
+                for j in 0..QK_K / 16 {
+                    let l = nearest_int(iscale * mins[j]) as u8;
+                    ys[i as usize].scales[j] |= l << 4;
+                }
+                ys[i as usize].dmin = f16::from_f32(max_min / q4scale);
+            } else {
+                ys[i as usize].dmin = f16::from_f32(0.0);
+            }
+
+            for j in 0..QK_K / 16 {
+                let d = ys[i as usize].d.to_f32() * (ys[i as usize].scales[j] & 0xF) as f32;
+                if d == 0.0 {
+                    continue;
+                }
+                let dm = ys[i as usize].dmin.to_f32() * (ys[i as usize].scales[j] >> 4) as f32;
+                for ii in 0..16 {
+                    let mut ll = nearest_int((xs[16 * j + ii] + dm) / d);
+                    ll = cmp::max(0, cmp::min(3, ll));
+                    l[16 * j + ii] = ll as u8;
+                }
+            }
+
+            for j in (0..QK_K).step_by(128) {
+                for ll in 0..32 {
+                    ys[i as usize].qs[j / 4 + ll] = l[j + ll]
+                        | (l[j + ll + 32] << 2)
+                        | (l[j + ll + 64] << 4)
+                        | (l[j + ll + 96] << 6);
+                }
+            }
+        }
+        Ok(())
     }
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L354
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
@@ -319,18 +393,6 @@ impl GgmlType for BlockQ2K {
             }
         }
         Ok(())
-    }
-}
-
-fn get_scale_min_k4(j: usize, q: &[u8]) -> (u8, u8) {
-    if j < 4 {
-        let d = q[j] & 63;
-        let m = q[j + 4] & 63;
-        (d, m)
-    } else {
-        let d = (q[j + 4] & 0xF) | ((q[j - 4] >> 6) << 4);
-        let m = (q[j + 4] >> 4) | ((q[j] >> 6) << 4);
-        (d, m)
     }
 }
 
@@ -415,6 +477,7 @@ impl GgmlType for BlockQ5K {
     fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
         todo!()
     }
+
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
         let k = ys.len();
         if k % QK_K != 0 {
@@ -456,143 +519,6 @@ impl GgmlType for BlockQ5K {
         }
         Ok(())
     }
-}
-
-fn nearest_int(v: f32) -> i32 {
-    v.round() as i32
-}
-
-unsafe fn make_qx_quants(n: usize, nmax: i32, x: *const f32, ls: *mut i8, rmse_type: i32) -> f32 {
-    let mut max = 0f32;
-    let mut amax = 0f32;
-    for i in 0..n {
-        let x = *x.add(i);
-        let ax = x.abs();
-        if ax > amax {
-            amax = ax;
-            max = x;
-        }
-    }
-    if amax == 0. {
-        // all zero
-        for i in 0..n {
-            *ls.add(i) = 0;
-        }
-        return 0.;
-    }
-    let mut iscale = -(nmax as f32) / max;
-    if rmse_type == 0 {
-        for i in 0..n {
-            let x = *x.add(i);
-            let l = nearest_int(iscale * x);
-            *ls.add(i) = (nmax + l.clamp(-nmax, nmax - 1)) as i8;
-        }
-        return 1.0 / iscale;
-    }
-    let weight_type = rmse_type % 2;
-    let mut sumlx = 0f32;
-    let mut suml2 = 0f32;
-    for i in 0..n {
-        let x = *x.add(i);
-        let l = nearest_int(iscale * x);
-        let l = l.clamp(-nmax, nmax - 1);
-        *ls.add(i) = (l + nmax) as i8;
-        let w = if weight_type == 1 { x * x } else { 1.0 };
-        let l = l as f32;
-        sumlx += w * x * l;
-        suml2 += w * l * l;
-    }
-    let mut scale = sumlx / suml2;
-    let mut best = scale * sumlx;
-    for _itry in 0..3 {
-        let iscale = 1.0 / scale;
-        let mut slx = 0f32;
-        let mut sl2 = 0f32;
-        let mut changed = false;
-        for i in 0..n {
-            let x = *x.add(i);
-            let l = nearest_int(iscale * x);
-            let l = l.clamp(-nmax, nmax - 1);
-            if l + nmax != *ls.add(i) as i32 {
-                changed = true;
-            }
-            let w = if weight_type == 1 { x * x } else { 1f32 };
-            let l = l as f32;
-            slx += w * x * l;
-            sl2 += w * l * l;
-        }
-        if !changed || sl2 == 0.0 || slx * slx <= best * sl2 {
-            break;
-        }
-        for i in 0..n {
-            let x = *x.add(i);
-            let l = nearest_int(iscale * x);
-            *ls.add(i) = (nmax + l.clamp(-nmax, nmax - 1)) as i8;
-        }
-        sumlx = slx;
-        suml2 = sl2;
-        scale = sumlx / suml2;
-        best = scale * sumlx;
-    }
-    for _itry in 0..5 {
-        let mut n_changed = 0;
-        for i in 0..n {
-            let x = *x.add(i);
-            let w = if weight_type == 1 { x * x } else { 1. };
-            let l = *ls.add(i) as i32 - nmax;
-            let mut slx = sumlx - w * x * l as f32;
-            if slx > 0. {
-                let mut sl2 = suml2 - w * l as f32 * l as f32;
-                let new_l = nearest_int(x * sl2 / slx);
-                let new_l = new_l.clamp(-nmax, nmax - 1);
-                if new_l != l {
-                    slx += w * x * new_l as f32;
-                    sl2 += w * new_l as f32 * new_l as f32;
-                    if sl2 > 0. && slx * slx * suml2 > sumlx * sumlx * sl2 {
-                        *ls.add(i) = (nmax + new_l) as i8;
-                        sumlx = slx;
-                        suml2 = sl2;
-                        scale = sumlx / suml2;
-                        best = scale * sumlx;
-                        n_changed += 1;
-                    }
-                }
-            }
-        }
-        if n_changed == 0 {
-            break;
-        }
-    }
-    if rmse_type < 3 {
-        return scale;
-    }
-    for is in -4..4 {
-        if is == 0 {
-            continue;
-        }
-        iscale = -(nmax as f32 + 0.1f32 * is as f32) / max;
-        let mut sumlx = 0.;
-        let mut suml2 = 0.;
-        for i in 0..n {
-            let x = *x.add(i);
-            let l = nearest_int(iscale * x);
-            let l = i32::max(-nmax, i32::min(nmax - 1, l));
-            let w = if weight_type == 1 { x * x } else { 1. };
-            let l = l as f32;
-            sumlx += w * x * l;
-            suml2 += w * l * l;
-        }
-        if suml2 > 0. && sumlx * sumlx > best * suml2 {
-            for i in 0..n {
-                let x = *x.add(i);
-                let l = nearest_int(iscale * x);
-                *ls.add(i) = (nmax + l.clamp(-nmax, nmax - 1)) as i8;
-            }
-            scale = sumlx / suml2;
-            best = scale * sumlx;
-        }
-    }
-    scale
 }
 
 impl GgmlType for BlockQ6K {
