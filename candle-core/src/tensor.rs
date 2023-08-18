@@ -705,18 +705,38 @@ impl Tensor {
         self.sum_impl(sum_dims, false)
     }
 
-    pub fn mean_keepdim<D: Dims>(&self, sum_dims: D) -> Result<Self> {
-        let sum_dims = sum_dims.to_indexes(self.shape(), "mean-keepdim")?;
-        let reduced_dim: usize = sum_dims.iter().map(|i| self.dims()[*i]).product();
+    /// Returns the mean of all elements in the input tensor. The mean is performed over all the
+    /// input dimensions.
+    ///
+    /// The resulting tensor has a shape that is similar to the shape of the input tensor, except
+    /// that the number of elements for each dimension index in `mean_dims` is 1.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &Device::Cpu)?;
+    /// let s = a.mean_keepdim(0)?;
+    /// assert_eq!(s.to_vec2::<f32>()?, &[[1., 2.]]);
+    /// let s = a.mean_keepdim(1)?;
+    /// assert_eq!(s.to_vec2::<f32>()?, &[[0.5], [2.5]]);
+    /// let s = a.mean_keepdim((0, 1))?;
+    /// assert_eq!(s.to_vec2::<f32>()?, &[[1.5]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn mean_keepdim<D: Dims>(&self, mean_dims: D) -> Result<Self> {
+        let mean_dims = mean_dims.to_indexes(self.shape(), "mean-keepdim")?;
+        let reduced_dim: usize = mean_dims.iter().map(|i| self.dims()[*i]).product();
         let scale = 1f64 / (reduced_dim as f64);
-        self.sum_impl(sum_dims, true)? * scale
+        self.sum_impl(mean_dims, true)? * scale
     }
 
-    pub fn mean<D: Dims>(&self, sum_dims: D) -> Result<Self> {
-        let sum_dims = sum_dims.to_indexes(self.shape(), "mean")?;
-        let reduced_dim: usize = sum_dims.iter().map(|i| self.dims()[*i]).product();
+    /// Returns the mean of all elements in the input tensor. The mean is performed over all the
+    /// input dimensions and compared to `mean_keepdim` these dimensions are squeezed rather than
+    /// kept.
+    pub fn mean<D: Dims>(&self, mean_dims: D) -> Result<Self> {
+        let mean_dims = mean_dims.to_indexes(self.shape(), "mean")?;
+        let reduced_dim: usize = mean_dims.iter().map(|i| self.dims()[*i]).product();
         let scale = 1f64 / (reduced_dim as f64);
-        self.sum_impl(sum_dims, false)? * scale
+        self.sum_impl(mean_dims, false)? * scale
     }
 
     pub fn max_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
