@@ -17,6 +17,7 @@
 //! assert_eq!(ys.to_vec2::<f32>()?, &[[210.0, 430.0, 650.0]]);
 //! # Ok(()) }
 //! ```
+use crate::init::{DefaultInit, Initializer, ModelInitializer};
 use candle::{Result, Tensor};
 
 #[derive(Debug)]
@@ -43,23 +44,45 @@ impl Linear {
     }
 }
 
-/// Create or initialize a new linear layer.
+impl ModelInitializer for Linear {}
+
+impl Initializer<Linear> for DefaultInit {
+    type Config = ((usize, usize), bool);
+
+    fn init(&mut self, (shape, has_bias): Self::Config) -> Result<Linear> {
+        let dtype = self.dtype();
+        let device = self.device().clone();
+        let (out_dim, in_dim) = shape;
+        let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
+        let ws = init_ws.var(shape, dtype, &device)?;
+        self.push_var(ws.clone());
+        let ws = ws.as_tensor().clone();
+        if has_bias {
+            let bound = 1. / (in_dim as f64).sqrt();
+            let init_bs = crate::Init::Uniform {
+                lo: -bound,
+                up: bound,
+            };
+            let bs = init_bs.var(out_dim, dtype, &device)?;
+            self.push_var(bs.clone());
+            let bs = bs.as_tensor().clone();
+            Ok(Linear::new(ws, Some(bs)))
+        } else {
+            Ok(Linear::new(ws, None))
+        }
+    }
+}
+
+/// Loads a linear layer.
 ///
 /// This uses some default names for weight and biases, namely `"weight"` and `"bias"`.
 pub fn linear(in_dim: usize, out_dim: usize, vs: crate::VarBuilder) -> Result<Linear> {
-    let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_or_init((out_dim, in_dim), "weight", init_ws)?;
-    let bound = 1. / (in_dim as f64).sqrt();
-    let init_bs = crate::Init::Uniform {
-        lo: -bound,
-        up: bound,
-    };
-    let bs = vs.get_or_init(out_dim, "bias", init_bs)?;
+    let ws = vs.get((out_dim, in_dim), "weight")?;
+    let bs = vs.get(out_dim, "bias")?;
     Ok(Linear::new(ws, Some(bs)))
 }
 
 pub fn linear_no_bias(in_dim: usize, out_dim: usize, vs: crate::VarBuilder) -> Result<Linear> {
-    let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_or_init((out_dim, in_dim), "weight", init_ws)?;
+    let ws = vs.get((out_dim, in_dim), "weight")?;
     Ok(Linear::new(ws, None))
 }

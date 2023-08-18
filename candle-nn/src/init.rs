@@ -3,6 +3,50 @@
 // https://github.com/pytorch/pytorch/blob/07107919297db3f8ab37f11c12666b6d6d5f692e/torch/nn/init.py#
 use candle::{DType, Device, Result, Shape, Tensor, Var};
 
+pub trait Initializer<M> {
+    type Config;
+    fn init(&mut self, config: Self::Config) -> Result<M>;
+}
+
+pub trait ModelInitializer: Sized {
+    fn init<INIT: Initializer<Self>>(initializer: &mut INIT, config: INIT::Config) -> Result<Self> {
+        initializer.init(config)
+    }
+}
+
+pub struct DefaultInit {
+    vars: Vec<Var>,
+    dtype: DType,
+    device: Device,
+}
+
+impl DefaultInit {
+    pub fn new(dtype: DType, device: Device) -> Self {
+        let vars = vec![];
+        Self {
+            dtype,
+            device,
+            vars,
+        }
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    pub fn vars(&self) -> &[Var] {
+        &self.vars
+    }
+
+    pub fn push_var(&mut self, var: Var) {
+        self.vars.push(var)
+    }
+}
+
 /// Number of features as input or output of a layer.
 /// In Kaiming initialization, choosing `FanIn` preserves
 /// the magnitude of the variance of the weights in the
