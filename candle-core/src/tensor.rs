@@ -1482,8 +1482,7 @@ impl Tensor {
                 dims
             )
         }
-        // TODO: backprop.
-        let op = BackpropOp::none();
+        let op = BackpropOp::new1(self, |t| Op::Permute(t, dims.clone()));
         let tensor_ = Tensor_ {
             id: TensorId::new(),
             storage: self.storage.clone(),
