@@ -290,7 +290,9 @@ enum WhichModel {
 impl WhichModel {
     fn is_multilingual(&self) -> bool {
         match self {
-            Self::Tiny | Self::Base | Self::Small | Self::Medium | Self::LargeV2 => true,
+            Self::Tiny | Self::Base | Self::Small | Self::Medium | Self::Large | Self::LargeV2 => {
+                true
+            }
             Self::TinyEn | Self::BaseEn | Self::SmallEn | Self::MediumEn => false,
         }
     }
