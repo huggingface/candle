@@ -1,5 +1,6 @@
 use crate::{Error as E, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
+use std::collections::HashMap;
 use std::io::BufRead;
 
 // https://docs.juliahub.com/Pickle/LAUNc/0.1.0/opcode/
@@ -82,25 +83,31 @@ fn read_to_newline<R: BufRead>(r: &mut R) -> Result<Vec<u8>> {
     Ok(data)
 }
 
-#[derive(Debug)]
-enum Object {
+#[derive(Debug, Clone, PartialEq)]
+pub enum Object {
     Class {
         module_name: String,
         class_name: String,
     },
     Int(i32),
     Unicode(String),
+    Bool(bool),
+    None,
+    Tuple(Vec<Object>),
+    Mark,
 }
 
 #[derive(Debug)]
 pub struct Stack {
     stack: Vec<Object>,
+    memo: HashMap<u32, Object>,
 }
 
 impl Stack {
     pub fn empty() -> Self {
         Self {
             stack: Vec::with_capacity(512),
+            memo: HashMap::new(),
         }
     }
 
@@ -110,6 +117,29 @@ impl Stack {
                 break;
             }
         }
+        Ok(())
+    }
+
+    pub fn pop(&mut self) -> Result<Object> {
+        match self.stack.pop() {
+            None => crate::bail!("unexpected empty stack"),
+            Some(obj) => Ok(obj),
+        }
+    }
+
+    pub fn memo_get(&self, id: u32) -> Result<Object> {
+        match self.memo.get(&id) {
+            None => crate::bail!("missing object in memo {id}"),
+            Some(obj) => {
+                // Maybe we should use refcounting rather than doing potential large clones here.
+                Ok(obj.clone())
+            }
+        }
+    }
+
+    pub fn memo_put(&mut self, id: u32) -> Result<()> {
+        let obj = self.pop()?;
+        self.memo.insert(id, obj);
         Ok(())
     }
 
@@ -158,32 +188,41 @@ impl Stack {
                 println!("binpersid");
             }
             OpCode::Tuple => {
-                println!("tuple");
+                let mut objs = vec![];
+                loop {
+                    let obj = self.pop()?;
+                    if obj == Object::Mark {
+                        break;
+                    }
+                    objs.push(obj)
+                }
+                objs.reverse();
+                self.stack.push(Object::Tuple(objs))
             }
             OpCode::Tuple1 => {
-                println!("tuple1");
+                let obj = self.pop()?;
+                self.stack.push(Object::Tuple(vec![obj]))
             }
             OpCode::Tuple2 => {
-                println!("tuple2");
+                let obj2 = self.pop()?;
+                let obj1 = self.pop()?;
+                self.stack.push(Object::Tuple(vec![obj1, obj2]))
             }
             OpCode::Tuple3 => {
-                println!("tuple3");
+                let obj3 = self.pop()?;
+                let obj2 = self.pop()?;
+                let obj1 = self.pop()?;
+                self.stack.push(Object::Tuple(vec![obj1, obj2, obj3]))
             }
-            OpCode::NewTrue => {
-                println!("true");
-            }
-            OpCode::NewFalse => {
-                println!("false");
-            }
+            OpCode::NewTrue => self.stack.push(Object::Bool(true)),
+            OpCode::NewFalse => self.stack.push(Object::Bool(false)),
             OpCode::SetItem => {
                 println!("setitem");
             }
             OpCode::SetItems => {
                 println!("setitems");
             }
-            OpCode::None => {
-                println!("none");
-            }
+            OpCode::None => self.stack.push(Object::None),
             OpCode::Stop => {
                 println!("stop");
                 return Ok(true);
@@ -197,30 +236,28 @@ impl Stack {
             OpCode::Dict => {
                 println!("dict");
             }
-            OpCode::Mark => {
-                println!("mark");
-            }
+            OpCode::Mark => self.stack.push(Object::Mark),
             OpCode::Reduce => {
                 println!("reduce");
             }
-            OpCode::EmptyTuple => {
-                println!("empty-tuple");
-            }
+            OpCode::EmptyTuple => self.stack.push(Object::Tuple(vec![])),
             OpCode::BinGet => {
                 let arg = r.read_u8()?;
-                println!("binget {arg}");
+                let obj = self.memo_get(arg as u32)?;
+                self.stack.push(obj)
             }
             OpCode::LongBinGet => {
                 let arg = r.read_u32::<LittleEndian>()?;
-                println!("binget {arg}");
+                let obj = self.memo_get(arg)?;
+                self.stack.push(obj)
             }
             OpCode::BinPut => {
                 let arg = r.read_u8()?;
-                println!("binput {arg}");
+                self.memo_put(arg as u32)?
             }
             OpCode::LongBinPut => {
                 let arg = r.read_u32::<LittleEndian>()?;
-                println!("binput {arg}");
+                self.memo_put(arg)?
             }
         }
         Ok(false)
