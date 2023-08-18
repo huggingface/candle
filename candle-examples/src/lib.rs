@@ -13,7 +13,7 @@ pub fn device(cpu: bool) -> Result<Device> {
 }
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
-/// (3, 224, 224).
+/// (3, 224, 224). imagenet normaliation is applied.
 pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
     let img = image::io::Reader::open(p)?
         .decode()
@@ -22,7 +22,11 @@ pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
     let img = img.to_rgb8();
     let data = img.into_raw();
     let data = Tensor::from_vec(data, (3, 224, 224), &Device::Cpu)?;
-    data.to_dtype(candle::DType::F32)? / 255.
+    let mean = Tensor::new(&[0.485f32, 0.456, 0.406], &Device::Cpu)?.reshape((3, 1, 1))?;
+    let std = Tensor::new(&[0.229f32, 0.224, 0.225], &Device::Cpu)?.reshape((3, 1, 1))?;
+    (data.to_dtype(candle::DType::F32)? / 255.)?
+        .broadcast_sub(&mean)?
+        .broadcast_div(&std)
 }
 
 /// Saves an image to disk using the image crate, this expects an input with shape
