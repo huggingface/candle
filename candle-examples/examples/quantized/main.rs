@@ -7,7 +7,7 @@ use tokenizers::Tokenizer;
 use candle::quantized::ggml_file::Content;
 use candle::quantized::QTensor;
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::Embedding;
+use candle_nn::{Embedding, Module};
 use candle_transformers::generation::LogitsProcessor;
 
 const MAX_SEQ_LEN: usize = 4096;

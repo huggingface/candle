@@ -1,6 +1,7 @@
 use crate::nn::{conv1d, conv1d_weight_norm, Conv1d, Conv1dConfig, VarBuilder};
 use anyhow::Result;
 use candle::{DType, IndexOp, Tensor};
+use candle_nn::Module;
 
 // Encodec Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py

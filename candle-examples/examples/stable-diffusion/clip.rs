@@ -7,6 +7,7 @@
 //! https://github.com/openai/CLIP
 use candle::{DType, Device, Result, Tensor, D};
 use candle_nn as nn;
+use candle_nn::Module;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Activation {

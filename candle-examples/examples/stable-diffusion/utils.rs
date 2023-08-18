@@ -1,4 +1,5 @@
 use candle::{Device, Result, Tensor};
+use candle_nn::Module;
 
 pub fn linspace(start: f64, stop: f64, steps: usize) -> Result<Tensor> {
     if steps < 1 {

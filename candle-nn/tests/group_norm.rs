@@ -23,7 +23,7 @@ extern crate intel_mkl_src;
 
 use anyhow::Result;
 use candle::{Device, Tensor};
-use candle_nn::GroupNorm;
+use candle_nn::{GroupNorm, Module};
 mod test_utils;
 use test_utils::to_vec3_round;
 

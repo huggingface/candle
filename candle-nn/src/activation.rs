@@ -7,8 +7,8 @@ pub enum Activation {
     Elu(f64),
 }
 
-impl Activation {
-    pub fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
+impl super::Module for Activation {
+    fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
         match self {
             Self::Gelu => xs.gelu(),
             Self::Relu => xs.relu(),

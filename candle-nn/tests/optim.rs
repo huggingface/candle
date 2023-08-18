@@ -6,7 +6,7 @@ use test_utils::{to_vec0_round, to_vec2_round};
 
 use anyhow::Result;
 use candle::{Device, Tensor, Var};
-use candle_nn::{AdamW, Linear, ParamsAdamW, SGD};
+use candle_nn::{AdamW, Linear, Module, ParamsAdamW, SGD};
 
 #[test]
 fn sgd_optim() -> Result<()> {

@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use candle::{Result, Tensor, D};
 use candle_nn as nn;
+use candle_nn::Module;
 
 #[derive(Debug)]
 pub struct TimestepEmbedding {

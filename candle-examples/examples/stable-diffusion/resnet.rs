@@ -8,6 +8,7 @@
 use crate::utils::{conv2d, Conv2d};
 use candle::{Result, Tensor, D};
 use candle_nn as nn;
+use candle_nn::Module;
 
 /// Configuration for a ResNet block.
 #[derive(Debug, Clone, Copy)]

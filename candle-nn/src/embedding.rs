@@ -18,8 +18,10 @@ impl Embedding {
     pub fn embeddings(&self) -> &Tensor {
         &self.embeddings
     }
+}
 
-    pub fn forward(&self, indexes: &Tensor) -> Result<Tensor> {
+impl crate::Module for Embedding {
+    fn forward(&self, indexes: &Tensor) -> Result<Tensor> {
         let mut final_dims = indexes.dims().to_vec();
         final_dims.push(self.hidden_size);
         let indexes = indexes.flatten_all()?;

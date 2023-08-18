@@ -1,5 +1,5 @@
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, VarBuilder};
+use candle_nn::{Embedding, Module, VarBuilder};
 use serde::Deserialize;
 
 pub const DTYPE: DType = DType::F32;

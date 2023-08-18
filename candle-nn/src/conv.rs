@@ -35,8 +35,10 @@ impl Conv1d {
     pub fn config(&self) -> &Conv1dConfig {
         &self.config
     }
+}
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl crate::Module for Conv1d {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = x.conv1d(&self.weight, self.config.padding, self.config.stride)?;
         match &self.bias {
             None => Ok(x),
@@ -84,8 +86,10 @@ impl Conv2d {
     pub fn config(&self) -> &Conv2dConfig {
         &self.config
     }
+}
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl crate::Module for Conv2d {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x = x.conv2d(&self.weight, self.config.padding, self.config.stride)?;
         match &self.bias {
             None => Ok(x),

@@ -7,7 +7,7 @@
 //!
 //! ```rust
 //! use candle::{Tensor, Device::Cpu};
-//! use candle_nn::Linear;
+//! use candle_nn::{Linear, Module};
 //! # fn main() -> candle::Result<()> {
 //!
 //! let w = Tensor::new(&[[1f32, 2.], [3., 4.], [5., 6.]], &Cpu)?;
@@ -29,8 +29,10 @@ impl Linear {
     pub fn new(weight: Tensor, bias: Option<Tensor>) -> Self {
         Self { weight, bias }
     }
+}
 
-    pub fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
+impl super::Module for Linear {
+    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
         let w = match x.dims() {
             &[bsize, _, _] => self.weight.broadcast_left(bsize)?.t()?,
             _ => self.weight.t()?,

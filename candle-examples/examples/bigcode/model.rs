@@ -1,5 +1,5 @@
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, LayerNorm, Linear, VarBuilder};
+use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder};
 
 fn linear(size1: usize, size2: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
     let weight = vb.get((size2, size1), "weight")?;
