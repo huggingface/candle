@@ -10,6 +10,7 @@ use crate::unet_2d_blocks::{
 };
 use candle::{Result, Tensor};
 use candle_nn as nn;
+use candle_nn::Module;
 
 #[derive(Debug, Clone)]
 struct EncoderConfig {

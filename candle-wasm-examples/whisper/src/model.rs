@@ -3,7 +3,7 @@
 // back when using RUST_LIB_BACKTRACE=1.
 use anyhow::Result;
 use candle::{Device, Tensor};
-use candle_nn::{Conv1d, Conv1dConfig, Embedding, LayerNorm, VarBuilder};
+use candle_nn::{Conv1d, Conv1dConfig, Embedding, LayerNorm, Module, VarBuilder};
 use serde::Deserialize;
 
 // The names in comments correspond to the original implementation:

@@ -34,8 +34,10 @@ impl GroupNorm {
             num_groups,
         })
     }
+}
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl crate::Module for GroupNorm {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let x_shape = x.dims();
         if x_shape.len() <= 2 {
             candle::bail!("input rank for GroupNorm should be at least 3");
