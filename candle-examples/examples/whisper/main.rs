@@ -280,6 +280,7 @@ enum WhichModel {
     Small,
     #[value(name = "small.en")]
     SmallEn,
+    Medium,
     #[value(name = "medium.en")]
     MediumEn,
     LargeV2,
@@ -288,7 +289,7 @@ enum WhichModel {
 impl WhichModel {
     fn is_multilingual(&self) -> bool {
         match self {
-            Self::Tiny | Self::Base | Self::Small | Self::LargeV2 => true,
+            Self::Tiny | Self::Base | Self::Small | Self::Medium | Self::LargeV2 => true,
             Self::TinyEn | Self::BaseEn | Self::SmallEn | Self::MediumEn => false,
         }
     }
@@ -300,6 +301,7 @@ impl WhichModel {
             Self::BaseEn => ("openai/whisper-base.en", "refs/pr/13"),
             Self::Small => ("openai/whisper-small", "main"),
             Self::SmallEn => ("openai/whisper-small.en", "refs/pr/10"),
+            Self::Medium => ("openai/whisper-medium", "refs/pr/21"),
             Self::MediumEn => ("openai/whisper-medium.en", "refs/pr/11"),
             Self::LargeV2 => ("openai/whisper-large-v2", "refs/pr/57"),
         }
