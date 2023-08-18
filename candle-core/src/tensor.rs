@@ -705,6 +705,20 @@ impl Tensor {
         self.sum_impl(sum_dims, false)
     }
 
+    pub fn mean_keepdim<D: Dims>(&self, sum_dims: D) -> Result<Self> {
+        let sum_dims = sum_dims.to_indexes(self.shape(), "mean-keepdim")?;
+        let reduced_dim: usize = sum_dims.iter().map(|i| self.dims()[*i]).product();
+        let scale = 1f64 / (reduced_dim as f64);
+        self.sum_impl(sum_dims, true)? * scale
+    }
+
+    pub fn mean<D: Dims>(&self, sum_dims: D) -> Result<Self> {
+        let sum_dims = sum_dims.to_indexes(self.shape(), "mean")?;
+        let reduced_dim: usize = sum_dims.iter().map(|i| self.dims()[*i]).product();
+        let scale = 1f64 / (reduced_dim as f64);
+        self.sum_impl(sum_dims, false)? * scale
+    }
+
     pub fn max_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
         self.reduce_impl(dim, true, ReduceOp::Max)
     }
