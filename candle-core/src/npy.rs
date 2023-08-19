@@ -361,6 +361,25 @@ impl NpzTensors {
         })
     }
 
+    pub fn names(&self) -> Vec<&String> {
+        self.index_per_name.keys().collect()
+    }
+
+    /// This only returns the shape and dtype for a named tensor. Compared to `get`, this avoids
+    /// reading the whole tensor data.
+    pub fn get_shape_and_dtype(&self, name: &str) -> Result<(Shape, DType)> {
+        let index = match self.index_per_name.get(name) {
+            None => crate::bail!("cannot find tensor {name}"),
+            Some(index) => *index,
+        };
+        let zip_reader = BufReader::new(File::open(&self.path)?);
+        let mut zip = zip::ZipArchive::new(zip_reader)?;
+        let mut reader = zip.by_index(index)?;
+        let header = read_header(&mut reader)?;
+        let header = Header::parse(&header)?;
+        Ok((header.shape(), header.descr))
+    }
+
     pub fn get(&self, name: &str) -> Result<Option<Tensor>> {
         let index = match self.index_per_name.get(name) {
             None => return Ok(None),
