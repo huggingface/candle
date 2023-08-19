@@ -313,8 +313,9 @@ fn run(args: Args) -> Result<()> {
         // scale the initial noise by the standard deviation required by the scheduler
         latents = (latents * scheduler.init_noise_sigma())?;
 
+        println!("starting sampling");
         for (timestep_index, &timestep) in scheduler.timesteps().iter().enumerate() {
-            println!("Timestep {timestep_index}/{n_steps}");
+            let start_time = std::time::Instant::now();
             let latent_model_input = Tensor::cat(&[&latents, &latents], 0)?;
 
             let latent_model_input = scheduler.scale_model_input(latent_model_input, timestep)?;
@@ -325,6 +326,8 @@ fn run(args: Args) -> Result<()> {
             let noise_pred =
                 (noise_pred_uncond + ((noise_pred_text - noise_pred_uncond)? * GUIDANCE_SCALE)?)?;
             latents = scheduler.step(&noise_pred, timestep, &latents)?;
+            let dt = start_time.elapsed().as_secs_f32();
+            println!("step {}/{n_steps} done, {:.2}s", timestep_index + 1, dt);
 
             if args.intermediary_images {
                 let image = vae.decode(&(&latents / 0.18215)?)?;
