@@ -456,7 +456,24 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
                     Ok(size) => size,
                     Err(_) => continue,
                 };
-                let dtype = DType::F32; // TODO
+                let storage = match args.remove(0) {
+                    Object::PersistentLoad(vs) => *vs,
+                    _ => continue,
+                };
+                let storage = match storage {
+                    Object::Tuple(vs) => vs,
+                    _ => continue,
+                };
+                let dtype = match &storage[1] {
+                    Object::Class { class_name, .. } => match class_name.as_str() {
+                        "FloatStorage" => DType::F32,
+                        other => {
+                            eprintln!("unsupported storage type {other}");
+                            continue;
+                        }
+                    },
+                    _ => continue,
+                };
                 tensor_info.push((key, dtype, size))
                 // pass
             }

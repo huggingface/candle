@@ -45,7 +45,7 @@ fn run_ls(file: &std::path::PathBuf) -> Result<()> {
                 println!("{name}: [{shape:?}; {dtype}]")
             }
         }
-        Some("pth") => {
+        Some("pt") | Some("pth") => {
             let mut tensors = candle_core::pickle::read_pth_tensor_info(file)?;
             tensors.sort_by(|a, b| a.0.cmp(&b.0));
             for (name, dtype, shape) in tensors.iter() {
