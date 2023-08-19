@@ -88,9 +88,15 @@ fn run_ls(file: &std::path::PathBuf, format: Option<Format>) -> Result<()> {
         }
         Format::PyTorch => {
             let mut tensors = candle_core::pickle::read_pth_tensor_info(file)?;
-            tensors.sort_by(|a, b| a.0.cmp(&b.0));
-            for (name, dtype, shape) in tensors.iter() {
-                println!("{name}: [{shape:?}; {dtype:?}]")
+            tensors.sort_by(|a, b| a.name.cmp(&b.name));
+            for tensor_info in tensors.iter() {
+                println!(
+                    "{}: [{:?}; {:?}] {:?}",
+                    tensor_info.name,
+                    tensor_info.layout.shape(),
+                    tensor_info.dtype,
+                    tensor_info.path,
+                )
             }
         }
         Format::Pickle => {
