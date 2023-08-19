@@ -159,28 +159,31 @@ pub(super) fn make_qkx1_quants(
     nmax: i32,
     x: &[f32],
     l: &mut [u8],
-    the_min: &mut f32,
     ntry: usize,
-) -> f32 {
-
+) -> (f32, f32) {
     // Get min/max
-    let mut min = x.iter().fold(f32::MAX, |min, &val| if val < min { val } else { min });
-    let max = x.iter().fold(f32::MIN, |max, &val| if val > max { val } else { max });
+    let mut min = x
+        .iter()
+        .take(n)
+        .fold(f32::MAX, |min, &val| if val < min { val } else { min });
+    let max = x
+        .iter()
+        .take(n)
+        .fold(f32::MIN, |max, &val| if val > max { val } else { max });
 
     // If min == max, all values are the same => nothing to do here
     if max == min {
         for li in l.iter_mut().take(n) {
             *li = 0;
         }
-        *the_min = 0.0;
-        return 0.0;
+        return (0.0, 0.0);
     }
 
     // Ensure min <= 0.0
     if min > 0.0 {
         min = 0.0;
     }
-    
+
     // Compute scale and inverse scale
     let mut iscale = nmax as f32 / (max - min);
     let mut scale = 1.0 / iscale;
@@ -190,9 +193,9 @@ pub(super) fn make_qkx1_quants(
         let mut suml2 = 0;
         let mut did_change = false;
 
-        for (i,value) in x.iter().enumerate().take(n){
+        for (i, value) in x.iter().enumerate().take(n) {
             let mut li = nearest_int(iscale * (value - min));
-            li = li.max(0).min(nmax);
+            li = li.min(nmax).max(0);
             let current_l = l[i] as i32;
             if li != current_l {
                 l[i] = li as u8;
@@ -219,8 +222,7 @@ pub(super) fn make_qkx1_quants(
             break;
         }
     }
-    *the_min = -min;
-    scale
+    (scale, -min)
 }
 
 // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L165
