@@ -45,6 +45,27 @@ fn run_ls(file: &std::path::PathBuf) -> Result<()> {
                 println!("{name}: [{shape:?}; {dtype}]")
             }
         }
+        Some("pth") => {
+            let file = std::fs::File::open(file)?;
+            let zip_reader = std::io::BufReader::new(file);
+            let mut zip = zip::ZipArchive::new(zip_reader)?;
+            let zip_file_names = zip
+                .file_names()
+                .map(|f| f.to_string())
+                .collect::<Vec<String>>();
+            for name in zip_file_names.iter() {
+                if !name.ends_with("data.pkl") {
+                    continue;
+                }
+                let reader = zip.by_name(name)?;
+                let mut reader = std::io::BufReader::new(reader);
+                let mut stack = candle_core::pickle::Stack::empty();
+                stack.read_loop(&mut reader)?;
+                for (i, obj) in stack.stack().iter().enumerate() {
+                    println!("{i} {obj:?}");
+                }
+            }
+        }
         Some("pkl") => {
             let file = std::fs::File::open(file)?;
             let mut reader = std::io::BufReader::new(file);
