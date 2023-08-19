@@ -89,54 +89,132 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
     if n % QK_K != 0 {
         crate::bail!("vec_dot_q6k_q8k: {n} is not divisible by {QK_K}")
     }
+    let mut sum = 0f32;
+    unsafe {
+        let m4b = vdupq_n_u8(0xF);
 
-    let mut aux8 = [0i8; QK_K];
-    let mut aux16 = [0i16; 8];
-    let mut sums = [0f32; 8];
-    let mut aux32 = [0f32; 8];
+        let mone = vdupq_n_u8(3);
 
-    for (x, y) in xs.iter().zip(ys.iter()) {
-        let q4 = &x.ql;
-        let qh = &x.qh;
-        let q8 = &y.qs;
-        aux32.fill(0f32);
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let d_all = x.d.to_f32();
 
-        for j in (0..QK_K).step_by(128) {
-            let aux8 = &mut aux8[j..];
-            let q4 = &q4[j / 2..];
-            let qh = &qh[j / 4..];
-            for l in 0..32 {
-                aux8[l] = (((q4[l] & 0xF) | ((qh[l] & 3) << 4)) as i32 - 32) as i8;
-                aux8[l + 32] = (((q4[l + 32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) as i32 - 32) as i8;
-                aux8[l + 64] = (((q4[l] >> 4) | (((qh[l] >> 4) & 3) << 4)) as i32 - 32) as i8;
-                aux8[l + 96] = (((q4[l + 32] >> 4) | (((qh[l] >> 6) & 3) << 4)) as i32 - 32) as i8;
-            }
-        }
+            let mut q6 = x.ql.as_ptr();
+            let mut qh = x.qh.as_ptr();
+            let mut q8 = y.qs.as_ptr();
 
-        for (j, &scale) in x.scales.iter().enumerate() {
-            let scale = scale as f32;
-            let q8 = &q8[16 * j..];
-            let aux8 = &aux8[16 * j..];
-            for l in 0..8 {
-                aux16[l] = q8[l] as i16 * aux8[l] as i16;
-            }
-            for l in 0..8 {
-                aux32[l] += scale * aux16[l] as f32
-            }
-            let q8 = &q8[8..];
-            let aux8 = &aux8[8..];
-            for l in 0..8 {
-                aux16[l] = q8[l] as i16 * aux8[l] as i16;
-            }
-            for l in 0..8 {
-                aux32[l] += scale * aux16[l] as f32
-            }
-        }
+            let mut scale = x.scales.as_ptr();
 
-        let d = x.d.to_f32() * y.d;
-        for (sum, &a) in sums.iter_mut().zip(aux32.iter()) {
-            *sum += a * d;
+            let q8sums = vld1q_s16_x2(y.bsums.as_ptr());
+            let scales = vld1q_s8(scale);
+            let q6scales = int16x8x2_t(
+                vmovl_s8(vget_low_s8(scales)),
+                vmovl_s8(vget_high_s8(scales)),
+            );
+
+            let prod = vaddq_s32(
+                vaddq_s32(
+                    vmull_s16(vget_low_s16(q8sums.0), vget_low_s16(q6scales.0)),
+                    vmull_s16(vget_high_s16(q8sums.0), vget_high_s16(q6scales.0)),
+                ),
+                vaddq_s32(
+                    vmull_s16(vget_low_s16(q8sums.1), vget_low_s16(q6scales.1)),
+                    vmull_s16(vget_high_s16(q8sums.1), vget_high_s16(q6scales.1)),
+                ),
+            );
+            let isum_mins = vaddvq_s32(prod);
+
+            let mut isum = 0i32;
+
+            for _j in 0..QK_K / 128 {
+                let qhbits = vld1q_u8_x2(qh);
+                qh = qh.add(32);
+                let q6bits = vld1q_u8_x4(q6);
+                q6 = q6.add(64);
+                let q8bytes = vld1q_s8_x4(q8);
+                q8 = q8.add(64);
+
+                let q6h_0 = vshlq_n_u8(vandq_u8(mone, qhbits.0), 4);
+                let q6h_1 = vshlq_n_u8(vandq_u8(mone, qhbits.1), 4);
+                let shifted = vshrq_n_u8(qhbits.0, 2);
+                let q6h_2 = vshlq_n_u8(vandq_u8(mone, shifted), 4);
+                let shifted = vshrq_n_u8(qhbits.1, 2);
+                let q6h_3 = vshlq_n_u8(vandq_u8(mone, shifted), 4);
+
+                let q6bytes_0 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.0, m4b), q6h_0));
+                let q6bytes_1 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.1, m4b), q6h_1));
+                let q6bytes_2 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.2, m4b), q6h_2));
+                let q6bytes_3 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.3, m4b), q6h_3));
+
+                // TODO: dotprod
+
+                let p0 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q6bytes_0), vget_low_s8(q8bytes.0)),
+                    vmull_s8(vget_high_s8(q6bytes_0), vget_high_s8(q8bytes.0)),
+                );
+                let p1 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q6bytes_1), vget_low_s8(q8bytes.1)),
+                    vmull_s8(vget_high_s8(q6bytes_1), vget_high_s8(q8bytes.1)),
+                );
+                let (scale0, scale1) = (*scale as i32, *scale.add(1) as i32);
+                isum += vaddvq_s16(p0) as i32 * scale0 + vaddvq_s16(p1) as i32 * scale1;
+                scale = scale.add(2);
+
+                let p2 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q6bytes_2), vget_low_s8(q8bytes.2)),
+                    vmull_s8(vget_high_s8(q6bytes_2), vget_high_s8(q8bytes.2)),
+                );
+                let p3 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q6bytes_3), vget_low_s8(q8bytes.3)),
+                    vmull_s8(vget_high_s8(q6bytes_3), vget_high_s8(q8bytes.3)),
+                );
+                let (scale0, scale1) = (*scale as i32, *scale.add(1) as i32);
+                isum += vaddvq_s16(p2) as i32 * scale0 + vaddvq_s16(p3) as i32 * scale1;
+                scale = scale.add(2);
+
+                let q8bytes = vld1q_s8_x4(q8);
+                q8 = q8.add(64);
+
+                let shifted = vshrq_n_u8(qhbits.0, 4);
+                let q6h_0 = vshlq_n_u8(vandq_u8(mone, shifted), 4);
+                let shifted = vshrq_n_u8(qhbits.1, 4);
+                let q6h_1 = vshlq_n_u8(vandq_u8(mone, shifted), 4);
+                let shifted = vshrq_n_u8(qhbits.0, 6);
+                let q6h_2 = vshlq_n_u8(vandq_u8(mone, shifted), 4);
+                let shifted = vshrq_n_u8(qhbits.1, 6);
+                let q6h_3 = vshlq_n_u8(vandq_u8(mone, shifted), 4);
+
+                let q6bytes_0 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.0, 4), q6h_0));
+                let q6bytes_1 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.1, 4), q6h_1));
+                let q6bytes_2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.2, 4), q6h_2));
+                let q6bytes_3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.3, 4), q6h_3));
+
+                // TODO: dotprod case.
+                let p0 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q6bytes_0), vget_low_s8(q8bytes.0)),
+                    vmull_s8(vget_high_s8(q6bytes_0), vget_high_s8(q8bytes.0)),
+                );
+                let p1 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q6bytes_1), vget_low_s8(q8bytes.1)),
+                    vmull_s8(vget_high_s8(q6bytes_1), vget_high_s8(q8bytes.1)),
+                );
+                let (scale0, scale1) = (*scale as i32, *scale.add(1) as i32);
+                isum += vaddvq_s16(p0) as i32 * scale0 + vaddvq_s16(p1) as i32 * scale1;
+                scale = scale.add(2);
+
+                let p2 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q6bytes_2), vget_low_s8(q8bytes.2)),
+                    vmull_s8(vget_high_s8(q6bytes_2), vget_high_s8(q8bytes.2)),
+                );
+                let p3 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q6bytes_3), vget_low_s8(q8bytes.3)),
+                    vmull_s8(vget_high_s8(q6bytes_3), vget_high_s8(q8bytes.3)),
+                );
+                let (scale0, scale1) = (*scale as i32, *scale.add(1) as i32);
+                isum += vaddvq_s16(p2) as i32 * scale0 + vaddvq_s16(p3) as i32 * scale1;
+                scale = scale.add(2);
+            }
+            sum += d_all * y.d * ((isum - 32 * isum_mins) as f32);
         }
     }
-    Ok(sums.iter().sum())
+    Ok(sum)
 }
