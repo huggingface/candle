@@ -45,6 +45,22 @@ fn run_ls(file: &std::path::PathBuf) -> Result<()> {
                 println!("{name}: [{shape:?}; {dtype}]")
             }
         }
+        Some("pt") | Some("pth") => {
+            let mut tensors = candle_core::pickle::read_pth_tensor_info(file)?;
+            tensors.sort_by(|a, b| a.0.cmp(&b.0));
+            for (name, dtype, shape) in tensors.iter() {
+                println!("{name}: [{shape:?}; {dtype:?}]")
+            }
+        }
+        Some("pkl") => {
+            let file = std::fs::File::open(file)?;
+            let mut reader = std::io::BufReader::new(file);
+            let mut stack = candle_core::pickle::Stack::empty();
+            stack.read_loop(&mut reader)?;
+            for (i, obj) in stack.stack().iter().enumerate() {
+                println!("{i} {obj:?}");
+            }
+        }
         Some(_) => {
             println!("{file:?}: unsupported file extension")
         }
