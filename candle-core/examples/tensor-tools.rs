@@ -45,6 +45,15 @@ fn run_ls(file: &std::path::PathBuf) -> Result<()> {
                 println!("{name}: [{shape:?}; {dtype}]")
             }
         }
+        Some("pkl") => {
+            let file = std::fs::File::open(file)?;
+            let mut reader = std::io::BufReader::new(file);
+            let mut stack = candle_core::pickle::Stack::empty();
+            stack.read_loop(&mut reader)?;
+            for (i, obj) in stack.stack().iter().enumerate() {
+                println!("{i} {obj:?}");
+            }
+        }
         Some(_) => {
             println!("{file:?}: unsupported file extension")
         }

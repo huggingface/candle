@@ -1,3 +1,4 @@
+// Just enough pickle support to be able to read PyTorch checkpoints.
 use crate::{Error as E, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
@@ -117,6 +118,10 @@ impl Stack {
         }
     }
 
+    pub fn stack(&self) -> &[Object] {
+        self.stack.as_slice()
+    }
+
     pub fn read_loop<R: BufRead>(&mut self, r: &mut R) -> Result<()> {
         loop {
             if self.read(r)? {
@@ -137,13 +142,40 @@ impl Stack {
         }
     }
 
+    // https://docs.juliahub.com/Pickle/LAUNc/0.1.0/opcode/#Pickle.OpCodes.BUILD
+    fn build(&mut self) -> Result<()> {
+        let mut args = self.pop()?;
+        let obj = self.last()?;
+        match (obj, &mut args) {
+            (Object::Dict(obj), Object::Dict(args)) => obj.append(args),
+            (obj, args) => println!("build {obj:?} {args:?}"),
+        }
+        Ok(())
+    }
+
     fn reduce(&mut self) -> Result<()> {
         let args = self.pop()?;
         let callable = self.pop()?;
-        self.push(Object::Reduce {
+        #[allow(clippy::single_match)]
+        let reduced = match &callable {
+            Object::Class {
+                module_name,
+                class_name,
+            } => {
+                if module_name == "collections" && class_name == "OrderedDict" {
+                    // TODO: have a separate ordered dict.
+                    Some(Object::Dict(vec![]))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let reduced = reduced.unwrap_or_else(|| Object::Reduce {
             callable: Box::new(callable),
             args: Box::new(args),
         });
+        self.push(reduced);
         Ok(())
     }
 
@@ -176,16 +208,23 @@ impl Stack {
     }
 
     fn pop_to_marker(&mut self) -> Result<Vec<Object>> {
-        let mut objs = vec![];
-        loop {
-            let obj = self.pop()?;
-            if obj == Object::Mark {
+        let mut mark_idx = None;
+        for (idx, obj) in self.stack.iter().enumerate().rev() {
+            if obj == &Object::Mark {
+                mark_idx = Some(idx);
                 break;
             }
-            objs.push(obj)
         }
-        objs.reverse();
-        Ok(objs)
+        match mark_idx {
+            Some(mark_idx) => {
+                let objs = self.stack.split_off(mark_idx + 1);
+                self.stack.pop();
+                Ok(objs)
+            }
+            None => {
+                crate::bail!("marker object not found")
+            }
+        }
     }
 
     pub fn read<R: BufRead>(&mut self, r: &mut R) -> Result<bool> {
@@ -286,9 +325,7 @@ impl Stack {
             OpCode::Stop => {
                 return Ok(true);
             }
-            OpCode::Build => {
-                println!("build");
-            }
+            OpCode::Build => self.build()?,
             OpCode::EmptyDict => self.push(Object::Dict(vec![])),
             OpCode::Dict => {
                 let mut objs = self.pop_to_marker()?;
