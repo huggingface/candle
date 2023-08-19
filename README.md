@@ -32,6 +32,7 @@ Check out our [examples](./candle-examples/examples/):
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
   using self-supervision (can be used for imagenet classification, depth
   evaluation, segmentation).
+- [MNIST Training](./candle-examples/examples/mnist-training/): simple vision training example.
 
 Run them using the following commands:
 ```
@@ -42,6 +43,7 @@ cargo run --example bert --release
 cargo run --example bigcode --release
 cargo run --example stable-diffusion --release -- --prompt "a rusty robot holding a fire torch"
 cargo run --example dinov2 --release -- --image path/to/myinput.jpg
+cargo run --example mnist-training --release
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
