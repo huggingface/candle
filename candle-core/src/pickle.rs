@@ -6,6 +6,8 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 use std::io::BufRead;
 
+const VERBOSE: bool = false;
+
 // https://docs.juliahub.com/Pickle/LAUNc/0.1.0/opcode/
 #[repr(u8)]
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -352,7 +354,9 @@ impl Stack {
         match op_code {
             OpCode::Proto => {
                 let version = r.read_u8()?;
-                println!("proto {version}");
+                if VERBOSE {
+                    println!("proto {version}");
+                }
             }
             OpCode::Global => {
                 let module_name = read_to_newline(r)?;
@@ -537,6 +541,9 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(file: P) -> Result<Vec<Te
         let mut stack = Stack::empty();
         stack.read_loop(&mut reader)?;
         let obj = stack.finalize()?;
+        if VERBOSE {
+            println!("{obj:?}");
+        }
         if let Object::Dict(key_values) = obj {
             for (name, value) in key_values.into_iter() {
                 let name = match name.unicode() {
@@ -546,6 +553,20 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(file: P) -> Result<Vec<Te
                 let (callable, args) = match value.reduce() {
                     Ok(callable_args) => callable_args,
                     _ => continue,
+                };
+                let (callable, args) = match callable {
+                    Object::Class {
+                        module_name,
+                        class_name,
+                    } if module_name == "torch._tensor"
+                        && class_name == "_rebuild_from_type_v2" =>
+                    {
+                        let mut args = args.tuple()?;
+                        let callable = args.remove(0);
+                        let args = args.remove(1);
+                        (callable, args)
+                    }
+                    _ => (callable, args),
                 };
                 match callable {
                     Object::Class {
