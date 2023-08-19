@@ -335,6 +335,18 @@ impl Args {
     }
 }
 
+fn print_token(next_token: u32, tokenizer: &Tokenizer) {
+    // Extracting the last token as a string is complicated, here we just apply some simple
+    // heuristics as it seems to work well enough for this example. See the following for more
+    // details:
+    // https://github.com/huggingface/tokenizers/issues/1141#issuecomment-1562644141
+    if let Some(text) = tokenizer.id_to_token(next_token) {
+        let text = text.replace('▁', " ").replace("<0x0A>", "\n");
+        print!("{text}");
+        let _ = std::io::stdout().flush();
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
@@ -395,39 +407,40 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let mut tokens = tokens.get_ids().to_vec();
-    let mut index_pos = 0;
+    let prompt_tokens = tokens.get_ids().to_vec();
     let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature);
-    let start_gen = std::time::Instant::now();
-    let mut token_generated = 0;
+
     print!("{prompt}");
-    for index in 0..args.sample_len {
-        let context_size = if index == 0 { tokens.len() } else { 1 };
-        let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-        let input = Tensor::new(ctxt, &Device::Cpu)?.unsqueeze(0)?;
-        let logits = model.forward(&input, index_pos)?;
+
+    let start_prompt_processing = std::time::Instant::now();
+    let mut next_token = {
+        let input = Tensor::new(prompt_tokens.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
+        let logits = model.forward(&input, 0)?;
         let logits = logits.squeeze(0)?;
-        index_pos += ctxt.len();
+        logits_processor.sample(&logits)?
+    };
+    let prompt_dt = start_prompt_processing.elapsed();
+    print_token(next_token, &tokenizer);
 
-        let next_token = logits_processor.sample(&logits)?;
-        token_generated += 1;
-        tokens.push(next_token);
-
-        // Extracting the last token as a string is complicated, here we just apply some simple
-        // heuristics as it seems to work well enough for this example. See the following for more
-        // details:
-        // https://github.com/huggingface/tokenizers/issues/1141#issuecomment-1562644141
-        if let Some(text) = tokenizer.id_to_token(next_token) {
-            let text = text.replace('▁', " ").replace("<0x0A>", "\n");
-            print!("{text}");
-            std::io::stdout().flush()?;
-        }
+    let to_sample = args.sample_len.saturating_sub(1);
+    let start_post_prompt = std::time::Instant::now();
+    for index in 0..to_sample {
+        let input = Tensor::new(&[next_token], &Device::Cpu)?.unsqueeze(0)?;
+        let logits = model.forward(&input, prompt_tokens.len() + index)?;
+        let logits = logits.squeeze(0)?;
+        next_token = logits_processor.sample(&logits)?;
+        print_token(next_token, &tokenizer);
     }
-    let dt = start_gen.elapsed();
+    let dt = start_post_prompt.elapsed();
     println!(
-        "\n\n{} tokens generated ({:.2} token/s)\n",
-        token_generated,
-        token_generated as f64 / dt.as_secs_f64(),
+        "\n\n{:4} prompt tokens processed: {:.2} token/s",
+        prompt_tokens.len(),
+        prompt_tokens.len() as f64 / prompt_dt.as_secs_f64(),
+    );
+    println!(
+        "{:4} tokens generated: {:.2} token/s",
+        to_sample,
+        to_sample as f64 / dt.as_secs_f64(),
     );
     Ok(())
 }
