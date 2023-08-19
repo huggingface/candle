@@ -1,5 +1,7 @@
 // Just enough pickle support to be able to read PyTorch checkpoints.
-use crate::{Error as E, Result};
+// This hardcodes objects that are required for tensor reading, we may want to make this a bit more
+// composable/tensor agnostic at some point.
+use crate::{DType, Error as E, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -102,6 +104,44 @@ pub enum Object {
         callable: Box<Object>,
         args: Box<Object>,
     },
+    PersistentLoad(Box<Object>),
+}
+
+impl TryFrom<Object> for String {
+    type Error = Object;
+    fn try_from(value: Object) -> std::result::Result<Self, Self::Error> {
+        match value {
+            Object::Unicode(s) => Ok(s),
+            other => Err(other),
+        }
+    }
+}
+
+impl TryFrom<Object> for usize {
+    type Error = Object;
+    fn try_from(value: Object) -> std::result::Result<Self, Self::Error> {
+        match value {
+            Object::Int(s) if s >= 0 => Ok(s as usize),
+            other => Err(other),
+        }
+    }
+}
+
+impl<T: TryFrom<Object, Error = Object>> TryFrom<Object> for Vec<T> {
+    type Error = Object;
+    fn try_from(value: Object) -> std::result::Result<Self, Self::Error> {
+        match value {
+            Object::Tuple(values) => {
+                // This does not return the appropriate value in the error case but instead return
+                // the object related to the first error.
+                values
+                    .into_iter()
+                    .map(|v| T::try_from(v))
+                    .collect::<std::result::Result<Vec<T>, Self::Error>>()
+            }
+            other => Err(other),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -129,6 +169,10 @@ impl Stack {
             }
         }
         Ok(())
+    }
+
+    pub fn finalize(mut self) -> Result<Object> {
+        self.pop()
     }
 
     fn push(&mut self, obj: Object) {
@@ -202,9 +246,8 @@ impl Stack {
         Ok(())
     }
 
-    fn persistent_load(&mut self, id: Object) -> Result<Object> {
-        println!("persistent-load: {id:?}");
-        Ok(id)
+    fn persistent_load(&self, id: Object) -> Result<Object> {
+        Ok(Object::PersistentLoad(Box::new(id)))
     }
 
     fn pop_to_marker(&mut self) -> Result<Vec<Object>> {
@@ -363,4 +406,61 @@ impl Stack {
         }
         Ok(false)
     }
+}
+
+pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
+    file: P,
+) -> Result<Vec<(String, DType, Vec<usize>)>> {
+    let file = std::fs::File::open(file)?;
+    let zip_reader = std::io::BufReader::new(file);
+    let mut zip = zip::ZipArchive::new(zip_reader)?;
+    let zip_file_names = zip
+        .file_names()
+        .map(|f| f.to_string())
+        .collect::<Vec<String>>();
+
+    let mut tensor_info = vec![];
+    for name in zip_file_names.iter() {
+        if !name.ends_with("data.pkl") {
+            continue;
+        }
+        let reader = zip.by_name(name)?;
+        let mut reader = std::io::BufReader::new(reader);
+        let mut stack = Stack::empty();
+        stack.read_loop(&mut reader)?;
+        let obj = stack.finalize()?;
+        if let Object::Dict(key_values) = obj {
+            for (key, value) in key_values.into_iter() {
+                let key = match String::try_from(key) {
+                    Ok(key) => key,
+                    Err(_) => continue,
+                };
+                let (callable, args) = match value {
+                    Object::Reduce { callable, args } => (*callable, *args),
+                    _ => continue,
+                };
+                match callable {
+                    Object::Class {
+                        module_name,
+                        class_name,
+                    } if module_name == "torch._utils" && class_name == "_rebuild_tensor_v2" => {}
+                    _ => continue,
+                };
+                // https://github.com/pytorch/pytorch/blob/4eac43d046ded0f0a5a5fa8db03eb40f45bf656e/torch/_utils.py#L198
+                // Arguments: storage, storage_offset, size, stride, requires_grad, backward_hooks
+                let mut args = match args {
+                    Object::Tuple(args) => args,
+                    _ => continue,
+                };
+                let size = match Vec::<usize>::try_from(args.remove(2)) {
+                    Ok(size) => size,
+                    Err(_) => continue,
+                };
+                let dtype = DType::F32; // TODO
+                tensor_info.push((key, dtype, size))
+                // pass
+            }
+        }
+    }
+    Ok(tensor_info)
 }
