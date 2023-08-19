@@ -9,6 +9,14 @@ pub struct Layout {
 }
 
 impl Layout {
+    pub fn new(shape: Shape, stride: Vec<usize>, start_offset: usize) -> Self {
+        Self {
+            shape,
+            stride,
+            start_offset,
+        }
+    }
+
     pub fn contiguous_with_offset<S: Into<Shape>>(shape: S, start_offset: usize) -> Self {
         let shape = shape.into();
         let stride = shape.stride_contiguous();
