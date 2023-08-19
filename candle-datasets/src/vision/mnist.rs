@@ -51,10 +51,19 @@ fn read_images(filename: &std::path::Path) -> Result<Tensor> {
 
 pub fn load_dir<T: AsRef<std::path::Path>>(dir: T) -> Result<crate::vision::Dataset> {
     let dir = dir.as_ref();
-    let train_images = read_images(&dir.join("train-images-idx3-ubyte"))?;
-    let train_labels = read_labels(&dir.join("train-labels-idx1-ubyte"))?;
-    let test_images = read_images(&dir.join("t10k-images-idx3-ubyte"))?;
-    let test_labels = read_labels(&dir.join("t10k-labels-idx1-ubyte"))?;
+
+    let train_images_path = &dir.join("train-images-idx3-ubyte");
+    let train_images = read_images(train_images_path).map_err(|e| e.with_path(train_images_path))?;
+
+    let train_labels_path = &dir.join("train-labels-idx1-ubyte");
+    let train_labels = read_labels(train_labels_path).map_err(|e| e.with_path(train_labels_path))?;
+
+    let test_images_path = &dir.join("t10k-images-idx3-ubyte");
+    let test_images = read_images(test_images_path).map_err(|e| e.with_path(test_images_path))?;
+
+    let test_labels_path = &dir.join("t10k-labels-idx1-ubyte");
+    let test_labels = read_labels(test_labels_path).map_err(|e| e.with_path(test_labels_path))?;
+
     Ok(crate::vision::Dataset {
         train_images,
         train_labels,
