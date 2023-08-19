@@ -1,6 +1,5 @@
 use super::k_quants::{BlockQ4_0, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K};
 use crate::Result;
-use half::f16;
 
 #[allow(unused_imports)]
 #[cfg(target_arch = "arm")]
@@ -21,18 +20,68 @@ pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) ->
         crate::bail!("vec_dot_q4_0_q8_0: {nb} is not even")
     }
 
-    // Generic implementation.
-    let mut sumf = 0f32;
-    for (xs, ys) in xs.iter().zip(ys.iter()) {
-        let mut sum_i = 0;
-        for j in 0..qk / 2 {
-            let v0 = (xs.qs[j] & 0x0F) as i32 - 8;
-            let v1 = (xs.qs[j] >> 4) as i32 - 8;
-            sum_i += v0 * ys.qs[j] as i32 + v1 * ys.qs[j + qk / 2] as i32
+    unsafe {
+        let mut sumv0 = vdupq_n_f32(0.0f32);
+        let mut sumv1 = vdupq_n_f32(0.0f32);
+        for i in (0..nb).step_by(2) {
+            let x0 = &xs[i];
+            let x1 = &xs[i + 1];
+            let y0 = &ys[i];
+            let y1 = &ys[i + 1];
+
+            let m4b = vdupq_n_u8(0x0F);
+            let s8b = vdupq_n_s8(0x8);
+
+            let v0_0 = vld1q_u8(x0.qs.as_ptr());
+            let v0_1 = vld1q_u8(x1.qs.as_ptr());
+
+            // 4-bit -> 8-bit
+            let v0_0l = vreinterpretq_s8_u8(vandq_u8(v0_0, m4b));
+            let v0_0h = vreinterpretq_s8_u8(vshrq_n_u8(v0_0, 4));
+            let v0_1l = vreinterpretq_s8_u8(vandq_u8(v0_1, m4b));
+            let v0_1h = vreinterpretq_s8_u8(vshrq_n_u8(v0_1, 4));
+
+            // sub 8
+            let v0_0ls = vsubq_s8(v0_0l, s8b);
+            let v0_0hs = vsubq_s8(v0_0h, s8b);
+            let v0_1ls = vsubq_s8(v0_1l, s8b);
+            let v0_1hs = vsubq_s8(v0_1h, s8b);
+
+            // load y
+            let v1_0l = vld1q_s8(y0.qs.as_ptr());
+            let v1_0h = vld1q_s8(y0.qs.as_ptr().add(16));
+            let v1_1l = vld1q_s8(y1.qs.as_ptr());
+            let v1_1h = vld1q_s8(y1.qs.as_ptr().add(16));
+
+            // TODO: Support dotprod when it's available outside of nightly.
+            let pl0l = vmull_s8(vget_low_s8(v0_0ls), vget_low_s8(v1_0l));
+            let pl0h = vmull_s8(vget_high_s8(v0_0ls), vget_high_s8(v1_0l));
+            let ph0l = vmull_s8(vget_low_s8(v0_0hs), vget_low_s8(v1_0h));
+            let ph0h = vmull_s8(vget_high_s8(v0_0hs), vget_high_s8(v1_0h));
+
+            let pl1l = vmull_s8(vget_low_s8(v0_1ls), vget_low_s8(v1_1l));
+            let pl1h = vmull_s8(vget_high_s8(v0_1ls), vget_high_s8(v1_1l));
+            let ph1l = vmull_s8(vget_low_s8(v0_1hs), vget_low_s8(v1_1h));
+            let ph1h = vmull_s8(vget_high_s8(v0_1hs), vget_high_s8(v1_1h));
+
+            let pl0 = vaddq_s32(vpaddlq_s16(pl0l), vpaddlq_s16(pl0h));
+            let ph0 = vaddq_s32(vpaddlq_s16(ph0l), vpaddlq_s16(ph0h));
+            let pl1 = vaddq_s32(vpaddlq_s16(pl1l), vpaddlq_s16(pl1h));
+            let ph1 = vaddq_s32(vpaddlq_s16(ph1l), vpaddlq_s16(ph1h));
+
+            sumv0 = vmlaq_n_f32(
+                sumv0,
+                vcvtq_f32_s32(vaddq_s32(pl0, ph0)),
+                x0.d.to_f32() * y0.d.to_f32(),
+            );
+            sumv1 = vmlaq_n_f32(
+                sumv1,
+                vcvtq_f32_s32(vaddq_s32(pl1, ph1)),
+                x1.d.to_f32() * y1.d.to_f32(),
+            );
         }
-        sumf += sum_i as f32 * f16::to_f32(xs.d) * f16::to_f32(ys.d)
+        Ok(vaddvq_f32(sumv0) + vaddvq_f32(sumv1))
     }
-    Ok(sumf)
 }
 
 #[inline(always)]
