@@ -467,6 +467,10 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
                 let dtype = match &storage[1] {
                     Object::Class { class_name, .. } => match class_name.as_str() {
                         "FloatStorage" => DType::F32,
+                        "DoubleStorage" => DType::F64,
+                        "HalfStorage" => DType::F16,
+                        "BFloat16Storage" => DType::BF16,
+                        "ByteStorage" => DType::U8,
                         other => {
                             eprintln!("unsupported storage type {other}");
                             continue;
