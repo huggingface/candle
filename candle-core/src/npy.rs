@@ -196,7 +196,11 @@ impl Header {
 
 impl Tensor {
     // TODO: Add the possibility to read directly to a device?
-    fn from_reader<R: std::io::Read>(shape: Shape, dtype: DType, reader: &mut R) -> Result<Self> {
+    pub(crate) fn from_reader<R: std::io::Read>(
+        shape: Shape,
+        dtype: DType,
+        reader: &mut R,
+    ) -> Result<Self> {
         let elem_count = shape.elem_count();
         match dtype {
             DType::BF16 => {

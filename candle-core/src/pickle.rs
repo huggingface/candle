@@ -1,7 +1,7 @@
 // Just enough pickle support to be able to read PyTorch checkpoints.
 // This hardcodes objects that are required for tensor reading, we may want to make this a bit more
 // composable/tensor agnostic at some point.
-use crate::{DType, Error as E, Layout, Result};
+use crate::{DType, Error as E, Layout, Result, Tensor};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -518,7 +518,7 @@ pub struct TensorInfo {
     pub name: String,
     pub dtype: DType,
     pub layout: Layout,
-    pub path: std::path::PathBuf,
+    pub path: String,
 }
 
 pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(file: P) -> Result<Vec<TensorInfo>> {
@@ -583,7 +583,7 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(file: P) -> Result<Vec<Te
                             name,
                             dtype,
                             layout,
-                            path,
+                            path: path.to_string_lossy().into_owned(),
                         })
                     }
                     Err(err) => {
@@ -594,4 +594,54 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(file: P) -> Result<Vec<Te
         }
     }
     Ok(tensor_infos)
+}
+
+/// Lazy tensor loader.
+pub struct PthTensors {
+    tensor_infos: HashMap<String, TensorInfo>,
+    path: std::path::PathBuf,
+    // We do not store a zip reader as it needs mutable access to extract data. Instead we
+    // re-create a zip reader for each tensor.
+}
+
+impl PthTensors {
+    pub fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        let tensor_infos = read_pth_tensor_info(path.as_ref())?;
+        let tensor_infos = tensor_infos
+            .into_iter()
+            .map(|ti| (ti.name.to_string(), ti))
+            .collect();
+        let path = path.as_ref().to_owned();
+        Ok(Self { tensor_infos, path })
+    }
+
+    pub fn tensor_infos(&self) -> &HashMap<String, TensorInfo> {
+        &self.tensor_infos
+    }
+
+    pub fn get(&self, name: &str) -> Result<Option<Tensor>> {
+        let tensor_info = match self.tensor_infos.get(name) {
+            None => return Ok(None),
+            Some(tensor_info) => tensor_info,
+        };
+        // We hope that the file has not changed since first reading it.
+        let zip_reader = std::io::BufReader::new(std::fs::File::open(&self.path)?);
+        let mut zip = zip::ZipArchive::new(zip_reader)?;
+        let mut reader = zip.by_name(&tensor_info.path)?;
+
+        // Reading the data is a bit tricky as it can be strided, use an offset, etc.
+        // For now only support the basic case.
+        if tensor_info.layout.start_offset() != 0 || !tensor_info.layout.is_contiguous() {
+            crate::bail!(
+                "cannot retrieve non-contiguous tensors {:?}",
+                tensor_info.layout
+            )
+        }
+        let tensor = Tensor::from_reader(
+            tensor_info.layout.shape().clone(),
+            tensor_info.dtype,
+            &mut reader,
+        )?;
+        Ok(Some(tensor))
+    }
 }
