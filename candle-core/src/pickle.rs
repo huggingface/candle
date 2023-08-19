@@ -107,6 +107,76 @@ pub enum Object {
     PersistentLoad(Box<Object>),
 }
 
+type OResult<T> = std::result::Result<T, Object>;
+
+impl Object {
+    pub fn unicode(self) -> OResult<String> {
+        match self {
+            Self::Unicode(t) => Ok(t),
+            _ => Err(self),
+        }
+    }
+
+    pub fn reduce(self) -> OResult<(Self, Self)> {
+        match self {
+            Self::Reduce { callable, args } => Ok((*callable, *args)),
+            _ => Err(self),
+        }
+    }
+
+    pub fn none(self) -> OResult<()> {
+        match self {
+            Self::None => Ok(()),
+            _ => Err(self),
+        }
+    }
+
+    pub fn persistent_load(self) -> OResult<Self> {
+        match self {
+            Self::PersistentLoad(t) => Ok(*t),
+            _ => Err(self),
+        }
+    }
+
+    pub fn bool(self) -> OResult<bool> {
+        match self {
+            Self::Bool(t) => Ok(t),
+            _ => Err(self),
+        }
+    }
+
+    pub fn int(self) -> OResult<i32> {
+        match self {
+            Self::Int(t) => Ok(t),
+            _ => Err(self),
+        }
+    }
+
+    pub fn tuple(self) -> OResult<Vec<Self>> {
+        match self {
+            Self::Tuple(t) => Ok(t),
+            _ => Err(self),
+        }
+    }
+
+    pub fn dict(self) -> OResult<Vec<(Self, Self)>> {
+        match self {
+            Self::Dict(t) => Ok(t),
+            _ => Err(self),
+        }
+    }
+
+    pub fn class(self) -> OResult<(String, String)> {
+        match self {
+            Self::Class {
+                module_name,
+                class_name,
+            } => Ok((module_name, class_name)),
+            _ => Err(self),
+        }
+    }
+}
+
 impl TryFrom<Object> for String {
     type Error = Object;
     fn try_from(value: Object) -> std::result::Result<Self, Self::Error> {
@@ -408,6 +478,33 @@ impl Stack {
     }
 }
 
+impl From<Object> for E {
+    fn from(value: Object) -> Self {
+        E::Msg(format!("conversion error on {value:?}"))
+    }
+}
+
+// https://github.com/pytorch/pytorch/blob/4eac43d046ded0f0a5a5fa8db03eb40f45bf656e/torch/_utils.py#L198
+// Arguments: storage, storage_offset, size, stride, requires_grad, backward_hooks
+fn rebuild_args(args: Object) -> Result<(Vec<usize>, DType)> {
+    let mut args = args.tuple()?;
+    let size = Vec::<usize>::try_from(args.remove(2))?;
+    let storage = args.remove(0).persistent_load()?;
+    let mut storage = storage.tuple()?;
+    let (_module_name, class_name) = storage.remove(1).class()?;
+    let dtype = match class_name.as_str() {
+        "FloatStorage" => DType::F32,
+        "DoubleStorage" => DType::F64,
+        "HalfStorage" => DType::F16,
+        "BFloat16Storage" => DType::BF16,
+        "ByteStorage" => DType::U8,
+        other => {
+            crate::bail!("unsupported storage type {other}")
+        }
+    };
+    Ok((size, dtype))
+}
+
 pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
     file: P,
 ) -> Result<Vec<(String, DType, Vec<usize>)>> {
@@ -431,12 +528,12 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
         let obj = stack.finalize()?;
         if let Object::Dict(key_values) = obj {
             for (key, value) in key_values.into_iter() {
-                let key = match String::try_from(key) {
+                let key = match key.unicode() {
                     Ok(key) => key,
                     Err(_) => continue,
                 };
-                let (callable, args) = match value {
-                    Object::Reduce { callable, args } => (*callable, *args),
+                let (callable, args) = match value.reduce() {
+                    Ok(callable_args) => callable_args,
                     _ => continue,
                 };
                 match callable {
@@ -446,40 +543,12 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
                     } if module_name == "torch._utils" && class_name == "_rebuild_tensor_v2" => {}
                     _ => continue,
                 };
-                // https://github.com/pytorch/pytorch/blob/4eac43d046ded0f0a5a5fa8db03eb40f45bf656e/torch/_utils.py#L198
-                // Arguments: storage, storage_offset, size, stride, requires_grad, backward_hooks
-                let mut args = match args {
-                    Object::Tuple(args) => args,
-                    _ => continue,
-                };
-                let size = match Vec::<usize>::try_from(args.remove(2)) {
-                    Ok(size) => size,
-                    Err(_) => continue,
-                };
-                let storage = match args.remove(0) {
-                    Object::PersistentLoad(vs) => *vs,
-                    _ => continue,
-                };
-                let storage = match storage {
-                    Object::Tuple(vs) => vs,
-                    _ => continue,
-                };
-                let dtype = match &storage[1] {
-                    Object::Class { class_name, .. } => match class_name.as_str() {
-                        "FloatStorage" => DType::F32,
-                        "DoubleStorage" => DType::F64,
-                        "HalfStorage" => DType::F16,
-                        "BFloat16Storage" => DType::BF16,
-                        "ByteStorage" => DType::U8,
-                        other => {
-                            eprintln!("unsupported storage type {other}");
-                            continue;
-                        }
-                    },
-                    _ => continue,
-                };
-                tensor_info.push((key, dtype, size))
-                // pass
+                match rebuild_args(args) {
+                    Ok((size, dtype)) => tensor_info.push((key, dtype, size)),
+                    Err(err) => {
+                        eprintln!("skipping {key}: {err:?}")
+                    }
+                }
             }
         }
     }
