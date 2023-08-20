@@ -6,6 +6,8 @@ BINARY_OP(__nv_bfloat16, badd_bf16, x + y)
 BINARY_OP(__nv_bfloat16, bdiv_bf16, x / y)
 BINARY_OP(__nv_bfloat16, bmul_bf16, x * y)
 BINARY_OP(__nv_bfloat16, bsub_bf16, x - y)
+BINARY_OP(__nv_bfloat16, bmaximum_bf16, maxg(x, y))
+BINARY_OP(__nv_bfloat16, bminimum_bf16, ming(x, y))
 BINARY_OP_OUT(__nv_bfloat16, uint8_t, eq_bf16, x == y)
 BINARY_OP_OUT(__nv_bfloat16, uint8_t, ne_bf16, x != y)
 BINARY_OP_OUT(__nv_bfloat16, uint8_t, lt_bf16, x < y)
@@ -19,6 +21,8 @@ BINARY_OP(__half, badd_f16, x + y)
 BINARY_OP(__half, bdiv_f16, x / y)
 BINARY_OP(__half, bmul_f16, x * y)
 BINARY_OP(__half, bsub_f16, x - y)
+BINARY_OP(__half, bmaximum_f16, maxg(x, y))
+BINARY_OP(__half, bminimum_f16, ming(x, y))
 BINARY_OP_OUT(__half, uint8_t, eq_f16, x == y)
 BINARY_OP_OUT(__half, uint8_t, ne_f16, x != y)
 BINARY_OP_OUT(__half, uint8_t, lt_f16, x < y)
@@ -43,6 +47,14 @@ BINARY_OP(float, bsub_f32, x - y)
 BINARY_OP(double, bsub_f64, x - y);
 BINARY_OP(uint8_t, bsub_u8, x - y);
 BINARY_OP(uint32_t, bsub_u32, x - y);
+BINARY_OP(float, bminimum_f32, ming(x, y));
+BINARY_OP(double, bminimum_f64, ming(x, y));
+BINARY_OP(uint8_t, bminimum_u8, ming(x, y));
+BINARY_OP(uint32_t, bminimum_u32, ming(x, y));
+BINARY_OP(float, bmaximum_f32, maxg(x, y));
+BINARY_OP(double, bmaximum_f64, maxg(x, y));
+BINARY_OP(uint8_t, bmaximum_u8, maxg(x, y));
+BINARY_OP(uint32_t, bmaximum_u32, maxg(x, y));
 
 BINARY_OP_OUT(float, uint8_t, eq_f32, x == y)
 BINARY_OP_OUT(double, uint8_t, eq_f64, x == y)

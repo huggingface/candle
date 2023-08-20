@@ -444,10 +444,14 @@ impl Tensor {
     binary_op!(mul, Mul);
     binary_op!(sub, Sub);
     binary_op!(div, Div);
+    binary_op!(maximum, Maximum);
+    binary_op!(minimum, Minimum);
     broadcast_binary_op!(broadcast_add, add);
     broadcast_binary_op!(broadcast_mul, mul);
     broadcast_binary_op!(broadcast_sub, sub);
     broadcast_binary_op!(broadcast_div, div);
+    broadcast_binary_op!(broadcast_maximum, maximum);
+    broadcast_binary_op!(broadcast_minimum, minimum);
 
     unary_op!(recip, Recip);
     unary_op!(neg, Neg);

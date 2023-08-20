@@ -12,6 +12,24 @@ pub fn device(cpu: bool) -> Result<Device> {
     }
 }
 
+pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
+    p: P,
+    width: usize,
+    height: usize,
+) -> Result<Tensor> {
+    let img = image::io::Reader::open(p)?
+        .decode()
+        .map_err(candle::Error::wrap)?
+        .resize_to_fill(
+            width as u32,
+            height as u32,
+            image::imageops::FilterType::Triangle,
+        );
+    let img = img.to_rgb8();
+    let data = img.into_raw();
+    Tensor::from_vec(data, (width, height, 3), &Device::Cpu)?.permute((2, 0, 1))
+}
+
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 224, 224). imagenet normalization is applied.
 pub fn load_image224<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {

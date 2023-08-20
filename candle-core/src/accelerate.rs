@@ -123,6 +123,42 @@ mod ffi {
             _: c_long,
             _: c_ulong,
         );
+        pub fn vDSP_vminD(
+            _: *const c_double,
+            _: c_long,
+            _: *const c_double,
+            _: c_long,
+            _: *mut c_double,
+            _: c_long,
+            _: c_ulong,
+        );
+        pub fn vDSP_vmin(
+            _: *const c_float,
+            _: c_long,
+            _: *const c_float,
+            _: c_long,
+            _: *mut c_float,
+            _: c_long,
+            _: c_ulong,
+        );
+        pub fn vDSP_vmaxD(
+            _: *const c_double,
+            _: c_long,
+            _: *const c_double,
+            _: c_long,
+            _: *mut c_double,
+            _: c_long,
+            _: c_ulong,
+        );
+        pub fn vDSP_vmax(
+            _: *const c_float,
+            _: c_long,
+            _: *const c_float,
+            _: c_long,
+            _: *mut c_float,
+            _: c_long,
+            _: c_ulong,
+        );
     }
 }
 
@@ -348,3 +384,7 @@ binary_op!(vs_mul, f32, vDSP_vmul);
 binary_op!(vd_mul, f64, vDSP_vmulD);
 binary_op!(vs_div, f32, vDSP_vdiv);
 binary_op!(vd_div, f64, vDSP_vdivD);
+binary_op!(vs_max, f32, vDSP_vmax);
+binary_op!(vd_max, f64, vDSP_vmaxD);
+binary_op!(vs_min, f32, vDSP_vmin);
+binary_op!(vd_min, f64, vDSP_vminD);

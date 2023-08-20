@@ -36,10 +36,10 @@ fn tensor_2d(device: &Device) -> Result<()> {
 
 fn binary_op(device: &Device) -> Result<()> {
     let data = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
-    let tensor = Tensor::new(data, device)?;
+    let tensor1 = Tensor::new(data, device)?;
     let data2 = &[[5f32, 5., 5., 5., 5.], [2., 1., 7., 8., 2.]];
     let tensor2 = Tensor::new(data2, device)?;
-    let tensor = (&tensor + (&tensor * &tensor)? / (&tensor + &tensor2))?;
+    let tensor = (&tensor1 + (&tensor1 * &tensor1)? / (&tensor1 + &tensor2))?;
     let dims = tensor.dims2()?;
     assert_eq!(dims, (2, 5));
     let content: Vec<Vec<f32>> = tensor.to_vec2()?;
@@ -49,6 +49,17 @@ fn binary_op(device: &Device) -> Result<()> {
     let tensor = (&tensor - &tensor)?;
     let content: Vec<Vec<f32>> = tensor.to_vec2()?;
     assert_eq!(content[0], [0., 0., 0., 0., 0.]);
+
+    let min = tensor1.minimum(&(&tensor2 * 0.5)?)?;
+    let max = tensor1.maximum(&(&tensor2 * 0.5)?)?;
+    assert_eq!(
+        min.to_vec2::<f32>()?,
+        [[2.5, 1.0, 2.5, 1.0, 2.5], [1.0, 0.5, 3.5, 4.0, 1.0]],
+    );
+    assert_eq!(
+        max.to_vec2::<f32>()?,
+        [[3.0, 2.5, 4.0, 2.5, 5.0], [2.0, 1.0, 7.0, 8.0, 2.0]]
+    );
     Ok(())
 }
 

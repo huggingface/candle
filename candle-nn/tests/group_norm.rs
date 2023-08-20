@@ -21,6 +21,9 @@ print(group_norm(t, num_groups=3))
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+#[cfg(feature = "accelerate")]
+extern crate accelerate_src;
+
 use anyhow::Result;
 use candle::{Device, Tensor};
 use candle_nn::{GroupNorm, Module};

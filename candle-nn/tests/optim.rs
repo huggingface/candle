@@ -1,6 +1,9 @@
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+#[cfg(feature = "accelerate")]
+extern crate accelerate_src;
+
 mod test_utils;
 use test_utils::{to_vec0_round, to_vec2_round};
 

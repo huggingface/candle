@@ -25,6 +25,10 @@ mod ffi {
         pub fn vdMul(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
         pub fn vsDiv(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
         pub fn vdDiv(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
+        pub fn vsFmax(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
+        pub fn vdFmax(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
+        pub fn vsFmin(n: c_int, a: *const c_float, b: *const c_float, y: *mut c_float);
+        pub fn vdFmin(n: c_int, a: *const c_double, b: *const c_double, y: *mut c_double);
 
         pub fn sgemm_(
             transa: *const c_char,
@@ -376,3 +380,7 @@ binary_op!(vs_mul, f32, vsMul);
 binary_op!(vd_mul, f64, vdMul);
 binary_op!(vs_div, f32, vsDiv);
 binary_op!(vd_div, f64, vdDiv);
+binary_op!(vs_max, f32, vsFmax);
+binary_op!(vd_max, f64, vdFmax);
+binary_op!(vs_min, f32, vsFmin);
+binary_op!(vd_min, f64, vdFmin);
