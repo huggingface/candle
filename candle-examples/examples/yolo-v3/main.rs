@@ -11,6 +11,7 @@ use anyhow::Result;
 use candle::{DType, Device, Tensor};
 use candle_nn::{Module, VarBuilder};
 use clap::Parser;
+use image::{DynamicImage, ImageBuffer};
 
 const CONFIDENCE_THRESHOLD: f32 = 0.5;
 const NMS_THRESHOLD: f32 = 0.4;
@@ -37,11 +38,28 @@ fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
 }
 
 // Assumes x1 <= x2 and y1 <= y2
-pub fn draw_rect(_: &mut Tensor, _x1: usize, _x2: usize, _y1: usize, _y2: usize) {
-    todo!()
+pub fn draw_rect(
+    img: &mut ImageBuffer<image::Rgb<u8>, Vec<u8>>,
+    x1: u32,
+    x2: u32,
+    y1: u32,
+    y2: u32,
+) {
+    for x in x1..=x2 {
+        let pixel = img.get_pixel_mut(x, y1);
+        *pixel = image::Rgb([255, 0, 0]);
+        let pixel = img.get_pixel_mut(x, y2);
+        *pixel = image::Rgb([255, 0, 0]);
+    }
+    for y in y1..=y2 {
+        let pixel = img.get_pixel_mut(x1, y);
+        *pixel = image::Rgb([255, 0, 0]);
+        let pixel = img.get_pixel_mut(x2, y);
+        *pixel = image::Rgb([255, 0, 0]);
+    }
 }
 
-pub fn report(pred: &Tensor, img: &Tensor, w: usize, h: usize) -> Result<Tensor> {
+pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<DynamicImage> {
     let (npreds, pred_size) = pred.dims2()?;
     let nclasses = pred_size - 5;
     // The bounding boxes grouped by (maximum) class index.
@@ -90,24 +108,21 @@ pub fn report(pred: &Tensor, img: &Tensor, w: usize, h: usize) -> Result<Tensor>
         bboxes_for_class.truncate(current_index);
     }
     // Annotate the original image and print boxes information.
-    let (_, initial_h, initial_w) = img.dims3()?;
-    let mut img = (img.to_dtype(DType::F32)? * (1. / 255.))?;
+    let (initial_h, initial_w) = (img.height(), img.width());
     let w_ratio = initial_w as f32 / w as f32;
     let h_ratio = initial_h as f32 / h as f32;
+    let mut img = img.to_rgb8();
     for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
         for b in bboxes_for_class.iter() {
             println!("{}: {:?}", coco_classes::NAMES[class_index], b);
-            let xmin = ((b.xmin * w_ratio) as usize).clamp(0, initial_w - 1);
-            let ymin = ((b.ymin * h_ratio) as usize).clamp(0, initial_h - 1);
-            let xmax = ((b.xmax * w_ratio) as usize).clamp(0, initial_w - 1);
-            let ymax = ((b.ymax * h_ratio) as usize).clamp(0, initial_h - 1);
-            draw_rect(&mut img, xmin, xmax, ymin, ymax.min(ymin + 2));
-            draw_rect(&mut img, xmin, xmax, ymin.max(ymax - 2), ymax);
-            draw_rect(&mut img, xmin, xmax.min(xmin + 2), ymin, ymax);
-            draw_rect(&mut img, xmin.max(xmax - 2), xmax, ymin, ymax);
+            let xmin = ((b.xmin * w_ratio) as u32).clamp(0, initial_w - 1);
+            let ymin = ((b.ymin * h_ratio) as u32).clamp(0, initial_h - 1);
+            let xmax = ((b.xmax * w_ratio) as u32).clamp(0, initial_w - 1);
+            let ymax = ((b.ymax * h_ratio) as u32).clamp(0, initial_h - 1);
+            draw_rect(&mut img, xmin, xmax, ymin, ymax);
         }
     }
-    Ok((img * 255.)?.to_dtype(DType::U8)?)
+    Ok(DynamicImage::ImageRgb8(img))
 }
 
 #[derive(Parser, Debug)]
@@ -133,16 +148,33 @@ pub fn main() -> Result<()> {
     let darknet = darknet::parse_config(&args.config)?;
     let model = darknet.build_model(vb)?;
 
-    for image in args.images.iter() {
-        println!("processing {image}");
+    for image_name in args.images.iter() {
+        println!("processing {image_name}");
+        let mut image_name = std::path::PathBuf::from(image_name);
         // Load the image file and resize it.
         let net_width = darknet.width()?;
         let net_height = darknet.height()?;
-        let original_image = candle_examples::load_image_and_resize(image, net_width, net_height)?;
-        let image = (original_image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
+
+        let original_image = image::io::Reader::open(&image_name)?
+            .decode()
+            .map_err(candle::Error::wrap)?;
+        let image = {
+            let data = original_image
+                .resize_exact(
+                    net_width as u32,
+                    net_height as u32,
+                    image::imageops::FilterType::Triangle,
+                )
+                .to_rgb8()
+                .into_raw();
+            Tensor::from_vec(data, (net_width, net_height, 3), &Device::Cpu)?.permute((2, 0, 1))?
+        };
+        let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image)?.squeeze(0)?;
-        let _image = report(&predictions, &original_image, net_width, net_height)?;
-        println!("converted {image}");
+        let image = report(&predictions, original_image, net_width, net_height)?;
+        image_name.set_extension("pp.jpg");
+        println!("writing {image_name:?}");
+        image.save(image_name)?
     }
     Ok(())
 }

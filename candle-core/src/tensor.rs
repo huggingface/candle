@@ -499,7 +499,7 @@ impl Tensor {
         let mut inp = if self.rank() < repeats.len() {
             let mut shape = self.dims().to_vec();
             while shape.len() < repeats.len() {
-                shape.push(1)
+                shape.insert(0, 1)
             }
             self.reshape(shape)?
         } else {

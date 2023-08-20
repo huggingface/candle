@@ -145,11 +145,12 @@ fn conv(vb: VarBuilder, index: usize, p: usize, b: &Block) -> Result<(usize, Bl)
             Some(bn) => bn.forward(&xs)?,
             None => xs,
         };
-        if leaky {
-            xs.maximum(&(&xs * 0.1)?)
+        let xs = if leaky {
+            xs.maximum(&(&xs * 0.1)?)?
         } else {
-            Ok(xs)
-        }
+            xs
+        };
+        Ok(xs)
     });
     Ok((filters, Bl::Layer(Box::new(func))))
 }
@@ -246,7 +247,8 @@ fn detect(
     let ys02 = (candle_nn::ops::sigmoid(&ys02)?.add(&xy_offset)? * stride as f64)?;
     let ys24 = (ys24.exp()?.mul(&anchors)? * stride as f64)?;
     let ys4 = candle_nn::ops::sigmoid(&ys4)?;
-    Tensor::cat(&[ys02, ys24, ys4], 2)
+    let ys = Tensor::cat(&[ys02, ys24, ys4], 2)?;
+    Ok(ys)
 }
 
 impl Darknet {
