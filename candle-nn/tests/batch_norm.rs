@@ -7,8 +7,8 @@ extern crate accelerate_src;
 mod test_utils;
 
 use anyhow::Result;
-use candle::{Device, Tensor};
-use candle_nn::{BatchNorm, Module};
+use candle::{DType, Device, Tensor};
+use candle_nn::BatchNorm;
 
 /* The test below has been generated using the following PyTorch code:
 import torch
@@ -21,7 +21,9 @@ print(output.flatten())
 */
 #[test]
 fn batch_norm() -> Result<()> {
-    let bn = BatchNorm::new_no_bias(5, 1e-8)?;
+    let running_mean = Tensor::zeros(5, DType::F32, &Device::Cpu)?;
+    let running_var = Tensor::ones(5, DType::F32, &Device::Cpu)?;
+    let bn = BatchNorm::new_no_bias(5, running_mean.clone(), running_var.clone(), 1e-8)?;
     let input: [f32; 120] = [
         -0.7493, -1.0410, 1.6977, -0.6579, 1.7982, -0.0087, 0.2812, -0.1190, 0.2908, -0.5975,
         -0.0278, -0.2138, -1.3130, -1.6048, -2.2028, 0.9452, 0.4002, 0.0831, 1.0004, 0.1860,
@@ -37,7 +39,7 @@ fn batch_norm() -> Result<()> {
         1.4252, -0.9115, -0.1093, -0.3100, -0.6734, -1.4357, 0.9205,
     ];
     let input = Tensor::new(&input, &Device::Cpu)?.reshape((2, 5, 3, 4))?;
-    let output = bn.forward(&input)?;
+    let output = bn.forward_learning(&input)?;
     assert_eq!(output.dims(), &[2, 5, 3, 4]);
     let output = output.flatten_all()?;
     assert_eq!(
@@ -59,11 +61,13 @@ fn batch_norm() -> Result<()> {
     );
     let bn2 = BatchNorm::new(
         5,
+        running_mean.clone(),
+        running_var.clone(),
         Tensor::new(&[0.5f32], &Device::Cpu)?.broadcast_as(5)?,
         Tensor::new(&[-1.5f32], &Device::Cpu)?.broadcast_as(5)?,
         1e-8,
     )?;
-    let output2 = bn2.forward(&input)?;
+    let output2 = bn2.forward_learning(&input)?;
     assert_eq!(output2.dims(), &[2, 5, 3, 4]);
     let output2 = output2.flatten_all()?;
     let diff2 = ((output2 - (output * 0.5)?)? + 1.5)?.sqr()?;
