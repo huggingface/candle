@@ -4,9 +4,9 @@ use crate::{Device, Result, Shape, Tensor};
 pub mod avx;
 pub mod ggml_file;
 pub mod k_quants;
-pub mod utils;
 #[cfg(target_feature = "neon")]
 pub mod neon;
+pub mod utils;
 
 pub use k_quants::GgmlType;
 

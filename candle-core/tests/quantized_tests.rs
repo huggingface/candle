@@ -169,8 +169,8 @@ fn compare_with_error(values: &[f32], expected: &[f32], precision: usize, tolera
     }
 }
 
-fn quantize_roundtrip<T: GgmlType>(src: &[f32], dst: &mut [f32], ) -> Result<Vec<T>> {
-    let mut quant = vec![T::zeros(); src.len()/T::BLCK_SIZE];
+fn quantize_roundtrip<T: GgmlType>(src: &[f32], dst: &mut [f32]) -> Result<Vec<T>> {
+    let mut quant = vec![T::zeros(); src.len() / T::BLCK_SIZE];
     T::from_float(&src, &mut quant)?;
     T::to_float(&quant, dst)?;
     Ok(quant)

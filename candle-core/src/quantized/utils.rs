@@ -225,9 +225,8 @@ pub(super) fn make_qkx1_quants(
     (scale, -min)
 }
 
-
-
 // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L165
+#[allow(dead_code)]
 /// CAUTION untested!
 pub(super) fn make_q3_quants(n: usize, nmax: i32, x: &[f32], l: &mut [i8], do_rmse: bool) -> f32 {
     let mut max = 0.0;
