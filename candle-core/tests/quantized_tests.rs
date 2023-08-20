@@ -143,7 +143,7 @@ fn get_test_vector(bound: f32, size: Option<usize>) -> (Vec<f32>, Vec<f32>) {
 }
 
 /// Round a vector
-fn round_vector(values: &Vec<f32>) -> Vec<f32> {
+fn round_vector(values: &[f32]) -> Vec<f32> {
     values
         .iter()
         .map(|x| (1000. * x).round() / 1000.)
@@ -171,7 +171,7 @@ fn compare_with_error(values: &[f32], expected: &[f32], precision: usize, tolera
 
 fn quantize_roundtrip<T: GgmlType>(src: &[f32], dst: &mut [f32]) -> Result<Vec<T>> {
     let mut quant = vec![T::zeros(); src.len() / T::BLCK_SIZE];
-    T::from_float(&src, &mut quant)?;
+    T::from_float(src, &mut quant)?;
     T::to_float(&quant, dst)?;
     Ok(quant)
 }
