@@ -146,8 +146,7 @@ fn conv(vb: VarBuilder, index: usize, p: usize, b: &Block) -> Result<(usize, Bl)
             None => xs,
         };
         if leaky {
-            // TODO: support xs.maximum(&xs * 0.1)
-            todo!()
+            xs.maximum(&(&xs * 0.1)?)
         } else {
             Ok(xs)
         }
