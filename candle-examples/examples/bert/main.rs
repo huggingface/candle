@@ -1,5 +1,8 @@
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
+
+#[cfg(feature = "accelerate")]
+extern crate accelerate_src;
 mod model;
 
 use anyhow::{anyhow, Error as E, Result};
