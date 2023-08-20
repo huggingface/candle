@@ -7,7 +7,7 @@
 Candle is a minimalist ML framework for Rust with a focus on performance (including GPU support) 
 and ease of use. Try our online demos: 
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
-[llama2](https://huggingface.co/spaces/lmz/candle-llama2).
+[LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2).
 
 ```rust
 let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
@@ -22,7 +22,7 @@ println!("{c}");
 Check out our [examples](./candle-examples/examples/):
 
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
-- [Llama and Llama-v2](./candle-examples/examples/llama/): general LLM.
+- [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
 - [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code
@@ -32,6 +32,9 @@ Check out our [examples](./candle-examples/examples/):
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
   using self-supervision (can be used for imagenet classification, depth
   evaluation, segmentation).
+- [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
+  the LLaMA model using the same quantization techniques as
+  [llama.cpp](https://github.com/ggerganov/llama.cpp).
 
 Run them using the following commands:
 ```
@@ -42,6 +45,7 @@ cargo run --example bert --release
 cargo run --example bigcode --release
 cargo run --example stable-diffusion --release -- --prompt "a rusty robot holding a fire torch"
 cargo run --example dinov2 --release -- --image path/to/myinput.jpg
+cargo run --example quantized --release
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
@@ -53,7 +57,7 @@ There are also some wasm examples for whisper and
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
 [llama2](https://huggingface.co/spaces/lmz/candle-llama2).
 
-For llama2, run the following command to retrieve the weight files and start a
+For LLaMA2, run the following command to retrieve the weight files and start a
 test server:
 ```bash
 cd candle-wasm-examples/llama2-c
@@ -76,7 +80,7 @@ And then head over to
     - CUDA backend for efficiently running on GPUs, multiple GPU distribution via NCCL.
     - WASM support, run your models in a browser.
 - Included models.
-    - LLMs: Llama v1 and v2, Falcon, StarCoder.
+    - LLMs: LLaMA v1 and v2, Falcon, StarCoder.
     - Whisper (multi-lingual support).
     - Stable Diffusion.
     - Computer Vision: DINOv2.
@@ -180,14 +184,14 @@ or for accelerate:
 extern crate accelerate_src;
 ```
 
-#### Cannot run llama example : access to source requires login credentials
+#### Cannot run the LLaMA examples: access to source requires login credentials
 
 ```
 Error: request error: https://huggingface.co/meta-llama/Llama-2-7b-hf/resolve/main/tokenizer.json: status code 401
 ```
 
-This is likely because you're not permissioned for the llama-v2 model. To fix
-this, you have to register on the huggingface-hub, accept the [llama-v2 model
+This is likely because you're not permissioned for the LLaMA-v2 model. To fix
+this, you have to register on the huggingface-hub, accept the [LLaMA-v2 model
 conditions](https://huggingface.co/meta-llama/Llama-2-7b-hf), and set up your
 authentication token. See issue
 [#350](https://github.com/huggingface/candle/issues/350) for more details.
