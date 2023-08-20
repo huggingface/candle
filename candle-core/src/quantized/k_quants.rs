@@ -277,7 +277,6 @@ impl GgmlType for BlockQ2K {
     }
 
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L279
-    /// Currently doesn't work for positive numbers
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
         let k = xs.len();
         if k % QK_K != 0 {
@@ -285,18 +284,19 @@ impl GgmlType for BlockQ2K {
         }
         let nb = k / QK_K;
 
-        let mut l: [u8; QK_K] = [0; QK_K];
-        let mut mins: [f32; QK_K / 16] = [0.0; QK_K / 16];
-        let mut scales: [f32; QK_K / 16] = [0.0; QK_K / 16];
-
         let q4scale = 15.0;
 
         for i in 0..nb {
+
             //calculate scales and mins
+            let mut big_l: [u8; QK_K] = [0; QK_K];
+            let mut mins: [f32; QK_K / 16] = [0.0; QK_K / 16];
+            let mut scales: [f32; QK_K / 16] = [0.0; QK_K / 16];
+
             let offset = i * QK_K;
             for j in 0..QK_K / 16 {
                 (scales[j], mins[j]) =
-                    make_qkx1_quants(16, 3, &xs[offset + 16 * j..], &mut l[16 * j..], 5);
+                    make_qkx1_quants(16, 3, &xs[offset + 16 * j..], &mut big_l[16 * j..], 5);
             }
             // get max scale and max min and ensure they are >= 0.0
             let max_scale = scales
@@ -337,18 +337,18 @@ impl GgmlType for BlockQ2K {
                 }
                 let dm = ys[i as usize].dmin.to_f32() * (ys[i as usize].scales[j] >> 4) as f32;
                 for ii in 0..16 {
-                    let mut ll = nearest_int((xs[16 * j + ii] + dm) / d);
+                    let mut ll = nearest_int((xs[offset + 16 * j + ii] + dm) / d);
                     ll = cmp::max(0, cmp::min(3, ll));
-                    l[16 * j + ii] = ll as u8;
+                    big_l[16 * j + ii] = ll as u8;
                 }
             }
 
             for j in (0..QK_K).step_by(128) {
                 for ll in 0..32 {
-                    ys[i as usize].qs[j / 4 + ll] = l[j + ll]
-                        | (l[j + ll + 32] << 2)
-                        | (l[j + ll + 64] << 4)
-                        | (l[j + ll + 96] << 6);
+                    ys[i as usize].qs[j / 4 + ll] = big_l[j + ll]
+                        | (big_l[j + ll + 32] << 2)
+                        | (big_l[j + ll + 64] << 4)
+                        | (big_l[j + ll + 96] << 6);
                 }
             }
         }
@@ -587,8 +587,9 @@ impl GgmlType for BlockQ5K {
         for i in 0..nb {
             let mut max_scale = 0.0;
             let mut max_min = 0.0;
+            let offset = i * QK_K;
             for j in 0..QK_K / 32 {
-                (scales[j],mins[j]) = make_qkx1_quants(32, 31, &xs[32 * j..], &mut l[32 * j..], 5);
+                (scales[j],mins[j]) = make_qkx1_quants(32, 31, &xs[offset + 32 * j..], &mut l[32 * j..], 5);
                 let scale = scales[j];
                 if scale > max_scale {
                     max_scale = scale;
@@ -626,7 +627,7 @@ impl GgmlType for BlockQ5K {
                 }
                 let dm = ys[i].dmin.to_f32() * m as f32;
                 for ii in 0..32 {
-                    let mut ll = nearest_int((xs[32 * j + ii] + dm) / d) as i32;
+                    let mut ll = nearest_int((xs[offset + 32 * j + ii] + dm) / d) as i32;
                     ll = ll.min(31).max(0);
                     l[32 * j + ii] = ll as u8;
                 }

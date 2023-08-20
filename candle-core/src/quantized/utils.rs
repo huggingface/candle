@@ -196,9 +196,9 @@ pub(super) fn make_qkx1_quants(
         for (i, value) in x.iter().enumerate().take(n) {
             let mut li = nearest_int(iscale * (value - min));
             li = li.min(nmax).max(0);
-            let current_l = l[i] as i32;
-            if li != current_l {
-                l[i] = li as u8;
+            let clamped_li = li as u8;
+            if clamped_li != l[i] {
+                l[i] = clamped_li;
                 did_change = true;
             }
             sumlx += (value - min) * li as f32;
@@ -224,6 +224,8 @@ pub(super) fn make_qkx1_quants(
     }
     (scale, -min)
 }
+
+
 
 // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L165
 /// CAUTION untested!
