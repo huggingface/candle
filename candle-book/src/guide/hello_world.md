@@ -147,7 +147,7 @@ And rewrite our examples using it
 # extern crate candle_core;
 # extern crate candle_nn;
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::Linear;
+use candle_nn::{Linear, Module};
 
 struct Model {
     first: Linear,

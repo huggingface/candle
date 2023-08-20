@@ -96,6 +96,7 @@ impl Tensor {
                     | Op::ToDType(node)
                     | Op::ToDevice(node)
                     | Op::Transpose(node, _, _)
+                    | Op::Permute(node, _)
                     | Op::Narrow(node, _, _, _)
                     | Op::Unary(node, _)
                     | Op::Elu(node, _)
@@ -400,6 +401,15 @@ impl Tensor {
                     }
                     Op::Transpose(arg, dim1, dim2) => {
                         let arg_grad = grad.transpose(*dim1, *dim2)?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&arg_grad)?
+                    }
+                    Op::Permute(arg, dims) => {
+                        let mut inv_dims = vec![0; dims.len()];
+                        for (i, &dim_idx) in dims.iter().enumerate() {
+                            inv_dims[dim_idx] = i
+                        }
+                        let arg_grad = grad.permute(inv_dims)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }

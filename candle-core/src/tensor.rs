@@ -106,7 +106,9 @@ macro_rules! broadcast_binary_op {
     ($fn_name:ident, $inner_fn_name:ident) => {
         pub fn $fn_name(&self, rhs: &Self) -> Result<Self> {
             let lhs = self;
-            let shape = lhs.broadcast_shape_binary_op(rhs, stringify!($fn_name))?;
+            let shape = lhs
+                .shape()
+                .broadcast_shape_binary_op(rhs.shape(), stringify!($fn_name))?;
             let l_broadcast = shape != *lhs.shape();
             let r_broadcast = shape != *rhs.shape();
             match (l_broadcast, r_broadcast) {
@@ -415,48 +417,6 @@ impl Tensor {
         Self::new_impl(array, shape.into(), device, false)
     }
 
-    pub(crate) fn broadcast_shape_binary_op<'a>(
-        &'a self,
-        rhs: &'a Self,
-        op: &'static str,
-    ) -> Result<Shape> {
-        let lhs = self;
-        let lhs_dims = lhs.shape().dims();
-        let rhs_dims = rhs.shape().dims();
-        let lhs_ndims = lhs_dims.len();
-        let rhs_ndims = rhs_dims.len();
-        let bcast_ndims = usize::max(lhs_ndims, rhs_ndims);
-        let mut bcast_dims = vec![0; bcast_ndims];
-        for (idx, bcast_value) in bcast_dims.iter_mut().enumerate() {
-            let rev_idx = bcast_ndims - idx;
-            let l_value = if lhs_ndims < rev_idx {
-                1
-            } else {
-                lhs_dims[lhs_ndims - rev_idx]
-            };
-            let r_value = if rhs_ndims < rev_idx {
-                1
-            } else {
-                rhs_dims[rhs_ndims - rev_idx]
-            };
-            *bcast_value = if l_value == r_value {
-                l_value
-            } else if l_value == 1 {
-                r_value
-            } else if r_value == 1 {
-                l_value
-            } else {
-                Err(Error::ShapeMismatchBinaryOp {
-                    lhs: self.shape().clone(),
-                    rhs: rhs.shape().clone(),
-                    op,
-                }
-                .bt())?
-            }
-        }
-        Ok(Shape::from(bcast_dims))
-    }
-
     pub(crate) fn same_shape_binary_op(&self, rhs: &Self, op: &'static str) -> Result<&Shape> {
         let lhs = self.shape();
         let rhs = rhs.shape();
@@ -705,6 +665,40 @@ impl Tensor {
         self.sum_impl(sum_dims, false)
     }
 
+    /// Returns the mean of all elements in the input tensor. The mean is performed over all the
+    /// input dimensions.
+    ///
+    /// The resulting tensor has a shape that is similar to the shape of the input tensor, except
+    /// that the number of elements for each dimension index in `mean_dims` is 1.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let a = Tensor::new(&[[0f32, 1.], [2., 3.]], &Device::Cpu)?;
+    /// let s = a.mean_keepdim(0)?;
+    /// assert_eq!(s.to_vec2::<f32>()?, &[[1., 2.]]);
+    /// let s = a.mean_keepdim(1)?;
+    /// assert_eq!(s.to_vec2::<f32>()?, &[[0.5], [2.5]]);
+    /// let s = a.mean_keepdim((0, 1))?;
+    /// assert_eq!(s.to_vec2::<f32>()?, &[[1.5]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn mean_keepdim<D: Dims>(&self, mean_dims: D) -> Result<Self> {
+        let mean_dims = mean_dims.to_indexes(self.shape(), "mean-keepdim")?;
+        let reduced_dim: usize = mean_dims.iter().map(|i| self.dims()[*i]).product();
+        let scale = 1f64 / (reduced_dim as f64);
+        self.sum_impl(mean_dims, true)? * scale
+    }
+
+    /// Returns the mean of all elements in the input tensor. The mean is performed over all the
+    /// input dimensions and compared to `mean_keepdim` these dimensions are squeezed rather than
+    /// kept.
+    pub fn mean<D: Dims>(&self, mean_dims: D) -> Result<Self> {
+        let mean_dims = mean_dims.to_indexes(self.shape(), "mean")?;
+        let reduced_dim: usize = mean_dims.iter().map(|i| self.dims()[*i]).product();
+        let scale = 1f64 / (reduced_dim as f64);
+        self.sum_impl(mean_dims, false)? * scale
+    }
+
     pub fn max_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
         self.reduce_impl(dim, true, ReduceOp::Max)
     }
@@ -925,6 +919,28 @@ impl Tensor {
         )?;
         let op = BackpropOp::new2(self, rhs, Op::Matmul);
         Ok(from_storage(storage, c_shape, op, false))
+    }
+
+    /// Matrix-multiplication with broadcasting support.
+    ///
+    /// Compared to `matmul` the two matrixes are allowed to have different dimensions as long as
+    /// they are compatible for broadcast. E.g. if `self` has shape `(j, 1, n, k)` and `rhs` has
+    /// shape `(l, k, m)`, the output will have shape `(j, l, n, m)`.
+    pub fn broadcast_matmul(&self, rhs: &Self) -> Result<Self> {
+        let lhs = self;
+        let (l_shape, r_shape) = lhs.shape().broadcast_shape_matmul(rhs.shape())?;
+        let l_broadcast = l_shape != *lhs.shape();
+        let r_broadcast = r_shape != *rhs.shape();
+        // TODO: Avoid concretising the broadcasted matrixes via contiguous.
+        match (l_broadcast, r_broadcast) {
+            (true, true) => lhs
+                .broadcast_as(&l_shape)?
+                .contiguous()?
+                .matmul(&rhs.broadcast_as(&r_shape)?.contiguous()?),
+            (false, true) => lhs.matmul(&rhs.broadcast_as(&r_shape)?.contiguous()?),
+            (true, false) => lhs.broadcast_as(&l_shape)?.contiguous()?.matmul(rhs),
+            (false, false) => lhs.matmul(rhs),
+        }
     }
 
     /// Returns a tensor with the same shape as the input tensor, the values are taken from
@@ -1417,6 +1433,42 @@ impl Tensor {
             id: TensorId::new(),
             storage: self.storage.clone(),
             layout: self.layout.transpose(dim1, dim2)?,
+            op,
+            is_variable: false,
+            dtype: self.dtype,
+            device: self.device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
+    }
+
+    /// Returns a tensor with the same data as the input where the dimensions have been permuted.
+    /// dims must be a permutation, i.e. include each dimension index exactly once.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let tensor = Tensor::arange(0u32, 120u32, &Device::Cpu)?.reshape((2, 3, 4, 5))?;
+    /// assert_eq!(tensor.dims(), &[2, 3, 4, 5]);
+    /// let tensor = tensor.permute((2, 3, 1, 0))?;
+    /// assert_eq!(tensor.dims(), &[4, 5, 3, 2]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn permute<D: Dims>(&self, dims: D) -> Result<Tensor> {
+        let dims = dims.to_indexes(self.shape(), "permute")?;
+        // O(n^2) permutation check but these arrays are small.
+        let is_permutation =
+            dims.len() == self.rank() && (0..dims.len()).all(|i| dims.contains(&i));
+        if !is_permutation {
+            crate::bail!(
+                "dimension mismatch in permute, tensor {:?}, dims: {:?}",
+                self.dims(),
+                dims
+            )
+        }
+        let op = BackpropOp::new1(self, |t| Op::Permute(t, dims.clone()));
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.clone(),
+            layout: self.layout.permute(&dims)?,
             op,
             is_variable: false,
             dtype: self.dtype,

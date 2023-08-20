@@ -717,6 +717,9 @@ impl GgmlType for BlockQ6K {
         #[cfg(target_feature = "avx")]
         return super::avx::vec_dot_q6k_q8k(n, xs, ys);
 
+        #[cfg(target_feature = "neon")]
+        return super::neon::vec_dot_q6k_q8k(n, xs, ys);
+
         if n % QK_K != 0 {
             crate::bail!("vec_dot_q6k_q8k: {n} is not divisible by {QK_K}")
         }
@@ -1012,6 +1015,9 @@ impl GgmlType for BlockQ4_0 {
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         #[cfg(target_feature = "avx")]
         return super::avx::vec_dot_q4_0_q8_0(n, xs, ys);
+
+        #[cfg(target_feature = "neon")]
+        return super::neon::vec_dot_q4_0_q8_0(n, xs, ys);
 
         let qk = QK8_0;
         let nb = n / qk;
