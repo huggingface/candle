@@ -224,7 +224,7 @@ impl<'a> VarBuilder<'a> {
         Ok(tensor)
     }
 
-    /// Retrieve the tensor associted with the current name and path.
+    /// Retrieve the tensor associated with the given name at the current path.
     pub fn get<S: Into<Shape>>(&self, s: S, tensor_name: &str) -> Result<Tensor> {
         let data = self.data.as_ref();
         let s: Shape = s.into();
@@ -285,8 +285,8 @@ impl<'a> VarBuilder<'a> {
         Ok(tensor)
     }
 
-    /// Retrieve the tensor associted with the current name and path or initialize a new tensor if
-    /// it's missing.
+    /// Retrieve the tensor associated with the given name at the current path or initialize a new
+    /// tensor if it's missing.
     ///
     /// Tensor initialization is only available if the `VarBuilder` is backed by a `VarMap`.
     pub fn get_or_init<S: Into<Shape>>(
