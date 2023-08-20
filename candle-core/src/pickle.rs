@@ -108,6 +108,10 @@ pub enum Object {
         callable: Box<Object>,
         args: Box<Object>,
     },
+    Build {
+        callable: Box<Object>,
+        args: Box<Object>,
+    },
     PersistentLoad(Box<Object>),
 }
 
@@ -269,20 +273,10 @@ impl Stack {
                 obj.append(&mut args);
                 Object::Dict(obj)
             }
-            (Object::Reduce { callable, args: _ }, Object::Dict(args)) => match *callable {
-                Object::Class {
-                    module_name,
-                    class_name,
-                } if module_name == "__torch__" && class_name == "Module" => Object::Dict(args),
-                _ => {
-                    println!("build {callable:?} {args:?}");
-                    Object::Dict(args)
-                }
+            (obj, args) => Object::Build {
+                callable: Box::new(obj),
+                args: Box::new(args),
             },
-            (obj, args) => {
-                println!("build {obj:?} {args:?}");
-                obj
-            }
         };
         self.push(obj);
         Ok(())
@@ -578,6 +572,19 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(file: P) -> Result<Vec<Te
         if VERBOSE {
             println!("{obj:?}");
         }
+        let obj = match obj {
+            Object::Build { callable, args } => match *callable {
+                Object::Reduce { callable, args: _ } => match *callable {
+                    Object::Class {
+                        module_name,
+                        class_name,
+                    } if module_name == "__torch__" && class_name == "Module" => *args,
+                    _ => continue,
+                },
+                _ => continue,
+            },
+            obj => obj,
+        };
         if let Object::Dict(key_values) = obj {
             for (name, value) in key_values.into_iter() {
                 let name = match name.unicode() {
