@@ -84,6 +84,7 @@ And then head over to
     - Whisper (multi-lingual support).
     - Stable Diffusion.
     - Computer Vision: DINOv2.
+- File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.
 - Quantization support using the llama.cpp quantized types.
 

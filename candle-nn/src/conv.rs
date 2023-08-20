@@ -141,3 +141,19 @@ pub fn conv2d(
     let bs = vs.get_or_init(out_channels, "bias", init_bs)?;
     Ok(Conv2d::new(ws, Some(bs), cfg))
 }
+
+pub fn conv2d_no_bias(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv2dConfig,
+    vs: crate::VarBuilder,
+) -> Result<Conv2d> {
+    let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
+    let ws = vs.get_or_init(
+        (out_channels, in_channels, kernel_size, kernel_size),
+        "weight",
+        init_ws,
+    )?;
+    Ok(Conv2d::new(ws, None, cfg))
+}
