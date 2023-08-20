@@ -12,6 +12,7 @@ pub mod loss;
 pub mod ops;
 pub mod optim;
 pub mod var_builder;
+pub mod var_map;
 
 pub use activation::Activation;
 pub use batch_norm::{batch_norm, BatchNorm, BatchNormConfig};
@@ -22,7 +23,8 @@ pub use init::Init;
 pub use layer_norm::{layer_norm, rms_norm, LayerNorm, LayerNormConfig, RmsNorm};
 pub use linear::{linear, linear_no_bias, Linear};
 pub use optim::{AdamW, ParamsAdamW, SGD};
-pub use var_builder::{VarBuilder, VarMap};
+pub use var_builder::VarBuilder;
+pub use var_map::VarMap;
 
 // A simple trait defining a module with forward method using a single argument.
 pub trait Module: std::fmt::Debug {
