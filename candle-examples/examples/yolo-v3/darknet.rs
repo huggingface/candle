@@ -1,4 +1,4 @@
-use candle::{Device, IndexOp, Result, Tensor};
+use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{batch_norm, conv2d, conv2d_no_bias, Func, Module, VarBuilder};
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -225,12 +225,13 @@ fn detect(
     let grid = Tensor::arange(0u32, grid_size as u32, &Device::Cpu)?;
     let a = grid.repeat((grid_size, 1))?;
     let b = a.t()?.contiguous()?;
-    let x_offset = a.unsqueeze(1)?;
-    let y_offset = b.unsqueeze(1)?;
+    let x_offset = a.flatten_all()?.unsqueeze(1)?;
+    let y_offset = b.flatten_all()?.unsqueeze(1)?;
     let xy_offset = Tensor::cat(&[&x_offset, &y_offset], 1)?
         .repeat((1, nanchors))?
         .reshape((grid_size * grid_size * nanchors, 2))?
-        .unsqueeze(0)?;
+        .unsqueeze(0)?
+        .to_dtype(DType::F32)?;
     let anchors: Vec<f32> = anchors
         .iter()
         .flat_map(|&(x, y)| vec![x as f32 / stride as f32, y as f32 / stride as f32].into_iter())

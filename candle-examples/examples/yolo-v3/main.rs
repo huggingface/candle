@@ -12,21 +12,20 @@ use candle::{DType, Device, Tensor};
 use candle_nn::{Module, VarBuilder};
 use clap::Parser;
 
-const CONFIG_NAME: &str = "candle-examples/examples/yolo/yolo-v3.cfg";
-const CONFIDENCE_THRESHOLD: f64 = 0.5;
-const NMS_THRESHOLD: f64 = 0.4;
+const CONFIDENCE_THRESHOLD: f32 = 0.5;
+const NMS_THRESHOLD: f32 = 0.4;
 
 #[derive(Debug, Clone, Copy)]
 struct Bbox {
-    xmin: f64,
-    ymin: f64,
-    xmax: f64,
-    ymax: f64,
-    confidence: f64,
+    xmin: f32,
+    ymin: f32,
+    xmax: f32,
+    ymax: f32,
+    confidence: f32,
 }
 
 // Intersection over union of two bounding boxes.
-fn iou(b1: &Bbox, b2: &Bbox) -> f64 {
+fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
     let b1_area = (b1.xmax - b1.xmin + 1.) * (b1.ymax - b1.ymin + 1.);
     let b2_area = (b2.xmax - b2.xmin + 1.) * (b2.ymax - b2.ymin + 1.);
     let i_xmin = b1.xmin.max(b2.xmin);
@@ -49,7 +48,7 @@ pub fn report(pred: &Tensor, img: &Tensor, w: usize, h: usize) -> Result<Tensor>
     let mut bboxes: Vec<Vec<Bbox>> = (0..nclasses).map(|_| vec![]).collect();
     // Extract the bounding boxes for which confidence is above the threshold.
     for index in 0..npreds {
-        let pred = Vec::<f64>::try_from(pred.get(index)?)?;
+        let pred = Vec::<f32>::try_from(pred.get(index)?)?;
         let confidence = pred[4];
         if confidence > CONFIDENCE_THRESHOLD {
             let mut class_index = 0;
@@ -93,8 +92,8 @@ pub fn report(pred: &Tensor, img: &Tensor, w: usize, h: usize) -> Result<Tensor>
     // Annotate the original image and print boxes information.
     let (_, initial_h, initial_w) = img.dims3()?;
     let mut img = (img.to_dtype(DType::F32)? * (1. / 255.))?;
-    let w_ratio = initial_w as f64 / w as f64;
-    let h_ratio = initial_h as f64 / h as f64;
+    let w_ratio = initial_w as f32 / w as f32;
+    let h_ratio = initial_h as f32 / h as f32;
     for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
         for b in bboxes_for_class.iter() {
             println!("{}: {:?}", coco_classes::NAMES[class_index], b);
@@ -118,6 +117,9 @@ struct Args {
     #[arg(long)]
     model: String,
 
+    #[arg(long)]
+    config: String,
+
     images: Vec<String>,
 }
 
@@ -128,17 +130,18 @@ pub fn main() -> Result<()> {
     let weights = unsafe { candle::safetensors::MmapedFile::new(&args.model)? };
     let weights = weights.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &Device::Cpu);
-    let darknet = darknet::parse_config(CONFIG_NAME)?;
+    let darknet = darknet::parse_config(&args.config)?;
     let model = darknet.build_model(vb)?;
 
     for image in args.images.iter() {
+        println!("processing {image}");
         // Load the image file and resize it.
         let net_width = darknet.width()?;
         let net_height = darknet.height()?;
-        let image = candle_examples::load_image_and_resize(image, net_width, net_height)?;
-        let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
+        let original_image = candle_examples::load_image_and_resize(image, net_width, net_height)?;
+        let image = (original_image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image)?.squeeze(0)?;
-        let _image = report(&predictions, &image, net_width, net_height)?;
+        let _image = report(&predictions, &original_image, net_width, net_height)?;
         println!("converted {image}");
     }
     Ok(())
