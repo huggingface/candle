@@ -497,10 +497,7 @@ impl Tensor {
         let repeats = shape.into();
         let repeats = repeats.dims();
         let mut inp = if self.rank() < repeats.len() {
-            let mut shape = self.dims().to_vec();
-            while shape.len() < repeats.len() {
-                shape.insert(0, 1)
-            }
+            let shape = [vec![1; repeats.len() - self.rank()], self.dims().to_vec()].concat();
             self.reshape(shape)?
         } else {
             self.clone()
