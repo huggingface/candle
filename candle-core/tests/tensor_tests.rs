@@ -751,7 +751,7 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
     let lhs = Tensor::randn(0f32, 1f32, (3, 1, 4, 5), device)?;
     let rhs = Tensor::randn(0f32, 1f32, (6, 5, 2), device)?;
     let out = lhs.broadcast_matmul(&rhs)?;
-    assert_eq!(out.dims(), &[1]);
+    assert_eq!(out.dims(), &[3, 6, 4, 2]);
     Ok(())
 }
 

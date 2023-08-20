@@ -931,12 +931,14 @@ impl Tensor {
         let (l_shape, r_shape) = lhs.shape().broadcast_shape_matmul(rhs.shape())?;
         let l_broadcast = l_shape != *lhs.shape();
         let r_broadcast = r_shape != *rhs.shape();
+        // TODO: Avoid concretising the broadcasted matrixes via contiguous.
         match (l_broadcast, r_broadcast) {
             (true, true) => lhs
                 .broadcast_as(&l_shape)?
-                .matmul(&rhs.broadcast_as(&r_shape)?),
-            (false, true) => lhs.matmul(&rhs.broadcast_as(&r_shape)?),
-            (true, false) => lhs.broadcast_as(&l_shape)?.matmul(rhs),
+                .contiguous()?
+                .matmul(&rhs.broadcast_as(&r_shape)?.contiguous()?),
+            (false, true) => lhs.matmul(&rhs.broadcast_as(&r_shape)?.contiguous()?),
+            (true, false) => lhs.broadcast_as(&l_shape)?.contiguous()?.matmul(rhs),
             (false, false) => lhs.matmul(rhs),
         }
     }
