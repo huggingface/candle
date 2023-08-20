@@ -747,6 +747,14 @@ fn matmul(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn broadcast_matmul(device: &Device) -> Result<()> {
+    let lhs = Tensor::randn(0f32, 1f32, (3, 1, 4, 5), device)?;
+    let rhs = Tensor::randn(0f32, 1f32, (6, 5, 2), device)?;
+    let out = lhs.broadcast_matmul(&rhs)?;
+    assert_eq!(out.dims(), &[1]);
+    Ok(())
+}
+
 fn broadcasting(device: &Device) -> Result<()> {
     let t1 = Tensor::arange(0f32, 24f32, device)?.reshape((4, 2, 3))?;
     let t2 = Tensor::new(&[100f32, 200f32], device)?;
@@ -864,6 +872,7 @@ test_device!(binary_op, binary_op_cpu, binary_op_gpu);
 test_device!(embeddings, embeddings_cpu, embeddings_gpu);
 test_device!(cmp, cmp_cpu, cmp_gpu);
 test_device!(matmul, matmul_cpu, matmul_gpu);
+test_device!(broadcast_matmul, broadcast_matmul_cpu, broadcast_matmul_gpu);
 test_device!(broadcasting, broadcasting_cpu, broadcasting_gpu);
 test_device!(index_select, index_select_cpu, index_select_gpu);
 test_device!(index_add, index_add_cpu, index_add_gpu);

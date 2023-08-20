@@ -185,6 +185,69 @@ impl Shape {
         self.0.extend(additional_dims);
         self
     }
+
+    /// Check whether the two shapes are compatible for broadcast, and if it is the case return the
+    /// broadcasted shape. This is to be used for binary pointwise ops.
+    pub(crate) fn broadcast_shape_binary_op(&self, rhs: &Self, op: &'static str) -> Result<Shape> {
+        let lhs = self;
+        let lhs_dims = lhs.dims();
+        let rhs_dims = rhs.dims();
+        let lhs_ndims = lhs_dims.len();
+        let rhs_ndims = rhs_dims.len();
+        let bcast_ndims = usize::max(lhs_ndims, rhs_ndims);
+        let mut bcast_dims = vec![0; bcast_ndims];
+        for (idx, bcast_value) in bcast_dims.iter_mut().enumerate() {
+            let rev_idx = bcast_ndims - idx;
+            let l_value = if lhs_ndims < rev_idx {
+                1
+            } else {
+                lhs_dims[lhs_ndims - rev_idx]
+            };
+            let r_value = if rhs_ndims < rev_idx {
+                1
+            } else {
+                rhs_dims[rhs_ndims - rev_idx]
+            };
+            *bcast_value = if l_value == r_value {
+                l_value
+            } else if l_value == 1 {
+                r_value
+            } else if r_value == 1 {
+                l_value
+            } else {
+                Err(Error::ShapeMismatchBinaryOp {
+                    lhs: lhs.clone(),
+                    rhs: rhs.clone(),
+                    op,
+                }
+                .bt())?
+            }
+        }
+        Ok(Shape::from(bcast_dims))
+    }
+
+    pub(crate) fn broadcast_shape_matmul(&self, rhs: &Self) -> Result<(Shape, Shape)> {
+        let lhs = self;
+        let lhs_dims = lhs.dims();
+        let rhs_dims = rhs.dims();
+        if lhs_dims.len() < 2 || rhs_dims.len() < 2 {
+            crate::bail!("only 2d matrixes are supported {lhs:?} {rhs:?}")
+        }
+        let (m, lhs_k) = (lhs_dims[lhs_dims.len() - 2], lhs_dims[lhs_dims.len() - 1]);
+        let (rhs_k, n) = (rhs_dims[rhs_dims.len() - 2], rhs_dims[rhs_dims.len() - 1]);
+        if lhs_k != rhs_k {
+            crate::bail!("different inner dimensions in broadcast matmul {lhs:?} {rhs:?}")
+        }
+
+        let lhs_b = Self::from(&lhs_dims[..lhs_dims.len() - 2]);
+        let rhs_b = Self::from(&rhs_dims[..rhs_dims.len() - 2]);
+        let bcast = lhs_b.broadcast_shape_binary_op(&rhs_b, "broadcast_matmul")?;
+        let bcast_dims = bcast.dims();
+
+        let bcast_lhs = [bcast_dims, &[m, lhs_k]].concat();
+        let bcast_rhs = [bcast_dims, &[rhs_k, n]].concat();
+        Ok((Shape::from(bcast_lhs), Shape::from(bcast_rhs)))
+    }
 }
 
 pub trait Dim {
