@@ -752,6 +752,17 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
     let rhs = Tensor::randn(0f32, 1f32, (6, 5, 2), device)?;
     let out = lhs.broadcast_matmul(&rhs)?;
     assert_eq!(out.dims(), &[3, 6, 4, 2]);
+    for idx1 in 0..3 {
+        for idx2 in 0..6 {
+            let out = out.i((idx1, idx2))?;
+            let lhs = lhs.i((idx1, 0))?;
+            let rhs = rhs.i(idx2)?;
+            let out2 = lhs.matmul(&rhs);
+            let sum_diff2 = (out - out2)?.sqr()?.sum_all()?;
+            // With cuda, we see errors of up to ~1e-12.
+            assert!(sum_diff2.to_vec0::<f32>()? < 1e-6)
+        }
+    }
     Ok(())
 }
 
