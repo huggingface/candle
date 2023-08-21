@@ -179,8 +179,7 @@ impl C2f {
 impl Module for C2f {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let ys = self.cv1.forward(xs)?;
-        let ys_1 = ys.dim(1)?;
-        let mut ys = vec![ys.i((.., 0..ys_1 / 2))?, ys.i((.., ys_1 / 2..))?];
+        let mut ys = ys.chunk(2, 1)?;
         for m in self.bottleneck.iter() {
             ys.push(m.forward(ys.last().unwrap())?)
         }
@@ -349,7 +348,9 @@ impl DarkNet {
 
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
         let x1 = self.b1_1.forward(&self.b1_0.forward(xs)?)?;
-        let x2 = self.b2_1.forward(&self.b2_0.forward(&x1)?)?;
+        let x2 = self
+            .b2_2
+            .forward(&self.b2_1.forward(&self.b2_0.forward(&x1)?)?)?;
         let x3 = self.b3_1.forward(&self.b3_0.forward(&x2)?)?;
         let x4 = self.b4_1.forward(&self.b4_0.forward(&x3)?)?;
         let x5 = self.b5.forward(&x4)?;
