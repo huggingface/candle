@@ -6,7 +6,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{batch_norm, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder};
 use clap::Parser;
 use image::{DynamicImage, ImageBuffer};
@@ -436,13 +436,41 @@ fn make_anchors(
     xs0: &Tensor,
     xs1: &Tensor,
     xs2: &Tensor,
-    strides: &[usize],
+    (s0, s1, s2): (usize, usize, usize),
     grid_cell_offset: f64,
 ) -> Result<(Tensor, Tensor)> {
-    todo!()
+    let dev = xs0.device();
+    let mut anchor_points = vec![];
+    let mut stride_tensor = vec![];
+    for (xs, stride) in [(xs0, s0), (xs1, s1), (xs2, s2)] {
+        // xs is only used to extract the h and w dimensions.
+        let (_, _, h, w) = xs.dims4()?;
+        let sx = (Tensor::arange(0, w as u32, dev)?.to_dtype(DType::F32)? + grid_cell_offset)?;
+        let sy = (Tensor::arange(0, h as u32, dev)?.to_dtype(DType::F32)? + grid_cell_offset)?;
+        let sx = sx
+            .reshape((1, sx.elem_count()))?
+            .repeat((h, 1))?
+            .flatten_all()?;
+        let sy = sy
+            .reshape((sy.elem_count(), 1))?
+            .repeat((1, w))?
+            .flatten_all()?;
+        anchor_points.push(Tensor::stack(&[&sx, &sy], D::Minus1)?);
+        stride_tensor.push((Tensor::ones((h, w), DType::F32, dev)? * stride as f64)?);
+    }
+    let anchor_points = Tensor::cat(anchor_points.as_slice(), 0)?;
+    let stride_tensor = Tensor::cat(stride_tensor.as_slice(), 0)?.unsqueeze(1)?;
+    Ok((anchor_points, stride_tensor))
 }
 fn dist2bbox(distance: &Tensor, anchor_points: &Tensor) -> Result<Tensor> {
-    todo!()
+    let chunks = distance.chunk(2, 1)?;
+    let lt = &chunks[0];
+    let rb = &chunks[1];
+    let x1y1 = anchor_points.sub(lt)?;
+    let x2y2 = anchor_points.add(rb)?;
+    let c_xy = ((&x1y1 + &x2y2)? * 0.5)?;
+    let wh = (&x2y2 - &x1y1)?;
+    Tensor::cat(&[c_xy, wh], 1)
 }
 
 impl DetectionHead {
@@ -510,13 +538,13 @@ impl DetectionHead {
         let xs1 = forward_cv(xs1, 1)?;
         let xs2 = forward_cv(xs2, 1)?;
 
-        let (anchors, strides) = make_anchors(&xs0, &xs1, &xs2, &[8, 16, 32], 0.5)?;
+        let (anchors, strides) = make_anchors(&xs0, &xs1, &xs2, (8, 16, 32), 0.5)?;
         let anchors = anchors.transpose(0, 1)?;
         let strides = strides.transpose(0, 1)?;
 
         let reshape = |xs: &Tensor| {
             let d = xs.dim(0)?;
-            let el = xs.shape().elem_count();
+            let el = xs.elem_count();
             xs.reshape((d, self.no, el / (d * self.no)))
         };
         let ys0 = reshape(&xs0)?;
