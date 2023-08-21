@@ -9,7 +9,9 @@ extern crate accelerate_src;
 mod coco_classes;
 
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{batch_norm, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder};
+use candle_nn::{
+    batch_norm, conv2d, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder,
+};
 use clap::Parser;
 use image::{DynamicImage, ImageBuffer};
 
@@ -530,7 +532,7 @@ impl DetectionHead {
     ) -> Result<(ConvBlock, ConvBlock, Conv2d)> {
         let block0 = ConvBlock::load(vb.pp("0"), filter, c1, 3, 1, None)?;
         let block1 = ConvBlock::load(vb.pp("1"), c1, c1, 3, 1, None)?;
-        let conv = conv2d_no_bias(c1, nc, 1, Default::default(), vb.pp("2"))?;
+        let conv = conv2d(c1, nc, 1, Default::default(), vb.pp("2"))?;
         Ok((block0, block1, conv))
     }
 
@@ -542,7 +544,7 @@ impl DetectionHead {
     ) -> Result<(ConvBlock, ConvBlock, Conv2d)> {
         let block0 = ConvBlock::load(vb.pp("0"), filter, c2, 3, 1, None)?;
         let block1 = ConvBlock::load(vb.pp("1"), c2, c2, 3, 1, None)?;
-        let conv = conv2d_no_bias(c2, 4 * ch, 1, Default::default(), vb.pp("2"))?;
+        let conv = conv2d(c2, 4 * ch, 1, Default::default(), vb.pp("2"))?;
         Ok((block0, block1, conv))
     }
 
@@ -768,7 +770,6 @@ pub fn main() -> anyhow::Result<()> {
         let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image)?.squeeze(0)?;
         println!("generated predictions {predictions:?}");
-        println!("{predictions}");
         let image = report(&predictions, original_image, 640, 640)?;
         image_name.set_extension("pp.jpg");
         println!("writing {image_name:?}");
