@@ -505,13 +505,12 @@ impl GgmlType for BlockQ3K {
         const KMASK2: u32 = 0x0f0f0f0f;
 
         for (block, y) in group_for_dequantization(xs, ys)? {
-            let d_all = block.d.to_f32();
-            let mut m = 1;
-
             //Reconstruct the scales
-            let mut aux = unsafe {
-                std::mem::transmute::<&mut [u8; 12], &mut [u32; 4]>(&mut block.scales.clone())
+            let mut aux = [0; 4];
+            let aux_raw = unsafe {
+                std::mem::transmute::<&mut [u8; 12], &mut [u32; 3]>(&mut block.scales.clone())
             };
+            aux[0..3].copy_from_slice(aux_raw);
 
             let tmp = aux[2];
             aux[2] = ((aux[0] >> 4) & KMASK2) | (((tmp >> 4) & KMASK1) << 4);
@@ -520,44 +519,41 @@ impl GgmlType for BlockQ3K {
             aux[1] = (aux[1] & KMASK2) | (((tmp >> 2) & KMASK1) << 4);
 
             //Transfer the scales into an i8 array
-            let scales = unsafe { std::mem::transmute::<&mut [u32; 4], &mut [i8; 16]>(&mut aux) };
+            let scales: &mut [i8] =
+                unsafe { std::slice::from_raw_parts_mut(aux.as_mut_ptr() as *mut i8, 16) };
 
+            let d_all = block.d.to_f32();
+            let mut m = 1;
             let mut is = 0;
             let mut dl;
-            let mut offset = 0;
-            let mut y_offset = 0;
 
-            for _ in (0..QK_K).step_by(128) {
+            // Dequantize both 128 long blocks
+            // 32 qs values per 128 long block
+            // Each 16 elements get a scale
+            for (y, qs) in y.chunks_exact_mut(128).zip(block.qs.chunks_exact(32)) {
                 let mut shift = 0;
-                for _ in 0..4 {
-                    dl = d_all * (scales[is] as f32 - 32.0);
-                    is += 1;
-                    for l in 0..16 {
-                        let new_y = dl
-                            * (((block.qs[offset + l] >> shift) & 3) as i8
-                                - if (block.hmask[l] & m) == 0u8 { 4 } else { 0 })
-                                as f32;
-                        y[y_offset] = new_y;
-                        y_offset += 1;
+                for shift_scoped_y in y.chunks_exact_mut(32) {
+                    for (scale_index, scale_scoped_y) in
+                        shift_scoped_y.chunks_exact_mut(16).enumerate()
+                    {
+                        dl = d_all * (scales[is] as f32 - 32.0);
+                        for (i, inner_y) in scale_scoped_y.iter_mut().enumerate() {
+                            let new_y = dl
+                                * (((qs[i + 16 * scale_index] >> shift) & 3) as i8
+                                    - if (block.hmask[i + 16 * scale_index] & m) == 0 {
+                                        4
+                                    } else {
+                                        0
+                                    }) as f32;
+                            *inner_y = new_y;
+                        }
+                        // 16 block finished => advance scale index
+                        is += 1;
                     }
-
-                    dl = d_all * (scales[is] as f32 - 32.0);
-                    is += 1;
-                    for l in 0..16 {
-                        let new_y = dl
-                            * (((block.qs[offset + 16 + l] >> shift) & 3) as i8
-                                - if (block.hmask[l + 16] & m) == 0u8 {
-                                    4
-                                } else {
-                                    0
-                                }) as f32;
-                        y[y_offset] = new_y;
-                        y_offset += 1;
-                    }
+                    //32 block finished => increase shift and m
                     shift += 2;
                     m <<= 1;
                 }
-                offset += 32;
             }
         }
 

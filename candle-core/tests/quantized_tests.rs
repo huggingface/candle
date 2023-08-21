@@ -197,7 +197,6 @@ fn quantize_q2k() -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
 #[test]
 fn quantize_q3k() -> Result<()> {
     use k_quants::BlockQ3K;
