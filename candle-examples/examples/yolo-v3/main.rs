@@ -199,6 +199,7 @@ pub fn main() -> Result<()> {
         };
         let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image)?.squeeze(0)?;
+        println!("generated predictions {predictions:?}");
         let image = report(&predictions, original_image, net_width, net_height)?;
         image_name.set_extension("pp.jpg");
         println!("writing {image_name:?}");
