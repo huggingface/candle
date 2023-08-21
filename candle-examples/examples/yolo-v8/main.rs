@@ -9,7 +9,6 @@ extern crate accelerate_src;
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{batch_norm, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder};
 use clap::Parser;
-use image::{DynamicImage, ImageBuffer};
 
 // Model architecture from https://github.com/ultralytics/ultralytics/issues/189
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py
@@ -91,7 +90,16 @@ struct ConvBlock {
 }
 
 impl ConvBlock {
-    fn load(vb: VarBuilder, c1: usize, c2: usize, k: usize, cfg: Conv2dConfig) -> Result<Self> {
+    fn load(
+        vb: VarBuilder,
+        c1: usize,
+        c2: usize,
+        k: usize,
+        stride: usize,
+        padding: Option<usize>,
+    ) -> Result<Self> {
+        let padding = padding.unwrap_or(k / 2);
+        let cfg = Conv2dConfig { padding, stride };
         let conv = conv2d_no_bias(c1, c2, k, cfg, vb.pp("conv"))?;
         let bn = batch_norm(c2, 1e-3, vb.pp("bn"))?;
         Ok(Self { conv, bn })
@@ -117,8 +125,8 @@ impl Bottleneck {
     fn load(vb: VarBuilder, c1: usize, c2: usize, shortcut: bool) -> Result<Self> {
         let channel_factor = 1.;
         let c_ = (c2 as f64 * channel_factor) as usize;
-        let cv1 = ConvBlock::load(vb.pp("cv1"), c1, c_, 3, Default::default())?;
-        let cv2 = ConvBlock::load(vb.pp("cv2"), c_, c2, 3, Default::default())?;
+        let cv1 = ConvBlock::load(vb.pp("cv1"), c1, c_, 3, 1, None)?;
+        let cv2 = ConvBlock::load(vb.pp("cv2"), c_, c2, 3, 1, None)?;
         let residual = c1 == c2 && shortcut;
         Ok(Self { cv1, cv2, residual })
     }
@@ -146,8 +154,8 @@ struct C2f {
 impl C2f {
     fn load(vb: VarBuilder, c1: usize, c2: usize, n: usize, shortcut: bool) -> Result<Self> {
         let c = (c2 as f64 * 0.5) as usize;
-        let cv1 = ConvBlock::load(vb.pp("cv1"), c1, 2 * c, 1, Default::default())?;
-        let cv2 = ConvBlock::load(vb.pp("cv2"), (2 + n) * c, c2, 1, Default::default())?;
+        let cv1 = ConvBlock::load(vb.pp("cv1"), c1, 2 * c, 1, 1, None)?;
+        let cv2 = ConvBlock::load(vb.pp("cv2"), (2 + n) * c, c2, 1, 1, None)?;
         let mut bottleneck = Vec::with_capacity(n);
         for idx in 0..n {
             let b = Bottleneck::load(vb.pp(&format!("bottleneck.{idx}")), c, c, shortcut)?;
@@ -185,15 +193,15 @@ struct Sppf {
 impl Sppf {
     fn load(vb: VarBuilder, c1: usize, c2: usize, k: usize) -> Result<Self> {
         let c_ = c1 / 2;
-        let cv1 = ConvBlock::load(vb.pp("cv1"), c1, c_, 1, Default::default())?;
-        let cv2 = ConvBlock::load(vb.pp("cv2"), c_ * 4, c2, 1, Default::default())?;
+        let cv1 = ConvBlock::load(vb.pp("cv1"), c1, c_, 1, 1, None)?;
+        let cv2 = ConvBlock::load(vb.pp("cv2"), c_ * 4, c2, 1, 1, None)?;
         Ok(Self { cv1, cv2, k })
     }
 }
 
 impl Module for Sppf {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = self.cv1.forward(&xs)?;
+        let xs = self.cv1.forward(xs)?;
         let xs2 = xs.max_pool2d((self.k, self.k), (1, 1))?;
         let xs3 = xs2.max_pool2d((self.k, self.k), (1, 1))?;
         let xs4 = xs3.max_pool2d((self.k, self.k), (1, 1))?;
@@ -241,18 +249,15 @@ struct DarkNet {
 
 impl DarkNet {
     fn load(vb: VarBuilder, m: Multiples) -> Result<Self> {
-        let cfg = Conv2dConfig {
-            padding: 1,
-            stride: 2,
-        };
         let (w, r, d) = (m.width, m.ratio, m.depth);
-        let b1_0 = ConvBlock::load(vb.pp("b1.0"), 3, (64. * w) as usize, 3, cfg)?;
+        let b1_0 = ConvBlock::load(vb.pp("b1.0"), 3, (64. * w) as usize, 3, 2, Some(1))?;
         let b1_1 = ConvBlock::load(
             vb.pp("b1.1"),
             (64. * w) as usize,
             (128. * w) as usize,
             3,
-            cfg,
+            2,
+            Some(1),
         )?;
         let b2_0 = C2f::load(
             vb.pp("b2.0"),
@@ -266,7 +271,8 @@ impl DarkNet {
             (128. * w) as usize,
             (256. * w) as usize,
             3,
-            cfg,
+            2,
+            Some(1),
         )?;
         let b2_2 = C2f::load(
             vb.pp("b2.2"),
@@ -280,7 +286,8 @@ impl DarkNet {
             (256. * w) as usize,
             (512. * w) as usize,
             3,
-            cfg,
+            2,
+            Some(1),
         )?;
         let b3_1 = C2f::load(
             vb.pp("b3.1"),
@@ -294,7 +301,8 @@ impl DarkNet {
             (512. * w) as usize,
             (512. * w * r) as usize,
             3,
-            cfg,
+            2,
+            Some(1),
         )?;
         let b4_1 = C2f::load(
             vb.pp("b4.1"),
@@ -324,7 +332,7 @@ impl DarkNet {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
-        let x1 = self.b1_1.forward(&self.b1_0.forward(&xs)?)?;
+        let x1 = self.b1_1.forward(&self.b1_0.forward(xs)?)?;
         let x2 = self.b2_1.forward(&self.b2_0.forward(&x1)?)?;
         let x3 = self.b3_1.forward(&self.b3_0.forward(&x2)?)?;
         let x4 = self.b4_1.forward(&self.b4_0.forward(&x3)?)?;
@@ -349,10 +357,6 @@ impl YoloV8Neck {
         let up = Upsample::new(2)?;
         let (w, r, d) = (m.width, m.ratio, m.depth);
         let n = (3. * d).round() as usize;
-        let cfg = Conv2dConfig {
-            padding: 1,
-            stride: 2,
-        };
         let n1 = C2f::load(
             vb.pp("n1"),
             (512. * w * (1. + r)) as usize,
@@ -372,7 +376,8 @@ impl YoloV8Neck {
             (256. * w) as usize,
             (256. * w) as usize,
             3,
-            cfg,
+            2,
+            Some(1),
         )?;
         let n4 = C2f::load(
             vb.pp("n4"),
@@ -386,7 +391,8 @@ impl YoloV8Neck {
             (512. * w) as usize,
             (512. * w) as usize,
             3,
-            cfg,
+            2,
+            Some(1),
         )?;
         let n6 = C2f::load(
             vb.pp("n6"),
@@ -409,7 +415,7 @@ impl YoloV8Neck {
     fn forward(&self, p3: &Tensor, p4: &Tensor, p5: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
         let x = self
             .n1
-            .forward(&Tensor::cat(&[&self.up.forward(&p5)?, p4], 1)?)?;
+            .forward(&Tensor::cat(&[&self.up.forward(p5)?, p4], 1)?)?;
         let head_1 = self
             .n2
             .forward(&Tensor::cat(&[&self.up.forward(&x)?, p3], 1)?)?;
@@ -418,7 +424,7 @@ impl YoloV8Neck {
             .forward(&Tensor::cat(&[&self.n3.forward(&head_1)?, &x], 1)?)?;
         let head_3 = self
             .n6
-            .forward(&Tensor::cat(&[&self.n5.forward(&head_2)?, &p5], 1)?)?;
+            .forward(&Tensor::cat(&[&self.n5.forward(&head_2)?, p5], 1)?)?;
         Ok((head_1, head_2, head_3))
     }
 }
@@ -505,8 +511,8 @@ impl DetectionHead {
         nc: usize,
         filter: usize,
     ) -> Result<(ConvBlock, ConvBlock, Conv2d)> {
-        let block0 = ConvBlock::load(vb.pp("0"), filter, c1, 3, Default::default())?;
-        let block1 = ConvBlock::load(vb.pp("1"), c1, c1, 3, Default::default())?;
+        let block0 = ConvBlock::load(vb.pp("0"), filter, c1, 3, 1, None)?;
+        let block1 = ConvBlock::load(vb.pp("1"), c1, c1, 3, 1, None)?;
         let conv = conv2d_no_bias(c1, nc, 1, Default::default(), vb.pp("2"))?;
         Ok((block0, block1, conv))
     }
@@ -517,8 +523,8 @@ impl DetectionHead {
         ch: usize,
         filter: usize,
     ) -> Result<(ConvBlock, ConvBlock, Conv2d)> {
-        let block0 = ConvBlock::load(vb.pp("0"), filter, c2, 3, Default::default())?;
-        let block1 = ConvBlock::load(vb.pp("1"), c2, c2, 3, Default::default())?;
+        let block0 = ConvBlock::load(vb.pp("0"), filter, c2, 3, 1, None)?;
+        let block1 = ConvBlock::load(vb.pp("1"), c2, c2, 3, 1, None)?;
         let conv = conv2d_no_bias(c2, 4 * ch, 1, Default::default(), vb.pp("2"))?;
         Ok((block0, block1, conv))
     }
@@ -619,7 +625,28 @@ pub fn main() -> anyhow::Result<()> {
     let weights = weights.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &Device::Cpu);
     let multiples = Multiples::s();
-    let _model = YoloV8::load(vb, multiples, /* num_classes=*/ 80)?;
+    let model = YoloV8::load(vb, multiples, /* num_classes=*/ 80)?;
     println!("model loaded");
+    for image_name in args.images.iter() {
+        println!("processing {image_name}");
+        let image_name = std::path::PathBuf::from(image_name);
+        let original_image = image::io::Reader::open(&image_name)?
+            .decode()
+            .map_err(candle::Error::wrap)?;
+        let image = {
+            let data = original_image
+                .resize_exact(640, 640, image::imageops::FilterType::Triangle)
+                .to_rgb8()
+                .into_raw();
+            Tensor::from_vec(data, (640, 640, 3), &Device::Cpu)?.permute((2, 0, 1))?
+        };
+        let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
+        let _predictions = model.forward(&image)?.squeeze(0)?;
+        // let image = report(&predictions, original_image, net_width, net_height)?;
+        // image_name.set_extension("pp.jpg");
+        // println!("writing {image_name:?}");
+        // image.save(image_name)?
+    }
+
     Ok(())
 }
