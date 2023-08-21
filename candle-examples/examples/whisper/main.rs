@@ -91,9 +91,14 @@ impl Decoder {
         task: Option<Task>,
         timestamps: bool,
     ) -> Result<Self> {
+        let no_timestamps_token = token_id(&tokenizer, NO_TIMESTAMPS_TOKEN)?;
+        // Suppress the notimestamps token when in timestamps mode.
+        // https://github.com/openai/whisper/blob/e8622f9afc4eba139bf796c210f5c01081000472/whisper/decoding.py#L452
         let suppress_tokens: Vec<f32> = (0..model.config.vocab_size as u32)
             .map(|i| {
-                if model.config.suppress_tokens.contains(&i) {
+                if model.config.suppress_tokens.contains(&i)
+                    || timestamps && i == no_timestamps_token
+                {
                     f32::NEG_INFINITY
                 } else {
                     0f32
@@ -104,7 +109,6 @@ impl Decoder {
         let sot_token = token_id(&tokenizer, SOT_TOKEN)?;
         let transcribe_token = token_id(&tokenizer, TRANSCRIBE_TOKEN)?;
         let translate_token = token_id(&tokenizer, TRANSLATE_TOKEN)?;
-        let no_timestamps_token = token_id(&tokenizer, NO_TIMESTAMPS_TOKEN)?;
         let eot_token = token_id(&tokenizer, EOT_TOKEN)?;
         let no_speech_token = token_id(&tokenizer, NO_SPEECH_TOKEN)?;
         Ok(Self {
