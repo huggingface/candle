@@ -6,7 +6,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle::{DType, Device, Result, Tensor};
+use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{batch_norm, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder};
 use clap::Parser;
 use image::{DynamicImage, ImageBuffer};
@@ -163,8 +163,15 @@ impl C2f {
 }
 
 impl Module for C2f {
-    fn forward(&self, _: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let ys = self.cv1.forward(xs)?;
+        let ys_1 = ys.dim(1)?;
+        let mut ys = vec![ys.i((.., 0..ys_1 / 2))?, ys.i((.., ys_1 / 2..))?];
+        for m in self.bottleneck.iter() {
+            ys.push(m.forward(ys.last().unwrap())?)
+        }
+        let zs = Tensor::cat(ys.as_slice(), 1)?;
+        self.cv2.forward(&zs)
     }
 }
 
@@ -185,8 +192,12 @@ impl Sppf {
 }
 
 impl Module for Sppf {
-    fn forward(&self, _: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let xs = self.cv1.forward(&xs)?;
+        let xs2 = xs.max_pool2d((self.k, self.k), (1, 1))?;
+        let xs3 = xs2.max_pool2d((self.k, self.k), (1, 1))?;
+        let xs4 = xs3.max_pool2d((self.k, self.k), (1, 1))?;
+        self.cv2.forward(&Tensor::cat(&[&xs, &xs2, &xs3, &xs4], 1)?)
     }
 }
 
@@ -205,7 +216,12 @@ impl Dfl {
 
 impl Module for Dfl {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+        let (b_sz, _channels, anchors) = xs.dims3()?;
+        let xs = xs
+            .reshape((b_sz, 4, self.num_classes, anchors))?
+            .transpose(2, 1)?;
+        let xs = candle_nn::ops::softmax(&xs, 1)?;
+        self.conv.forward(&xs)?.reshape((b_sz, 4, anchors))
     }
 }
 
@@ -413,6 +429,20 @@ struct DetectionHead {
     cv2: [(ConvBlock, ConvBlock, Conv2d); 3],
     cv3: [(ConvBlock, ConvBlock, Conv2d); 3],
     ch: usize,
+    no: usize,
+}
+
+fn make_anchors(
+    xs0: &Tensor,
+    xs1: &Tensor,
+    xs2: &Tensor,
+    strides: &[usize],
+    grid_cell_offset: f64,
+) -> Result<(Tensor, Tensor)> {
+    todo!()
+}
+fn dist2bbox(distance: &Tensor, anchor_points: &Tensor) -> Result<Tensor> {
+    todo!()
 }
 
 impl DetectionHead {
@@ -431,7 +461,14 @@ impl DetectionHead {
             Self::load_cv2(vb.pp("cv2.1"), c2, ch, filters.1)?,
             Self::load_cv2(vb.pp("cv2.2"), c2, ch, filters.2)?,
         ];
-        Ok(Self { dfl, cv2, cv3, ch })
+        let no = nc + ch * 4;
+        Ok(Self {
+            dfl,
+            cv2,
+            cv3,
+            ch,
+            no,
+        })
     }
 
     fn load_cv3(
@@ -458,8 +495,42 @@ impl DetectionHead {
         Ok((block0, block1, conv))
     }
 
-    fn forward(&self, _xs1: &Tensor, _xs2: &Tensor, _xs3: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs0: &Tensor, xs1: &Tensor, xs2: &Tensor) -> Result<Tensor> {
+        let forward_cv = |xs, i: usize| {
+            let xs_2 = self.cv2[i].0.forward(xs)?;
+            let xs_2 = self.cv2[i].1.forward(&xs_2)?;
+            let xs_2 = self.cv2[i].2.forward(&xs_2)?;
+
+            let xs_3 = self.cv3[i].0.forward(xs)?;
+            let xs_3 = self.cv3[i].1.forward(&xs_3)?;
+            let xs_3 = self.cv3[i].2.forward(&xs_3)?;
+            Tensor::cat(&[&xs_2, &xs_3], 1)
+        };
+        let xs0 = forward_cv(xs0, 0)?;
+        let xs1 = forward_cv(xs1, 1)?;
+        let xs2 = forward_cv(xs2, 1)?;
+
+        let (anchors, strides) = make_anchors(&xs0, &xs1, &xs2, &[8, 16, 32], 0.5)?;
+        let anchors = anchors.transpose(0, 1)?;
+        let strides = strides.transpose(0, 1)?;
+
+        let reshape = |xs: &Tensor| {
+            let d = xs.dim(0)?;
+            let el = xs.shape().elem_count();
+            xs.reshape((d, self.no, el / (d * self.no)))
+        };
+        let ys0 = reshape(&xs0)?;
+        let ys1 = reshape(&xs1)?;
+        let ys2 = reshape(&xs2)?;
+
+        let x_cat = Tensor::cat(&[ys0, ys1, ys2], 2)?;
+        let box_ = x_cat.i((.., ..self.ch * 4))?;
+        let cls = x_cat.i((.., self.ch * 4..))?;
+
+        let dbox = dist2bbox(&self.dfl.forward(&box_)?, &anchors.unsqueeze(0)?)?;
+        let dbox = dbox.broadcast_mul(&strides)?;
+
+        Tensor::cat(&[dbox, candle_nn::ops::sigmoid(&cls)?], 1)
     }
 }
 
