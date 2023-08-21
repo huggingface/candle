@@ -177,8 +177,35 @@ fn unary_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn binary_grad(device: &Device) -> Result<()> {
+    let x = Var::new(&[3f32, 1., -4., -1.], device)?;
+    let x = x.as_tensor();
+    // leaky relu
+    let y = x.maximum(&(x * 0.1)?)?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(x.to_vec1::<f32>()?, [3., 1., -4., -1.]);
+    assert_eq!(y.to_vec1::<f32>()?, [3., 1., -0.4, -0.1]);
+    assert_eq!(grad_x.to_vec1::<f32>()?, [1., 1., 0.1, 0.1]);
+
+    let y = x.minimum(&(x * 0.1)?)?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(y.to_vec1::<f32>()?, [0.3, 0.1, -4., -1.]);
+    assert_eq!(grad_x.to_vec1::<f32>()?, [0.1, 0.1, 1., 1.]);
+
+    // This one is easy to mess up, we want the gradient to be one as it is the identity function.
+    let y = x.minimum(x)?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(x).context("no grad for x")?;
+    assert_eq!(y.to_vec1::<f32>()?, [3., 1., -4., -1.]);
+    assert_eq!(grad_x.to_vec1::<f32>()?, [1., 1., 1., 1.]);
+    Ok(())
+}
+
 test_device!(simple_grad, simple_grad_cpu, simple_grad_gpu);
 test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu);
 test_device!(matmul_grad, matmul_grad_cpu, matmul_grad_gpu);
 test_device!(grad_descent, grad_descent_cpu, grad_descent_gpu);
 test_device!(unary_grad, unary_grad_cpu, unary_grad_gpu);
+test_device!(binary_grad, binary_grad_cpu, binary_grad_gpu);
