@@ -201,10 +201,20 @@ impl Sppf {
 
 impl Module for Sppf {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (_, _, _, _) = xs.dims4()?;
         let xs = self.cv1.forward(xs)?;
-        let xs2 = xs.max_pool2d((self.k, self.k), (1, 1))?;
-        let xs3 = xs2.max_pool2d((self.k, self.k), (1, 1))?;
-        let xs4 = xs3.max_pool2d((self.k, self.k), (1, 1))?;
+        let xs2 = xs
+            .pad_with_zeros(2, self.k / 2, self.k / 2)?
+            .pad_with_zeros(3, self.k / 2, self.k / 2)?
+            .max_pool2d((self.k, self.k), (1, 1))?;
+        let xs3 = xs2
+            .pad_with_zeros(2, self.k / 2, self.k / 2)?
+            .pad_with_zeros(3, self.k / 2, self.k / 2)?
+            .max_pool2d((self.k, self.k), (1, 1))?;
+        let xs4 = xs3
+            .pad_with_zeros(2, self.k / 2, self.k / 2)?
+            .pad_with_zeros(3, self.k / 2, self.k / 2)?
+            .max_pool2d((self.k, self.k), (1, 1))?;
         self.cv2.forward(&Tensor::cat(&[&xs, &xs2, &xs3, &xs4], 1)?)
     }
 }
