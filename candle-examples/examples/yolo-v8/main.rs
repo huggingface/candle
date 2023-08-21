@@ -579,7 +579,6 @@ impl DetectionHead {
 
         let dbox = dist2bbox(&self.dfl.forward(&box_)?, &anchors.unsqueeze(0)?)?;
         let dbox = dbox.broadcast_mul(&strides)?;
-
         Tensor::cat(&[dbox, candle_nn::ops::sigmoid(&cls)?], 1)
     }
 }
@@ -652,22 +651,22 @@ pub fn draw_rect(
 }
 
 pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<DynamicImage> {
-    let (npreds, pred_size) = pred.dims2()?;
-    let nclasses = pred_size - 5;
+    let (pred_size, npreds) = pred.dims2()?;
+    let nclasses = pred_size - 4;
     // The bounding boxes grouped by (maximum) class index.
     let mut bboxes: Vec<Vec<Bbox>> = (0..nclasses).map(|_| vec![]).collect();
     // Extract the bounding boxes for which confidence is above the threshold.
     for index in 0..npreds {
-        let pred = Vec::<f32>::try_from(pred.get(index)?)?;
-        let confidence = pred[4];
+        let pred = Vec::<f32>::try_from(pred.i((.., index))?)?;
+        let confidence = *pred[4..].iter().max_by(|x, y| x.total_cmp(y)).unwrap();
         if confidence > CONFIDENCE_THRESHOLD {
             let mut class_index = 0;
             for i in 0..nclasses {
-                if pred[5 + i] > pred[5 + class_index] {
+                if pred[4 + i] > pred[4 + class_index] {
                     class_index = i
                 }
             }
-            if pred[class_index + 5] > 0. {
+            if pred[class_index + 4] > 0. {
                 let bbox = Bbox {
                     xmin: pred[0] - pred[2] / 2.,
                     ymin: pred[1] - pred[3] / 2.,
@@ -767,8 +766,8 @@ pub fn main() -> anyhow::Result<()> {
         };
         let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image)?.squeeze(0)?;
-        let predictions = predictions.t()?;
         println!("generated predictions {predictions:?}");
+        println!("{predictions}");
         let image = report(&predictions, original_image, 640, 640)?;
         image_name.set_extension("pp.jpg");
         println!("writing {image_name:?}");
