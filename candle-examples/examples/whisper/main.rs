@@ -280,7 +280,7 @@ impl Decoder {
                     }
                     // The no_timestamp_token is the last before the timestamp ones.
                     if token > self.no_timestamps_token {
-                        let timestamp_s = (token - self.no_timestamps_token + 1) as f32 / 100.;
+                        let timestamp_s = (token - self.no_timestamps_token + 1) as f32 / 50.;
                         if !tokens_to_decode.is_empty() {
                             let text = self
                                 .tokenizer
