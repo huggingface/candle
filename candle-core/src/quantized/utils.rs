@@ -1,5 +1,45 @@
+use crate::Result;
+
 pub(super) fn nearest_int(v: f32) -> i32 {
     v.round() as i32
+}
+
+/// Validates that the input and output are the right size and returns an iterator which maps each input region `xs` to its corresponding output block in `ys`. Each output region is guaranteed to be `T::BLCK_SIZE` long.
+pub(super) fn group_for_quantization<'a, 'b, T: super::k_quants::GgmlType>(
+    xs: &'b [f32],
+    ys: &'a mut [T],
+) -> Result<Vec<(&'a mut T, &'b [f32])>> {
+    let block_size = T::BLCK_SIZE;
+    let dtype = T::DTYPE;
+
+    let expected_blocks = xs.len() / block_size;
+    let actual_blocks = ys.len();
+
+    //validate that the input is the right size
+    if expected_blocks != actual_blocks {
+        crate::bail!("quantize {dtype:?}: expected {expected_blocks} blocks but only {actual_blocks} were provided!")
+    }
+
+    Ok(ys.iter_mut().zip(xs.chunks_exact(block_size)).collect())
+}
+
+/// Validates that the input and output are the right size and returns an iterator which maps each input block `xs` to its corresponding output region in `ys`. Each output region is guaranteed to be `T::BLCK_SIZE` long.
+pub(super) fn group_for_dequantization<'a, 'b, T: super::k_quants::GgmlType>(
+    xs: &'a [T],
+    ys: &'b mut [f32],
+) -> Result<Vec<(&'a T, &'b mut [f32])>> {
+    let block_size = T::BLCK_SIZE;
+    let dtype = T::DTYPE;
+
+    let actual_output_len = ys.len();
+    let expected_output_len = xs.len() * block_size;
+    //validate that the output is the right size
+    if expected_output_len != actual_output_len {
+        crate::bail!("dequantize {dtype:?}: ys (len = {actual_output_len}) does not match the expected length of {expected_output_len}!")
+    }
+
+    //zip the blocks and outputs together
+    Ok(xs.iter().zip(ys.chunks_exact_mut(block_size)).collect())
 }
 
 pub(super) fn get_scale_min_k4(j: usize, q: &[u8]) -> (u8, u8) {
@@ -226,12 +266,10 @@ pub(super) fn make_qkx1_quants(
 }
 
 // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L165
-#[allow(dead_code)]
-/// CAUTION untested!
 pub(super) fn make_q3_quants(n: usize, nmax: i32, x: &[f32], l: &mut [i8], do_rmse: bool) -> f32 {
     let mut max = 0.0;
     let mut amax = 0.0;
-    for &xi in x.iter() {
+    for &xi in x.iter().take(n) {
         let ax = xi.abs();
         if ax > amax {
             amax = ax;

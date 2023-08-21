@@ -1,6 +1,9 @@
 use std::cmp;
 
-use super::utils::{get_scale_min_k4, make_qkx1_quants, make_qx_quants, nearest_int};
+use super::utils::{
+    get_scale_min_k4, group_for_dequantization, group_for_quantization, make_q3_quants,
+    make_qkx1_quants, make_qx_quants, nearest_int,
+};
 use super::GgmlDType;
 use crate::Result;
 use half::f16;
@@ -413,13 +416,152 @@ impl GgmlType for BlockQ3K {
         todo!()
     }
 
-    fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
-        todo!()
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        for (block, x) in group_for_quantization(xs, ys)? {
+            let mut l: [i8; QK_K] = [0; QK_K];
+            let mut scales: [f32; QK_K / 16] = [0.0; QK_K / 16];
+
+            let mut max_scale = 0.0;
+            let mut amax = 0.0;
+            for j in 0..QK_K / 16 {
+                scales[j] = make_q3_quants(16, 4, &x[16 * j..], &mut l[16 * j..], true);
+                let scale = scales[j].abs();
+                if scale > amax {
+                    amax = scale;
+                    max_scale = scales[j];
+                }
+            }
+
+            block.scales.fill(0);
+
+            if max_scale != 0.0 {
+                let iscale = -32.0 / max_scale;
+                for (j, scale) in scales.iter().enumerate() {
+                    let mut l_val = nearest_int(iscale * scale);
+                    l_val = l_val.min(31).max(-32) + 32;
+                    if j < 8 {
+                        block.scales[j] = (l_val & 0xF) as u8;
+                    } else {
+                        block.scales[j - 8] |= ((l_val & 0xF) << 4) as u8;
+                    }
+                    l_val >>= 4;
+                    block.scales[j % 4 + 8] |= (l_val << (2 * (j / 4))) as u8;
+                }
+                block.d = f16::from_f32(1.0 / iscale);
+            } else {
+                block.d = f16::from_f32(0.0);
+            }
+
+            for j in 0..QK_K / 16 {
+                let sc = if j < 8 {
+                    block.scales[j] & 0xF
+                } else {
+                    block.scales[j - 8] >> 4
+                };
+                let sc = (sc | (((block.scales[8 + j % 4] >> (2 * (j / 4))) & 3) << 4)) as i8 - 32;
+                let d = block.d.to_f32() * sc as f32;
+                if d != 0.0 {
+                    for ii in 0..16 {
+                        let mut l_val = nearest_int(x[16 * j + ii] / d);
+                        l_val = l_val.min(3).max(-4);
+                        l[16 * j + ii] = (l_val + 4) as i8;
+                    }
+                }
+            }
+
+            block.hmask.fill(0);
+            let mut m = 0;
+            let mut hm = 1;
+
+            for ll in l.iter_mut() {
+                if *ll > 3 {
+                    block.hmask[m] |= hm;
+                    *ll -= 4;
+                }
+                m += 1;
+                if m == QK_K / 8 {
+                    m = 0;
+                    hm <<= 1;
+                }
+            }
+
+            for j in (0..QK_K).step_by(128) {
+                for l_val in 0..32 {
+                    block.qs[j / 4 + l_val] = (l[j + l_val]
+                        | (l[j + l_val + 32] << 2)
+                        | (l[j + l_val + 64] << 4)
+                        | (l[j + l_val + 96] << 6))
+                        as u8;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L533
-    fn to_float(_xs: &[Self], _ys: &mut [f32]) -> Result<()> {
-        todo!()
+    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
+        const KMASK1: u32 = 0x03030303;
+        const KMASK2: u32 = 0x0f0f0f0f;
+
+        for (block, y) in group_for_dequantization(xs, ys)? {
+            let d_all = block.d.to_f32();
+            let mut m = 1;
+
+            //Reconstruct the scales
+            let mut aux = unsafe {
+                std::mem::transmute::<&mut [u8; 12], &mut [u32; 4]>(&mut block.scales.clone())
+            };
+
+            let tmp = aux[2];
+            aux[2] = ((aux[0] >> 4) & KMASK2) | (((tmp >> 4) & KMASK1) << 4);
+            aux[3] = ((aux[1] >> 4) & KMASK2) | (((tmp >> 6) & KMASK1) << 4);
+            aux[0] = (aux[0] & KMASK2) | (((tmp) & KMASK1) << 4);
+            aux[1] = (aux[1] & KMASK2) | (((tmp >> 2) & KMASK1) << 4);
+
+            //Transfer the scales into an i8 array
+            let scales = unsafe { std::mem::transmute::<&mut [u32; 4], &mut [i8; 16]>(&mut aux) };
+
+            let mut is = 0;
+            let mut dl;
+            let mut offset = 0;
+            let mut y_offset = 0;
+
+            for _ in (0..QK_K).step_by(128) {
+                let mut shift = 0;
+                for _ in 0..4 {
+                    dl = d_all * (scales[is] as f32 - 32.0);
+                    is += 1;
+                    for l in 0..16 {
+                        let new_y = dl
+                            * (((block.qs[offset + l] >> shift) & 3) as i8
+                                - if (block.hmask[l] & m) == 0u8 { 4 } else { 0 })
+                                as f32;
+                        y[y_offset] = new_y;
+                        y_offset += 1;
+                    }
+
+                    dl = d_all * (scales[is] as f32 - 32.0);
+                    is += 1;
+                    for l in 0..16 {
+                        let new_y = dl
+                            * (((block.qs[offset + 16 + l] >> shift) & 3) as i8
+                                - if (block.hmask[l + 16] & m) == 0u8 {
+                                    4
+                                } else {
+                                    0
+                                }) as f32;
+                        y[y_offset] = new_y;
+                        y_offset += 1;
+                    }
+                    shift += 2;
+                    m <<= 1;
+                }
+                offset += 32;
+            }
+        }
+
+        Ok(())
     }
 }
 
