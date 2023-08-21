@@ -1,5 +1,3 @@
-use std::cmp;
-
 use super::utils::{
     get_scale_min_k4, group_for_dequantization, group_for_quantization, make_q3_quants,
     make_qkx1_quants, make_qx_quants, nearest_int,
@@ -152,6 +150,104 @@ pub struct BlockQ8K {
 }
 const _: () = assert!(4 + QK_K + QK_K / 16 * 2 == std::mem::size_of::<BlockQ8K>());
 
+impl GgmlType for BlockQ4_0 {
+    const DTYPE: GgmlDType = GgmlDType::Q4_0;
+    const BLCK_SIZE: usize = QK4_0;
+    type VecDotType = BlockQ8_0;
+
+    // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1525
+    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
+        let k = ys.len();
+        let qk = Self::BLCK_SIZE;
+        if k % qk != 0 {
+            crate::bail!("dequantize_row_q4_0: {k} is not divisible by {qk}")
+        }
+
+        let nb = k / qk;
+        for i in 0..nb {
+            let d = xs[i].d.to_f32();
+
+            for j in 0..(qk / 2) {
+                let x0 = (xs[i].qs[j] & 0x0F) as i16 - 8;
+                let x1 = (xs[i].qs[j] >> 4) as i16 - 8;
+
+                ys[i * qk + j] = (x0 as f32) * d;
+                ys[i * qk + j + qk / 2] = (x1 as f32) * d;
+            }
+        }
+        Ok(())
+    }
+
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        // quantize_row_q4_0
+        let qk = Self::BLCK_SIZE;
+        let k = xs.len();
+        if k % qk != 0 {
+            crate::bail!("{k} is not divisible by {}", qk);
+        };
+        let nb = k / qk;
+        if ys.len() != nb {
+            crate::bail!("size mismatch {} {} {}", xs.len(), ys.len(), qk,)
+        }
+        for (i, ys) in ys.iter_mut().enumerate() {
+            let mut amax = 0f32;
+            let mut max = 0f32;
+
+            let xs = &xs[i * qk..(i + 1) * qk];
+            for &x in xs.iter() {
+                if amax < x.abs() {
+                    amax = x.abs();
+                    max = x;
+                }
+            }
+            let d = max / -8.0;
+            let id = if d != 0f32 { 1. / d } else { 0. };
+            ys.d = f16::from_f32(d);
+
+            for (j, q) in ys.qs.iter_mut().enumerate() {
+                let x0 = xs[j] * id;
+                let x1 = xs[qk / 2 + j] * id;
+                let xi0 = u8::min(15, (x0 + 8.5) as u8);
+                let xi1 = u8::min(15, (x1 + 8.5) as u8);
+                *q = xi0 | (xi1 << 4)
+            }
+        }
+        Ok(())
+    }
+
+    // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L2361C10-L2361C122
+    #[allow(unreachable_code)]
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        #[cfg(target_feature = "avx")]
+        return super::avx::vec_dot_q4_0_q8_0(n, xs, ys);
+
+        #[cfg(target_feature = "neon")]
+        return super::neon::vec_dot_q4_0_q8_0(n, xs, ys);
+
+        let qk = QK8_0;
+        let nb = n / qk;
+        if n % QK8_0 != 0 {
+            crate::bail!("vec_dot_q4_0_q8_0: {n} is not divisible by {qk}")
+        }
+        if nb % 2 != 0 {
+            crate::bail!("vec_dot_q4_0_q8_0: {nb} is not even")
+        }
+
+        // Generic implementation.
+        let mut sumf = 0f32;
+        for (xs, ys) in xs.iter().zip(ys.iter()) {
+            let mut sum_i = 0;
+            for j in 0..qk / 2 {
+                let v0 = (xs.qs[j] & 0x0F) as i32 - 8;
+                let v1 = (xs.qs[j] >> 4) as i32 - 8;
+                sum_i += v0 * ys.qs[j] as i32 + v1 * ys.qs[j + qk / 2] as i32
+            }
+            sumf += sum_i as f32 * f16::to_f32(xs.d) * f16::to_f32(ys.d)
+        }
+        Ok(sumf)
+    }
+}
+
 impl GgmlType for BlockQ4_1 {
     const DTYPE: GgmlDType = GgmlDType::Q4_1;
     const BLCK_SIZE: usize = QK4_1;
@@ -270,6 +366,85 @@ impl GgmlType for BlockQ5_1 {
     }
 }
 
+impl GgmlType for BlockQ8_0 {
+    const DTYPE: GgmlDType = GgmlDType::Q8_0;
+    const BLCK_SIZE: usize = QK8_0;
+    type VecDotType = BlockQ8_0;
+
+    // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1619
+    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
+        let k = ys.len();
+        if k % QK8_0 != 0 {
+            crate::bail!("dequantize_row_q8_0: {k} is not divisible by {QK8_0}");
+        }
+
+        let nb = k / QK8_0;
+
+        for i in 0..nb {
+            let d = xs[i].d.to_f32();
+
+            for j in 0..QK8_0 {
+                ys[i * QK8_0 + j] = xs[i].qs[j] as f32 * d;
+            }
+        }
+        Ok(())
+    }
+
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        // quantize_row_q8_0
+        let k = xs.len();
+        if k % Self::BLCK_SIZE != 0 {
+            crate::bail!("{k} is not divisible by {}", Self::BLCK_SIZE);
+        };
+        let nb = k / Self::BLCK_SIZE;
+        if ys.len() != nb {
+            crate::bail!(
+                "size mismatch {} {} {}",
+                xs.len(),
+                ys.len(),
+                Self::BLCK_SIZE
+            )
+        }
+        for (i, ys) in ys.iter_mut().enumerate() {
+            let mut amax = 0f32;
+            let xs = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
+            for &x in xs.iter() {
+                amax = amax.max(x.abs())
+            }
+            let d = amax / ((1 << 7) - 1) as f32;
+            let id = if d != 0f32 { 1. / d } else { 0. };
+            ys.d = f16::from_f32(d);
+            for (y, &x) in ys.qs.iter_mut().zip(xs.iter()) {
+                *y = f32::round(x * id) as i8
+            }
+        }
+        Ok(())
+    }
+
+    fn vec_dot(_: usize, _: &[Self], _: &[Self::VecDotType]) -> Result<f32> {
+        todo!()
+    }
+}
+
+impl GgmlType for BlockQ8_1 {
+    const DTYPE: GgmlDType = GgmlDType::Q3K;
+    const BLCK_SIZE: usize = QK_K;
+    type VecDotType = BlockQ8_1;
+
+    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
+        todo!()
+    }
+
+    fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
+        todo!()
+    }
+
+    // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L533
+    fn to_float(_xs: &[Self], _ys: &mut [f32]) -> Result<()> {
+        todo!()
+    }
+}
+
 impl GgmlType for BlockQ2K {
     const DTYPE: GgmlDType = GgmlDType::Q2K;
     const BLCK_SIZE: usize = QK_K;
@@ -281,42 +456,26 @@ impl GgmlType for BlockQ2K {
 
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L279
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
-        if xs.len() != ys.len() * Self::BLCK_SIZE {
-            crate::bail!(
-                "quantize_row_q2k: size mismatch {} != {} * {}",
-                xs.len(),
-                ys.len(),
-                Self::BLCK_SIZE
-            )
-        }
+        const Q4SCALE: f32 = 15.0;
 
-        let q4scale = 15.0;
-
-        for (i, block) in ys.iter_mut().enumerate() {
+        for (block, x) in group_for_quantization(xs, ys)? {
             //calculate scales and mins
-            let mut big_l: [u8; QK_K] = [0; QK_K];
             let mut mins: [f32; QK_K / 16] = [0.0; QK_K / 16];
             let mut scales: [f32; QK_K / 16] = [0.0; QK_K / 16];
 
-            let offset = i * QK_K;
-            for j in 0..QK_K / 16 {
-                (scales[j], mins[j]) =
-                    make_qkx1_quants(16, 3, &xs[offset + 16 * j..], &mut big_l[16 * j..], 5);
+            for (j, x_scale_slice) in x.chunks(16).enumerate() {
+                (scales[j], mins[j]) = make_qkx1_quants(3, 5, x_scale_slice);
             }
             // get max scale and max min and ensure they are >= 0.0
-            let max_scale = scales
-                .iter()
-                .fold(0.0, |max, &val| if val > max { val } else { max });
-            let max_min = mins
-                .iter()
-                .fold(0.0, |max, &val| if val > max { val } else { max });
+            let max_scale = scales.iter().fold(0.0, |max, &val| val.max(max));
+            let max_min = mins.iter().fold(0.0, |max, &val| val.max(max));
 
             if max_scale > 0.0 {
-                let iscale = q4scale / max_scale;
+                let iscale = Q4SCALE / max_scale;
                 for (j, scale) in scales.iter().enumerate().take(QK_K / 16) {
                     block.scales[j] = nearest_int(iscale * scale) as u8;
                 }
-                block.d = f16::from_f32(max_scale / q4scale);
+                block.d = f16::from_f32(max_scale / Q4SCALE);
             } else {
                 for j in 0..QK_K / 16 {
                     block.scales[j] = 0;
@@ -325,15 +484,17 @@ impl GgmlType for BlockQ2K {
             }
 
             if max_min > 0.0 {
-                let iscale = q4scale / max_min;
+                let iscale = Q4SCALE / max_min;
                 for (j, scale) in block.scales.iter_mut().enumerate() {
                     let l = nearest_int(iscale * mins[j]) as u8;
                     *scale |= l << 4;
                 }
-                block.dmin = f16::from_f32(max_min / q4scale);
+                block.dmin = f16::from_f32(max_min / Q4SCALE);
             } else {
                 block.dmin = f16::from_f32(0.0);
             }
+
+            let mut big_l: [u8; QK_K] = [0; QK_K];
 
             for j in 0..QK_K / 16 {
                 let d = block.d.to_f32() * (block.scales[j] & 0xF) as f32;
@@ -342,8 +503,8 @@ impl GgmlType for BlockQ2K {
                 }
                 let dm = block.dmin.to_f32() * (block.scales[j] >> 4) as f32;
                 for ii in 0..16 {
-                    let mut ll = nearest_int((xs[offset + 16 * j + ii] + dm) / d);
-                    ll = cmp::max(0, cmp::min(3, ll));
+                    let mut ll = nearest_int((x[16 * j + ii] + dm) / d);
+                    ll = ll.clamp(0, 3);
                     big_l[16 * j + ii] = ll as u8;
                 }
             }
@@ -361,46 +522,39 @@ impl GgmlType for BlockQ2K {
     }
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L354
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
-        let k = ys.len();
-        if k % QK_K != 0 {
-            crate::bail!("dequantize_row_q2k: {k} is not divisible by {QK_K}")
-        }
-        let mut ys_index = 0;
-        for x in xs {
-            let d = x.d.to_f32();
-            let min = x.dmin.to_f32();
-            let q = &x.qs;
+        for (block, y) in group_for_dequantization(xs, ys)? {
+            let d = block.d.to_f32();
+            let min = block.dmin.to_f32();
 
             let mut is = 0;
-            let mut offset = 0;
 
-            for _ in (0..QK_K).step_by(128) {
+            for (y_block, qs) in y.chunks_exact_mut(128).zip(block.qs.chunks_exact(32)) {
                 // Step by 32 over q.
                 let mut shift = 0;
+                let mut y_block_index = 0;
                 for _j in 0..4 {
-                    let sc = x.scales[is];
+                    let sc = block.scales[is];
                     is += 1;
                     let dl = d * (sc & 0xF) as f32;
                     let ml = min * (sc >> 4) as f32;
-                    for q in &q[offset..offset + 16] {
+                    for q in &qs[..16] {
                         let y = dl * ((q >> shift) & 3) as f32 - ml;
-                        ys[ys_index] = y;
-                        ys_index += 1;
+                        y_block[y_block_index] = y;
+                        y_block_index += 1;
                     }
 
-                    let sc = x.scales[is];
+                    let sc = block.scales[is];
                     is += 1;
                     let dl = d * (sc & 0xF) as f32;
                     let ml = min * (sc >> 4) as f32;
-                    for q in &q[offset + 16..offset + 32] {
+                    for q in &qs[16..] {
                         let y = dl * ((q >> shift) & 3) as f32 - ml;
-                        ys[ys_index] = y;
-                        ys_index += 1;
+                        y_block[y_block_index] = y;
+                        y_block_index += 1;
                     }
 
                     shift += 2;
                 }
-                offset += 32;
             }
         }
         Ok(())
@@ -418,19 +572,15 @@ impl GgmlType for BlockQ3K {
 
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
         for (block, x) in group_for_quantization(xs, ys)? {
-            let mut l: [i8; QK_K] = [0; QK_K];
             let mut scales: [f32; QK_K / 16] = [0.0; QK_K / 16];
-
-            let mut max_scale = 0.0;
-            let mut amax = 0.0;
-            for j in 0..QK_K / 16 {
-                scales[j] = make_q3_quants(16, 4, &x[16 * j..], &mut l[16 * j..], true);
-                let scale = scales[j].abs();
-                if scale > amax {
-                    amax = scale;
-                    max_scale = scales[j];
-                }
+            for (j, x_scale_slice) in x.chunks_exact(16).enumerate() {
+                scales[j] = make_q3_quants(x_scale_slice, 4, true);
             }
+
+            // Get max scale by absolute value.
+            let max_scale = scales
+                .iter()
+                .fold(0.0, |max, &val| if val.abs() > max { val } else { max });
 
             block.scales.fill(0);
 
@@ -438,7 +588,7 @@ impl GgmlType for BlockQ3K {
                 let iscale = -32.0 / max_scale;
                 for (j, scale) in scales.iter().enumerate() {
                     let mut l_val = nearest_int(iscale * scale);
-                    l_val = l_val.min(31).max(-32) + 32;
+                    l_val = l_val.clamp(-32, 31) + 32;
                     if j < 8 {
                         block.scales[j] = (l_val & 0xF) as u8;
                     } else {
@@ -452,6 +602,8 @@ impl GgmlType for BlockQ3K {
                 block.d = f16::from_f32(0.0);
             }
 
+            let mut l: [i8; QK_K] = [0; QK_K];
+
             for j in 0..QK_K / 16 {
                 let sc = if j < 8 {
                     block.scales[j] & 0xF
@@ -463,7 +615,7 @@ impl GgmlType for BlockQ3K {
                 if d != 0.0 {
                     for ii in 0..16 {
                         let mut l_val = nearest_int(x[16 * j + ii] / d);
-                        l_val = l_val.min(3).max(-4);
+                        l_val = l_val.clamp(-4, 3);
                         l[16 * j + ii] = (l_val + 4) as i8;
                     }
                 }
@@ -571,34 +723,17 @@ impl GgmlType for BlockQ4K {
     }
 
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
-        if xs.len() != ys.len() * Self::BLCK_SIZE {
-            crate::bail!(
-                "quantize_row_q4k: size mismatch {} {} {}",
-                xs.len(),
-                ys.len(),
-                Self::BLCK_SIZE
-            )
-        }
+        for (block, x) in group_for_quantization(xs, ys)? {
+            let mut mins: [f32; QK_K / 32] = [0.0; QK_K / 32];
+            let mut scales: [f32; QK_K / 32] = [0.0; QK_K / 32];
 
-        let mut l: [u8; QK_K] = [0; QK_K];
-        let mut mins: [f32; QK_K / 32] = [0.0; QK_K / 32];
-        let mut scales: [f32; QK_K / 32] = [0.0; QK_K / 32];
-
-        let mut x_offset = 0;
-
-        for block in ys.iter_mut() {
-            for j in 0..QK_K / 32 {
-                (scales[j], mins[j]) =
-                    make_qkx1_quants(32, 15, &xs[x_offset + 32 * j..], &mut l[32 * j..], 5);
+            for (j, x_scale_slice) in x.chunks_exact(32).enumerate() {
+                (scales[j], mins[j]) = make_qkx1_quants(15, 5, x_scale_slice);
             }
 
             // get max scale and max min and ensure they are >= 0.0
-            let max_scale = scales
-                .iter()
-                .fold(0.0, |max, &val| if val > max { val } else { max });
-            let max_min = mins
-                .iter()
-                .fold(0.0, |max, &val| if val > max { val } else { max });
+            let max_scale = scales.iter().fold(0.0, |max, &val| val.max(max));
+            let max_min = mins.iter().fold(0.0, |max, &val| val.max(max));
 
             let inv_scale = if max_scale > 0.0 {
                 63.0 / max_scale
@@ -625,14 +760,16 @@ impl GgmlType for BlockQ4K {
             block.d = f16::from_f32(max_scale / 63.0);
             block.dmin = f16::from_f32(max_min / 63.0);
 
+            let mut l: [u8; QK_K] = [0; QK_K];
+
             for j in 0..QK_K / 32 {
                 let (sc, m) = get_scale_min_k4(j, &block.scales);
                 let d = block.d.to_f32() * sc as f32;
                 if d != 0.0 {
                     let dm = block.dmin.to_f32() * m as f32;
                     for ii in 0..32 {
-                        let mut l_val = nearest_int((xs[x_offset + 32 * j + ii] + dm) / d);
-                        l_val = std::cmp::max(0, std::cmp::min(15, l_val));
+                        let mut l_val = nearest_int((x[32 * j + ii] + dm) / d);
+                        l_val = l_val.clamp(0, 15);
                         l[32 * j + ii] = l_val as u8;
                     }
                 }
@@ -645,39 +782,32 @@ impl GgmlType for BlockQ4K {
                     q[offset_index] = l[j + l_val] | (l[j + l_val + 32] << 4);
                 }
             }
-
-            x_offset += QK_K;
         }
         Ok(())
     }
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L735
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
-        let k = ys.len();
-        if k % QK_K != 0 {
-            crate::bail!("dequantize_row_q4k: {k} is not divisible by {QK_K}")
-        }
-        let mut ys_index = 0;
-        for x in xs.iter() {
-            let d = x.d.to_f32();
-            let min = x.dmin.to_f32();
-            let q = &x.qs;
+        for (block, y) in group_for_dequantization(xs, ys)? {
+            let d = block.d.to_f32();
+            let min = block.dmin.to_f32();
+            let q = &block.qs;
             let mut is = 0;
+            let mut ys_index = 0;
+
             for j in (0..QK_K).step_by(64) {
                 let q = &q[j / 2..j / 2 + 32];
-                let (sc, m) = get_scale_min_k4(is, &x.scales);
+                let (sc, m) = get_scale_min_k4(is, &block.scales);
                 let d1 = d * sc as f32;
                 let m1 = min * m as f32;
-                let (sc, m) = get_scale_min_k4(is + 1, &x.scales);
+                let (sc, m) = get_scale_min_k4(is + 1, &block.scales);
                 let d2 = d * sc as f32;
                 let m2 = min * m as f32;
                 for q in q {
-                    let y = d1 * (q & 0xF) as f32 - m1;
-                    ys[ys_index] = y;
+                    y[ys_index] = d1 * (q & 0xF) as f32 - m1;
                     ys_index += 1;
                 }
                 for q in q {
-                    let y = d2 * (q >> 4) as f32 - m2;
-                    ys[ys_index] = y;
+                    y[ys_index] = d2 * (q >> 4) as f32 - m2;
                     ys_index += 1;
                 }
                 is += 2;
@@ -699,33 +829,17 @@ impl GgmlType for BlockQ5K {
 
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L793
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
-        if xs.len() != ys.len() * Self::BLCK_SIZE {
-            crate::bail!(
-                "quantize_row_q5k: size mismatch {} {} {}",
-                xs.len(),
-                ys.len(),
-                Self::BLCK_SIZE
-            )
-        }
+        for (block, x) in group_for_quantization(xs, ys)? {
+            let mut mins: [f32; QK_K / 32] = [0.0; QK_K / 32];
+            let mut scales: [f32; QK_K / 32] = [0.0; QK_K / 32];
 
-        let mut l: [u8; QK_K] = [0; QK_K];
-        let mut mins: [f32; QK_K / 32] = [0.0; QK_K / 32];
-        let mut scales: [f32; QK_K / 32] = [0.0; QK_K / 32];
-
-        for (i, block) in ys.iter_mut().enumerate() {
-            let offset = i * QK_K;
-            for j in 0..QK_K / 32 {
-                (scales[j], mins[j]) =
-                    make_qkx1_quants(32, 31, &xs[offset + 32 * j..], &mut l[32 * j..], 5);
+            for (j, x_scale_slice) in x.chunks_exact(32).enumerate() {
+                (scales[j], mins[j]) = make_qkx1_quants(31, 5, x_scale_slice);
             }
 
             // get max scale and max min and ensure they are >= 0.0
-            let max_scale = scales
-                .iter()
-                .fold(0.0, |max, &val| if val > max { val } else { max });
-            let max_min = mins
-                .iter()
-                .fold(0.0, |max, &val| if val > max { val } else { max });
+            let max_scale = scales.iter().fold(0.0, |max, &val| val.max(max));
+            let max_min = mins.iter().fold(0.0, |max, &val| val.max(max));
 
             let inv_scale = if max_scale > 0.0 {
                 63.0 / max_scale
@@ -750,6 +864,7 @@ impl GgmlType for BlockQ5K {
             block.d = f16::from_f32(max_scale / 63.0);
             block.dmin = f16::from_f32(max_min / 63.0);
 
+            let mut l: [u8; QK_K] = [0; QK_K];
             for j in 0..QK_K / 32 {
                 let (sc, m) = get_scale_min_k4(j, &block.scales);
                 let d = block.d.to_f32() * sc as f32;
@@ -758,7 +873,7 @@ impl GgmlType for BlockQ5K {
                 }
                 let dm = block.dmin.to_f32() * m as f32;
                 for ii in 0..32 {
-                    let mut ll = nearest_int((xs[offset + 32 * j + ii] + dm) / d);
+                    let mut ll = nearest_int((x[32 * j + ii] + dm) / d);
                     ll = ll.min(31).max(0);
                     l[32 * j + ii] = ll as u8;
                 }
@@ -766,7 +881,7 @@ impl GgmlType for BlockQ5K {
 
             let qh = &mut block.qh;
             let ql = &mut block.qs;
-            qh.iter_mut().for_each(|x| *x = 0);
+            qh.fill(0);
 
             let mut m1 = 1;
             let mut m2 = 2;
@@ -795,37 +910,32 @@ impl GgmlType for BlockQ5K {
 
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L928
     fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
-        let k = ys.len();
-        if k % QK_K != 0 {
-            crate::bail!("dequantize_row_q5k: {k} is not divisible by {QK_K}")
-        }
-        let mut ys_index = 0;
-        for x in xs.iter() {
-            let d = x.d.to_f32();
-            let min = x.dmin.to_f32();
-            let ql = &x.qs;
-            let qh = &x.qh;
+        for (block, y) in group_for_dequantization(xs, ys)? {
+            let d = block.d.to_f32();
+            let min = block.dmin.to_f32();
+            let ql = &block.qs;
+            let qh = &block.qh;
             let mut is = 0;
             let mut u1 = 1;
             let mut u2 = 2;
+            let mut ys_index = 0;
+
             for j in (0..QK_K).step_by(64) {
                 let ql = &ql[j / 2..j / 2 + 32];
-                let (sc, m) = get_scale_min_k4(is, &x.scales);
+                let (sc, m) = get_scale_min_k4(is, &block.scales);
                 let d1 = d * sc as f32;
                 let m1 = min * m as f32;
-                let (sc, m) = get_scale_min_k4(is + 1, &x.scales);
+                let (sc, m) = get_scale_min_k4(is + 1, &block.scales);
                 let d2 = d * sc as f32;
                 let m2 = min * m as f32;
                 for (ql, qh) in ql.iter().zip(qh) {
                     let to_add = if qh & u1 != 0 { 16 } else { 1 };
-                    let y = d1 * ((ql & 0xF) + to_add) as f32 - m1;
-                    ys[ys_index] = y;
+                    y[ys_index] = d1 * ((ql & 0xF) + to_add) as f32 - m1;
                     ys_index += 1;
                 }
                 for (ql, qh) in ql.iter().zip(qh) {
                     let to_add = if qh & u2 != 0 { 16 } else { 1 };
-                    let y = d2 * ((ql >> 4) + to_add) as f32 - m2;
-                    ys[ys_index] = y;
+                    y[ys_index] = d2 * ((ql >> 4) + to_add) as f32 - m2;
                     ys_index += 1;
                 }
                 is += 2;
@@ -1072,183 +1182,6 @@ impl GgmlType for BlockQ8K {
             }
         }
         Ok(())
-    }
-}
-
-impl GgmlType for BlockQ4_0 {
-    const DTYPE: GgmlDType = GgmlDType::Q4_0;
-    const BLCK_SIZE: usize = QK4_0;
-    type VecDotType = BlockQ8_0;
-
-    // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1525
-    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
-        let k = ys.len();
-        let qk = Self::BLCK_SIZE;
-        if k % qk != 0 {
-            crate::bail!("dequantize_row_q4_0: {k} is not divisible by {qk}")
-        }
-
-        let nb = k / qk;
-        for i in 0..nb {
-            let d = xs[i].d.to_f32();
-
-            for j in 0..(qk / 2) {
-                let x0 = (xs[i].qs[j] & 0x0F) as i16 - 8;
-                let x1 = (xs[i].qs[j] >> 4) as i16 - 8;
-
-                ys[i * qk + j] = (x0 as f32) * d;
-                ys[i * qk + j + qk / 2] = (x1 as f32) * d;
-            }
-        }
-        Ok(())
-    }
-
-    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
-        // quantize_row_q4_0
-        let qk = Self::BLCK_SIZE;
-        let k = xs.len();
-        if k % qk != 0 {
-            crate::bail!("{k} is not divisible by {}", qk);
-        };
-        let nb = k / qk;
-        if ys.len() != nb {
-            crate::bail!("size mismatch {} {} {}", xs.len(), ys.len(), qk,)
-        }
-        for (i, ys) in ys.iter_mut().enumerate() {
-            let mut amax = 0f32;
-            let mut max = 0f32;
-
-            let xs = &xs[i * qk..(i + 1) * qk];
-            for &x in xs.iter() {
-                if amax < x.abs() {
-                    amax = x.abs();
-                    max = x;
-                }
-            }
-            let d = max / -8.0;
-            let id = if d != 0f32 { 1. / d } else { 0. };
-            ys.d = f16::from_f32(d);
-
-            for (j, q) in ys.qs.iter_mut().enumerate() {
-                let x0 = xs[j] * id;
-                let x1 = xs[qk / 2 + j] * id;
-                let xi0 = u8::min(15, (x0 + 8.5) as u8);
-                let xi1 = u8::min(15, (x1 + 8.5) as u8);
-                *q = xi0 | (xi1 << 4)
-            }
-        }
-        Ok(())
-    }
-
-    // https://github.com/ggerganov/llama.cpp/blob/b5ffb2849d23afe73647f68eec7b68187af09be6/ggml.c#L2361C10-L2361C122
-    #[allow(unreachable_code)]
-    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        #[cfg(target_feature = "avx")]
-        return super::avx::vec_dot_q4_0_q8_0(n, xs, ys);
-
-        #[cfg(target_feature = "neon")]
-        return super::neon::vec_dot_q4_0_q8_0(n, xs, ys);
-
-        let qk = QK8_0;
-        let nb = n / qk;
-        if n % QK8_0 != 0 {
-            crate::bail!("vec_dot_q4_0_q8_0: {n} is not divisible by {qk}")
-        }
-        if nb % 2 != 0 {
-            crate::bail!("vec_dot_q4_0_q8_0: {nb} is not even")
-        }
-
-        // Generic implementation.
-        let mut sumf = 0f32;
-        for (xs, ys) in xs.iter().zip(ys.iter()) {
-            let mut sum_i = 0;
-            for j in 0..qk / 2 {
-                let v0 = (xs.qs[j] & 0x0F) as i32 - 8;
-                let v1 = (xs.qs[j] >> 4) as i32 - 8;
-                sum_i += v0 * ys.qs[j] as i32 + v1 * ys.qs[j + qk / 2] as i32
-            }
-            sumf += sum_i as f32 * f16::to_f32(xs.d) * f16::to_f32(ys.d)
-        }
-        Ok(sumf)
-    }
-}
-
-impl GgmlType for BlockQ8_0 {
-    const DTYPE: GgmlDType = GgmlDType::Q8_0;
-    const BLCK_SIZE: usize = QK8_0;
-    type VecDotType = BlockQ8_0;
-
-    // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1619
-    fn to_float(xs: &[Self], ys: &mut [f32]) -> Result<()> {
-        let k = ys.len();
-        if k % QK8_0 != 0 {
-            crate::bail!("dequantize_row_q8_0: {k} is not divisible by {QK8_0}");
-        }
-
-        let nb = k / QK8_0;
-
-        for i in 0..nb {
-            let d = xs[i].d.to_f32();
-
-            for j in 0..QK8_0 {
-                ys[i * QK8_0 + j] = xs[i].qs[j] as f32 * d;
-            }
-        }
-        Ok(())
-    }
-
-    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
-        // quantize_row_q8_0
-        let k = xs.len();
-        if k % Self::BLCK_SIZE != 0 {
-            crate::bail!("{k} is not divisible by {}", Self::BLCK_SIZE);
-        };
-        let nb = k / Self::BLCK_SIZE;
-        if ys.len() != nb {
-            crate::bail!(
-                "size mismatch {} {} {}",
-                xs.len(),
-                ys.len(),
-                Self::BLCK_SIZE
-            )
-        }
-        for (i, ys) in ys.iter_mut().enumerate() {
-            let mut amax = 0f32;
-            let xs = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
-            for &x in xs.iter() {
-                amax = amax.max(x.abs())
-            }
-            let d = amax / ((1 << 7) - 1) as f32;
-            let id = if d != 0f32 { 1. / d } else { 0. };
-            ys.d = f16::from_f32(d);
-            for (y, &x) in ys.qs.iter_mut().zip(xs.iter()) {
-                *y = f32::round(x * id) as i8
-            }
-        }
-        Ok(())
-    }
-
-    fn vec_dot(_: usize, _: &[Self], _: &[Self::VecDotType]) -> Result<f32> {
-        todo!()
-    }
-}
-
-impl GgmlType for BlockQ8_1 {
-    const DTYPE: GgmlDType = GgmlDType::Q3K;
-    const BLCK_SIZE: usize = QK_K;
-    type VecDotType = BlockQ8_1;
-
-    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
-        todo!()
-    }
-
-    fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
-        todo!()
-    }
-
-    // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L533
-    fn to_float(_xs: &[Self], _ys: &mut [f32]) -> Result<()> {
-        todo!()
     }
 }
 

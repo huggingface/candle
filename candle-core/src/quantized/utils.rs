@@ -194,28 +194,19 @@ pub(super) unsafe fn make_qx_quants(
 }
 
 // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L224
-pub(super) fn make_qkx1_quants(
-    n: usize,
-    nmax: i32,
-    x: &[f32],
-    l: &mut [u8],
-    ntry: usize,
-) -> (f32, f32) {
+pub(super) fn make_qkx1_quants(nmax: i32, ntry: usize, x: &[f32]) -> (f32, f32) {
+    let n = x.len();
+    let mut l = vec![0; n];
     // Get min/max
-    let mut min = x
+    let mut min = *x
         .iter()
         .take(n)
-        .fold(f32::MAX, |min, &val| if val < min { val } else { min });
-    let max = x
-        .iter()
-        .take(n)
-        .fold(f32::MIN, |max, &val| if val > max { val } else { max });
+        .min_by(|a, b| a.total_cmp(b))
+        .unwrap_or(&x[0]);
+    let max = *x.iter().max_by(|a, b| a.total_cmp(b)).unwrap_or(&x[0]);
 
     // If min == max, all values are the same => nothing to do here
     if max == min {
-        for li in l.iter_mut().take(n) {
-            *li = 0;
-        }
         return (0.0, 0.0);
     }
 
@@ -235,7 +226,7 @@ pub(super) fn make_qkx1_quants(
 
         for (i, value) in x.iter().enumerate().take(n) {
             let mut li = nearest_int(iscale * (value - min));
-            li = li.min(nmax).max(0);
+            li = li.clamp(0,nmax);
             let clamped_li = li as u8;
             if clamped_li != l[i] {
                 l[i] = clamped_li;
@@ -266,7 +257,10 @@ pub(super) fn make_qkx1_quants(
 }
 
 // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L165
-pub(super) fn make_q3_quants(n: usize, nmax: i32, x: &[f32], l: &mut [i8], do_rmse: bool) -> f32 {
+pub(super) fn make_q3_quants(x: &[f32], nmax: i32, do_rmse: bool) -> f32 {
+    let n = x.len();
+    let mut l = vec![0i8; n];
+
     let mut max = 0.0;
     let mut amax = 0.0;
     for &xi in x.iter().take(n) {
@@ -276,19 +270,18 @@ pub(super) fn make_q3_quants(n: usize, nmax: i32, x: &[f32], l: &mut [i8], do_rm
             max = xi;
         }
     }
+
     if amax == 0.0 {
-        for li in l.iter_mut() {
-            *li = 0;
-        }
         return 0.0;
     }
+
     let iscale = -(nmax as f32) / max;
     if do_rmse {
         let mut sumlx = 0.0;
         let mut suml2 = 0.0;
         for i in 0..n {
             let mut li = (iscale * x[i]).round() as i32;
-            li = li.max(-nmax).min(nmax - 1);
+            li = li.clamp(-nmax, nmax - 1);
             l[i] = li as i8;
             let w = x[i] * x[i];
             sumlx += w * x[i] * li as f32;
@@ -302,7 +295,7 @@ pub(super) fn make_q3_quants(n: usize, nmax: i32, x: &[f32], l: &mut [i8], do_rm
                 if slx > 0.0 {
                     let mut sl2 = suml2 - w * (l[i] as i32 * l[i] as i32) as f32;
                     let mut new_l = (x[i] * sl2 / slx).round() as i32;
-                    new_l = new_l.max(-nmax).min(nmax - 1);
+                    new_l = new_l.clamp(-nmax, nmax - 1);
                     if new_l != l[i] as i32 {
                         slx += w * x[i] * new_l as f32;
                         sl2 += w * (new_l * new_l) as f32;
@@ -326,7 +319,7 @@ pub(super) fn make_q3_quants(n: usize, nmax: i32, x: &[f32], l: &mut [i8], do_rm
     }
     for i in 0..n {
         let mut li = (iscale * x[i]).round() as i32;
-        li = li.max(-nmax).min(nmax - 1);
+        li = li.clamp(-nmax, nmax - 1);
         l[i] = (li + nmax) as i8;
     }
     1.0 / iscale

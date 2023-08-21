@@ -150,19 +150,16 @@ fn round_vector(values: &[f32]) -> Vec<f32> {
         .collect::<Vec<_>>()
 }
 
-fn compare_with_error(values: &[f32], expected: &[f32], precision: usize, tolerance: f32) {
-    let factor = 10f32.powi(precision as i32);
+fn compare_with_error(values: &[f32], expected: &[f32], tolerance: f32) {
     for (i, (value, expected_value)) in values.iter().zip(expected.iter()).enumerate() {
-        let rounded_value = (value * factor).round() / factor;
-        let rounded_expected_value = (expected_value * factor).round() / factor;
-        let difference = (rounded_value - rounded_expected_value).abs();
+        let difference = (value - expected_value).abs();
 
         assert!(
             difference < tolerance,
             "Error at index {}: value = {}, expected = {}. Difference = {} exceeds tolerance = {}.",
             i,
-            rounded_value,
-            rounded_expected_value,
+            value,
+            expected_value,
             difference,
             tolerance
         );
@@ -182,10 +179,10 @@ fn quantize_q2k() -> Result<()> {
 
     let (src, mut dst) = get_test_vector(0.5, Some(1024));
     let _quant = quantize_roundtrip::<BlockQ2K>(src.as_slice(), dst.as_mut_slice())?;
-    compare_with_error(src.as_slice(), dst.as_slice(), 6, 0.1);
+    compare_with_error(dst.as_slice(), src.as_slice(), 0.1);
 
     // Test some specific values
-    dst = round_vector(&dst);
+    let dst = round_vector(&dst);
     assert_eq!(
         [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
         [-0.499, -0.366, -0.249, 0.0, 0.295, 0.492]
@@ -193,7 +190,7 @@ fn quantize_q2k() -> Result<()> {
 
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ2K>(src_big.as_slice(), dst_big.as_mut_slice())?;
-    compare_with_error(src_big.as_slice(), dst_big.as_slice(), 3, 6.0);
+    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 6.0);
     Ok(())
 }
 
@@ -203,7 +200,7 @@ fn quantize_q3k() -> Result<()> {
 
     let (src, mut dst) = get_test_vector(0.5, Some(1024));
     let _quant = quantize_roundtrip::<BlockQ3K>(src.as_slice(), dst.as_mut_slice())?;
-    compare_with_error(src.as_slice(), dst.as_slice(), 6, 0.03);
+    compare_with_error(dst.as_slice(), src.as_slice(), 0.03);
 
     // Test some specific values
     dst = round_vector(&dst);
@@ -214,7 +211,7 @@ fn quantize_q3k() -> Result<()> {
 
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ3K>(src_big.as_slice(), dst_big.as_mut_slice())?;
-    compare_with_error(src_big.as_slice(), dst_big.as_slice(), 3, 3.5);
+    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 3.5);
     Ok(())
 }
 
@@ -224,7 +221,7 @@ fn quantize_q4k() -> Result<()> {
 
     let (src, mut dst) = get_test_vector(0.5, Some(1024));
     let _quant = quantize_roundtrip::<BlockQ4K>(src.as_slice(), dst.as_mut_slice())?;
-    compare_with_error(src.as_slice(), dst.as_slice(), 6, 0.017);
+    compare_with_error(dst.as_slice(), src.as_slice(), 0.017);
 
     // Test some specific values
     dst = round_vector(&dst);
@@ -235,7 +232,7 @@ fn quantize_q4k() -> Result<()> {
 
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ4K>(src_big.as_slice(), dst_big.as_mut_slice())?;
-    compare_with_error(src_big.as_slice(), dst_big.as_slice(), 3, 4.5);
+    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 4.5);
     Ok(())
 }
 
@@ -245,7 +242,7 @@ fn quantize_q5k() -> Result<()> {
 
     let (src, mut dst) = get_test_vector(0.5, Some(1024));
     let _quant = quantize_roundtrip::<BlockQ5K>(src.as_slice(), dst.as_mut_slice())?;
-    compare_with_error(src.as_slice(), dst.as_slice(), 6, 0.008);
+    compare_with_error(dst.as_slice(), src.as_slice(), 0.008);
 
     // Test some specific values
     dst = round_vector(&dst);
@@ -256,7 +253,7 @@ fn quantize_q5k() -> Result<()> {
 
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ5K>(src_big.as_slice(), dst_big.as_mut_slice())?;
-    compare_with_error(src_big.as_slice(), dst_big.as_slice(), 3, 2.5);
+    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 2.5);
     Ok(())
 }
 
@@ -266,7 +263,7 @@ fn quantize_q6k() -> Result<()> {
 
     let (src, mut dst) = get_test_vector(0.5, Some(1024));
     let _quant = quantize_roundtrip::<BlockQ6K>(src.as_slice(), dst.as_mut_slice())?;
-    compare_with_error(src.as_slice(), dst.as_slice(), 6, 0.008);
+    compare_with_error(dst.as_slice(), src.as_slice(), 0.008);
 
     // Test some specific values
     dst = round_vector(&dst);
@@ -277,7 +274,7 @@ fn quantize_q6k() -> Result<()> {
 
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ6K>(src_big.as_slice(), dst_big.as_mut_slice())?;
-    compare_with_error(src_big.as_slice(), dst_big.as_slice(), 6, 2.0);
+    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 2.0);
 
     Ok(())
 }
@@ -288,7 +285,7 @@ fn quantize_q8k() -> Result<()> {
 
     let (src, mut dst) = get_test_vector(0.5, Some(1024));
     let _quant = quantize_roundtrip::<BlockQ8K>(src.as_slice(), dst.as_mut_slice())?;
-    compare_with_error(src.as_slice(), dst.as_slice(), 6, 0.003);
+    compare_with_error(dst.as_slice(), src.as_slice(), 0.003);
 
     // Test some specific values
     dst = round_vector(&dst);
@@ -299,7 +296,7 @@ fn quantize_q8k() -> Result<()> {
 
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ8K>(src_big.as_slice(), dst_big.as_mut_slice())?;
-    compare_with_error(src_big.as_slice(), dst_big.as_slice(), 6, 0.6);
+    compare_with_error(dst_big.as_slice(), src_big.as_slice(), 0.6);
 
     Ok(())
 }
