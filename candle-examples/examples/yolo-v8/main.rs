@@ -6,9 +6,15 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
+mod coco_classes;
+
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{batch_norm, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder};
 use clap::Parser;
+use image::{DynamicImage, ImageBuffer};
+
+const CONFIDENCE_THRESHOLD: f32 = 0.5;
+const NMS_THRESHOLD: f32 = 0.4;
 
 // Model architecture from https://github.com/ultralytics/ultralytics/issues/189
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py
@@ -472,7 +478,7 @@ fn make_anchors(
             .repeat((1, w))?
             .flatten_all()?;
         anchor_points.push(Tensor::stack(&[&sx, &sy], D::Minus1)?);
-        stride_tensor.push((Tensor::ones((h, w), DType::F32, dev)? * stride as f64)?);
+        stride_tensor.push((Tensor::ones(h * w, DType::F32, dev)? * stride as f64)?);
     }
     let anchor_points = Tensor::cat(anchor_points.as_slice(), 0)?;
     let stride_tensor = Tensor::cat(stride_tensor.as_slice(), 0)?.unsqueeze(1)?;
@@ -552,7 +558,7 @@ impl DetectionHead {
         };
         let xs0 = forward_cv(xs0, 0)?;
         let xs1 = forward_cv(xs1, 1)?;
-        let xs2 = forward_cv(xs2, 1)?;
+        let xs2 = forward_cv(xs2, 2)?;
 
         let (anchors, strides) = make_anchors(&xs0, &xs1, &xs2, (8, 16, 32), 0.5)?;
         let anchors = anchors.transpose(0, 1)?;
@@ -602,6 +608,115 @@ impl Module for YoloV8 {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Bbox {
+    xmin: f32,
+    ymin: f32,
+    xmax: f32,
+    ymax: f32,
+    confidence: f32,
+}
+
+// Intersection over union of two bounding boxes.
+fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
+    let b1_area = (b1.xmax - b1.xmin + 1.) * (b1.ymax - b1.ymin + 1.);
+    let b2_area = (b2.xmax - b2.xmin + 1.) * (b2.ymax - b2.ymin + 1.);
+    let i_xmin = b1.xmin.max(b2.xmin);
+    let i_xmax = b1.xmax.min(b2.xmax);
+    let i_ymin = b1.ymin.max(b2.ymin);
+    let i_ymax = b1.ymax.min(b2.ymax);
+    let i_area = (i_xmax - i_xmin + 1.).max(0.) * (i_ymax - i_ymin + 1.).max(0.);
+    i_area / (b1_area + b2_area - i_area)
+}
+
+// Assumes x1 <= x2 and y1 <= y2
+pub fn draw_rect(
+    img: &mut ImageBuffer<image::Rgb<u8>, Vec<u8>>,
+    x1: u32,
+    x2: u32,
+    y1: u32,
+    y2: u32,
+) {
+    for x in x1..=x2 {
+        let pixel = img.get_pixel_mut(x, y1);
+        *pixel = image::Rgb([255, 0, 0]);
+        let pixel = img.get_pixel_mut(x, y2);
+        *pixel = image::Rgb([255, 0, 0]);
+    }
+    for y in y1..=y2 {
+        let pixel = img.get_pixel_mut(x1, y);
+        *pixel = image::Rgb([255, 0, 0]);
+        let pixel = img.get_pixel_mut(x2, y);
+        *pixel = image::Rgb([255, 0, 0]);
+    }
+}
+
+pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<DynamicImage> {
+    let (npreds, pred_size) = pred.dims2()?;
+    let nclasses = pred_size - 5;
+    // The bounding boxes grouped by (maximum) class index.
+    let mut bboxes: Vec<Vec<Bbox>> = (0..nclasses).map(|_| vec![]).collect();
+    // Extract the bounding boxes for which confidence is above the threshold.
+    for index in 0..npreds {
+        let pred = Vec::<f32>::try_from(pred.get(index)?)?;
+        let confidence = pred[4];
+        if confidence > CONFIDENCE_THRESHOLD {
+            let mut class_index = 0;
+            for i in 0..nclasses {
+                if pred[5 + i] > pred[5 + class_index] {
+                    class_index = i
+                }
+            }
+            if pred[class_index + 5] > 0. {
+                let bbox = Bbox {
+                    xmin: pred[0] - pred[2] / 2.,
+                    ymin: pred[1] - pred[3] / 2.,
+                    xmax: pred[0] + pred[2] / 2.,
+                    ymax: pred[1] + pred[3] / 2.,
+                    confidence,
+                };
+                bboxes[class_index].push(bbox)
+            }
+        }
+    }
+    // Perform non-maximum suppression.
+    for bboxes_for_class in bboxes.iter_mut() {
+        bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
+        let mut current_index = 0;
+        for index in 0..bboxes_for_class.len() {
+            let mut drop = false;
+            for prev_index in 0..current_index {
+                let iou = iou(&bboxes_for_class[prev_index], &bboxes_for_class[index]);
+                if iou > NMS_THRESHOLD {
+                    drop = true;
+                    break;
+                }
+            }
+            if !drop {
+                bboxes_for_class.swap(current_index, index);
+                current_index += 1;
+            }
+        }
+        bboxes_for_class.truncate(current_index);
+    }
+    // Annotate the original image and print boxes information.
+    let (initial_h, initial_w) = (img.height(), img.width());
+    let w_ratio = initial_w as f32 / w as f32;
+    let h_ratio = initial_h as f32 / h as f32;
+    let mut img = img.to_rgb8();
+    for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
+        for b in bboxes_for_class.iter() {
+            println!("{}: {:?}", coco_classes::NAMES[class_index], b);
+            let xmin = ((b.xmin * w_ratio) as u32).clamp(0, initial_w - 1);
+            let ymin = ((b.ymin * h_ratio) as u32).clamp(0, initial_h - 1);
+            let xmax = ((b.xmax * w_ratio) as u32).clamp(0, initial_w - 1);
+            let ymax = ((b.ymax * h_ratio) as u32).clamp(0, initial_h - 1);
+            draw_rect(&mut img, xmin, xmax, ymin, ymax);
+        }
+    }
+    Ok(DynamicImage::ImageRgb8(img))
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -639,7 +754,7 @@ pub fn main() -> anyhow::Result<()> {
     println!("model loaded");
     for image_name in args.images.iter() {
         println!("processing {image_name}");
-        let image_name = std::path::PathBuf::from(image_name);
+        let mut image_name = std::path::PathBuf::from(image_name);
         let original_image = image::io::Reader::open(&image_name)?
             .decode()
             .map_err(candle::Error::wrap)?;
@@ -651,11 +766,13 @@ pub fn main() -> anyhow::Result<()> {
             Tensor::from_vec(data, (640, 640, 3), &Device::Cpu)?.permute((2, 0, 1))?
         };
         let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
-        let _predictions = model.forward(&image)?.squeeze(0)?;
-        // let image = report(&predictions, original_image, net_width, net_height)?;
-        // image_name.set_extension("pp.jpg");
-        // println!("writing {image_name:?}");
-        // image.save(image_name)?
+        let predictions = model.forward(&image)?.squeeze(0)?;
+        let predictions = predictions.t()?;
+        println!("generated predictions {predictions:?}");
+        let image = report(&predictions, original_image, 640, 640)?;
+        image_name.set_extension("pp.jpg");
+        println!("writing {image_name:?}");
+        image.save(image_name)?
     }
 
     Ok(())
