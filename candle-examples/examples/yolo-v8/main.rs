@@ -7,7 +7,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{batch_norm, conv2d, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder};
+use candle_nn::{batch_norm, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder};
 use clap::Parser;
 use image::{DynamicImage, ImageBuffer};
 
@@ -92,7 +92,7 @@ struct ConvBlock {
 
 impl ConvBlock {
     fn load(vb: VarBuilder, c1: usize, c2: usize, k: usize, cfg: Conv2dConfig) -> Result<Self> {
-        let conv = conv2d(c1, c2, k, cfg, vb.pp("conv"))?;
+        let conv = conv2d_no_bias(c1, c2, k, cfg, vb.pp("conv"))?;
         let bn = batch_norm(c2, 1e-3, vb.pp("bn"))?;
         Ok(Self { conv, bn })
     }
@@ -115,7 +115,8 @@ struct Bottleneck {
 
 impl Bottleneck {
     fn load(vb: VarBuilder, c1: usize, c2: usize, shortcut: bool) -> Result<Self> {
-        let c_ = (c2 as f64 * 0.5) as usize;
+        let channel_factor = 1.;
+        let c_ = (c2 as f64 * channel_factor) as usize;
         let cv1 = ConvBlock::load(vb.pp("cv1"), c1, c_, 3, Default::default())?;
         let cv2 = ConvBlock::load(vb.pp("cv2"), c_, c2, 3, Default::default())?;
         let residual = c1 == c2 && shortcut;
@@ -197,7 +198,7 @@ struct Dfl {
 
 impl Dfl {
     fn load(vb: VarBuilder, num_classes: usize) -> Result<Self> {
-        let conv = conv2d(num_classes, 1, 1, Default::default(), vb.pp("conv"))?;
+        let conv = conv2d_no_bias(num_classes, 1, 1, Default::default(), vb.pp("conv"))?;
         Ok(Self { conv, num_classes })
     }
 }
@@ -426,7 +427,7 @@ impl DetectionHead {
             Self::load_cv3(vb.pp("cv3.2"), c1, nc, filters.2)?,
         ];
         let cv2 = [
-            Self::load_cv2(vb.pp("cv2.0"), c2, nc, filters.0)?,
+            Self::load_cv2(vb.pp("cv2.0"), c2, ch, filters.0)?,
             Self::load_cv2(vb.pp("cv2.1"), c2, ch, filters.1)?,
             Self::load_cv2(vb.pp("cv2.2"), c2, ch, filters.2)?,
         ];
@@ -441,7 +442,7 @@ impl DetectionHead {
     ) -> Result<(ConvBlock, ConvBlock, Conv2d)> {
         let block0 = ConvBlock::load(vb.pp("0"), filter, c1, 3, Default::default())?;
         let block1 = ConvBlock::load(vb.pp("1"), c1, c1, 3, Default::default())?;
-        let conv = conv2d(c1, nc, 1, Default::default(), vb.pp("2"))?;
+        let conv = conv2d_no_bias(c1, nc, 1, Default::default(), vb.pp("2"))?;
         Ok((block0, block1, conv))
     }
 
@@ -453,7 +454,7 @@ impl DetectionHead {
     ) -> Result<(ConvBlock, ConvBlock, Conv2d)> {
         let block0 = ConvBlock::load(vb.pp("0"), filter, c2, 3, Default::default())?;
         let block1 = ConvBlock::load(vb.pp("1"), c2, c2, 3, Default::default())?;
-        let conv = conv2d(c2, 4 * ch, 1, Default::default(), vb.pp("2"))?;
+        let conv = conv2d_no_bias(c2, 4 * ch, 1, Default::default(), vb.pp("2"))?;
         Ok((block0, block1, conv))
     }
 
