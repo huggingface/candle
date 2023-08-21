@@ -165,6 +165,10 @@ impl crate::backend::BackendDevice for CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    fn full_impl(&self, _shape: &Shape, _dtype: DType, _fill_value: f64) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }

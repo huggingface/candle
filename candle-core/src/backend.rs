@@ -95,6 +95,8 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
 
     fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
 
+    fn full_impl(&self, _shape: &Shape, _dtype: DType, _fill_value: f64) -> Result<Self::Storage>;
+
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage>;
 
     fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;

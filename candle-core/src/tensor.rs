@@ -234,6 +234,56 @@ impl Tensor {
         Tensor::zeros(self.shape(), self.dtype(), self.device())
     }
 
+    pub(crate) fn full_impl<S: Into<Shape>>(
+        fill_value: f64,
+        shape: S,
+        dtype: DType,
+        device: &Device,
+        is_variable: bool,
+    ) -> Result<Self> {
+        let none = BackpropOp::none();
+        if is_variable {
+            let shape = shape.into();
+            let storage = device.full(fill_value, &shape, dtype)?;
+            Ok(from_storage(storage, shape, none, is_variable))
+        } else {
+            let storage = device.full(fill_value, &crate::shape::SCALAR, dtype)?;
+            from_storage(storage, crate::shape::SCALAR, none, is_variable).broadcast_as(shape)
+        }
+    }
+
+    /// Creates a new tensor filled with fill_value.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, DType, Device};
+    /// let a = Tensor::full(3.14, (2, 3), DType::F32, &Device::Cpu)?;
+    /// let b = Tensor::from_slice(&[3.14f32, 3.14, 3.14, 3.14, 3.14, 3.14], (2, 3), &Device::Cpu)?;
+    /// // a == b
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn full<S: Into<Shape>>(
+        fill_value: f64,
+        shape: S,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Self> {
+        Self::full_impl(fill_value, shape, dtype, device, false)
+    }
+
+    /// Creates a new tensor filled with fill_value with same shape, dtype, and device as the other
+    /// tensor.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, DType, Device};
+    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// let b = a.full_like(3.14)?;
+    /// // b is on CPU f32.
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn full_like(&self, fill_value: f64) -> Result<Self> {
+        Tensor::full(fill_value, self.shape(), self.dtype(), self.device())
+    }
+
     pub(crate) fn rand_impl<S: Into<Shape>, T: crate::FloatDType>(
         lo: T,
         up: T,

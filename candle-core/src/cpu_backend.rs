@@ -2182,6 +2182,19 @@ impl BackendDevice for CpuDevice {
         };
         Ok(storage)
     }
+
+    fn full_impl(&self, shape: &Shape, dtype: DType, fill_value: f64) -> Result<CpuStorage> {
+        let elem_count = shape.elem_count();
+        let storage = match dtype {
+            DType::U8 => CpuStorage::U8(vec![u8::from_f64(fill_value); elem_count]),
+            DType::U32 => CpuStorage::U32(vec![u32::from_f64(fill_value); elem_count]),
+            DType::BF16 => CpuStorage::BF16(vec![bf16::from_f64(fill_value); elem_count]),
+            DType::F16 => CpuStorage::F16(vec![f16::from_f64(fill_value); elem_count]),
+            DType::F32 => CpuStorage::F32(vec![f32::from_f64(fill_value); elem_count]),
+            DType::F64 => CpuStorage::F64(vec![f64::from_f64(fill_value); elem_count]),
+        };
+        Ok(storage)
+    }
 }
 
 #[macro_export]
