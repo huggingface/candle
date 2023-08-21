@@ -12,10 +12,8 @@ readme = "README.md"
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
 candle = { path = "../candle-core", version = "0.1.2", package = "candle-core" }
-hf-hub = { workspace = true}
 candle-nn = { path = "../candle-nn", version = "0.1.2" }
 intel-mkl-src = { workspace = true, optional = true }
-tokenizers = { workspace = true, features = ["onig"] }
 rand = { workspace = true }
 wav = { workspace = true }
 
