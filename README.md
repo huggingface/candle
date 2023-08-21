@@ -35,7 +35,8 @@ Check out our [examples](./candle-examples/examples/):
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
-
+- [yolo-v3](./candle-examples/examples/yolo-v3/) and
+  [yolo-v8](./candle-examples/examples/yolo-v8/): object detection models.
 Run them using the following commands:
 ```
 cargo run --example whisper --release
@@ -46,6 +47,8 @@ cargo run --example bigcode --release
 cargo run --example stable-diffusion --release -- --prompt "a rusty robot holding a fire torch"
 cargo run --example dinov2 --release -- --image path/to/myinput.jpg
 cargo run --example quantized --release
+cargo run --example yolo-v3 --release -- myimage.jpg
+cargo run --example yolo-v8 --release -- myimage.jpg
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
