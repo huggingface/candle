@@ -226,7 +226,7 @@ pub(super) fn make_qkx1_quants(nmax: i32, ntry: usize, x: &[f32]) -> (f32, f32) 
 
         for (i, value) in x.iter().enumerate().take(n) {
             let mut li = nearest_int(iscale * (value - min));
-            li = li.clamp(0,nmax);
+            li = li.clamp(0, nmax);
             let clamped_li = li as u8;
             if clamped_li != l[i] {
                 l[i] = clamped_li;
