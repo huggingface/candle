@@ -786,10 +786,10 @@ impl GgmlType for BlockQ4K {
             let d = block.d.to_f32();
             let min = block.dmin.to_f32();
             let q = &block.qs;
+            let mut is = 0;
             let mut ys_index = 0;
 
             for j in (0..QK_K).step_by(64) {
-                let is = j * 2;
                 let q = &q[j / 2..j / 2 + 32];
                 let (sc, m) = get_scale_min_k4(is, &block.scales);
                 let d1 = d * sc as f32;
@@ -805,6 +805,7 @@ impl GgmlType for BlockQ4K {
                     y[ys_index] = d2 * (q >> 4) as f32 - m2;
                     ys_index += 1;
                 }
+                is += 2;
             }
         }
         Ok(())
