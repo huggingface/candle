@@ -700,7 +700,7 @@ impl GgmlType for BlockQ3K {
                         // 16 block finished => advance scale index
                         is += 1;
                     }
-                    //32 block finished => increase shift and m
+                    // 32 block finished => increase shift and m
                     shift += 2;
                     m <<= 1;
                 }
@@ -765,8 +765,7 @@ impl GgmlType for BlockQ4K {
                     let dm = block.dmin.to_f32() * m as f32;
                     for ii in 0..32 {
                         let l_val = nearest_int((x[32 * j + ii] + dm) / d);
-                        let l_val = l_val.clamp(0, 15);
-                        l[32 * j + ii] = l_val as u8;
+                        l[32 * j + ii] = l_val.clamp(0, 15) as u8;
                     }
                 }
             }
