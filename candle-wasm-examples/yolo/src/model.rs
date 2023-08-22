@@ -1,16 +1,8 @@
-#[cfg(feature = "mkl")]
-extern crate intel_mkl_src;
-
-#[cfg(feature = "accelerate")]
-extern crate accelerate_src;
-
-mod coco_classes;
-
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+#![allow(dead_code)]
+use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder,
 };
-use clap::{Parser, ValueEnum};
 use image::{DynamicImage, ImageBuffer};
 
 const CONFIDENCE_THRESHOLD: f32 = 0.5;
@@ -20,42 +12,42 @@ const NMS_THRESHOLD: f32 = 0.4;
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-struct Multiples {
+pub struct Multiples {
     depth: f64,
     width: f64,
     ratio: f64,
 }
 
 impl Multiples {
-    fn n() -> Self {
+    pub fn n() -> Self {
         Self {
             depth: 0.33,
             width: 0.25,
             ratio: 2.0,
         }
     }
-    fn s() -> Self {
+    pub fn s() -> Self {
         Self {
             depth: 0.33,
             width: 0.50,
             ratio: 2.0,
         }
     }
-    fn m() -> Self {
+    pub fn m() -> Self {
         Self {
             depth: 0.67,
             width: 0.75,
             ratio: 1.5,
         }
     }
-    fn l() -> Self {
+    pub fn l() -> Self {
         Self {
             depth: 1.00,
             width: 1.00,
             ratio: 1.0,
         }
     }
-    fn x() -> Self {
+    pub fn x() -> Self {
         Self {
             depth: 1.00,
             width: 1.25,
@@ -583,14 +575,14 @@ impl DetectionHead {
 }
 
 #[derive(Debug)]
-struct YoloV8 {
+pub struct YoloV8 {
     net: DarkNet,
     fpn: YoloV8Neck,
     head: DetectionHead,
 }
 
 impl YoloV8 {
-    fn load(vb: VarBuilder, m: Multiples, num_classes: usize) -> Result<Self> {
+    pub fn load(vb: VarBuilder, m: Multiples, num_classes: usize) -> Result<Self> {
         let net = DarkNet::load(vb.pp("net"), m)?;
         let fpn = YoloV8Neck::load(vb.pp("fpn"), m)?;
         let head = DetectionHead::load(vb.pp("head"), num_classes, m.filters())?;
@@ -704,7 +696,7 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Dy
     let mut img = img.to_rgb8();
     for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
         for b in bboxes_for_class.iter() {
-            println!("{}: {:?}", coco_classes::NAMES[class_index], b);
+            println!("{}: {:?}", crate::coco_classes::NAMES[class_index], b);
             let xmin = ((b.xmin * w_ratio) as u32).clamp(0, initial_w - 1);
             let ymin = ((b.ymin * h_ratio) as u32).clamp(0, initial_h - 1);
             let xmax = ((b.xmax * w_ratio) as u32).clamp(0, initial_w - 1);
@@ -713,90 +705,4 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Dy
         }
     }
     Ok(DynamicImage::ImageRgb8(img))
-}
-
-#[derive(Clone, Copy, ValueEnum, Debug)]
-enum Which {
-    N,
-    S,
-    M,
-    L,
-    X,
-}
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Model weights, in safetensors format.
-    #[arg(long)]
-    model: Option<String>,
-
-    /// Which model variant to use.
-    #[arg(long, value_enum, default_value_t = Which::S)]
-    which: Which,
-
-    images: Vec<String>,
-}
-
-impl Args {
-    fn model(&self) -> anyhow::Result<std::path::PathBuf> {
-        let path = match &self.model {
-            Some(model) => std::path::PathBuf::from(model),
-            None => {
-                let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model("lmz/candle-yolo-v8".to_string());
-                let filename = match self.which {
-                    Which::N => "yolov8n.safetensors",
-                    Which::S => "yolov8s.safetensors",
-                    Which::M => "yolov8m.safetensors",
-                    Which::L => "yolov8l.safetensors",
-                    Which::X => "yolov8x.safetensors",
-                };
-                api.get(filename)?
-            }
-        };
-        Ok(path)
-    }
-}
-
-pub fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-
-    // Create the model and load the weights from the file.
-    let multiples = match args.which {
-        Which::N => Multiples::n(),
-        Which::S => Multiples::s(),
-        Which::M => Multiples::m(),
-        Which::L => Multiples::l(),
-        Which::X => Multiples::x(),
-    };
-    let model = args.model()?;
-    let weights = unsafe { candle::safetensors::MmapedFile::new(model)? };
-    let weights = weights.deserialize()?;
-    let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &Device::Cpu);
-    let model = YoloV8::load(vb, multiples, /* num_classes=*/ 80)?;
-    println!("model loaded");
-    for image_name in args.images.iter() {
-        println!("processing {image_name}");
-        let mut image_name = std::path::PathBuf::from(image_name);
-        let original_image = image::io::Reader::open(&image_name)?
-            .decode()
-            .map_err(candle::Error::wrap)?;
-        let image = {
-            let data = original_image
-                .resize_exact(640, 640, image::imageops::FilterType::Triangle)
-                .to_rgb8()
-                .into_raw();
-            Tensor::from_vec(data, (640, 640, 3), &Device::Cpu)?.permute((2, 0, 1))?
-        };
-        let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
-        let predictions = model.forward(&image)?.squeeze(0)?;
-        println!("generated predictions {predictions:?}");
-        let image = report(&predictions, original_image, 640, 640)?;
-        image_name.set_extension("pp.jpg");
-        println!("writing {image_name:?}");
-        image.save(image_name)?
-    }
-
-    Ok(())
 }
