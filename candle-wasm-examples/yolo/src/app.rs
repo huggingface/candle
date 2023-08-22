@@ -80,8 +80,8 @@ fn draw_bboxes(bboxes: Vec<Vec<crate::model::Bbox>>) -> Result<(), JsValue> {
         None => return Err("no bike-img".into()),
     };
     let image_html_element = image_html_element.dyn_into::<web_sys::HtmlImageElement>()?;
-    canvas.set_width(image_html_element.width());
-    canvas.set_height(image_html_element.height());
+    canvas.set_width(image_html_element.natural_width());
+    canvas.set_height(image_html_element.natural_height());
     context.draw_image_with_html_image_element(&image_html_element, 0., 0.)?;
     context.set_stroke_style(&JsValue::from("#0dff9a"));
     for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
