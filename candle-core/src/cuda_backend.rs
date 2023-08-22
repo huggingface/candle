@@ -327,7 +327,7 @@ impl BackendDevice for CudaDevice {
     }
 
     fn full_impl<T: WithDType>(&self, shape: &Shape, fill_value: T) -> Result<CudaStorage> {
-        self.const_impl(fill_value.to_f64(), shape, dtype)
+        self.const_impl(fill_value.to_f64(), shape, T::DTYPE)
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<CudaStorage> {
