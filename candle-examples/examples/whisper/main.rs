@@ -142,15 +142,15 @@ impl Decoder {
         let mut sum_logprob = 0f64;
         let mut no_speech_prob = f64::NAN;
         let mut tokens = vec![self.sot_token];
+        if let Some(language_token) = self.language_token {
+            tokens.push(language_token);
+        }
         match self.task {
             Some(Task::Transcribe) => tokens.push(self.transcribe_token),
             Some(Task::Translate) => tokens.push(self.translate_token),
             None => {
                 // Nothing in this case, same as the Python implementation.
             }
-        }
-        if let Some(language_token) = self.language_token {
-            tokens.push(language_token);
         }
         if !self.timestamps {
             tokens.push(self.no_timestamps_token);
