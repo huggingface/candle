@@ -169,7 +169,7 @@ impl LayerWeights {
             let x = x
                 .unsqueeze(2)?
                 .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head, n_rep, seq_len, head_dim))?;
+                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
             Ok(x)
         }
     }
