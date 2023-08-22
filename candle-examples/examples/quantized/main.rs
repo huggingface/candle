@@ -367,8 +367,8 @@ struct Args {
     which: Which,
 
     /// Group-Query Attention, use 8 for the 70B version of LLaMAv2.
-    #[arg(long, default_value_t = 1)]
-    gqa: usize,
+    #[arg(long)]
+    gqa: Option<usize>,
 }
 
 impl Args {
@@ -490,7 +490,11 @@ fn main() -> anyhow::Result<()> {
         start.elapsed().as_secs_f32(),
     );
     println!("params: {:?}", model.hparams);
-    let mut model = ModelWeights::new(model, args.gqa)?;
+    let default_gqa = match args.which {
+        Which::L7b | Which::L13b => 1,
+        Which::L70b => 8,
+    };
+    let mut model = ModelWeights::new(model, args.gqa.unwrap_or(default_gqa))?;
     println!("model built");
 
     let tokenizer = args.tokenizer()?;
