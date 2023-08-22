@@ -95,11 +95,7 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
 
     fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
 
-    fn full_impl<T: WithDType>(
-        &self,
-        _shape: &Shape,
-        _fill_value: T,
-    ) -> Result<Self::Storage>;
+    fn full_impl<T: WithDType>(&self, _shape: &Shape, _fill_value: T) -> Result<Self::Storage>;
 
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage>;
 
