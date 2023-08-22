@@ -1,3 +1,6 @@
+pub mod coco_classes;
+pub mod object_detection;
+
 use candle::{Device, Result, Tensor};
 
 pub fn device(cpu: bool) -> Result<Device> {

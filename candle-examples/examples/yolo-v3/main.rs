@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-mod coco_classes;
+use candle_examples::object_detection::{iou, Bbox};
 mod darknet;
 
 use anyhow::Result;
@@ -15,27 +15,6 @@ use image::{DynamicImage, ImageBuffer};
 
 const CONFIDENCE_THRESHOLD: f32 = 0.5;
 const NMS_THRESHOLD: f32 = 0.4;
-
-#[derive(Debug, Clone, Copy)]
-struct Bbox {
-    xmin: f32,
-    ymin: f32,
-    xmax: f32,
-    ymax: f32,
-    confidence: f32,
-}
-
-// Intersection over union of two bounding boxes.
-fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
-    let b1_area = (b1.xmax - b1.xmin + 1.) * (b1.ymax - b1.ymin + 1.);
-    let b2_area = (b2.xmax - b2.xmin + 1.) * (b2.ymax - b2.ymin + 1.);
-    let i_xmin = b1.xmin.max(b2.xmin);
-    let i_xmax = b1.xmax.min(b2.xmax);
-    let i_ymin = b1.ymin.max(b2.ymin);
-    let i_ymax = b1.ymax.min(b2.ymax);
-    let i_area = (i_xmax - i_xmin + 1.).max(0.) * (i_ymax - i_ymin + 1.).max(0.);
-    i_area / (b1_area + b2_area - i_area)
-}
 
 // Assumes x1 <= x2 and y1 <= y2
 pub fn draw_rect(
@@ -114,7 +93,11 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Dy
     let mut img = img.to_rgb8();
     for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
         for b in bboxes_for_class.iter() {
-            println!("{}: {:?}", coco_classes::NAMES[class_index], b);
+            println!(
+                "{}: {:?}",
+                candle_examples::coco_classes::NAMES[class_index],
+                b
+            );
             let xmin = ((b.xmin * w_ratio) as u32).clamp(0, initial_w - 1);
             let ymin = ((b.ymin * h_ratio) as u32).clamp(0, initial_h - 1);
             let xmax = ((b.xmax * w_ratio) as u32).clamp(0, initial_w - 1);
