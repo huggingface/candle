@@ -6,6 +6,7 @@ pub mod ggml_file;
 pub mod k_quants;
 #[cfg(target_feature = "neon")]
 pub mod neon;
+pub mod utils;
 
 pub use k_quants::GgmlType;
 
