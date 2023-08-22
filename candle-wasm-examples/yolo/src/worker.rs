@@ -27,17 +27,12 @@ pub struct ModelData {
     pub weights: Vec<u8>,
 }
 
-struct Model {
+pub struct Model {
     model: YoloV8,
 }
 
 impl Model {
-    fn run(
-        &self,
-        _link: &WorkerLink<Worker>,
-        _id: HandlerId,
-        image_data: Vec<u8>,
-    ) -> Result<Vec<Vec<Bbox>>> {
+    pub fn run(&self, image_data: Vec<u8>) -> Result<Vec<Vec<Bbox>>> {
         console_log!("image data: {}", image_data.len());
         let image_data = std::io::Cursor::new(image_data);
         let original_image = image::io::Reader::new(image_data)
@@ -76,15 +71,17 @@ impl Model {
         let bboxes = report(&predictions, original_image, width, height)?;
         Ok(bboxes)
     }
-}
 
-impl Model {
-    fn load(md: ModelData) -> Result<Self> {
+    pub fn load_(weights: &[u8]) -> Result<Self> {
         let dev = &Device::Cpu;
-        let weights = safetensors::tensor::SafeTensors::deserialize(&md.weights)?;
+        let weights = safetensors::tensor::SafeTensors::deserialize(weights)?;
         let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, dev);
         let model = YoloV8::load(vb, Multiples::s(), 80)?;
         Ok(Self { model })
+    }
+
+    pub fn load(md: ModelData) -> Result<Self> {
+        Self::load_(&md.weights)
     }
 }
 
@@ -131,9 +128,7 @@ impl yew_agent::Worker for Worker {
             WorkerInput::Run(image_data) => match &mut self.model {
                 None => Err("model has not been set yet".to_string()),
                 Some(model) => {
-                    let result = model
-                        .run(&self.link, id, image_data)
-                        .map_err(|e| e.to_string());
+                    let result = model.run(image_data).map_err(|e| e.to_string());
                     Ok(WorkerOutput::ProcessingDone(result))
                 }
             },
