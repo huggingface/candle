@@ -44,17 +44,36 @@ impl Model {
             .with_guessed_format()?
             .decode()
             .map_err(candle::Error::wrap)?;
-        let image = {
-            let data = original_image
-                .resize_exact(640, 640, image::imageops::FilterType::Triangle)
-                .to_rgb8()
-                .into_raw();
-            Tensor::from_vec(data, (640, 640, 3), &Device::Cpu)?.permute((2, 0, 1))?
+        let (width, height) = {
+            let w = original_image.width() as usize;
+            let h = original_image.height() as usize;
+            if w < h {
+                let w = w * 640 / h;
+                // Sizes have to be divisible by 32.
+                (w / 32 * 32, 640)
+            } else {
+                let h = h * 640 / w;
+                (640, h / 32 * 32)
+            }
         };
-        let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
-        let predictions = self.model.forward(&image)?.squeeze(0)?;
+        let image_t = {
+            let img = original_image.resize_exact(
+                width as u32,
+                height as u32,
+                image::imageops::FilterType::CatmullRom,
+            );
+            let data = img.to_rgb8().into_raw();
+            Tensor::from_vec(
+                data,
+                (img.height() as usize, img.width() as usize, 3),
+                &Device::Cpu,
+            )?
+            .permute((2, 0, 1))?
+        };
+        let image_t = (image_t.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
+        let predictions = self.model.forward(&image_t)?.squeeze(0)?;
         console_log!("generated predictions {predictions:?}");
-        let bboxes = report(&predictions, original_image, 640, 640)?;
+        let bboxes = report(&predictions, original_image, width, height)?;
         Ok(bboxes)
     }
 }
