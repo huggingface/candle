@@ -95,10 +95,10 @@ fn draw_bboxes(bboxes: Vec<Vec<crate::model::Bbox>>) -> Result<(), JsValue> {
             );
             if let Ok(metrics) = context.measure_text(name) {
                 let width = metrics.width();
-                context.set_fill_style(&"#0dff9a".into());
-                context.fill_rect(b.xmin as f64 - 2., b.ymin as f64 - 20., width + 5., 22.);
+                context.set_fill_style(&"#3c8566".into());
+                context.fill_rect(b.xmin as f64 - 2., b.ymin as f64 - 12., width + 4., 14.);
                 context.set_fill_style(&"#e3fff3".into());
-                context.fill_text(name, b.xmin as f64, b.ymin as f64)?
+                context.fill_text(name, b.xmin as f64, b.ymin as f64 - 2.)?
             }
         }
     }
