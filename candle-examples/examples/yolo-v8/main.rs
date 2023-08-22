@@ -424,6 +424,7 @@ impl YoloV8Neck {
     }
 
     fn forward(&self, p3: &Tensor, p4: &Tensor, p5: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+        println!("{p3:?} {p4:?} {p5:?}");
         let x = self
             .n1
             .forward(&Tensor::cat(&[&self.up.forward(p5)?, p4], 1)?)?;
@@ -707,11 +708,11 @@ struct Args {
     images: Vec<String>,
 
     /// Threshold for the model confidence level.
-    #[arg(long, default_value_t = 0.5)]
+    #[arg(long, default_value_t = 0.25)]
     confidence_threshold: f32,
 
     /// Threshold for non-maximum suppression.
-    #[arg(long, default_value_t = 0.4)]
+    #[arg(long, default_value_t = 0.45)]
     nms_threshold: f32,
 }
 
@@ -759,27 +760,47 @@ pub fn main() -> anyhow::Result<()> {
         let original_image = image::io::Reader::open(&image_name)?
             .decode()
             .map_err(candle::Error::wrap)?;
-        let image = {
-            let data = original_image
-                .resize_exact(640, 640, image::imageops::FilterType::Triangle)
-                .to_rgb8()
-                .into_raw();
-            Tensor::from_vec(data, (640, 640, 3), &Device::Cpu)?.permute((2, 0, 1))?
+        let (width, height) = {
+            let w = original_image.width() as usize;
+            let h = original_image.height() as usize;
+            if w < h {
+                let w = w * 640 / h;
+                // Sizes have to be divisible by 4.
+                (w / 32 * 32, 640)
+            } else {
+                let h = h * 640 / w;
+                (640, h / 32 * 32)
+            }
         };
-        let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
-        let predictions = model.forward(&image)?.squeeze(0)?;
+        let image_t = {
+            let img = original_image.resize_exact(
+                width as u32,
+                height as u32,
+                image::imageops::FilterType::CatmullRom,
+            );
+            let data = img.to_rgb8().into_raw();
+            Tensor::from_vec(
+                data,
+                (img.height() as usize, img.width() as usize, 3),
+                &Device::Cpu,
+            )?
+            .permute((2, 0, 1))?
+        };
+        println!("{image_t:?}");
+        let image_t = (image_t.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
+        let predictions = model.forward(&image_t)?.squeeze(0)?;
         println!("generated predictions {predictions:?}");
-        let image = report(
+        let image_t = report(
             &predictions,
             original_image,
-            640,
-            640,
+            width,
+            height,
             args.confidence_threshold,
             args.nms_threshold,
         )?;
         image_name.set_extension("pp.jpg");
         println!("writing {image_name:?}");
-        image.save(image_name)?
+        image_t.save(image_name)?
     }
 
     Ok(())
