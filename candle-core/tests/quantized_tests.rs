@@ -182,6 +182,10 @@ fn quantize_q2k() -> Result<()> {
     compare_with_error(dst.as_slice(), src.as_slice(), 0.1);
 
     // Test some specific values
+    assert_eq!(
+        [src[0], src[128], src[256], src[512], src[800], src[1023]],
+        [-0.5, -0.375, -0.25, 0.0, 0.28125, 0.49902344]
+    );
     let dst = round_vector(&dst);
     assert_eq!(
         [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
@@ -203,7 +207,11 @@ fn quantize_q3k() -> Result<()> {
     compare_with_error(dst.as_slice(), src.as_slice(), 0.03);
 
     // Test some specific values
-    dst = round_vector(&dst);
+    assert_eq!(
+        [src[0], src[128], src[256], src[512], src[800], src[1023]],
+        [-0.5, -0.375, -0.25, 0.0, 0.28125, 0.49902344]
+    );
+    let dst = round_vector(&dst);
     assert_eq!(
         [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
         [-0.493, -0.37, -0.243, -0.0, 0.292, 0.492]
@@ -224,7 +232,11 @@ fn quantize_q4k() -> Result<()> {
     compare_with_error(dst.as_slice(), src.as_slice(), 0.017);
 
     // Test some specific values
-    dst = round_vector(&dst);
+    assert_eq!(
+        [src[0], src[128], src[256], src[512], src[800], src[1023]],
+        [-0.5, -0.375, -0.25, 0.0, 0.28125, 0.49902344]
+    );
+    let dst = round_vector(&dst);
     assert_eq!(
         [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
         [-0.5, -0.373, -0.25, 0.0, 0.288, 0.498]
@@ -245,7 +257,11 @@ fn quantize_q5k() -> Result<()> {
     compare_with_error(dst.as_slice(), src.as_slice(), 0.008);
 
     // Test some specific values
-    dst = round_vector(&dst);
+    assert_eq!(
+        [src[0], src[128], src[256], src[512], src[800], src[1023]],
+        [-0.5, -0.375, -0.25, 0.0, 0.28125, 0.49902344]
+    );
+    let dst = round_vector(&dst);
     assert_eq!(
         [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
         [-0.499, -0.372, -0.249, 0.001, 0.279, 0.499]
@@ -266,7 +282,11 @@ fn quantize_q6k() -> Result<()> {
     compare_with_error(dst.as_slice(), src.as_slice(), 0.008);
 
     // Test some specific values
-    dst = round_vector(&dst);
+    assert_eq!(
+        [src[0], src[128], src[256], src[512], src[800], src[1023]],
+        [-0.5, -0.375, -0.25, 0.0, 0.28125, 0.49902344]
+    );
+    let dst = round_vector(&dst);
     assert_eq!(
         [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
         [-0.497, -0.372, -0.25, -0.0, 0.284, 0.5]
@@ -288,7 +308,11 @@ fn quantize_q8k() -> Result<()> {
     compare_with_error(dst.as_slice(), src.as_slice(), 0.003);
 
     // Test some specific values
-    dst = round_vector(&dst);
+    assert_eq!(
+        [src[0], src[128], src[256], src[512], src[800], src[1023]],
+        [-0.5, -0.375, -0.25, 0.0, 0.28125, 0.49902344]
+    );
+    let dst = round_vector(&dst);
     assert_eq!(
         [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
         [-0.5, -0.375, -0.25, -0.0, 0.281, 0.499]
