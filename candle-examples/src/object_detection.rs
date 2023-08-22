@@ -1,3 +1,4 @@
+/// A bounding box around an object.
 #[derive(Debug, Clone, Copy)]
 pub struct Bbox {
     pub xmin: f32,
@@ -7,7 +8,7 @@ pub struct Bbox {
     pub confidence: f32,
 }
 
-// Intersection over union of two bounding boxes.
+/// Intersection over union of two bounding boxes.
 pub fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
     let b1_area = (b1.xmax - b1.xmin + 1.) * (b1.ymax - b1.ymin + 1.);
     let b2_area = (b2.xmax - b2.xmin + 1.) * (b2.ymax - b2.ymin + 1.);
@@ -17,4 +18,27 @@ pub fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
     let i_ymax = b1.ymax.min(b2.ymax);
     let i_area = (i_xmax - i_xmin + 1.).max(0.) * (i_ymax - i_ymin + 1.).max(0.);
     i_area / (b1_area + b2_area - i_area)
+}
+
+pub fn non_maximum_suppression(bboxes: &mut [Vec<Bbox>], threshold: f32) {
+    // Perform non-maximum suppression.
+    for bboxes_for_class in bboxes.iter_mut() {
+        bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
+        let mut current_index = 0;
+        for index in 0..bboxes_for_class.len() {
+            let mut drop = false;
+            for prev_index in 0..current_index {
+                let iou = iou(&bboxes_for_class[prev_index], &bboxes_for_class[index]);
+                if iou > threshold {
+                    drop = true;
+                    break;
+                }
+            }
+            if !drop {
+                bboxes_for_class.swap(current_index, index);
+                current_index += 1;
+            }
+        }
+        bboxes_for_class.truncate(current_index);
+    }
 }

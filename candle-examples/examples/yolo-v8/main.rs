@@ -5,15 +5,12 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_examples::object_detection::{iou, Bbox};
+use candle_examples::object_detection::{non_maximum_suppression, Bbox};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder,
 };
 use clap::{Parser, ValueEnum};
 use image::{DynamicImage, ImageBuffer};
-
-const CONFIDENCE_THRESHOLD: f32 = 0.5;
-const NMS_THRESHOLD: f32 = 0.4;
 
 // Model architecture from https://github.com/ultralytics/ultralytics/issues/189
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py
@@ -627,7 +624,14 @@ pub fn draw_rect(
     }
 }
 
-pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<DynamicImage> {
+pub fn report(
+    pred: &Tensor,
+    img: DynamicImage,
+    w: usize,
+    h: usize,
+    confidence_threshold: f32,
+    nms_threshold: f32,
+) -> Result<DynamicImage> {
     let (pred_size, npreds) = pred.dims2()?;
     let nclasses = pred_size - 4;
     // The bounding boxes grouped by (maximum) class index.
@@ -636,7 +640,7 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Dy
     for index in 0..npreds {
         let pred = Vec::<f32>::try_from(pred.i((.., index))?)?;
         let confidence = *pred[4..].iter().max_by(|x, y| x.total_cmp(y)).unwrap();
-        if confidence > CONFIDENCE_THRESHOLD {
+        if confidence > confidence_threshold {
             let mut class_index = 0;
             for i in 0..nclasses {
                 if pred[4 + i] > pred[4 + class_index] {
@@ -655,26 +659,9 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Dy
             }
         }
     }
-    // Perform non-maximum suppression.
-    for bboxes_for_class in bboxes.iter_mut() {
-        bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
-        let mut current_index = 0;
-        for index in 0..bboxes_for_class.len() {
-            let mut drop = false;
-            for prev_index in 0..current_index {
-                let iou = iou(&bboxes_for_class[prev_index], &bboxes_for_class[index]);
-                if iou > NMS_THRESHOLD {
-                    drop = true;
-                    break;
-                }
-            }
-            if !drop {
-                bboxes_for_class.swap(current_index, index);
-                current_index += 1;
-            }
-        }
-        bboxes_for_class.truncate(current_index);
-    }
+
+    non_maximum_suppression(&mut bboxes, nms_threshold);
+
     // Annotate the original image and print boxes information.
     let (initial_h, initial_w) = (img.height(), img.width());
     let w_ratio = initial_w as f32 / w as f32;
@@ -718,6 +705,14 @@ struct Args {
     which: Which,
 
     images: Vec<String>,
+
+    /// Threshold for the model confidence level.
+    #[arg(long, default_value_t = 0.5)]
+    confidence_threshold: f32,
+
+    /// Threshold for non-maximum suppression.
+    #[arg(long, default_value_t = 0.4)]
+    nms_threshold: f32,
 }
 
 impl Args {
@@ -774,7 +769,14 @@ pub fn main() -> anyhow::Result<()> {
         let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image)?.squeeze(0)?;
         println!("generated predictions {predictions:?}");
-        let image = report(&predictions, original_image, 640, 640)?;
+        let image = report(
+            &predictions,
+            original_image,
+            640,
+            640,
+            args.confidence_threshold,
+            args.nms_threshold,
+        )?;
         image_name.set_extension("pp.jpg");
         println!("writing {image_name:?}");
         image.save(image_name)?

@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle_examples::object_detection::{iou, Bbox};
+use candle_examples::object_detection::{non_maximum_suppression, Bbox};
 mod darknet;
 
 use anyhow::Result;
@@ -66,26 +66,7 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Dy
             }
         }
     }
-    // Perform non-maximum suppression.
-    for bboxes_for_class in bboxes.iter_mut() {
-        bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
-        let mut current_index = 0;
-        for index in 0..bboxes_for_class.len() {
-            let mut drop = false;
-            for prev_index in 0..current_index {
-                let iou = iou(&bboxes_for_class[prev_index], &bboxes_for_class[index]);
-                if iou > NMS_THRESHOLD {
-                    drop = true;
-                    break;
-                }
-            }
-            if !drop {
-                bboxes_for_class.swap(current_index, index);
-                current_index += 1;
-            }
-        }
-        bboxes_for_class.truncate(current_index);
-    }
+    non_maximum_suppression(&mut bboxes, NMS_THRESHOLD);
     // Annotate the original image and print boxes information.
     let (initial_h, initial_w) = (img.height(), img.width());
     let w_ratio = initial_w as f32 / w as f32;
