@@ -10,11 +10,11 @@ fn zeros(device: &Device) -> Result<()> {
 }
 
 fn full(device: &Device) -> Result<()> {
-    let tensor = Tensor::full(3.14f32, (2, 5), device)?;
+    let tensor = Tensor::full(3f32, (2, 5), device)?;
     let (dim1, dim2) = tensor.dims2()?;
     assert_eq!(dim1, 2);
     assert_eq!(dim2, 5);
-    let data = &[[3.14f32; 5], [3.14f32; 5]];
+    let data = &[[3f32; 5], [3f32; 5]];
     let content: Vec<Vec<f32>> = tensor.to_vec2()?;
     assert_eq!(content, data);
     Ok(())
