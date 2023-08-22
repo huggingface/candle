@@ -765,7 +765,7 @@ pub fn main() -> anyhow::Result<()> {
             let h = original_image.height() as usize;
             if w < h {
                 let w = w * 640 / h;
-                // Sizes have to be divisible by 4.
+                // Sizes have to be divisible by 32.
                 (w / 32 * 32, 640)
             } else {
                 let h = h * 640 / w;
