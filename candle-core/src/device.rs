@@ -205,14 +205,14 @@ impl Device {
         }
     }
 
-    pub(crate) fn full(&self, fill_value: f64, shape: &Shape, dtype: DType) -> Result<Storage> {
+    pub(crate) fn full<T: WithDType>(&self, fill_value: T, shape: &Shape) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = CpuDevice.full_impl(shape, dtype, fill_value)?;
+                let storage = CpuDevice.full_impl(shape, fill_value)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
-                let storage = device.full_impl(shape, dtype, fill_value)?;
+                let storage = device.full_impl(shape, fill_value)?;
                 Ok(Storage::Cuda(storage))
             }
         }

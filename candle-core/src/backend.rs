@@ -1,5 +1,5 @@
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Layout, Result, Shape};
+use crate::{CpuStorage, DType, Layout, Result, Shape, WithDType};
 
 pub trait BackendStorage: Sized {
     type Device: BackendDevice;
@@ -95,7 +95,11 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
 
     fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
 
-    fn full_impl(&self, _shape: &Shape, _dtype: DType, _fill_value: f64) -> Result<Self::Storage>;
+    fn full_impl<T: WithDType>(
+        &self,
+        _shape: &Shape,
+        _fill_value: T,
+    ) -> Result<Self::Storage>;
 
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage>;
 

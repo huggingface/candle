@@ -3,6 +3,7 @@ use crate::op::{
     BackpropOp, BinaryOp, CmpOp, CustomOp1, CustomOp2, CustomOp3, Op, ReduceOp, UnaryOp,
 };
 use crate::shape::{Dim, Dims};
+use crate::WithDType;
 use crate::{storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
 
@@ -234,20 +235,19 @@ impl Tensor {
         Tensor::zeros(self.shape(), self.dtype(), self.device())
     }
 
-    pub(crate) fn full_impl<S: Into<Shape>>(
-        fill_value: f64,
+    pub(crate) fn full_impl<S: Into<Shape>, T: WithDType>(
+        fill_value: T,
         shape: S,
-        dtype: DType,
         device: &Device,
         is_variable: bool,
     ) -> Result<Self> {
         let none = BackpropOp::none();
         if is_variable {
             let shape = shape.into();
-            let storage = device.full(fill_value, &shape, dtype)?;
+            let storage = device.full(fill_value, &shape)?;
             Ok(from_storage(storage, shape, none, is_variable))
         } else {
-            let storage = device.full(fill_value, &crate::shape::SCALAR, dtype)?;
+            let storage = device.full(fill_value, &crate::shape::SCALAR)?;
             from_storage(storage, crate::shape::SCALAR, none, is_variable).broadcast_as(shape)
         }
     }
@@ -256,32 +256,31 @@ impl Tensor {
     ///
     /// ```rust
     /// use candle_core::{Tensor, DType, Device};
-    /// let a = Tensor::full(3.14, (2, 3), DType::F32, &Device::Cpu)?;
+    /// let a = Tensor::full(3.14f32, (2, 3), &Device::Cpu)?;
     /// let b = Tensor::from_slice(&[3.14f32, 3.14, 3.14, 3.14, 3.14, 3.14], (2, 3), &Device::Cpu)?;
     /// // a == b
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn full<S: Into<Shape>>(
-        fill_value: f64,
+    pub fn full<S: Into<Shape>, T: WithDType>(
+        fill_value: T,
         shape: S,
-        dtype: DType,
         device: &Device,
     ) -> Result<Self> {
-        Self::full_impl(fill_value, shape, dtype, device, false)
+        Self::full_impl(fill_value, shape, device, false)
     }
 
-    /// Creates a new tensor filled with fill_value with same shape, dtype, and device as the other
+    /// Creates a new tensor filled with fill_value with same shape and device as the other
     /// tensor.
     ///
     /// ```rust
     /// use candle_core::{Tensor, DType, Device};
     /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
-    /// let b = a.full_like(3.14)?;
+    /// let b = a.full_like(3.14f32)?;
     /// // b is on CPU f32.
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn full_like(&self, fill_value: f64) -> Result<Self> {
-        Tensor::full(fill_value, self.shape(), self.dtype(), self.device())
+    pub fn full_like<T: WithDType>(&self, fill_value: T) -> Result<Self> {
+        Tensor::full(fill_value, self.shape(), self.device())
     }
 
     pub(crate) fn rand_impl<S: Into<Shape>, T: crate::FloatDType>(

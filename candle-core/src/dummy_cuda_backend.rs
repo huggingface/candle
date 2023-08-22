@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
+use crate::{CpuStorage, DType, Error, Layout, Result, Shape, WithDType};
 
 #[derive(Debug, Clone)]
 pub struct CudaDevice;
@@ -165,7 +165,7 @@ impl crate::backend::BackendDevice for CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn full_impl(&self, _shape: &Shape, _dtype: DType, _fill_value: f64) -> Result<Self::Storage> {
+    fn full_impl<T: WithDType>(&self, _shape: &Shape, _fill_value: T) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
