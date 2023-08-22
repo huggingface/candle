@@ -44,7 +44,6 @@ pub struct CurrentDecode {
 pub struct App {
     status: String,
     loaded: bool,
-    prompt: std::rc::Rc<std::cell::RefCell<String>>,
     generated: String,
     n_tokens: usize,
     current_decode: Option<CurrentDecode>,
@@ -77,7 +76,6 @@ impl Component for App {
         Self {
             status,
             n_tokens: 0,
-            prompt: std::rc::Rc::new(std::cell::RefCell::new("".to_string())),
             generated: String::new(),
             current_decode: None,
             worker,
@@ -110,16 +108,15 @@ impl Component for App {
             }
             Msg::Run => {
                 if self.current_decode.is_some() {
-                    self.status = "already generating some sample at the moment".to_string()
+                    self.status = "already processing some image at the moment".to_string()
                 } else {
                     let start_time = performance_now();
                     self.current_decode = Some(CurrentDecode { start_time });
-                    self.status = "generating...".to_string();
+                    self.status = "processing...".to_string();
                     self.n_tokens = 0;
                     self.generated.clear();
-                    let prompt = self.prompt.borrow().clone();
-                    ctx.link()
-                        .send_message(Msg::WorkerInMsg(WorkerInput::Run(prompt.into())))
+                    // ctx.link()
+                    //    .send_message(Msg::WorkerInMsg(WorkerInput::Run(prompt.into())))
                 }
                 true
             }
@@ -169,25 +166,15 @@ impl Component for App {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        use yew::TargetCast;
-        let prompt = self.prompt.clone();
-        let oninput_prompt = ctx.link().callback(move |e: yew::InputEvent| {
-            let input: web_sys::HtmlInputElement = e.target_unchecked_into();
-            *prompt.borrow_mut() = input.value();
-            Msg::Refresh
-        });
         html! {
             <div style="margin: 2%;">
-                <div><p>{"Running "}
-                <a href="https://github.com/karpathy/llama2.c" target="_blank">{"llama2.c"}</a>
-                {" in the browser using rust/wasm with "}
+                <div><p>{"Running an object detection model in the browser using rust/wasm with "}
                 <a href="https://github.com/huggingface/candle" target="_blank">{"candle!"}</a>
                 </p>
-                <p>{"Once the weights have loaded, click on the run button to start generating content."}
-                </p>
+                <p>{"Once the weights have loaded, click on the run button to process an image."}</p>
+                <p><img src="bike.jpeg"/></p>
+                <p>{"Source: "}<a href="https://commons.wikimedia.org/wiki/File:V%C3%A9lo_parade_-_V%C3%A9lorution_-_bike_critical_mass.JPG">{"wikimedia"}</a></p>
                 </div>
-                {"prompt: "}<input type="text" value={self.prompt.borrow().to_string()} oninput={oninput_prompt} id="prompt"/>
-                <br/ >
                 {
                     if self.loaded{
                         html!(<button class="button" onclick={ctx.link().callback(move |_| Msg::Run)}> { "run" }</button>)
