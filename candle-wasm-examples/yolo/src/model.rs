@@ -1,17 +1,9 @@
-#[cfg(feature = "mkl")]
-extern crate intel_mkl_src;
-
-#[cfg(feature = "accelerate")]
-extern crate accelerate_src;
-
-mod coco_classes;
-
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+#![allow(dead_code)]
+use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder,
 };
-use clap::{Parser, ValueEnum};
-use image::{DynamicImage, ImageBuffer};
+use image::DynamicImage;
 
 const CONFIDENCE_THRESHOLD: f32 = 0.5;
 const NMS_THRESHOLD: f32 = 0.4;
@@ -20,42 +12,42 @@ const NMS_THRESHOLD: f32 = 0.4;
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-struct Multiples {
+pub struct Multiples {
     depth: f64,
     width: f64,
     ratio: f64,
 }
 
 impl Multiples {
-    fn n() -> Self {
+    pub fn n() -> Self {
         Self {
             depth: 0.33,
             width: 0.25,
             ratio: 2.0,
         }
     }
-    fn s() -> Self {
+    pub fn s() -> Self {
         Self {
             depth: 0.33,
             width: 0.50,
             ratio: 2.0,
         }
     }
-    fn m() -> Self {
+    pub fn m() -> Self {
         Self {
             depth: 0.67,
             width: 0.75,
             ratio: 1.5,
         }
     }
-    fn l() -> Self {
+    pub fn l() -> Self {
         Self {
             depth: 1.00,
             width: 1.00,
             ratio: 1.0,
         }
     }
-    fn x() -> Self {
+    pub fn x() -> Self {
         Self {
             depth: 1.00,
             width: 1.25,
@@ -583,14 +575,14 @@ impl DetectionHead {
 }
 
 #[derive(Debug)]
-struct YoloV8 {
+pub struct YoloV8 {
     net: DarkNet,
     fpn: YoloV8Neck,
     head: DetectionHead,
 }
 
 impl YoloV8 {
-    fn load(vb: VarBuilder, m: Multiples, num_classes: usize) -> Result<Self> {
+    pub fn load(vb: VarBuilder, m: Multiples, num_classes: usize) -> Result<Self> {
         let net = DarkNet::load(vb.pp("net"), m)?;
         let fpn = YoloV8Neck::load(vb.pp("fpn"), m)?;
         let head = DetectionHead::load(vb.pp("head"), num_classes, m.filters())?;
@@ -606,13 +598,13 @@ impl Module for YoloV8 {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Bbox {
-    xmin: f32,
-    ymin: f32,
-    xmax: f32,
-    ymax: f32,
-    confidence: f32,
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct Bbox {
+    pub xmin: f32,
+    pub ymin: f32,
+    pub xmax: f32,
+    pub ymax: f32,
+    pub confidence: f32,
 }
 
 // Intersection over union of two bounding boxes.
@@ -627,29 +619,7 @@ fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
     i_area / (b1_area + b2_area - i_area)
 }
 
-// Assumes x1 <= x2 and y1 <= y2
-pub fn draw_rect(
-    img: &mut ImageBuffer<image::Rgb<u8>, Vec<u8>>,
-    x1: u32,
-    x2: u32,
-    y1: u32,
-    y2: u32,
-) {
-    for x in x1..=x2 {
-        let pixel = img.get_pixel_mut(x, y1);
-        *pixel = image::Rgb([255, 0, 0]);
-        let pixel = img.get_pixel_mut(x, y2);
-        *pixel = image::Rgb([255, 0, 0]);
-    }
-    for y in y1..=y2 {
-        let pixel = img.get_pixel_mut(x1, y);
-        *pixel = image::Rgb([255, 0, 0]);
-        let pixel = img.get_pixel_mut(x2, y);
-        *pixel = image::Rgb([255, 0, 0]);
-    }
-}
-
-pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<DynamicImage> {
+pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Vec<Vec<Bbox>>> {
     let (pred_size, npreds) = pred.dims2()?;
     let nclasses = pred_size - 4;
     // The bounding boxes grouped by (maximum) class index.
@@ -698,105 +668,17 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Dy
         bboxes_for_class.truncate(current_index);
     }
     // Annotate the original image and print boxes information.
-    let (initial_h, initial_w) = (img.height(), img.width());
-    let w_ratio = initial_w as f32 / w as f32;
-    let h_ratio = initial_h as f32 / h as f32;
-    let mut img = img.to_rgb8();
-    for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
-        for b in bboxes_for_class.iter() {
-            println!("{}: {:?}", coco_classes::NAMES[class_index], b);
-            let xmin = ((b.xmin * w_ratio) as u32).clamp(0, initial_w - 1);
-            let ymin = ((b.ymin * h_ratio) as u32).clamp(0, initial_h - 1);
-            let xmax = ((b.xmax * w_ratio) as u32).clamp(0, initial_w - 1);
-            let ymax = ((b.ymax * h_ratio) as u32).clamp(0, initial_h - 1);
-            draw_rect(&mut img, xmin, xmax, ymin, ymax);
+    let (initial_h, initial_w) = (img.height() as f32, img.width() as f32);
+    let w_ratio = initial_w / w as f32;
+    let h_ratio = initial_h / h as f32;
+    for (class_index, bboxes_for_class) in bboxes.iter_mut().enumerate() {
+        for b in bboxes_for_class.iter_mut() {
+            crate::console_log!("{}: {:?}", crate::coco_classes::NAMES[class_index], b);
+            b.xmin = (b.xmin * w_ratio).clamp(0., initial_w - 1.);
+            b.ymin = (b.ymin * h_ratio).clamp(0., initial_h - 1.);
+            b.xmax = (b.xmax * w_ratio).clamp(0., initial_w - 1.);
+            b.ymax = (b.ymax * h_ratio).clamp(0., initial_h - 1.);
         }
     }
-    Ok(DynamicImage::ImageRgb8(img))
-}
-
-#[derive(Clone, Copy, ValueEnum, Debug)]
-enum Which {
-    N,
-    S,
-    M,
-    L,
-    X,
-}
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Model weights, in safetensors format.
-    #[arg(long)]
-    model: Option<String>,
-
-    /// Which model variant to use.
-    #[arg(long, value_enum, default_value_t = Which::S)]
-    which: Which,
-
-    images: Vec<String>,
-}
-
-impl Args {
-    fn model(&self) -> anyhow::Result<std::path::PathBuf> {
-        let path = match &self.model {
-            Some(model) => std::path::PathBuf::from(model),
-            None => {
-                let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model("lmz/candle-yolo-v8".to_string());
-                let filename = match self.which {
-                    Which::N => "yolov8n.safetensors",
-                    Which::S => "yolov8s.safetensors",
-                    Which::M => "yolov8m.safetensors",
-                    Which::L => "yolov8l.safetensors",
-                    Which::X => "yolov8x.safetensors",
-                };
-                api.get(filename)?
-            }
-        };
-        Ok(path)
-    }
-}
-
-pub fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
-
-    // Create the model and load the weights from the file.
-    let multiples = match args.which {
-        Which::N => Multiples::n(),
-        Which::S => Multiples::s(),
-        Which::M => Multiples::m(),
-        Which::L => Multiples::l(),
-        Which::X => Multiples::x(),
-    };
-    let model = args.model()?;
-    let weights = unsafe { candle::safetensors::MmapedFile::new(model)? };
-    let weights = weights.deserialize()?;
-    let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &Device::Cpu);
-    let model = YoloV8::load(vb, multiples, /* num_classes=*/ 80)?;
-    println!("model loaded");
-    for image_name in args.images.iter() {
-        println!("processing {image_name}");
-        let mut image_name = std::path::PathBuf::from(image_name);
-        let original_image = image::io::Reader::open(&image_name)?
-            .decode()
-            .map_err(candle::Error::wrap)?;
-        let image = {
-            let data = original_image
-                .resize_exact(640, 640, image::imageops::FilterType::Triangle)
-                .to_rgb8()
-                .into_raw();
-            Tensor::from_vec(data, (640, 640, 3), &Device::Cpu)?.permute((2, 0, 1))?
-        };
-        let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
-        let predictions = model.forward(&image)?.squeeze(0)?;
-        println!("generated predictions {predictions:?}");
-        let image = report(&predictions, original_image, 640, 640)?;
-        image_name.set_extension("pp.jpg");
-        println!("writing {image_name:?}");
-        image.save(image_name)?
-    }
-
-    Ok(())
+    Ok(bboxes)
 }

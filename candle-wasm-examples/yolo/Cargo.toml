@@ -1,0 +1,57 @@
+[package]
+name = "candle-wasm-example-yolo"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[dependencies]
+candle = { path = "../../candle-core", version = "0.1.2", package = "candle-core" }
+candle-nn = { path = "../../candle-nn", version = "0.1.2" }
+num-traits = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+image = { workspace = true }
+
+# App crates.
+anyhow = { workspace = true }
+byteorder = { workspace = true }
+log = { workspace = true }
+rand = { workspace = true }
+safetensors = { workspace = true }
+
+# Wasm specific crates.
+console_error_panic_hook = "0.1.7"
+getrandom = { version = "0.2", features = ["js"] }
+gloo = "0.8"
+js-sys = "0.3.64"
+wasm-bindgen = "0.2.87"
+wasm-bindgen-futures = "0.4.37"
+wasm-logger = "0.2"
+yew-agent = "0.2.0"
+yew = { version = "0.20.0", features = ["csr"] }
+
+[dependencies.web-sys]
+version = "0.3.64"
+features = [
+  'Blob',
+  'CanvasRenderingContext2d',
+  'Document',
+  'Element',
+  'HtmlElement',
+  'HtmlCanvasElement',
+  'HtmlImageElement',
+  'ImageData',
+  'Node',
+  'Window',
+  'Request',
+  'RequestCache',
+  'RequestInit',
+  'RequestMode',
+  'Response',
+  'Performance',
+  'TextMetrics',
+]
