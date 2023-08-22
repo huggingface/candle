@@ -50,12 +50,28 @@ pub struct TensorInfo {
     pub offset: u64,
 }
 
+impl TensorInfo {
+    pub fn read<R: std::io::Seek + std::io::Read>(
+        &self,
+        reader: &mut R,
+        tensor_data_offset: u64,
+    ) -> Result<super::QTensor> {
+        let tensor_elems = self.shape.elem_count();
+        let size_in_bytes =
+            tensor_elems * self.ggml_dtype.type_size() / self.ggml_dtype.blck_size();
+        let mut raw_data = vec![0u8; size_in_bytes];
+        reader.seek(std::io::SeekFrom::Start(tensor_data_offset + self.offset))?;
+        reader.read_exact(&mut raw_data)?;
+        super::ggml_file::qtensor_from_ggml(self.ggml_dtype, &raw_data, self.shape.dims().to_vec())
+    }
+}
+
 #[derive(Debug)]
 pub struct Content {
     pub magic: VersionedMagic,
     pub metadata: HashMap<String, Value>,
     pub tensor_infos: HashMap<String, TensorInfo>,
-    pub tensor_data_offset: usize,
+    pub tensor_data_offset: u64,
 }
 
 fn read_string<R: std::io::Read>(reader: &mut R) -> Result<String> {
@@ -191,8 +207,8 @@ impl Content {
                 },
             );
         }
-        let position = reader.stream_position()? as usize;
-        let alignment = DEFAULT_ALIGNMENT;
+        let position = reader.stream_position()?;
+        let alignment = DEFAULT_ALIGNMENT as u64;
         let tensor_data_offset = (position + alignment - 1) / alignment * alignment;
         Ok(Self {
             magic,
