@@ -7,7 +7,8 @@
 Candle is a minimalist ML framework for Rust with a focus on performance (including GPU support) 
 and ease of use. Try our online demos: 
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
-[LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2).
+[LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2),
+[yolo](https://huggingface.co/spaces/lmz/candle-yolo).
 
 ```rust
 let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
