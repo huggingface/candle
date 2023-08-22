@@ -45,7 +45,6 @@ pub struct App {
     status: String,
     loaded: bool,
     generated: String,
-    n_tokens: usize,
     current_decode: Option<CurrentDecode>,
     worker: Box<dyn Bridge<Worker>>,
 }
@@ -75,7 +74,6 @@ impl Component for App {
         let worker = Worker::bridge(std::rc::Rc::new(cb));
         Self {
             status,
-            n_tokens: 0,
             generated: String::new(),
             current_decode: None,
             worker,
@@ -110,42 +108,75 @@ impl Component for App {
                 if self.current_decode.is_some() {
                     self.status = "already processing some image at the moment".to_string()
                 } else {
+                    /*
+                    let data = web_sys::window()
+                        .unwrap()
+                        .document()
+                        .unwrap()
+                        .get_element_by_id("bike-img");
+                    let data = match data {
+                        Some(data) => data,
+                        None => {
+                            console_log!("cannot retrieve the image");
+                            return true;
+                        }
+                    };
+                    let data = match data.dyn_into::<web_sys::HtmlImageElement>() {
+                        Ok(data) => data,
+                        Err(err) => {
+                            console_log!("cannot retrieve the image {err}");
+                            return true;
+                        }
+                    };
+                    */
                     let start_time = performance_now();
                     self.current_decode = Some(CurrentDecode { start_time });
                     self.status = "processing...".to_string();
-                    self.n_tokens = 0;
                     self.generated.clear();
-                    // ctx.link()
-                    //    .send_message(Msg::WorkerInMsg(WorkerInput::Run(prompt.into())))
+                    ctx.link().send_future(async {
+                        match fetch_url("bike.jpeg").await {
+                            Err(err) => {
+                                let status = format!("{err:?}");
+                                Msg::UpdateStatus(status)
+                            }
+                            Ok(image_data) => Msg::WorkerInMsg(WorkerInput::Run(image_data)),
+                        }
+                    });
                 }
                 true
             }
             Msg::WorkerOutMsg(output) => {
                 match output {
                     Ok(WorkerOutput::WeightsLoaded) => self.status = "weights loaded!".to_string(),
-                    Ok(WorkerOutput::GenerationDone(Err(err))) => {
+                    Ok(WorkerOutput::ProcessingDone(Err(err))) => {
                         self.status = format!("error in worker process: {err}");
                         self.current_decode = None
                     }
-                    Ok(WorkerOutput::GenerationDone(Ok(()))) => {
+                    Ok(WorkerOutput::ProcessingDone(Ok(bboxes))) => {
+                        let mut content = Vec::new();
+                        for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
+                            for b in bboxes_for_class.iter() {
+                                content.push(format!(
+                                    "bbox {}: xs {:.0}-{:.0}  ys {:.0}-{:.0}",
+                                    crate::coco_classes::NAMES[class_index],
+                                    b.xmin,
+                                    b.xmax,
+                                    b.ymin,
+                                    b.ymax
+                                ))
+                            }
+                        }
+                        self.generated = content.join("\n");
                         let dt = self.current_decode.as_ref().and_then(|current_decode| {
                             current_decode.start_time.and_then(|start_time| {
                                 performance_now().map(|stop_time| stop_time - start_time)
                             })
                         });
                         self.status = match dt {
-                            None => "generation succeeded!".to_string(),
-                            Some(dt) => format!(
-                                "generation succeeded in {:.2}s ({:.1} ms/token)",
-                                dt,
-                                dt * 1000.0 / (self.n_tokens as f64)
-                            ),
+                            None => "processing succeeded!".to_string(),
+                            Some(dt) => format!("processing succeeded in {:.2}s", dt,),
                         };
                         self.current_decode = None
-                    }
-                    Ok(WorkerOutput::Generated(token)) => {
-                        self.n_tokens += 1;
-                        self.generated.push_str(&token)
                     }
                     Err(err) => {
                         self.status = format!("error in worker {err:?}");
@@ -172,7 +203,7 @@ impl Component for App {
                 <a href="https://github.com/huggingface/candle" target="_blank">{"candle!"}</a>
                 </p>
                 <p>{"Once the weights have loaded, click on the run button to process an image."}</p>
-                <p><img src="bike.jpeg"/></p>
+                <p><img id="bike-img" src="bike.jpeg"/></p>
                 <p>{"Source: "}<a href="https://commons.wikimedia.org/wiki/File:V%C3%A9lo_parade_-_V%C3%A9lorution_-_bike_critical_mass.JPG">{"wikimedia"}</a></p>
                 </div>
                 {

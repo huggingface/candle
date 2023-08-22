@@ -26,6 +26,7 @@ flamegraph.svg
 trace-*.json
 
 candle-wasm-examples/*/*.bin
+candle-wasm-examples/*/*.jpeg
 candle-wasm-examples/*/*.wav
 candle-wasm-examples/*/*.safetensors
 candle-wasm-examples/*/package-lock.json

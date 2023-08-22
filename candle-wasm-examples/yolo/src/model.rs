@@ -3,7 +3,7 @@ use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder,
 };
-use image::{DynamicImage, ImageBuffer};
+use image::DynamicImage;
 
 const CONFIDENCE_THRESHOLD: f32 = 0.5;
 const NMS_THRESHOLD: f32 = 0.4;
@@ -598,13 +598,13 @@ impl Module for YoloV8 {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Bbox {
-    xmin: f32,
-    ymin: f32,
-    xmax: f32,
-    ymax: f32,
-    confidence: f32,
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct Bbox {
+    pub xmin: f32,
+    pub ymin: f32,
+    pub xmax: f32,
+    pub ymax: f32,
+    pub confidence: f32,
 }
 
 // Intersection over union of two bounding boxes.
@@ -619,29 +619,7 @@ fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
     i_area / (b1_area + b2_area - i_area)
 }
 
-// Assumes x1 <= x2 and y1 <= y2
-pub fn draw_rect(
-    img: &mut ImageBuffer<image::Rgb<u8>, Vec<u8>>,
-    x1: u32,
-    x2: u32,
-    y1: u32,
-    y2: u32,
-) {
-    for x in x1..=x2 {
-        let pixel = img.get_pixel_mut(x, y1);
-        *pixel = image::Rgb([255, 0, 0]);
-        let pixel = img.get_pixel_mut(x, y2);
-        *pixel = image::Rgb([255, 0, 0]);
-    }
-    for y in y1..=y2 {
-        let pixel = img.get_pixel_mut(x1, y);
-        *pixel = image::Rgb([255, 0, 0]);
-        let pixel = img.get_pixel_mut(x2, y);
-        *pixel = image::Rgb([255, 0, 0]);
-    }
-}
-
-pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<DynamicImage> {
+pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Vec<Vec<Bbox>>> {
     let (pred_size, npreds) = pred.dims2()?;
     let nclasses = pred_size - 4;
     // The bounding boxes grouped by (maximum) class index.
@@ -690,19 +668,17 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Dy
         bboxes_for_class.truncate(current_index);
     }
     // Annotate the original image and print boxes information.
-    let (initial_h, initial_w) = (img.height(), img.width());
-    let w_ratio = initial_w as f32 / w as f32;
-    let h_ratio = initial_h as f32 / h as f32;
-    let mut img = img.to_rgb8();
-    for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
-        for b in bboxes_for_class.iter() {
-            println!("{}: {:?}", crate::coco_classes::NAMES[class_index], b);
-            let xmin = ((b.xmin * w_ratio) as u32).clamp(0, initial_w - 1);
-            let ymin = ((b.ymin * h_ratio) as u32).clamp(0, initial_h - 1);
-            let xmax = ((b.xmax * w_ratio) as u32).clamp(0, initial_w - 1);
-            let ymax = ((b.ymax * h_ratio) as u32).clamp(0, initial_h - 1);
-            draw_rect(&mut img, xmin, xmax, ymin, ymax);
+    let (initial_h, initial_w) = (img.height() as f32, img.width() as f32);
+    let w_ratio = initial_w / w as f32;
+    let h_ratio = initial_h / h as f32;
+    for (class_index, bboxes_for_class) in bboxes.iter_mut().enumerate() {
+        for b in bboxes_for_class.iter_mut() {
+            crate::console_log!("{}: {:?}", crate::coco_classes::NAMES[class_index], b);
+            b.xmin = (b.xmin * w_ratio).clamp(0., initial_w - 1.);
+            b.ymin = (b.ymin * h_ratio).clamp(0., initial_h - 1.);
+            b.xmax = (b.xmax * w_ratio).clamp(0., initial_w - 1.);
+            b.ymax = (b.ymax * h_ratio).clamp(0., initial_h - 1.);
         }
     }
-    Ok(DynamicImage::ImageRgb8(img))
+    Ok(bboxes)
 }
