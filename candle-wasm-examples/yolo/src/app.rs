@@ -61,6 +61,50 @@ fn performance_now() -> Option<f64> {
     Some(performance.now() / 1000.)
 }
 
+fn draw_bboxes(bboxes: Vec<Vec<crate::model::Bbox>>) -> Result<(), JsValue> {
+    let document = web_sys::window().unwrap().document().unwrap();
+    let canvas = match document.get_element_by_id("canvas") {
+        Some(canvas) => canvas,
+        None => return Err("no canvas".into()),
+    };
+    let canvas: web_sys::HtmlCanvasElement = canvas.dyn_into::<web_sys::HtmlCanvasElement>()?;
+
+    let context = canvas
+        .get_context("2d")?
+        .ok_or("no 2d")?
+        .dyn_into::<web_sys::CanvasRenderingContext2d>()?;
+
+    let image_html_element = document.get_element_by_id("bike-img");
+    let image_html_element = match image_html_element {
+        Some(data) => data,
+        None => return Err("no bike-img".into()),
+    };
+    let image_html_element = image_html_element.dyn_into::<web_sys::HtmlImageElement>()?;
+    canvas.set_width(image_html_element.width());
+    canvas.set_height(image_html_element.height());
+    context.draw_image_with_html_image_element(&image_html_element, 0., 0.)?;
+    context.set_stroke_style(&JsValue::from("#0dff9a"));
+    for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
+        for b in bboxes_for_class.iter() {
+            let name = crate::coco_classes::NAMES[class_index];
+            context.stroke_rect(
+                b.xmin as f64,
+                b.ymin as f64,
+                (b.xmax - b.xmin) as f64,
+                (b.ymax - b.ymin) as f64,
+            );
+            if let Ok(metrics) = context.measure_text(name) {
+                let width = metrics.width();
+                context.set_fill_style(&"#0dff9a".into());
+                context.fill_rect(b.xmin as f64 - 2., b.ymin as f64 - 20., width + 5., 22.);
+                context.set_fill_style(&"#e3fff3".into());
+                context.fill_text(name, b.xmin as f64, b.ymin as f64)?
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Component for App {
     type Message = Msg;
     type Properties = ();
@@ -108,27 +152,6 @@ impl Component for App {
                 if self.current_decode.is_some() {
                     self.status = "already processing some image at the moment".to_string()
                 } else {
-                    /*
-                    let data = web_sys::window()
-                        .unwrap()
-                        .document()
-                        .unwrap()
-                        .get_element_by_id("bike-img");
-                    let data = match data {
-                        Some(data) => data,
-                        None => {
-                            console_log!("cannot retrieve the image");
-                            return true;
-                        }
-                    };
-                    let data = match data.dyn_into::<web_sys::HtmlImageElement>() {
-                        Ok(data) => data,
-                        Err(err) => {
-                            console_log!("cannot retrieve the image {err}");
-                            return true;
-                        }
-                    };
-                    */
                     let start_time = performance_now();
                     self.current_decode = Some(CurrentDecode { start_time });
                     self.status = "processing...".to_string();
@@ -176,7 +199,10 @@ impl Component for App {
                             None => "processing succeeded!".to_string(),
                             Some(dt) => format!("processing succeeded in {:.2}s", dt,),
                         };
-                        self.current_decode = None
+                        self.current_decode = None;
+                        if let Err(err) = draw_bboxes(bboxes) {
+                            self.status = format!("{err:?}")
+                        }
                     }
                     Err(err) => {
                         self.status = format!("error in worker {err:?}");
@@ -224,6 +250,9 @@ impl Component for App {
                         html! {}
                     }
                 }
+                <div>
+                <canvas id="canvas" height="150" width="150"></canvas>
+                </div>
                 <blockquote>
                 <p> { self.generated.chars().map(|c|
                     if c == '\r' || c == '\n' {

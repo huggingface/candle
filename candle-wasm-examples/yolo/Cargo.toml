@@ -38,9 +38,11 @@ yew = { version = "0.20.0", features = ["csr"] }
 version = "0.3.64"
 features = [
   'Blob',
+  'CanvasRenderingContext2d',
   'Document',
   'Element',
   'HtmlElement',
+  'HtmlCanvasElement',
   'HtmlImageElement',
   'ImageData',
   'Node',
@@ -51,4 +53,5 @@ features = [
   'RequestMode',
   'Response',
   'Performance',
+  'TextMetrics',
 ]
