@@ -13,9 +13,6 @@ use candle_nn::{Module, VarBuilder};
 use clap::Parser;
 use image::{DynamicImage, ImageBuffer};
 
-const CONFIDENCE_THRESHOLD: f32 = 0.5;
-const NMS_THRESHOLD: f32 = 0.4;
-
 // Assumes x1 <= x2 and y1 <= y2
 pub fn draw_rect(
     img: &mut ImageBuffer<image::Rgb<u8>, Vec<u8>>,
@@ -38,7 +35,14 @@ pub fn draw_rect(
     }
 }
 
-pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<DynamicImage> {
+pub fn report(
+    pred: &Tensor,
+    img: DynamicImage,
+    w: usize,
+    h: usize,
+    confidence_threshold: f32,
+    nms_threshold: f32,
+) -> Result<DynamicImage> {
     let (npreds, pred_size) = pred.dims2()?;
     let nclasses = pred_size - 5;
     // The bounding boxes grouped by (maximum) class index.
@@ -47,7 +51,7 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Dy
     for index in 0..npreds {
         let pred = Vec::<f32>::try_from(pred.get(index)?)?;
         let confidence = pred[4];
-        if confidence > CONFIDENCE_THRESHOLD {
+        if confidence > confidence_threshold {
             let mut class_index = 0;
             for i in 0..nclasses {
                 if pred[5 + i] > pred[5 + class_index] {
@@ -66,7 +70,7 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Dy
             }
         }
     }
-    non_maximum_suppression(&mut bboxes, NMS_THRESHOLD);
+    non_maximum_suppression(&mut bboxes, nms_threshold);
     // Annotate the original image and print boxes information.
     let (initial_h, initial_w) = (img.height(), img.width());
     let w_ratio = initial_w as f32 / w as f32;
@@ -100,6 +104,14 @@ struct Args {
     config: Option<String>,
 
     images: Vec<String>,
+
+    /// Threshold for the model confidence level.
+    #[arg(long, default_value_t = 0.5)]
+    confidence_threshold: f32,
+
+    /// Threshold for non-maximum suppression.
+    #[arg(long, default_value_t = 0.4)]
+    nms_threshold: f32,
 }
 
 impl Args {
@@ -164,7 +176,14 @@ pub fn main() -> Result<()> {
         let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image)?.squeeze(0)?;
         println!("generated predictions {predictions:?}");
-        let image = report(&predictions, original_image, net_width, net_height)?;
+        let image = report(
+            &predictions,
+            original_image,
+            net_width,
+            net_height,
+            args.confidence_threshold,
+            args.nms_threshold,
+        )?;
         image_name.set_extension("pp.jpg");
         println!("writing {image_name:?}");
         image.save(image_name)?
