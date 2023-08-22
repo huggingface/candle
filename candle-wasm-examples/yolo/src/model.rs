@@ -5,8 +5,8 @@ use candle_nn::{
 };
 use image::DynamicImage;
 
-const CONFIDENCE_THRESHOLD: f32 = 0.5;
-const NMS_THRESHOLD: f32 = 0.4;
+const CONFIDENCE_THRESHOLD: f32 = 0.25;
+const NMS_THRESHOLD: f32 = 0.45;
 
 // Model architecture from https://github.com/ultralytics/ultralytics/issues/189
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py
