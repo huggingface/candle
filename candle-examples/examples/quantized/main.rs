@@ -391,6 +391,12 @@ enum Which {
     L13b,
     #[value(name = "70b")]
     L70b,
+    #[value(name = "7b-chat")]
+    L7bChat,
+    #[value(name = "13b-chat")]
+    L13bChat,
+    #[value(name = "70b-chat")]
+    L70bChat,
 }
 
 #[derive(Parser, Debug)]
@@ -466,6 +472,18 @@ impl Args {
                     Which::L7b => ("TheBloke/Llama-2-7B-GGML", "llama-2-7b.ggmlv3.q4_0.bin"),
                     Which::L13b => ("TheBloke/Llama-2-13B-GGML", "llama-2-13b.ggmlv3.q4_0.bin"),
                     Which::L70b => ("TheBloke/Llama-2-70B-GGML", "llama-2-70b.ggmlv3.q4_0.bin"),
+                    Which::L7bChat => (
+                        "TheBloke/Llama-2-7B-Chat-GGML",
+                        "llama-2-7b-chat.ggmlv3.q4_0.bin",
+                    ),
+                    Which::L13bChat => (
+                        "TheBloke/Llama-2-13B-Chat-GGML",
+                        "llama-2-13b-chat.ggmlv3.q4_0.bin",
+                    ),
+                    Which::L70bChat => (
+                        "TheBloke/Llama-2-70B-Chat-GGML",
+                        "llama-2-70b-chat.ggmlv3.q4_0.bin",
+                    ),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
                 let api = api.model(repo.to_string());
