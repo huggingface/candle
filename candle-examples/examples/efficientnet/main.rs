@@ -208,8 +208,8 @@ impl SqueezeExcitation {
 impl Module for SqueezeExcitation {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let residual = xs;
-        // xs.adaptive_avg_pool2d([1, 1])
-        let xs = xs.avg_pool2d((1, 1), (1, 1))?;
+        // equivalent to adaptive_avg_pool2d([1, 1])
+        let xs = xs.mean_keepdim(D::Minus2)?.mean_keepdim(D::Minus1)?;
         let xs = self.fc1.forward(&xs)?;
         let xs = swish(&xs)?;
         let xs = self.fc2.forward(&xs)?;
@@ -336,11 +336,8 @@ impl Module for EfficientNet {
             xs = block.forward(&xs)?
         }
         let xs = self.final_cna.forward(&xs)?;
-        // TODO: xs.adaptive_avg_pool2d([1, 1])?
-        let xs = xs
-            .avg_pool2d((1, 1), (1, 1))?
-            .squeeze(D::Minus1)?
-            .squeeze(D::Minus1)?;
+        // Equivalent to adaptive_avg_pool2d([1, 1]) -> squeeze(-1) -> squeeze(-1)
+        let xs = xs.mean(D::Minus1)?.mean(D::Minus1)?;
         self.classifier.forward(&xs)
     }
 }
