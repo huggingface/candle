@@ -82,8 +82,10 @@ use anyhow::Result;
 use candle_core::{Device, Tensor};
 
 fn main() -> Result<()> {
-    let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
-    let b = Tensor::randn(0f32, 1., (3, 4), &Device::Cpu)?;
+    let device = Device::Cpu;
+
+    let a = Tensor::randn(0f32, 1., (2, 3), &device)?;
+    let b = Tensor::randn(0f32, 1., (3, 4), &device)?;
 
     let c = a.matmul(&b)?;
     println!("{c}");
@@ -94,14 +96,11 @@ fn main() -> Result<()> {
 `cargo run` should display a tensor of shape `Tensor[[2, 4], f32]`
 
 
-Having installed `candle` with Cuda support, you can create the tensors on GPU instead as follows:
+Having installed `candle` with Cuda support, simply define the `device` to be on GPU:
 
 ```diff
-- let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
-- let b = Tensor::randn(0f32, 1., (3, 4), &Device::Cpu)?;
+- let device = Device::Cpu;
 + let device = Device::new_cuda(0)?;
-+ let a = Tensor::randn(0f32, 1., (2, 3), &device)?;
-+ let b = Tensor::randn(0f32, 1., (3, 4), &device)?;
 ```
 
 For more advanced examples, please have a look at the following sections.
