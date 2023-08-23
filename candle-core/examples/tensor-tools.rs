@@ -6,6 +6,7 @@ enum Format {
     Safetensors,
     Npz,
     Ggml,
+    Gguf,
     Pth,
     Pickle,
 }
@@ -16,11 +17,12 @@ impl Format {
             .extension()
             .and_then(|e| e.to_str())
             .and_then(|e| match e {
-                // We don't infer any format for .bin as it can be used for ggml or pytorch.
+                // We don't infer any format for .bin as it can be used for ggml/gguf or pytorch.
                 "safetensors" | "safetensor" => Some(Self::Safetensors),
                 "npz" => Some(Self::Npz),
                 "pth" | "pt" => Some(Self::Pth),
                 "ggml" => Some(Self::Ggml),
+                "gguf" => Some(Self::Gguf),
                 _ => None,
             })
     }
@@ -119,6 +121,23 @@ fn run_ls(file: &std::path::PathBuf, format: Option<Format>, verbose: bool) -> R
             tensors.sort_by(|a, b| a.0.cmp(&b.0));
             for (name, qtensor) in tensors.iter() {
                 println!("{name}: [{:?}; {:?}]", qtensor.shape(), qtensor.dtype());
+            }
+        }
+        Format::Gguf => {
+            let mut file = std::fs::File::open(file)?;
+            let content = candle_core::quantized::gguf_file::Content::read(&mut file)?;
+            if verbose {
+                let mut metadata = content.metadata.into_iter().collect::<Vec<_>>();
+                metadata.sort_by(|a, b| a.0.cmp(&b.0));
+                println!("metadata entries ({})", metadata.len());
+                for (key, value) in metadata.iter() {
+                    println!("  {key}: {value:?}");
+                }
+            }
+            let mut tensors = content.tensor_infos.into_iter().collect::<Vec<_>>();
+            tensors.sort_by(|a, b| a.0.cmp(&b.0));
+            for (name, info) in tensors.iter() {
+                println!("{name}: [{:?}; {:?}]", info.shape, info.ggml_dtype);
             }
         }
     }

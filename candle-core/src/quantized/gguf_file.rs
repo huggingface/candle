@@ -7,7 +7,7 @@ use crate::Result;
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 
-pub const DEFAULT_ALIGNMENT: usize = 32;
+pub const DEFAULT_ALIGNMENT: u64 = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Magic {
@@ -208,7 +208,15 @@ impl Content {
             );
         }
         let position = reader.stream_position()?;
-        let alignment = DEFAULT_ALIGNMENT as u64;
+        let alignment = match metadata.get("general.alignment") {
+            Some(Value::U8(v)) => *v as u64,
+            Some(Value::U16(v)) => *v as u64,
+            Some(Value::U32(v)) => *v as u64,
+            Some(Value::I8(v)) if *v >= 0 => *v as u64,
+            Some(Value::I16(v)) if *v >= 0 => *v as u64,
+            Some(Value::I32(v)) if *v >= 0 => *v as u64,
+            _ => DEFAULT_ALIGNMENT,
+        };
         let tensor_data_offset = (position + alignment - 1) / alignment * alignment;
         Ok(Self {
             magic,
