@@ -15,21 +15,11 @@ and ease of use. Try our online demos:
 Make sure that you have [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) correctly installed as described in [**Installation**](https://huggingface.github.io/candle/guide/installation.html).
 
 Let's see how to run a simple matrix multiplication.
-
-We will need the [`anyhow`](https://docs.rs/anyhow/latest/anyhow/) package for our example, so let's also add it to our app.
-
-```bash
-cd myapp
-cargo add anyhow
-```
-
-Next, write the following to your `myapp/src/main.rs` file:
-
+Write the following to your `myapp/src/main.rs` file:
 ```rust
-use anyhow::Result;
 use candle_core::{Device, Tensor};
 
-fn main() -> Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let device = Device::Cpu;
 
     let a = Tensor::randn(0f32, 1., (2, 3), &device)?;
