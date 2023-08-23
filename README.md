@@ -10,65 +10,13 @@ and ease of use. Try our online demos:
 [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2),
 [yolo](https://huggingface.co/spaces/lmz/candle-yolo).
 
-## Installation
-
-- **With Cuda support**:
-
-1. First, make sure that Cuda is correctly installed.
-- `nvcc --version` should print your information about your Cuda compiler driver.
-- `nvidia-smi --query-gpu=compute_cap --format=csv` should print your GPUs compute capability, e.g. something
-like:
-```
-compute_cap
-8.9
-```
-
-If any of the above commands errors out, please make sure to update your Cuda version.
-
-2. Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) with Cuda support
-
-Start by creating a new cargo:
-
-```bash
-cargo new myapp
-cd myapp
-```
-
-Make sure to add the `candle-core` crate with the cuda feature:
-
-```
-cargo add --git https://github.com/huggingface/candle.git candle-core --features "cuda"
-```
-
-Run `cargo build` to make sure everything can be correctly built.
-
-```
-cargo run
-```
-
-**Without Cuda support**:
-
-Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) as follows:
-
-```
-cargo new myapp
-cd myapp
-cargo add --git https://github.com/huggingface/candle.git candle-core
-```
-
-Run `cargo build` to make sure everything can be correctly built.
-
-```
-cargo run
-```
-
 ## Get started
 
-Having installed `candle-core` as described in [Installation](#Installation), we can now 
-run a simple matrix multiplication.
+Make sure that you have [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) correctly installed as described in [**Installation**](https://huggingface.github.io/candle/guide/installation.html).
 
-We will need the [`anyhow`](https://docs.rs/anyhow/latest/anyhow/) package for our example,
-so let's add it to our app.
+Let's see how to run a simple matrix multiplication.
+
+We will need the [`anyhow`](https://docs.rs/anyhow/latest/anyhow/) package for our example, so let's also add it to our app.
 
 ```
 cd myapp
@@ -103,7 +51,7 @@ Having installed `candle` with Cuda support, simply define the `device` to be on
 + let device = Device::new_cuda(0)?;
 ```
 
-For more advanced examples, please have a look at the following sections.
+For more advanced examples, please have a look at the following section.
 
 ## Check out our examples
 
