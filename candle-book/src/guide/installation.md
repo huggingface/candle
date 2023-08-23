@@ -32,7 +32,7 @@ cargo add --git https://github.com/huggingface/candle.git candle-core --features
 Run `cargo build` to make sure everything can be correctly built.
 
 ```bash
-cargo run
+cargo build
 ```
 
 **Without Cuda support**:
@@ -45,10 +45,10 @@ cd myapp
 cargo add --git https://github.com/huggingface/candle.git candle-core
 ```
 
-Finally, run `cargo run` to make sure everything can be correctly built.
+Finally, run `cargo build` to make sure everything can be correctly built.
 
 ```bash
-cargo run
+cargo build
 ```
 
 **With mkl support**
