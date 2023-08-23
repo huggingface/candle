@@ -9,7 +9,6 @@ pub struct ParamsConv1D {
     pub(crate) k_size: usize,
     pub(crate) padding: usize,
     pub(crate) stride: usize,
-    pub(crate) groups: usize,
 }
 
 impl ParamsConv1D {
@@ -35,7 +34,6 @@ pub struct ParamsConv2D {
     pub(crate) c_in: usize,
     pub(crate) padding: usize,
     pub(crate) stride: usize,
-    pub(crate) groups: usize,
 }
 
 impl ParamsConv2D {

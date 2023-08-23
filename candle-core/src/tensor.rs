@@ -807,12 +807,6 @@ impl Tensor {
             }
             .bt())?
         }
-        if c_in % groups != 0 {
-            crate::bail!("in_channel ({c_in}) must be divisible by groups ({groups})")
-        }
-        if c_out % groups != 0 {
-            crate::bail!("out_channel ({c_out}) must be divisible by groups ({groups})")
-        }
 
         let params = crate::conv::ParamsConv1D {
             b_size,
@@ -822,7 +816,6 @@ impl Tensor {
             k_size,
             padding,
             stride,
-            groups,
         };
         let storage =
             self.storage()
@@ -851,12 +844,6 @@ impl Tensor {
                 "in_channel mismatch between input ({c_in}, groups {groups}) and kernel ({c_in_k})"
             )
         }
-        if c_in % groups != 0 {
-            crate::bail!("in_channel ({c_in}) must be divisible by groups ({groups})")
-        }
-        if c_out % groups != 0 {
-            crate::bail!("out_channel ({c_out}) must be divisible by groups ({groups})")
-        }
         let params = crate::conv::ParamsConv2D {
             b_size,
             i_h,
@@ -867,7 +854,6 @@ impl Tensor {
             c_in,
             padding,
             stride,
-            groups,
         };
         let storage =
             self.storage()
