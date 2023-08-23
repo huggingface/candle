@@ -38,25 +38,16 @@ cargo run
 
 Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) as follows:
 
-
-Start by creating a new app:
-
-```bash
+```
 cargo new myapp
 cd myapp
 cargo add --git https://github.com/huggingface/candle.git candle-core
 ```
 
-At this point, candle will be built **without** CUDA support.
-To get CUDA support use the `cuda` feature
-```bash
-cargo add --git https://github.com/huggingface/candle.git candle-core --features cuda
+Finally, run `cargo build` to make sure everything can be correctly built.
+
 ```
-
-You can check everything works properly:
-
-```bash
-cargo build
+cargo run
 ```
 
 **With mkl support**
