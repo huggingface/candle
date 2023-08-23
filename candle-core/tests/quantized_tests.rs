@@ -3,6 +3,13 @@ use quantized::{k_quants, GgmlType};
 mod test_utils;
 use test_utils::to_vec2_round;
 
+const GGML_TEST_SIZE: usize = 32 * 128;
+
+const GGML_MAX_QUANTIZATION_TOTAL_ERROR: f32 = 0.002;
+const GGML_MAX_QUANTIZATION_TOTAL_ERROR_2BITS: f32 = 0.0075;
+const GGML_MAX_QUANTIZATION_TOTAL_ERROR_3BITS: f32 = 0.0040;
+const GGML_MAX_DOT_PRODUCT_ERROR: f32 = 0.02;
+
 #[test]
 fn quantized_matmul() -> Result<()> {
     let cpu = &Device::Cpu;
@@ -121,6 +128,10 @@ fn quantize_q4_0() -> Result<()> {
             127.0, 127.0
         ]
     );
+
+    //mirrored GGML unit test
+    ggml_quantization_error_test::<BlockQ4_0>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
+
     Ok(())
 }
 
@@ -166,6 +177,41 @@ fn compare_with_error(values: &[f32], expected: &[f32], tolerance: f32) {
     }
 }
 
+/// Creates a vector simillarly to the one used in GGML unit tests: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L26-L30
+fn create_ggml_like_vector(offset: f32) -> Vec<f32> {
+    let mut vec = vec![0.0; GGML_TEST_SIZE];
+    for (i, item) in vec.iter_mut().enumerate() {
+        *item = 0.1 + 2.0 * (i as f32 + offset).cos();
+    }
+    vec
+}
+
+/// Calculates the root mean square error between two vectors
+fn calculate_rmse(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len());
+    let mut sum = 0.0;
+    for i in 0..a.len() {
+        sum += (a[i] - b[i]).powi(2);
+    }
+    (sum).sqrt() / a.len() as f32
+}
+
+/// Mirrores the GGML quanitzation unit test: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L43-L50
+fn ggml_quantization_error_test<T: GgmlType>(max_error: f32) -> Result<()> {
+    let src = create_ggml_like_vector(0.0);
+    let mut dst = vec![0.0; GGML_TEST_SIZE];
+    let _quant = quantize_roundtrip::<T>(src.as_slice(), dst.as_mut_slice())?;
+    let error = calculate_rmse(src.as_slice(), dst.as_slice());
+    if error > max_error {
+        candle_core::bail!(
+            "Quantization error {} exceeds max error {}",
+            error,
+            max_error
+        );
+    }
+    Ok(())
+}
+
 fn quantize_roundtrip<T: GgmlType>(src: &[f32], dst: &mut [f32]) -> Result<Vec<T>> {
     let mut quant = vec![T::zeros(); src.len() / T::BLCK_SIZE];
     T::from_float(src, &mut quant)?;
@@ -195,6 +241,9 @@ fn quantize_q2k() -> Result<()> {
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ2K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 6.0);
+
+    //mirrored GGML unit test
+    ggml_quantization_error_test::<BlockQ2K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR_2BITS)?;
     Ok(())
 }
 
@@ -220,6 +269,9 @@ fn quantize_q3k() -> Result<()> {
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ3K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 3.5);
+
+    //mirrored GGML unit test
+    ggml_quantization_error_test::<BlockQ3K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR_3BITS)?;
     Ok(())
 }
 
@@ -245,6 +297,9 @@ fn quantize_q4k() -> Result<()> {
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ4K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 4.5);
+
+    //mirrored GGML unit test
+    ggml_quantization_error_test::<BlockQ4K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
     Ok(())
 }
 
@@ -270,6 +325,10 @@ fn quantize_q5k() -> Result<()> {
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ5K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 2.5);
+
+    //mirrored GGML unit test
+    ggml_quantization_error_test::<BlockQ5K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
+
     Ok(())
 }
 
@@ -295,6 +354,9 @@ fn quantize_q6k() -> Result<()> {
     let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
     let _quant_big = quantize_roundtrip::<BlockQ6K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 2.0);
+
+    //mirrored GGML unit test
+    ggml_quantization_error_test::<BlockQ6K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
 
     Ok(())
 }
@@ -322,6 +384,44 @@ fn quantize_q8k() -> Result<()> {
     let _quant_big = quantize_roundtrip::<BlockQ8K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 0.6);
 
+    //mirrored GGML unit test
+    ggml_quantization_error_test::<BlockQ8K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
+
+    Ok(())
+}
+
+/// Very simple dot product implementation
+fn vec_dot_referenze(a: &[f32], b: &[f32]) -> f32 {
+    let mut sum = 0.0;
+    for (a_i, b_i) in a.iter().zip(b) {
+        sum += a_i * b_i;
+    }
+    sum
+}
+
+/// Mirrores the GGML matmul unit test: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L76-L91
+fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
+    let a = create_ggml_like_vector(0.0);
+    let b = create_ggml_like_vector(1.0);
+    let length = a.len();
+
+    let mut a_quant = vec![T::zeros(); length / T::BLCK_SIZE];
+    let mut b_quant = vec![T::VecDotType::zeros(); length / T::VecDotType::BLCK_SIZE];
+    T::from_float(&a, &mut a_quant)?;
+    T::VecDotType::from_float(&b, &mut b_quant)?;
+
+    let result = T::vec_dot(length, &a_quant, &b_quant)?;
+    let reference_result = vec_dot_referenze(&a, &b);
+
+    let error = (result - reference_result).abs() / length as f32;
+
+    if error > GGML_MAX_DOT_PRODUCT_ERROR {
+        candle_core::bail!(
+            "Dot product error {} exceeds max error {}",
+            error,
+            GGML_MAX_DOT_PRODUCT_ERROR
+        );
+    }
     Ok(())
 }
 
@@ -364,6 +464,9 @@ fn quantized_matmul_q6k() -> Result<()> {
         .map(|x| (1000. * x).round() / 1000.)
         .collect::<Vec<_>>();
     assert_eq!(dst, [1.324, 1.49, -0.164, 1.741]);
+
+    //mirrored GGML unit test
+    ggml_matmul_error_test::<BlockQ6K>()?;
 
     Ok(())
 }
