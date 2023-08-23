@@ -3,7 +3,7 @@
 **With Cuda support**:
 
 1. First, make sure that Cuda is correctly installed.
-- `nvcc --version` should print your information about your Cuda compiler driver.
+- `nvcc --version` should print information about your Cuda compiler driver.
 - `nvidia-smi --query-gpu=compute_cap --format=csv` should print your GPUs compute capability, e.g. something
 like:
 
@@ -14,7 +14,7 @@ compute_cap
 
 If any of the above commands errors out, please make sure to update your Cuda version.
 
-2. Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) with Cuda support
+2. Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) with Cuda support.
 
 Start by creating a new cargo:
 

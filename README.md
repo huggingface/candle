@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`cargo run` should display a tensor of shape `Tensor[[2, 4], f32]`
+`cargo run` should display a tensor of shape `Tensor[[2, 4], f32]`.
 
 
 Having installed `candle` with Cuda support, simply define the `device` to be on GPU:
