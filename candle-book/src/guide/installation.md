@@ -6,7 +6,8 @@
 - `nvcc --version` should print your information about your Cuda compiler driver.
 - `nvidia-smi --query-gpu=compute_cap --format=csv` should print your GPUs compute capability, e.g. something
 like:
-```
+
+```bash
 compute_cap
 8.9
 ```
@@ -30,7 +31,7 @@ cargo add --git https://github.com/huggingface/candle.git candle-core --features
 
 Run `cargo build` to make sure everything can be correctly built.
 
-```
+```bash
 cargo run
 ```
 
@@ -38,7 +39,7 @@ cargo run
 
 Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) as follows:
 
-```
+```bash
 cargo new myapp
 cd myapp
 cargo add --git https://github.com/huggingface/candle.git candle-core
