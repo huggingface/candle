@@ -87,7 +87,7 @@ And then head over to
     - LLMs: LLaMA v1 and v2, Falcon, StarCoder.
     - Whisper (multi-lingual support).
     - Stable Diffusion.
-    - Computer Vision: DINOv2.
+    - Computer Vision: DINOv2, EfficientNet, yolo-v3, yolo-v8.
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.
 - Quantization support using the llama.cpp quantized types.
