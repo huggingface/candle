@@ -137,8 +137,7 @@ fn quantize_q4_0() -> Result<()> {
 }
 
 /// Generates a small test vector ranging from -`bound` to `bound` with `size` steps
-fn get_test_vector(bound: f32, size: Option<usize>) -> (Vec<f32>, Vec<f32>) {
-    let size = size.unwrap_or(1024);
+fn get_test_vector(bound: f32, size: usize) -> (Vec<f32>, Vec<f32>) {
     assert!(
         size % crate::quantized::k_quants::QK_K == 0,
         "size must be a multiple of {}",
@@ -180,21 +179,21 @@ fn compare_with_error(values: &[f32], expected: &[f32], tolerance: f32) {
 
 /// Creates a vector simillarly to the one used in GGML unit tests: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L26-L30
 fn create_ggml_like_vector(offset: f32) -> Vec<f32> {
-    let mut vec = vec![0.0; GGML_TEST_SIZE];
-    for (i, item) in vec.iter_mut().enumerate() {
-        *item = 0.1 + 2.0 * (i as f32 + offset).cos();
-    }
-    vec
+    (0..GGML_TEST_SIZE)
+        .map(|i| 0.1 + 2.0 * (i as f32 + offset).cos())
+        .collect()
 }
 
 /// Calculates the root mean square error between two vectors
 fn calculate_rmse(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
-    let mut sum = 0.0;
-    for i in 0..a.len() {
-        sum += (a[i] - b[i]).powi(2);
-    }
-    (sum).sqrt() / a.len() as f32
+    let sum = a
+        .iter()
+        .zip(b)
+        .map(|(a, b)| (a - b).powi(2))
+        .sum::<f32>()
+        .sqrt();
+    sum / a.len() as f32
 }
 
 /// Mirrores the GGML quanitzation unit test: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L43-L50
@@ -224,7 +223,7 @@ fn quantize_roundtrip<T: GgmlType>(src: &[f32], dst: &mut [f32]) -> Result<Vec<T
 fn quantize_q2k() -> Result<()> {
     use k_quants::BlockQ2K;
 
-    let (src, mut dst) = get_test_vector(0.5, Some(1024));
+    let (src, mut dst) = get_test_vector(0.5, 1024);
     let _quant = quantize_roundtrip::<BlockQ2K>(src.as_slice(), dst.as_mut_slice())?;
     compare_with_error(dst.as_slice(), src.as_slice(), 0.1);
 
@@ -239,7 +238,7 @@ fn quantize_q2k() -> Result<()> {
         [-0.499, -0.366, -0.249, 0.0, 0.295, 0.492]
     );
 
-    let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
+    let (src_big, mut dst_big) = get_test_vector(128.0, 1024);
     let _quant_big = quantize_roundtrip::<BlockQ2K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 6.0);
 
@@ -252,7 +251,7 @@ fn quantize_q2k() -> Result<()> {
 fn quantize_q3k() -> Result<()> {
     use k_quants::BlockQ3K;
 
-    let (src, mut dst) = get_test_vector(0.5, Some(1024));
+    let (src, mut dst) = get_test_vector(0.5, 1024);
     let _quant = quantize_roundtrip::<BlockQ3K>(src.as_slice(), dst.as_mut_slice())?;
     compare_with_error(dst.as_slice(), src.as_slice(), 0.03);
 
@@ -267,7 +266,7 @@ fn quantize_q3k() -> Result<()> {
         [-0.493, -0.37, -0.243, -0.0, 0.292, 0.492]
     );
 
-    let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
+    let (src_big, mut dst_big) = get_test_vector(128.0, 1024);
     let _quant_big = quantize_roundtrip::<BlockQ3K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 3.5);
 
@@ -280,7 +279,7 @@ fn quantize_q3k() -> Result<()> {
 fn quantize_q4k() -> Result<()> {
     use k_quants::BlockQ4K;
 
-    let (src, mut dst) = get_test_vector(0.5, Some(1024));
+    let (src, mut dst) = get_test_vector(0.5, 1024);
     let _quant = quantize_roundtrip::<BlockQ4K>(src.as_slice(), dst.as_mut_slice())?;
     compare_with_error(dst.as_slice(), src.as_slice(), 0.017);
 
@@ -295,7 +294,7 @@ fn quantize_q4k() -> Result<()> {
         [-0.5, -0.373, -0.25, 0.0, 0.288, 0.498]
     );
 
-    let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
+    let (src_big, mut dst_big) = get_test_vector(128.0, 1024);
     let _quant_big = quantize_roundtrip::<BlockQ4K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 4.5);
 
@@ -308,7 +307,7 @@ fn quantize_q4k() -> Result<()> {
 fn quantize_q5k() -> Result<()> {
     use k_quants::BlockQ5K;
 
-    let (src, mut dst) = get_test_vector(0.5, Some(1024));
+    let (src, mut dst) = get_test_vector(0.5, 1024);
     let _quant = quantize_roundtrip::<BlockQ5K>(src.as_slice(), dst.as_mut_slice())?;
     compare_with_error(dst.as_slice(), src.as_slice(), 0.008);
 
@@ -323,7 +322,7 @@ fn quantize_q5k() -> Result<()> {
         [-0.499, -0.372, -0.249, 0.001, 0.279, 0.499]
     );
 
-    let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
+    let (src_big, mut dst_big) = get_test_vector(128.0, 1024);
     let _quant_big = quantize_roundtrip::<BlockQ5K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 2.5);
 
@@ -337,7 +336,7 @@ fn quantize_q5k() -> Result<()> {
 fn quantize_q6k() -> Result<()> {
     use k_quants::BlockQ6K;
 
-    let (src, mut dst) = get_test_vector(0.5, Some(1024));
+    let (src, mut dst) = get_test_vector(0.5, 1024);
     let _quant = quantize_roundtrip::<BlockQ6K>(src.as_slice(), dst.as_mut_slice())?;
     compare_with_error(dst.as_slice(), src.as_slice(), 0.008);
 
@@ -352,7 +351,7 @@ fn quantize_q6k() -> Result<()> {
         [-0.497, -0.372, -0.25, -0.0, 0.284, 0.5]
     );
 
-    let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
+    let (src_big, mut dst_big) = get_test_vector(128.0, 1024);
     let _quant_big = quantize_roundtrip::<BlockQ6K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 2.0);
 
@@ -366,7 +365,7 @@ fn quantize_q6k() -> Result<()> {
 fn quantize_q8k() -> Result<()> {
     use k_quants::BlockQ8K;
 
-    let (src, mut dst) = get_test_vector(0.5, Some(1024));
+    let (src, mut dst) = get_test_vector(0.5, 1024);
     let _quant = quantize_roundtrip::<BlockQ8K>(src.as_slice(), dst.as_mut_slice())?;
     compare_with_error(dst.as_slice(), src.as_slice(), 0.003);
 
@@ -381,7 +380,7 @@ fn quantize_q8k() -> Result<()> {
         [-0.5, -0.375, -0.25, -0.0, 0.281, 0.499]
     );
 
-    let (src_big, mut dst_big) = get_test_vector(128.0, Some(1024));
+    let (src_big, mut dst_big) = get_test_vector(128.0, 1024);
     let _quant_big = quantize_roundtrip::<BlockQ8K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 0.6);
 
@@ -393,11 +392,7 @@ fn quantize_q8k() -> Result<()> {
 
 /// Very simple dot product implementation
 fn vec_dot_referenze(a: &[f32], b: &[f32]) -> f32 {
-    let mut sum = 0.0;
-    for (a_i, b_i) in a.iter().zip(b) {
-        sum += a_i * b_i;
-    }
-    sum
+    a.iter().zip(b).map(|(a, b)| a * b).sum()
 }
 
 /// Mirrores the GGML matmul unit test: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L76-L91
