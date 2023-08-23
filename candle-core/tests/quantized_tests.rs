@@ -450,6 +450,33 @@ fn get_random_tensors(
 }
 
 #[test]
+fn quantized_matmul_q2k() -> Result<()> {
+    use k_quants::BlockQ2K;
+
+    let cpu = &Device::Cpu;
+    let (m, k, n) = (11, 512, 21);
+    let (lhs, rhs, mm) = get_random_tensors(m, k, n, cpu)?;
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
+
+    let rhs = quantized::QTensor::quantize::<BlockQ2K>(&rhs)?;
+    let rhs = quantized::QMatMul::from_qtensor(rhs);
+    let mm = rhs.forward(&lhs)?;
+
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [0.916, 0.422, 0.215, 1.668]);
+
+    //mirrored GGML unit test
+    ggml_matmul_error_test::<BlockQ2K>()?;
+
+    Ok(())
+}
+
+#[test]
 fn quantized_matmul_q6k() -> Result<()> {
     use k_quants::BlockQ6K;
 

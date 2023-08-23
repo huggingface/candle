@@ -450,8 +450,56 @@ impl GgmlType for BlockQ2K {
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
 
-    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
-        todo!()
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        if n % QK_K != 0 {
+            crate::bail!("vec_dot_q2k_q8k: {n} is not divisible by {QK_K}")
+        }
+
+        let mut sumf = 0.0;
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let mut q2: &[_] = &x.qs;
+            let mut q8: &[_] = &y.qs;
+            let sc = &x.scales;
+
+            let mut summs = 0;
+            for (bsum, scale) in y.bsums.iter().zip(sc) {
+                summs += *bsum as i32 * ((scale >> 4) as i32);
+            }
+
+            let dall = y.d * x.d.to_f32();
+            let dmin = y.d * x.dmin.to_f32();
+
+            let mut isum = 0;
+            let mut is = 0;
+            let mut d;
+            for _ in 0..(QK_K / 128) {
+                let mut shift = 0;
+                for _ in 0..4 {
+                    d = (sc[is] & 0xF) as i32;
+                    is += 1;
+                    let mut isuml = 0;
+                    for l in 0..16 {
+                        isuml += q8[l] as i32 * (((q2[l] >> shift) & 3) as i32);
+                    }
+                    isum += d * isuml;
+                    d = (sc[is] & 0xF) as i32;
+                    is += 1;
+                    isuml = 0;
+                    for l in 16..32 {
+                        isuml += q8[l] as i32 * (((q2[l] >> shift) & 3) as i32);
+                    }
+                    isum += d * isuml;
+                    shift += 2;
+                    // adjust the indexing
+                    q8 = &q8[32..];
+                }
+                // adjust the indexing
+                q2 = &q2[32..];
+            }
+            sumf += dall * isum as f32 - dmin * summs as f32;
+        }
+
+        Ok(sumf)
     }
 
     // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L279
