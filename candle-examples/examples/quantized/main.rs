@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::io::Write;
 use tokenizers::Tokenizer;
 
-use candle::quantized::ggml_file::Content;
 use candle::quantized::QTensor;
+use candle::quantized::{ggml_file, gguf_file};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Module};
 use candle_transformers::generation::LogitsProcessor;
@@ -195,24 +195,83 @@ impl WeightMap {
     }
 }
 
+fn precomput_freqs_cis(head_dim: usize) -> Result<(Tensor, Tensor)> {
+    let theta: Vec<_> = (0..head_dim)
+        .step_by(2)
+        .map(|i| 1f32 / 10000f32.powf(i as f32 / head_dim as f32))
+        .collect();
+    let theta = Tensor::new(theta.as_slice(), &Device::Cpu)?;
+    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, &Device::Cpu)?
+        .to_dtype(DType::F32)?
+        .reshape((MAX_SEQ_LEN, 1))?
+        .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+    let cos = idx_theta.cos()?;
+    let sin = idx_theta.sin()?;
+    Ok((cos, sin))
+}
+
 impl ModelWeights {
-    fn new(mut ct: Content, gqa: usize) -> Result<Self> {
+    fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
         let cpu = &Device::Cpu;
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
+        let (cos, sin) = precomput_freqs_cis(head_dim)?;
+        let tok_embeddings = ct.remove("tok_embeddings.weight")?;
+        let tok_embeddings = tok_embeddings.dequantize(cpu)?;
+        let norm = RmsNorm::new(ct.remove("norm.weight")?)?;
+        let output = ct.remove("output.weight")?;
+        let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
+        for layer_idx in 0..ct.hparams.n_layer {
+            let prefix = format!("layers.{layer_idx}");
+            let attention_wq = ct.remove(&format!("layers.{layer_idx}.attention.wq.weight"))?;
+            let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
+            let attention_wv = ct.remove(&format!("{prefix}.attention.wv.weight"))?;
+            let attention_wo = ct.remove(&format!("{prefix}.attention.wo.weight"))?;
+            let feed_forward_w1 = ct.remove(&format!("{prefix}.feed_forward.w1.weight"))?;
+            let feed_forward_w2 = ct.remove(&format!("{prefix}.feed_forward.w2.weight"))?;
+            let feed_forward_w3 = ct.remove(&format!("{prefix}.feed_forward.w3.weight"))?;
+            let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
+            let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
+            let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
+            let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
+            let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
+            layers.push(LayerWeights {
+                attention_wq: QMatMul::from_qtensor(attention_wq),
+                attention_wk: QMatMul::from_qtensor(attention_wk),
+                attention_wv: QMatMul::from_qtensor(attention_wv),
+                attention_wo: QMatMul::from_qtensor(attention_wo),
+                attention_norm: RmsNorm::new(attention_norm)?,
+                feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1),
+                feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2),
+                feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3),
+                ffn_norm: RmsNorm::new(ffn_norm)?,
+                n_head: ct.hparams.n_head as usize,
+                n_kv_head: ct.hparams.n_head as usize / gqa,
+                head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
+                cos: cos.clone(),
+                sin: sin.clone(),
+                kv_cache: None,
+                span_attn,
+                span_rot,
+                span_mlp,
+            })
+        }
+        let span = tracing::span!(tracing::Level::TRACE, "model");
+        let span_output = tracing::span!(tracing::Level::TRACE, "output");
+        Ok(Self {
+            tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd as usize),
+            layers,
+            norm,
+            output: QMatMul::from_qtensor(output),
+            masks: HashMap::new(),
+            span,
+            span_output,
+        })
+    }
 
-        // precompute freqs_cis
-        let theta: Vec<_> = (0..head_dim)
-            .step_by(2)
-            .map(|i| 1f32 / 10000f32.powf(i as f32 / head_dim as f32))
-            .collect();
-        let theta = Tensor::new(theta.as_slice(), &Device::Cpu)?;
-        let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, &Device::Cpu)?
-            .to_dtype(DType::F32)?
-            .reshape((MAX_SEQ_LEN, 1))?
-            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-        let cos = idx_theta.cos()?;
-        let sin = idx_theta.sin()?;
-
+    fn from_gguf(mut ct: gguf_file::Content) -> Result<Self> {
+        let cpu = &Device::Cpu;
+        let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
+        let (cos, sin) = precomput_freqs_cis(head_dim)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(cpu)?;
         let norm = RmsNorm::new(ct.remove("norm.weight")?)?;
@@ -443,6 +502,18 @@ fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> Resul
     Tensor::from_vec(logits, logits_len, &Device::Cpu)
 }
 
+fn format_size(size_in_bytes: usize) -> String {
+    if size_in_bytes < 1_000 {
+        format!("{}B", size_in_bytes)
+    } else if size_in_bytes < 1_000_000 {
+        format!("{:.2}KB", size_in_bytes as f64 / 1e3)
+    } else if size_in_bytes < 1_000_000_000 {
+        format!("{:.2}MB", size_in_bytes as f64 / 1e6)
+    } else {
+        format!("{:.2}GB", size_in_bytes as f64 / 1e9)
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
@@ -464,37 +535,49 @@ fn main() -> anyhow::Result<()> {
         candle::utils::with_f16c()
     );
 
-    let mut file = std::fs::File::open(&args.model()?)?;
+    let model_path = args.model()?;
+    let mut file = std::fs::File::open(&model_path)?;
     let start = std::time::Instant::now();
-    let model = Content::read(&mut file)?;
 
-    let mut total_size_in_bytes = 0;
-    for (_, tensor) in model.tensors.iter() {
-        let elem_count = tensor.shape().elem_count();
-        total_size_in_bytes += elem_count * tensor.dtype().type_size() / tensor.dtype().blck_size();
-    }
-    let total_size = if total_size_in_bytes < 1_000 {
-        format!("{}B", total_size_in_bytes)
-    } else if total_size_in_bytes < 1_000_000 {
-        format!("{:.2}KB", total_size_in_bytes as f64 / 1e3)
-    } else if total_size_in_bytes < 1_000_000_000 {
-        format!("{:.2}MB", total_size_in_bytes as f64 / 1e6)
-    } else {
-        format!("{:.2}GB", total_size_in_bytes as f64 / 1e9)
+    let mut model = match model_path.extension().and_then(|v| v.to_str()) {
+        Some("gguf") => {
+            let model = gguf_file::Content::read(&mut file)?;
+            let mut total_size_in_bytes = 0;
+            for (_, tensor) in model.tensor_infos.iter() {
+                let elem_count = tensor.shape.elem_count();
+                total_size_in_bytes +=
+                    elem_count * tensor.ggml_dtype.type_size() / tensor.ggml_dtype.blck_size();
+            }
+            println!(
+                "loaded {:?} tensors ({}) in {:.2}s",
+                model.tensor_infos.len(),
+                &format_size(total_size_in_bytes),
+                start.elapsed().as_secs_f32(),
+            );
+            ModelWeights::from_gguf(model)?
+        }
+        Some("ggml" | "bin") => {
+            let model = ggml_file::Content::read(&mut file)?;
+            let mut total_size_in_bytes = 0;
+            for (_, tensor) in model.tensors.iter() {
+                let elem_count = tensor.shape().elem_count();
+                total_size_in_bytes +=
+                    elem_count * tensor.dtype().type_size() / tensor.dtype().blck_size();
+            }
+            println!(
+                "loaded {:?} tensors ({}) in {:.2}s",
+                model.tensors.len(),
+                &format_size(total_size_in_bytes),
+                start.elapsed().as_secs_f32(),
+            );
+            println!("params: {:?}", model.hparams);
+            let default_gqa = match args.which {
+                Which::L7b | Which::L13b => 1,
+                Which::L70b => 8,
+            };
+            ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa))?
+        }
     };
-
-    println!(
-        "loaded {:?} tensors ({}) in {:.2}s",
-        model.tensors.len(),
-        total_size,
-        start.elapsed().as_secs_f32(),
-    );
-    println!("params: {:?}", model.hparams);
-    let default_gqa = match args.which {
-        Which::L7b | Which::L13b => 1,
-        Which::L70b => 8,
-    };
-    let mut model = ModelWeights::new(model, args.gqa.unwrap_or(default_gqa))?;
     println!("model built");
 
     let tokenizer = args.tokenizer()?;

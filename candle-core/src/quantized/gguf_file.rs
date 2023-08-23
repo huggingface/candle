@@ -78,6 +78,10 @@ fn read_string<R: std::io::Read>(reader: &mut R) -> Result<String> {
     let len = reader.read_u32::<LittleEndian>()?;
     let mut v = vec![0u8; len as usize];
     reader.read_exact(&mut v)?;
+    // GGUF strings are supposed to be non-null terminated but in practice this happens.
+    while let Some(0) = v.last() {
+        v.pop();
+    }
     // GGUF strings are utf8 encoded but there are cases that don't seem to be valid.
     Ok(String::from_utf8_lossy(&v).into_owned())
 }
