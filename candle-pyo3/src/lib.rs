@@ -136,6 +136,7 @@ macro_rules! pydtype {
 }
 pydtype!(u8, |v| v);
 pydtype!(u32, |v| v);
+pydtype!(i64, |v| v);
 pydtype!(f16, f32::from);
 pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
@@ -150,6 +151,7 @@ trait MapDType {
         match t.dtype() {
             DType::U8 => self.f::<u8>(t),
             DType::U32 => self.f::<u32>(t),
+            DType::I64 => self.f::<i64>(t),
             DType::BF16 => self.f::<bf16>(t),
             DType::F16 => self.f::<f16>(t),
             DType::F32 => self.f::<f32>(t),
@@ -166,7 +168,11 @@ impl PyTensor {
         use Device::Cpu;
         let tensor = if let Ok(vs) = vs.extract::<u32>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
+        } else if let Ok(vs) = vs.extract::<i64>(py) {
+            Tensor::new(vs, &Cpu).map_err(wrap_err)?
         } else if let Ok(vs) = vs.extract::<Vec<u32>>(py) {
+            Tensor::new(vs.as_slice(), &Cpu).map_err(wrap_err)?
+        } else if let Ok(vs) = vs.extract::<Vec<i64>>(py) {
             Tensor::new(vs.as_slice(), &Cpu).map_err(wrap_err)?
         } else if let Ok(vs) = vs.extract::<f32>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?

@@ -53,6 +53,7 @@ impl VecOps for f64 {}
 impl VecOps for half::bf16 {}
 impl VecOps for u8 {}
 impl VecOps for u32 {}
+impl VecOps for i64 {}
 
 #[inline(always)]
 pub fn par_for_each(n_threads: usize, func: impl Fn(usize) + Send + Sync) {
