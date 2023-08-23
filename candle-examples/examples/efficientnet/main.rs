@@ -214,7 +214,7 @@ impl Module for SqueezeExcitation {
         let xs = swish(&xs)?;
         let xs = self.fc2.forward(&xs)?;
         let xs = nn::ops::sigmoid(&xs)?;
-        residual * xs
+        residual.broadcast_mul(&xs)
     }
 }
 
