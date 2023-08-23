@@ -306,7 +306,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image = candle_examples::load_image224(args.image)?;
+    let image = candle_examples::imagenet::load_image224(args.image)?;
     println!("loaded image {image:?}");
 
     let model_file = match args.model {
@@ -331,7 +331,7 @@ pub fn main() -> anyhow::Result<()> {
     for &(category_idx, pr) in prs.iter().take(5) {
         println!(
             "{:24}: {:.2}%",
-            candle_examples::IMAGENET_CLASSES[category_idx],
+            candle_examples::imagenet::CLASSES[category_idx],
             100. * pr
         );
     }
