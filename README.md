@@ -12,9 +12,9 @@ and ease of use. Try our online demos:
 
 ## Installation
 
-- *With Cuda support*:
+- **With Cuda support**:
 
-1. To install candle with Cuda support, first make sure that Cuda is correctly installed.
+1. First, make sure that Cuda is correctly installed.
 - `nvcc --version` should print your information about your Cuda compiler driver.
 - `nvidia-smi --query-gpu=compute_cap --format=csv` should print your GPUs compute capability, e.g. something
 like:
@@ -23,30 +23,30 @@ compute_cap
 8.9
 ```
 
-If any of the above commands errors out, please make sure to update your CUDA version.
+If any of the above commands errors out, please make sure to update your Cuda version.
 
 2. Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) with Cuda support
+
+Start by creating a new cargo:
 
 ```bash
 cargo new myapp
 cd myapp
 ```
 
-Next make sure to add the `candle-core` crate with the cuda feature:
+Make sure to add the `candle-core` crate with the cuda feature:
 
 ```
 cargo add --git https://github.com/huggingface/candle.git candle-core --features "cuda"
 ```
 
-Finally, run `cargo build` to make sure everything can be correctly built.
+Run `cargo build` to make sure everything can be correctly built.
 
 ```
 cargo run
 ```
 
-Now you can run the example as shown in the next section!
-
-- *Without Cuda support*:
+**Without Cuda support**:
 
 Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) as follows:
 
@@ -56,7 +56,7 @@ cd myapp
 cargo add --git https://github.com/huggingface/candle.git candle-core
 ```
 
-Finally, run `cargo build` to make sure everything can be correctly built.
+Run `cargo build` to make sure everything can be correctly built.
 
 ```
 cargo run
@@ -67,7 +67,8 @@ cargo run
 Having installed `candle-core` as described in [Installation](#Installation), we can now 
 run a simple matrix multiplication.
 
-First, let's add the [`anyhow`](https://docs.rs/anyhow/latest/anyhow/) package to our app.
+We will need the [`anyhow`](https://docs.rs/anyhow/latest/anyhow/) package for our example,
+so let's add it to our app.
 
 ```
 cd myapp
