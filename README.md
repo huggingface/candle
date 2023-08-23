@@ -18,7 +18,7 @@ Let's see how to run a simple matrix multiplication.
 
 We will need the [`anyhow`](https://docs.rs/anyhow/latest/anyhow/) package for our example, so let's also add it to our app.
 
-```
+```bash
 cd myapp
 cargo add anyhow
 ```
