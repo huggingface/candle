@@ -55,6 +55,20 @@ impl ParamsConv2D {
 }
 
 impl Tensor {
+    fn conv1d_single_group(&self, kernel: &Self, params: &ParamsConv1D) -> Result<Self> {
+        let storage =
+            self.storage()
+                .conv1d(self.layout(), &kernel.storage(), kernel.layout(), params)?;
+        let op = BackpropOp::new2(self, kernel, |arg, kernel| Op::Conv1D {
+            arg,
+            kernel,
+            padding: params.padding,
+            stride: params.stride,
+        });
+        let out_dims = params.out_dims();
+        Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+    }
+
     /// Applies a 1D convolution over the input tensor.
     pub fn conv1d(
         &self,
@@ -76,7 +90,7 @@ impl Tensor {
             .bt())?
         }
 
-        let params = crate::conv::ParamsConv1D {
+        let params = ParamsConv1D {
             b_size,
             l_in,
             c_out,
@@ -85,19 +99,33 @@ impl Tensor {
             padding,
             stride,
         };
+        if groups == 1 {
+            self.conv1d_single_group(kernel, &params)
+        } else {
+            let blocks = self.chunk(groups, 1)?;
+            let blocks = blocks
+                .iter()
+                .map(|block| block.conv1d_single_group(kernel, &params))
+                .collect::<Result<Vec<_>>>()?;
+            Tensor::cat(&blocks, 1)
+        }
+    }
+
+    fn conv2d_single_group(&self, kernel: &Self, params: &ParamsConv2D) -> Result<Self> {
         let storage =
             self.storage()
-                .conv1d(self.layout(), &kernel.storage(), kernel.layout(), &params)?;
-        let op = BackpropOp::new2(self, kernel, |arg, kernel| Op::Conv1D {
+                .conv2d(self.layout(), &kernel.storage(), kernel.layout(), params)?;
+        let op = BackpropOp::new2(self, kernel, |arg, kernel| Op::Conv2D {
             arg,
             kernel,
-            padding,
-            stride,
+            padding: params.padding,
+            stride: params.stride,
         });
         let out_dims = params.out_dims();
         Ok(crate::tensor::from_storage(storage, out_dims, op, false))
     }
 
+    /// Applies a 2D convolution over the input tensor.
     pub fn conv2d(
         &self,
         kernel: &Self,
@@ -112,7 +140,7 @@ impl Tensor {
                 "in_channel mismatch between input ({c_in}, groups {groups}) and kernel ({c_in_k})"
             )
         }
-        let params = crate::conv::ParamsConv2D {
+        let params = ParamsConv2D {
             b_size,
             i_h,
             i_w,
@@ -123,16 +151,15 @@ impl Tensor {
             padding,
             stride,
         };
-        let storage =
-            self.storage()
-                .conv2d(self.layout(), &kernel.storage(), kernel.layout(), &params)?;
-        let op = BackpropOp::new2(self, kernel, |arg, kernel| Op::Conv2D {
-            arg,
-            kernel,
-            padding,
-            stride,
-        });
-        let out_dims = params.out_dims();
-        Ok(crate::tensor::from_storage(storage, out_dims, op, false))
+        if groups == 1 {
+            self.conv2d_single_group(kernel, &params)
+        } else {
+            let blocks = self.chunk(groups, 1)?;
+            let blocks = blocks
+                .iter()
+                .map(|block| block.conv2d_single_group(kernel, &params))
+                .collect::<Result<Vec<_>>>()?;
+            Tensor::cat(&blocks, 1)
+        }
     }
 }
