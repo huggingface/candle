@@ -788,10 +788,16 @@ impl Tensor {
     }
 
     /// Applies a 1D convolution over the input tensor.
-    pub fn conv1d(&self, kernel: &Self, padding: usize, stride: usize) -> Result<Self> {
+    pub fn conv1d(
+        &self,
+        kernel: &Self,
+        padding: usize,
+        stride: usize,
+        groups: usize,
+    ) -> Result<Self> {
         let (c_out, c_in_k, k_size) = kernel.dims3()?;
         let (b_size, c_in, l_in) = self.dims3()?;
-        if c_in != c_in_k {
+        if c_in != c_in_k * groups {
             Err(Error::Conv1dInvalidArgs {
                 inp_shape: self.shape().clone(),
                 k_shape: kernel.shape().clone(),
@@ -801,6 +807,13 @@ impl Tensor {
             }
             .bt())?
         }
+        if c_in % groups != 0 {
+            crate::bail!("in_channel ({c_in}) must be divisible by groups ({groups})")
+        }
+        if c_out % groups != 0 {
+            crate::bail!("out_channel ({c_out}) must be divisible by groups ({groups})")
+        }
+
         let params = crate::conv::ParamsConv1D {
             b_size,
             l_in,
@@ -809,6 +822,7 @@ impl Tensor {
             k_size,
             padding,
             stride,
+            groups,
         };
         let storage =
             self.storage()
@@ -823,11 +837,25 @@ impl Tensor {
         Ok(from_storage(storage, out_dims, op, false))
     }
 
-    pub fn conv2d(&self, kernel: &Self, padding: usize, stride: usize) -> Result<Self> {
+    pub fn conv2d(
+        &self,
+        kernel: &Self,
+        padding: usize,
+        stride: usize,
+        groups: usize,
+    ) -> Result<Self> {
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
         let (c_out, c_in_k, k_h, k_w) = kernel.dims4()?;
-        if c_in != c_in_k {
-            crate::bail!("in_channel mismatch between input ({c_in}) and kernel ({c_in_k})")
+        if c_in != c_in_k * groups {
+            crate::bail!(
+                "in_channel mismatch between input ({c_in}, groups {groups}) and kernel ({c_in_k})"
+            )
+        }
+        if c_in % groups != 0 {
+            crate::bail!("in_channel ({c_in}) must be divisible by groups ({groups})")
+        }
+        if c_out % groups != 0 {
+            crate::bail!("out_channel ({c_out}) must be divisible by groups ({groups})")
         }
         let params = crate::conv::ParamsConv2D {
             b_size,
@@ -839,6 +867,7 @@ impl Tensor {
             c_in,
             padding,
             stride,
+            groups,
         };
         let storage =
             self.storage()
