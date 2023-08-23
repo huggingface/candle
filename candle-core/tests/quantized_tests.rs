@@ -1,6 +1,7 @@
 use candle_core::{quantized, Device, Result, Tensor};
 use quantized::{k_quants, GgmlType};
 mod test_utils;
+use rand::prelude::*;
 use test_utils::to_vec2_round;
 
 const GGML_TEST_SIZE: usize = 32 * 128;
@@ -425,15 +426,15 @@ fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn quantized_matmul_q6k() -> Result<()> {
-    use k_quants::BlockQ6K;
-    use rand::prelude::*;
-
+/// generates random tensors of size `m x k` and `n x k` and calculates their expected matrix multiplication result.
+fn get_random_tensors(
+    m: usize,
+    k: usize,
+    n: usize,
+    device: &Device,
+) -> Result<(Tensor, Tensor, Tensor)> {
     let mut rng = StdRng::seed_from_u64(314159265358979);
 
-    let cpu = &Device::Cpu;
-    let (m, k, n) = (11, 512, 21);
     let lhs = (0..m * k)
         .map(|_| rng.gen::<f32>() - 0.5)
         .collect::<Vec<_>>();
@@ -441,16 +442,23 @@ fn quantized_matmul_q6k() -> Result<()> {
         .map(|_| rng.gen::<f32>() - 0.5)
         .collect::<Vec<_>>();
 
-    let lhs = Tensor::from_vec(lhs, (m, k), cpu)?;
-    let rhs = Tensor::from_vec(rhs, (n, k), cpu)?;
+    let lhs = Tensor::from_vec(lhs, (m, k), device)?;
+    let rhs = Tensor::from_vec(rhs, (n, k), device)?;
 
     let mm = lhs.matmul(&rhs.t()?)?;
+    Ok((lhs, rhs, mm))
+}
+
+#[test]
+fn quantized_matmul_q6k() -> Result<()> {
+    use k_quants::BlockQ6K;
+
+    let cpu = &Device::Cpu;
+    let (m, k, n) = (11, 512, 21);
+    let (lhs, rhs, mm) = get_random_tensors(m, k, n, cpu)?;
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
-    let dst = [dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]
-        .iter()
-        .map(|x| (1000. * x).round() / 1000.)
-        .collect::<Vec<_>>();
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
     let rhs = quantized::QTensor::quantize::<BlockQ6K>(&rhs)?;
@@ -459,10 +467,7 @@ fn quantized_matmul_q6k() -> Result<()> {
 
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
-    let dst = [dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]
-        .iter()
-        .map(|x| (1000. * x).round() / 1000.)
-        .collect::<Vec<_>>();
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.324, 1.49, -0.164, 1.741]);
 
     //mirrored GGML unit test
