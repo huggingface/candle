@@ -222,7 +222,7 @@ impl ModelWeights {
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
         for layer_idx in 0..ct.hparams.n_layer {
             let prefix = format!("layers.{layer_idx}");
-            let attention_wq = ct.remove(&format!("layers.{layer_idx}.attention.wq.weight"))?;
+            let attention_wq = ct.remove(&format!("{prefix}.attention.wq.weight"))?;
             let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
             let attention_wv = ct.remove(&format!("{prefix}.attention.wv.weight"))?;
             let attention_wo = ct.remove(&format!("{prefix}.attention.wo.weight"))?;
@@ -268,26 +268,41 @@ impl ModelWeights {
         })
     }
 
-    fn from_gguf(mut ct: gguf_file::Content) -> Result<Self> {
+    fn from_gguf<R: std::io::Seek + std::io::Read>(
+        ct: gguf_file::Content,
+        reader: &mut R,
+    ) -> Result<Self> {
         let cpu = &Device::Cpu;
-        let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let (cos, sin) = precomput_freqs_cis(head_dim)?;
-        let tok_embeddings = ct.remove("tok_embeddings.weight")?;
+        let md_get = |s: &str| match ct.metadata.get(s) {
+            None => candle::bail!("cannot find {s} in metadata"),
+            Some(v) => Ok(v),
+        };
+
+        // Parameter extraction from metadata.
+        let head_count = md_get("llama.attention.head_count")?.to_u32()? as usize;
+        let head_count_kv = md_get("llama.attention.head_count_kv")?.to_u32()? as usize;
+        let block_count = md_get("llama.block_count")?.to_u32()? as usize;
+        let embedding_length = md_get("llama.embedding_length")?.to_u32()? as usize;
+        let rope_dim = md_get("llama.rope.dimension_count")?.to_u32()? as usize;
+
+        let (cos, sin) = precomput_freqs_cis(rope_dim)?;
+
+        let tok_embeddings = ct.tensor(reader, "token_embd.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(cpu)?;
-        let norm = RmsNorm::new(ct.remove("norm.weight")?)?;
-        let output = ct.remove("output.weight")?;
-        let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
-        for layer_idx in 0..ct.hparams.n_layer {
-            let prefix = format!("layers.{layer_idx}");
-            let attention_wq = ct.remove(&format!("layers.{layer_idx}.attention.wq.weight"))?;
-            let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
-            let attention_wv = ct.remove(&format!("{prefix}.attention.wv.weight"))?;
-            let attention_wo = ct.remove(&format!("{prefix}.attention.wo.weight"))?;
-            let feed_forward_w1 = ct.remove(&format!("{prefix}.feed_forward.w1.weight"))?;
-            let feed_forward_w2 = ct.remove(&format!("{prefix}.feed_forward.w2.weight"))?;
-            let feed_forward_w3 = ct.remove(&format!("{prefix}.feed_forward.w3.weight"))?;
-            let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
-            let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
+        let norm = RmsNorm::new(ct.tensor(reader, "output_norm.weight")?)?;
+        let output = ct.tensor(reader, "output.weight")?;
+        let mut layers = Vec::with_capacity(block_count);
+        for layer_idx in 0..block_count {
+            let prefix = format!("blk.{layer_idx}");
+            let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"))?;
+            let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"))?;
+            let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"))?;
+            let attention_wo = ct.tensor(reader, &format!("{prefix}.attn_output.weight"))?;
+            let feed_forward_w1 = ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"))?;
+            let feed_forward_w2 = ct.tensor(reader, &format!("{prefix}.ffn_down.weight"))?;
+            let feed_forward_w3 = ct.tensor(reader, &format!("{prefix}.ffn_up.weight"))?;
+            let attention_norm = ct.tensor(reader, &format!("{prefix}.attn_norm.weight"))?;
+            let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"))?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
@@ -301,9 +316,9 @@ impl ModelWeights {
                 feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2),
                 feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3),
                 ffn_norm: RmsNorm::new(ffn_norm)?,
-                n_head: ct.hparams.n_head as usize,
-                n_kv_head: ct.hparams.n_head as usize / gqa,
-                head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
+                n_head: head_count,
+                n_kv_head: head_count_kv,
+                head_dim: embedding_length / head_count,
                 cos: cos.clone(),
                 sin: sin.clone(),
                 kv_cache: None,
@@ -315,7 +330,7 @@ impl ModelWeights {
         let span = tracing::span!(tracing::Level::TRACE, "model");
         let span_output = tracing::span!(tracing::Level::TRACE, "output");
         Ok(Self {
-            tok_embeddings: Embedding::new(tok_embeddings, ct.hparams.n_embd as usize),
+            tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
             norm,
             output: QMatMul::from_qtensor(output),
@@ -554,9 +569,9 @@ fn main() -> anyhow::Result<()> {
                 &format_size(total_size_in_bytes),
                 start.elapsed().as_secs_f32(),
             );
-            ModelWeights::from_gguf(model)?
+            ModelWeights::from_gguf(model, &mut file)?
         }
-        Some("ggml" | "bin") => {
+        Some("ggml" | "bin") | Some(_) | None => {
             let model = ggml_file::Content::read(&mut file)?;
             let mut total_size_in_bytes = 0;
             for (_, tensor) in model.tensors.iter() {

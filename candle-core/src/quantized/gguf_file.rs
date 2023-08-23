@@ -2,7 +2,7 @@
 //!
 //! Spec: https://github.com/philpax/ggml/blob/gguf-spec/docs/gguf.md
 
-use super::GgmlDType;
+use super::{GgmlDType, QTensor};
 use crate::Result;
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
@@ -55,7 +55,7 @@ impl TensorInfo {
         &self,
         reader: &mut R,
         tensor_data_offset: u64,
-    ) -> Result<super::QTensor> {
+    ) -> Result<QTensor> {
         let tensor_elems = self.shape.elem_count();
         let size_in_bytes =
             tensor_elems * self.ggml_dtype.type_size() / self.ggml_dtype.blck_size();
@@ -129,6 +129,76 @@ pub enum Value {
 }
 
 impl Value {
+    pub fn to_u8(&self) -> Result<u8> {
+        match self {
+            Self::U8(v) => Ok(*v),
+            v => crate::bail!("not a u8 {v:?}"),
+        }
+    }
+
+    pub fn to_i8(&self) -> Result<i8> {
+        match self {
+            Self::I8(v) => Ok(*v),
+            v => crate::bail!("not a i8 {v:?}"),
+        }
+    }
+
+    pub fn to_u16(&self) -> Result<u16> {
+        match self {
+            Self::U16(v) => Ok(*v),
+            v => crate::bail!("not a u16 {v:?}"),
+        }
+    }
+
+    pub fn to_i16(&self) -> Result<i16> {
+        match self {
+            Self::I16(v) => Ok(*v),
+            v => crate::bail!("not a i16 {v:?}"),
+        }
+    }
+
+    pub fn to_u32(&self) -> Result<u32> {
+        match self {
+            Self::U32(v) => Ok(*v),
+            v => crate::bail!("not a u32 {v:?}"),
+        }
+    }
+
+    pub fn to_i32(&self) -> Result<i32> {
+        match self {
+            Self::I32(v) => Ok(*v),
+            v => crate::bail!("not a i32 {v:?}"),
+        }
+    }
+
+    pub fn to_f32(&self) -> Result<f32> {
+        match self {
+            Self::F32(v) => Ok(*v),
+            v => crate::bail!("not a f32 {v:?}"),
+        }
+    }
+
+    pub fn to_bool(&self) -> Result<bool> {
+        match self {
+            Self::Bool(v) => Ok(*v),
+            v => crate::bail!("not a bool {v:?}"),
+        }
+    }
+
+    pub fn to_vec(&self) -> Result<&Vec<Value>> {
+        match self {
+            Self::Array(v) => Ok(v),
+            v => crate::bail!("not a vec {v:?}"),
+        }
+    }
+
+    pub fn to_string(&self) -> Result<&String> {
+        match self {
+            Self::String(v) => Ok(v),
+            v => crate::bail!("not a string {v:?}"),
+        }
+    }
+
     fn read<R: std::io::Read>(reader: &mut R, value_type: ValueType) -> Result<Self> {
         let v = match value_type {
             ValueType::U8 => Self::U8(reader.read_u8()?),
@@ -228,5 +298,17 @@ impl Content {
             tensor_infos,
             tensor_data_offset,
         })
+    }
+
+    pub fn tensor<R: std::io::Seek + std::io::Read>(
+        &self,
+        reader: &mut R,
+        name: &str,
+    ) -> Result<QTensor> {
+        let tensor_info = match self.tensor_infos.get(name) {
+            Some(tensor_info) => tensor_info,
+            None => crate::bail!("cannot find tensor-infor for {name}"),
+        };
+        tensor_info.read(reader, self.tensor_data_offset)
     }
 }
