@@ -10,13 +10,99 @@ and ease of use. Try our online demos:
 [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2),
 [yolo](https://huggingface.co/spaces/lmz/candle-yolo).
 
-```rust
-let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
-let b = Tensor::randn(0f32, 1., (3, 4), &Device::Cpu)?;
+## Installation
 
-let c = a.matmul(&b)?;
-println!("{c}");
+- *With Cuda support*:
+
+1. To install candle with Cuda support, first make sure that Cuda is correctly installed.
+- `nvcc --version` should print your information about your Cuda compiler driver.
+- `nvidia-smi --query-gpu=compute_cap --format=csv` should print your GPUs compute capability, e.g. something
+like:
 ```
+compute_cap
+8.9
+```
+
+If any of the above commands errors out, please make sure to update your CUDA version.
+
+2. Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) with Cuda support
+
+```bash
+cargo new myapp
+cd myapp
+```
+
+Next make sure to add the `candle-core` crate with the cuda feature:
+
+```
+cargo add --git https://github.com/huggingface/candle.git candle-core --features "cuda"
+```
+
+Finally, run `cargo build` to make sure everything can be correctly built.
+
+```
+cargo run
+```
+
+Now you can run the example as shown in the next section!
+
+- *Without Cuda support*:
+
+Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) as follows:
+
+```
+cargo new myapp
+cd myapp
+cargo add --git https://github.com/huggingface/candle.git candle-core
+```
+
+Finally, run `cargo build` to make sure everything can be correctly built.
+
+```
+cargo run
+```
+
+## Get started
+
+Having installed `candle-core` as described in [Installation](#Installation), we can now 
+run a simple matrix multiplication.
+
+First, let's add the [`anyhow`](https://docs.rs/anyhow/latest/anyhow/) package to our app.
+
+```
+cd myapp
+cargo add anyhow
+```
+
+Next, write the following to your `myapp/src/main.rs` file:
+
+```rust
+use anyhow::Result;
+use candle_core::{Device, Tensor};
+
+fn main() -> Result<()> {
+    let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
+    let b = Tensor::randn(0f32, 1., (3, 4), &Device::Cpu)?;
+
+    let c = a.matmul(&b)?;
+    println!("{c}");
+    Ok(())
+}
+```
+
+`cargo run` should display a tensor of shape `Tensor[[2, 4], f32]`
+
+
+Having installed `candle` with Cuda support, you can create the tensors on GPU instead as follows:
+
+```diff
+- let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
+- let b = Tensor::randn(0f32, 1., (3, 4), &Device::Cpu)?;
++ let a = Tensor::randn(0f32, 1., (2, 3), &Device::new_cuda(0)?)?;
++ let b = Tensor::randn(0f32, 1., (3, 4), &Device::new_cuda(0)?)?;
+```
+
+For more advanced examples, please have a look at the following sections.
 
 ## Check out our examples
 
