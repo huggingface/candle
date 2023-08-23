@@ -25,7 +25,7 @@ cd myapp
 
 Make sure to add the `candle-core` crate with the cuda feature:
 
-```
+```bash
 cargo add --git https://github.com/huggingface/candle.git candle-core --features "cuda"
 ```
 
@@ -47,7 +47,7 @@ cargo add --git https://github.com/huggingface/candle.git candle-core
 
 Finally, run `cargo build` to make sure everything can be correctly built.
 
-```
+```bash
 cargo run
 ```
 
