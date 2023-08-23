@@ -99,8 +99,9 @@ Having installed `candle` with Cuda support, you can create the tensors on GPU i
 ```diff
 - let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
 - let b = Tensor::randn(0f32, 1., (3, 4), &Device::Cpu)?;
-+ let a = Tensor::randn(0f32, 1., (2, 3), &Device::new_cuda(0)?)?;
-+ let b = Tensor::randn(0f32, 1., (3, 4), &Device::new_cuda(0)?)?;
++ let device = Device::new_cuda(0)?;
++ let a = Tensor::randn(0f32, 1., (2, 3), &device)?;
++ let b = Tensor::randn(0f32, 1., (3, 4), &device)?;
 ```
 
 For more advanced examples, please have a look at the following sections.
