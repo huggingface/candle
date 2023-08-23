@@ -1,6 +1,6 @@
 # Installation
 
-- **With Cuda support**:
+**With Cuda support**:
 
 1. First, make sure that Cuda is correctly installed.
 - `nvcc --version` should print your information about your Cuda compiler driver.
