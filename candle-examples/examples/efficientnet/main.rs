@@ -382,8 +382,18 @@ pub fn main() -> anyhow::Result<()> {
     let model_file = match args.model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("lmz/candle-dino-v2".into());
-            api.get("dinov2_vits14.safetensors")?
+            let api = api.model("lmz/candle-efficientnet".into());
+            let filename = match args.which {
+                Which::B0 => "efficientnet-b0.safetensors",
+                Which::B1 => "efficientnet-b1.safetensors",
+                Which::B2 => "efficientnet-b2.safetensors",
+                Which::B3 => "efficientnet-b3.safetensors",
+                Which::B4 => "efficientnet-b4.safetensors",
+                Which::B5 => "efficientnet-b5.safetensors",
+                Which::B6 => "efficientnet-b6.safetensors",
+                Which::B7 => "efficientnet-b7.safetensors",
+            };
+            api.get(filename)?
         }
         Some(model) => model.into(),
     };
