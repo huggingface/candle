@@ -16,27 +16,48 @@
     <script type="module">
       const MODEL_BASEURL =
         "https://huggingface.co/lmz/candle-yolo-v8/resolve/main/";
+
+      const MODELS = {
+        yolov8n: {
+          model_size: "n",
+          url: "yolov8n.safetensors",
+        },
+        yolov8s: {
+          model_size: "s",
+          url: "yolov8s.safetensors",
+        },
+        yolov8m: {
+          model_size: "m",
+          url: "yolov8m.safetensors",
+        },
+        yolov8l: {
+          model_size: "l",
+          url: "yolov8l.safetensors",
+        },
+        yolov8x: {
+          model_size: "x",
+          url: "yolov8x.safetensors",
+        },
+      };
+
       // init web worker
-      const yoloWorker = new Worker("yoloWorker.js", { type: "module" });
+      const yoloWorker = new Worker("./yoloWorker.js", { type: "module" });
 
       async function classifyImage(
         imageURL, // URL of image to classify
         modelID, // ID of model to use
         modelURL, // URL to model file
-        updateStatus, // function receives status updates
-        signal // AbortSignal to abort worker
+        modelSize, // size of model
+        updateStatus // function receives status updates
       ) {
         return new Promise((resolve, reject) => {
-          yoloWorker.postMessage({ imageURL, modelID, modelURL });
+          yoloWorker.postMessage({ imageURL, modelID, modelURL, modelSize });
           yoloWorker.addEventListener("message", (event) => {
             if ("status" in event.data) {
               updateStatus(event.data.status);
             }
             if ("error" in event.data) {
               reject(new Error(event.data.error));
-            }
-            if (signal?.aborted) {
-              reject(new Error("Aborted"));
             }
             if (event.data.status === "complete") {
               resolve(event.data);
@@ -48,11 +69,10 @@
       function updateStatus(statusMessage) {
         document.querySelector("#status").textContent = statusMessage;
       }
-
       document.querySelector("#detect").addEventListener("click", async () => {
         const modelID = document.querySelector("#model").value;
-        const modelURL = MODEL_BASEURL + modelID;
-        const controller = new AbortController();
+        const modelURL = MODEL_BASEURL + MODELS[modelID].url;
+        const modelSize = MODELS[modelID].model_size;
 
         let imageURL;
         // if image on input file
@@ -72,8 +92,8 @@
           imageURL,
           modelID,
           modelURL,
-          updateStatus,
-          controller.signal
+          modelSize,
+          updateStatus
         );
 
         const { output } = results;
@@ -142,13 +162,11 @@
         <h3 class="text-xl font-bold">Models:</h3>
         <label for="model">Choose a model size:</label>
         <select id="model" class="border-2 border-gray-500 rounded-md">
-          <option value="yolov8n.safetensors">yolov8n (6.37 MB)</option>
-          <option value="yolov8s.safetensors" selected>
-            yolov8s (22.4 MB)
-          </option>
-          <option value="yolov8m.safetensors">yolov8m (51.9 MB)</option>
-          <option value="yolov8l.safetensors">yolov8l (87.5 MB)</option>
-          <option value="yolov8x.safetensors">yolov8x (137 MB)</option>
+          <option value="yolov8n">yolov8n (6.37 MB)</option>
+          <option value="yolov8s" selected>yolov8s (22.4 MB)</option>
+          <option value="yolov8m">yolov8m (51.9 MB)</option>
+          <option value="yolov8l">yolov8l (87.5 MB)</option>
+          <option value="yolov8x">yolov8x (137 MB)</option>
         </select>
       </div>
       <div>
@@ -199,7 +217,7 @@
             type="file"
             id="file"
             accept="image/*"
-            class="m-3 p-3"
+            class="my-3 py-3"
             multiple="false"
           />
         </div>
