@@ -295,10 +295,12 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F64(data)
             }
         };
-        if lo != 0.0 || up != 1.0 {
+        let slice = if lo == 0. && up == 1.0 {
+            slice
+        } else {
             let layout = Layout::contiguous(shape);
-            Affine(up - lo, lo).map(&slice, self, &layout)?;
-        }
+            Affine(up - lo, lo).map(&slice, self, &layout)?
+        };
         Ok(CudaStorage {
             slice,
             device: self.clone(),
