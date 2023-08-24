@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_closure_call)]
 use crate::{CpuStorage, CudaStorage, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
 use num_traits::float::Float;
@@ -251,6 +252,7 @@ pub trait UnaryOpT {
     fn f64(v1: f64) -> f64;
     fn u8(v1: u8) -> u8;
     fn u32(v1: u32) -> u32;
+    fn i64(v1: i64) -> i64;
 
     // There is no very good way to represent optional function in traits so we go for an explicit
     // boolean flag to mark the function as existing.
@@ -274,6 +276,7 @@ pub trait BinaryOpT {
     fn f64(v1: f64, v2: f64) -> f64;
     fn u8(v1: u8, v2: u8) -> u8;
     fn u32(v1: u32, v2: u32) -> u32;
+    fn i64(v1: i64, v2: i64) -> i64;
 
     const BF16_VEC: bool = false;
     fn bf16_vec(_xs1: &[bf16], _xs2: &[bf16], _ys: &mut [bf16]) {}
@@ -287,6 +290,8 @@ pub trait BinaryOpT {
     fn u8_vec(_xs1: &[u8], _xs2: &[u8], _ys: &mut [u8]) {}
     const U32_VEC: bool = false;
     fn u32_vec(_xs1: &[u32], _xs2: &[u32], _ys: &mut [u32]) {}
+    const I64_VEC: bool = false;
+    fn i64_vec(_xs1: &[i64], _xs2: &[i64], _ys: &mut [i64]) {}
 }
 
 pub(crate) struct Add;
@@ -335,6 +340,10 @@ macro_rules! bin_op {
             }
             #[inline(always)]
             fn u32(v1: u32, v2: u32) -> u32 {
+                $e(v1, v2)
+            }
+            #[inline(always)]
+            fn i64(v1: i64, v2: i64) -> i64 {
                 $e(v1, v2)
             }
 
@@ -390,6 +399,7 @@ bin_op!(
     vd_max
 );
 
+#[allow(clippy::redundant_closure_call)]
 macro_rules! unary_op {
     ($op: ident, $name: literal, $a: ident, $e: expr) => {
         impl UnaryOpT for $op {
@@ -419,6 +429,10 @@ macro_rules! unary_op {
             #[inline(always)]
             fn u32(_: u32) -> u32 {
                 todo!("no unary function for u32")
+            }
+            #[inline(always)]
+            fn i64(_: i64) -> i64 {
+                todo!("no unary function for i64")
             }
         }
     };
@@ -451,6 +465,10 @@ macro_rules! unary_op {
             #[inline(always)]
             fn u32(_: u32) -> u32 {
                 todo!("no unary function for u32")
+            }
+            #[inline(always)]
+            fn i64(_: i64) -> i64 {
+                todo!("no unary function for i64")
             }
 
             #[cfg(feature = "mkl")]
@@ -543,6 +561,10 @@ impl UnaryOpT for Gelu {
     fn u32(_: u32) -> u32 {
         0
     }
+    #[inline(always)]
+    fn i64(_: i64) -> i64 {
+        0
+    }
     const KERNEL: &'static str = "ugelu";
 
     #[cfg(feature = "mkl")]
@@ -590,6 +612,10 @@ impl UnaryOpT for Relu {
     }
     #[inline(always)]
     fn u32(v: u32) -> u32 {
+        v
+    }
+    #[inline(always)]
+    fn i64(v: i64) -> i64 {
         v
     }
 }

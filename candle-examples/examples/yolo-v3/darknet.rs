@@ -128,7 +128,11 @@ fn conv(vb: VarBuilder, index: usize, p: usize, b: &Block) -> Result<(usize, Bl)
         }
         Some(_) | None => (None, true),
     };
-    let conv_cfg = candle_nn::Conv2dConfig { stride, padding };
+    let conv_cfg = candle_nn::Conv2dConfig {
+        stride,
+        padding,
+        groups: 1,
+    };
     let conv = if bias {
         conv2d(p, filters, size, conv_cfg, vb.pp(&format!("conv_{index}")))?
     } else {

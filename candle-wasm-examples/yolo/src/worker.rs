@@ -27,45 +27,61 @@ pub struct ModelData {
     pub weights: Vec<u8>,
 }
 
-struct Model {
+pub struct Model {
     model: YoloV8,
 }
 
 impl Model {
-    fn run(
-        &self,
-        _link: &WorkerLink<Worker>,
-        _id: HandlerId,
-        image_data: Vec<u8>,
-    ) -> Result<Vec<Vec<Bbox>>> {
+    pub fn run(&self, image_data: Vec<u8>) -> Result<Vec<Vec<Bbox>>> {
         console_log!("image data: {}", image_data.len());
         let image_data = std::io::Cursor::new(image_data);
         let original_image = image::io::Reader::new(image_data)
             .with_guessed_format()?
             .decode()
             .map_err(candle::Error::wrap)?;
-        let image = {
-            let data = original_image
-                .resize_exact(640, 640, image::imageops::FilterType::Triangle)
-                .to_rgb8()
-                .into_raw();
-            Tensor::from_vec(data, (640, 640, 3), &Device::Cpu)?.permute((2, 0, 1))?
+        let (width, height) = {
+            let w = original_image.width() as usize;
+            let h = original_image.height() as usize;
+            if w < h {
+                let w = w * 640 / h;
+                // Sizes have to be divisible by 32.
+                (w / 32 * 32, 640)
+            } else {
+                let h = h * 640 / w;
+                (640, h / 32 * 32)
+            }
         };
-        let image = (image.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
-        let predictions = self.model.forward(&image)?.squeeze(0)?;
+        let image_t = {
+            let img = original_image.resize_exact(
+                width as u32,
+                height as u32,
+                image::imageops::FilterType::CatmullRom,
+            );
+            let data = img.to_rgb8().into_raw();
+            Tensor::from_vec(
+                data,
+                (img.height() as usize, img.width() as usize, 3),
+                &Device::Cpu,
+            )?
+            .permute((2, 0, 1))?
+        };
+        let image_t = (image_t.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
+        let predictions = self.model.forward(&image_t)?.squeeze(0)?;
         console_log!("generated predictions {predictions:?}");
-        let bboxes = report(&predictions, original_image, 640, 640)?;
+        let bboxes = report(&predictions, original_image, width, height)?;
         Ok(bboxes)
     }
-}
 
-impl Model {
-    fn load(md: ModelData) -> Result<Self> {
+    pub fn load_(weights: &[u8]) -> Result<Self> {
         let dev = &Device::Cpu;
-        let weights = safetensors::tensor::SafeTensors::deserialize(&md.weights)?;
+        let weights = safetensors::tensor::SafeTensors::deserialize(weights)?;
         let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, dev);
         let model = YoloV8::load(vb, Multiples::s(), 80)?;
         Ok(Self { model })
+    }
+
+    pub fn load(md: ModelData) -> Result<Self> {
+        Self::load_(&md.weights)
     }
 }
 
@@ -112,9 +128,7 @@ impl yew_agent::Worker for Worker {
             WorkerInput::Run(image_data) => match &mut self.model {
                 None => Err("model has not been set yet".to_string()),
                 Some(model) => {
-                    let result = model
-                        .run(&self.link, id, image_data)
-                        .map_err(|e| e.to_string());
+                    let result = model.run(image_data).map_err(|e| e.to_string());
                     Ok(WorkerOutput::ProcessingDone(result))
                 }
             },

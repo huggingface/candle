@@ -92,6 +92,7 @@ from_tensor!(f64);
 from_tensor!(f32);
 from_tensor!(f16);
 from_tensor!(bf16);
+from_tensor!(i64);
 from_tensor!(u32);
 from_tensor!(u8);
 
@@ -127,6 +128,11 @@ impl Tensor {
             DType::U32 => {
                 for v in vs.to_vec1::<u32>()? {
                     f.write_u32::<LittleEndian>(v)?
+                }
+            }
+            DType::I64 => {
+                for v in vs.to_vec1::<i64>()? {
+                    f.write_i64::<LittleEndian>(v)?
                 }
             }
             DType::U8 => {

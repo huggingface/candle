@@ -66,6 +66,7 @@ impl ResnetBlock2D {
         let conv_cfg = nn::Conv2dConfig {
             stride: 1,
             padding: 1,
+            groups: 1,
         };
         let norm1 = nn::group_norm(config.groups, in_channels, config.eps, vs.pp("norm1"))?;
         let conv1 = conv2d(in_channels, out_channels, 3, conv_cfg, vs.pp("conv1"))?;
@@ -79,6 +80,7 @@ impl ResnetBlock2D {
             let conv_cfg = nn::Conv2dConfig {
                 stride: 1,
                 padding: 0,
+                groups: 1,
             };
             Some(conv2d(
                 in_channels,

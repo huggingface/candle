@@ -112,8 +112,8 @@ impl UNet2DConditionModel {
         let bl_attention_head_dim = config.blocks.last().unwrap().attention_head_dim;
         let time_embed_dim = b_channels * 4;
         let conv_cfg = nn::Conv2dConfig {
-            stride: 1,
             padding: 1,
+            ..Default::default()
         };
         let conv_in = conv2d(in_channels, b_channels, 3, conv_cfg, vs.pp("conv_in"))?;
 

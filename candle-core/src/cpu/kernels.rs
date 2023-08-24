@@ -1,4 +1,4 @@
-pub trait VecOps: num_traits::NumAssign + Copy {
+pub trait VecOps: num_traits::NumAssign + PartialOrd + Copy {
     /// Dot-product of two vectors.
     ///
     /// # Safety
@@ -24,6 +24,40 @@ pub trait VecOps: num_traits::NumAssign + Copy {
         *res = Self::zero();
         for i in 0..len {
             *res += *xs.add(i)
+        }
+    }
+
+    /// Maximum element in a non-empty vector.
+    ///
+    /// # Safety
+    ///
+    /// The length of `xs` must be at least `len` and positive. `res` has to point to a valid
+    /// element.
+    #[inline(always)]
+    unsafe fn vec_reduce_max(xs: *const Self, res: *mut Self, len: usize) {
+        *res = *xs;
+        for i in 1..len {
+            let x = *xs.add(i);
+            if x > *res {
+                *res = x
+            }
+        }
+    }
+
+    /// Minimum element in a non-empty vector.
+    ///
+    /// # Safety
+    ///
+    /// The length of `xs` must be at least `len` and positive. `res` has to point to a valid
+    /// element.
+    #[inline(always)]
+    unsafe fn vec_reduce_min(xs: *const Self, res: *mut Self, len: usize) {
+        *res = *xs;
+        for i in 1..len {
+            let x = *xs.add(i);
+            if x < *res {
+                *res = x
+            }
         }
     }
 }
@@ -53,6 +87,7 @@ impl VecOps for f64 {}
 impl VecOps for half::bf16 {}
 impl VecOps for u8 {}
 impl VecOps for u32 {}
+impl VecOps for i64 {}
 
 #[inline(always)]
 pub fn par_for_each(n_threads: usize, func: impl Fn(usize) + Send + Sync) {

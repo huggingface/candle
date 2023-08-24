@@ -5,8 +5,8 @@ use candle_nn::{
 };
 use image::DynamicImage;
 
-const CONFIDENCE_THRESHOLD: f32 = 0.5;
-const NMS_THRESHOLD: f32 = 0.4;
+const CONFIDENCE_THRESHOLD: f32 = 0.25;
+const NMS_THRESHOLD: f32 = 0.45;
 
 // Model architecture from https://github.com/ultralytics/ultralytics/issues/189
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py
@@ -97,7 +97,11 @@ impl ConvBlock {
         padding: Option<usize>,
     ) -> Result<Self> {
         let padding = padding.unwrap_or(k / 2);
-        let cfg = Conv2dConfig { padding, stride };
+        let cfg = Conv2dConfig {
+            padding,
+            stride,
+            groups: 1,
+        };
         let conv = conv2d_no_bias(c1, c2, k, cfg, vb.pp("conv"))?;
         let bn = batch_norm(c2, 1e-3, vb.pp("bn"))?;
         Ok(Self { conv, bn })
