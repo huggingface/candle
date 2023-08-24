@@ -64,6 +64,16 @@ fn avg_pool2d_pytorch(dev: &Device) -> Result<()> {
     );
     let pool = t.avg_pool2d((3, 3), (3, 3))?.squeeze(0)?;
     assert_eq!(test_utils::to_vec3_round(pool, 4)?, [[[0.085]], [[0.0078]]]);
+
+    let t = t.reshape((1, 1, 4, 8))?;
+    let pool = t.avg_pool2d((2, 2), (2, 2))?.squeeze(0)?.squeeze(0)?;
+    assert_eq!(
+        test_utils::to_vec2_round(&pool, 4)?,
+        [
+            [0.7745, 0.0276, -1.6983, 0.12],
+            [0.3542, 0.1625, 0.4542, -0.0014]
+        ]
+    );
     Ok(())
 }
 
