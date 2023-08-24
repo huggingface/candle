@@ -428,7 +428,6 @@ impl YoloV8Neck {
     }
 
     fn forward(&self, p3: &Tensor, p4: &Tensor, p5: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
-        println!("{p3:?} {p4:?} {p5:?}");
         let x = self
             .n1
             .forward(&Tensor::cat(&[&self.up.forward(p5)?, p4], 1)?)?;
@@ -645,15 +644,15 @@ impl PoseHead {
         let xs0 = forward_cv(xs0, 0)?;
         let xs1 = forward_cv(xs1, 1)?;
         let xs2 = forward_cv(xs2, 2)?;
-        let xs = Tensor::cat(&[xs0, xs1, xs2], 1)?;
+        let xs = Tensor::cat(&[xs0, xs1, xs2], D::Minus1)?;
         let (b_sz, _nk, hw) = xs.dims3()?;
         let xs = xs.reshape((b_sz, self.kpt.0, self.kpt.1, hw))?;
 
         let ys01 = ((xs.i((.., .., 0..2))? * 2.)?.broadcast_add(&d.anchors)? - 0.5)?
             .broadcast_mul(&d.strides)?;
         let ys2 = candle_nn::ops::sigmoid(&xs.i((.., .., 2..3))?)?;
-
-        Tensor::cat(&[d.pred, ys01, ys2], 1)
+        let ys = Tensor::cat(&[ys01, ys2], 2)?.flatten(1, 2)?;
+        Tensor::cat(&[d.pred, ys], 1)
     }
 }
 
@@ -856,6 +855,7 @@ pub fn main() -> anyhow::Result<()> {
     let weights = weights.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &Device::Cpu);
     let model = YoloV8::load(vb, multiples, /* num_classes=*/ 80)?;
+    // let model = YoloV8Pose::load(vb, multiples, /* num_classes=*/ 1, (17, 3))?;
     println!("model loaded");
     for image_name in args.images.iter() {
         println!("processing {image_name}");
@@ -889,7 +889,6 @@ pub fn main() -> anyhow::Result<()> {
             )?
             .permute((2, 0, 1))?
         };
-        println!("{image_t:?}");
         let image_t = (image_t.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image_t)?.squeeze(0)?;
         println!("generated predictions {predictions:?}");
