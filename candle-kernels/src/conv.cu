@@ -64,8 +64,8 @@ __device__ void conv2d(
     T *dst
 ) {
   const size_t dst_i = blockIdx.x * blockDim.x + threadIdx.x;
-  // src: (b_size, c_in, w_in, h_in)
-  // k: (c_out, c_in, w_k, h_k)
+  // src: (b_size, c_in, h_in, w_in)
+  // k: (c_out, c_in, h_k, w_k)
   const size_t *src_dims = info;
   const size_t *src_s = info + 4;
   const size_t *k_dims = info + 8;
