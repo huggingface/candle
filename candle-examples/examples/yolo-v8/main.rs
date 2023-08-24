@@ -454,6 +454,13 @@ struct DetectionHead {
     no: usize,
 }
 
+#[derive(Debug)]
+struct PoseHead {
+    detect: DetectionHead,
+    cv4: [(ConvBlock, ConvBlock, Conv2d); 3],
+    kpt: (usize, usize),
+}
+
 fn make_anchors(
     xs0: &Tensor,
     xs1: &Tensor,
@@ -580,6 +587,64 @@ impl DetectionHead {
         let dbox = dist2bbox(&self.dfl.forward(&box_)?, &anchors.unsqueeze(0)?)?;
         let dbox = dbox.broadcast_mul(&strides)?;
         Tensor::cat(&[dbox, candle_nn::ops::sigmoid(&cls)?], 1)
+    }
+}
+
+#[allow(unused)]
+impl PoseHead {
+    // kpt: keypoints, (17, 3)
+    // nc: num-classes, 80
+    fn load(
+        vb: VarBuilder,
+        nc: usize,
+        kpt: (usize, usize),
+        filters: (usize, usize, usize),
+    ) -> Result<Self> {
+        let detect = DetectionHead::load(vb.clone(), nc, filters)?;
+        let nk = kpt.0 * kpt.1;
+        let c4 = usize::max(filters.0 / 4, nk);
+        let cv4 = [
+            Self::load_cv4(vb.pp("cv4.0"), c4, nk, filters.0)?,
+            Self::load_cv4(vb.pp("cv4.1"), c4, nk, filters.1)?,
+            Self::load_cv4(vb.pp("cv4.2"), c4, nk, filters.2)?,
+        ];
+        Ok(Self { detect, cv4, kpt })
+    }
+
+    fn load_cv4(
+        vb: VarBuilder,
+        c1: usize,
+        nc: usize,
+        filter: usize,
+    ) -> Result<(ConvBlock, ConvBlock, Conv2d)> {
+        let block0 = ConvBlock::load(vb.pp("0"), filter, c1, 3, 1, None)?;
+        let block1 = ConvBlock::load(vb.pp("1"), c1, c1, 3, 1, None)?;
+        let conv = conv2d(c1, nc, 1, Default::default(), vb.pp("2"))?;
+        Ok((block0, block1, conv))
+    }
+
+    fn forward(&self, xs0: &Tensor, xs1: &Tensor, xs2: &Tensor) -> Result<Tensor> {
+        let d = self.detect.forward(xs0, xs1, xs2)?;
+        let forward_cv = |xs: &Tensor, i: usize| {
+            let (b_sz, _, h, w) = xs.dims4()?;
+            let xs = self.cv4[i].0.forward(xs)?;
+            let xs = self.cv4[i].1.forward(&xs)?;
+            let xs = self.cv4[i].2.forward(&xs)?;
+            xs.reshape((b_sz, self.kpt.0 * self.kpt.1, h * w))
+        };
+        let xs0 = forward_cv(xs0, 0)?;
+        let xs1 = forward_cv(xs1, 1)?;
+        let xs2 = forward_cv(xs2, 2)?;
+        let xs = Tensor::cat(&[xs0, xs1, xs2], 1)?;
+        let (b_sz, _nk, hw) = xs.dims3()?;
+        let xs = xs.reshape((b_sz, self.kpt.0, self.kpt.1, hw))?;
+
+        let ys0 = (xs.i((.., .., 0))? * 2.)?;
+        let ys1 = (xs.i((.., .., 1))? * 2.)?;
+        // TODO: Add anchors[0]-0.5 or anchors[1]-0.5, then multiply by strides.
+        let ys2 = candle_nn::ops::sigmoid(&xs.i((.., .., 2))?)?;
+
+        Tensor::cat(&[d, ys0, ys1, ys2], 1)
     }
 }
 
