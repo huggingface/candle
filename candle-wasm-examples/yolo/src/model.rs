@@ -623,16 +623,31 @@ fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
     i_area / (b1_area + b2_area - i_area)
 }
 
-pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Vec<Vec<Bbox>>> {
+pub fn report(
+    pred: &Tensor,
+    img: DynamicImage,
+    w: usize,
+    h: usize,
+    conf_threshold: f32,
+    iou_threshold: f32,
+) -> Result<Vec<Vec<Bbox>>> {
     let (pred_size, npreds) = pred.dims2()?;
     let nclasses = pred_size - 4;
+    let conf_threshold = Some(conf_threshold)
+        .unwrap_or(CONFIDENCE_THRESHOLD)
+        .max(0.0)
+        .min(1.0);
+    let iou_threshold = Some(iou_threshold)
+        .unwrap_or(NMS_THRESHOLD)
+        .max(0.0)
+        .min(1.0);
     // The bounding boxes grouped by (maximum) class index.
     let mut bboxes: Vec<Vec<Bbox>> = (0..nclasses).map(|_| vec![]).collect();
     // Extract the bounding boxes for which confidence is above the threshold.
     for index in 0..npreds {
         let pred = Vec::<f32>::try_from(pred.i((.., index))?)?;
         let confidence = *pred[4..].iter().max_by(|x, y| x.total_cmp(y)).unwrap();
-        if confidence > CONFIDENCE_THRESHOLD {
+        if confidence > conf_threshold {
             let mut class_index = 0;
             for i in 0..nclasses {
                 if pred[4 + i] > pred[4 + class_index] {
@@ -659,7 +674,7 @@ pub fn report(pred: &Tensor, img: DynamicImage, w: usize, h: usize) -> Result<Ve
             let mut drop = false;
             for prev_index in 0..current_index {
                 let iou = iou(&bboxes_for_class[prev_index], &bboxes_for_class[index]);
-                if iou > NMS_THRESHOLD {
+                if iou > iou_threshold {
                     drop = true;
                     break;
                 }

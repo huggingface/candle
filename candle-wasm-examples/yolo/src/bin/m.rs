@@ -17,8 +17,13 @@ impl Model {
     }
 
     #[wasm_bindgen]
-    pub fn run(&self, image: Vec<u8>) -> Result<String, JsError> {
-        let bboxes = self.inner.run(image)?;
+    pub fn run(
+        &self,
+        image: Vec<u8>,
+        conf_threshold: f32,
+        iou_threshold: f32,
+    ) -> Result<String, JsError> {
+        let bboxes = self.inner.run(image, conf_threshold, iou_threshold)?;
         let mut detections: Vec<(String, Bbox)> = vec![];
 
         for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {

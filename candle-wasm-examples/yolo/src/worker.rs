@@ -28,12 +28,24 @@ pub struct ModelData {
     pub model_size: String,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct RunData {
+    pub image_data: Vec<u8>,
+    pub conf_threshold: f32,
+    pub iou_threshold: f32,
+}
+
 pub struct Model {
     model: YoloV8,
 }
 
 impl Model {
-    pub fn run(&self, image_data: Vec<u8>) -> Result<Vec<Vec<Bbox>>> {
+    pub fn run(
+        &self,
+        image_data: Vec<u8>,
+        conf_threshold: f32,
+        iou_threshold: f32,
+    ) -> Result<Vec<Vec<Bbox>>> {
         console_log!("image data: {}", image_data.len());
         let image_data = std::io::Cursor::new(image_data);
         let original_image = image::io::Reader::new(image_data)
@@ -69,7 +81,14 @@ impl Model {
         let image_t = (image_t.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = self.model.forward(&image_t)?.squeeze(0)?;
         console_log!("generated predictions {predictions:?}");
-        let bboxes = report(&predictions, original_image, width, height)?;
+        let bboxes = report(
+            &predictions,
+            original_image,
+            width,
+            height,
+            conf_threshold,
+            iou_threshold,
+        )?;
         Ok(bboxes)
     }
 
@@ -104,7 +123,7 @@ pub struct Worker {
 #[derive(Serialize, Deserialize)]
 pub enum WorkerInput {
     ModelData(ModelData),
-    Run(Vec<u8>),
+    RunData(RunData),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -136,10 +155,12 @@ impl yew_agent::Worker for Worker {
                 }
                 Err(err) => Err(format!("model creation error {err:?}")),
             },
-            WorkerInput::Run(image_data) => match &mut self.model {
+            WorkerInput::RunData(rd) => match &mut self.model {
                 None => Err("model has not been set yet".to_string()),
                 Some(model) => {
-                    let result = model.run(image_data).map_err(|e| e.to_string());
+                    let result = model
+                        .run(rd.image_data, rd.conf_threshold, rd.iou_threshold)
+                        .map_err(|e| e.to_string());
                     Ok(WorkerOutput::ProcessingDone(result))
                 }
             },

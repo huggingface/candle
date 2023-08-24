@@ -1,5 +1,5 @@
-use crate::worker::{ModelData, Worker, WorkerInput, WorkerOutput};
-use crate::{console_log, model};
+use crate::console_log;
+use crate::worker::{ModelData, RunData, Worker, WorkerInput, WorkerOutput};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use yew::{html, Component, Context, Html};
@@ -166,7 +166,11 @@ impl Component for App {
                                 let status = format!("{err:?}");
                                 Msg::UpdateStatus(status)
                             }
-                            Ok(image_data) => Msg::WorkerInMsg(WorkerInput::Run(image_data)),
+                            Ok(image_data) => Msg::WorkerInMsg(WorkerInput::RunData(RunData {
+                                image_data,
+                                conf_threshold: 0.5,
+                                iou_threshold: 0.5,
+                            })),
                         }
                     });
                 }
