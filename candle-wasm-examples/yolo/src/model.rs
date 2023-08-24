@@ -633,14 +633,8 @@ pub fn report(
 ) -> Result<Vec<Vec<Bbox>>> {
     let (pred_size, npreds) = pred.dims2()?;
     let nclasses = pred_size - 4;
-    let conf_threshold = Some(conf_threshold)
-        .unwrap_or(CONFIDENCE_THRESHOLD)
-        .max(0.0)
-        .min(1.0);
-    let iou_threshold = Some(iou_threshold)
-        .unwrap_or(NMS_THRESHOLD)
-        .max(0.0)
-        .min(1.0);
+    let conf_threshold = conf_threshold.clamp(0.0, 1.0);
+    let iou_threshold = iou_threshold.clamp(0.0, 1.0);
     // The bounding boxes grouped by (maximum) class index.
     let mut bboxes: Vec<Vec<Bbox>> = (0..nclasses).map(|_| vec![]).collect();
     // Extract the bounding boxes for which confidence is above the threshold.
