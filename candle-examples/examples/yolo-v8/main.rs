@@ -601,7 +601,6 @@ impl DetectionHead {
     }
 }
 
-#[allow(unused)]
 impl PoseHead {
     // kpt: keypoints, (17, 3)
     // nc: num-classes, 80
@@ -679,6 +678,31 @@ impl Module for YoloV8 {
         let (xs1, xs2, xs3) = self.net.forward(xs)?;
         let (xs1, xs2, xs3) = self.fpn.forward(&xs1, &xs2, &xs3)?;
         Ok(self.head.forward(&xs1, &xs2, &xs3)?.pred)
+    }
+}
+
+#[derive(Debug)]
+struct YoloV8Head {
+    net: DarkNet,
+    fpn: YoloV8Neck,
+    head: PoseHead,
+}
+
+#[allow(unused)]
+impl YoloV8Head {
+    fn load(vb: VarBuilder, m: Multiples, num_classes: usize, kpt: (usize, usize)) -> Result<Self> {
+        let net = DarkNet::load(vb.pp("net"), m)?;
+        let fpn = YoloV8Neck::load(vb.pp("fpn"), m)?;
+        let head = PoseHead::load(vb.pp("head"), num_classes, kpt, m.filters())?;
+        Ok(Self { net, fpn, head })
+    }
+}
+
+impl Module for YoloV8Head {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (xs1, xs2, xs3) = self.net.forward(xs)?;
+        let (xs1, xs2, xs3) = self.fpn.forward(&xs1, &xs2, &xs3)?;
+        self.head.forward(&xs1, &xs2, &xs3)
     }
 }
 
