@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{
     BackpropOp, BinaryOp, CmpOp, CustomOp1, CustomOp2, CustomOp3, Op, ReduceOp, UnaryOp,
