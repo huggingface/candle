@@ -502,6 +502,12 @@ fn dist2bbox(distance: &Tensor, anchor_points: &Tensor) -> Result<Tensor> {
     Tensor::cat(&[c_xy, wh], 1)
 }
 
+struct DetectionHeadOut {
+    pred: Tensor,
+    anchors: Tensor,
+    strides: Tensor,
+}
+
 impl DetectionHead {
     fn load(vb: VarBuilder, nc: usize, filters: (usize, usize, usize)) -> Result<Self> {
         let ch = 16;
@@ -552,7 +558,7 @@ impl DetectionHead {
         Ok((block0, block1, conv))
     }
 
-    fn forward(&self, xs0: &Tensor, xs1: &Tensor, xs2: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs0: &Tensor, xs1: &Tensor, xs2: &Tensor) -> Result<DetectionHeadOut> {
         let forward_cv = |xs, i: usize| {
             let xs_2 = self.cv2[i].0.forward(xs)?;
             let xs_2 = self.cv2[i].1.forward(&xs_2)?;
@@ -568,7 +574,7 @@ impl DetectionHead {
         let xs2 = forward_cv(xs2, 2)?;
 
         let (anchors, strides) = make_anchors(&xs0, &xs1, &xs2, (8, 16, 32), 0.5)?;
-        let anchors = anchors.transpose(0, 1)?;
+        let anchors = anchors.transpose(0, 1)?.unsqueeze(0)?;
         let strides = strides.transpose(0, 1)?;
 
         let reshape = |xs: &Tensor| {
@@ -584,9 +590,14 @@ impl DetectionHead {
         let box_ = x_cat.i((.., ..self.ch * 4))?;
         let cls = x_cat.i((.., self.ch * 4..))?;
 
-        let dbox = dist2bbox(&self.dfl.forward(&box_)?, &anchors.unsqueeze(0)?)?;
+        let dbox = dist2bbox(&self.dfl.forward(&box_)?, &anchors)?;
         let dbox = dbox.broadcast_mul(&strides)?;
-        Tensor::cat(&[dbox, candle_nn::ops::sigmoid(&cls)?], 1)
+        let pred = Tensor::cat(&[dbox, candle_nn::ops::sigmoid(&cls)?], 1)?;
+        Ok(DetectionHeadOut {
+            pred,
+            anchors,
+            strides,
+        })
     }
 }
 
@@ -639,12 +650,11 @@ impl PoseHead {
         let (b_sz, _nk, hw) = xs.dims3()?;
         let xs = xs.reshape((b_sz, self.kpt.0, self.kpt.1, hw))?;
 
-        let ys0 = (xs.i((.., .., 0))? * 2.)?;
-        let ys1 = (xs.i((.., .., 1))? * 2.)?;
-        // TODO: Add anchors[0]-0.5 or anchors[1]-0.5, then multiply by strides.
-        let ys2 = candle_nn::ops::sigmoid(&xs.i((.., .., 2))?)?;
+        let ys01 = ((xs.i((.., .., 0..2))? * 2.)?.broadcast_add(&d.anchors)? - 0.5)?
+            .broadcast_mul(&d.strides)?;
+        let ys2 = candle_nn::ops::sigmoid(&xs.i((.., .., 2..3))?)?;
 
-        Tensor::cat(&[d, ys0, ys1, ys2], 1)
+        Tensor::cat(&[d.pred, ys01, ys2], 1)
     }
 }
 
@@ -668,7 +678,7 @@ impl Module for YoloV8 {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (xs1, xs2, xs3) = self.net.forward(xs)?;
         let (xs1, xs2, xs3) = self.fpn.forward(&xs1, &xs2, &xs3)?;
-        self.head.forward(&xs1, &xs2, &xs3)
+        Ok(self.head.forward(&xs1, &xs2, &xs3)?.pred)
     }
 }
 
