@@ -41,6 +41,10 @@ pub enum OpCode {
     Build = b'b',
     Stop = b'.',
     NewObj = 0x81,
+    EmptyList = b']',
+    BinFloat = b'g',
+    Append = b'a',
+    Appends = b'e',
 }
 
 // Avoid using FromPrimitive so as not to drag another dependency.
@@ -76,6 +80,10 @@ impl TryFrom<u8> for OpCode {
             b'b' => Ok(Self::Build),
             b'.' => Ok(Self::Stop),
             0x81 => Ok(Self::NewObj),
+            b']' => Ok(Self::EmptyList),
+            b'G' => Ok(Self::BinFloat),
+            b'a' => Ok(Self::Append),
+            b'e' => Ok(Self::Appends),
             value => Err(value),
         }
     }
@@ -98,10 +106,12 @@ pub enum Object {
         class_name: String,
     },
     Int(i32),
+    Float(f64),
     Unicode(String),
     Bool(bool),
     None,
     Tuple(Vec<Object>),
+    List(Vec<Object>),
     Mark,
     Dict(Vec<(Object, Object)>),
     Reduce {
@@ -400,6 +410,10 @@ impl Stack {
                 let arg = r.read_i32::<LittleEndian>()?;
                 self.push(Object::Int(arg))
             }
+            OpCode::BinFloat => {
+                let arg = r.read_f64::<LittleEndian>()?;
+                self.push(Object::Float(arg))
+            }
             OpCode::BinUnicode => {
                 let len = r.read_u32::<LittleEndian>()?;
                 let mut data = vec![0u8; len as usize];
@@ -433,6 +447,24 @@ impl Stack {
             }
             OpCode::NewTrue => self.push(Object::Bool(true)),
             OpCode::NewFalse => self.push(Object::Bool(false)),
+            OpCode::Append => {
+                let value = self.pop()?;
+                let pylist = self.last()?;
+                if let Object::List(d) = pylist {
+                    d.push(value)
+                } else {
+                    crate::bail!("expected a list, got {pylist:?}")
+                }
+            }
+            OpCode::Appends => {
+                let objs = self.pop_to_marker()?;
+                let pylist = self.last()?;
+                if let Object::List(d) = pylist {
+                    d.extend(objs)
+                } else {
+                    crate::bail!("expected a list, got {pylist:?}")
+                }
+            }
             OpCode::SetItem => {
                 let value = self.pop()?;
                 let key = self.pop()?;
@@ -479,6 +511,7 @@ impl Stack {
             OpCode::Mark => self.push(Object::Mark),
             OpCode::Reduce => self.reduce()?,
             OpCode::EmptyTuple => self.push(Object::Tuple(vec![])),
+            OpCode::EmptyList => self.push(Object::List(vec![])),
             OpCode::BinGet => {
                 let arg = r.read_u8()?;
                 let obj = self.memo_get(arg as u32)?;
