@@ -613,8 +613,129 @@ impl GgmlType for BlockQ3K {
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
 
-    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
-        todo!()
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        if n % QK_K != 0 {
+            crate::bail!("vec_dot_q3k_q8k: {n} is not divisible by {QK_K}")
+        }
+
+        const KMASK1: u32 = 0x03030303;
+        const KMASK2: u32 = 0x0f0f0f0f;
+
+        let mut aux8: [i8; QK_K] = [0; QK_K];
+        let mut aux16: [i16; 8] = [0; 8];
+        let mut sums: [f32; 8] = [0.0; 8];
+        let mut aux32: [i32; 8] = [0; 8];
+
+        let mut auxs: [u32; 4] = [0; 4];
+        let mut scales: &[i8; 16];
+
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let mut q3: &[u8] = &x.qs;
+            let hmask: &[u8] = &x.hmask;
+            let mut q8: &[i8] = &y.qs;
+
+            aux32.iter_mut().for_each(|x| *x = 0);
+            let mut a = &mut aux8[..];
+
+            let mut m = 1;
+            //Like the GGML original this is written this way to enable the compiler to vectorize it.
+            for _ in 0..QK_K / 128 {
+                a.iter_mut()
+                    .take(32)
+                    .zip(q3)
+                    .for_each(|(a_val, q3_val)| *a_val = (q3_val & 3) as i8);
+                a.iter_mut()
+                    .take(32)
+                    .zip(hmask)
+                    .for_each(|(a_val, hmask_val)| {
+                        *a_val -= if hmask_val & m != 0 { 0 } else { 4 }
+                    });
+                a = &mut a[32..];
+                m <<= 1;
+
+                a.iter_mut()
+                    .take(32)
+                    .zip(q3)
+                    .for_each(|(a_val, q3_val)| *a_val = ((q3_val >> 2) & 3) as i8);
+                a.iter_mut()
+                    .take(32)
+                    .zip(hmask)
+                    .for_each(|(a_val, hmask_val)| {
+                        *a_val -= if hmask_val & m != 0 { 0 } else { 4 }
+                    });
+                a = &mut a[32..];
+                m <<= 1;
+
+                a.iter_mut()
+                    .take(32)
+                    .zip(q3)
+                    .for_each(|(a_val, q3_val)| *a_val = ((q3_val >> 4) & 3) as i8);
+                a.iter_mut()
+                    .take(32)
+                    .zip(hmask)
+                    .for_each(|(a_val, hmask_val)| {
+                        *a_val -= if hmask_val & m != 0 { 0 } else { 4 }
+                    });
+                a = &mut a[32..];
+                m <<= 1;
+
+                a.iter_mut()
+                    .take(32)
+                    .zip(q3)
+                    .for_each(|(a_val, q3_val)| *a_val = ((q3_val >> 6) & 3) as i8);
+                a.iter_mut()
+                    .take(32)
+                    .zip(hmask)
+                    .for_each(|(a_val, hmask_val)| {
+                        *a_val -= if hmask_val & m != 0 { 0 } else { 4 }
+                    });
+                a = &mut a[32..];
+                m <<= 1;
+                q3 = &q3[32..];
+            }
+
+            a = &mut aux8[..];
+
+            let aux_raw = unsafe {
+                std::mem::transmute::<&mut [u8; 12], &mut [u32; 3]>(&mut x.scales.clone())
+            };
+            auxs[0..3].copy_from_slice(aux_raw);
+
+            let tmp = auxs[2];
+            auxs[2] = ((auxs[0] >> 4) & KMASK2) | (((tmp >> 4) & KMASK1) << 4);
+            auxs[3] = ((auxs[1] >> 4) & KMASK2) | (((tmp >> 6) & KMASK1) << 4);
+            auxs[0] = (auxs[0] & KMASK2) | (((tmp) & KMASK1) << 4);
+            auxs[1] = (auxs[1] & KMASK2) | (((tmp >> 2) & KMASK1) << 4);
+
+            scales = unsafe { std::mem::transmute::<&mut [u32; 4], &mut [i8; 16]>(&mut auxs) };
+
+            for scale in scales {
+                for l in 0..8 {
+                    aux16[l] = q8[l] as i16 * a[l] as i16;
+                }
+                for l in 0..8 {
+                    aux32[l] += (*scale as i32 - 32) * aux16[l] as i32;
+                }
+                q8 = &q8[8..];
+                a = &mut a[8..];
+
+                for l in 0..8 {
+                    aux16[l] = q8[l] as i16 * a[l] as i16;
+                }
+                for l in 0..8 {
+                    aux32[l] += (*scale as i32 - 32) * aux16[l] as i32;
+                }
+                q8 = &q8[8..];
+                a = &mut a[8..];
+            }
+
+            let d = x.d.to_f32() * y.d;
+            for l in 0..8 {
+                sums[l] += d * aux32[l] as f32;
+            }
+        }
+
+        Ok(sums.iter().sum())
     }
 
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
@@ -625,9 +746,12 @@ impl GgmlType for BlockQ3K {
             }
 
             // Get max scale by absolute value.
-            let max_scale = scales
-                .iter()
-                .fold(0.0, |max, &val| if val.abs() > max { val } else { max });
+            let mut max_scale: f32 = 0.0;
+            for &scale in scales.iter() {
+                if scale.abs() > max_scale.abs() {
+                    max_scale = scale;
+                }
+            }
 
             block.scales.fill(0);
 
