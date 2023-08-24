@@ -23,11 +23,7 @@ class Yolo {
 }
 
 self.addEventListener("message", async (event) => {
-  const imageURL = event.data.imageURL;
-  const modelURL = event.data.modelURL;
-  const modelID = event.data.modelID;
-  const modelSize = event.data.modelSize;
-
+  const { imageURL, modelID, modelURL, modelSize } = event.data;
   try {
     const yolo = await Yolo.getInstance(modelID, modelURL, modelSize);
 
@@ -37,7 +33,7 @@ self.addEventListener("message", async (event) => {
     const imageArrayU8 = new Uint8Array(imgData);
 
     self.postMessage({ status: `running inference ${modelID}:${modelSize}` });
-    const bboxes = yolo.run(imageArrayU8);
+    const bboxes = yolo.run(imageArrayU8, 0.2, 0.2);
 
     // Send the output back to the main thread as JSON
     self.postMessage({
