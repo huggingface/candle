@@ -12,7 +12,9 @@ impl Tensor {
         #[cfg(feature = "cuda")]
         let device_str = match self.device() {
             crate::Device::Cpu => "".to_owned(),
-            crate::Device::Cuda(device) => format!(", cuda:{}", device.cuda_device().ordinal().to_string()),
+            crate::Device::Cuda(device) => {
+                format!(", cuda:{}", device.cuda_device().ordinal().to_string())
+            }
         };
         #[cfg(not(feature = "cuda"))]
         let device_str = match self.device() {
@@ -477,7 +479,9 @@ impl std::fmt::Display for Tensor {
         #[cfg(feature = "cuda")]
         let device_str = match self.device() {
             crate::Device::Cpu => "".to_owned(),
-            crate::Device::Cuda(device) => format!(", cuda:{}", device.cuda_device().ordinal().to_string()),
+            crate::Device::Cuda(device) => {
+                format!(", cuda:{}", device.cuda_device().ordinal().to_string())
+            }
         };
         #[cfg(not(feature = "cuda"))]
         let device_str = match self.device() {
@@ -485,6 +489,12 @@ impl std::fmt::Display for Tensor {
             _ => "".to_owned(),
         };
 
-        write!(f, "Tensor[{:?}, {}{}]", self.dims(), self.dtype().as_str(), device_str)
+        write!(
+            f,
+            "Tensor[{:?}, {}{}]",
+            self.dims(),
+            self.dtype().as_str(),
+            device_str
+        )
     }
 }
