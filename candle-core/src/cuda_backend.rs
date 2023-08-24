@@ -295,10 +295,12 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F64(data)
             }
         };
-        if lo != 0.0 || up != 1.0 {
+        let slice = if lo == 0. && up == 1.0 {
+            slice
+        } else {
             let layout = Layout::contiguous(shape);
-            Affine(up - lo, lo).map(&slice, self, &layout)?;
-        }
+            Affine(up - lo, lo).map(&slice, self, &layout)?
+        };
         Ok(CudaStorage {
             slice,
             device: self.clone(),
@@ -955,7 +957,7 @@ impl<'a> Map2 for Conv1D<'a> {
         } else if dims.len() == 2 {
             [&[1], dims, &[1], inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {
-            panic!("unexpected input shape for conv1d {dims:?}")
+            crate::bail!("unexpected input shape for conv1d {dims:?}")
         };
         let ds = dev.htod_copy(ds).w()?;
         let params = (el, l_out, p.stride, p.padding, &ds, inp, k, &out);
@@ -993,7 +995,7 @@ impl<'a> Map2 for Conv2D<'a> {
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {
-            panic!("unexpected input shape for conv1d {dims:?}")
+            crate::bail!("unexpected input shape for conv2d {dims:?}")
         };
         let ds = dev.htod_copy(ds).w()?;
         let params = (el, out_w, out_h, p.stride, p.padding, &ds, inp, k, &out);
@@ -1030,7 +1032,7 @@ impl Map1 for Pool2D {
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride()].concat()
         } else {
-            panic!("unexpected input shape for conv1d {dims:?}")
+            crate::bail!("unexpected input shape for pool {dims:?}")
         };
         let el = shape.elem_count();
         let out_w = (dims[2] - self.w_k) / self.w_stride + 1;
@@ -1076,7 +1078,7 @@ impl Map1 for UpsampleNearest2D {
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride()].concat()
         } else {
-            panic!("unexpected input shape for conv1d {dims:?}")
+            crate::bail!("unexpected input shape for upsample {dims:?}")
         };
         let (out_w, out_h) = (self.0, self.1);
         let dst_el = out_w * out_h * dims[0] * dims[1];
@@ -1622,7 +1624,6 @@ impl BackendStorage for CudaStorage {
                     .map_err(crate::Error::wrap)?;
                 S::F16(out)
             }
-
             (S::F32(inp), S::F32(k)) => {
                 let inp = &inp.slice(inp_l.start_offset()..);
                 let k = &k.slice(kernel_l.start_offset()..);
