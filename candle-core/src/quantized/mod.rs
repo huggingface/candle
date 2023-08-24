@@ -119,6 +119,7 @@ pub trait QuantizedType: Send + Sync {
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()>;
     fn to_float(&self, ys: &mut [f32]) -> Result<()>;
     fn storage_size_in_bytes(&self) -> usize;
+    fn as_ptr(&self) -> *const u8;
 }
 
 impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
@@ -136,6 +137,10 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
 
     fn storage_size_in_bytes(&self) -> usize {
         self.len() * std::mem::size_of::<T>()
+    }
+
+    fn as_ptr(&self) -> *const u8 {
+        self.as_ptr() as *const u8
     }
 }
 
@@ -213,6 +218,10 @@ impl QTensor {
 
     pub fn storage_size_in_bytes(&self) -> usize {
         self.data.storage_size_in_bytes()
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        self.data.as_ptr()
     }
 }
 

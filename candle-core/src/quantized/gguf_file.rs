@@ -425,8 +425,10 @@ pub fn write<W: std::io::Seek + std::io::Write>(
                 "internal error, unexpected current position {tensor_start_pos} {offset} {pos}"
             )
         }
-        // TODO: write the actual data.
+        let data_ptr = tensor.as_ptr();
         let size_in_bytes = tensor.storage_size_in_bytes();
+        let data = unsafe { std::slice::from_raw_parts(data_ptr, size_in_bytes) };
+        w.write_all(data)?;
         let padding = 31 - (31 + size_in_bytes) % 32;
         w.write_all(&vec![0u8; padding])?;
     }
