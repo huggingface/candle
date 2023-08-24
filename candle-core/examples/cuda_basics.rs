@@ -9,8 +9,14 @@ use candle_core::{Device, Tensor};
 
 fn main() -> Result<()> {
     let device = Device::new_cuda(0)?;
-    let t = Tensor::rand(-1f32, 1f32, 96, &device)?;
-    println!("{t}");
+    let in_t = Tensor::rand(-1f32, 1f32, (1, 3, 12, 7), &device)?;
+    let k_t = Tensor::rand(-1f32, 1f32, (6, 3, 1, 7), &device)?;
+    let out_t = in_t.conv2d(&k_t, 0, 1, 1)?;
+    println!("{out_t}");
+    let in_t = in_t.to_device(&Device::Cpu)?;
+    let k_t = k_t.to_device(&Device::Cpu)?;
+    let out_t = in_t.conv2d(&k_t, 0, 1, 1)?;
+    println!("{out_t}");
 
     let t = Tensor::randn(0f32, 1f32, (2, 4, 96, 96), &device)?;
     let w = Tensor::randn(0f32, 1f32, (320, 4, 3, 3), &device)?;
