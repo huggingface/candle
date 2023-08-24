@@ -1,5 +1,5 @@
-use crate::console_log;
 use crate::worker::{ModelData, Worker, WorkerInput, WorkerOutput};
+use crate::{console_log, model};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use yew::{html, Component, Context, Html};
@@ -51,8 +51,12 @@ pub struct App {
 
 async fn model_data_load() -> Result<ModelData, JsValue> {
     let weights = fetch_url("yolo.safetensors").await?;
+    let model_size = "s".to_string();
     console_log!("loaded weights {}", weights.len());
-    Ok(ModelData { weights })
+    Ok(ModelData {
+        weights,
+        model_size,
+    })
 }
 
 fn performance_now() -> Option<f64> {

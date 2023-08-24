@@ -25,6 +25,7 @@ macro_rules! console_log {
 #[derive(Serialize, Deserialize)]
 pub struct ModelData {
     pub weights: Vec<u8>,
+    pub model_size: String,
 }
 
 pub struct Model {
@@ -72,16 +73,26 @@ impl Model {
         Ok(bboxes)
     }
 
-    pub fn load_(weights: &[u8]) -> Result<Self> {
+    pub fn load_(weights: &[u8], model_size: &str) -> Result<Self> {
+        let multiples = match model_size {
+            "n" => Multiples::n(),
+            "s" => Multiples::s(),
+            "m" => Multiples::m(),
+            "l" => Multiples::l(),
+            "x" => Multiples::x(),
+            _ => Err(candle::Error::Msg(
+                "invalid model size: must be n, s, m, l or x".to_string(),
+            ))?,
+        };
         let dev = &Device::Cpu;
         let weights = safetensors::tensor::SafeTensors::deserialize(weights)?;
         let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, dev);
-        let model = YoloV8::load(vb, Multiples::s(), 80)?;
+        let model = YoloV8::load(vb, multiples, 80)?;
         Ok(Self { model })
     }
 
     pub fn load(md: ModelData) -> Result<Self> {
-        Self::load_(&md.weights)
+        Self::load_(&md.weights, &md.model_size.to_string())
     }
 }
 

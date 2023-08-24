@@ -11,8 +11,8 @@ pub struct Model {
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn new(data: Vec<u8>) -> Result<Model, JsError> {
-        let inner = M::load_(&data)?;
+    pub fn new(data: Vec<u8>, model_size: &str) -> Result<Model, JsError> {
+        let inner = M::load_(&data, model_size)?;
         Ok(Self { inner })
     }
 
