@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_closure_call)]
 use crate::backend::BackendStorage;
 use crate::{CpuStorage, Error, Result};
 

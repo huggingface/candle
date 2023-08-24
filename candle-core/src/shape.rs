@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_closure_call)]
 use crate::{Error, Result};
 
 #[derive(Clone, PartialEq, Eq)]
