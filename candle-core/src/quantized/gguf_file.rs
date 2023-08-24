@@ -398,5 +398,37 @@ pub fn write<W: std::io::Seek + std::io::Write>(
         w.write_u32::<LittleEndian>(value.value_type().to_u32())?;
         value.write(w)?;
     }
+    let mut offset = 0usize;
+    let mut offsets = Vec::with_capacity(tensors.len());
+    for (name, tensor) in tensors.iter() {
+        write_string(w, name)?;
+        let dims = tensor.shape().dims();
+        w.write_u32::<LittleEndian>(dims.len() as u32)?;
+        for &dim in dims.iter().rev() {
+            w.write_u32::<LittleEndian>(dim as u32)?;
+        }
+        w.write_u32::<LittleEndian>(tensor.dtype().to_u32())?;
+        w.write_u64::<LittleEndian>(offset as u64)?;
+        offsets.push(offset);
+        let size_in_bytes = tensor.storage_size_in_bytes();
+        let padding = 31 - (31 + size_in_bytes) % 32;
+        offset += size_in_bytes + padding;
+    }
+    let pos = w.stream_position()? as usize;
+    let padding = 31 - (31 + pos) % 32;
+    w.write_all(&vec![0u8; padding])?;
+    let tensor_start_pos = w.stream_position()? as usize;
+    for (offset, (_name, tensor)) in offsets.iter().zip(tensors.iter()) {
+        let pos = w.stream_position()? as usize;
+        if tensor_start_pos + offset != pos {
+            crate::bail!(
+                "internal error, unexpected current position {tensor_start_pos} {offset} {pos}"
+            )
+        }
+        // TODO: write the actual data.
+        let size_in_bytes = tensor.storage_size_in_bytes();
+        let padding = 31 - (31 + size_in_bytes) % 32;
+        w.write_all(&vec![0u8; padding])?;
+    }
     Ok(())
 }
