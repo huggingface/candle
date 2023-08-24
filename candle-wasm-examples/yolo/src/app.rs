@@ -50,7 +50,7 @@ pub struct App {
 }
 
 async fn model_data_load() -> Result<ModelData, JsValue> {
-    let weights = fetch_url("yolo.safetensors").await?;
+    let weights = fetch_url("yolov8s.safetensors").await?;
     let model_size = "s".to_string();
     console_log!("loaded weights {}", weights.len());
     Ok(ModelData {
