@@ -1,0 +1,225 @@
+<html>
+  <head>
+    <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+    <title>Candle YOLOv8 Rust/WASM</title>
+  </head>
+  <body></body>
+</html>
+
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      const MODEL_BASEURL =
+        "https://huggingface.co/lmz/candle-yolo-v8/resolve/main/";
+      // init web worker
+      const yoloWorker = new Worker("yoloWorker.js", { type: "module" });
+
+      async function classifyImage(
+        imageURL, // URL of image to classify
+        modelID, // ID of model to use
+        modelURL, // URL to model file
+        updateStatus, // function receives status updates
+        signal // AbortSignal to abort worker
+      ) {
+        return new Promise((resolve, reject) => {
+          yoloWorker.postMessage({ imageURL, modelID, modelURL });
+          yoloWorker.addEventListener("message", (event) => {
+            if ("status" in event.data) {
+              updateStatus(event.data.status);
+            }
+            if ("error" in event.data) {
+              reject(new Error(event.data.error));
+            }
+            if (signal?.aborted) {
+              reject(new Error("Aborted"));
+            }
+            if (event.data.status === "complete") {
+              resolve(event.data);
+            }
+          });
+        });
+      }
+
+      function updateStatus(statusMessage) {
+        document.querySelector("#status").textContent = statusMessage;
+      }
+
+      document.querySelector("#detect").addEventListener("click", async () => {
+        const modelID = document.querySelector("#model").value;
+        const modelURL = MODEL_BASEURL + modelID;
+        const controller = new AbortController();
+
+        let imageURL;
+        // if image on input file
+        const files = document.querySelector("#file").files;
+
+        if (files.length > 0) {
+          imageURL = URL.createObjectURL(files[0]);
+        } else {
+          imageURL = document.querySelector(
+            'input[name="image-select"]:checked + label > img'
+          ).src;
+        }
+        if (!imageURL) {
+          return;
+        }
+        const results = await await classifyImage(
+          imageURL,
+          modelID,
+          modelURL,
+          updateStatus,
+          controller.signal
+        );
+
+        const { output } = results;
+
+        const canvas = document.querySelector("#canvas");
+        const ctx = canvas.getContext("2d");
+        const img = new Image();
+        img.onload = () => {
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = "#3c8566";
+          // ctx.font = "20px Arial";
+          ctx.fillStyle = "#0dff9a";
+          for (const [label, bbox] of output) {
+            const [x, y, w, h] = [
+              bbox.xmin,
+              bbox.ymin,
+              bbox.xmax - bbox.xmin,
+              bbox.ymax - bbox.ymin,
+            ];
+
+            const confidence = bbox.confidence;
+
+            const text = `${label} ${confidence.toFixed(2)}`;
+            const width = ctx.measureText(text).width;
+            ctx.fillStyle = "#3c8566";
+            ctx.fillRect(x - 2, y - 12, width + 4, 14);
+            ctx.fillStyle = "#e3fff3";
+
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillText(text, x, y - 2);
+          }
+        };
+        img.src = imageURL;
+      });
+    </script>
+  </head>
+  <body class="container mx-auto p-4">
+    <main class="grid grid-cols-1 gap-8">
+      <div>
+        <h1 class="text-5xl font-bold">Candle YOLOv8</h1>
+        <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
+        <p class="max-w-lg">
+          Running an object detection model in the browser using rust/wasm with
+          an image. This demo uses the
+          <a
+            href="https://huggingface.co/lmz/candle-yolo-v8"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+          >
+            Candle YOLOv8
+          </a>
+          models to detect objects in images and WASM runtime built with
+          <a
+            href="https://github.com/huggingface/candle/"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+            >Candle
+          </a>
+        </p>
+      </div>
+
+      <div>
+        <h3 class="text-xl font-bold">Models:</h3>
+        <label for="model">Choose a model size:</label>
+        <select id="model" class="border-2 border-gray-500 rounded-md">
+          <option value="yolov8n.safetensors">yolov8n (6.37 MB)</option>
+          <option value="yolov8s.safetensors" selected>
+            yolov8s (22.4 MB)
+          </option>
+          <option value="yolov8m.safetensors">yolov8m (51.9 MB)</option>
+          <option value="yolov8l.safetensors">yolov8l (87.5 MB)</option>
+          <option value="yolov8x.safetensors">yolov8x (137 MB)</option>
+        </select>
+      </div>
+      <div>
+        <h3 class="text-xl font-bold">Image to detect objects:</h3>
+        <p class="max-w-lg">
+          Choose an example image or upload your own Image.
+        </p>
+        <div
+          class="flex gap-3 text-center"
+          onclick="document.querySelector('#file').value = '';"
+        >
+          <div>
+            <input
+              type="radio"
+              name="image-select"
+              id="image-select-1"
+              class=""
+              checked
+            />
+            <label
+              for="image-select-1"
+              class="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <img
+                src="examples/alex-radelich-XVUQfCkcaUg-unsplash.jpg"
+                class="w-64 cursor-pointer"
+              />
+            </label>
+          </div>
+          <div>
+            <input
+              type="radio"
+              name="image-select"
+              id="image-select-2"
+              class=""
+            />
+            <label
+              for="image-select-2"
+              class="focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <img src="examples/bike.jpg" class="w-64 cursor-pointer" />
+            </label>
+          </div>
+        </div>
+        <h3 class="text-xl font-bold">Or choose your own image:</h3>
+        <div class="">
+          <input
+            type="file"
+            id="file"
+            accept="image/*"
+            class="m-3 p-3"
+            multiple="false"
+          />
+        </div>
+      </div>
+      <div>
+        <button
+          id="detect"
+          class="bg-blue-950 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+        >
+          Detect Objects
+        </button>
+      </div>
+      <div>
+        <h3 class="text-xl font-bold">Status:</h3>
+        <pre id="status" class="p-2 h-10"></pre>
+      </div>
+      <div class="max-w-3xl">
+        <h3 class="text-xl font-bold">Results:</h3>
+        <canvas id="canvas" class="w-full"></canvas>
+      </div>
+    </main>
+  </body>
+</html>
