@@ -77,7 +77,7 @@ struct Args {
     n_steps: usize,
 
     /// The number of samples to generate.
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 4)]
     num_samples: i64,
 
     /// The name of the final image to generate.
