@@ -582,7 +582,10 @@ pub struct TensorInfo {
     pub storage_size: usize,
 }
 
-pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(file: P) -> Result<Vec<TensorInfo>> {
+pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
+    file: P,
+    verbose: bool,
+) -> Result<Vec<TensorInfo>> {
     let file = std::fs::File::open(file)?;
     let zip_reader = std::io::BufReader::new(file);
     let mut zip = zip::ZipArchive::new(zip_reader)?;
@@ -602,7 +605,7 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(file: P) -> Result<Vec<Te
         let mut stack = Stack::empty();
         stack.read_loop(&mut reader)?;
         let obj = stack.finalize()?;
-        if VERBOSE {
+        if VERBOSE || verbose {
             println!("{obj:?}");
         }
         let obj = match obj {
@@ -681,7 +684,7 @@ pub struct PthTensors {
 
 impl PthTensors {
     pub fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        let tensor_infos = read_pth_tensor_info(path.as_ref())?;
+        let tensor_infos = read_pth_tensor_info(path.as_ref(), false)?;
         let tensor_infos = tensor_infos
             .into_iter()
             .map(|ti| (ti.name.to_string(), ti))
