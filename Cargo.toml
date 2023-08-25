@@ -46,6 +46,7 @@ num-traits = "0.2.15"
 rand = "0.8.5"
 rand_distr = "0.4.3"
 rayon = "1.7.0"
+rusttype = { version = "0.9", default-features = false }
 safetensors = "0.3.1"
 serde = { version = "1.0.171", features = ["derive"] }
 serde_json = "1.0.99"
