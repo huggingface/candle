@@ -727,7 +727,7 @@ pub fn draw_rect(
     }
 }
 
-pub fn report(
+pub fn report_detect(
     pred: &Tensor,
     img: DynamicImage,
     w: usize,
@@ -757,6 +757,7 @@ pub fn report(
                     xmax: pred[0] + pred[2] / 2.,
                     ymax: pred[1] + pred[3] / 2.,
                     confidence,
+                    keypoints: vec![],
                 };
                 bboxes[class_index].push(bbox)
             }
@@ -782,6 +783,85 @@ pub fn report(
             let xmax = ((b.xmax * w_ratio) as u32).clamp(0, initial_w - 1);
             let ymax = ((b.ymax * h_ratio) as u32).clamp(0, initial_h - 1);
             draw_rect(&mut img, xmin, xmax, ymin, ymax);
+        }
+    }
+    Ok(DynamicImage::ImageRgb8(img))
+}
+
+pub fn report_pose(
+    pred: &Tensor,
+    img: DynamicImage,
+    w: usize,
+    h: usize,
+    confidence_threshold: f32,
+    nms_threshold: f32,
+) -> Result<DynamicImage> {
+    let (pred_size, npreds) = pred.dims2()?;
+    let nclasses = pred_size - 4;
+    // The bounding boxes grouped by (maximum) class index.
+    let mut bboxes: Vec<Vec<Bbox>> = (0..nclasses).map(|_| vec![]).collect();
+    // Extract the bounding boxes for which confidence is above the threshold.
+    for index in 0..npreds {
+        let pred = Vec::<f32>::try_from(pred.i((.., index))?)?;
+        let confidence = pred[4];
+        if confidence > confidence_threshold {
+            let mut class_index = 0;
+            for i in 0..nclasses {
+                if pred[4 + i] > pred[4 + class_index] {
+                    class_index = i
+                }
+            }
+            if pred[class_index + 4] > 0. {
+                let keypoints = (0..17)
+                    .map(|i| (pred[5 + 3 * i], pred[3 * i + 6], pred[3 * i + 7]))
+                    .collect::<Vec<_>>();
+                let bbox = Bbox {
+                    xmin: pred[0] - pred[2] / 2.,
+                    ymin: pred[1] - pred[3] / 2.,
+                    xmax: pred[0] + pred[2] / 2.,
+                    ymax: pred[1] + pred[3] / 2.,
+                    confidence,
+                    keypoints,
+                };
+                bboxes[class_index].push(bbox)
+            }
+        }
+    }
+
+    non_maximum_suppression(&mut bboxes, nms_threshold);
+
+    // Annotate the original image and print boxes information.
+    let (initial_h, initial_w) = (img.height(), img.width());
+    let w_ratio = initial_w as f32 / w as f32;
+    let h_ratio = initial_h as f32 / h as f32;
+    let mut img = img.to_rgb8();
+    for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
+        for b in bboxes_for_class.iter() {
+            println!(
+                "{}: {:?}",
+                candle_examples::coco_classes::NAMES[class_index],
+                b
+            );
+            let xmin = ((b.xmin * w_ratio) as u32).clamp(0, initial_w - 1);
+            let ymin = ((b.ymin * h_ratio) as u32).clamp(0, initial_h - 1);
+            let xmax = ((b.xmax * w_ratio) as u32).clamp(0, initial_w - 1);
+            let ymax = ((b.ymax * h_ratio) as u32).clamp(0, initial_h - 1);
+            draw_rect(&mut img, xmin, xmax, ymin, ymax);
+            for (x, y, z) in b.keypoints.iter() {
+                if z < &0.6 {
+                    continue;
+                }
+                let x = x * w_ratio;
+                let y = y * w_ratio;
+                for dx in -2..3 {
+                    for dy in -2..3 {
+                        let x = ((x + dx as f32) as u32).clamp(0, initial_w - 1);
+                        let y = ((y + dy as f32) as u32).clamp(0, initial_h - 1);
+                        let pixel = img.get_pixel_mut(x, y);
+                        *pixel = image::Rgb([0, 255, 0]);
+                    }
+                }
+            }
         }
     }
     Ok(DynamicImage::ImageRgb8(img))
@@ -892,7 +972,7 @@ pub fn main() -> anyhow::Result<()> {
         let image_t = (image_t.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image_t)?.squeeze(0)?;
         println!("generated predictions {predictions:?}");
-        let image_t = report(
+        let image_t = report_detect(
             &predictions,
             original_image,
             width,
