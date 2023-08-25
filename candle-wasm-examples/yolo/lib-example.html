@@ -179,6 +179,8 @@
         canvas.width = canvasInput.width;
         canvas.height = canvasInput.height;
 
+        const scale = canvas.width / canvas.offsetWidth;
+
         const ctx = canvas.getContext("2d");
         ctx.drawImage(canvasInput, 0, 0);
         const imageURL = canvas.toDataURL();
@@ -195,9 +197,11 @@
 
         const { output } = results;
 
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 1 + 2 * scale;
         ctx.strokeStyle = "#3c8566";
         ctx.fillStyle = "#0dff9a";
+        const fontSize = 14 * scale;
+        ctx.font = `${fontSize}px sans-serif`;
         for (const [label, bbox] of output) {
           const [x, y, w, h] = [
             bbox.xmin,
@@ -211,7 +215,7 @@
           const text = `${label} ${confidence.toFixed(2)}`;
           const width = ctx.measureText(text).width;
           ctx.fillStyle = "#3c8566";
-          ctx.fillRect(x - 2, y - 12, width + 4, 14);
+          ctx.fillRect(x - 2, y - fontSize, width + 4, fontSize);
           ctx.fillStyle = "#e3fff3";
 
           ctx.strokeRect(x, y, w, h);
