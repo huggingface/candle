@@ -421,8 +421,24 @@ impl GgmlType for BlockQ8_0 {
         Ok(())
     }
 
-    fn vec_dot(_: usize, _: &[Self], _: &[Self::VecDotType]) -> Result<f32> {
-        todo!()
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        let qk = QK8_0;
+        if n % QK8_0 != 0 {
+            crate::bail!("vec_dot_q8_0_q8_0: {n} is not divisible by {qk}")
+        }
+
+        // Generic implementation.
+        let mut sumf = 0f32;
+        for (xs, ys) in xs.iter().zip(ys.iter()) {
+            let sum_i = xs
+                .qs
+                .iter()
+                .zip(ys.qs.iter())
+                .map(|(&x, &y)| x as i32 * y as i32)
+                .sum::<i32>();
+            sumf += sum_i as f32 * f16::to_f32(xs.d) * f16::to_f32(ys.d)
+        }
+        Ok(sumf)
     }
 }
 
