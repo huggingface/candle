@@ -404,6 +404,10 @@ enum Which {
     L70bChat,
     #[value(name = "7b-code")]
     L7bCode,
+    #[value(name = "13b-code")]
+    L13bCode,
+    #[value(name = "32b-code")]
+    L34bCode,
 }
 
 #[derive(Parser, Debug)]
@@ -492,6 +496,8 @@ impl Args {
                         "llama-2-70b-chat.ggmlv3.q4_0.bin",
                     ),
                     Which::L7bCode => ("TheBloke/CodeLlama-7B-GGUF", "codellama-7b.Q8_0.gguf"),
+                    Which::L13bCode => ("TheBloke/CodeLlama-13B-GGUF", "codellama-13b.Q8_0.gguf"),
+                    Which::L34bCode => ("TheBloke/CodeLlama-34B-GGUF", "codellama-34b.Q8_0.gguf"),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
                 let api = api.model(repo.to_string());
@@ -613,7 +619,13 @@ fn main() -> anyhow::Result<()> {
             );
             println!("params: {:?}", model.hparams);
             let default_gqa = match args.which {
-                Which::L7b | Which::L13b | Which::L7bChat | Which::L13bChat | Which::L7bCode => 1,
+                Which::L7b
+                | Which::L13b
+                | Which::L7bChat
+                | Which::L13bChat
+                | Which::L7bCode
+                | Which::L13bCode
+                | Which::L34bCode => 1,
                 Which::L70b | Which::L70bChat => 8,
             };
             ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa))?
