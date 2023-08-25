@@ -135,7 +135,7 @@ pub fn report_detect(
                         xmin,
                         ymin,
                         rusttype::Scale::uniform(legend_size as f32 - 1.),
-                        &font,
+                        font,
                         &legend,
                     )
                 }
