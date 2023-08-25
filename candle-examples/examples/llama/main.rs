@@ -12,7 +12,7 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use anyhow::{Error as E, Result};
+use anyhow::{bail, Error as E, Result};
 use clap::Parser;
 
 use candle::{DType, Tensor};
@@ -104,7 +104,7 @@ fn main() -> Result<()> {
         Some("f16") => DType::F16,
         Some("bf16") => DType::BF16,
         Some("f32") => DType::F32,
-        Some(dtype) => panic!("Unsupported dtype {dtype}"),
+        Some(dtype) => bail!("Unsupported dtype {dtype}"),
         None => DType::F16,
     };
     let (llama, tokenizer_filename, cache) = match args.npy {
