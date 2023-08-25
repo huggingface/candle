@@ -1206,6 +1206,11 @@ impl Map2 for MatMul {
         rhs_l: &Layout,
     ) -> Result<Vec<T>> {
         use gemm::{gemm, Parallelism};
+
+        if T::DTYPE == DType::BF16 {
+            return Err(Error::UnsupportedDTypeForOp(T::DTYPE, "matmul").bt())?;
+        }
+
         let (b, m, n, k) = self.0;
         let lhs = &lhs[lhs_l.start_offset()..];
         let rhs = &rhs[rhs_l.start_offset()..];
