@@ -189,7 +189,7 @@ pub fn report_pose(
                     continue;
                 }
                 let x = (kp.x * w_ratio) as i32;
-                let y = (kp.y * w_ratio) as i32;
+                let y = (kp.y * h_ratio) as i32;
                 imageproc::drawing::draw_filled_circle_mut(
                     &mut img,
                     (x, y),
