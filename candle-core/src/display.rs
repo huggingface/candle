@@ -9,7 +9,6 @@ impl Tensor {
         &self,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-
         let device_str = match self.device().location() {
             crate::DeviceLocation::Cpu => "".to_owned(),
             crate::DeviceLocation::Cuda { gpu_id } => {
