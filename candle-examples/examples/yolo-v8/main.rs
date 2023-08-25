@@ -16,7 +16,7 @@ use image::{DynamicImage, ImageBuffer};
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-struct Multiples {
+pub struct Multiples {
     depth: f64,
     width: f64,
     ratio: f64,
@@ -876,9 +876,15 @@ enum Which {
     X,
 }
 
+#[derive(Clone, Copy, ValueEnum, Debug)]
+enum YoloTask {
+    Detect,
+    Pose,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-struct Args {
+pub struct Args {
     /// Model weights, in safetensors format.
     #[arg(long)]
     model: Option<String>,
@@ -896,6 +902,10 @@ struct Args {
     /// Threshold for non-maximum suppression.
     #[arg(long, default_value_t = 0.45)]
     nms_threshold: f32,
+
+    /// The task to be run.
+    #[arg(long, default_value = "detect")]
+    task: YoloTask,
 }
 
 impl Args {
@@ -905,23 +915,71 @@ impl Args {
             None => {
                 let api = hf_hub::api::sync::Api::new()?;
                 let api = api.model("lmz/candle-yolo-v8".to_string());
-                let filename = match self.which {
-                    Which::N => "yolov8n.safetensors",
-                    Which::S => "yolov8s.safetensors",
-                    Which::M => "yolov8m.safetensors",
-                    Which::L => "yolov8l.safetensors",
-                    Which::X => "yolov8x.safetensors",
+                let size = match self.which {
+                    Which::N => "n",
+                    Which::S => "s",
+                    Which::M => "m",
+                    Which::L => "l",
+                    Which::X => "x",
                 };
-                api.get(filename)?
+                let task = match self.task {
+                    YoloTask::Pose => "-pose",
+                    YoloTask::Detect => "",
+                };
+                api.get(&format!("yolov8{size}{task}.safetensors"))?
             }
         };
         Ok(path)
     }
 }
 
-pub fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+pub trait Task: Module + Sized {
+    fn load(vb: VarBuilder, multiples: Multiples) -> Result<Self>;
+    fn report(
+        pred: &Tensor,
+        img: DynamicImage,
+        w: usize,
+        h: usize,
+        confidence_threshold: f32,
+        nms_threshold: f32,
+    ) -> Result<DynamicImage>;
+}
 
+impl Task for YoloV8 {
+    fn load(vb: VarBuilder, multiples: Multiples) -> Result<Self> {
+        YoloV8::load(vb, multiples, /* num_classes=*/ 80)
+    }
+
+    fn report(
+        pred: &Tensor,
+        img: DynamicImage,
+        w: usize,
+        h: usize,
+        confidence_threshold: f32,
+        nms_threshold: f32,
+    ) -> Result<DynamicImage> {
+        report_detect(pred, img, w, h, confidence_threshold, nms_threshold)
+    }
+}
+
+impl Task for YoloV8Pose {
+    fn load(vb: VarBuilder, multiples: Multiples) -> Result<Self> {
+        YoloV8Pose::load(vb, multiples, /* num_classes=*/ 1, (17, 3))
+    }
+
+    fn report(
+        pred: &Tensor,
+        img: DynamicImage,
+        w: usize,
+        h: usize,
+        confidence_threshold: f32,
+        nms_threshold: f32,
+    ) -> Result<DynamicImage> {
+        report_pose(pred, img, w, h, confidence_threshold, nms_threshold)
+    }
+}
+
+pub fn run<T: Task>(args: Args) -> anyhow::Result<()> {
     // Create the model and load the weights from the file.
     let multiples = match args.which {
         Which::N => Multiples::n(),
@@ -934,8 +992,7 @@ pub fn main() -> anyhow::Result<()> {
     let weights = unsafe { candle::safetensors::MmapedFile::new(model)? };
     let weights = weights.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &Device::Cpu);
-    let model = YoloV8::load(vb, multiples, /* num_classes=*/ 80)?;
-    // let model = YoloV8Pose::load(vb, multiples, /* num_classes=*/ 1, (17, 3))?;
+    let model = T::load(vb, multiples)?;
     println!("model loaded");
     for image_name in args.images.iter() {
         println!("processing {image_name}");
@@ -972,7 +1029,7 @@ pub fn main() -> anyhow::Result<()> {
         let image_t = (image_t.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = model.forward(&image_t)?.squeeze(0)?;
         println!("generated predictions {predictions:?}");
-        let image_t = report_detect(
+        let image_t = T::report(
             &predictions,
             original_image,
             width,
@@ -985,5 +1042,14 @@ pub fn main() -> anyhow::Result<()> {
         image_t.save(image_name)?
     }
 
+    Ok(())
+}
+
+pub fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    match args.task {
+        YoloTask::Detect => run::<YoloV8>(args)?,
+        YoloTask::Pose => run::<YoloV8Pose>(args)?,
+    }
     Ok(())
 }
