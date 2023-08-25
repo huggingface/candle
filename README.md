@@ -80,6 +80,18 @@ cargo run --example yolo-v8 --release -- myimage.jpg
 In order to use **CUDA** add `--features cuda` to the example command line. If
 you have cuDNN installed, use `--features cudnn` for even more speedups.
 
+Some examples, such as stable diffusion and llama, also support the use of [flash attention](https://github.com/Dao-AILab/flash-attention), which is an effective technique for reducing memory usage and speeding up inference. To utilize this feature, ensure that the [cutlass](https://github.com/NVIDIA/cutlass.git) submodule is properly initialized and included in the repository. If it is not, execute the following command at the top level of the repository:
+
+```
+git submodule update --init
+```
+
+Afterward, you can run the example with the following command:
+
+```
+cargo run --example stable-diffusion --profile=release --features cudnn --features flash-attn -- --prompt "a rusty robot holding a fire torch" --use-flash-attn
+```
+
 There are also some wasm examples for whisper and
 [llama2.c](https://github.com/karpathy/llama2.c). You can either build them with
 `trunk` or try them online:
