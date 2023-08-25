@@ -56,13 +56,31 @@ pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) ->
     }
 
     unsafe {
-        // Generic implementation.
         let mut acc = _mm256_setzero_ps();
         for (x, y) in xs.iter().zip(ys.iter()) {
             let d = _mm256_set1_ps(f16::to_f32(x.d) * f16::to_f32(y.d));
             let bx = bytes_from_nibbles_32(x.qs.as_ptr());
             let off = _mm256_set1_epi8(8);
             let bx = _mm256_sub_epi8(bx, off);
+            let by = _mm256_loadu_si256(y.qs.as_ptr() as *const __m256i);
+            let q = mul_sum_i8_pairs_float(bx, by);
+            acc = _mm256_fmadd_ps(d, q, acc);
+        }
+        Ok(hsum_float_8(acc))
+    }
+}
+
+#[inline(always)]
+pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) -> Result<f32> {
+    let qk = QK8_0;
+    if n % QK8_0 != 0 {
+        crate::bail!("vec_dot_q8_0_q8_0: {n} is not divisible by {qk}")
+    }
+    unsafe {
+        let mut acc = _mm256_setzero_ps();
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let d = _mm256_set1_ps(f16::to_f32(x.d) * f16::to_f32(y.d));
+            let bx = _mm256_loadu_si256(x.qs.as_ptr() as *const __m256i);
             let by = _mm256_loadu_si256(y.qs.as_ptr() as *const __m256i);
             let q = mul_sum_i8_pairs_float(bx, by);
             acc = _mm256_fmadd_ps(d, q, acc);
