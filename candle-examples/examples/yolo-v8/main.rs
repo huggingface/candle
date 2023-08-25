@@ -8,35 +8,49 @@ mod model;
 use model::{Multiples, YoloV8, YoloV8Pose};
 
 use candle::{DType, Device, IndexOp, Result, Tensor};
-use candle_examples::object_detection::{non_maximum_suppression, Bbox};
+use candle_examples::object_detection::{non_maximum_suppression, Bbox, KeyPoint};
 use candle_nn::{Module, VarBuilder};
 use clap::{Parser, ValueEnum};
-use image::{DynamicImage, ImageBuffer};
+use image::DynamicImage;
 
+// Keypoints as reported by ChatGPT :)
+// Nose
+// Left Eye
+// Right Eye
+// Left Ear
+// Right Ear
+// Left Shoulder
+// Right Shoulder
+// Left Elbow
+// Right Elbow
+// Left Wrist
+// Right Wrist
+// Left Hip
+// Right Hip
+// Left Knee
+// Right Knee
+// Left Ankle
+// Right Ankle
+const KP_CONNECTIONS: [(usize, usize); 16] = [
+    (0, 1),
+    (0, 2),
+    (1, 3),
+    (2, 4),
+    (5, 6),
+    (5, 11),
+    (6, 12),
+    (11, 12),
+    (5, 7),
+    (6, 8),
+    (7, 9),
+    (8, 10),
+    (11, 13),
+    (12, 14),
+    (13, 15),
+    (14, 16),
+];
 // Model architecture from https://github.com/ultralytics/ultralytics/issues/189
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py
-
-// Assumes x1 <= x2 and y1 <= y2
-pub fn draw_rect(
-    img: &mut ImageBuffer<image::Rgb<u8>, Vec<u8>>,
-    x1: u32,
-    x2: u32,
-    y1: u32,
-    y2: u32,
-) {
-    for x in x1..=x2 {
-        let pixel = img.get_pixel_mut(x, y1);
-        *pixel = image::Rgb([255, 0, 0]);
-        let pixel = img.get_pixel_mut(x, y2);
-        *pixel = image::Rgb([255, 0, 0]);
-    }
-    for y in y1..=y2 {
-        let pixel = img.get_pixel_mut(x1, y);
-        *pixel = image::Rgb([255, 0, 0]);
-        let pixel = img.get_pixel_mut(x2, y);
-        *pixel = image::Rgb([255, 0, 0]);
-    }
-}
 
 pub fn report_detect(
     pred: &Tensor,
@@ -89,11 +103,17 @@ pub fn report_detect(
                 candle_examples::coco_classes::NAMES[class_index],
                 b
             );
-            let xmin = ((b.xmin * w_ratio) as u32).clamp(0, initial_w - 1);
-            let ymin = ((b.ymin * h_ratio) as u32).clamp(0, initial_h - 1);
-            let xmax = ((b.xmax * w_ratio) as u32).clamp(0, initial_w - 1);
-            let ymax = ((b.ymax * h_ratio) as u32).clamp(0, initial_h - 1);
-            draw_rect(&mut img, xmin, xmax, ymin, ymax);
+            let xmin = (b.xmin * w_ratio) as i32;
+            let ymin = (b.ymin * h_ratio) as i32;
+            let dx = (b.xmax - b.xmin) * w_ratio;
+            let dy = (b.ymax - b.ymin) * h_ratio;
+            if dx >= 0. && dy >= 0. {
+                imageproc::drawing::draw_hollow_rect_mut(
+                    &mut img,
+                    imageproc::rect::Rect::at(xmin, ymin).of_size(dx as u32, dy as u32),
+                    image::Rgb([255, 0, 0]),
+                );
+            }
         }
     }
     Ok(DynamicImage::ImageRgb8(img))
@@ -124,7 +144,11 @@ pub fn report_pose(
             }
             if pred[class_index + 4] > 0. {
                 let keypoints = (0..17)
-                    .map(|i| (pred[5 + 3 * i], pred[3 * i + 6], pred[3 * i + 7]))
+                    .map(|i| KeyPoint {
+                        x: pred[5 + 3 * i],
+                        y: pred[3 * i + 6],
+                        mask: pred[3 * i + 7],
+                    })
                     .collect::<Vec<_>>();
                 let bbox = Bbox {
                     xmin: pred[0] - pred[2] / 2.,
@@ -146,32 +170,46 @@ pub fn report_pose(
     let w_ratio = initial_w as f32 / w as f32;
     let h_ratio = initial_h as f32 / h as f32;
     let mut img = img.to_rgb8();
-    for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
+    for bboxes_for_class in bboxes.iter() {
         for b in bboxes_for_class.iter() {
-            println!(
-                "{}: {:?}",
-                candle_examples::coco_classes::NAMES[class_index],
-                b
-            );
-            let xmin = ((b.xmin * w_ratio) as u32).clamp(0, initial_w - 1);
-            let ymin = ((b.ymin * h_ratio) as u32).clamp(0, initial_h - 1);
-            let xmax = ((b.xmax * w_ratio) as u32).clamp(0, initial_w - 1);
-            let ymax = ((b.ymax * h_ratio) as u32).clamp(0, initial_h - 1);
-            draw_rect(&mut img, xmin, xmax, ymin, ymax);
-            for (x, y, z) in b.keypoints.iter() {
-                if z < &0.6 {
+            println!("{b:?}");
+            let xmin = (b.xmin * w_ratio) as i32;
+            let ymin = (b.ymin * h_ratio) as i32;
+            let dx = (b.xmax - b.xmin) * w_ratio;
+            let dy = (b.ymax - b.ymin) * h_ratio;
+            if dx >= 0. && dy >= 0. {
+                imageproc::drawing::draw_hollow_rect_mut(
+                    &mut img,
+                    imageproc::rect::Rect::at(xmin, ymin).of_size(dx as u32, dy as u32),
+                    image::Rgb([255, 0, 0]),
+                );
+            }
+            for kp in b.keypoints.iter() {
+                if kp.mask < 0.6 {
                     continue;
                 }
-                let x = x * w_ratio;
-                let y = y * w_ratio;
-                for dx in -2..3 {
-                    for dy in -2..3 {
-                        let x = ((x + dx as f32) as u32).clamp(0, initial_w - 1);
-                        let y = ((y + dy as f32) as u32).clamp(0, initial_h - 1);
-                        let pixel = img.get_pixel_mut(x, y);
-                        *pixel = image::Rgb([0, 255, 0]);
-                    }
+                let x = (kp.x * w_ratio) as i32;
+                let y = (kp.y * w_ratio) as i32;
+                imageproc::drawing::draw_filled_circle_mut(
+                    &mut img,
+                    (x, y),
+                    2,
+                    image::Rgb([0, 255, 0]),
+                );
+            }
+
+            for &(idx1, idx2) in KP_CONNECTIONS.iter() {
+                let kp1 = &b.keypoints[idx1];
+                let kp2 = &b.keypoints[idx2];
+                if kp1.mask < 0.6 || kp2.mask < 0.6 {
+                    continue;
                 }
+                imageproc::drawing::draw_line_segment_mut(
+                    &mut img,
+                    (kp1.x * w_ratio, kp1.y * h_ratio),
+                    (kp2.x * w_ratio, kp2.y * h_ratio),
+                    image::Rgb([255, 255, 0]),
+                );
             }
         }
     }
