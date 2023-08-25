@@ -33,6 +33,7 @@ hf-hub = { workspace = true, features=["tokio"]}
 imageproc = { workspace = true }
 memmap2 = { workspace = true }
 rand = { workspace = true }
+rusttype = { workspace = true }
 tokenizers = { workspace = true, features = ["onig"] }
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
