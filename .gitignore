@@ -31,3 +31,5 @@ candle-wasm-examples/*/*.jpeg
 candle-wasm-examples/*/*.wav
 candle-wasm-examples/*/*.safetensors
 candle-wasm-examples/*/package-lock.json
+
+.DS_Store
