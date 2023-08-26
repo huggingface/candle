@@ -10,13 +10,38 @@ and ease of use. Try our online demos:
 [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2),
 [yolo](https://huggingface.co/spaces/lmz/candle-yolo).
 
-```rust
-let a = Tensor::randn(0f32, 1., (2, 3), &Device::Cpu)?;
-let b = Tensor::randn(0f32, 1., (3, 4), &Device::Cpu)?;
+## Get started
 
-let c = a.matmul(&b)?;
-println!("{c}");
+Make sure that you have [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) correctly installed as described in [**Installation**](https://huggingface.github.io/candle/guide/installation.html).
+
+Let's see how to run a simple matrix multiplication.
+Write the following to your `myapp/src/main.rs` file:
+```rust
+use candle_core::{Device, Tensor};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let device = Device::Cpu;
+
+    let a = Tensor::randn(0f32, 1., (2, 3), &device)?;
+    let b = Tensor::randn(0f32, 1., (3, 4), &device)?;
+
+    let c = a.matmul(&b)?;
+    println!("{c}");
+    Ok(())
+}
 ```
+
+`cargo run` should display a tensor of shape `Tensor[[2, 4], f32]`.
+
+
+Having installed `candle` with Cuda support, simply define the `device` to be on GPU:
+
+```diff
+- let device = Device::Cpu;
++ let device = Device::new_cuda(0)?;
+```
+
+For more advanced examples, please have a look at the following section.
 
 ## Check out our examples
 
@@ -37,7 +62,8 @@ Check out our [examples](./candle-examples/examples/):
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
 - [yolo-v3](./candle-examples/examples/yolo-v3/) and
-  [yolo-v8](./candle-examples/examples/yolo-v8/): object detection models.
+  [yolo-v8](./candle-examples/examples/yolo-v8/): object detection and pose
+  estimation models.
 Run them using the following commands:
 ```
 cargo run --example whisper --release
@@ -49,7 +75,7 @@ cargo run --example stable-diffusion --release -- --prompt "a rusty robot holdin
 cargo run --example dinov2 --release -- --image path/to/myinput.jpg
 cargo run --example quantized --release
 cargo run --example yolo-v3 --release -- myimage.jpg
-cargo run --example yolo-v8 --release -- myimage.jpg
+cargo run --example yolo-v8 --release -- myimage.jpg # for pose estimation, add --task pose 
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
@@ -87,7 +113,7 @@ And then head over to
     - LLMs: LLaMA v1 and v2, Falcon, StarCoder.
     - Whisper (multi-lingual support).
     - Stable Diffusion.
-    - Computer Vision: DINOv2.
+    - Computer Vision: DINOv2, EfficientNet, yolo-v3, yolo-v8.
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.
 - Quantization support using the llama.cpp quantized types.

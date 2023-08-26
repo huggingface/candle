@@ -65,6 +65,7 @@ pub fn report(
                     xmax: pred[0] + pred[2] / 2.,
                     ymax: pred[1] + pred[3] / 2.,
                     confidence,
+                    keypoints: vec![],
                 };
                 bboxes[class_index].push(bbox)
             }

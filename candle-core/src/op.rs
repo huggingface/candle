@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_closure_call)]
 use crate::{CpuStorage, CudaStorage, Layout, Result, Shape, Tensor};
 use half::{bf16, f16};
 use num_traits::float::Float;
@@ -398,6 +399,7 @@ bin_op!(
     vd_max
 );
 
+#[allow(clippy::redundant_closure_call)]
 macro_rules! unary_op {
     ($op: ident, $name: literal, $a: ident, $e: expr) => {
         impl UnaryOpT for $op {

@@ -1,3 +1,4 @@
+#![allow(clippy::redundant_closure_call)]
 // TODO: Handle negative dimension indexes.
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;

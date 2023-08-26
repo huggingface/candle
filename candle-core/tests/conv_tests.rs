@@ -149,6 +149,18 @@ fn conv2d_small(dev: &Device) -> Result<()> {
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
         [0.164, -0.0111, -0.1742, 2.6437, -2.0268, 1.1823, 3.2855, -1.0324, 0.2539]
     );
+    let res = t.conv2d(&w, 2, 1, 1)?;
+    assert_eq!(res.dims(), [1, 1, 7, 7]);
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        [
+            0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
+            0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.1640, -0.0111, -0.1742, 0.0000, 0.0000,
+            0.0000, 0.0000, 2.6437, -2.0268, 1.1823, 0.0000, 0.0000, 0.0000, 0.0000, 3.2855,
+            -1.0324, 0.2539, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
+            0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000
+        ]
+    );
     Ok(())
 }
 
@@ -171,8 +183,44 @@ fn conv2d_smaller(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/* This test is based on the following script.
+import torch
+torch.manual_seed(4242)
+
+t = torch.randn((1, 2, 4, 2))
+w = torch.randn((1, 2, 1, 1))
+print(t.flatten())
+print(w.flatten())
+res = torch.nn.functional.conv2d(t, w)
+print(res.flatten())
+*/
+fn conv2d_non_square(dev: &Device) -> Result<()> {
+    let t = Tensor::new(
+        &[
+            0.4056f32, -0.8689, -0.0773, -1.5630, -2.8012, -1.5059, 0.3972, 1.0852, 0.4997, 3.0616,
+            1.6541, 0.0964, -0.8338, -1.6523, -0.8323, -0.1699,
+        ],
+        dev,
+    )?;
+    let w = Tensor::new(&[-1.1351f32, 1.3841], dev)?;
+    let t = t.reshape((1, 2, 4, 2))?;
+    let w = w.reshape((1, 2, 1, 1))?;
+    let res = t.conv2d(&w, 0, 1, 1)?;
+    assert_eq!(res.dims(), [1, 1, 4, 2]);
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        [0.2312, 5.2238, 2.3772, 1.9076, 2.0256, -0.5776, -1.6028, -1.467]
+    );
+    Ok(())
+}
+
 test_device!(conv1d, conv1d_cpu, conv1d_gpu);
 test_device!(conv1d_small, conv1d_small_cpu, conv1d_small_gpu);
 test_device!(conv2d, conv2d_cpu, conv2d_gpu);
+test_device!(
+    conv2d_non_square,
+    conv2d_non_square_cpu,
+    conv2d_non_square_gpu
+);
 test_device!(conv2d_small, conv2d_small_cpu, conv2d_small_gpu);
 test_device!(conv2d_smaller, conv2d_smaller_cpu, conv2d_smaller_gpu);

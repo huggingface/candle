@@ -1,11 +1,19 @@
 /// A bounding box around an object.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Bbox {
     pub xmin: f32,
     pub ymin: f32,
     pub xmax: f32,
     pub ymax: f32,
     pub confidence: f32,
+    pub keypoints: Vec<KeyPoint>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KeyPoint {
+    pub x: f32,
+    pub y: f32,
+    pub mask: f32,
 }
 
 /// Intersection over union of two bounding boxes.
