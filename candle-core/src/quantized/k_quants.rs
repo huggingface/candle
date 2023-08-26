@@ -291,12 +291,71 @@ impl GgmlType for BlockQ5_0 {
     const BLCK_SIZE: usize = QK5_0;
     type VecDotType = BlockQ8_0;
 
-    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
-        todo!()
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        let qk = Self::BLCK_SIZE;
+        if n % Self::BLCK_SIZE != 0 {
+            crate::bail!("vec_dot_q5_0_q8_0: {n} is not divisible by {qk}")
+        }
+        let nb = n / qk;
+        if nb % 2 != 0 {
+            crate::bail!("vec_dot_q5_0_q8_0: {n}, nb is not divisible by 2")
+        }
+
+        // Generic implementation.
+        let mut sumf = 0f32;
+
+        for (xs, ys) in xs.iter().zip(ys.iter()) {
+            let qh = LittleEndian::read_u32(&xs.qh);
+            let mut sumi = 0i32;
+
+            for j in 0..Self::BLCK_SIZE / 2 {
+                let xh_0 = (((qh & (1u32 << j)) >> j) << 4) as u8;
+                let xh_1 = ((qh & (1u32 << (j + 16))) >> (j + 12)) as u8;
+
+                let x0 = ((xs.qs[j] & 0x0F) as i32 | xh_0 as i32) - 16;
+                let x1 = ((xs.qs[j] >> 4) as i32 | xh_1 as i32) - 16;
+
+                sumi += (x0 * ys.qs[j] as i32) + (x1 * ys.qs[j + Self::BLCK_SIZE / 2] as i32);
+            }
+
+            sumf += sumi as f32 * f16::to_f32(xs.d) * f16::to_f32(ys.d)
+        }
+        Ok(sumf)
     }
 
-    fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
-        todo!()
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        // quantize_row_q5_0
+        let k = xs.len();
+        if ys.len() * Self::BLCK_SIZE != k {
+            crate::bail!("size mismatch {k} {} {}", ys.len(), Self::BLCK_SIZE)
+        }
+        for (i, ys) in ys.iter_mut().enumerate() {
+            let xs = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
+
+            let mut amax = 0f32;
+            let mut max = 0f32;
+            for &x in xs.iter() {
+                if amax < x.abs() {
+                    amax = x.abs();
+                    max = x;
+                }
+            }
+            let d = max / -16.;
+            let id = if d != 0f32 { 1. / d } else { 0. };
+            ys.d = f16::from_f32(d);
+            let mut qh = 0u32;
+            for j in 0..Self::BLCK_SIZE / 2 {
+                let x0 = xs[j] * id;
+                let x1 = xs[j + Self::BLCK_SIZE / 2] * id;
+                let xi0 = ((x0 + 16.5) as i8).min(31) as u8;
+                let xi1 = ((x1 + 16.5) as i8).min(31) as u8;
+                ys.qs[j] = (xi0 & 0x0F) | ((xi1 & 0x0F) << 4);
+                qh |= ((xi0 as u32 & 0x10) >> 4) << j;
+                qh |= ((xi1 as u32 & 0x10) >> 4) << (j + Self::BLCK_SIZE / 2);
+            }
+            LittleEndian::write_u32(&mut ys.qh, qh)
+        }
+        Ok(())
     }
 
     // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1566
@@ -331,8 +390,36 @@ impl GgmlType for BlockQ5_1 {
     const BLCK_SIZE: usize = QK5_1;
     type VecDotType = BlockQ8_1;
 
-    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
-        todo!()
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        let qk = Self::BLCK_SIZE;
+        if n % Self::BLCK_SIZE != 0 {
+            crate::bail!("vec_dot_q5_1_q8_1: {n} is not divisible by {qk}")
+        }
+        let nb = n / qk;
+        if nb % 2 != 0 {
+            crate::bail!("vec_dot_q5_1_q8_1: {n}, nb is not divisible by 2")
+        }
+
+        // Generic implementation.
+        let mut sumf = 0f32;
+
+        for (xs, ys) in xs.iter().zip(ys.iter()) {
+            let qh = LittleEndian::read_u32(&xs.qh);
+            let mut sumi = 0i32;
+
+            for j in 0..Self::BLCK_SIZE / 2 {
+                let xh_0 = ((qh >> j) << 4) & 0x10;
+                let xh_1 = (qh >> (j + 12)) & 0x10;
+
+                let x0 = (xs.qs[j] as i32 & 0xF) | xh_0 as i32;
+                let x1 = (xs.qs[j] as i32 >> 4) | xh_1 as i32;
+
+                sumi += (x0 * ys.qs[j] as i32) + (x1 * ys.qs[j + Self::BLCK_SIZE / 2] as i32);
+            }
+
+            sumf += sumi as f32 * f16::to_f32(xs.d) * f16::to_f32(ys.d)
+        }
+        Ok(sumf)
     }
 
     fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
@@ -451,21 +538,44 @@ impl GgmlType for BlockQ8_0 {
 }
 
 impl GgmlType for BlockQ8_1 {
-    const DTYPE: GgmlDType = GgmlDType::Q3K;
-    const BLCK_SIZE: usize = QK_K;
+    const DTYPE: GgmlDType = GgmlDType::Q8_1;
+    const BLCK_SIZE: usize = QK8_1;
     type VecDotType = BlockQ8_1;
 
     fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
-        todo!()
+        unimplemented!("no support for vec-dot on Q8_1")
     }
 
-    fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
-        todo!()
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        // quantize_row_q8_1
+        let k = xs.len();
+        if ys.len() * Self::BLCK_SIZE != k {
+            crate::bail!("size mismatch {k} {} {}", ys.len(), Self::BLCK_SIZE)
+        }
+        for (i, ys) in ys.iter_mut().enumerate() {
+            let mut amax = 0f32;
+            let xs = &xs[i * Self::BLCK_SIZE..(i + 1) * Self::BLCK_SIZE];
+            for &x in xs.iter() {
+                amax = amax.max(x.abs())
+            }
+            let d = amax / ((1 << 7) - 1) as f32;
+            let id = if d != 0f32 { 1. / d } else { 0. };
+            ys.d = f16::from_f32(d);
+            let mut sum = 0i32;
+            for j in 0..Self::BLCK_SIZE / 2 {
+                let v0 = xs[j] * id;
+                let v1 = xs[j + Self::BLCK_SIZE / 2] * id;
+                ys.qs[j] = f32::round(v0) as u8;
+                ys.qs[j + Self::BLCK_SIZE / 2] = f32::round(v1) as u8;
+                sum += ys.qs[j] as i32 + ys.qs[j + Self::BLCK_SIZE / 2] as i32;
+            }
+            ys.s = f16::from_f32(sum as f32) * ys.d;
+        }
+        Ok(())
     }
 
-    // https://github.com/ggerganov/llama.cpp/blob/8183159cf3def112f6d1fe94815fce70e1bffa12/k_quants.c#L533
     fn to_float(_xs: &[Self], _ys: &mut [f32]) -> Result<()> {
-        todo!()
+        unimplemented!("no support for vec-dot on Q8_1")
     }
 }
 
