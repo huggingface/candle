@@ -944,11 +944,7 @@ impl GgmlType for BlockQ4K {
                 q4 = &q4[32..];
             }
 
-            let utmp_raw = unsafe {
-                std::mem::transmute::<&mut [u8; 12], &mut [u32; 3]>(&mut x.scales.clone())
-            };
-
-            utmp[0..3].copy_from_slice(utmp_raw);
+            LittleEndian::read_u32_into(&x.scales, &mut utmp[0..3]);
 
             utmp[3] = ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4);
             let uaux = utmp[1] & KMASK1;
@@ -1140,11 +1136,7 @@ impl GgmlType for BlockQ5K {
                 q5 = &q5[32..];
             }
 
-            let utmp_raw = unsafe {
-                std::mem::transmute::<&mut [u8; 12], &mut [u32; 3]>(&mut x.scales.clone())
-            };
-
-            utmp[0..3].copy_from_slice(utmp_raw);
+            LittleEndian::read_u32_into(&x.scales, &mut utmp[0..3]);
 
             utmp[3] = ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4);
             let uaux = utmp[1] & KMASK1;
