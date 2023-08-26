@@ -916,8 +916,8 @@ impl GgmlType for BlockQ4K {
         const KMASK3: u32 = 0x03030303;
 
         let mut utmp: [u32; 4] = [0; 4];
-        let mut scales: [u8; 8];
-        let mut mins: [u8; 8];
+        let mut scales: [u8; 8] = [0; 8];
+        let mut mins: [u8; 8] = [0; 8];
 
         let mut aux8: [i8; QK_K] = [0; QK_K];
         let mut aux16: [i16; 8] = [0; 8];
@@ -953,14 +953,8 @@ impl GgmlType for BlockQ4K {
             utmp[0] &= KMASK1;
 
             //extract scales and mins
-            let mut utemp_scales = &mut [0u32; 2];
-            let mut utemp_mins = &mut [0u32; 2];
-            utemp_scales.copy_from_slice(&utmp[0..2]);
-            utemp_mins.copy_from_slice(&utmp[2..4]);
-
-            scales =
-                unsafe { *std::mem::transmute::<&mut [u32; 2], &mut [u8; 8]>(&mut utemp_scales) };
-            mins = unsafe { *std::mem::transmute::<&mut [u32; 2], &mut [u8; 8]>(&mut utemp_mins) };
+            LittleEndian::write_u32_into(&utmp[0..2], &mut scales);
+            LittleEndian::write_u32_into(&utmp[2..4], &mut mins);
 
             let mut sumi = 0;
             for j in 0..QK_K / 16 {
@@ -1101,8 +1095,8 @@ impl GgmlType for BlockQ5K {
         const KMASK3: u32 = 0x03030303;
 
         let mut utmp: [u32; 4] = [0; 4];
-        let mut scales: [u8; 8];
-        let mut mins: [u8; 8];
+        let mut scales: [u8; 8] = [0; 8];
+        let mut mins: [u8; 8] = [0; 8];
 
         let mut aux8: [i8; QK_K] = [0; QK_K];
         let mut aux16: [i16; 8] = [0; 8];
@@ -1145,14 +1139,8 @@ impl GgmlType for BlockQ5K {
             utmp[0] &= KMASK1;
 
             //extract scales and mins
-            let mut utemp_scales = &mut [0u32; 2];
-            let mut utemp_mins = &mut [0u32; 2];
-            utemp_scales.copy_from_slice(&utmp[0..2]);
-            utemp_mins.copy_from_slice(&utmp[2..4]);
-
-            scales =
-                unsafe { *std::mem::transmute::<&mut [u32; 2], &mut [u8; 8]>(&mut utemp_scales) };
-            mins = unsafe { *std::mem::transmute::<&mut [u32; 2], &mut [u8; 8]>(&mut utemp_mins) };
+            LittleEndian::write_u32_into(&utmp[0..2], &mut scales);
+            LittleEndian::write_u32_into(&utmp[2..4], &mut mins);
 
             let mut sumi = 0;
             for j in 0..QK_K / 16 {
