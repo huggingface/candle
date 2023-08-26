@@ -1,4 +1,7 @@
-use candle_core::{quantized, Device, Result, Tensor};
+use candle_core::{
+    quantized::{self, GgmlDType},
+    Device, Result, Tensor,
+};
 use quantized::{k_quants, GgmlType};
 mod test_utils;
 use rand::prelude::*;
@@ -395,6 +398,27 @@ fn vec_dot_referenze(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(a, b)| a * b).sum()
 }
 
+/// Returns the error achieved by the GGML matmul unit test.
+fn ggml_reference_matmul_error(quantiztation_tpye: GgmlDType) -> Result<f32> {
+    match quantiztation_tpye {
+        GgmlDType::F16 => Ok(0.000010),
+        GgmlDType::Q2K => Ok(0.004086),
+        GgmlDType::Q3K => Ok(0.016148),
+        GgmlDType::Q4K => Ok(0.002425),
+        GgmlDType::Q5K => Ok(0.000740),
+        GgmlDType::Q6K => Ok(0.000952),
+        GgmlDType::Q4_0 => Ok(0.001143),
+        GgmlDType::Q4_1 => Ok(0.007784),
+        GgmlDType::Q5_0 => Ok(0.001353),
+        GgmlDType::Q5_1 => Ok(0.001363),
+        GgmlDType::Q8_0 => Ok(0.000092),
+        _ => candle_core::bail!(
+            "No GGML results for quantization type {:?}",
+            quantiztation_tpye
+        ),
+    }
+}
+
 /// Mirrores the GGML matmul unit test: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L76-L91
 fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
     let a = create_ggml_like_vector(0.0);
@@ -411,11 +435,24 @@ fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
 
     let error = (result - reference_result).abs() / length as f32;
 
+    let ggml_error = ggml_reference_matmul_error(T::DTYPE)?;
+
     if error > GGML_MAX_DOT_PRODUCT_ERROR {
         candle_core::bail!(
             "Dot product error {} exceeds max error {}",
             error,
             GGML_MAX_DOT_PRODUCT_ERROR
+        );
+    }
+
+    // We diverge slightly due to different rounding behavior / f16 to f32 conversions in GGML
+    // => we use a slightly higher error threshold
+    const ERROR_LENIENCY: f32 = 0.00001;
+    if error - ERROR_LENIENCY > ggml_error {
+        candle_core::bail!(
+            "Dot product error {} exceeds ggml reference error {}",
+            error,
+            ggml_error
         );
     }
     Ok(())
@@ -494,6 +531,61 @@ fn quantized_matmul_q3k() -> Result<()> {
 
     //mirrored GGML unit test
     ggml_matmul_error_test::<BlockQ3K>()?;
+
+    Ok(())
+}
+
+#[test]
+fn quantized_matmul_q4k() -> Result<()> {
+    use k_quants::BlockQ4K;
+
+    let cpu = &Device::Cpu;
+    let (m, k, n) = (11, 512, 21);
+    let (lhs, rhs, mm) = get_random_tensors(m, k, n, cpu)?;
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
+
+    let rhs = quantized::QTensor::quantize::<BlockQ4K>(&rhs)?;
+    let rhs = quantized::QMatMul::from_qtensor(rhs);
+    let mm = rhs.forward(&lhs)?;
+
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.125, 1.435, -0.201, 1.589]);
+
+    //mirrored GGML unit test
+    ggml_matmul_error_test::<BlockQ4K>()?;
+
+    Ok(())
+}
+
+#[test]
+fn quantized_matmul_q5k() -> Result<()> {
+    use k_quants::BlockQ5K;
+
+    let cpu = &Device::Cpu;
+    let (m, k, n) = (11, 512, 21);
+    let (lhs, rhs, mm) = get_random_tensors(m, k, n, cpu)?;
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
+
+    let rhs = quantized::QTensor::quantize::<BlockQ5K>(&rhs)?;
+    let rhs = quantized::QMatMul::from_qtensor(rhs);
+    let mm = rhs.forward(&lhs)?;
+
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.192, 1.491, -0.18, 1.743]);
+
+    //mirrored GGML unit test
+    //Expected: 0.000740408897
+    ggml_matmul_error_test::<BlockQ5K>()?;
 
     Ok(())
 }
