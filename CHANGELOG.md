@@ -3,6 +3,8 @@ This documents the main changes to the `candle` crate.
 
 ## Unreleased
 ### Added
+- Support more quantized types, e.g. Q2K, Q4K, Q5K...
+  [586](https://github.com/huggingface/candle/pull/586).
 - Add pose estimation to the yolo example
   [589](https://github.com/huggingface/candle/pull/589).
 - Api to write GGUF files

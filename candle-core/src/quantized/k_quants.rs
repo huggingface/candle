@@ -651,7 +651,6 @@ impl GgmlType for BlockQ3K {
         let mut aux32: [i32; 8] = [0; 8];
 
         let mut auxs: [u32; 4] = [0; 4];
-        let mut scales: &[i8; 16];
 
         for (x, y) in xs.iter().zip(ys.iter()) {
             let mut q3: &[u8] = &x.qs;
@@ -728,28 +727,28 @@ impl GgmlType for BlockQ3K {
             auxs[0] = (auxs[0] & KMASK2) | (((tmp) & KMASK1) << 4);
             auxs[1] = (auxs[1] & KMASK2) | (((tmp >> 2) & KMASK1) << 4);
 
-            scales = unsafe { std::mem::transmute::<&mut [u32; 4], &mut [i8; 16]>(&mut auxs) };
+            for aux in auxs {
+                for scale in aux.to_le_bytes() {
+                    let scale = i8::from_be_bytes([scale]);
+                    for l in 0..8 {
+                        aux16[l] = q8[l] as i16 * a[l] as i16;
+                    }
+                    for l in 0..8 {
+                        aux32[l] += (scale as i32 - 32) * aux16[l] as i32;
+                    }
+                    q8 = &q8[8..];
+                    a = &mut a[8..];
 
-            for scale in scales {
-                for l in 0..8 {
-                    aux16[l] = q8[l] as i16 * a[l] as i16;
+                    for l in 0..8 {
+                        aux16[l] = q8[l] as i16 * a[l] as i16;
+                    }
+                    for l in 0..8 {
+                        aux32[l] += (scale as i32 - 32) * aux16[l] as i32;
+                    }
+                    q8 = &q8[8..];
+                    a = &mut a[8..];
                 }
-                for l in 0..8 {
-                    aux32[l] += (*scale as i32 - 32) * aux16[l] as i32;
-                }
-                q8 = &q8[8..];
-                a = &mut a[8..];
-
-                for l in 0..8 {
-                    aux16[l] = q8[l] as i16 * a[l] as i16;
-                }
-                for l in 0..8 {
-                    aux32[l] += (*scale as i32 - 32) * aux16[l] as i32;
-                }
-                q8 = &q8[8..];
-                a = &mut a[8..];
             }
-
             let d = x.d.to_f32() * y.d;
             for l in 0..8 {
                 sums[l] += d * aux32[l] as f32;
