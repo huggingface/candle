@@ -32,7 +32,7 @@ impl crate::Module for Embedding {
 }
 
 pub fn embedding(in_size: usize, out_size: usize, vb: crate::VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get_or_init(
+    let embeddings = vb.get_with_hints(
         (in_size, out_size),
         "weight",
         crate::Init::Randn {

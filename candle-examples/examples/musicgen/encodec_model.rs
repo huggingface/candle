@@ -354,13 +354,13 @@ impl EncodecResnetBlock {
     }
 }
 
-struct Layer<'a> {
-    vb: VarBuilder<'a>,
+struct Layer {
+    vb: VarBuilder,
     cnt: usize,
 }
 
-impl<'a> Layer<'a> {
-    fn new(vb: VarBuilder<'a>) -> Self {
+impl Layer {
+    fn new(vb: VarBuilder) -> Self {
         Self { vb, cnt: 0 }
     }
 
@@ -368,7 +368,7 @@ impl<'a> Layer<'a> {
         self.cnt += 1;
     }
 
-    fn next(&mut self) -> VarBuilder<'a> {
+    fn next(&mut self) -> VarBuilder {
         let vb = self.vb.pp(&self.cnt.to_string());
         self.cnt += 1;
         vb

@@ -104,7 +104,7 @@ impl TransformerWeights {
         })
     }
 
-    pub fn var_builder(&self, cfg: &Config, device: &Device) -> Result<VarBuilder<'static>> {
+    pub fn var_builder(&self, cfg: &Config, device: &Device) -> Result<VarBuilder> {
         // TODO: As of 2023-08-04, gemm is slower than expected when multiplying a matrix of
         // size (1, k) with the transpose of a matrix of size (k, n) as it ends up transposing the
         // second matrix back. We detect this case here and as a temporary hack make the weight

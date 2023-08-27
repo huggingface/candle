@@ -4,8 +4,219 @@ use safetensors::{slice::IndexOp, tensor::SafeTensors};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-// TODO: Maybe we would want the storage to be generic, e.g. with Box<dyn> to avoid too many
-// generics.
+/// A structure used to retrieve variables, these variables can either come from storage or be
+/// generated via some form of initialization.
+///
+/// The way to retrieve variables is defined in the backend embedded in the `VarBuilder`.
+pub struct VarBuilderArgs<B: Backend> {
+    data: Arc<TensorData<B>>,
+    path: Vec<String>,
+}
+
+impl<B: Backend> Clone for VarBuilderArgs<B> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            path: self.path.clone(),
+        }
+    }
+}
+
+/// A simple `VarBuilder`, this is less generic than `VarBuilderArgs` but should cover most common
+/// use cases.
+pub type VarBuilder = VarBuilderArgs<Box<dyn SimpleBackend>>;
+
+struct TensorData<B: Backend> {
+    backend: B,
+    pub dtype: DType,
+    pub device: Device,
+}
+
+/// A trait that defines how tensor data is retrieved.
+///
+/// Typically this would use disk storage in some specific format, or random initialization.
+/// Note that there is a speciliazed version of this trait (`SimpleBackend`) that can be used most
+/// of the time. The main restriction is that it doesn't allow for specific args (besides
+/// initialization hints).
+pub trait Backend {
+    type Hints: Default;
+
+    /// Retrieve a tensor with some target shape.
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: Self::Hints,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor>;
+}
+
+pub trait SimpleBackend {
+    /// Retrieve a tensor based on a target name and shape.
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor>;
+}
+
+impl Backend for Box<dyn SimpleBackend> {
+    type Hints = crate::Init;
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: Self::Hints,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        self.as_ref().get(s, name, h, dtype, dev)
+    }
+}
+
+impl<B: Backend> VarBuilderArgs<B> {
+    pub fn push_prefix<S: ToString>(&self, s: S) -> Self {
+        let mut path = self.path.clone();
+        path.push(s.to_string());
+        Self {
+            data: self.data.clone(),
+            path,
+        }
+    }
+
+    /// Short alias for `push_prefix`.
+    pub fn pp<S: ToString>(&self, s: S) -> Self {
+        self.push_prefix(s)
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.data.device
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.data.dtype
+    }
+
+    fn path(&self, tensor_name: &str) -> String {
+        if self.path.is_empty() {
+            tensor_name.to_string()
+        } else {
+            [&self.path.join("."), tensor_name].join(".")
+        }
+    }
+
+    /// Retrieve the tensor associated with the given name at the current path.
+    pub fn get_with_hints<S: Into<Shape>>(
+        &self,
+        s: S,
+        name: &str,
+        hints: B::Hints,
+    ) -> Result<Tensor> {
+        let path = self.path(name);
+        self.data
+            .backend
+            .get(s.into(), &path, hints, self.data.dtype, &self.data.device)
+    }
+
+    /// Retrieve the tensor associated with the given name at the current path.
+    pub fn get<S: Into<Shape>>(&self, s: S, name: &str) -> Result<Tensor> {
+        self.get_with_hints(s, name, Default::default())
+    }
+}
+
+struct Zeros;
+impl SimpleBackend for Zeros {
+    fn get(&self, s: Shape, _: &str, _: crate::Init, dtype: DType, dev: &Device) -> Result<Tensor> {
+        Tensor::zeros(s, dtype, dev)
+    }
+}
+
+impl SimpleBackend for HashMap<String, Tensor> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        _: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        let tensor = self
+            .get(name)
+            .ok_or_else(|| {
+                Error::CannotFindTensor {
+                    path: name.to_string(),
+                }
+                .bt()
+            })?
+            .clone();
+        if tensor.shape() != &s {
+            Err(candle::Error::UnexpectedShape {
+                msg: format!("shape mismatch for {name}"),
+                expected: s,
+                got: tensor.shape().clone(),
+            }
+            .bt())?
+        }
+        tensor.to_device(dev)?.to_dtype(dtype)
+    }
+}
+
+impl SimpleBackend for VarMap {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        VarMap::get(self, s, name, h, dtype, dev)
+    }
+}
+
+impl VarBuilder {
+    fn new(backend: Box<dyn SimpleBackend>, dtype: DType, device: Device) -> Self {
+        let data = TensorData {
+            backend,
+            dtype,
+            device,
+        };
+        Self {
+            data: Arc::new(data),
+            path: vec![],
+        }
+    }
+
+    pub fn zeros(dtype: DType, dev: &Device) -> Self {
+        Self::new(Box::new(Zeros), dtype, dev.clone())
+    }
+
+    pub fn from_tensors(ts: HashMap<String, Tensor>, dtype: DType, dev: &Device) -> Self {
+        Self::new(Box::new(ts), dtype, dev.clone())
+    }
+
+    pub fn from_varmap(varmap: &VarMap, dtype: DType, dev: &Device) -> Self {
+        Self::new(Box::new(varmap.clone()), dtype, dev.clone())
+    }
+
+    pub fn from_safetensors<'a>(_st: Vec<SafeTensors<'a>>, _dtype: DType, _dev: &Device) -> Self {
+        todo!()
+    }
+
+    pub fn from_npz<P: AsRef<std::path::Path>>(
+        _p: P,
+        _dtype: DType,
+        _dev: &Device,
+    ) -> Result<Self> {
+        todo!()
+    }
+}
+
+/*
 enum Tensors<'a> {
     SafeTensorWithRouting {
         routing: HashMap<String, usize>,
@@ -15,12 +226,6 @@ enum Tensors<'a> {
     TensorMap(HashMap<String, Tensor>),
     Zeros,
     VarMap(VarMap),
-}
-
-struct TensorData<'a> {
-    tensors: Tensors<'a>,
-    pub dtype: DType,
-    pub device: Device,
 }
 
 impl<'a> TensorData<'a> {
@@ -76,12 +281,6 @@ impl<'a> TensorData<'a> {
     }
 }
 
-#[derive(Clone)]
-pub struct VarBuilder<'a> {
-    data: Arc<TensorData<'a>>,
-    path: Vec<String>,
-}
-
 impl<'a> VarBuilder<'a> {
     /// Create a `VarBuilder` accessing data frome the safetensors storage. The initial path is
     /// set to the root path and sub-paths can be created via the `push_prefix` method.
@@ -129,27 +328,6 @@ impl<'a> VarBuilder<'a> {
         })
     }
 
-    pub fn push_prefix<S: ToString>(&self, s: S) -> Self {
-        let mut path = self.path.clone();
-        path.push(s.to_string());
-        Self {
-            data: self.data.clone(),
-            path,
-        }
-    }
-
-    /// Short alias for `push_prefix`.
-    pub fn pp<S: ToString>(&self, s: S) -> Self {
-        self.push_prefix(s)
-    }
-
-    pub fn device(&self) -> &Device {
-        &self.data.device
-    }
-
-    pub fn dtype(&self) -> DType {
-        self.data.dtype
-    }
 }
 
 impl<'a> VarBuilder<'a> {
@@ -304,12 +482,5 @@ impl<'a> VarBuilder<'a> {
             _ => self.get(s, tensor_name),
         }
     }
-
-    fn path(&self, tensor_name: &str) -> String {
-        if self.path.is_empty() {
-            tensor_name.to_string()
-        } else {
-            [&self.path.join("."), tensor_name].join(".")
-        }
-    }
 }
+*/
