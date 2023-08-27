@@ -3,9 +3,11 @@ use crate::{Device, Result, Shape, Tensor};
 #[cfg(target_feature = "avx")]
 pub mod avx;
 pub mod ggml_file;
+pub mod gguf_file;
 pub mod k_quants;
 #[cfg(target_feature = "neon")]
 pub mod neon;
+pub mod utils;
 
 pub use k_quants::GgmlType;
 
@@ -14,7 +16,7 @@ pub struct QTensor {
     shape: Shape,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GgmlDType {
     F32,
     F16,
@@ -52,6 +54,25 @@ impl GgmlDType {
             _ => crate::bail!("unknown dtype for tensor {u}"),
         };
         Ok(dtype)
+    }
+
+    pub(crate) fn to_u32(self) -> u32 {
+        match self {
+            Self::F32 => 0,
+            Self::F16 => 1,
+            Self::Q4_0 => 2,
+            Self::Q4_1 => 3,
+            Self::Q5_0 => 6,
+            Self::Q5_1 => 7,
+            Self::Q8_0 => 8,
+            Self::Q8_1 => 9,
+            Self::Q2K => 10,
+            Self::Q3K => 11,
+            Self::Q4K => 12,
+            Self::Q5K => 13,
+            Self::Q6K => 14,
+            Self::Q8K => 15,
+        }
     }
 
     /// The type size for blocks in bytes.
@@ -97,6 +118,8 @@ pub trait QuantizedType: Send + Sync {
     fn dtype(&self) -> GgmlDType;
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()>;
     fn to_float(&self, ys: &mut [f32]) -> Result<()>;
+    fn storage_size_in_bytes(&self) -> usize;
+    fn as_ptr(&self) -> *const u8;
 }
 
 impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
@@ -110,6 +133,14 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
 
     fn to_float(&self, ys: &mut [f32]) -> Result<()> {
         T::to_float(self.as_slice(), ys)
+    }
+
+    fn storage_size_in_bytes(&self) -> usize {
+        self.len() * std::mem::size_of::<T>()
+    }
+
+    fn as_ptr(&self) -> *const u8 {
+        self.as_ptr() as *const u8
     }
 }
 
@@ -183,6 +214,14 @@ impl QTensor {
 
     pub fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()> {
         self.data.matmul_t(mkn, lhs, dst)
+    }
+
+    pub fn storage_size_in_bytes(&self) -> usize {
+        self.data.storage_size_in_bytes()
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        self.data.as_ptr()
     }
 }
 

@@ -40,7 +40,7 @@ impl Benchmark for Conv1d {
     }
 
     fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
-        d.0.conv1d(&d.1, 0, 1)
+        d.0.conv1d(&d.1, 0, 1, 1)
     }
 
     const ITERS: usize = 5;
@@ -59,7 +59,7 @@ impl Benchmark for Conv2d {
     }
 
     fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
-        d.0.conv2d(&d.1, 0, 1)
+        d.0.conv2d(&d.1, 0, 1, 1)
     }
 
     const ITERS: usize = 1;

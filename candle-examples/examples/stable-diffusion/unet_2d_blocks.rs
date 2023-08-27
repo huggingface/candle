@@ -24,7 +24,11 @@ impl Downsample2D {
         padding: usize,
     ) -> Result<Self> {
         let conv = if use_conv {
-            let config = nn::Conv2dConfig { stride: 2, padding };
+            let config = nn::Conv2dConfig {
+                stride: 2,
+                padding,
+                ..Default::default()
+            };
             let conv = conv2d(in_channels, out_channels, 3, config, vs.pp("conv"))?;
             Some(conv)
         } else {

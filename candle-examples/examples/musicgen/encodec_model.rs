@@ -274,14 +274,22 @@ impl EncodecConv1d {
                 in_c,
                 out_c,
                 kernel_size,
-                Conv1dConfig { padding: 0, stride },
+                Conv1dConfig {
+                    padding: 0,
+                    stride,
+                    groups: 1,
+                },
                 vb.pp("conv"),
             )?,
             NormType::None => conv1d(
                 in_c,
                 out_c,
                 kernel_size,
-                Conv1dConfig { padding: 0, stride },
+                Conv1dConfig {
+                    padding: 0,
+                    stride,
+                    groups: 1,
+                },
                 vb.pp("conv"),
             )?,
         };

@@ -1,9 +1,4 @@
-#![allow(dead_code)]
-
-#[cfg(feature = "accelerate")]
-extern crate accelerate_src;
-
-use candle_core::{Result, Tensor};
+use crate::{Result, Tensor};
 
 #[macro_export]
 macro_rules! test_device {
@@ -23,6 +18,12 @@ macro_rules! test_device {
     };
 }
 
+pub fn to_vec0_round(t: &Tensor, digits: i32) -> Result<f32> {
+    let b = 10f32.powi(digits);
+    let t = t.to_vec0::<f32>()?;
+    Ok(f32::round(t * b) / b)
+}
+
 pub fn to_vec1_round(t: &Tensor, digits: i32) -> Result<Vec<f32>> {
     let b = 10f32.powi(digits);
     let t = t.to_vec1::<f32>()?;
@@ -40,7 +41,7 @@ pub fn to_vec2_round(t: &Tensor, digits: i32) -> Result<Vec<Vec<f32>>> {
     Ok(t)
 }
 
-pub fn to_vec3_round(t: Tensor, digits: i32) -> Result<Vec<Vec<Vec<f32>>>> {
+pub fn to_vec3_round(t: &Tensor, digits: i32) -> Result<Vec<Vec<Vec<f32>>>> {
     let b = 10f32.powi(digits);
     let t = t.to_vec3::<f32>()?;
     let t = t

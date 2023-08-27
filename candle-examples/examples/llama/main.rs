@@ -12,13 +12,13 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use anyhow::{Error as E, Result};
+use anyhow::{bail, Error as E, Result};
 use clap::Parser;
 
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::api::sync::Api;
+use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::io::Write;
 
 mod model;
@@ -59,9 +59,9 @@ struct Args {
     #[arg(long)]
     prompt: Option<String>,
 
-    /// Use f32 computations rather than f16.
+    /// Use different dtype than f16
     #[arg(long)]
-    use_f32: bool,
+    dtype: Option<String>,
 
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
@@ -69,6 +69,9 @@ struct Args {
 
     #[arg(long)]
     model_id: Option<String>,
+
+    #[arg(long)]
+    revision: Option<String>,
 
     #[arg(long)]
     v1: bool,
@@ -80,6 +83,14 @@ struct Args {
     /// (same structure as huggingface online)
     #[arg(long)]
     local_weights: Option<String>,
+
+    /// Penalty to be applied for repeating tokens, 1. means no penalty.
+    #[arg(long, default_value_t = 1.0)]
+    repeat_penalty: f32,
+
+    /// The context size to consider for the repeat penalty.
+    #[arg(long, default_value_t = 64)]
+    repeat_last_n: usize,
 }
 
 fn main() -> Result<()> {
@@ -97,7 +108,13 @@ fn main() -> Result<()> {
     };
 
     let device = candle_examples::device(args.cpu)?;
-    let dtype = if args.use_f32 { DType::F32 } else { DType::F16 };
+    let dtype = match args.dtype.as_deref() {
+        Some("f16") => DType::F16,
+        Some("bf16") => DType::BF16,
+        Some("f32") => DType::F32,
+        Some(dtype) => bail!("Unsupported dtype {dtype}"),
+        None => DType::F16,
+    };
     let (llama, tokenizer_filename, cache) = match args.npy {
         Some(filename) => {
             let config = if args.v1 {
@@ -120,7 +137,8 @@ fn main() -> Result<()> {
                 }
             });
             println!("loading the model weights from {model_id}");
-            let api = api.model(model_id);
+            let revision = args.revision.unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
 
             let tokenizer_filename = match &args.local_weights {
                 Some(path) => (path.to_owned() + "tokenizer.json").into(),
@@ -190,6 +208,16 @@ fn main() -> Result<()> {
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
         let logits = llama.forward(&input, index_pos)?;
         let logits = logits.squeeze(0)?;
+        let logits = if args.repeat_penalty == 1. {
+            logits
+        } else {
+            let start_at = tokens.len().saturating_sub(args.repeat_last_n);
+            candle_transformers::utils::apply_repeat_penalty(
+                &logits,
+                args.repeat_penalty,
+                &tokens[start_at..],
+            )?
+        };
         index_pos += ctxt.len();
 
         let next_token = logits_processor.sample(&logits)?;

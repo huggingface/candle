@@ -63,6 +63,7 @@ pub mod shape;
 mod storage;
 mod strided_index;
 mod tensor;
+pub mod test_utils;
 pub mod utils;
 mod variable;
 
@@ -87,3 +88,6 @@ pub use dummy_cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
+
+#[cfg(feature = "accelerate")]
+extern crate accelerate_src;

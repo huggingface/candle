@@ -1,0 +1,414 @@
+<html>
+  <head>
+    <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+    <title>Candle YOLOv8 Rust/WASM</title>
+  </head>
+  <body></body>
+</html>
+
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
+      html,
+      body {
+        font-family: "Source Sans 3", sans-serif;
+      }
+      code,
+      output,
+      select,
+      pre {
+        font-family: "Source Code Pro", monospace;
+      }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script
+      src="https://cdn.jsdelivr.net/gh/huggingface/hub-js-utils/share-canvas.js"
+      type="module"
+    ></script>
+    <script type="module">
+      const MODEL_BASEURL =
+        "https://huggingface.co/lmz/candle-yolo-v8/resolve/main/";
+
+      const MODELS = {
+        yolov8n: {
+          model_size: "n",
+          url: "yolov8n.safetensors",
+        },
+        yolov8s: {
+          model_size: "s",
+          url: "yolov8s.safetensors",
+        },
+        yolov8m: {
+          model_size: "m",
+          url: "yolov8m.safetensors",
+        },
+        yolov8l: {
+          model_size: "l",
+          url: "yolov8l.safetensors",
+        },
+        yolov8x: {
+          model_size: "x",
+          url: "yolov8x.safetensors",
+        },
+      };
+
+      // init web worker
+      const yoloWorker = new Worker("./yoloWorker.js", { type: "module" });
+
+      let hasImage = false;
+      //add event listener to image examples
+      document.querySelector("#image-select").addEventListener("click", (e) => {
+        const target = e.target;
+        if (target.nodeName === "IMG") {
+          const href = target.src;
+          drawImageCanvas(href);
+        }
+      });
+      //add event listener to file input
+      document.querySelector("#file-upload").addEventListener("change", (e) => {
+        const target = e.target;
+        if (target.files.length > 0) {
+          const href = URL.createObjectURL(target.files[0]);
+          drawImageCanvas(href);
+        }
+      });
+      // add event listener to drop-area
+      const dropArea = document.querySelector("#drop-area");
+      dropArea.addEventListener("dragenter", (e) => {
+        e.preventDefault();
+        dropArea.classList.add("border-blue-700");
+      });
+      dropArea.addEventListener("dragleave", (e) => {
+        e.preventDefault();
+        dropArea.classList.remove("border-blue-700");
+      });
+      dropArea.addEventListener("dragover", (e) => {
+        e.preventDefault();
+      });
+      dropArea.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropArea.classList.remove("border-blue-700");
+        const url = e.dataTransfer.getData("text/uri-list");
+        const files = e.dataTransfer.files;
+
+        if (files.length > 0) {
+          const href = URL.createObjectURL(files[0]);
+          drawImageCanvas(href);
+        } else if (url) {
+          drawImageCanvas(url);
+        }
+      });
+
+      function drawImageCanvas(imgURL) {
+        const canvas = document.querySelector("#canvas");
+        const canvasResult = document.querySelector("#canvas-result");
+        canvasResult
+          .getContext("2d")
+          .clearRect(0, 0, canvas.width, canvas.height);
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        document.querySelector("#share-btn").hidden = true;
+
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+
+        img.onload = () => {
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+
+          canvas.parentElement.style.height = canvas.offsetHeight + "px";
+          hasImage = true;
+          document.querySelector("#detect").disabled = false;
+        };
+        img.src = imgURL;
+      }
+
+      async function classifyImage(
+        imageURL, // URL of image to classify
+        modelID, // ID of model to use
+        modelURL, // URL to model file
+        modelSize, // size of model
+        confidence, // confidence threshold
+        iou_threshold, // IoU threshold
+        updateStatus // function receives status updates
+      ) {
+        return new Promise((resolve, reject) => {
+          yoloWorker.postMessage({
+            imageURL,
+            modelID,
+            modelURL,
+            modelSize,
+            confidence,
+            iou_threshold,
+          });
+          yoloWorker.addEventListener("message", (event) => {
+            if ("status" in event.data) {
+              updateStatus(event.data.status);
+            }
+            if ("error" in event.data) {
+              reject(new Error(event.data.error));
+            }
+            if (event.data.status === "complete") {
+              resolve(event.data);
+            }
+          });
+        });
+      }
+      // add event listener to detect button
+      document.querySelector("#detect").addEventListener("click", async () => {
+        if (!hasImage) {
+          return;
+        }
+        const modelID = document.querySelector("#model").value;
+        const modelURL = MODEL_BASEURL + MODELS[modelID].url;
+        const modelSize = MODELS[modelID].model_size;
+        const confidence = parseFloat(
+          document.querySelector("#confidence").value
+        );
+        const iou_threshold = parseFloat(
+          document.querySelector("#iou_threshold").value
+        );
+
+        const canvasInput = document.querySelector("#canvas");
+        const canvas = document.querySelector("#canvas-result");
+        canvas.width = canvasInput.width;
+        canvas.height = canvasInput.height;
+
+        const scale = canvas.width / canvas.offsetWidth;
+
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(canvasInput, 0, 0);
+        const imageURL = canvas.toDataURL();
+
+        const results = await await classifyImage(
+          imageURL,
+          modelID,
+          modelURL,
+          modelSize,
+          confidence,
+          iou_threshold,
+          updateStatus
+        );
+
+        const { output } = results;
+
+        ctx.lineWidth = 1 + 2 * scale;
+        ctx.strokeStyle = "#3c8566";
+        ctx.fillStyle = "#0dff9a";
+        const fontSize = 14 * scale;
+        ctx.font = `${fontSize}px sans-serif`;
+        for (const [label, bbox] of output) {
+          const [x, y, w, h] = [
+            bbox.xmin,
+            bbox.ymin,
+            bbox.xmax - bbox.xmin,
+            bbox.ymax - bbox.ymin,
+          ];
+
+          const confidence = bbox.confidence;
+
+          const text = `${label} ${confidence.toFixed(2)}`;
+          const width = ctx.measureText(text).width;
+          ctx.fillStyle = "#3c8566";
+          ctx.fillRect(x - 2, y - fontSize, width + 4, fontSize);
+          ctx.fillStyle = "#e3fff3";
+
+          ctx.strokeRect(x, y, w, h);
+          ctx.fillText(text, x, y - 2);
+        }
+      });
+
+      function updateStatus(statusMessage) {
+        const button = document.querySelector("#detect");
+        if (statusMessage === "detecting") {
+          button.disabled = true;
+          button.classList.add("bg-blue-700");
+          button.classList.remove("bg-blue-950");
+          button.textContent = "Detecting...";
+        } else if (statusMessage === "complete") {
+          button.disabled = false;
+          button.classList.add("bg-blue-950");
+          button.classList.remove("bg-blue-700");
+          button.textContent = "Detect Objects";
+          document.querySelector("#share-btn").hidden = false;
+        }
+      }
+      document.querySelector("#share-btn").addEventListener("click", () => {
+        shareToCommunity(
+          "lmz/candle-yolo",
+          "Candle + YOLOv8",
+          "YOLOv8 with [Candle](https://github.com/huggingface/candle)",
+          "canvas-result",
+          "share-btn"
+        );
+      });
+    </script>
+  </head>
+  <body class="container max-w-4xl mx-auto p-4">
+    <main class="grid grid-cols-1 gap-8">
+      <div>
+        <h1 class="text-5xl font-bold">Candle YOLOv8</h1>
+        <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
+        <p class="max-w-lg">
+          Running an object detection model in the browser using rust/wasm with
+          an image. This demo uses the
+          <a
+            href="https://huggingface.co/lmz/candle-yolo-v8"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+          >
+            Candle YOLOv8
+          </a>
+          models to detect objects in images and WASM runtime built with
+          <a
+            href="https://github.com/huggingface/candle/"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+            >Candle
+          </a>
+        </p>
+      </div>
+
+      <div>
+        <label for="model" class="font-medium">Models Options: </label>
+        <select
+          id="model"
+          class="border-2 border-gray-500 rounded-md font-light"
+        >
+          <option value="yolov8n" selected>yolov8n (6.37 MB)</option>
+          <option value="yolov8s">yolov8s (22.4 MB)</option>
+          <option value="yolov8m">yolov8m (51.9 MB)</option>
+          <option value="yolov8l">yolov8l (87.5 MB)</option>
+          <option value="yolov8x">yolov8x (137 MB)</option>
+        </select>
+      </div>
+      <!-- drag and drop area -->
+      <div class="relative">
+        <div
+          id="drop-area"
+          class="flex flex-col items-center justify-center border-2 border-gray-300 border-dashed rounded-xl relative aspect-video w-full overflow-hidden"
+        >
+          <div
+            class="flex flex-col items-center justify-center space-y-1 text-center"
+          >
+            <svg
+              width="25"
+              height="25"
+              viewBox="0 0 25 25"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M3.5 24.3a3 3 0 0 1-1.9-.8c-.5-.5-.8-1.2-.8-1.9V2.9c0-.7.3-1.3.8-1.9.6-.5 1.2-.7 2-.7h18.6c.7 0 1.3.2 1.9.7.5.6.7 1.2.7 2v18.6c0 .7-.2 1.4-.7 1.9a3 3 0 0 1-2 .8H3.6Zm0-2.7h18.7V2.9H3.5v18.7Zm2.7-2.7h13.3c.3 0 .5 0 .6-.3v-.7l-3.7-5a.6.6 0 0 0-.6-.2c-.2 0-.4 0-.5.3l-3.5 4.6-2.4-3.3a.6.6 0 0 0-.6-.3c-.2 0-.4.1-.5.3l-2.7 3.6c-.1.2-.2.4 0 .7.1.2.3.3.6.3Z"
+                fill="#000"
+              />
+            </svg>
+            <div class="flex text-sm text-gray-600">
+              <label
+                for="file-upload"
+                class="relative cursor-pointer bg-white rounded-md font-medium text-blue-950 hover:text-blue-700"
+              >
+                <span>Drag and drop your image here</span>
+                <span class="block text-xs">or</span>
+                <span class="block text-xs">Click to upload</span>
+              </label>
+            </div>
+            <input
+              id="file-upload"
+              name="file-upload"
+              type="file"
+              class="sr-only"
+            />
+          </div>
+          <canvas
+            id="canvas"
+            class="absolute pointer-events-none w-full"
+          ></canvas>
+          <canvas
+            id="canvas-result"
+            class="absolute pointer-events-none w-full"
+          ></canvas>
+        </div>
+        <div class="text-right py-2">
+          <button
+            id="share-btn"
+            hidden
+            class="bg-white rounded-md hover:outline outline-orange-200 disabled:opacity-50"
+          >
+            <img
+              src="https://huggingface.co/datasets/huggingface/badges/raw/main/share-to-community-sm.svg"
+            />
+          </button>
+        </div>
+      </div>
+      <div>
+        <div class="flex gap-3 items-center" id="image-select">
+          <h3 class="font-medium">Examples:</h3>
+
+          <img
+            src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/candle/examples/sf.jpg"
+            class="cursor-pointer w-24 h-24 object-cover"
+          />
+          <img
+            src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/candle/examples/bike.jpeg"
+            class="cursor-pointer w-24 h-24 object-cover"
+          />
+        </div>
+      </div>
+      <div>
+        <div class="grid grid-cols-3 max-w-md items-center gap-3">
+          <label class="text-sm font-medium" for="confidence"
+            >Confidence Threshold</label
+          >
+          <input
+            type="range"
+            id="confidence"
+            name="confidence"
+            min="0"
+            max="1"
+            step="0.01"
+            value="0.25"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)"
+          />
+          <output
+            class="text-xs font-light px-1 py-1 border border-gray-700 rounded-md w-min"
+            >0.25</output
+          >
+
+          <label class="text-sm font-medium" for="iou_threshold"
+            >IoU Threshold</label
+          >
+
+          <input
+            type="range"
+            id="iou_threshold"
+            name="iou_threshold"
+            min="0"
+            max="1"
+            step="0.01"
+            value="0.45"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)"
+          />
+          <output
+            class="font-extralight text-xs px-1 py-1 border border-gray-700 rounded-md w-min"
+            >0.45</output
+          >
+        </div>
+      </div>
+      <div>
+        <button
+          id="detect"
+          disabled
+          class="bg-blue-950 hover:bg-blue-700 text-white font-normal py-2 px-4 rounded disabled:opacity-75 disabled:hover:bg-blue-950"
+        >
+          Detect Objects
+        </button>
+      </div>
+    </main>
+  </body>
+</html>

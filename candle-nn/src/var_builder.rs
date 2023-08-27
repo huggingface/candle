@@ -129,7 +129,7 @@ impl<'a> VarBuilder<'a> {
         })
     }
 
-    pub fn push_prefix(&self, s: &str) -> Self {
+    pub fn push_prefix<S: ToString>(&self, s: S) -> Self {
         let mut path = self.path.clone();
         path.push(s.to_string());
         Self {
@@ -139,7 +139,7 @@ impl<'a> VarBuilder<'a> {
     }
 
     /// Short alias for `push_prefix`.
-    pub fn pp(&self, s: &str) -> Self {
+    pub fn pp<S: ToString>(&self, s: S) -> Self {
         self.push_prefix(s)
     }
 

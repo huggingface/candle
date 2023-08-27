@@ -4,10 +4,8 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-mod test_utils;
-
 use anyhow::Result;
-use candle::{DType, Device, Tensor};
+use candle::{test_utils, DType, Device, Tensor};
 use candle_nn::BatchNorm;
 
 /* The test below has been generated using the following PyTorch code:
