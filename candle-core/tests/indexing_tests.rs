@@ -1,8 +1,6 @@
 use anyhow::Result;
 use candle_core::{Device, IndexOp, Tensor};
 
-mod test_utils;
-
 #[test]
 fn integer_index() -> Result<()> {
     let dev = Device::Cpu;

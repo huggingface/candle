@@ -1,5 +1,4 @@
-mod test_utils;
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{test_device, DType, Device, IndexOp, Result, Tensor};
 
 fn zeros(device: &Device) -> Result<()> {
     let tensor = Tensor::zeros((5, 2), DType::F32, device)?;

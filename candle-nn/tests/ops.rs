@@ -4,10 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-mod test_utils;
-use test_utils::to_vec3_round;
-
-use candle::{Device, Result, Tensor};
+use candle::{test_utils::to_vec3_round, Device, Result, Tensor};
 
 #[test]
 fn softmax() -> Result<()> {
@@ -18,7 +15,7 @@ fn softmax() -> Result<()> {
     let t1 = candle_nn::ops::softmax(&tensor.log()?, 1)?;
     let t2 = candle_nn::ops::softmax(&tensor.log()?, 2)?;
     assert_eq!(
-        to_vec3_round(t0, 4)?,
+        to_vec3_round(&t0, 4)?,
         &[
             // 3/5, 1/2, 4/11
             [[0.6, 0.5, 0.3636], [0.1111, 0.7143, 0.5294]],
@@ -27,7 +24,7 @@ fn softmax() -> Result<()> {
         ]
     );
     assert_eq!(
-        to_vec3_round(t1, 4)?,
+        to_vec3_round(&t1, 4)?,
         &[
             // 3/4, 1/6, 4/13
             [[0.75, 0.1667, 0.3077], [0.25, 0.8333, 0.6923]],
@@ -36,7 +33,7 @@ fn softmax() -> Result<()> {
         ]
     );
     assert_eq!(
-        to_vec3_round(t2, 4)?,
+        to_vec3_round(&t2, 4)?,
         &[
             // (3, 1, 4) / 8, (1, 5, 9) / 15
             [[0.375, 0.125, 0.5], [0.0667, 0.3333, 0.6]],

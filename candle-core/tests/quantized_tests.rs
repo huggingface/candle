@@ -1,11 +1,10 @@
 use candle_core::{
     quantized::{self, GgmlDType},
+    test_utils::to_vec2_round,
     Device, Result, Tensor,
 };
 use quantized::{k_quants, GgmlType};
-mod test_utils;
 use rand::prelude::*;
-use test_utils::to_vec2_round;
 
 const GGML_TEST_SIZE: usize = 32 * 128;
 
