@@ -306,13 +306,14 @@ impl<'a> VarBuilder<'a> {
 }
 
 pub struct ShardedSafeTensors<'a>(SafeTensorWithRouting<'a>);
+pub type ShardedVarBuilder<'a> = VarBuilderArgs<'a, ShardedSafeTensors<'a>>;
 
 impl<'a> ShardedSafeTensors<'a> {
     pub fn var_builder(
         safetensors: Vec<SafeTensors<'a>>,
         dtype: DType,
         dev: &Device,
-    ) -> VarBuilderArgs<'a, Self> {
+    ) -> ShardedVarBuilder<'a> {
         let mut routing = HashMap::new();
         for (index, sf) in safetensors.iter().enumerate() {
             for k in sf.names() {
@@ -330,9 +331,9 @@ impl<'a> ShardedSafeTensors<'a> {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Shard {
-    dim: usize,
-    rank: usize,
-    world_size: usize,
+    pub dim: usize,
+    pub rank: usize,
+    pub world_size: usize,
 }
 
 impl Default for Shard {
@@ -361,7 +362,7 @@ impl<'a> Backend for ShardedSafeTensors<'a> {
 
     fn get(
         &self,
-        target_shape: Shape,
+        _target_shape: Shape, // The size is not checked for ShardedTensors
         path: &str,
         h: Self::Hints,
         dtype: DType,
@@ -422,15 +423,6 @@ impl<'a> Backend for ShardedSafeTensors<'a> {
 
         let view_dtype: DType = view_dtype.try_into()?;
         let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
-        let tensor = Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?;
-        if tensor.shape() != &target_shape {
-            Err(candle::Error::UnexpectedShape {
-                msg: format!("shape mismatch for {path}"),
-                expected: target_shape,
-                got: tensor.shape().clone(),
-            }
-            .bt())?
-        }
-        Ok(tensor)
+        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)
     }
 }
