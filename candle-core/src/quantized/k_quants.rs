@@ -854,7 +854,7 @@ impl GgmlType for BlockQ3K {
             let hmask: &[u8] = &x.hmask;
             let mut q8: &[i8] = &y.qs;
 
-            aux32.iter_mut().for_each(|x| *x = 0);
+            aux32.fill(0);
             let mut a = &mut aux8[..];
 
             let mut m = 1;
