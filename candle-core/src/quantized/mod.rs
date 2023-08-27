@@ -202,6 +202,10 @@ impl QTensor {
         self.data.dtype()
     }
 
+    pub fn rank(&self) -> usize {
+        self.shape.rank()
+    }
+
     pub fn shape(&self) -> &Shape {
         &self.shape
     }
