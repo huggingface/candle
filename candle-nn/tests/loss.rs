@@ -4,9 +4,8 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
+use candle::test_utils::to_vec0_round;
 use candle::{Device, Result, Tensor};
-mod test_utils;
-use test_utils::to_vec0_round;
 
 /* Equivalent python code:
 import torch

@@ -1,5 +1,4 @@
-mod test_utils;
-use candle::{Device, IndexOp, Result, Tensor};
+use candle::{test_device, Device, IndexOp, Result, Tensor};
 use candle_core as candle;
 
 fn contiguous(device: &Device) -> Result<()> {

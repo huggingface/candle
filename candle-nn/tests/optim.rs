@@ -4,8 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-mod test_utils;
-use test_utils::{to_vec0_round, to_vec2_round};
+use candle::test_utils::{to_vec0_round, to_vec2_round};
 
 use anyhow::Result;
 use candle::{Device, Tensor, Var};

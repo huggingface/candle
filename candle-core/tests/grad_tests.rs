@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
-use candle_core::{Device, Shape, Tensor, Var};
-mod test_utils;
+use candle_core::{test_device, test_utils, Device, Shape, Tensor, Var};
 
 fn simple_grad(device: &Device) -> Result<()> {
     let x = Var::new(&[3f32, 1., 4.], device)?;
