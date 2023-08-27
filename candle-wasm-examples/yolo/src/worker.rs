@@ -1,4 +1,4 @@
-use crate::model::{report, Bbox, Multiples, YoloV8};
+use crate::model::{report_detect, Bbox, Multiples, YoloV8};
 use candle::{DType, Device, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 use serde::{Deserialize, Serialize};
@@ -81,7 +81,7 @@ impl Model {
         let image_t = (image_t.unsqueeze(0)?.to_dtype(DType::F32)? * (1. / 255.))?;
         let predictions = self.model.forward(&image_t)?.squeeze(0)?;
         console_log!("generated predictions {predictions:?}");
-        let bboxes = report(
+        let bboxes = report_detect(
             &predictions,
             original_image,
             width,
