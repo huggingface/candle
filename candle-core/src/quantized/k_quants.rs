@@ -283,6 +283,7 @@ impl GgmlType for BlockQ4_1 {
     }
 
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        // quantize_row_q4_1
         let qk = Self::BLCK_SIZE;
         if ys.len() * qk != xs.len() {
             crate::bail!("size mismatch {} {} {}", xs.len(), ys.len(), qk,)
@@ -474,8 +475,42 @@ impl GgmlType for BlockQ5_1 {
         Ok(sumf)
     }
 
-    fn from_float(_xs: &[f32], _ys: &mut [Self]) -> Result<()> {
-        todo!()
+    fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
+        // quantize_row_q5_1
+        let qk = Self::BLCK_SIZE;
+        if ys.len() * qk != xs.len() {
+            crate::bail!("size mismatch {} {} {}", xs.len(), ys.len(), qk,)
+        }
+        for (i, ys) in ys.iter_mut().enumerate() {
+            let xs = &xs[i * qk..(i + 1) * qk];
+
+            let mut min = f32::INFINITY;
+            let mut max = f32::NEG_INFINITY;
+            for &x in xs.iter() {
+                min = f32::min(x, min);
+                max = f32::max(x, max);
+            }
+            let d = (max - min) / ((1 << 5) - 1) as f32;
+            let id = if d != 0f32 { 1. / d } else { 0. };
+            ys.d = f16::from_f32(d);
+            ys.m = f16::from_f32(min);
+
+            let mut qh = 0u32;
+            for (j, q) in ys.qs.iter_mut().enumerate() {
+                let x0 = (xs[i * qk + j] - min) * id;
+                let x1 = (xs[i * qk + qk / 2 + j] - min) * id;
+
+                let xi0 = (x0 + 0.5) as u8;
+                let xi1 = (x1 + 0.5) as u8;
+
+                *q = (xi0 & 0x0F) | ((xi1 & 0x0F0) << 4);
+                // get the 5-th bit and store it in qh at the right position
+                qh |= ((xi0 as u32 & 0x10) >> 4) << j;
+                qh |= ((xi1 as u32 & 0x10) >> 4) << (j + qk / 2);
+            }
+            LittleEndian::write_u32(&mut ys.qh, qh);
+        }
+        Ok(())
     }
 
     // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/ggml.c#L1592
