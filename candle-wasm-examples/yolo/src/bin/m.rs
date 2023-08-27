@@ -26,18 +26,9 @@ impl Model {
         let bboxes = self.inner.run(image, conf_threshold, iou_threshold)?;
         let mut detections: Vec<(String, Bbox)> = vec![];
 
-        for (class_index, bboxes_for_class) in bboxes.iter().enumerate() {
-            for b in bboxes_for_class.iter() {
-                detections.push((
-                    coco_classes::NAMES[class_index].to_string(),
-                    Bbox {
-                        xmin: b.xmin,
-                        ymin: b.ymin,
-                        xmax: b.xmax,
-                        ymax: b.ymax,
-                        confidence: b.confidence,
-                    },
-                ));
+        for (class_index, bboxes_for_class) in bboxes.into_iter().enumerate() {
+            for b in bboxes_for_class.into_iter() {
+                detections.push((coco_classes::NAMES[class_index].to_string(), b));
             }
         }
         let json = serde_json::to_string(&detections)?;

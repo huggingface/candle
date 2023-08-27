@@ -702,13 +702,21 @@ impl Module for YoloV8Pose {
     }
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct KeyPoint {
+    pub x: f32,
+    pub y: f32,
+    pub mask: f32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Bbox {
     pub xmin: f32,
     pub ymin: f32,
     pub xmax: f32,
     pub ymax: f32,
     pub confidence: f32,
+    pub keypoints: Vec<KeyPoint>,
 }
 
 // Intersection over union of two bounding boxes.
@@ -755,6 +763,7 @@ pub fn report_detect(
                     xmax: pred[0] + pred[2] / 2.,
                     ymax: pred[1] + pred[3] / 2.,
                     confidence,
+                    keypoints: vec![],
                 };
                 bboxes[class_index].push(bbox)
             }
@@ -791,6 +800,87 @@ pub fn report_detect(
             b.ymin = (b.ymin * h_ratio).clamp(0., initial_h - 1.);
             b.xmax = (b.xmax * w_ratio).clamp(0., initial_w - 1.);
             b.ymax = (b.ymax * h_ratio).clamp(0., initial_h - 1.);
+        }
+    }
+    Ok(bboxes)
+}
+
+fn non_maximum_suppression(bboxes: &mut [Vec<Bbox>], threshold: f32) {
+    // Perform non-maximum suppression.
+    for bboxes_for_class in bboxes.iter_mut() {
+        bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
+        let mut current_index = 0;
+        for index in 0..bboxes_for_class.len() {
+            let mut drop = false;
+            for prev_index in 0..current_index {
+                let iou = iou(&bboxes_for_class[prev_index], &bboxes_for_class[index]);
+                if iou > threshold {
+                    drop = true;
+                    break;
+                }
+            }
+            if !drop {
+                bboxes_for_class.swap(current_index, index);
+                current_index += 1;
+            }
+        }
+        bboxes_for_class.truncate(current_index);
+    }
+}
+
+pub fn report_pose(
+    pred: &Tensor,
+    img: DynamicImage,
+    w: usize,
+    h: usize,
+    confidence_threshold: f32,
+    nms_threshold: f32,
+) -> Result<Vec<Bbox>> {
+    let (pred_size, npreds) = pred.dims2()?;
+    if pred_size != 17 * 3 + 4 + 1 {
+        candle::bail!("unexpected pred-size {pred_size}");
+    }
+    let mut bboxes = vec![];
+    // Extract the bounding boxes for which confidence is above the threshold.
+    for index in 0..npreds {
+        let pred = Vec::<f32>::try_from(pred.i((.., index))?)?;
+        let confidence = pred[4];
+        if confidence > confidence_threshold {
+            let keypoints = (0..17)
+                .map(|i| KeyPoint {
+                    x: pred[3 * i + 5],
+                    y: pred[3 * i + 6],
+                    mask: pred[3 * i + 7],
+                })
+                .collect::<Vec<_>>();
+            let bbox = Bbox {
+                xmin: pred[0] - pred[2] / 2.,
+                ymin: pred[1] - pred[3] / 2.,
+                xmax: pred[0] + pred[2] / 2.,
+                ymax: pred[1] + pred[3] / 2.,
+                confidence,
+                keypoints,
+            };
+            bboxes.push(bbox)
+        }
+    }
+
+    let mut bboxes = vec![bboxes];
+    non_maximum_suppression(&mut bboxes, nms_threshold);
+    let mut bboxes = bboxes.into_iter().next().unwrap();
+
+    let (initial_h, initial_w) = (img.height() as f32, img.width() as f32);
+    let w_ratio = initial_w / w as f32;
+    let h_ratio = initial_h / h as f32;
+    for b in bboxes.iter_mut() {
+        crate::console_log!("detected {b:?}");
+        b.xmin = (b.xmin * w_ratio).clamp(0., initial_w - 1.);
+        b.ymin = (b.ymin * h_ratio).clamp(0., initial_h - 1.);
+        b.xmax = (b.xmax * w_ratio).clamp(0., initial_w - 1.);
+        b.ymax = (b.ymax * h_ratio).clamp(0., initial_h - 1.);
+        for kp in b.keypoints.iter_mut() {
+            kp.x = (kp.x * w_ratio).clamp(0., initial_w - 1.);
+            kp.y = (kp.y * h_ratio).clamp(0., initial_h - 1.);
         }
     }
     Ok(bboxes)
