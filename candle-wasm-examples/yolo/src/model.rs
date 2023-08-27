@@ -1,12 +1,8 @@
-#![allow(dead_code)]
 use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder,
 };
 use image::DynamicImage;
-
-const CONFIDENCE_THRESHOLD: f32 = 0.25;
-const NMS_THRESHOLD: f32 = 0.45;
 
 // Model architecture from https://github.com/ultralytics/ultralytics/issues/189
 // https://github.com/tinygrad/tinygrad/blob/master/examples/yolov8.py

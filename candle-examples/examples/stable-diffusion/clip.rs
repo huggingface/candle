@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Contrastive Language-Image Pre-Training
 //!
 //! Contrastive Language-Image Pre-Training (CLIP) is an architecture trained on

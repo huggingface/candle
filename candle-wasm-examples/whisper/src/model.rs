@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 // We use anyhow rather than candle errors as it provides better support for getting the backtrace
 // back when using RUST_LIB_BACKTRACE=1.
 use anyhow::Result;
@@ -95,32 +94,6 @@ fn conv1d(
     let weight = vb.get((out_channels, in_channels, kernel_size), "weight")?;
     let bias = vb.get(out_channels, "bias")?;
     Ok(Conv1d::new(weight, Some(bias), config))
-}
-
-fn conv1d_no_bias(
-    in_channels: usize,
-    out_channels: usize,
-    kernel_size: usize,
-    config: Conv1dConfig,
-    vb: VarBuilder,
-) -> Result<Conv1d> {
-    let weight = vb.get((out_channels, in_channels, kernel_size), "weight")?;
-    Ok(Conv1d::new(weight, None, config))
-}
-
-struct Dropout {
-    pr: f64,
-}
-
-impl Dropout {
-    fn new(pr: f64) -> Self {
-        Self { pr }
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // TODO
-        Ok(x.clone())
-    }
 }
 
 fn layer_norm(size: usize, vb: VarBuilder) -> Result<LayerNorm> {
@@ -413,11 +386,5 @@ impl Whisper {
             decoder,
             config,
         })
-    }
-
-    pub fn forward(&self, mel: &Tensor, tokens: &Tensor) -> Result<Tensor> {
-        let enc = self.encoder.forward(mel)?;
-        let dec = self.decoder.forward(tokens, &enc)?;
-        Ok(dec)
     }
 }

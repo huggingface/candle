@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! ResNet Building Blocks
 //!
 //! Some Residual Network blocks used in UNet models.

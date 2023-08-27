@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
@@ -183,16 +182,6 @@ struct ModelWeights {
     masks: HashMap<usize, Tensor>,
     span: tracing::Span,
     span_output: tracing::Span,
-}
-
-struct WeightMap(HashMap<String, QTensor>);
-impl WeightMap {
-    fn get(&mut self, name: &str) -> Result<QTensor> {
-        match self.0.remove(name) {
-            None => candle::bail!("cannot find tensor with name '{name}'"),
-            Some(tensor) => Ok(tensor),
-        }
-    }
 }
 
 fn precomput_freqs_cis(head_dim: usize, freq_base: f32) -> Result<(Tensor, Tensor)> {
