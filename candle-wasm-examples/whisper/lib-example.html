@@ -1,0 +1,96 @@
+<html>
+  <head>
+    <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+    <title>Candle Whisper</title>
+  </head>
+  <body></body>
+</html>
+
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
+      html,
+      body {
+        font-family: "Source Sans 3", sans-serif;
+      }
+      code,
+      output,
+      select,
+      pre {
+        font-family: "Source Code Pro", monospace;
+      }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script
+      src="https://cdn.jsdelivr.net/gh/huggingface/hub-js-utils/share-canvas.js"
+      type="module"
+    ></script>
+    <script type="module">
+      const whisperWorker = new Worker("./whisperWorker.js", {
+        type: "module",
+      });
+
+      async function classifyAudio(
+        weightsURL,
+        modelID,
+        tokenizerURL,
+        mel_filtersURL,
+        audioURL,
+        updateStatus
+      ) {
+        return new Promise((resolve, reject) => {
+          whisperWorker.postMessage({
+            weightsURL,
+            modelID,
+            tokenizerURL,
+            mel_filtersURL,
+            audioURL,
+          });
+          whisperWorker.addEventListener("message", (event) => {
+            if ("status" in event.data) {
+              updateStatus(event.data.status);
+            }
+            if ("error" in event.data) {
+              reject(new Error(event.data.error));
+            }
+            if (event.data.status === "complete") {
+              resolve(event.data);
+            }
+          });
+        });
+      }
+
+      function updateStatus(statusMessage) {
+        console.log(statusMessage);
+        document.getElementById("status").textContent = statusMessage;
+      }
+      classifyAudio(
+        "./tiny.en.safetensors",
+        "tiny.en",
+        "./tokenizer.en.json",
+        "./mel_filters.safetensors",
+        "./gb0.wav",
+        updateStatus
+      )
+        .then((result) => {
+          console.log(result);
+          document.getElementById("output").textContent = JSON.stringify(
+            result,
+            null,
+            2
+          );
+        })
+        .catch((error) => {
+          console.error(error);
+        });
+    </script>
+  </head>
+  <body>
+    <pre id="status"></pre>
+    <pre id="output"></pre>
+  </body>
+</html>

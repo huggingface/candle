@@ -26,6 +26,6 @@ impl Drop for Timer {
 mod app;
 mod audio;
 mod model;
-mod worker;
+pub mod worker;
 pub use app::App;
 pub use worker::Worker;
