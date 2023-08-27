@@ -292,7 +292,7 @@ impl ValueType {
             7 => Self::Bool,
             8 => Self::String,
             9 => Self::Array,
-            v => crate::bail!("unrecognized value-type {v}"),
+            v => crate::bail!("unrecognized value-type {v:#08x}"),
         };
         Ok(v)
     }
@@ -393,6 +393,7 @@ pub fn write<W: std::io::Seek + std::io::Write>(
     w.write_u32::<LittleEndian>(0x46554747)?;
     w.write_u32::<LittleEndian>(1)?; // version 1.
     w.write_u32::<LittleEndian>(tensors.len() as u32)?;
+    w.write_u32::<LittleEndian>(metadata.len() as u32)?;
     for (name, value) in metadata.iter() {
         write_string(w, name)?;
         w.write_u32::<LittleEndian>(value.value_type().to_u32())?;
