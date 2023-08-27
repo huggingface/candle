@@ -474,29 +474,27 @@ fn quantize_q8k() -> Result<()> {
 }
 
 /// Very simple dot product implementation
-fn vec_dot_referenze(a: &[f32], b: &[f32]) -> f32 {
+fn vec_dot_reference(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(a, b)| a * b).sum()
 }
 
 /// Returns the error achieved by the GGML matmul unit test.
-fn ggml_reference_matmul_error(quantiztation_tpye: GgmlDType) -> Result<f32> {
-    match quantiztation_tpye {
-        GgmlDType::F16 => Ok(0.000010),
-        GgmlDType::Q2K => Ok(0.004086),
-        GgmlDType::Q3K => Ok(0.016148),
-        GgmlDType::Q4K => Ok(0.002425),
-        GgmlDType::Q5K => Ok(0.000740),
-        GgmlDType::Q6K => Ok(0.000952),
-        GgmlDType::Q4_0 => Ok(0.001143),
-        GgmlDType::Q4_1 => Ok(0.007784),
-        GgmlDType::Q5_0 => Ok(0.001353),
-        GgmlDType::Q5_1 => Ok(0.001363),
-        GgmlDType::Q8_0 => Ok(0.000092),
-        _ => candle_core::bail!(
-            "No GGML results for quantization type {:?}",
-            quantiztation_tpye
-        ),
-    }
+fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
+    let err = match dtype {
+        GgmlDType::F16 => 0.000010,
+        GgmlDType::Q2K => 0.004086,
+        GgmlDType::Q3K => 0.016148,
+        GgmlDType::Q4K => 0.002425,
+        GgmlDType::Q5K => 0.000740,
+        GgmlDType::Q6K => 0.000952,
+        GgmlDType::Q4_0 => 0.001143,
+        GgmlDType::Q4_1 => 0.007784,
+        GgmlDType::Q5_0 => 0.001353,
+        GgmlDType::Q5_1 => 0.001363,
+        GgmlDType::Q8_0 => 0.000092,
+        _ => candle_core::bail!("No GGML results for quantization type {dtype:?}",),
+    };
+    Ok(err)
 }
 
 /// Mirrores the GGML matmul unit test: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L76-L91
@@ -511,7 +509,7 @@ fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
     T::VecDotType::from_float(&b, &mut b_quant)?;
 
     let result = T::vec_dot(length, &a_quant, &b_quant)?;
-    let reference_result = vec_dot_referenze(&a, &b);
+    let reference_result = vec_dot_reference(&a, &b);
 
     let error = (result - reference_result).abs() / length as f32;
 
