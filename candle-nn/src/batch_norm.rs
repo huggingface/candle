@@ -179,11 +179,11 @@ pub fn batch_norm<C: Into<BatchNormConfig>>(
     if config.eps < 0. {
         candle::bail!("batch-norm eps cannot be negative {}", config.eps)
     }
-    let running_mean = vb.get_or_init(num_features, "running_mean", crate::Init::Const(0.))?;
-    let running_var = vb.get_or_init(num_features, "running_var", crate::Init::Const(1.))?;
+    let running_mean = vb.get_with_hints(num_features, "running_mean", crate::Init::Const(0.))?;
+    let running_var = vb.get_with_hints(num_features, "running_var", crate::Init::Const(1.))?;
     let weight_and_bias = if config.affine {
-        let weight = vb.get_or_init(num_features, "weight", crate::Init::Const(1.))?;
-        let bias = vb.get_or_init(num_features, "bias", crate::Init::Const(0.))?;
+        let weight = vb.get_with_hints(num_features, "weight", crate::Init::Const(1.))?;
+        let bias = vb.get_with_hints(num_features, "bias", crate::Init::Const(0.))?;
         Some((weight, bias))
     } else {
         None
