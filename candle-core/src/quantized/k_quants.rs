@@ -302,9 +302,9 @@ impl GgmlType for BlockQ4_1 {
             ys.d = f16::from_f32(d);
             ys.m = f16::from_f32(min);
 
-            for (j, q) in ys.qs.iter_mut().enumerate() {
-                let x0 = (xs[i * qk + j] - min) * id;
-                let x1 = (xs[i * qk + qk / 2 + j] - min) * id;
+            for (j, q) in ys.qs.iter_mut().take(qk / 2).enumerate() {
+                let x0 = (xs[j] - min) * id;
+                let x1 = (xs[qk / 2 + j] - min) * id;
 
                 let xi0 = u8::min(15, (x0 + 0.5) as u8);
                 let xi1 = u8::min(15, (x1 + 0.5) as u8);
@@ -496,9 +496,9 @@ impl GgmlType for BlockQ5_1 {
             ys.m = f16::from_f32(min);
 
             let mut qh = 0u32;
-            for (j, q) in ys.qs.iter_mut().enumerate() {
-                let x0 = (xs[i * qk + j] - min) * id;
-                let x1 = (xs[i * qk + qk / 2 + j] - min) * id;
+            for (j, q) in ys.qs.iter_mut().take(qk / 2).enumerate() {
+                let x0 = (xs[j] - min) * id;
+                let x1 = (xs[qk / 2 + j] - min) * id;
 
                 let xi0 = (x0 + 0.5) as u8;
                 let xi1 = (x1 + 0.5) as u8;
