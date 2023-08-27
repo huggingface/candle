@@ -3,7 +3,7 @@ use candle::Tensor;
 
 const MAX_SEQ_LEN: usize = 5000;
 
-pub type VarBuilder = candle_nn::VarBuilder;
+pub type VarBuilder<'a> = candle_nn::VarBuilder<'a>;
 pub type Linear = candle_nn::Linear;
 
 pub fn linear(size1: usize, size2: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {

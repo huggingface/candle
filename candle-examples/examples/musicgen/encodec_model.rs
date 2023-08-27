@@ -354,13 +354,13 @@ impl EncodecResnetBlock {
     }
 }
 
-struct Layer {
-    vb: VarBuilder,
+struct Layer<'a> {
+    vb: VarBuilder<'a>,
     cnt: usize,
 }
 
-impl Layer {
-    fn new(vb: VarBuilder) -> Self {
+impl<'a> Layer<'a> {
+    fn new(vb: VarBuilder<'a>) -> Self {
         Self { vb, cnt: 0 }
     }
 

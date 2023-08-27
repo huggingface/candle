@@ -8,23 +8,25 @@ use std::sync::Arc;
 /// generated via some form of initialization.
 ///
 /// The way to retrieve variables is defined in the backend embedded in the `VarBuilder`.
-pub struct VarBuilderArgs<B: Backend> {
+pub struct VarBuilderArgs<'a, B: Backend> {
     data: Arc<TensorData<B>>,
     path: Vec<String>,
+    _phantom: std::marker::PhantomData<&'a B>,
 }
 
-impl<B: Backend> Clone for VarBuilderArgs<B> {
+impl<'a, B: Backend> Clone for VarBuilderArgs<'a, B> {
     fn clone(&self) -> Self {
         Self {
             data: self.data.clone(),
             path: self.path.clone(),
+            _phantom: self._phantom,
         }
     }
 }
 
 /// A simple `VarBuilder`, this is less generic than `VarBuilderArgs` but should cover most common
 /// use cases.
-pub type VarBuilder = VarBuilderArgs<Box<dyn SimpleBackend>>;
+pub type VarBuilder<'a> = VarBuilderArgs<'a, Box<dyn SimpleBackend + 'a>>;
 
 struct TensorData<B: Backend> {
     backend: B,
@@ -64,7 +66,7 @@ pub trait SimpleBackend {
     ) -> Result<Tensor>;
 }
 
-impl Backend for Box<dyn SimpleBackend> {
+impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
     type Hints = crate::Init;
     fn get(
         &self,
@@ -78,13 +80,14 @@ impl Backend for Box<dyn SimpleBackend> {
     }
 }
 
-impl<B: Backend> VarBuilderArgs<B> {
+impl<'a, B: Backend> VarBuilderArgs<'a, B> {
     pub fn push_prefix<S: ToString>(&self, s: S) -> Self {
         let mut path = self.path.clone();
         path.push(s.to_string());
         Self {
             data: self.data.clone(),
             path,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -178,8 +181,73 @@ impl SimpleBackend for VarMap {
     }
 }
 
-impl VarBuilder {
-    fn new(backend: Box<dyn SimpleBackend>, dtype: DType, device: Device) -> Self {
+struct SafeTensorWithRouting<'a> {
+    routing: HashMap<String, usize>,
+    safetensors: Vec<SafeTensors<'a>>,
+}
+
+impl<'a> SimpleBackend for SafeTensorWithRouting<'a> {
+    fn get(
+        &self,
+        s: Shape,
+        path: &str,
+        _: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        let index = self.routing.get(path).ok_or_else(|| {
+            Error::CannotFindTensor {
+                path: path.to_string(),
+            }
+            .bt()
+        })?;
+        let tensor = self.safetensors[*index]
+            .tensor(path)?
+            .load(dev)?
+            .to_dtype(dtype)?;
+        if tensor.shape() != &s {
+            Err(candle::Error::UnexpectedShape {
+                msg: format!("shape mismatch for {path}"),
+                expected: s,
+                got: tensor.shape().clone(),
+            }
+            .bt())?
+        }
+        Ok(tensor)
+    }
+}
+
+impl SimpleBackend for candle::npy::NpzTensors {
+    fn get(
+        &self,
+        s: Shape,
+        path: &str,
+        _: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        let tensor = match self.get(path)? {
+            None => Err(Error::CannotFindTensor {
+                path: path.to_string(),
+            }
+            .bt())?,
+            Some(tensor) => tensor,
+        };
+        let tensor = tensor.to_device(dev)?.to_dtype(dtype)?;
+        if tensor.shape() != &s {
+            Err(candle::Error::UnexpectedShape {
+                msg: format!("shape mismatch for {path}"),
+                expected: s,
+                got: tensor.shape().clone(),
+            }
+            .bt())?
+        }
+        Ok(tensor)
+    }
+}
+
+impl<'a> VarBuilder<'a> {
+    fn new(backend: Box<dyn SimpleBackend + 'a>, dtype: DType, device: Device) -> Self {
         let data = TensorData {
             backend,
             dtype,
@@ -188,6 +256,7 @@ impl VarBuilder {
         Self {
             data: Arc::new(data),
             path: vec![],
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -203,16 +272,23 @@ impl VarBuilder {
         Self::new(Box::new(varmap.clone()), dtype, dev.clone())
     }
 
-    pub fn from_safetensors<'a>(_st: Vec<SafeTensors<'a>>, _dtype: DType, _dev: &Device) -> Self {
-        todo!()
+    pub fn from_safetensors(safetensors: Vec<SafeTensors<'a>>, dtype: DType, dev: &Device) -> Self {
+        let mut routing = HashMap::new();
+        for (index, sf) in safetensors.iter().enumerate() {
+            for k in sf.names() {
+                routing.insert(k.to_string(), index);
+            }
+        }
+        let tensors = SafeTensorWithRouting {
+            routing,
+            safetensors,
+        };
+        Self::new(Box::new(tensors), dtype, dev.clone())
     }
 
-    pub fn from_npz<P: AsRef<std::path::Path>>(
-        _p: P,
-        _dtype: DType,
-        _dev: &Device,
-    ) -> Result<Self> {
-        todo!()
+    pub fn from_npz<P: AsRef<std::path::Path>>(p: P, dtype: DType, dev: &Device) -> Result<Self> {
+        let npz = candle::npy::NpzTensors::new(p)?;
+        Ok(Self::new(Box::new(npz), dtype, dev.clone()))
     }
 }
 
