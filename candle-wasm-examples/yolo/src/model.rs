@@ -769,26 +769,9 @@ pub fn report_detect(
             }
         }
     }
-    // Perform non-maximum suppression.
-    for bboxes_for_class in bboxes.iter_mut() {
-        bboxes_for_class.sort_by(|b1, b2| b2.confidence.partial_cmp(&b1.confidence).unwrap());
-        let mut current_index = 0;
-        for index in 0..bboxes_for_class.len() {
-            let mut drop = false;
-            for prev_index in 0..current_index {
-                let iou = iou(&bboxes_for_class[prev_index], &bboxes_for_class[index]);
-                if iou > iou_threshold {
-                    drop = true;
-                    break;
-                }
-            }
-            if !drop {
-                bboxes_for_class.swap(current_index, index);
-                current_index += 1;
-            }
-        }
-        bboxes_for_class.truncate(current_index);
-    }
+
+    non_maximum_suppression(&mut bboxes, iou_threshold);
+
     // Annotate the original image and print boxes information.
     let (initial_h, initial_w) = (img.height() as f32, img.width() as f32);
     let w_ratio = initial_w / w as f32;
