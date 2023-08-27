@@ -2,14 +2,14 @@ use crate::VarMap;
 use candle::{safetensors::Load, DType, Device, Error, Result, Shape, Tensor};
 use safetensors::{slice::IndexOp, tensor::SafeTensors};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::rc::Rc;
 
 /// A structure used to retrieve variables, these variables can either come from storage or be
 /// generated via some form of initialization.
 ///
 /// The way to retrieve variables is defined in the backend embedded in the `VarBuilder`.
 pub struct VarBuilderArgs<'a, B: Backend> {
-    data: Arc<TensorData<B>>,
+    data: Rc<TensorData<B>>,
     path: Vec<String>,
     _phantom: std::marker::PhantomData<&'a B>,
 }
@@ -81,6 +81,19 @@ impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
 }
 
 impl<'a, B: Backend> VarBuilderArgs<'a, B> {
+    pub fn new_with_args(backend: B, dtype: DType, dev: &Device) -> Self {
+        let data = TensorData {
+            backend,
+            dtype,
+            device: dev.clone(),
+        };
+        Self {
+            data: Rc::new(data),
+            path: vec![],
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
     pub fn push_prefix<S: ToString>(&self, s: S) -> Self {
         let mut path = self.path.clone();
         path.push(s.to_string());
@@ -254,7 +267,7 @@ impl<'a> VarBuilder<'a> {
             device,
         };
         Self {
-            data: Arc::new(data),
+            data: Rc::new(data),
             path: vec![],
             _phantom: std::marker::PhantomData,
         }
@@ -292,271 +305,132 @@ impl<'a> VarBuilder<'a> {
     }
 }
 
-/*
-enum Tensors<'a> {
-    SafeTensorWithRouting {
-        routing: HashMap<String, usize>,
-        safetensors: Vec<SafeTensors<'a>>,
-    },
-    Npz(candle::npy::NpzTensors),
-    TensorMap(HashMap<String, Tensor>),
-    Zeros,
-    VarMap(VarMap),
-}
+pub struct ShardedSafeTensors<'a>(SafeTensorWithRouting<'a>);
 
-impl<'a> TensorData<'a> {
-    fn from_safetensors(safetensors: Vec<SafeTensors<'a>>, dtype: DType, device: &Device) -> Self {
+impl<'a> ShardedSafeTensors<'a> {
+    pub fn var_builder(
+        safetensors: Vec<SafeTensors<'a>>,
+        dtype: DType,
+        dev: &Device,
+    ) -> VarBuilderArgs<'a, Self> {
         let mut routing = HashMap::new();
         for (index, sf) in safetensors.iter().enumerate() {
             for k in sf.names() {
                 routing.insert(k.to_string(), index);
             }
         }
-        let tensors = Tensors::SafeTensorWithRouting {
+        let tensors = SafeTensorWithRouting {
             routing,
             safetensors,
         };
-        Self {
-            tensors,
-            device: device.clone(),
-            dtype,
-        }
+        let backend = ShardedSafeTensors(tensors);
+        VarBuilderArgs::new_with_args(backend, dtype, dev)
     }
+}
 
-    fn zeros(dtype: DType, device: &Device) -> Self {
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct Shard {
+    dim: usize,
+    rank: usize,
+    world_size: usize,
+}
+
+impl Default for Shard {
+    fn default() -> Self {
         Self {
-            tensors: Tensors::Zeros,
-            device: device.clone(),
-            dtype,
-        }
-    }
-
-    fn from_tensors(tensors: HashMap<String, Tensor>, dtype: DType, device: &Device) -> Self {
-        Self {
-            tensors: Tensors::TensorMap(tensors),
-            device: device.clone(),
-            dtype,
-        }
-    }
-
-    fn from_npz<P: AsRef<std::path::Path>>(file: P, dtype: DType, device: &Device) -> Result<Self> {
-        let npz = candle::npy::NpzTensors::new(file)?;
-        Ok(Self {
-            tensors: Tensors::Npz(npz),
-            device: device.clone(),
-            dtype,
-        })
-    }
-
-    fn from_varmap(varmap: &VarMap, dtype: DType, device: &Device) -> Self {
-        Self {
-            tensors: Tensors::VarMap(varmap.clone()),
-            device: device.clone(),
-            dtype,
+            dim: 0,
+            rank: 0,
+            world_size: 1,
         }
     }
 }
 
-impl<'a> VarBuilder<'a> {
-    /// Create a `VarBuilder` accessing data frome the safetensors storage. The initial path is
-    /// set to the root path and sub-paths can be created via the `push_prefix` method.
-    pub fn from_safetensors(st: Vec<SafeTensors<'a>>, dtype: DType, device: &Device) -> Self {
-        let data = TensorData::from_safetensors(st, dtype, device);
-        Self {
-            data: Arc::new(data),
-            path: vec![],
-        }
-    }
+/// Get part of a tensor, typically used to do Tensor Parallelism sharding.
+///
+/// If the tensor is of size (1024, 1024).
+///
+/// `dim` corresponds to the dimension to slice into
+/// `rank` is the rank of the current process
+/// `world_size` is the total number of ranks in the process group
+///
+/// `get_sharded("tensor", 0, 0, 2)` means `tensor.i((..512))`
+/// `get_sharded("tensor", 0, 1, 2)` means `tensor.i((512..))`
+/// `get_sharded("tensor", 1, 0, 2)` means `tensor.i((.., ..512))`
+impl<'a> Backend for ShardedSafeTensors<'a> {
+    type Hints = Shard;
 
-    pub fn zeros(dtype: DType, device: &Device) -> Self {
-        let data = TensorData::zeros(dtype, device);
-        Self {
-            data: Arc::new(data),
-            path: vec![],
-        }
-    }
-
-    pub fn from_tensors(ts: HashMap<String, Tensor>, dtype: DType, device: &Device) -> Self {
-        let data = TensorData::from_tensors(ts, dtype, device);
-        Self {
-            data: Arc::new(data),
-            path: vec![],
-        }
-    }
-
-    pub fn from_varmap(varmap: &VarMap, dtype: DType, device: &Device) -> Self {
-        let data = TensorData::from_varmap(varmap, dtype, device);
-        Self {
-            data: Arc::new(data),
-            path: vec![],
-        }
-    }
-
-    pub fn from_npz<P: AsRef<std::path::Path>>(
-        file: P,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<Self> {
-        let data = TensorData::from_npz(file, dtype, device)?;
-        Ok(Self {
-            data: Arc::new(data),
-            path: vec![],
-        })
-    }
-
-}
-
-impl<'a> VarBuilder<'a> {
-    /// Get part of a tensor, typically used to do Tensor Parallelism sharding.
-    ///
-    /// If the tensor is of size (1024, 1024).
-    ///
-    /// `dim` corresponds to the dimension to slice into
-    /// `rank` is the rank of the current process
-    /// `world_size` is the total number of ranks in the process group
-    ///
-    /// `get_sharded("tensor", 0, 0, 2)` means `tensor.i((..512))`
-    /// `get_sharded("tensor", 0, 1, 2)` means `tensor.i((512..))`
-    /// `get_sharded("tensor", 1, 0, 2)` means `tensor.i((.., ..512))`
-    pub fn get_sharded(
+    fn get(
         &self,
-        tensor_name: &str,
-        dim: usize,
-        rank: usize,
-        world_size: usize,
+        target_shape: Shape,
+        path: &str,
+        h: Self::Hints,
+        dtype: DType,
+        dev: &Device,
     ) -> Result<Tensor> {
-        let data = self.data.as_ref();
-        let path = self.path(tensor_name);
-        let tensor = match &self.data.tensors {
-            Tensors::SafeTensorWithRouting {
-                routing,
-                safetensors,
-            } => {
-                let index = routing.get(&path).ok_or_else(|| {
-                    Error::CannotFindTensor {
-                        path: path.to_string(),
-                    }
-                    .bt()
-                })?;
-
-                let view = safetensors[*index].tensor(&path)?;
-                let dtype = view.dtype();
-                let mut shape = view.shape().to_vec();
-                let size = shape[dim];
-
-                if size % world_size != 0 {
-                    return Err(Error::ShapeMismatchSplit {
-                        shape: shape.into(),
-                        dim,
-                        n_parts: world_size,
-                    });
-                }
-                let block_size = size / world_size;
-                let start = rank * block_size;
-                let stop = (rank + 1) * block_size;
-
-                // Everything is expressed in tensor dimension
-                // bytes offsets is handled automatically for safetensors.
-
-                let iterator = if dim == 0 {
-                    view.slice(start..stop).map_err(|_| Error::Msg(format!("Cannot slice tensor {tensor_name} ({shape:?} along dim {dim} with {start}..{stop}")))?
-                } else if dim == 1 {
-                    view.slice((.., start..stop)).map_err(|_| Error::Msg(format!("Cannot slice tensor {tensor_name} ({shape:?} along dim {dim} with {start}..{stop}")))?
-                } else {
-                    candle::bail!("Get sharded on dimensions != 0 or 1")
-                };
-
-                shape[dim] = block_size;
-
-                let dtype: DType = dtype.try_into()?;
-
-                let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
-                Tensor::from_raw_buffer(&raw, dtype, &shape, &data.device)?
+        let Shard {
+            dim,
+            rank,
+            world_size,
+        } = h;
+        let SafeTensorWithRouting {
+            routing,
+            safetensors,
+        } = &self.0;
+        let index = routing.get(path).ok_or_else(|| {
+            Error::CannotFindTensor {
+                path: path.to_string(),
             }
-            _ => candle::bail!("get_sharded is only available for safetensors"),
+            .bt()
+        })?;
+
+        let view = safetensors[*index].tensor(path)?;
+        let view_dtype = view.dtype();
+        let mut shape = view.shape().to_vec();
+        let size = shape[dim];
+
+        if size % world_size != 0 {
+            return Err(Error::ShapeMismatchSplit {
+                shape: shape.into(),
+                dim,
+                n_parts: world_size,
+            });
+        }
+        let block_size = size / world_size;
+        let start = rank * block_size;
+        let stop = (rank + 1) * block_size;
+
+        // Everything is expressed in tensor dimension
+        // bytes offsets is handled automatically for safetensors.
+
+        let iterator = if dim == 0 {
+            view.slice(start..stop).map_err(|_| {
+                Error::Msg(format!(
+                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                ))
+            })?
+        } else if dim == 1 {
+            view.slice((.., start..stop)).map_err(|_| {
+                Error::Msg(format!(
+                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                ))
+            })?
+        } else {
+            candle::bail!("Get sharded on dimensions != 0 or 1")
         };
-        Ok(tensor)
-    }
 
-    /// Retrieve the tensor associated with the given name at the current path.
-    pub fn get<S: Into<Shape>>(&self, s: S, tensor_name: &str) -> Result<Tensor> {
-        let data = self.data.as_ref();
-        let s: Shape = s.into();
-        let path = self.path(tensor_name);
-        let tensor = match &self.data.tensors {
-            Tensors::Zeros => Tensor::zeros(&s, data.dtype, &data.device)?.contiguous()?,
-            Tensors::TensorMap(ts) => ts
-                .get(&path)
-                .ok_or_else(|| {
-                    Error::CannotFindTensor {
-                        path: path.to_string(),
-                    }
-                    .bt()
-                })?
-                .clone(),
-            Tensors::VarMap(varmap) => {
-                let data = varmap.data().lock().unwrap();
-                data.get(&path)
-                    .ok_or_else(|| {
-                        Error::CannotFindTensor {
-                            path: path.to_string(),
-                        }
-                        .bt()
-                    })?
-                    .as_tensor()
-                    .clone()
-            }
-            Tensors::Npz(npz) => npz.get(&path)?.ok_or_else(|| {
-                Error::CannotFindTensor {
-                    path: path.to_string(),
-                }
-                .bt()
-            })?,
-            Tensors::SafeTensorWithRouting {
-                routing,
-                safetensors,
-            } => {
-                let index = routing.get(&path).ok_or_else(|| {
-                    Error::CannotFindTensor {
-                        path: path.to_string(),
-                    }
-                    .bt()
-                })?;
-                safetensors[*index]
-                    .tensor(&path)?
-                    .load(&data.device)?
-                    .to_dtype(data.dtype)?
-            }
-        };
-        if tensor.shape() != &s {
+        shape[dim] = block_size;
+
+        let view_dtype: DType = view_dtype.try_into()?;
+        let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
+        let tensor = Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?;
+        if tensor.shape() != &target_shape {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {path}"),
-                expected: s,
+                expected: target_shape,
                 got: tensor.shape().clone(),
             }
             .bt())?
         }
         Ok(tensor)
     }
-
-    /// Retrieve the tensor associated with the given name at the current path or initialize a new
-    /// tensor if it's missing.
-    ///
-    /// Tensor initialization is only available if the `VarBuilder` is backed by a `VarMap`.
-    pub fn get_or_init<S: Into<Shape>>(
-        &self,
-        s: S,
-        tensor_name: &str,
-        init: crate::Init,
-    ) -> Result<Tensor> {
-        let data = self.data.as_ref();
-        match &self.data.tensors {
-            Tensors::VarMap(varmap) => {
-                let path = self.path(tensor_name);
-                varmap.get(s, &path, init, data.dtype, &data.device)
-            }
-            _ => self.get(s, tensor_name),
-        }
-    }
 }
-*/
