@@ -675,7 +675,6 @@ pub struct YoloV8Pose {
     head: PoseHead,
 }
 
-#[allow(unused)]
 impl YoloV8Pose {
     pub fn load(
         vb: VarBuilder,
