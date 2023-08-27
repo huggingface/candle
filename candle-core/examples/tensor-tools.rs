@@ -1,5 +1,16 @@
-use candle_core::Result;
+use candle_core::{Device, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use rayon::prelude::*;
+
+#[derive(ValueEnum, Debug, Clone)]
+enum Quantization {
+    Q2k,
+    Q3k,
+    Q4k,
+    Q5k,
+    Q6k,
+    Q8k,
+}
 
 #[derive(ValueEnum, Debug, Clone)]
 enum Format {
@@ -40,6 +51,17 @@ enum Command {
         /// Enable verbose mode.
         #[arg(short, long)]
         verbose: bool,
+    },
+
+    Quantize {
+        /// The input file, in gguf format.
+        in_file: std::path::PathBuf,
+        /// The output file, in gguf format.
+        out_file: std::path::PathBuf,
+
+        /// The quantization schema to apply.
+        #[arg(long, value_enum)]
+        quantization: Quantization,
     },
 }
 
@@ -144,6 +166,53 @@ fn run_ls(file: &std::path::PathBuf, format: Option<Format>, verbose: bool) -> R
     Ok(())
 }
 
+fn run_quantize(
+    in_file: std::path::PathBuf,
+    out_file: std::path::PathBuf,
+    q: Quantization,
+) -> Result<()> {
+    use candle_core::quantized::{gguf_file, k_quants, QTensor};
+    // Open the out file early so as to fail directly on missing directories etc.
+    let mut out_file = std::fs::File::create(out_file)?;
+    let mut in_ = std::fs::File::open(&in_file)?;
+    let content = gguf_file::Content::read(&mut in_)?;
+    println!("tensors: {}", content.tensor_infos.len());
+
+    let qtensors = content
+        .tensor_infos
+        .par_iter()
+        .map(|(name, _)| {
+            println!("  quantizing {name}");
+            let mut in_file = std::fs::File::open(&in_file)?;
+            let tensor = content.tensor(&mut in_file, name)?;
+            let tensor = tensor.dequantize(&Device::Cpu)?;
+            // TODO: Only quantize the linear weights, and quantize the final layer weights
+            // differently from the rest.
+            let tensor = match q {
+                Quantization::Q2k => QTensor::quantize::<k_quants::BlockQ2K>(&tensor)?,
+                Quantization::Q3k => QTensor::quantize::<k_quants::BlockQ3K>(&tensor)?,
+                Quantization::Q4k => QTensor::quantize::<k_quants::BlockQ4K>(&tensor)?,
+                Quantization::Q5k => QTensor::quantize::<k_quants::BlockQ5K>(&tensor)?,
+                Quantization::Q6k => QTensor::quantize::<k_quants::BlockQ6K>(&tensor)?,
+                Quantization::Q8k => QTensor::quantize::<k_quants::BlockQ8K>(&tensor)?,
+            };
+            Ok((name, tensor))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let qtensors = qtensors
+        .iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect::<Vec<_>>();
+
+    let metadata = content
+        .metadata
+        .iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect::<Vec<_>>();
+    gguf_file::write(&mut out_file, metadata.as_slice(), &qtensors)?;
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     match args.command {
@@ -160,6 +229,11 @@ fn main() -> anyhow::Result<()> {
                 run_ls(file, format.clone(), verbose)?
             }
         }
+        Command::Quantize {
+            in_file,
+            out_file,
+            quantization,
+        } => run_quantize(in_file, out_file, quantization)?,
     }
     Ok(())
 }
