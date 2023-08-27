@@ -186,6 +186,8 @@ fn run_quantize(
             let mut in_file = std::fs::File::open(&in_file)?;
             let tensor = content.tensor(&mut in_file, name)?;
             let tensor = tensor.dequantize(&Device::Cpu)?;
+            // TODO: Only quantize the linear weights, and quantize the final layer weights
+            // differently from the rest.
             let tensor = match q {
                 Quantization::Q2k => QTensor::quantize::<k_quants::BlockQ2K>(&tensor)?,
                 Quantization::Q3k => QTensor::quantize::<k_quants::BlockQ3K>(&tensor)?,
