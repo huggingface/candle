@@ -3,6 +3,10 @@ This documents the main changes to the `candle` crate.
 
 ## Unreleased
 ### Added
+- Refactor the VarBuilder api
+  [627](https://github.com/huggingface/candle/pull/627).
+- Add some quantization command
+  [625](https://github.com/huggingface/candle/pull/625).
 - Support more quantized types, e.g. Q2K, Q4K, Q5K...
   [586](https://github.com/huggingface/candle/pull/586).
 - Add pose estimation to the yolo example
