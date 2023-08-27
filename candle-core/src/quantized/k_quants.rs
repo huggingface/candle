@@ -503,7 +503,7 @@ impl GgmlType for BlockQ5_1 {
                 let xi0 = (x0 + 0.5) as u8;
                 let xi1 = (x1 + 0.5) as u8;
 
-                *q = (xi0 & 0x0F) | ((xi1 & 0x0F0) << 4);
+                *q = (xi0 & 0x0F) | ((xi1 & 0x0F) << 4);
                 // get the 5-th bit and store it in qh at the right position
                 qh |= ((xi0 as u32 & 0x10) >> 4) << j;
                 qh |= ((xi1 as u32 & 0x10) >> 4) << (j + qk / 2);

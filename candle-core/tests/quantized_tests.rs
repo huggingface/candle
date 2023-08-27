@@ -132,8 +132,6 @@ fn quantize_q4_0() -> Result<()> {
             127.0, 127.0
         ]
     );
-
-    //mirrored GGML unit test
     ggml_quantization_error_test::<BlockQ4_0>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
     Ok(())
 }
@@ -164,8 +162,6 @@ fn quantize_q4_1() -> Result<()> {
             118.73, 118.73, 120.797, 120.797, 122.863, 122.863, 124.93, 124.93, 126.996, 126.996
         ]
     );
-
-    //mirrored GGML unit test
     ggml_quantization_error_test::<BlockQ4_1>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
     Ok(())
 }
@@ -196,8 +192,6 @@ fn quantize_q5_0() -> Result<()> {
             119.063, 119.063, 119.063, 119.063, 127.0, 127.0, 127.0, 127.0
         ]
     );
-
-    //mirrored GGML unit test
     ggml_quantization_error_test::<BlockQ5_0>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
     Ok(())
 }
@@ -215,20 +209,19 @@ fn quantize_q5_1() -> Result<()> {
         dst,
         &[
             0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
-            16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0,
-            16.0, 16.0, 32.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0, 39.0, 40.0, 41.0, 42.0, 43.0,
-            44.0, 45.0, 46.0, 47.0, 48.0, 48.0, 48.0, 48.0, 48.0, 48.0, 48.0, 48.0, 48.0, 48.0,
-            48.0, 48.0, 48.0, 48.0, 48.0, 48.0, 64.0, 65.0, 66.0, 67.0, 68.0, 69.0, 70.0, 71.0,
-            72.0, 73.0, 74.0, 75.0, 76.0, 77.0, 78.0, 79.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0,
-            80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 80.0, 96.0, 97.0, 98.0, 99.0,
+            16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0,
+            30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0, 39.0, 40.0, 41.0, 42.0, 43.0,
+            44.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0, 56.0, 57.0,
+            58.0, 59.0, 60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0, 67.0, 68.0, 69.0, 70.0, 71.0,
+            72.0, 73.0, 74.0, 75.0, 76.0, 77.0, 78.0, 79.0, 80.0, 81.0, 82.0, 83.0, 84.0, 85.0,
+            86.0, 87.0, 88.0, 89.0, 90.0, 91.0, 92.0, 93.0, 94.0, 95.0, 96.0, 97.0, 98.0, 99.0,
             100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0, 110.0, 111.0,
-            112.0, 112.0, 112.0, 112.0, 112.0, 112.0, 112.0, 112.0, 112.0, 112.0, 112.0, 112.0,
-            112.0, 112.0, 112.0, 112.0
+            112.0, 113.0, 114.0, 115.0, 116.0, 117.0, 118.0, 119.0, 120.0, 121.0, 122.0, 123.0,
+            124.0, 125.0, 126.0, 127.0
         ]
     );
 
-    //mirrored GGML unit test
-    ggml_quantization_error_test::<BlockQ5_1>(0.014)?;
+    ggml_quantization_error_test::<BlockQ5_1>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
     Ok(())
 }
 
@@ -338,7 +331,6 @@ fn quantize_q2k() -> Result<()> {
     let _quant_big = quantize_roundtrip::<BlockQ2K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 6.0);
 
-    //mirrored GGML unit test
     ggml_quantization_error_test::<BlockQ2K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR_2BITS)?;
     Ok(())
 }
@@ -366,7 +358,6 @@ fn quantize_q3k() -> Result<()> {
     let _quant_big = quantize_roundtrip::<BlockQ3K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 3.5);
 
-    //mirrored GGML unit test
     ggml_quantization_error_test::<BlockQ3K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR_3BITS)?;
     Ok(())
 }
@@ -394,7 +385,6 @@ fn quantize_q4k() -> Result<()> {
     let _quant_big = quantize_roundtrip::<BlockQ4K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 4.5);
 
-    //mirrored GGML unit test
     ggml_quantization_error_test::<BlockQ4K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
     Ok(())
 }
@@ -422,7 +412,6 @@ fn quantize_q5k() -> Result<()> {
     let _quant_big = quantize_roundtrip::<BlockQ5K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 2.5);
 
-    //mirrored GGML unit test
     ggml_quantization_error_test::<BlockQ5K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
 
     Ok(())
@@ -451,7 +440,6 @@ fn quantize_q6k() -> Result<()> {
     let _quant_big = quantize_roundtrip::<BlockQ6K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 2.0);
 
-    //mirrored GGML unit test
     ggml_quantization_error_test::<BlockQ6K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
 
     Ok(())
@@ -480,7 +468,6 @@ fn quantize_q8k() -> Result<()> {
     let _quant_big = quantize_roundtrip::<BlockQ8K>(src_big.as_slice(), dst_big.as_mut_slice())?;
     compare_with_error(dst_big.as_slice(), src_big.as_slice(), 0.6);
 
-    //mirrored GGML unit test
     ggml_quantization_error_test::<BlockQ8K>(GGML_MAX_QUANTIZATION_TOTAL_ERROR)?;
 
     Ok(())
@@ -595,7 +582,6 @@ fn quantized_matmul_q2k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [0.916, 0.422, 0.215, 1.668]);
 
-    //mirrored GGML unit test
     ggml_matmul_error_test::<BlockQ2K>()?;
 
     Ok(())
@@ -622,7 +608,6 @@ fn quantized_matmul_q3k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.029, 1.418, -0.314, 1.495]);
 
-    //mirrored GGML unit test
     ggml_matmul_error_test::<BlockQ3K>()?;
 
     Ok(())
@@ -649,7 +634,6 @@ fn quantized_matmul_q4k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.125, 1.435, -0.201, 1.589]);
 
-    //mirrored GGML unit test
     ggml_matmul_error_test::<BlockQ4K>()?;
 
     Ok(())
@@ -676,7 +660,6 @@ fn quantized_matmul_q5k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.192, 1.491, -0.18, 1.743]);
 
-    //mirrored GGML unit test
     //Expected: 0.000740408897
     ggml_matmul_error_test::<BlockQ5K>()?;
 
@@ -704,8 +687,6 @@ fn quantized_matmul_q6k() -> Result<()> {
     let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
     assert_eq!(dst, [1.324, 1.49, -0.164, 1.741]);
 
-    //mirrored GGML unit test
     ggml_matmul_error_test::<BlockQ6K>()?;
-
     Ok(())
 }
