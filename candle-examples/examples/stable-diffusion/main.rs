@@ -17,7 +17,7 @@ mod utils;
 mod vae;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, IndexOp, Tensor};
+use candle::{DType, Device, IndexOp, Tensor, D};
 use clap::Parser;
 use tokenizers::Tokenizer;
 
@@ -241,6 +241,65 @@ fn output_filename(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn text_embeddings(
+    prompt: &str,
+    uncond_prompt: &str,
+    tokenizer: Option<String>,
+    clip_weights: Option<String>,
+    sd_version: StableDiffusionVersion,
+    sd_config: &stable_diffusion::StableDiffusionConfig,
+    use_f16: bool,
+    device: &Device,
+    dtype: DType,
+    first: bool,
+) -> Result<Tensor> {
+    let tokenizer_file = if first {
+        ModelFile::Tokenizer
+    } else {
+        ModelFile::Tokenizer2
+    };
+    let tokenizer = tokenizer_file.get(tokenizer, sd_version, use_f16)?;
+    let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
+    let pad_id = match &sd_config.clip.pad_with {
+        Some(padding) => *tokenizer.get_vocab(true).get(padding.as_str()).unwrap(),
+        None => *tokenizer.get_vocab(true).get("<|endoftext|>").unwrap(),
+    };
+    println!("Running with prompt \"{prompt}\".");
+    let mut tokens = tokenizer
+        .encode(prompt, true)
+        .map_err(E::msg)?
+        .get_ids()
+        .to_vec();
+    while tokens.len() < sd_config.clip.max_position_embeddings {
+        tokens.push(pad_id)
+    }
+    let tokens = Tensor::new(tokens.as_slice(), device)?.unsqueeze(0)?;
+
+    let mut uncond_tokens = tokenizer
+        .encode(uncond_prompt, true)
+        .map_err(E::msg)?
+        .get_ids()
+        .to_vec();
+    while uncond_tokens.len() < sd_config.clip.max_position_embeddings {
+        uncond_tokens.push(pad_id)
+    }
+    let uncond_tokens = Tensor::new(uncond_tokens.as_slice(), device)?.unsqueeze(0)?;
+
+    println!("Building the Clip transformer.");
+    let clip_weights_file = if first {
+        ModelFile::Clip
+    } else {
+        ModelFile::Clip2
+    };
+    let clip_weights = clip_weights_file.get(clip_weights, sd_version, false)?;
+    let text_model = sd_config.build_clip_transformer(clip_weights, device, DType::F32)?;
+    let text_embeddings = text_model.forward(&tokens)?;
+    let uncond_embeddings = text_model.forward(&uncond_tokens)?;
+    let text_embeddings = Tensor::cat(&[uncond_embeddings, text_embeddings], 0)?.to_dtype(dtype)?;
+    Ok(text_embeddings)
+}
+
 fn run(args: Args) -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
@@ -290,41 +349,29 @@ fn run(args: Args) -> Result<()> {
     let scheduler = sd_config.build_scheduler(n_steps)?;
     let device = candle_examples::device(cpu)?;
 
-    let tokenizer = ModelFile::Tokenizer.get(tokenizer, sd_version, use_f16)?;
-    let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
-    let pad_id = match &sd_config.clip.pad_with {
-        Some(padding) => *tokenizer.get_vocab(true).get(padding.as_str()).unwrap(),
-        None => *tokenizer.get_vocab(true).get("<|endoftext|>").unwrap(),
+    let which = match sd_version {
+        StableDiffusionVersion::Xl => vec![true, false],
+        _ => vec![true],
     };
-    println!("Running with prompt \"{prompt}\".");
-    let mut tokens = tokenizer
-        .encode(prompt, true)
-        .map_err(E::msg)?
-        .get_ids()
-        .to_vec();
-    while tokens.len() < sd_config.clip.max_position_embeddings {
-        tokens.push(pad_id)
-    }
-    let tokens = Tensor::new(tokens.as_slice(), &device)?.unsqueeze(0)?;
-
-    let mut uncond_tokens = tokenizer
-        .encode(uncond_prompt, true)
-        .map_err(E::msg)?
-        .get_ids()
-        .to_vec();
-    while uncond_tokens.len() < sd_config.clip.max_position_embeddings {
-        uncond_tokens.push(pad_id)
-    }
-    let uncond_tokens = Tensor::new(uncond_tokens.as_slice(), &device)?.unsqueeze(0)?;
-
-    println!("Building the Clip transformer.");
-    let text_embeddings = {
-        let clip_weights = ModelFile::Clip.get(clip_weights, sd_version, false)?;
-        let text_model = sd_config.build_clip_transformer(&clip_weights, &device, DType::F32)?;
-        let text_embeddings = text_model.forward(&tokens)?;
-        let uncond_embeddings = text_model.forward(&uncond_tokens)?;
-        Tensor::cat(&[uncond_embeddings, text_embeddings], 0)?.to_dtype(dtype)?
-    };
+    let text_embeddings = which
+        .iter()
+        .map(|first| {
+            text_embeddings(
+                &prompt,
+                &uncond_prompt,
+                tokenizer.clone(),
+                clip_weights.clone(),
+                sd_version,
+                &sd_config,
+                use_f16,
+                &device,
+                dtype,
+                *first,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let text_embeddings = Tensor::cat(&text_embeddings, D::Minus1)?;
+    println!("{text_embeddings:?}");
 
     println!("Building the autoencoder.");
     let vae_weights = ModelFile::Vae.get(vae_weights, sd_version, use_f16)?;
