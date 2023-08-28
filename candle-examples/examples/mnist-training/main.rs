@@ -143,7 +143,7 @@ struct Args {
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     // Load the dataset
-    let m = candle_datasets::vision::mnist::load_dir("data")?;
+    let m = candle_datasets::vision::mnist::load_dir("data").expect("Cannot find the dataset. Please download the MNIST dataset and place it in a the ./data/ directory in the root directory of this crate.");
     println!("train-images: {:?}", m.train_images.shape());
     println!("train-labels: {:?}", m.train_labels.shape());
     println!("test-images: {:?}", m.test_images.shape());
