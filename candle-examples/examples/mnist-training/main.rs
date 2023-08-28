@@ -14,8 +14,8 @@ const IMAGE_DIM: usize = 784;
 const LABELS: usize = 10;
 
 fn linear_z(in_dim: usize, out_dim: usize, vs: VarBuilder) -> Result<Linear> {
-    let ws = vs.get_or_init((out_dim, in_dim), "weight", candle_nn::init::ZERO)?;
-    let bs = vs.get_or_init(out_dim, "bias", candle_nn::init::ZERO)?;
+    let ws = vs.get_with_hints((out_dim, in_dim), "weight", candle_nn::init::ZERO)?;
+    let bs = vs.get_with_hints(out_dim, "bias", candle_nn::init::ZERO)?;
     Ok(Linear::new(ws, Some(bs)))
 }
 

@@ -2,19 +2,16 @@
 // own forward pass (CPU and GPU versions) as well as their backward pass.
 //
 // In this example we add the RMS normalization operation and implement it for f32.
-#![allow(dead_code)]
-#![allow(unused)]
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+#[allow(unused)]
 mod cuda_kernels;
 
 use clap::Parser;
 
-use candle::backend::BackendStorage;
-use candle::cpu_backend;
-use candle::{CpuStorage, CustomOp1, DType, Device, Layout, Result, Shape, Tensor};
+use candle::{CpuStorage, CustomOp1, Layout, Result, Shape, Tensor};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -57,8 +54,9 @@ impl CustomOp1 for LayerNorm {
         storage: &candle::CudaStorage,
         layout: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
-        use candle::cuda_backend::{cudarc, WrapErr};
-        use cudarc::driver::{LaunchAsync, LaunchConfig};
+        use candle::backend::BackendStorage;
+        use candle::cuda_backend::cudarc::driver::{LaunchAsync, LaunchConfig};
+        use candle::cuda_backend::WrapErr;
         let (d1, d2) = layout.shape().dims2()?;
         let d1 = d1 as u32;
         let d2 = d2 as u32;

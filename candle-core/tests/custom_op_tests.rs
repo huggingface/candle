@@ -1,9 +1,7 @@
 use candle_core::backend::BackendStorage;
 use candle_core::cpu_backend;
+use candle_core::test_utils::to_vec1_round;
 use candle_core::{CpuStorage, CustomOp1, DType, Device, Error, Layout, Result, Shape, Tensor};
-
-mod test_utils;
-use test_utils::to_vec1_round;
 
 fn fwd<T: num_traits::Float>(v: T, alpha: f64) -> T {
     if v.is_sign_positive() {

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
@@ -183,16 +182,6 @@ struct ModelWeights {
     masks: HashMap<usize, Tensor>,
     span: tracing::Span,
     span_output: tracing::Span,
-}
-
-struct WeightMap(HashMap<String, QTensor>);
-impl WeightMap {
-    fn get(&mut self, name: &str) -> Result<QTensor> {
-        match self.0.remove(name) {
-            None => candle::bail!("cannot find tensor with name '{name}'"),
-            Some(tensor) => Ok(tensor),
-        }
-    }
 }
 
 fn precomput_freqs_cis(head_dim: usize, freq_base: f32) -> Result<(Tensor, Tensor)> {
@@ -533,22 +522,6 @@ fn print_token(next_token: u32, tokenizer: &Tokenizer) {
     }
 }
 
-fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> Result<Tensor> {
-    let mut logits = logits.to_vec1::<f32>()?;
-    let context: std::collections::HashSet<_> = context.iter().collect();
-    for (token_id, logit) in logits.iter_mut().enumerate() {
-        if context.contains(&(token_id as u32)) {
-            if *logit >= 0. {
-                *logit /= penalty
-            } else {
-                *logit *= penalty
-            }
-        }
-    }
-    let logits_len = logits.len();
-    Tensor::from_vec(logits, logits_len, &Device::Cpu)
-}
-
 fn format_size(size_in_bytes: usize) -> String {
     if size_in_bytes < 1_000 {
         format!("{}B", size_in_bytes)
@@ -670,7 +643,11 @@ fn main() -> anyhow::Result<()> {
             logits
         } else {
             let start_at = all_tokens.len().saturating_sub(args.repeat_last_n);
-            apply_repeat_penalty(&logits, args.repeat_penalty, &all_tokens[start_at..])?
+            candle_transformers::utils::apply_repeat_penalty(
+                &logits,
+                args.repeat_penalty,
+                &all_tokens[start_at..],
+            )?
         };
         next_token = logits_processor.sample(&logits)?;
         all_tokens.push(next_token);

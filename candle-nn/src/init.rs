@@ -139,3 +139,9 @@ impl Init {
         }
     }
 }
+
+impl Default for Init {
+    fn default() -> Self {
+        Self::Const(0.)
+    }
+}

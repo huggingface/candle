@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub const WITH_TIMER: bool = true;
 
 struct Timer {

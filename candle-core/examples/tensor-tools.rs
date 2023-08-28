@@ -1,5 +1,64 @@
-use candle_core::Result;
+use candle_core::quantized::{gguf_file, k_quants, QTensor};
+use candle_core::{Device, Result, Tensor};
 use clap::{Parser, Subcommand, ValueEnum};
+use rayon::prelude::*;
+
+#[derive(ValueEnum, Debug, Clone)]
+enum QuantizationMode {
+    /// The default quantization includes all 2d tensors, except the output tensor which always
+    /// uses Q6_K.
+    Llama,
+}
+
+impl QuantizationMode {
+    fn quantize(
+        &self,
+        name: &str,
+        tensor: QTensor,
+        default: fn(&Tensor) -> Result<QTensor>,
+    ) -> Result<QTensor> {
+        match self {
+            Self::Llama => {
+                // Same behavior as the llama.cpp quantization.
+                let should_quantize = name.ends_with(".weight") && tensor.rank() == 2;
+                if should_quantize {
+                    let tensor = tensor.dequantize(&Device::Cpu)?;
+                    if name == "output.weight" {
+                        QTensor::quantize::<k_quants::BlockQ6K>(&tensor)
+                    } else {
+                        default(&tensor)
+                    }
+                } else {
+                    Ok(tensor)
+                }
+            }
+        }
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone)]
+enum Quantization {
+    #[value(name = "q4_0")]
+    Q4_0,
+    #[value(name = "q4_1")]
+    Q4_1,
+    #[value(name = "q5_0")]
+    Q5_0,
+    #[value(name = "q5_1")]
+    Q5_1,
+    #[value(name = "q8_0")]
+    Q8_0,
+    #[value(name = "q8_1")]
+    Q8_1,
+    Q2k,
+    Q3k,
+    Q4k,
+    Q5k,
+    Q6k,
+    Q8k,
+    F16,
+    F32,
+}
 
 #[derive(ValueEnum, Debug, Clone)]
 enum Format {
@@ -40,6 +99,21 @@ enum Command {
         /// Enable verbose mode.
         #[arg(short, long)]
         verbose: bool,
+    },
+
+    Quantize {
+        /// The input file, in gguf format.
+        in_file: std::path::PathBuf,
+        /// The output file, in gguf format.
+        out_file: std::path::PathBuf,
+
+        /// The quantization schema to apply.
+        #[arg(long, value_enum)]
+        quantization: Quantization,
+
+        /// Which tensor to quantize.
+        #[arg(long, value_enum, default_value_t = QuantizationMode::Llama)]
+        mode: QuantizationMode,
     },
 }
 
@@ -125,7 +199,7 @@ fn run_ls(file: &std::path::PathBuf, format: Option<Format>, verbose: bool) -> R
         }
         Format::Gguf => {
             let mut file = std::fs::File::open(file)?;
-            let content = candle_core::quantized::gguf_file::Content::read(&mut file)?;
+            let content = gguf_file::Content::read(&mut file)?;
             if verbose {
                 let mut metadata = content.metadata.into_iter().collect::<Vec<_>>();
                 metadata.sort_by(|a, b| a.0.cmp(&b.0));
@@ -141,6 +215,60 @@ fn run_ls(file: &std::path::PathBuf, format: Option<Format>, verbose: bool) -> R
             }
         }
     }
+    Ok(())
+}
+
+fn run_quantize(
+    in_file: std::path::PathBuf,
+    out_file: std::path::PathBuf,
+    q: Quantization,
+    qmode: QuantizationMode,
+) -> Result<()> {
+    // Open the out file early so as to fail directly on missing directories etc.
+    let mut out_file = std::fs::File::create(out_file)?;
+    let mut in_ = std::fs::File::open(&in_file)?;
+    let content = gguf_file::Content::read(&mut in_)?;
+    println!("tensors: {}", content.tensor_infos.len());
+
+    let quantize_fn = match q {
+        Quantization::Q4_0 => QTensor::quantize::<k_quants::BlockQ4_0>,
+        Quantization::Q4_1 => QTensor::quantize::<k_quants::BlockQ4_1>,
+        Quantization::Q5_0 => QTensor::quantize::<k_quants::BlockQ5_0>,
+        Quantization::Q5_1 => QTensor::quantize::<k_quants::BlockQ5_1>,
+        Quantization::Q8_0 => QTensor::quantize::<k_quants::BlockQ8_0>,
+        Quantization::Q8_1 => QTensor::quantize::<k_quants::BlockQ8_1>,
+        Quantization::Q2k => QTensor::quantize::<k_quants::BlockQ2K>,
+        Quantization::Q3k => QTensor::quantize::<k_quants::BlockQ3K>,
+        Quantization::Q4k => QTensor::quantize::<k_quants::BlockQ4K>,
+        Quantization::Q5k => QTensor::quantize::<k_quants::BlockQ5K>,
+        Quantization::Q6k => QTensor::quantize::<k_quants::BlockQ6K>,
+        Quantization::Q8k => QTensor::quantize::<k_quants::BlockQ8K>,
+        Quantization::F16 => QTensor::quantize::<half::f16>,
+        Quantization::F32 => QTensor::quantize::<f32>,
+    };
+
+    let qtensors = content
+        .tensor_infos
+        .par_iter()
+        .map(|(name, _)| {
+            println!("  quantizing {name}");
+            let mut in_file = std::fs::File::open(&in_file)?;
+            let tensor = content.tensor(&mut in_file, name)?;
+            let tensor = qmode.quantize(name, tensor, quantize_fn)?;
+            Ok((name, tensor))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let qtensors = qtensors
+        .iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect::<Vec<_>>();
+
+    let metadata = content
+        .metadata
+        .iter()
+        .map(|(k, v)| (k.as_str(), v))
+        .collect::<Vec<_>>();
+    gguf_file::write(&mut out_file, metadata.as_slice(), &qtensors)?;
     Ok(())
 }
 
@@ -160,6 +288,12 @@ fn main() -> anyhow::Result<()> {
                 run_ls(file, format.clone(), verbose)?
             }
         }
+        Command::Quantize {
+            in_file,
+            out_file,
+            quantization,
+            mode,
+        } => run_quantize(in_file, out_file, quantization, mode)?,
     }
     Ok(())
 }

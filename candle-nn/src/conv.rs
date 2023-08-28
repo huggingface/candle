@@ -124,7 +124,7 @@ pub fn conv1d(
     vs: crate::VarBuilder,
 ) -> Result<Conv1d> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_or_init(
+    let ws = vs.get_with_hints(
         (out_channels, in_channels / cfg.groups, kernel_size),
         "weight",
         init_ws,
@@ -134,7 +134,7 @@ pub fn conv1d(
         lo: -bound,
         up: bound,
     };
-    let bs = vs.get_or_init(out_channels, "bias", init_bs)?;
+    let bs = vs.get_with_hints(out_channels, "bias", init_bs)?;
     Ok(Conv1d::new(ws, Some(bs), cfg))
 }
 
@@ -146,7 +146,7 @@ pub fn conv2d(
     vs: crate::VarBuilder,
 ) -> Result<Conv2d> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_or_init(
+    let ws = vs.get_with_hints(
         (
             out_channels,
             in_channels / cfg.groups,
@@ -161,7 +161,7 @@ pub fn conv2d(
         lo: -bound,
         up: bound,
     };
-    let bs = vs.get_or_init(out_channels, "bias", init_bs)?;
+    let bs = vs.get_with_hints(out_channels, "bias", init_bs)?;
     Ok(Conv2d::new(ws, Some(bs), cfg))
 }
 
@@ -173,7 +173,7 @@ pub fn conv2d_no_bias(
     vs: crate::VarBuilder,
 ) -> Result<Conv2d> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
-    let ws = vs.get_or_init(
+    let ws = vs.get_with_hints(
         (
             out_channels,
             in_channels / cfg.groups,

@@ -1,6 +1,5 @@
-mod test_utils;
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::{test_device, test_utils, Device, Tensor};
 
 /* This test is based on the following script.
 import torch

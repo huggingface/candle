@@ -33,9 +33,6 @@ pub const HOP_LENGTH: usize = 160;
 pub const CHUNK_LENGTH: usize = 30;
 pub const N_SAMPLES: usize = CHUNK_LENGTH * SAMPLE_RATE; // 480000 samples in a 30-second chunk
 pub const N_FRAMES: usize = N_SAMPLES / HOP_LENGTH; // 3000 frames in a mel spectrogram input
-pub const N_SAMPLES_PER_TOKEN: usize = HOP_LENGTH * 2; // the initial convolutions has stride 2
-pub const FRAMES_PER_SECOND: usize = SAMPLE_RATE / HOP_LENGTH; // 10ms per audio frame
-pub const TOKENS_PER_SECOND: usize = SAMPLE_RATE / N_SAMPLES_PER_TOKEN; // 20ms per audio token
 
 pub const NO_SPEECH_THRESHOLD: f64 = 0.6;
 pub const LOGPROB_THRESHOLD: f64 = -1.0;
@@ -46,7 +43,6 @@ pub const COMPRESSION_RATIO_THRESHOLD: f64 = 2.4;
 pub const SOT_TOKEN: u32 = 50257;
 pub const EOT_TOKEN: u32 = 50256;
 pub const NO_SPEECH_TOKEN: u32 = 50361;
-pub const NO_TIMESTAMP_TOKEN: u32 = 50362;
 // From the _get_suppress_tokens function + 50362 (no timestamp)
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/decoding.py#L605
 pub const SUPPRESS_TOKENS: [u32; 91] = [

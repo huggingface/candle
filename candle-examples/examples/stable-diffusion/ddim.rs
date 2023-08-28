@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! # Denoising Diffusion Implicit Models
 //!
 //! The Denoising Diffusion Implicit Models (DDIM) is a simple scheduler
@@ -162,17 +161,6 @@ impl DDIMScheduler {
         } else {
             Ok(prev_sample)
         }
-    }
-
-    pub fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor> {
-        let timestep = if timestep >= self.alphas_cumprod.len() {
-            timestep - 1
-        } else {
-            timestep
-        };
-        let sqrt_alpha_prod = self.alphas_cumprod[timestep].sqrt();
-        let sqrt_one_minus_alpha_prod = (1.0 - self.alphas_cumprod[timestep]).sqrt();
-        (original * sqrt_alpha_prod)? + (noise * sqrt_one_minus_alpha_prod)?
     }
 
     pub fn init_noise_sigma(&self) -> f64 {

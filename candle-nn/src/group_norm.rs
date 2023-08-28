@@ -79,7 +79,7 @@ pub fn group_norm(
     eps: f64,
     vb: crate::VarBuilder,
 ) -> Result<GroupNorm> {
-    let weight = vb.get_or_init(num_channels, "weight", crate::Init::Const(1.))?;
-    let bias = vb.get_or_init(num_channels, "bias", crate::Init::Const(0.))?;
+    let weight = vb.get_with_hints(num_channels, "weight", crate::Init::Const(1.))?;
+    let bias = vb.get_with_hints(num_channels, "bias", crate::Init::Const(0.))?;
     GroupNorm::new(weight, bias, num_channels, num_groups, eps)
 }
