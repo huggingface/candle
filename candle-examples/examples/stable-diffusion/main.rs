@@ -105,10 +105,13 @@ enum StableDiffusionVersion {
     Xl,
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ModelFile {
     Tokenizer,
+    Tokenizer2,
     Clip,
+    Clip2,
     Unet,
     Vae,
 }
@@ -157,12 +160,21 @@ impl StableDiffusionVersion {
             }
         }
     }
+
+    fn clip2_file(&self, use_f16: bool) -> &'static str {
+        match self {
+            Self::V1_5 | Self::V2_1 | Self::Xl => {
+                if use_f16 {
+                    "text_encoder_2/model.fp16.safetensors"
+                } else {
+                    "text_encoder_2/model.safetensors"
+                }
+            }
+        }
+    }
 }
 
 impl ModelFile {
-    const TOKENIZER_REPO: &str = "openai/clip-vit-base-patch32";
-    const TOKENIZER_PATH: &str = "tokenizer.json";
-
     fn get(
         &self,
         filename: Option<String>,
@@ -174,8 +186,24 @@ impl ModelFile {
             Some(filename) => Ok(std::path::PathBuf::from(filename)),
             None => {
                 let (repo, path) = match self {
-                    Self::Tokenizer => (Self::TOKENIZER_REPO, Self::TOKENIZER_PATH),
+                    Self::Tokenizer => {
+                        let tokenizer_repo = match version {
+                            StableDiffusionVersion::V1_5 | StableDiffusionVersion::V2_1 => {
+                                "openai/clip-vit-base-patch32"
+                            }
+                            StableDiffusionVersion::Xl => {
+                                // This seems similar to the patch32 version except some very small
+                                // difference in the split regex.
+                                "openai/clip-vit-large-patch14"
+                            }
+                        };
+                        (tokenizer_repo, "tokenizer.json")
+                    }
+                    Self::Tokenizer2 => {
+                        ("laion/CLIP-ViT-bigG-14-laion2B-39B-b160k", "tokenizer.json")
+                    }
                     Self::Clip => (version.repo(), version.clip_file(use_f16)),
+                    Self::Clip2 => (version.repo(), version.clip2_file(use_f16)),
                     Self::Unet => (version.repo(), version.unet_file(use_f16)),
                     Self::Vae => (version.repo(), version.vae_file(use_f16)),
                 };
