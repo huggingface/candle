@@ -35,12 +35,12 @@
       });
 
       async function classifyAudio(
-        weightsURL,
-        modelID,
-        tokenizerURL,
-        mel_filtersURL,
-        audioURL,
-        updateStatus
+        weightsURL, // URL to the weights file
+        modelID, // model ID
+        tokenizerURL, // URL to the tokenizer file
+        mel_filtersURL, // URL to the mel filters file
+        audioURL, // URL to the audio file
+        updateStatus // function to update the status
       ) {
         return new Promise((resolve, reject) => {
           whisperWorker.postMessage({
