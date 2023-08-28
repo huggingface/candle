@@ -102,6 +102,7 @@ struct Args {
 enum StableDiffusionVersion {
     V1_5,
     V2_1,
+    Xl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +116,7 @@ enum ModelFile {
 impl StableDiffusionVersion {
     fn repo(&self) -> &'static str {
         match self {
+            Self::Xl => "stabilityai/stable-diffusion-xl-base-1.0",
             Self::V2_1 => "stabilityai/stable-diffusion-2-1",
             Self::V1_5 => "runwayml/stable-diffusion-v1-5",
         }
@@ -122,7 +124,7 @@ impl StableDiffusionVersion {
 
     fn unet_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V2_1 => {
+            Self::V1_5 | Self::V2_1 | Self::Xl => {
                 if use_f16 {
                     "unet/diffusion_pytorch_model.fp16.safetensors"
                 } else {
@@ -134,7 +136,7 @@ impl StableDiffusionVersion {
 
     fn vae_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V2_1 => {
+            Self::V1_5 | Self::V2_1 | Self::Xl => {
                 if use_f16 {
                     "vae/diffusion_pytorch_model.fp16.safetensors"
                 } else {
@@ -146,7 +148,7 @@ impl StableDiffusionVersion {
 
     fn clip_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V2_1 => {
+            Self::V1_5 | Self::V2_1 | Self::Xl => {
                 if use_f16 {
                     "text_encoder/model.fp16.safetensors"
                 } else {
@@ -251,6 +253,9 @@ fn run(args: Args) -> Result<()> {
         }
         StableDiffusionVersion::V2_1 => {
             stable_diffusion::StableDiffusionConfig::v2_1(sliced_attention_size, height, width)
+        }
+        StableDiffusionVersion::Xl => {
+            stable_diffusion::StableDiffusionConfig::sdxl(sliced_attention_size, height, width)
         }
     };
 
