@@ -54,6 +54,42 @@ impl ParamsConv2D {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamsConvTranspose2D {
+    pub(crate) b_size: usize,
+    pub(crate) i_h: usize,
+    pub(crate) i_w: usize,
+    pub(crate) k_h: usize,
+    pub(crate) k_w: usize,
+    pub(crate) c_out: usize,
+    pub(crate) c_in: usize,
+    pub(crate) padding: usize,
+    pub(crate) output_padding: usize,
+    pub(crate) stride: usize,
+}
+
+impl ParamsConvTranspose2D {
+    pub(crate) fn out_h(&self) -> usize {
+        let dilation = 1;
+        (self.i_h - 1) * self.stride - 2 * self.padding
+            + dilation * (self.k_h - 1)
+            + self.output_padding
+            + 1
+    }
+
+    pub(crate) fn out_w(&self) -> usize {
+        let dilation = 1;
+        (self.i_w - 1) * self.stride - 2 * self.padding
+            + dilation * (self.k_w - 1)
+            + self.output_padding
+            + 1
+    }
+
+    pub(crate) fn out_dims(&self) -> Vec<usize> {
+        vec![self.b_size, self.c_out, self.out_h(), self.out_w()]
+    }
+}
+
 impl Tensor {
     fn conv1d_single_group(&self, kernel: &Self, params: &ParamsConv1D) -> Result<Self> {
         let storage =
@@ -165,5 +201,47 @@ impl Tensor {
                 .collect::<Result<Vec<_>>>()?;
             Tensor::cat(&blocks, 1)
         }
+    }
+
+    /// Applies a 2D transposed convolution over the input tensor.
+    pub fn conv_transpose2d(
+        &self,
+        kernel: &Self,
+        padding: usize,
+        output_padding: usize,
+        stride: usize,
+    ) -> Result<Self> {
+        let (b_size, c_in, i_h, i_w) = self.dims4()?;
+        let (c_in_k, c_out, k_h, k_w) = kernel.dims4()?;
+        if c_in != c_in_k {
+            crate::bail!("in_channel mismatch between input ({c_in}) and kernel ({c_in_k})")
+        }
+        let params = ParamsConvTranspose2D {
+            b_size,
+            i_h,
+            i_w,
+            k_h,
+            k_w,
+            c_out,
+            c_in,
+            padding,
+            output_padding,
+            stride,
+        };
+        let storage = self.storage().conv_transpose2d(
+            self.layout(),
+            &kernel.storage(),
+            kernel.layout(),
+            &params,
+        )?;
+        let op = BackpropOp::new2(self, kernel, |arg, kernel| Op::ConvTranspose2D {
+            arg,
+            kernel,
+            padding: params.padding,
+            output_padding: params.output_padding,
+            stride: params.stride,
+        });
+        let out_dims = params.out_dims();
+        Ok(crate::tensor::from_storage(storage, out_dims, op, false))
     }
 }

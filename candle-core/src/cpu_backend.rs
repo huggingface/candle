@@ -1180,6 +1180,60 @@ impl<'a> Map2 for Conv2D<'a> {
     }
 }
 
+struct ConvTranspose2D<'a>(&'a crate::conv::ParamsConvTranspose2D);
+
+impl<'a> Map2 for ConvTranspose2D<'a> {
+    const OP: &'static str = "conv_transpose2d";
+    fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
+        let p = self.0;
+        let inp = &inp[inp_l.start_offset()..];
+        let (inp_s0, inp_s1, inp_s2, inp_s3) = crate::shape::dims4(inp_l.stride())?;
+        let k = &k[k_l.start_offset()..];
+        let (k_s0, k_s1, k_s2, k_s3) = crate::shape::dims4(k_l.stride())?;
+        let (out_h, out_w) = (p.out_h(), p.out_w());
+
+        // Output shape: [b_size, c_out, out_h, out_w].
+        let mut dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
+        let dst_s0 = p.c_out * out_h * out_w;
+        let dst_s1 = out_h * out_w;
+        let dst_s2 = out_w;
+        let dst_s3 = 1;
+        for b_idx in 0..p.b_size {
+            for out_y in 0..out_h as i32 {
+                for out_x in 0..out_w as i32 {
+                    let inp_x = out_x * p.stride as i32 - p.padding as i32;
+                    let inp_y = out_y * p.stride as i32 - p.padding as i32;
+                    for k_y in 0..p.k_h as i32 {
+                        for k_x in 0..p.k_h as i32 {
+                            let k_index = k_y as usize * k_s2 + k_x as usize * k_s3;
+                            let inp_y = inp_y + k_y;
+                            let inp_x = inp_x + k_x;
+                            if inp_x < 0 || inp_y < 0 {
+                                continue;
+                            }
+                            let inp_x = inp_x as usize;
+                            let inp_y = inp_y as usize;
+                            if inp_x < p.i_w && inp_y < p.i_h {
+                                let inp_index = b_idx * inp_s0 + inp_y * inp_s2 + inp_x * inp_s3;
+                                let dst_index = b_idx * dst_s0 + inp_y * dst_s2 + inp_x * dst_s3;
+                                for c_out in 0..k_s0 {
+                                    for c_in in 0..k_s1 {
+                                        let k_index = k_index + c_out * k_s1 + c_in * k_s0;
+                                        let dst_index = dst_index + c_out * dst_s1;
+                                        let inp_index = inp_index + c_in * inp_s1;
+                                        dst[dst_index] += k[k_index] * inp[inp_index]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(dst)
+    }
+}
+
 struct MatMul((usize, usize, usize, usize));
 
 impl MatMul {
@@ -2041,6 +2095,16 @@ impl BackendStorage for CpuStorage {
         params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
         Conv2D(params).map(self, l, kernel, kernel_l)
+    }
+
+    fn conv_transpose2d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose2D,
+    ) -> Result<Self> {
+        ConvTranspose2D(params).map(self, l, kernel, kernel_l)
     }
 
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {

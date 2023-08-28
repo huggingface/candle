@@ -60,6 +60,11 @@ impl Tensor {
                         kernel: rhs,
                         ..
                     }
+                    | Op::ConvTranspose2D {
+                        arg: lhs,
+                        kernel: rhs,
+                        ..
+                    }
                     | Op::CustomOp2(lhs, rhs, _)
                     | Op::Binary(lhs, rhs, _)
                     | Op::Gather(lhs, rhs, _)
@@ -188,6 +193,9 @@ impl Tensor {
                     }
                     Op::Conv1D { .. } => Err(Error::BackwardNotSupported { op: "conv1d" })?,
                     Op::Conv2D { .. } => Err(Error::BackwardNotSupported { op: "conv2d" })?,
+                    Op::ConvTranspose2D { .. } => Err(Error::BackwardNotSupported {
+                        op: "conv-transpose2d",
+                    })?,
                     Op::AvgPool2D { .. } => Err(Error::BackwardNotSupported { op: "avg-pool2d" })?,
                     Op::MaxPool2D { .. } => Err(Error::BackwardNotSupported { op: "max-pool2d" })?,
                     Op::UpsampleNearest2D { .. } => Err(Error::BackwardNotSupported {
