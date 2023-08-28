@@ -43,7 +43,7 @@ impl Tensor {
                 }
             }
         }
-        write!(f, "; {} ,{}]", self.dtype().as_str(), device_str)
+        write!(f, "; {}{}]", self.dtype().as_str(), device_str)
     }
 }
 
