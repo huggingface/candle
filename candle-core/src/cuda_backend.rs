@@ -977,8 +977,8 @@ impl<'a> Map2 for Conv2D<'a> {
         k_l: &Layout,
         dev: &CudaDevice,
     ) -> Result<CudaSlice<T>> {
-        // Kernel shape: (c_out, c_in_k, w_k, h_k)
-        // Input shape: (b_size, c_in, w_in, c_in)
+        // Kernel shape: (c_out, c_in_k, h_k, w_k)
+        // Input shape: (b_size, c_in, h_in, w_in)
         let p = &self.0;
         let (out_w, out_h) = (p.out_w(), p.out_h());
         let dst_el = p.c_out * out_w * out_h * p.b_size;
@@ -999,6 +999,55 @@ impl<'a> Map2 for Conv2D<'a> {
         };
         let ds = dev.htod_copy(ds).w()?;
         let params = (el, out_w, out_h, p.stride, p.padding, &ds, inp, k, &out);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }.w()?;
+        Ok(out)
+    }
+}
+
+struct ConvTranspose2D<'a>(&'a crate::conv::ParamsConvTranspose2D);
+impl<'a> Map2 for ConvTranspose2D<'a> {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        inp: &CudaSlice<T>,
+        inp_l: &Layout,
+        k: &CudaSlice<T>,
+        k_l: &Layout,
+        dev: &CudaDevice,
+    ) -> Result<CudaSlice<T>> {
+        // Kernel shape: (c_in_k, c_out, h_k, w_k)
+        // Input shape: (b_size, c_in, h_in, w_in)
+        let p = &self.0;
+        let (out_w, out_h) = (p.out_w(), p.out_h());
+        let dst_el = p.c_out * out_w * out_h * p.b_size;
+        let inp = &inp.slice(inp_l.start_offset()..);
+        let k = &k.slice(k_l.start_offset()..);
+        let shape = inp_l.shape();
+        let dims = shape.dims();
+        let el = shape.elem_count();
+
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose2d"), kernels::CONV)?;
+        let ds = if dims.len() == 4 {
+            [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
+        } else {
+            crate::bail!("unexpected input shape for conv_transpose2d {dims:?}")
+        };
+        let ds = dev.htod_copy(ds).w()?;
+        let params = (
+            el,
+            out_w,
+            out_h,
+            p.stride,
+            p.padding,
+            p.output_padding,
+            &ds,
+            inp,
+            k,
+            &out,
+        );
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }.w()?;
         Ok(out)
@@ -1649,12 +1698,15 @@ impl BackendStorage for CudaStorage {
 
     fn conv_transpose2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConvTranspose2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose2D,
     ) -> Result<Self> {
-        todo!()
+        let device = self.device().clone();
+        let slice =
+            ConvTranspose2D(params).map(&self.slice, l, &kernel.slice, kernel_l, &device)?;
+        Ok(Self { slice, device })
     }
 
     fn avg_pool2d(&self, l: &Layout, k: (usize, usize), stride: (usize, usize)) -> Result<Self> {
