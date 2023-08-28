@@ -273,17 +273,17 @@ impl StableDiffusionConfig {
     pub fn build_scheduler(&self, n_steps: usize) -> Result<ddim::DDIMScheduler> {
         ddim::DDIMScheduler::new(n_steps, self.scheduler)
     }
+}
 
-    pub fn build_clip_transformer<P: AsRef<std::path::Path>>(
-        &self,
-        clip_weights: P,
-        device: &Device,
-        dtype: DType,
-    ) -> Result<clip::ClipTextTransformer> {
-        let weights = unsafe { candle::safetensors::MmapedFile::new(clip_weights)? };
-        let weights = weights.deserialize()?;
-        let vs = nn::VarBuilder::from_safetensors(vec![weights], dtype, device);
-        let text_model = clip::ClipTextTransformer::new(vs, &self.clip)?;
-        Ok(text_model)
-    }
+pub fn build_clip_transformer<P: AsRef<std::path::Path>>(
+    clip: &clip::Config,
+    clip_weights: P,
+    device: &Device,
+    dtype: DType,
+) -> Result<clip::ClipTextTransformer> {
+    let weights = unsafe { candle::safetensors::MmapedFile::new(clip_weights)? };
+    let weights = weights.deserialize()?;
+    let vs = nn::VarBuilder::from_safetensors(vec![weights], dtype, device);
+    let text_model = clip::ClipTextTransformer::new(vs, clip)?;
+    Ok(text_model)
 }
