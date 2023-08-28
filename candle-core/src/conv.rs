@@ -71,18 +71,14 @@ pub struct ParamsConvTranspose2D {
 impl ParamsConvTranspose2D {
     pub(crate) fn out_h(&self) -> usize {
         let dilation = 1;
-        (self.i_h - 1) * self.stride - 2 * self.padding
-            + dilation * (self.k_h - 1)
-            + self.output_padding
-            + 1
+        (self.i_h - 1) * self.stride + dilation * (self.k_h - 1) + self.output_padding + 1
+            - 2 * self.padding
     }
 
     pub(crate) fn out_w(&self) -> usize {
         let dilation = 1;
-        (self.i_w - 1) * self.stride - 2 * self.padding
-            + dilation * (self.k_w - 1)
-            + self.output_padding
-            + 1
+        (self.i_w - 1) * self.stride + dilation * (self.k_w - 1) + self.output_padding + 1
+            - 2 * self.padding
     }
 
     pub(crate) fn out_dims(&self) -> Vec<usize> {
