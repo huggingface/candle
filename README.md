@@ -93,10 +93,10 @@ test server:
 cd candle-wasm-examples/llama2-c
 wget https://huggingface.co/spaces/lmz/candle-llama2/resolve/main/model.bin
 wget https://huggingface.co/spaces/lmz/candle-llama2/resolve/main/tokenizer.json
-trunk serve --release --public-url /candle-llama2/ --port 8081
+trunk serve --release --port 8081
 ```
 And then head over to
-[http://localhost:8081/candle-llama2](http://localhost:8081/candle-llama2).
+[http://localhost:8081/](http://localhost:8081/).
 
 <!--- ANCHOR: features --->
 
