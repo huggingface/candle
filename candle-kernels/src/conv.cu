@@ -134,7 +134,7 @@ __device__ void conv_transpose2d(
   const size_t *k_s = info + 12;
   const size_t h_k = k_dims[2];
   const size_t w_k = k_dims[3];
-  const size_t c_out = k_dims[0];
+  const size_t c_out = k_dims[1];
   const size_t c_in = src_dims[1];
   const size_t h_in = src_dims[2];
   const size_t w_in = src_dims[3];
