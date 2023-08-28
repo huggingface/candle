@@ -1180,6 +1180,30 @@ impl<'a> Map2 for Conv2D<'a> {
     }
 }
 
+struct ConvTranspose2D<'a>(&'a crate::conv::ParamsConvTranspose2D);
+
+impl<'a> Map2 for ConvTranspose2D<'a> {
+    const OP: &'static str = "conv_transpose2d";
+    fn f<T: WithDType>(
+        &self,
+        _inp: &[T],
+        _inp_l: &Layout,
+        _k: &[T],
+        _k_l: &Layout,
+    ) -> Result<Vec<T>> {
+        let p = self.0;
+        // let inp = &inp[inp_l.start_offset()..];
+        // let (inp_s0, inp_s1, inp_s2, inp_s3) = crate::shape::dims4(inp_l.stride())?;
+        // let k = &k[k_l.start_offset()..];
+        // let (k_s0, k_s1, k_s2, k_s3) = crate::shape::dims4(k_l.stride())?;
+        let (out_h, out_w) = (p.out_h(), p.out_w());
+
+        // Output shape: [b_size, c_out, out_h, out_w].
+        let dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
+        Ok(dst)
+    }
+}
+
 struct MatMul((usize, usize, usize, usize));
 
 impl MatMul {
@@ -2045,12 +2069,12 @@ impl BackendStorage for CpuStorage {
 
     fn conv_transpose2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &crate::conv::ParamsConvTranspose2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose2D,
     ) -> Result<Self> {
-        todo!()
+        ConvTranspose2D(params).map(self, l, kernel, kernel_l)
     }
 
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
