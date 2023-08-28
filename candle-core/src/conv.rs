@@ -210,14 +210,11 @@ impl Tensor {
         padding: usize,
         output_padding: usize,
         stride: usize,
-        groups: usize,
     ) -> Result<Self> {
         let (b_size, c_in, i_h, i_w) = self.dims4()?;
-        let (c_out, c_in_k, k_h, k_w) = kernel.dims4()?;
-        if c_in != c_in_k * groups {
-            crate::bail!(
-                "in_channel mismatch between input ({c_in}, groups {groups}) and kernel ({c_in_k})"
-            )
+        let (c_in_k, c_out, k_h, k_w) = kernel.dims4()?;
+        if c_in != c_in_k {
+            crate::bail!("in_channel mismatch between input ({c_in}) and kernel ({c_in_k})")
         }
         let params = ParamsConvTranspose2D {
             b_size,
@@ -225,8 +222,8 @@ impl Tensor {
             i_w,
             k_h,
             k_w,
-            c_out: c_out / groups,
-            c_in: c_in / groups,
+            c_out,
+            c_in,
             padding,
             output_padding,
             stride,

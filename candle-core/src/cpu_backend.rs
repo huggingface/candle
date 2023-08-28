@@ -1218,7 +1218,7 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
                                 let dst_index = b_idx * dst_s0 + inp_y * dst_s2 + inp_x * dst_s3;
                                 for c_out in 0..k_s0 {
                                     for c_in in 0..k_s1 {
-                                        let k_index = k_index + c_out * k_s0 + c_in * k_s1;
+                                        let k_index = k_index + c_out * k_s1 + c_in * k_s0;
                                         let dst_index = dst_index + c_out * dst_s1;
                                         let inp_index = inp_index + c_in * inp_s1;
                                         dst[dst_index] += k[k_index] * inp[inp_index]

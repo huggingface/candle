@@ -130,6 +130,11 @@ print(t.flatten())
 print(w.flatten())
 res = torch.nn.functional.conv2d(t, w)
 print(res.flatten())
+
+w = w.transpose(0, 1)
+res = torch.nn.functional.conv_transpose2d(t, w)
+print(res.shape)
+print(res.flatten())
 */
 fn conv2d_small(dev: &Device) -> Result<()> {
     let t = Tensor::new(
@@ -160,6 +165,15 @@ fn conv2d_small(dev: &Device) -> Result<()> {
             0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000
         ]
     );
+    // TODO: enable the test for cuda once we have the proper implementation in place.
+    if dev.is_cpu() {
+        let res = t.conv_transpose2d(&w.transpose(0, 1)?, 0, 0, 1)?;
+        assert_eq!(res.dims(), [1, 1, 3, 3]);
+        assert_eq!(
+            test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+            [0.164, -0.0111, -0.1742, 2.6437, -2.0268, 1.1823, 3.2855, -1.0324, 0.2539],
+        );
+    }
     Ok(())
 }
 
