@@ -1193,7 +1193,7 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
         let (out_h, out_w) = (p.out_h(), p.out_w());
 
         // Output shape: [b_size, c_out, out_h, out_w].
-        let mut dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
+        let dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
         let dst_s0 = p.c_out * out_h * out_w;
         let dst_s1 = out_h * out_w;
         let dst_s2 = out_w;
@@ -1216,10 +1216,11 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
                 }
             }
         }
+        let num_threads = crate::utils::get_num_threads();
 
         for k_y in 0..p.k_h {
             for k_x in 0..p.k_w {
-                for dst_c_idx in 0..p.c_out {
+                crate::cpu::kernels::par_range(0, p.c_out, num_threads, |dst_c_idx| {
                     let k_cont = (0..p.c_in)
                         .map(|c_in_idx| {
                             k[c_in_idx * k_s0 + dst_c_idx * k_s1 + k_y * k_s2 + k_x * k_s3]
@@ -1238,7 +1239,7 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
                                 if out_x < out_w && out_y < out_h {
                                     let inp_cont = &inp_cont
                                         [b_idx * cont_s0 + inp_y * cont_s1 + inp_x * cont_s2..];
-                                    let dst_index = b_idx * dst_s0
+                                    let dst_idx = b_idx * dst_s0
                                         + out_y * dst_s2
                                         + out_x * dst_s3
                                         + dst_c_idx * dst_s1;
@@ -1251,12 +1252,19 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
                                             p.c_in,
                                         )
                                     }
-                                    dst[dst_index] += d
+                                    let dst_p = dst.as_ptr();
+                                    // Safety: dst_idx are uniques per dst_c_idx which is used to
+                                    // parallelise the different tasks so no two threads can try to
+                                    // write at the same location.
+                                    unsafe {
+                                        let ptr = dst_p.add(dst_idx) as *mut T;
+                                        *ptr += d
+                                    }
                                 }
                             }
                         }
                     }
-                }
+                })
             }
         }
         Ok(dst)
