@@ -208,6 +208,13 @@ impl Tensor {
                             grad.conv_transpose2d(kernel, *padding, out_padding, *stride)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
+
+                        let grad_kernel = node
+                            .transpose(0, 1)?
+                            .conv2d(&grad.transpose(0, 1)?, *padding, *stride, 1)?
+                            .transpose(0, 1)?;
+                        let sum_grad = grads.or_insert(kernel)?;
+                        *sum_grad = sum_grad.add(&grad_kernel)?;
                     }
                     Op::ConvTranspose2D { .. } => Err(Error::BackwardNotSupported {
                         op: "conv-transpose2d",
