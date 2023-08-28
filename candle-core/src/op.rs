@@ -91,6 +91,15 @@ pub enum Op {
         stride: usize,
     },
 
+    #[allow(dead_code)]
+    ConvTranspose2D {
+        arg: Tensor,
+        kernel: Tensor,
+        padding: usize,
+        output_padding: usize,
+        stride: usize,
+    },
+
     AvgPool2D {
         arg: Tensor,
         kernel_size: (usize, usize),

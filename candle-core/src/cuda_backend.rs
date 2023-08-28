@@ -1647,6 +1647,16 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn conv_transpose2d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConvTranspose2D,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     fn avg_pool2d(&self, l: &Layout, k: (usize, usize), stride: (usize, usize)) -> Result<Self> {
         let device = self.device().clone();
         let slice = Pool2D {

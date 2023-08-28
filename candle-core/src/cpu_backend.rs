@@ -2043,6 +2043,16 @@ impl BackendStorage for CpuStorage {
         Conv2D(params).map(self, l, kernel, kernel_l)
     }
 
+    fn conv_transpose2d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConvTranspose2D,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
         match ids {
             Self::U8(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
