@@ -209,7 +209,7 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
 
-                        let grad_kernel = node
+                        let grad_kernel = arg
                             .transpose(0, 1)?
                             .conv2d(&grad.transpose(0, 1)?, *padding, *stride, 1)?
                             .transpose(0, 1)?;
