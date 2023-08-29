@@ -54,7 +54,7 @@ Check out our [examples](./candle-examples/examples/):
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code
   generation.
 - [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
-  image generative model.
+  image generative model, support for the 1.5, 2.1, and SDXL 1.0 versions.
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
   using self-supervision (can be used for imagenet classification, depth
   evaluation, segmentation).
