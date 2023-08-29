@@ -69,6 +69,36 @@ impl Config {
             activation: Activation::Gelu,
         }
     }
+
+    // https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/text_encoder/config.json
+    pub fn sdxl() -> Self {
+        Self {
+            vocab_size: 49408,
+            embed_dim: 768,
+            intermediate_size: 3072,
+            max_position_embeddings: 77,
+            pad_with: Some("!".to_string()),
+            num_hidden_layers: 12,
+            num_attention_heads: 12,
+            projection_dim: 768,
+            activation: Activation::QuickGelu,
+        }
+    }
+
+    // https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/text_encoder_2/config.json
+    pub fn sdxl2() -> Self {
+        Self {
+            vocab_size: 49408,
+            embed_dim: 1280,
+            intermediate_size: 5120,
+            max_position_embeddings: 77,
+            pad_with: Some("!".to_string()),
+            num_hidden_layers: 32,
+            num_attention_heads: 20,
+            projection_dim: 1280,
+            activation: Activation::Gelu,
+        }
+    }
 }
 
 // CLIP Text Model

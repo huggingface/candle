@@ -473,7 +473,7 @@ impl AttentionBlock {
         let num_heads = channels / num_head_channels;
         let group_norm =
             nn::group_norm(config.num_groups, channels, config.eps, vs.pp("group_norm"))?;
-        let (q_path, k_path, v_path, out_path) = if vs.dtype() == DType::F16 {
+        let (q_path, k_path, v_path, out_path) = if vs.contains_tensor("to_q.weight") {
             ("to_q", "to_k", "to_v", "to_out.0")
         } else {
             ("query", "key", "value", "proj_attn")
