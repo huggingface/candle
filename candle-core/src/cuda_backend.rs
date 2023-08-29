@@ -960,7 +960,9 @@ impl<'a> Map2 for Conv1D<'a> {
             crate::bail!("unexpected input shape for conv1d {dims:?}")
         };
         let ds = dev.htod_copy(ds).w()?;
-        let params = (el, l_out, p.stride, p.padding, &ds, inp, k, &out);
+        let params = (
+            el, l_out, p.stride, p.padding, p.dilation, &ds, inp, k, &out,
+        );
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }.w()?;
         Ok(out)
@@ -998,7 +1000,9 @@ impl<'a> Map2 for Conv2D<'a> {
             crate::bail!("unexpected input shape for conv2d {dims:?}")
         };
         let ds = dev.htod_copy(ds).w()?;
-        let params = (el, out_w, out_h, p.stride, p.padding, &ds, inp, k, &out);
+        let params = (
+            el, out_w, out_h, p.stride, p.padding, p.dilation, &ds, inp, k, &out,
+        );
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }.w()?;
         Ok(out)
@@ -1043,6 +1047,7 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
             p.stride,
             p.padding,
             p.output_padding,
+            p.dilation,
             &ds,
             inp,
             k,
