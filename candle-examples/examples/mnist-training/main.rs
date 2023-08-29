@@ -84,8 +84,8 @@ impl Model for ConvNet {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_sz, _img_dim) = xs.dims2()?;
         let xs = xs.reshape((b_sz, 1, 28, 28))?;
-        let xs = self.conv1.forward(&xs)?.max_pool2d((2, 2), (2, 2))?;
-        let xs = self.conv2.forward(&xs)?.max_pool2d((2, 2), (2, 2))?;
+        let xs = self.conv1.forward(&xs)?.max_pool2d(2)?;
+        let xs = self.conv2.forward(&xs)?.max_pool2d(2)?;
         let xs = xs.flatten_from(1)?;
         let xs = self.fc1.forward(&xs)?;
         let xs = xs.relu()?;

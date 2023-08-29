@@ -256,7 +256,7 @@ impl Tensor {
                         // we scale the gradient for this case).
                         let node_upsampled = node.upsample_nearest2d(h, w)?;
                         let mask = arg.eq(&node_upsampled)?.to_dtype(arg.dtype())?;
-                        let avg = mask.avg_pool2d(*kernel_size, *stride)?;
+                        let avg = mask.avg_pool2d_with_stride(*kernel_size, *stride)?;
                         let grad_arg = ((grad * avg)?.upsample_nearest2d(h, w)? * mask)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
