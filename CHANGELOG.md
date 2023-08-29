@@ -3,6 +3,10 @@ This documents the main changes to the `candle` crate.
 
 ## Unreleased
 ### Added
+- Stable Diffusion XL support
+  [647](https://github.com/huggingface/candle/pull/647).
+- Add the conv-transpose2d op
+  [635](https://github.com/huggingface/candle/pull/635).
 - Refactor the VarBuilder api
   [627](https://github.com/huggingface/candle/pull/627).
 - Add some quantization command
