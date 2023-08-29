@@ -62,16 +62,16 @@ impl Args {
 
         let repo = Repo::with_revision(model_id, RepoType::Model, revision);
         let (config_filename, tokenizer_filename, weights_filename) = if self.offline {
-            let cache = Cache::default();
+            let cache = Cache::default().repo(repo);
             (
                 cache
-                    .get(&repo, "config.json")
+                    .get("config.json")
                     .ok_or(anyhow!("Missing config file in cache"))?,
                 cache
-                    .get(&repo, "tokenizer.json")
+                    .get("tokenizer.json")
                     .ok_or(anyhow!("Missing tokenizer file in cache"))?,
                 cache
-                    .get(&repo, "model.safetensors")
+                    .get("model.safetensors")
                     .ok_or(anyhow!("Missing weights file in cache"))?,
             )
         } else {
