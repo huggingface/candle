@@ -115,8 +115,8 @@ let repo = Repo::with_revision(
     "refs/convert/parquet".to_string(),
 );
 let repo = api.repo(repo);
-let test_parquet_filename = repo.get("mnist/mnist-test.parquet")?;
-let train_parquet_filename = repo.get("mnist/mnist-train.parquet")?;
+let test_parquet_filename = repo.get("mnist/test/0000.parquet")?;
+let train_parquet_filename = repo.get("mnist/train/0000.parquet")?;
 let test_parquet = SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)?;
 let train_parquet = SerializedFileReader::new(std::fs::File::open(train_parquet_filename)?)?;
 // ANCHOR_END: book_training_1
@@ -129,8 +129,8 @@ for row in test_parquet {
     }
 }
 // ANCHOR_END: book_training_2
-let test_parquet_filename = repo.get("mnist/mnist-test.parquet")?;
-let train_parquet_filename = repo.get("mnist/mnist-train.parquet")?;
+let test_parquet_filename = repo.get("mnist/test/0000.parquet")?;
+let train_parquet_filename = repo.get("mnist/train/0000.parquet")?;
 let test_parquet = SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)?;
 let train_parquet = SerializedFileReader::new(std::fs::File::open(train_parquet_filename)?)?;
 // ANCHOR: book_training_3
