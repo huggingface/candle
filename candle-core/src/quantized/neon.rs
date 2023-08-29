@@ -1,4 +1,6 @@
-use super::k_quants::{BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K};
+use super::k_quants::{
+    BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K,
+};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -467,6 +469,155 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
                 sumi2 += vaddvq_s16(vaddq_s16(p2, p3)) as i32 * scales[2 * j + 1] as i32;
             }
             sumf += d * (sumi1 + sumi2) as f32;
+        }
+    }
+    Ok(sumf)
+}
+
+#[inline(always)]
+pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Result<f32> {
+    if n % QK_K != 0 {
+        crate::bail!("vec_dot_q3k_q8k: {n} is not divisible by {QK_K}")
+    }
+    let mut sumf = 0f32;
+    let mut utmp = [0u32; 4];
+    let mut aux = [0u32; 3];
+    const KMASK1: u32 = 0x03030303;
+    const KMASK2: u32 = 0x0f0f0f0f;
+
+    unsafe {
+        let m3b = vdupq_n_u8(0x3);
+        let m0 = vdupq_n_u8(1);
+        let m1 = vshlq_n_u8(m0, 1);
+        let m2 = vshlq_n_u8(m0, 2);
+        let m3 = vshlq_n_u8(m0, 3);
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let d = y.d * x.d.to_f32();
+            let mut q3 = x.qs.as_ptr();
+            let qh = x.hmask.as_ptr();
+            let mut q8 = y.qs.as_ptr();
+
+            let mut qhbits = vld1q_u8_x2(qh);
+
+            let mut isum = 0i32;
+
+            // Set up scales
+            LittleEndian::read_u32_into(&x.scales, &mut aux);
+
+            utmp[3] = ((aux[1] >> 4) & KMASK2) | (((aux[2] >> 6) & KMASK1) << 4);
+            utmp[2] = ((aux[0] >> 4) & KMASK2) | (((aux[2] >> 4) & KMASK1) << 4);
+            utmp[1] = (aux[1] & KMASK2) | (((aux[2] >> 2) & KMASK1) << 4);
+            utmp[0] = (aux[0] & KMASK2) | ((aux[2] & KMASK1) << 4);
+
+            let mut scale = utmp.as_mut_ptr() as *mut i8;
+            for j in 0..16 {
+                *scale.add(j) -= 32i8
+            }
+
+            for j in 0..QK_K / 128 {
+                let q3bits = vld1q_u8_x2(q3);
+                q3 = q3.add(32);
+                let q8bytes_1 = vld1q_s8_x4(q8);
+                q8 = q8.add(64);
+                let q8bytes_2 = vld1q_s8_x4(q8);
+                q8 = q8.add(64);
+
+                let q3h_0 = vshlq_n_u8(vbicq_u8(m0, qhbits.0), 2);
+                let q3h_1 = vshlq_n_u8(vbicq_u8(m0, qhbits.1), 2);
+                let q3h_2 = vshlq_n_u8(vbicq_u8(m1, qhbits.0), 1);
+                let q3h_3 = vshlq_n_u8(vbicq_u8(m1, qhbits.1), 1);
+
+                let q3bytes_0 = vsubq_s8(
+                    vreinterpretq_s8_u8(vandq_u8(q3bits.0, m3b)),
+                    vreinterpretq_s8_u8(q3h_0),
+                );
+                let q3bytes_1 = vsubq_s8(
+                    vreinterpretq_s8_u8(vandq_u8(q3bits.1, m3b)),
+                    vreinterpretq_s8_u8(q3h_1),
+                );
+                let q3bytes_2 = vsubq_s8(
+                    vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q3bits.0, 2), m3b)),
+                    vreinterpretq_s8_u8(q3h_2),
+                );
+                let q3bytes_3 = vsubq_s8(
+                    vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q3bits.1, 2), m3b)),
+                    vreinterpretq_s8_u8(q3h_3),
+                );
+
+                // TODO: dotprod
+                let p0 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q3bytes_0), vget_low_s8(q8bytes_1.0)),
+                    vmull_s8(vget_high_s8(q3bytes_0), vget_high_s8(q8bytes_1.0)),
+                );
+                let p1 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q3bytes_1), vget_low_s8(q8bytes_1.1)),
+                    vmull_s8(vget_high_s8(q3bytes_1), vget_high_s8(q8bytes_1.1)),
+                );
+                let p2 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q3bytes_2), vget_low_s8(q8bytes_1.2)),
+                    vmull_s8(vget_high_s8(q3bytes_2), vget_high_s8(q8bytes_1.2)),
+                );
+                let p3 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q3bytes_3), vget_low_s8(q8bytes_1.3)),
+                    vmull_s8(vget_high_s8(q3bytes_3), vget_high_s8(q8bytes_1.3)),
+                );
+                isum += vaddvq_s16(p0) as i32 * *scale as i32
+                    + vaddvq_s16(p1) as i32 * *scale.add(1) as i32
+                    + vaddvq_s16(p2) as i32 * *scale.add(2) as i32
+                    + vaddvq_s16(p3) as i32 * *scale.add(3) as i32;
+                scale = scale.add(4);
+
+                let q3h_0 = vbicq_u8(m2, qhbits.0);
+                let q3h_1 = vbicq_u8(m2, qhbits.1);
+                let q3h_2 = vshrq_n_u8(vbicq_u8(m3, qhbits.0), 1);
+                let q3h_3 = vshrq_n_u8(vbicq_u8(m3, qhbits.1), 1);
+
+                let q3bytes_0 = vsubq_s8(
+                    vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q3bits.0, 4), m3b)),
+                    vreinterpretq_s8_u8(q3h_0),
+                );
+                let q3bytes_1 = vsubq_s8(
+                    vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q3bits.1, 4), m3b)),
+                    vreinterpretq_s8_u8(q3h_1),
+                );
+                let q3bytes_2 = vsubq_s8(
+                    vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q3bits.0, 6), m3b)),
+                    vreinterpretq_s8_u8(q3h_2),
+                );
+                let q3bytes_3 = vsubq_s8(
+                    vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q3bits.1, 6), m3b)),
+                    vreinterpretq_s8_u8(q3h_3),
+                );
+
+                // TODO: dotprod
+                let p0 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q3bytes_0), vget_low_s8(q8bytes_2.0)),
+                    vmull_s8(vget_high_s8(q3bytes_0), vget_high_s8(q8bytes_2.0)),
+                );
+                let p1 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q3bytes_1), vget_low_s8(q8bytes_2.1)),
+                    vmull_s8(vget_high_s8(q3bytes_1), vget_high_s8(q8bytes_2.1)),
+                );
+                let p2 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q3bytes_2), vget_low_s8(q8bytes_2.2)),
+                    vmull_s8(vget_high_s8(q3bytes_2), vget_high_s8(q8bytes_2.2)),
+                );
+                let p3 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q3bytes_3), vget_low_s8(q8bytes_2.3)),
+                    vmull_s8(vget_high_s8(q3bytes_3), vget_high_s8(q8bytes_2.3)),
+                );
+                isum += vaddvq_s16(p0) as i32 * *scale as i32
+                    + vaddvq_s16(p1) as i32 * *scale.add(1) as i32
+                    + vaddvq_s16(p2) as i32 * *scale.add(2) as i32
+                    + vaddvq_s16(p3) as i32 * *scale.add(3) as i32;
+                scale = scale.add(4);
+
+                if j == 0 {
+                    qhbits.0 = vshrq_n_u8(qhbits.0, 4);
+                    qhbits.1 = vshrq_n_u8(qhbits.1, 4);
+                }
+            }
+            sumf += d * isum as f32;
         }
     }
     Ok(sumf)
