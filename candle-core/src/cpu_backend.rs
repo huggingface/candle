@@ -1064,7 +1064,7 @@ impl<'a> Map2 for Conv1D<'a> {
                     let dst_idx = dst_idx + b_idx * p.c_out * l_out;
                     for dst_l in 0..l_out {
                         let dst_idx = dst_idx + dst_l;
-                        let src_l = p.stride * dst_l + offset;
+                        let src_l = (p.stride * dst_l + offset) * p.dilation;
                         if src_l < p.padding || src_l >= p.padding + p.l_in {
                             continue;
                         }
@@ -1141,14 +1141,14 @@ impl<'a> Map2 for Conv2D<'a> {
                         let dst_idx = dst_idx + b_idx * p.c_out * out_h * out_w;
                         for dst_h in 0..out_h {
                             let dst_idx = dst_idx + dst_h * out_w;
-                            let src_h = p.stride * dst_h + offset_h;
+                            let src_h = (p.stride * dst_h + offset_h) * p.dilation;
                             if src_h < p.padding || src_h >= p.i_h + p.padding {
                                 continue;
                             }
                             let src_h = src_h - p.padding;
                             for dst_w in 0..out_w {
                                 let dst_idx = dst_idx + dst_w;
-                                let src_w = p.stride * dst_w + offset_w;
+                                let src_w = (p.stride * dst_w + offset_w) * p.dilation;
                                 if src_w < p.padding || src_w >= p.i_w + p.padding {
                                     continue;
                                 }
@@ -1186,6 +1186,12 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
     const OP: &'static str = "conv_transpose2d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
+        if p.dilation != 1 {
+            crate::bail!(
+                "dilation {} is not supported for conv-transpose2d",
+                p.dilation
+            )
+        }
         let inp = &inp[inp_l.start_offset()..];
         let (inp_s0, inp_s1, inp_s2, inp_s3) = crate::shape::dims4(inp_l.stride())?;
         let k = &k[k_l.start_offset()..];

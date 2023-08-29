@@ -32,13 +32,13 @@ fn conv1d(dev: &Device) -> Result<()> {
         dev,
     )?
     .reshape((2, 4, 3))?;
-    let res = t.conv1d(&w, 0, 1, 1)?;
+    let res = t.conv1d(&w, 0, 1, 1, 1)?;
     assert_eq!(res.dims(), [1, 2, 3]);
     assert_eq!(
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
         [2.6357, -1.3336, 4.1393, -1.1784, 3.5675, 0.5069]
     );
-    let res = t.conv1d(&w, /*padding*/ 1, 1, 1)?;
+    let res = t.conv1d(&w, /*padding*/ 1, 1, 1, 1)?;
     assert_eq!(res.dims(), [1, 2, 5]);
     // Same as pytorch default padding: use zeros.
     assert_eq!(
@@ -51,13 +51,13 @@ fn conv1d(dev: &Device) -> Result<()> {
 fn conv1d_small(dev: &Device) -> Result<()> {
     let t = Tensor::new(&[0.4056f32, -0.8689, -0.0773, -1.5630], dev)?.reshape((1, 1, 4))?;
     let w = Tensor::new(&[1f32, 0., 0.], dev)?.reshape((1, 1, 3))?;
-    let res = t.conv1d(&w, 0, 1, 1)?;
+    let res = t.conv1d(&w, 0, 1, 1, 1)?;
     assert_eq!(res.dims(), [1, 1, 2]);
     assert_eq!(
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
         [0.4056, -0.8689]
     );
-    let res = t.conv1d(&w, /*padding*/ 1, 1, 1)?;
+    let res = t.conv1d(&w, /*padding*/ 1, 1, 1, 1)?;
     assert_eq!(res.dims(), [1, 1, 4]);
     assert_eq!(
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
@@ -81,6 +81,10 @@ w_t = w.transpose(0, 1)
 res = torch.nn.functional.conv_transpose2d(t, w_t)
 print(res.shape)
 print(res)
+
+res = torch.nn.functional.conv2d(t, w, dilation=2)
+print(res.shape)
+print(res[0])
 */
 fn conv2d(dev: &Device) -> Result<()> {
     let t = Tensor::new(
@@ -113,7 +117,7 @@ fn conv2d(dev: &Device) -> Result<()> {
     )?;
     let t = t.reshape((1, 4, 5, 5))?;
     let w = w.reshape((2, 4, 3, 3))?;
-    let res = t.conv2d(&w, 0, 1, 1)?;
+    let res = t.conv2d(&w, 0, 1, 1, 1)?;
     assert_eq!(res.dims(), [1, 2, 3, 3]);
     assert_eq!(
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
@@ -122,7 +126,7 @@ fn conv2d(dev: &Device) -> Result<()> {
             10.389, 3.6023, -4.2808, 0.2672, 5.3646, -5.2023, -2.1955, -9.4075
         ]
     );
-    let res = t.conv_transpose2d(&w.transpose(0, 1)?, 0, 0, 1)?;
+    let res = t.conv_transpose2d(&w.transpose(0, 1)?, 0, 0, 1, 1)?;
     assert_eq!(res.dims(), [1, 2, 7, 7]);
     assert_eq!(
         test_utils::to_vec3_round(&res.i(0)?, 4)?,
@@ -146,6 +150,13 @@ fn conv2d(dev: &Device) -> Result<()> {
                 [-5.5423, -2.5188, 1.0754, -0.0563, -2.9386, -1.1504, 1.0171]
             ]
         ]
+    );
+    // Dilations.
+    let res = t.conv2d(&w, 0, 1, 2, 1)?;
+    assert_eq!(res.dims(), [1, 2, 1, 1]);
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        [2.45, -2.3504],
     );
     Ok(())
 }
@@ -182,13 +193,13 @@ fn conv2d_small(dev: &Device) -> Result<()> {
     let w = Tensor::new(&[-0.9259f32, 1.3017], dev)?;
     let t = t.reshape((1, 2, 3, 3))?;
     let w = w.reshape((1, 2, 1, 1))?;
-    let res = t.conv2d(&w, 0, 1, 1)?;
+    let res = t.conv2d(&w, 0, 1, 1, 1)?;
     assert_eq!(res.dims(), [1, 1, 3, 3]);
     assert_eq!(
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
         [0.164, -0.0111, -0.1742, 2.6437, -2.0268, 1.1823, 3.2855, -1.0324, 0.2539]
     );
-    let res = t.conv2d(&w, 2, 1, 1)?;
+    let res = t.conv2d(&w, 2, 1, 1, 1)?;
     assert_eq!(res.dims(), [1, 1, 7, 7]);
     assert_eq!(
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
@@ -200,13 +211,13 @@ fn conv2d_small(dev: &Device) -> Result<()> {
             0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000
         ]
     );
-    let res = t.conv_transpose2d(&w.transpose(0, 1)?, 0, 0, 1)?;
+    let res = t.conv_transpose2d(&w.transpose(0, 1)?, 0, 0, 1, 1)?;
     assert_eq!(res.dims(), [1, 1, 3, 3]);
     assert_eq!(
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
         [0.164, -0.0111, -0.1742, 2.6437, -2.0268, 1.1823, 3.2855, -1.0324, 0.2539],
     );
-    let res = t.transpose(0, 1)?.conv_transpose2d(&w, 0, 0, 1)?;
+    let res = t.transpose(0, 1)?.conv_transpose2d(&w, 0, 0, 1, 1)?;
     assert_eq!(res.dims(), [2, 2, 3, 3]);
     assert_eq!(
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
@@ -230,7 +241,7 @@ fn conv2d_smaller(dev: &Device) -> Result<()> {
     let w = Tensor::new(&[1f32, 1., 1., 1., 1., 1., 1., 1., 1.], dev)?;
     let t = t.reshape((1, 1, 3, 3))?;
     let w = w.reshape((1, 1, 3, 3))?;
-    let res = t.conv2d(&w, 0, 1, 1)?;
+    let res = t.conv2d(&w, 0, 1, 1, 1)?;
     assert_eq!(res.dims(), [1, 1, 1, 1]);
     assert_eq!(
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
@@ -261,7 +272,7 @@ fn conv2d_non_square(dev: &Device) -> Result<()> {
     let w = Tensor::new(&[-1.1351f32, 1.3841], dev)?;
     let t = t.reshape((1, 2, 4, 2))?;
     let w = w.reshape((1, 2, 1, 1))?;
-    let res = t.conv2d(&w, 0, 1, 1)?;
+    let res = t.conv2d(&w, 0, 1, 1, 1)?;
     assert_eq!(res.dims(), [1, 1, 4, 2]);
     assert_eq!(
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
@@ -270,6 +281,36 @@ fn conv2d_non_square(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+/*
+import torch
+torch.manual_seed(4242)
+
+t = torch.randn((1, 4, 5, 5), requires_grad=True)
+w = torch.randn((2, 4, 3, 3), requires_grad=True)
+print(t.flatten())
+print(w.flatten())
+res = torch.nn.functional.conv2d(t, w)
+print(res.flatten())
+loss = (res ** 2).sum()
+print(loss)
+loss.backward()
+print(t.grad.shape)
+print(t.grad.flatten())
+print(w.grad.shape)
+print(w.grad.flatten())
+
+t.grad.zero_()
+w.grad.zero_()
+res = torch.nn.functional.conv2d(t, w, stride=2)
+print(res.flatten())
+loss = (res ** 2).sum()
+print(loss)
+loss.backward()
+print(t.grad.shape)
+print(t.grad[0])
+print(w.grad.shape)
+print(w.grad[0])
+*/
 fn conv2d_grad(dev: &Device) -> Result<()> {
     use candle_core::Var;
     let t = Var::from_slice(
@@ -302,7 +343,7 @@ fn conv2d_grad(dev: &Device) -> Result<()> {
         (2, 4, 3, 3),
         dev,
     )?;
-    let res = t.conv2d(&w, 0, 1, 1)?;
+    let res = t.conv2d(&w, 0, 1, 1, 1)?;
     let loss = res.sqr()?.sum_all()?;
     assert_eq!(test_utils::to_vec0_round(&loss, 2)?, 741.12f32);
     let grads = loss.backward()?;
@@ -333,6 +374,74 @@ fn conv2d_grad(dev: &Device) -> Result<()> {
             58.64, 5.55, 20.52, 2.5, -17.25, -6.8, 22.21, 30.15, -7.52, -37.46, 5.67, 22.58, 9.03,
             47.05, 17.61, 37.31, -98.13, -14.61, -4.8, -6.36, 44.69, 23.34, 8.37, -13.52, 80.05,
             -34.24, -16.36, -12.31, 1.92, -33.62, -14.1, -49.23, -7.39, 11.5, -9.98, 9.66, 29.6
+        ]
+    );
+
+    // Same as before but with stride.
+    let res = t.conv2d(&w, 0, 2, 1, 1)?;
+    let loss = res.sqr()?.sum_all()?;
+    assert_eq!(test_utils::to_vec0_round(&loss, 2)?, 277.16f32);
+    let grads = loss.backward()?;
+    let grad_t = grads.get(&t).unwrap();
+    let grad_w = grads.get(&w).unwrap();
+    assert_eq!(grad_t.dims(), [1, 4, 5, 5]);
+    assert_eq!(grad_w.dims(), [2, 4, 3, 3]);
+    assert_eq!(
+        test_utils::to_vec3_round(&grad_t.i(0)?, 2)?,
+        [
+            [
+                [9.29, -7.03, 0.94, 3.49, -7.71],
+                [-1.8, -7.82, 8.9, 8.46, 7.43],
+                [-25.84, 22.09, -19.27, -0.22, 1.69],
+                [4.02, 18.53, -18.37, 2.3, -24.51],
+                [7.72, -9.68, -12.34, 5.6, -20.22]
+            ],
+            [
+                [21.73, 3.39, -18.27, 3.86, -3.65],
+                [8.25, 3.73, 30.73, -8.61, -11.93],
+                [-72.15, -15.36, -17.53, -12.32, -1.61],
+                [-22.32, -7.79, -91.82, 6.44, -37.69],
+                [52.88, 14.44, 42.75, 9.88, 2.01]
+            ],
+            [
+                [-8.98, 9.91, 6.75, -4.68, 15.38],
+                [4.93, -0.33, 9.94, -1.46, 14.78],
+                [13.62, -30.63, 3.96, -3.58, -4.48],
+                [-14.13, 1.19, -34.43, 3.08, -33.83],
+                [17.28, 12.94, 31.83, -3.35, 6.81]
+            ],
+            [
+                [23.54, 6.98, -24.52, 0.52, 4.87],
+                [9.65, 6.18, 1.71, -25.23, -4.93],
+                [-54.99, -23.66, 3.19, -3.73, 18.58],
+                [-21.35, -10.39, -39.88, 28.73, -30.76],
+                [-9.13, 11.12, -14.0, -8.23, -11.25]
+            ]
+        ]
+    );
+    assert_eq!(
+        test_utils::to_vec3_round(&grad_w.i(0)?, 2)?,
+        [
+            [
+                [28.34, -45.75, 7.32],
+                [0.72, -35.28, 19.23],
+                [-28.29, 20.89, -5.18]
+            ],
+            [
+                [-16.04, -16.38, 32.12],
+                [57.5, 25.81, 11.96],
+                [-18.66, 8.48, -9.92]
+            ],
+            [
+                [2.93, 1.57, -23.76],
+                [12.74, -26.2, -17.88],
+                [-14.98, -9.35, 12.2]
+            ],
+            [
+                [-0.18, -6.82, 20.79],
+                [-2.54, 27.11, -10.11],
+                [-0.41, -3.18, -0.07]
+            ]
         ]
     );
     Ok(())

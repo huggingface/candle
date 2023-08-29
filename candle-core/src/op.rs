@@ -81,6 +81,7 @@ pub enum Op {
         kernel: Tensor,
         padding: usize,
         stride: usize,
+        dilation: usize,
     },
 
     #[allow(dead_code)]
@@ -89,6 +90,7 @@ pub enum Op {
         kernel: Tensor,
         padding: usize,
         stride: usize,
+        dilation: usize,
     },
 
     #[allow(dead_code)]
@@ -98,6 +100,7 @@ pub enum Op {
         padding: usize,
         output_padding: usize,
         stride: usize,
+        dilation: usize,
     },
 
     AvgPool2D {
