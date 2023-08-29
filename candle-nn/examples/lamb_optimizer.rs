@@ -50,6 +50,7 @@ pub struct Lamb {
     params: ParamsLamb,
 }
 
+// based on https://arxiv.org/pdf/1904.00962.pdf
 impl Lamb {
     pub fn new(vars: Vec<Var>, params: ParamsLamb) -> Result<Self> {
         let vars = vars.into_iter().map(|var| {
