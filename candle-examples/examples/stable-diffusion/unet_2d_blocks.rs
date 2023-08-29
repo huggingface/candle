@@ -47,7 +47,7 @@ impl Downsample2D {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         match &self.conv {
-            None => xs.avg_pool2d((2, 2), (2, 2)),
+            None => xs.avg_pool2d(2),
             Some(conv) => {
                 if self.padding == 0 {
                     let xs = xs
