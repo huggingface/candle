@@ -1,4 +1,4 @@
-use super::k_quants::{BlockQ4K, BlockQ4_0, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K};
+use super::k_quants::{BlockQ2K, BlockQ4K, BlockQ4_0, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use half::f16;
@@ -120,6 +120,18 @@ unsafe fn get_scale_shuffle_k4(i: usize) -> __m256i {
 }
 
 #[inline(always)]
+unsafe fn get_scale_shuffle_q3k(i: usize) -> __m256i {
+    const K_SHUFFLE: [u8; 128] = [
+        0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3,
+        2, 3, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7,
+        6, 7, 6, 7, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 10, 11, 10, 11, 10, 11, 10, 11,
+        10, 11, 10, 11, 10, 11, 10, 11, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12,
+        13, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15, 14, 15,
+    ];
+    _mm256_loadu_si256((K_SHUFFLE.as_ptr() as *const __m256i).add(i))
+}
+
+#[inline(always)]
 pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Result<f32> {
     let qk = QK_K;
     if n % qk != 0 {
@@ -210,6 +222,88 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
 #[inline(always)]
 unsafe fn mm256_set_m128i(a: __m128i, b: __m128i) -> __m256i {
     _mm256_insertf128_si256(_mm256_castsi128_si256(b), a, 1)
+}
+
+#[cfg_attr(not(debug_assertions), inline(always))]
+pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Result<f32> {
+    if n % QK_K != 0 {
+        crate::bail!("vec_dot_q4k_q8k: {n} is not divisible by {QK_K}")
+    }
+
+    unsafe {
+        let m3 = _mm256_set1_epi8(3);
+        let m4 = _mm_set1_epi8(0xF);
+
+        let mut acc = _mm256_setzero_ps();
+
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let d = y.d * x.d.to_f32();
+            let dmin = -y.d * x.dmin.to_f32();
+
+            let mut q2 = x.qs.as_ptr();
+            let mut q8 = y.qs.as_ptr();
+
+            let mins_and_scales = _mm_loadu_si128(x.scales.as_ptr() as *const __m128i);
+            let scales8 = _mm_and_si128(mins_and_scales, m4);
+            let mins8 = _mm_and_si128(_mm_srli_epi16(mins_and_scales, 4), m4);
+            let mins = _mm256_cvtepi8_epi16(mins8);
+            let prod =
+                _mm256_madd_epi16(mins, _mm256_loadu_si256(y.bsums.as_ptr() as *const __m256i));
+
+            acc = _mm256_fmadd_ps(_mm256_broadcast_ss(&dmin), _mm256_cvtepi32_ps(prod), acc);
+
+            let all_scales = _mm256_cvtepi8_epi16(scales8);
+            let l_scales = _mm256_extracti128_si256(all_scales, 0);
+            let h_scales = _mm256_extracti128_si256(all_scales, 1);
+            let scales = [
+                mm256_set_m128i(l_scales, l_scales),
+                mm256_set_m128i(h_scales, h_scales),
+            ];
+
+            let mut sumi = _mm256_setzero_si256();
+
+            for j in 0..QK_K / 128 {
+                let q2bits = _mm256_loadu_si256(q2 as *const __m256i);
+                q2 = q2.add(32);
+
+                let q8_0 = _mm256_loadu_si256(q8 as *const __m256i);
+                q8 = q8.add(32);
+                let q8_1 = _mm256_loadu_si256(q8 as *const __m256i);
+                q8 = q8.add(32);
+                let q8_2 = _mm256_loadu_si256(q8 as *const __m256i);
+                q8 = q8.add(32);
+                let q8_3 = _mm256_loadu_si256(q8 as *const __m256i);
+                q8 = q8.add(32);
+
+                let q2_0 = _mm256_and_si256(q2bits, m3);
+                let q2_1 = _mm256_and_si256(_mm256_srli_epi16(q2bits, 2), m3);
+                let q2_2 = _mm256_and_si256(_mm256_srli_epi16(q2bits, 4), m3);
+                let q2_3 = _mm256_and_si256(_mm256_srli_epi16(q2bits, 6), m3);
+
+                let mut p0 = _mm256_maddubs_epi16(q2_0, q8_0);
+                let mut p1 = _mm256_maddubs_epi16(q2_1, q8_1);
+                let mut p2 = _mm256_maddubs_epi16(q2_2, q8_2);
+                let mut p3 = _mm256_maddubs_epi16(q2_3, q8_3);
+
+                p0 =
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(scales[j], get_scale_shuffle_q3k(0)), p0);
+                p1 =
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(scales[j], get_scale_shuffle_q3k(1)), p1);
+                p2 =
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(scales[j], get_scale_shuffle_q3k(2)), p2);
+                p3 =
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(scales[j], get_scale_shuffle_q3k(3)), p3);
+
+                p0 = _mm256_add_epi32(p0, p1);
+                p2 = _mm256_add_epi32(p2, p3);
+
+                sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p0, p2));
+            }
+            acc = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), _mm256_cvtepi32_ps(sumi), acc);
+        }
+
+        Ok(hsum_float_8(acc))
+    }
 }
 
 #[inline(always)]
