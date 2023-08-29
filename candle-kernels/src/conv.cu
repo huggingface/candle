@@ -92,13 +92,13 @@ __device__ void conv2d(
   const size_t src_idx0 = b_idx * src_s[0];
   A d = 0;
   for (size_t w_offset = 0; w_offset < w_k; ++w_offset) {
-    size_t src_w = (stride * dst_w + w_offset) * dilation;
+    size_t src_w = stride * dst_w + w_offset * dilation;
     if (src_w < padding || src_w >= w_in + padding) {
       continue;
     }
     src_w -= padding;
     for (size_t h_offset = 0; h_offset < h_k; ++h_offset) {
-      size_t src_h = (stride * dst_h + h_offset) * dilation;
+      size_t src_h = stride * dst_h + h_offset * dilation;
       if (src_h < padding || src_h >= h_in + padding) {
         continue;
       }
