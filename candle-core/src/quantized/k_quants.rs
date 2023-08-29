@@ -676,6 +676,9 @@ impl GgmlType for BlockQ2K {
         #[cfg(target_feature = "avx")]
         return super::avx::vec_dot_q2k_q8k(n, xs, ys);
 
+        #[cfg(target_feature = "neon")]
+        return super::neon::vec_dot_q2k_q8k(n, xs, ys);
+
         if n % QK_K != 0 {
             crate::bail!("vec_dot_q2k_q8k: {n} is not divisible by {QK_K}")
         }

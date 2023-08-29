@@ -622,3 +622,106 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
     }
     Ok(sumf)
 }
+
+#[inline(always)]
+pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Result<f32> {
+    if n % QK_K != 0 {
+        crate::bail!("vec_dot_q2k_q8k: {n} is not divisible by {QK_K}")
+    }
+    let mut sumf = 0f32;
+    let mut aux = [0u8; 16];
+
+    unsafe {
+        let m3 = vdupq_n_u8(0x3);
+        let m4 = vdupq_n_u8(0xF);
+
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let d = y.d * x.d.to_f32();
+            let dmin = -y.d * x.dmin.to_f32();
+
+            let mut q2 = x.qs.as_ptr();
+            let mut q8 = y.qs.as_ptr();
+            let sc = x.scales.as_ptr();
+
+            let mins_and_scales = vld1q_u8(sc);
+            let scales = vandq_u8(mins_and_scales, m4);
+            vst1q_u8(aux.as_mut_ptr(), scales);
+
+            let mins = vshrq_n_u8(mins_and_scales, 4);
+            let q8sums = vld1q_s16_x2(y.bsums.as_ptr());
+            let mins16 = int16x8x2_t(
+                vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(mins))),
+                vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(mins))),
+            );
+            let s0 = vaddq_s32(
+                vmull_s16(vget_low_s16(mins16.0), vget_low_s16(q8sums.0)),
+                vmull_s16(vget_high_s16(mins16.0), vget_high_s16(q8sums.0)),
+            );
+            let s1 = vaddq_s32(
+                vmull_s16(vget_low_s16(mins16.1), vget_low_s16(q8sums.1)),
+                vmull_s16(vget_high_s16(mins16.1), vget_high_s16(q8sums.1)),
+            );
+            sumf += dmin * vaddvq_s32(vaddq_s32(s0, s1)) as f32;
+
+            let mut isum = 0i32;
+            let mut is = 0usize;
+
+            // TODO: dotprod
+
+            for _j in 0..QK_K / 128 {
+                let q2bits = vld1q_u8_x2(q2);
+                q2 = q2.add(32);
+
+                let q8bytes = vld1q_s8_x2(q8);
+                q8 = q8.add(32);
+                let mut q2bytes = int8x16x2_t(
+                    vreinterpretq_s8_u8(vandq_u8(q2bits.0, m3)),
+                    vreinterpretq_s8_u8(vandq_u8(q2bits.1, m3)),
+                );
+                isum += multiply_accum_with_scale(&aux, is, 0, q2bytes, q8bytes);
+
+                let q8bytes = vld1q_s8_x2(q8);
+                q8 = q8.add(32);
+                q2bytes.0 = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bits.0, 2), m3));
+                q2bytes.1 = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bits.1, 2), m3));
+                isum += multiply_accum_with_scale(&aux, is, 2, q2bytes, q8bytes);
+
+                let q8bytes = vld1q_s8_x2(q8);
+                q8 = q8.add(32);
+                q2bytes.0 = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bits.0, 4), m3));
+                q2bytes.1 = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bits.1, 4), m3));
+                isum += multiply_accum_with_scale(&aux, is, 4, q2bytes, q8bytes);
+
+                let q8bytes = vld1q_s8_x2(q8);
+                q8 = q8.add(32);
+                q2bytes.0 = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bits.0, 6), m3));
+                q2bytes.1 = vreinterpretq_s8_u8(vandq_u8(vshrq_n_u8(q2bits.1, 6), m3));
+                isum += multiply_accum_with_scale(&aux, is, 6, q2bytes, q8bytes);
+
+                is += 8;
+            }
+            sumf += d * isum as f32;
+        }
+    }
+    Ok(sumf)
+}
+
+#[inline(always)]
+unsafe fn multiply_accum_with_scale(
+    aux: &[u8; 16],
+    is: usize,
+    index: usize,
+    q2bytes: int8x16x2_t,
+    q8bytes: int8x16x2_t,
+) -> i32 {
+    let p1 = vaddq_s16(
+        vmull_s8(vget_low_s8(q2bytes.0), vget_low_s8(q8bytes.0)),
+        vmull_s8(vget_high_s8(q2bytes.0), vget_high_s8(q8bytes.0)),
+    );
+    let p2 = vaddq_s16(
+        vmull_s8(vget_low_s8(q2bytes.1), vget_low_s8(q8bytes.1)),
+        vmull_s8(vget_high_s8(q2bytes.1), vget_high_s8(q8bytes.1)),
+    );
+    vaddvq_s16(p1) as i32 * aux[is + index] as i32
+        + vaddvq_s16(p2) as i32 * aux[is + 1 + index] as i32
+}
