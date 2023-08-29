@@ -593,6 +593,30 @@ impl Map1 for Elu {
     }
 }
 
+struct Powf(f64);
+impl Map1 for Powf {
+    fn f<T: DeviceRepr + WithDType>(
+        &self,
+        src: &CudaSlice<T>,
+        dev: &CudaDevice,
+        layout: &Layout,
+    ) -> Result<CudaSlice<T>> {
+        let shape = layout.shape();
+        let dims = shape.dims();
+        let el = shape.elem_count();
+        let cfg = LaunchConfig::for_num_elems(el as u32);
+        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let src = &src.slice(layout.start_offset()..);
+        let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), kernels::UNARY)?;
+        // SAFETY: Set later by running the kernel.
+        let out = unsafe { dev.alloc::<T>(el) }.w()?;
+        let params = (el, dims.len(), &ds, T::from_f64(self.0), src, &out);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }.w()?;
+        Ok(out)
+    }
+}
+
 struct Sum<'a>(&'a [usize]);
 impl<'a> Map1 for Sum<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -1528,6 +1552,12 @@ impl BackendStorage for CudaStorage {
     fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
         let device = self.device().clone();
         let slice = Affine(mul, add).map(&self.slice, &device, layout)?;
+        Ok(Self { slice, device })
+    }
+
+    fn powf(&self, layout: &Layout, e: f64) -> Result<Self> {
+        let device = self.device().clone();
+        let slice = Powf(e).map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })
     }
 

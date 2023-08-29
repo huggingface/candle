@@ -105,6 +105,7 @@ impl Tensor {
                     | Op::Narrow(node, _, _, _)
                     | Op::Unary(node, _)
                     | Op::Elu(node, _)
+                    | Op::Powf(node, _)
                     | Op::CustomOp1(node, _) => {
                         let (tg, nodes) = walk(node, nodes, already_seen);
                         track_grad |= tg;
@@ -437,6 +438,7 @@ impl Tensor {
                         *sum_grad = sum_grad.add(&(&grad * relu_grad)?)?
                     }
                     Op::Elu(..) => Err(Error::BackwardNotSupported { op: "elu" })?,
+                    Op::Powf(..) => Err(Error::BackwardNotSupported { op: "powf" })?,
                     Op::CustomOp1(arg, c) => {
                         if let Some(arg_grad) = c.bwd(arg, node, &grad)? {
                             let sum_grad = grads.or_insert(arg)?;
