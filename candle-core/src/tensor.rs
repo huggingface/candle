@@ -535,6 +535,13 @@ impl Tensor {
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
+    /// Raise the tensor to some float exponent `e`.
+    pub fn powf(&self, e: f64) -> Result<Self> {
+        let storage = self.storage().powf(self.layout(), e)?;
+        let op = BackpropOp::new1(self, |t| Op::Powf(t, e));
+        Ok(from_storage(storage, self.shape(), op, false))
+    }
+
     fn check_dim(&self, dim: usize, op: &'static str) -> Result<()> {
         if dim >= self.dims().len() {
             Err(Error::DimOutOfRange {

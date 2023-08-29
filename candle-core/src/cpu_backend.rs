@@ -1929,6 +1929,32 @@ impl BackendStorage for CpuStorage {
         UpsampleNearest2D(h, w).map(self, layout)
     }
 
+    fn powf(&self, layout: &Layout, e: f64) -> Result<Self> {
+        use num_traits::Float;
+        // TODO: Have some generic map for functions that apply on num_traits::Float elements.
+        match self {
+            Self::BF16(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(bf16::from_f64(e)));
+                Ok(Self::BF16(data))
+            }
+            Self::F16(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(f16::from_f64(e)));
+                Ok(Self::F16(data))
+            }
+            Self::F32(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(e as f32));
+                Ok(Self::F32(data))
+            }
+            Self::F64(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(e));
+                Ok(Self::F64(data))
+            }
+            Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
+            Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt()),
+            Self::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "elu").bt()),
+        }
+    }
+
     fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
         // TODO: Have some generic map for functions that apply on num_traits::Float elements.
         match self {

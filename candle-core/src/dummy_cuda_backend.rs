@@ -37,6 +37,10 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    fn powf(&self, _: &Layout, _: f64) -> Result<Self> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn elu(&self, _: &Layout, _: f64) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
