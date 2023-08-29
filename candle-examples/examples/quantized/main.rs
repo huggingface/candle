@@ -16,7 +16,6 @@ use candle_nn::{Embedding, Module};
 use candle_transformers::generation::LogitsProcessor;
 
 const MAX_SEQ_LEN: usize = 4096;
-const DEFAULT_PROMPT: &str = "My favorite theorem is ";
 
 struct RmsNorm {
     inner: candle_nn::LayerNorm,
@@ -114,7 +113,13 @@ impl LayerWeights {
         Ok(rope)
     }
 
-    fn forward_attn(&mut self, x: &Tensor, mask: &Tensor, index_pos: usize) -> Result<Tensor> {
+    fn forward_attn(
+        &mut self,
+        x: &Tensor,
+        mask: &Tensor,
+        index_pos: usize,
+        update_kv_cache: bool,
+    ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
         let q = self.attention_wq.forward(x)?;
@@ -137,8 +142,16 @@ impl LayerWeights {
         let (k, v) = match &self.kv_cache {
             None => (k, v),
             Some((k_cache, v_cache)) => {
-                let k = Tensor::cat(&[k_cache, &k], 2)?.contiguous()?;
-                let v = Tensor::cat(&[v_cache, &v], 2)?.contiguous()?;
+                let k = if update_kv_cache {
+                    Tensor::cat(&[k_cache, &k], 2)?.contiguous()?
+                } else {
+                    k
+                };
+                let v = if update_kv_cache {
+                    Tensor::cat(&[v_cache, &v], 2)?.contiguous()?
+                } else {
+                    v
+                };
                 (k, v)
             }
         };
@@ -184,10 +197,10 @@ struct ModelWeights {
     span_output: tracing::Span,
 }
 
-fn precomput_freqs_cis(head_dim: usize, freq_base: f32) -> Result<(Tensor, Tensor)> {
+fn precomput_freqs_cis(head_dim: usize) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
-        .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
+        .map(|i| 1f32 / 10000f32.powf(i as f32 / head_dim as f32))
         .collect();
     let theta = Tensor::new(theta.as_slice(), &Device::Cpu)?;
     let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, &Device::Cpu)?
@@ -203,7 +216,7 @@ impl ModelWeights {
     fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
         let cpu = &Device::Cpu;
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let (cos, sin) = precomput_freqs_cis(head_dim, 10000.)?;
+        let (cos, sin) = precomput_freqs_cis(head_dim)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(cpu)?;
         let norm = RmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
@@ -276,10 +289,7 @@ impl ModelWeights {
         // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
         let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()?;
 
-        let rope_freq_base = md_get("llama.rope.freq_base")
-            .and_then(|m| m.to_f32())
-            .unwrap_or(10000f32);
-        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base)?;
+        let (cos, sin) = precomput_freqs_cis(rope_dim)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(cpu)?;
@@ -347,7 +357,7 @@ impl ModelWeights {
         }
     }
 
-    fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+    fn forward(&mut self, x: &Tensor, index_pos: usize, update_kv_cache: bool) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mask = self.mask(seq_len)?;
         let _enter = self.span.enter();
@@ -356,7 +366,7 @@ impl ModelWeights {
             let x = layer_in;
             let residual = &x;
             let x = layer.attention_norm.forward(&x)?;
-            let attn = layer.forward_attn(&x, &mask, index_pos)?;
+            let attn = layer.forward_attn(&x, &mask, index_pos, update_kv_cache)?;
             let x = (attn + residual)?;
 
             // MLP
@@ -391,12 +401,14 @@ enum Which {
     L13bChat,
     #[value(name = "70b-chat")]
     L70bChat,
-    #[value(name = "7b-code")]
-    L7bCode,
-    #[value(name = "13b-code")]
-    L13bCode,
-    #[value(name = "32b-code")]
-    L34bCode,
+}
+
+#[derive(Clone, Debug, Copy, ValueEnum)]
+enum PromptMode {
+    #[value(name = "chat")]
+    Chat,
+    #[value(name = "completion")]
+    Completion,
 }
 
 #[derive(Parser, Debug)]
@@ -449,6 +461,10 @@ struct Args {
     /// Group-Query Attention, use 8 for the 70B version of LLaMAv2.
     #[arg(long)]
     gqa: Option<usize>,
+
+    /// Selects mode between Completion or Chat.
+    #[arg(long)]
+    prompt_mode: Option<PromptMode>,
 }
 
 impl Args {
@@ -484,9 +500,6 @@ impl Args {
                         "TheBloke/Llama-2-70B-Chat-GGML",
                         "llama-2-70b-chat.ggmlv3.q4_0.bin",
                     ),
-                    Which::L7bCode => ("TheBloke/CodeLlama-7B-GGUF", "codellama-7b.Q8_0.gguf"),
-                    Which::L13bCode => ("TheBloke/CodeLlama-13B-GGUF", "codellama-13b.Q8_0.gguf"),
-                    Which::L34bCode => ("TheBloke/CodeLlama-34B-GGUF", "codellama-34b.Q8_0.gguf"),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
                 let api = api.model(repo.to_string());
@@ -495,9 +508,17 @@ impl Args {
         };
         Ok(model_path)
     }
+
+    fn prompt_mode(&self) -> PromptMode {
+        let mode_when_no_input_arg = match self.which {
+            Which::L7b | Which::L13b | Which::L70b => PromptMode::Completion,
+            Which::L7bChat | Which::L13bChat | Which::L70bChat => PromptMode::Chat,
+        };
+        self.prompt_mode.unwrap_or(mode_when_no_input_arg)
+    }
 }
 
-fn print_token(next_token: u32, tokenizer: &Tokenizer) {
+fn stream_token(next_token: u32, tokenizer: &Tokenizer, model_output: &mut Vec<String>) {
     // Extracting the last token as a string is complicated, here we just apply some simple
     // heuristics as it seems to work well enough for this example. See the following for more
     // details:
@@ -509,10 +530,14 @@ fn print_token(next_token: u32, tokenizer: &Tokenizer) {
             .and_then(|t| t.strip_suffix('>'))
             .and_then(|t| u8::from_str_radix(t, 16).ok());
         match ascii {
-            None => print!("{text}"),
+            None => {
+                print!("{text}");
+                model_output.push(text);
+            }
             Some(ascii) => {
                 if let Some(chr) = char::from_u32(ascii as u32) {
                     if chr.is_ascii() {
+                        model_output.push(chr.to_string());
                         print!("{chr}")
                     }
                 }
@@ -520,6 +545,22 @@ fn print_token(next_token: u32, tokenizer: &Tokenizer) {
         }
         let _ = std::io::stdout().flush();
     }
+}
+
+fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> Result<Tensor> {
+    let mut logits = logits.to_vec1::<f32>()?;
+    let context: std::collections::HashSet<_> = context.iter().collect();
+    for (token_id, logit) in logits.iter_mut().enumerate() {
+        if context.contains(&(token_id as u32)) {
+            if *logit >= 0. {
+                *logit /= penalty
+            } else {
+                *logit *= penalty
+            }
+        }
+    }
+    let logits_len = logits.len();
+    Tensor::from_vec(logits, logits_len, &Device::Cpu)
 }
 
 fn format_size(size_in_bytes: usize) -> String {
@@ -592,77 +633,95 @@ fn main() -> anyhow::Result<()> {
             );
             println!("params: {:?}", model.hparams);
             let default_gqa = match args.which {
-                Which::L7b
-                | Which::L13b
-                | Which::L7bChat
-                | Which::L13bChat
-                | Which::L7bCode
-                | Which::L13bCode
-                | Which::L34bCode => 1,
+                Which::L7b | Which::L13b | Which::L7bChat | Which::L13bChat => 1,
                 Which::L70b | Which::L70bChat => 8,
             };
             ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa))?
         }
     };
-    println!("model built");
+    println!(
+        "Model {:?} built in {:?} mode.",
+        args.which,
+        args.prompt_mode()
+    );
+    let chat_mode = matches!(args.prompt_mode(), PromptMode::Chat);
 
     let tokenizer = args.tokenizer()?;
-    let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
-    let tokens = tokenizer.encode(prompt, true).map_err(anyhow::Error::msg)?;
-    if args.verbose_prompt {
-        for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
-            let token = token.replace('▁', " ").replace("<0x0A>", "\n");
-            println!("{id:7} -> '{token}'");
+    let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature);
+    //in case we need to log the conversation in pieces of dialog.
+    let mut conversation: Vec<String> = vec![];
+    let mut all_tokens = vec![];
+    loop {
+        let mut prompt = String::new();
+        let mut model_output: Vec<String> = vec![];
+        std::print!("> ");
+        std::io::stdout().flush().unwrap();
+        std::io::stdin().read_line(&mut prompt).unwrap();
+        let prompt = prompt.trim_end();
+
+        if chat_mode {
+            conversation.push(prompt.to_string());
+        };
+
+        let tokens = tokenizer.encode(prompt, true).map_err(anyhow::Error::msg)?;
+
+        let prompt_tokens = tokens.get_ids().to_vec();
+        prompt_tokens.iter().for_each(|tok| all_tokens.push(*tok));
+
+        let start_prompt_processing = std::time::Instant::now();
+        let mut next_token = {
+            let input = Tensor::new(all_tokens.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
+            // when we forward without updating the kv_cache, it resets and needs to be recalculated
+            // for the whole conversation history. This way attention masking works mostly as it was implemented beforehand.
+            // Only happens with every new user input as we only reset it on the first next token.
+            // Next token prediction afterwards uses kv_vache as normal.
+            let logits = model.forward(&input, all_tokens.len(), false)?;
+            let logits = logits.squeeze(0)?;
+            logits_processor.sample(&logits)?
+        };
+        let prompt_dt = start_prompt_processing.elapsed();
+        all_tokens.push(next_token);
+        stream_token(next_token, &tokenizer, &mut model_output);
+
+        let to_sample = args.sample_len.saturating_sub(1);
+        let start_post_prompt = std::time::Instant::now();
+        for index in 0..to_sample {
+            let input = Tensor::new(&[next_token], &Device::Cpu)?.unsqueeze(0)?;
+            let logits = model.forward(&input, all_tokens.len() + index, true)?;
+            let logits = logits.squeeze(0)?;
+            let logits = if args.repeat_penalty == 1. {
+                logits
+            } else {
+                let start_at = all_tokens.len().saturating_sub(args.repeat_last_n);
+                apply_repeat_penalty(&logits, args.repeat_penalty, &all_tokens[start_at..])?
+            };
+            next_token = logits_processor.sample(&logits)?;
+            all_tokens.push(next_token);
+            stream_token(next_token, &tokenizer, &mut model_output);
+        }
+        let dt = start_post_prompt.elapsed();
+        println!(
+            "\n\n{:4} total context tokens processed: {:.2} token/s",
+            all_tokens.len() - model_output.len(),
+            (all_tokens.len() - model_output.len()) as f64 / prompt_dt.as_secs_f64(),
+        );
+        println!(
+            "{:4} tokens generated: {:.2} token/s",
+            to_sample,
+            to_sample as f64 / dt.as_secs_f64(),
+        );
+        if chat_mode {
+            // TODO: model_output should be decoded to a correct string without
+            // spaces between subword-tokens.
+            conversation.push(model_output.join(" "));
+            // keep only at most the last MAX_SEQ_LEN tokens from the context history.
+            all_tokens = all_tokens
+                .windows(MAX_SEQ_LEN)
+                .last()
+                .unwrap_or(&all_tokens)
+                .to_vec();
+        } else {
+            all_tokens.clear()
         }
     }
-
-    let prompt_tokens = tokens.get_ids().to_vec();
-    let mut all_tokens = vec![];
-    let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature);
-
-    print!("{prompt}");
-
-    let start_prompt_processing = std::time::Instant::now();
-    let mut next_token = {
-        let input = Tensor::new(prompt_tokens.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
-        let logits = model.forward(&input, 0)?;
-        let logits = logits.squeeze(0)?;
-        logits_processor.sample(&logits)?
-    };
-    let prompt_dt = start_prompt_processing.elapsed();
-    all_tokens.push(next_token);
-    print_token(next_token, &tokenizer);
-
-    let to_sample = args.sample_len.saturating_sub(1);
-    let start_post_prompt = std::time::Instant::now();
-    for index in 0..to_sample {
-        let input = Tensor::new(&[next_token], &Device::Cpu)?.unsqueeze(0)?;
-        let logits = model.forward(&input, prompt_tokens.len() + index)?;
-        let logits = logits.squeeze(0)?;
-        let logits = if args.repeat_penalty == 1. {
-            logits
-        } else {
-            let start_at = all_tokens.len().saturating_sub(args.repeat_last_n);
-            candle_transformers::utils::apply_repeat_penalty(
-                &logits,
-                args.repeat_penalty,
-                &all_tokens[start_at..],
-            )?
-        };
-        next_token = logits_processor.sample(&logits)?;
-        all_tokens.push(next_token);
-        print_token(next_token, &tokenizer);
-    }
-    let dt = start_post_prompt.elapsed();
-    println!(
-        "\n\n{:4} prompt tokens processed: {:.2} token/s",
-        prompt_tokens.len(),
-        prompt_tokens.len() as f64 / prompt_dt.as_secs_f64(),
-    );
-    println!(
-        "{:4} tokens generated: {:.2} token/s",
-        to_sample,
-        to_sample as f64 / dt.as_secs_f64(),
-    );
-    Ok(())
 }
