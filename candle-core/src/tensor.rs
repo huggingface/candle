@@ -802,11 +802,13 @@ impl Tensor {
         self.avg_pool2d_with_stride(sz, sz)
     }
 
-    pub fn avg_pool2d_with_stride(
+    pub fn avg_pool2d_with_stride<T: crate::ToUsize2>(
         &self,
-        kernel_size: (usize, usize),
-        stride: (usize, usize),
+        kernel_size: T,
+        stride: T,
     ) -> Result<Self> {
+        let kernel_size = kernel_size.to_usize2();
+        let stride = stride.to_usize2();
         let (n, c, h, w) = self.dims4()?;
         // https://pytorch.org/docs/stable/generated/torch.nn.AvgPool2d.html#torch.nn.AvgPool2d
         let h_out = (h - kernel_size.0) / stride.0 + 1;
@@ -827,11 +829,13 @@ impl Tensor {
         self.max_pool2d_with_stride(sz, sz)
     }
 
-    pub fn max_pool2d_with_stride(
+    pub fn max_pool2d_with_stride<T: crate::ToUsize2>(
         &self,
-        kernel_size: (usize, usize),
-        stride: (usize, usize),
+        kernel_size: T,
+        stride: T,
     ) -> Result<Self> {
+        let kernel_size = kernel_size.to_usize2();
+        let stride = stride.to_usize2();
         let (n, c, h, w) = self.dims4()?;
         // https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html#torch.nn.MaxPool2d
         let h_out = (h - kernel_size.0) / stride.0 + 1;
