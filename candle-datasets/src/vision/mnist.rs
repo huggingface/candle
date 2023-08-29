@@ -101,10 +101,10 @@ pub fn load() -> Result<crate::vision::Dataset> {
     );
     let repo = api.repo(repo);
     let test_parquet_filename = repo
-        .get("mnist/mnist-test.parquet")
+        .get("mnist/test/0000.parquet")
         .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
     let train_parquet_filename = repo
-        .get("mnist/mnist-train.parquet")
+        .get("mnist/train/0000.parquet")
         .map_err(|e| Error::Msg(format!("Api error: {e}")))?;
     let test_parquet = SerializedFileReader::new(std::fs::File::open(test_parquet_filename)?)
         .map_err(|e| Error::Msg(format!("Parquet error: {e}")))?;
