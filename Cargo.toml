@@ -3,6 +3,7 @@ members = [
     "candle-core",
     "candle-datasets",
     "candle-examples",
+    "candle-book",
     "candle-nn",
     "candle-pyo3",
     "candle-transformers",
@@ -57,6 +58,7 @@ tracing-chrome = "0.7.1"
 tracing-subscriber = "0.3.7"
 wav = "1.0.0"
 zip = { version = "0.6.6", default-features = false }
+parquet = { version = "45.0.0" }
 
 [profile.release-with-debug]
 inherits = "release"
