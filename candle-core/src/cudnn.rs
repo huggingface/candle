@@ -48,7 +48,7 @@ pub(crate) fn launch_conv2d<
     let conv = cudnn.create_conv2d::<T>(
         /* pad */ [params.padding as i32, params.padding as i32],
         /* stride */ [params.stride as i32, params.stride as i32],
-        /* dilation */ [1, 1],
+        /* dilation */ [params.dilation as i32, params.dilation as i32],
         cudarc::cudnn::sys::cudnnConvolutionMode_t::CUDNN_CROSS_CORRELATION,
     )?;
     let x_shape = [
