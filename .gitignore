@@ -33,3 +33,4 @@ candle-wasm-examples/*/*.safetensors
 candle-wasm-examples/*/package-lock.json
 
 .DS_Store
+.idea/*
