@@ -1,4 +1,6 @@
-use super::k_quants::{BlockQ2K, BlockQ4K, BlockQ4_0, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K};
+use super::k_quants::{
+    BlockQ2K, BlockQ3K, BlockQ4K, BlockQ4_0, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K,
+};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 use half::f16;
@@ -227,7 +229,7 @@ unsafe fn mm256_set_m128i(a: __m128i, b: __m128i) -> __m256i {
 #[cfg_attr(not(debug_assertions), inline(always))]
 pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Result<f32> {
     if n % QK_K != 0 {
-        crate::bail!("vec_dot_q4k_q8k: {n} is not divisible by {QK_K}")
+        crate::bail!("vec_dot_q2k_q8k: {n} is not divisible by {QK_K}")
     }
 
     unsafe {
@@ -262,7 +264,7 @@ pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Res
 
             let mut sumi = _mm256_setzero_si256();
 
-            for j in 0..QK_K / 128 {
+            for scale in scales {
                 let q2bits = _mm256_loadu_si256(q2 as *const __m256i);
                 q2 = q2.add(32);
 
@@ -286,13 +288,13 @@ pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Res
                 let mut p3 = _mm256_maddubs_epi16(q2_3, q8_3);
 
                 p0 =
-                    _mm256_madd_epi16(_mm256_shuffle_epi8(scales[j], get_scale_shuffle_q3k(0)), p0);
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(scale, get_scale_shuffle_q3k(0)), p0);
                 p1 =
-                    _mm256_madd_epi16(_mm256_shuffle_epi8(scales[j], get_scale_shuffle_q3k(1)), p1);
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(scale, get_scale_shuffle_q3k(1)), p1);
                 p2 =
-                    _mm256_madd_epi16(_mm256_shuffle_epi8(scales[j], get_scale_shuffle_q3k(2)), p2);
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(scale, get_scale_shuffle_q3k(2)), p2);
                 p3 =
-                    _mm256_madd_epi16(_mm256_shuffle_epi8(scales[j], get_scale_shuffle_q3k(3)), p3);
+                    _mm256_madd_epi16(_mm256_shuffle_epi8(scale, get_scale_shuffle_q3k(3)), p3);
 
                 p0 = _mm256_add_epi32(p0, p1);
                 p2 = _mm256_add_epi32(p2, p3);
@@ -302,6 +304,193 @@ pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Res
             acc = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), _mm256_cvtepi32_ps(sumi), acc);
         }
 
+        Ok(hsum_float_8(acc))
+    }
+}
+
+#[cfg_attr(not(debug_assertions), inline(always))]
+pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Result<f32> {
+    if n % QK_K != 0 {
+        crate::bail!("vec_dot_q3k_q8k: {n} is not divisible by {QK_K}")
+    }
+
+    let kmask1 = 0x03030303;
+    let kmask2 = 0x0f0f0f0f;
+
+    let mut aux = [0u32; 3];
+
+    unsafe {
+        let m3 = _mm256_set1_epi8(3);
+        let mone = _mm256_set1_epi8(1);
+        let m32 = _mm_set1_epi8(32);
+
+        let mut acc = _mm256_setzero_ps();
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let d = y.d * x.d.to_f32();
+
+            let mut q3 = x.qs.as_ptr();
+            let mut q8 = y.qs.as_ptr();
+
+            LittleEndian::read_u32_into(&x.scales, &mut aux);
+            let mut scales128 = _mm_set_epi32(
+                (((aux[1] >> 4) & kmask2) | (((aux[2] >> 6) & kmask1) << 4)) as i32,
+                (((aux[0] >> 4) & kmask2) | (((aux[2] >> 4) & kmask1) << 4)) as i32,
+                ((aux[1] & kmask2) | (((aux[2] >> 2) & kmask1) << 4)) as i32,
+                ((aux[0] & kmask2) | (((aux[2]) & kmask1) << 4)) as i32,
+            );
+            scales128 = _mm_sub_epi8(scales128, m32);
+            let all_scales = _mm256_cvtepi8_epi16(scales128);
+            let l_scales = _mm256_extracti128_si256(all_scales, 0);
+            let h_scales = _mm256_extracti128_si256(all_scales, 1);
+            let scales = [
+                mm256_set_m128i(l_scales, l_scales),
+                mm256_set_m128i(h_scales, h_scales),
+            ];
+
+            // high bit
+            let hbits = _mm256_loadu_si256(x.hmask.as_ptr() as *const __m256i);
+
+            // integer accumulator
+            let mut sumi = _mm256_setzero_si256();
+
+            for (j,scale) in scales.iter().enumerate() {
+                // load low 2 bits
+                let q3bits = _mm256_loadu_si256(q3 as *const __m256i);
+                q3 = q3.add(32);
+
+                // prepare low and high bits
+                //We hardcode the shifts here to avoid loading them into a seperate register
+                let q3l_0 = _mm256_and_si256(q3bits, m3);
+                let q3h_0 = if j == 0 {
+                    _mm256_slli_epi16(
+                        _mm256_srli_epi16(
+                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 0)),
+                            0,
+                        ),
+                        2,
+                    )
+                } else {
+                    _mm256_slli_epi16(
+                        _mm256_srli_epi16(
+                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 4)),
+                            4,
+                        ),
+                        2,
+                    )
+                };
+
+                let q3l_1 = _mm256_and_si256(_mm256_srli_epi16(q3bits, 2), m3);
+                let q3h_1 = if j == 0 {
+                    _mm256_slli_epi16(
+                        _mm256_srli_epi16(
+                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 1)),
+                            1,
+                        ),
+                        2,
+                    )
+                } else {
+                    _mm256_slli_epi16(
+                        _mm256_srli_epi16(
+                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 5)),
+                            5,
+                        ),
+                        2,
+                    )
+                };
+
+                let q3l_2 = _mm256_and_si256(_mm256_srli_epi16(q3bits, 4), m3);
+                let q3h_2 = if j == 0 {
+                    _mm256_slli_epi16(
+                        _mm256_srli_epi16(
+                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 2)),
+                            2,
+                        ),
+                        2,
+                    )
+                } else {
+                    _mm256_slli_epi16(
+                        _mm256_srli_epi16(
+                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 6)),
+                            6,
+                        ),
+                        2,
+                    )
+                };
+
+                let q3l_3 = _mm256_and_si256(_mm256_srli_epi16(q3bits, 6), m3);
+                let q3h_3 = if j == 0 {
+                    _mm256_slli_epi16(
+                        _mm256_srli_epi16(
+                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 3)),
+                            3,
+                        ),
+                        2,
+                    )
+                } else {
+                    _mm256_slli_epi16(
+                        _mm256_srli_epi16(
+                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 7)),
+                            7,
+                        ),
+                        2,
+                    )
+                };
+
+                // load Q8 quants
+                let q8_0 = _mm256_loadu_si256(q8 as *const __m256i);
+                q8 = q8.add(32);
+                let q8_1 = _mm256_loadu_si256(q8 as *const __m256i);
+                q8 = q8.add(32);
+                let q8_2 = _mm256_loadu_si256(q8 as *const __m256i);
+                q8 = q8.add(32);
+                let q8_3 = _mm256_loadu_si256(q8 as *const __m256i);
+                q8 = q8.add(32);
+
+                // Dot product: we multiply the 2 low bits and 1 high bit part separately, so we can use _mm256_maddubs_epi16,
+                // and then subtract. The high bit part has the 2 already subtracted (and so, it is zero if the high bit was not set,
+                // and 2 if the high bit was set)
+                let q8s_0 = _mm256_maddubs_epi16(q3h_0, q8_0);
+                let q8s_1 = _mm256_maddubs_epi16(q3h_1, q8_1);
+                let q8s_2 = _mm256_maddubs_epi16(q3h_2, q8_2);
+                let q8s_3 = _mm256_maddubs_epi16(q3h_3, q8_3);
+
+                let mut p16_0 = _mm256_maddubs_epi16(q3l_0, q8_0);
+                let mut p16_1 = _mm256_maddubs_epi16(q3l_1, q8_1);
+                let mut p16_2 = _mm256_maddubs_epi16(q3l_2, q8_2);
+                let mut p16_3 = _mm256_maddubs_epi16(q3l_3, q8_3);
+
+                p16_0 = _mm256_sub_epi16(p16_0, q8s_0);
+                p16_1 = _mm256_sub_epi16(p16_1, q8s_1);
+                p16_2 = _mm256_sub_epi16(p16_2, q8s_2);
+                p16_3 = _mm256_sub_epi16(p16_3, q8s_3);
+
+                // multiply with scales
+                p16_0 = _mm256_madd_epi16(
+                    _mm256_shuffle_epi8(*scale, get_scale_shuffle_q3k(0)),
+                    p16_0,
+                );
+                p16_1 = _mm256_madd_epi16(
+                    _mm256_shuffle_epi8(*scale, get_scale_shuffle_q3k(1)),
+                    p16_1,
+                );
+                p16_2 = _mm256_madd_epi16(
+                    _mm256_shuffle_epi8(*scale, get_scale_shuffle_q3k(2)),
+                    p16_2,
+                );
+                p16_3 = _mm256_madd_epi16(
+                    _mm256_shuffle_epi8(*scale, get_scale_shuffle_q3k(3)),
+                    p16_3,
+                );
+
+                // accumulate
+                p16_0 = _mm256_add_epi32(p16_0, p16_1);
+                p16_2 = _mm256_add_epi32(p16_2, p16_3);
+                sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16_0, p16_2));
+            }
+
+            // multiply with block scale and accumulate
+            acc = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), _mm256_cvtepi32_ps(sumi), acc);
+        }
         Ok(hsum_float_8(acc))
     }
 }
