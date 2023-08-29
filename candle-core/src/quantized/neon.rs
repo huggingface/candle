@@ -1,4 +1,4 @@
-use super::k_quants::{BlockQ4K, BlockQ4_0, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K};
+use super::k_quants::{BlockQ4K, BlockQ4_0, BlockQ5K, BlockQ6K, BlockQ8K, BlockQ8_0, QK8_0, QK_K};
 use crate::Result;
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -282,6 +282,104 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
 }
 
 #[inline(always)]
+pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> Result<f32> {
+    if n % QK_K != 0 {
+        crate::bail!("vec_dot_q5k_q8k: {n} is not divisible by {QK_K}")
+    }
+    let mut sumf = 0f32;
+    let mut utmp = [0u32; 4];
+    const KMASK1: u32 = 0x3f3f3f3f;
+    const KMASK2: u32 = 0x0f0f0f0f;
+    const KMASK3: u32 = 0x03030303;
+
+    unsafe {
+        let m4b = vdupq_n_u8(0xF);
+        let mone = vdupq_n_u8(1);
+        let mtwo = vdupq_n_u8(2);
+
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let d = y.d * x.d.to_f32();
+            let dmin = y.d * x.dmin.to_f32();
+
+            let q8sums = vpaddq_s16(
+                vld1q_s16(y.bsums.as_ptr()),
+                vld1q_s16(y.bsums.as_ptr().add(8)),
+            );
+
+            LittleEndian::read_u32_into(&x.scales, &mut utmp[0..3]);
+
+            utmp[3] = ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4);
+            let uaux = utmp[1] & KMASK1;
+            utmp[1] = (utmp[2] & KMASK2) | (((utmp[0] >> 6) & KMASK3) << 4);
+            utmp[2] = uaux;
+            utmp[0] &= KMASK1;
+
+            let mins8 = vld1_u8((utmp.as_ptr() as *const u8).add(8));
+            let mins = vreinterpretq_s16_u16(vmovl_u8(mins8));
+            let prod = vaddq_s32(
+                vmull_s16(vget_low_s16(q8sums), vget_low_s16(mins)),
+                vmull_s16(vget_high_s16(q8sums), vget_high_s16(mins)),
+            );
+            let sumi_mins = vaddvq_s32(prod);
+
+            let mut scales = utmp.as_ptr() as *const u8;
+
+            let mut q5 = x.qs.as_ptr();
+            let mut q8 = y.qs.as_ptr();
+
+            let mut qhbits = vld1q_u8_x2(x.qh.as_ptr());
+
+            let mut sumi = 0i32;
+
+            for _j in 0..QK_K / 64 {
+                let q5bits = vld1q_u8_x2(q5);
+                q5 = q5.add(32);
+                let q8bytes = vld1q_s8_x4(q8);
+                q8 = q8.add(64);
+
+                let q5h_0 = vshlq_n_u8(vandq_u8(mone, qhbits.0), 4);
+                let q5h_1 = vshlq_n_u8(vandq_u8(mone, qhbits.1), 4);
+                let q5h_2 = vshlq_n_u8(vandq_u8(mtwo, qhbits.0), 3);
+                let q5h_3 = vshlq_n_u8(vandq_u8(mtwo, qhbits.1), 3);
+                qhbits.0 = vshrq_n_u8(qhbits.0, 2);
+                qhbits.1 = vshrq_n_u8(qhbits.1, 2);
+
+                let q5bytes_0 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q5bits.0, m4b), q5h_0));
+                let q5bytes_1 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q5bits.1, m4b), q5h_1));
+                let q5bytes_2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q5bits.0, 4), q5h_2));
+                let q5bytes_3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q5bits.1, 4), q5h_3));
+
+                // TODO: dotprod
+
+                let p0 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q5bytes_0), vget_low_s8(q8bytes.0)),
+                    vmull_s8(vget_high_s8(q5bytes_0), vget_high_s8(q8bytes.0)),
+                );
+                let p1 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q5bytes_1), vget_low_s8(q8bytes.1)),
+                    vmull_s8(vget_high_s8(q5bytes_1), vget_high_s8(q8bytes.1)),
+                );
+                sumi += vaddvq_s16(vaddq_s16(p0, p1)) as i32 * *scales as i32;
+                scales = scales.add(1);
+
+                let p2 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q5bytes_2), vget_low_s8(q8bytes.2)),
+                    vmull_s8(vget_high_s8(q5bytes_2), vget_high_s8(q8bytes.2)),
+                );
+                let p3 = vaddq_s16(
+                    vmull_s8(vget_low_s8(q5bytes_3), vget_low_s8(q8bytes.3)),
+                    vmull_s8(vget_high_s8(q5bytes_3), vget_high_s8(q8bytes.3)),
+                );
+                sumi += vaddvq_s16(vaddq_s16(p2, p3)) as i32 * *scales as i32;
+                scales = scales.add(1);
+            }
+            sumf += d * sumi as f32 - dmin * sumi_mins as f32;
+        }
+    }
+    Ok(sumf)
+}
+
+#[inline(always)]
 pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Result<f32> {
     if n % QK_K != 0 {
         crate::bail!("vec_dot_q4k_q8k: {n} is not divisible by {QK_K}")
@@ -289,9 +387,9 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
     let mut sumf = 0f32;
     let mut utmp = [0u32; 4];
     let mut scales = [0u8; 16];
-    let kmask1: u32 = 0x3f3f3f3f;
-    let kmask2: u32 = 0x0f0f0f0f;
-    let kmask3: u32 = 0x03030303;
+    const KMASK1: u32 = 0x3f3f3f3f;
+    const KMASK2: u32 = 0x0f0f0f0f;
+    const KMASK3: u32 = 0x03030303;
 
     unsafe {
         let m4b = vdupq_n_u8(0xF);
@@ -309,13 +407,13 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
 
             let mins8 = vld1_u32(
                 [
-                    utmp[1] & kmask1,
-                    ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4),
+                    utmp[1] & KMASK1,
+                    ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4),
                 ]
                 .as_ptr(),
             );
-            utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
-            utmp[0] &= kmask1;
+            utmp[1] = (utmp[2] & KMASK2) | (((utmp[0] >> 6) & KMASK3) << 4);
+            utmp[0] &= KMASK1;
 
             let mins = vreinterpretq_s16_u16(vmovl_u8(vreinterpret_u8_u32(mins8)));
             let prod = vaddq_s32(
