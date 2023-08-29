@@ -6,6 +6,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use clap::{Parser, ValueEnum};
+use rand::prelude::*;
 
 use candle::{DType, Result, Tensor, D};
 use candle_nn::{loss, ops, Conv2d, Linear, Module, VarBuilder, VarMap};
@@ -128,9 +129,11 @@ fn training_loop_cnn(
     let test_images = m.test_images.to_device(&dev)?;
     let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
     let n_batches = train_images.dim(0)? / BSIZE;
+    let mut batch_idxs = (0..n_batches).collect::<Vec<usize>>();
     for epoch in 1..args.epochs {
         let mut sum_loss = 0f32;
-        for batch_idx in 0..n_batches {
+        batch_idxs.shuffle(&mut thread_rng());
+        for batch_idx in batch_idxs.iter() {
             let train_images = train_images.narrow(0, batch_idx * BSIZE, BSIZE)?;
             let train_labels = train_labels.narrow(0, batch_idx * BSIZE, BSIZE)?;
             let logits = model.forward(&train_images)?;
