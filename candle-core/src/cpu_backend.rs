@@ -1186,6 +1186,12 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
     const OP: &'static str = "conv_transpose2d";
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
+        if p.dilation != 1 {
+            crate::bail!(
+                "dilation {} is not supported for conv-transpose2d",
+                p.dilation
+            )
+        }
         let inp = &inp[inp_l.start_offset()..];
         let (inp_s0, inp_s1, inp_s2, inp_s3) = crate::shape::dims4(inp_l.stride())?;
         let k = &k[k_l.start_offset()..];
