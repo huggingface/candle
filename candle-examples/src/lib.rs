@@ -15,3 +15,40 @@ pub fn device(cpu: bool) -> Result<Device> {
         Ok(device)
     }
 }
+
+pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
+    p: P,
+    width: usize,
+    height: usize,
+) -> Result<Tensor> {
+    let img = image::io::Reader::open(p)?
+        .decode()
+        .map_err(candle::Error::wrap)?
+        .resize_to_fill(
+            width as u32,
+            height as u32,
+            image::imageops::FilterType::Triangle,
+        );
+    let img = img.to_rgb8();
+    let data = img.into_raw();
+    Tensor::from_vec(data, (width, height, 3), &Device::Cpu)?.permute((2, 0, 1))
+}
+
+/// Saves an image to disk using the image crate, this expects an input with shape
+/// (c, width, height).
+pub fn save_image<P: AsRef<std::path::Path>>(img: &Tensor, p: P) -> Result<()> {
+    let p = p.as_ref();
+    let (channel, width, height) = img.dims3()?;
+    if channel != 3 {
+        candle::bail!("save_image expects an input of shape (3, width, height)")
+    }
+    let img = img.transpose(0, 1)?.t()?.flatten_all()?;
+    let pixels = img.to_vec1::<u8>()?;
+    let image: image::ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+        match image::ImageBuffer::from_raw(width as u32, height as u32, pixels) {
+            Some(image) => image,
+            None => candle::bail!("error saving image {p:?}"),
+        };
+    image.save(p).map_err(candle::Error::wrap)?;
+    Ok(())
+}
