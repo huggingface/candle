@@ -97,6 +97,7 @@ impl ConvBlock {
             padding,
             stride,
             groups: 1,
+            dilation: 1,
         };
         let conv = conv2d_no_bias(c1, c2, k, cfg, vb.pp("conv"))?;
         let bn = batch_norm(c2, 1e-3, vb.pp("bn"))?;
