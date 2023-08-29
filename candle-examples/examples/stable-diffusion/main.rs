@@ -299,7 +299,7 @@ fn text_embeddings(
         sd_config.clip2.as_ref().unwrap()
     };
     let text_model =
-        stable_diffusion::build_clip_transformer(&clip_config, clip_weights, device, DType::F32)?;
+        stable_diffusion::build_clip_transformer(clip_config, clip_weights, device, DType::F32)?;
     let text_embeddings = text_model.forward(&tokens)?;
     let uncond_embeddings = text_model.forward(&uncond_tokens)?;
     let text_embeddings = Tensor::cat(&[uncond_embeddings, text_embeddings], 0)?.to_dtype(dtype)?;
