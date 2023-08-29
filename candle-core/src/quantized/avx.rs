@@ -310,8 +310,8 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
         crate::bail!("vec_dot_q3k_q8k: {n} is not divisible by {QK_K}")
     }
 
-    const KMASK1:u32 = 0x03030303;
-    const KMASK2:u32 = 0x0f0f0f0f;
+    const KMASK1: u32 = 0x03030303;
+    const KMASK2: u32 = 0x0f0f0f0f;
 
     let mut aux = [0u32; 3];
 
