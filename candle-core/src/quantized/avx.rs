@@ -310,8 +310,8 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
         crate::bail!("vec_dot_q3k_q8k: {n} is not divisible by {QK_K}")
     }
 
-    let kmask1 = 0x03030303;
-    let kmask2 = 0x0f0f0f0f;
+    const KMASK1:u32 = 0x03030303;
+    const KMASK2:u32 = 0x0f0f0f0f;
 
     let mut aux = [0u32; 3];
 
@@ -329,10 +329,10 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
 
             LittleEndian::read_u32_into(&x.scales, &mut aux);
             let mut scales128 = _mm_set_epi32(
-                (((aux[1] >> 4) & kmask2) | (((aux[2] >> 6) & kmask1) << 4)) as i32,
-                (((aux[0] >> 4) & kmask2) | (((aux[2] >> 4) & kmask1) << 4)) as i32,
-                ((aux[1] & kmask2) | (((aux[2] >> 2) & kmask1) << 4)) as i32,
-                ((aux[0] & kmask2) | (((aux[2]) & kmask1) << 4)) as i32,
+                (((aux[1] >> 4) & KMASK2) | (((aux[2] >> 6) & KMASK1) << 4)) as i32,
+                (((aux[0] >> 4) & KMASK2) | (((aux[2] >> 4) & KMASK1) << 4)) as i32,
+                ((aux[1] & KMASK2) | (((aux[2] >> 2) & KMASK1) << 4)) as i32,
+                ((aux[0] & KMASK2) | (((aux[2]) & KMASK1) << 4)) as i32,
             );
             scales128 = _mm_sub_epi8(scales128, m32);
             let all_scales = _mm256_cvtepi8_epi16(scales128);
@@ -489,9 +489,9 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
         crate::bail!("vec_dot_q4k_q8k: {n} is not divisible by {QK_K}")
     }
     let mut utmp = [0u32; 4];
-    let kmask1: u32 = 0x3f3f3f3f;
-    let kmask2: u32 = 0x0f0f0f0f;
-    let kmask3: u32 = 0x03030303;
+    const KMASK1: u32 = 0x3f3f3f3f;
+    const KMASK2: u32 = 0x0f0f0f0f;
+    const KMASK3: u32 = 0x03030303;
 
     unsafe {
         let m4 = _mm256_set1_epi8(0xF);
@@ -505,11 +505,11 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
 
             LittleEndian::read_u32_into(&x.scales, &mut utmp[0..3]);
 
-            utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
-            let uaux = utmp[1] & kmask1;
-            utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
+            utmp[3] = ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4);
+            let uaux = utmp[1] & KMASK1;
+            utmp[1] = (utmp[2] & KMASK2) | (((utmp[0] >> 6) & KMASK3) << 4);
             utmp[2] = uaux;
-            utmp[0] &= kmask1;
+            utmp[0] &= KMASK1;
 
             let mut q4 = x.qs.as_ptr();
             let mut q8 = y.qs.as_ptr();
@@ -573,9 +573,9 @@ pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> Res
         crate::bail!("vec_dot_q5k_q8k: {n} is not divisible by {QK_K}")
     }
     let mut utmp = [0u32; 4];
-    let kmask1: u32 = 0x3f3f3f3f;
-    let kmask2: u32 = 0x0f0f0f0f;
-    let kmask3: u32 = 0x03030303;
+    const KMASK1: u32 = 0x3f3f3f3f;
+    const KMASK2: u32 = 0x0f0f0f0f;
+    const KMASK3: u32 = 0x03030303;
 
     unsafe {
         let m4 = _mm256_set1_epi8(0xF);
@@ -591,11 +591,11 @@ pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> Res
 
             LittleEndian::read_u32_into(&x.scales, &mut utmp[0..3]);
 
-            utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
-            let uaux = utmp[1] & kmask1;
-            utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
+            utmp[3] = ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4);
+            let uaux = utmp[1] & KMASK1;
+            utmp[1] = (utmp[2] & KMASK2) | (((utmp[0] >> 6) & KMASK3) << 4);
             utmp[2] = uaux;
-            utmp[0] &= kmask1;
+            utmp[0] &= KMASK1;
 
             let mut q5 = x.qs.as_ptr();
             let mut q8 = y.qs.as_ptr();
