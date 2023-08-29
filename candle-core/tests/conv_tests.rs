@@ -81,6 +81,10 @@ w_t = w.transpose(0, 1)
 res = torch.nn.functional.conv_transpose2d(t, w_t)
 print(res.shape)
 print(res)
+
+res = torch.nn.functional.conv2d(t, w, dilation=2)
+print(res.shape)
+print(res[0])
 */
 fn conv2d(dev: &Device) -> Result<()> {
     let t = Tensor::new(
@@ -146,6 +150,13 @@ fn conv2d(dev: &Device) -> Result<()> {
                 [-5.5423, -2.5188, 1.0754, -0.0563, -2.9386, -1.1504, 1.0171]
             ]
         ]
+    );
+    // Dilations.
+    let res = t.conv2d(&w, 0, 1, 2, 1)?;
+    assert_eq!(res.dims(), [1, 2, 1, 1]);
+    assert_eq!(
+        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+        [2.45, -2.3504],
     );
     Ok(())
 }
