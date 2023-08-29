@@ -1296,7 +1296,11 @@ impl GgmlType for BlockQ5K {
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
 
+    #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        #[cfg(target_feature = "avx")]
+        return super::avx::vec_dot_q5k_q8k(n, xs, ys);
+
         if n % QK_K != 0 {
             crate::bail!("vec_dot_q5k_q8k: {n} is not divisible by {QK_K}")
         }
