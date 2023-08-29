@@ -438,7 +438,11 @@ impl Tensor {
                         *sum_grad = sum_grad.add(&(&grad * relu_grad)?)?
                     }
                     Op::Elu(..) => Err(Error::BackwardNotSupported { op: "elu" })?,
-                    Op::Powf(..) => Err(Error::BackwardNotSupported { op: "powf" })?,
+                    Op::Powf(arg, e) => {
+                        let arg_grad = (&(grad * arg.powf(e - 1.)?)? * *e)?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&arg_grad)?
+                    }
                     Op::CustomOp1(arg, c) => {
                         if let Some(arg_grad) = c.bwd(arg, node, &grad)? {
                             let sum_grad = grads.or_insert(arg)?;
