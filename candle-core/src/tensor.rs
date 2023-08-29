@@ -1877,6 +1877,10 @@ impl Tensor {
         }
     }
 
+    pub fn apply<M: crate::Module>(&self, m: &M) -> Result<Self> {
+        m.forward(self)
+    }
+
     pub(crate) fn storage(&self) -> std::sync::RwLockReadGuard<'_, Storage> {
         self.storage.read().unwrap()
     }
