@@ -222,7 +222,7 @@ impl Decoder {
         Ok(segments)
     }
 
-    fn load(md: ModelData) -> anyhow::Result<Self> {
+    pub fn load(md: ModelData) -> anyhow::Result<Self> {
         let device = Device::Cpu;
         let tokenizer = Tokenizer::from_bytes(&md.tokenizer).map_err(anyhow::Error::msg)?;
 
@@ -239,7 +239,7 @@ impl Decoder {
         Ok(decoder)
     }
 
-    fn convert_and_run(&self, wav_input: &[u8]) -> anyhow::Result<Vec<Segment>> {
+    pub fn convert_and_run(&self, wav_input: &[u8]) -> anyhow::Result<Vec<Segment>> {
         let device = Device::Cpu;
         let mut wav_input = std::io::Cursor::new(wav_input);
         let (header, data) = wav::read(&mut wav_input)?;
