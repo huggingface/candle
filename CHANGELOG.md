@@ -2,7 +2,18 @@
 This documents the main changes to the `candle` crate.
 
 ## Unreleased
+
 ### Added
+
+### Modified
+- Dilations are now supported in conv-transpose2d.
+  [671](https://github.com/huggingface/candle/pull/671).
+
+## v0.2.0 - 2023-08-30
+
+### Added
+- Add the powf op
+  [664](https://github.com/huggingface/candle/pull/664).
 - Stable Diffusion XL support
   [647](https://github.com/huggingface/candle/pull/647).
 - Add the conv-transpose2d op
