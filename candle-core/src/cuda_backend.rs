@@ -1046,12 +1046,6 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
         // Kernel shape: (c_in_k, c_out, h_k, w_k)
         // Input shape: (b_size, c_in, h_in, w_in)
         let p = &self.0;
-        if p.dilation != 1 {
-            crate::bail!(
-                "dilation {} is not supported for conv-transpose2d",
-                p.dilation
-            )
-        }
         let (out_w, out_h) = (p.out_w(), p.out_h());
         let dst_el = p.c_out * out_w * out_h * p.b_size;
         let inp = &inp.slice(inp_l.start_offset()..);
