@@ -350,7 +350,6 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
             // high bit
             let hbits = _mm256_loadu_si256(x.hmask.as_ptr() as *const __m256i);
 
-            // integer accumulator
             let mut sumi = _mm256_setzero_si256();
 
             for (j, scale) in scales.iter().enumerate() {
@@ -358,83 +357,39 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
                 let q3bits = _mm256_loadu_si256(q3 as *const __m256i);
                 q3 = q3.add(32);
 
-                // prepare low and high bits
-                //We hardcode the shifts here to avoid loading them into a seperate register
+                // Prepare low and high bits
+                // We hardcode the shifts here to avoid loading them into a seperate register
                 let q3l_0 = _mm256_and_si256(q3bits, m3);
                 let q3h_0 = if j == 0 {
-                    _mm256_slli_epi16(
-                        _mm256_srli_epi16(
-                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 0)),
-                            0,
-                        ),
-                        2,
-                    )
+                    _mm256_srli_epi16(_mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 0)), 0)
                 } else {
-                    _mm256_slli_epi16(
-                        _mm256_srli_epi16(
-                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 4)),
-                            4,
-                        ),
-                        2,
-                    )
+                    _mm256_srli_epi16(_mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 4)), 4)
                 };
+                let q3h_0 = _mm256_slli_epi16(q3h_0, 2);
 
                 let q3l_1 = _mm256_and_si256(_mm256_srli_epi16(q3bits, 2), m3);
                 let q3h_1 = if j == 0 {
-                    _mm256_slli_epi16(
-                        _mm256_srli_epi16(
-                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 1)),
-                            1,
-                        ),
-                        2,
-                    )
+                    _mm256_srli_epi16(_mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 1)), 1)
                 } else {
-                    _mm256_slli_epi16(
-                        _mm256_srli_epi16(
-                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 5)),
-                            5,
-                        ),
-                        2,
-                    )
+                    _mm256_srli_epi16(_mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 5)), 5)
                 };
+                let q3h_1 = _mm256_slli_epi16(q3h_1, 2);
 
                 let q3l_2 = _mm256_and_si256(_mm256_srli_epi16(q3bits, 4), m3);
                 let q3h_2 = if j == 0 {
-                    _mm256_slli_epi16(
-                        _mm256_srli_epi16(
-                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 2)),
-                            2,
-                        ),
-                        2,
-                    )
+                    _mm256_srli_epi16(_mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 2)), 2)
                 } else {
-                    _mm256_slli_epi16(
-                        _mm256_srli_epi16(
-                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 6)),
-                            6,
-                        ),
-                        2,
-                    )
+                    _mm256_srli_epi16(_mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 6)), 6)
                 };
+                let q3h_2 = _mm256_slli_epi16(q3h_2, 2);
 
                 let q3l_3 = _mm256_and_si256(_mm256_srli_epi16(q3bits, 6), m3);
                 let q3h_3 = if j == 0 {
-                    _mm256_slli_epi16(
-                        _mm256_srli_epi16(
-                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 3)),
-                            3,
-                        ),
-                        2,
-                    )
+                    _mm256_srli_epi16(_mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 3)), 3)
                 } else {
-                    _mm256_slli_epi16(
-                        _mm256_srli_epi16(
-                            _mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 7)),
-                            7,
-                        ),
-                        2,
-                    )
+                    _mm256_srli_epi16(_mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 7)), 7)
                 };
+                let q3h_3 = _mm256_slli_epi16(q3h_3, 2);
 
                 // load Q8 quants
                 let q8_0 = _mm256_loadu_si256(q8 as *const __m256i);
