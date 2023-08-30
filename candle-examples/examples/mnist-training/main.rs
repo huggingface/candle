@@ -242,7 +242,7 @@ struct Args {
     #[arg(long)]
     load: Option<String>,
 
-    /// The file where to load the trained weights from, in safetensors format.
+    /// The directory where to load the dataset from, in ubyte format.
     #[arg(long)]
     local_mnist: Option<String>,
 }

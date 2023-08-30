@@ -1,7 +1,7 @@
 # Changelog
 This documents the main changes to the `candle` crate.
 
-## Unreleased
+## v0.2.1 - Unreleased
 
 ### Added
 

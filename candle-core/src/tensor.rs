@@ -730,18 +730,24 @@ impl Tensor {
         self.sum_impl(mean_dims, false)? * scale
     }
 
+    /// Gathers the maximum value across the selected dimension. The resulting shape has the same
+    /// number of dimensions as the original tensor and the select dimension has a single element.
     pub fn max_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
         self.reduce_impl(dim, true, ReduceOp::Max)
     }
 
+    /// Similar to `max_keepdim` but the target dimension is squeezed.
     pub fn max<D: Dim>(&self, dim: D) -> Result<Self> {
         self.reduce_impl(dim, false, ReduceOp::Max)
     }
 
+    /// Gathers the minimum value across the selected dimension. The resulting shape has the same
+    /// number of dimensions as the original tensor and the select dimension has a single element.
     pub fn min_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
         self.reduce_impl(dim, true, ReduceOp::Min)
     }
 
+    /// Similar to `min_keepdim` but the target dimension is squeezed.
     pub fn min<D: Dim>(&self, dim: D) -> Result<Self> {
         self.reduce_impl(dim, false, ReduceOp::Min)
     }
@@ -750,6 +756,7 @@ impl Tensor {
         self.reduce_impl(dim, true, ReduceOp::ArgMax)
     }
 
+    /// Similar to `argmax_keepdim` but the target dimension is squeezed.
     pub fn argmax<D: Dim>(&self, dim: D) -> Result<Self> {
         self.reduce_impl(dim, false, ReduceOp::ArgMax)
     }
@@ -758,10 +765,15 @@ impl Tensor {
         self.reduce_impl(dim, true, ReduceOp::ArgMin)
     }
 
+    /// Similar to `argmin_keepdim` but the target dimension is squeezed.
     pub fn argmin<D: Dim>(&self, dim: D) -> Result<Self> {
         self.reduce_impl(dim, false, ReduceOp::ArgMin)
     }
 
+    /// Element-wise comparison between two tensors, e.g. equality, greater than, ... The actual
+    /// comparison operation is specified by the `op` argument.
+    ///
+    /// The returned tensor has the same shape as the original tensors and uses `u8` elements.
     pub fn cmp(&self, rhs: &Self, op: CmpOp) -> Result<Self> {
         let shape = self.same_shape_binary_op(rhs, "cmp")?;
         let storage = self
@@ -771,30 +783,45 @@ impl Tensor {
         Ok(from_storage(storage, shape.dims(), op, false))
     }
 
+    /// Element-wise equality.
     pub fn eq(&self, rhs: &Self) -> Result<Self> {
         self.cmp(rhs, CmpOp::Eq)
     }
 
+    /// Element-wise non-equality.
     pub fn ne(&self, rhs: &Self) -> Result<Self> {
         self.cmp(rhs, CmpOp::Ne)
     }
 
+    /// Element-wise comparison with lower-than, the returned tensor uses value 1 where `self <
+    /// rhs` and 0 otherwise.
     pub fn lt(&self, rhs: &Self) -> Result<Self> {
         self.cmp(rhs, CmpOp::Lt)
     }
 
+    /// Element-wise comparison with greater-than, the returned tensor uses value 1 where `self >
+    /// rhs` and 0 otherwise.
     pub fn gt(&self, rhs: &Self) -> Result<Self> {
         self.cmp(rhs, CmpOp::Gt)
     }
 
+    /// Element-wise comparison with greater-equal, the returned tensor uses value 1 where `self >=
+    /// rhs` and 0 otherwise.
     pub fn ge(&self, rhs: &Self) -> Result<Self> {
         self.cmp(rhs, CmpOp::Ge)
     }
 
+    /// Element-wise comparison with lower-equal, the returned tensor uses value 1 where `self <=
+    /// rhs` and 0 otherwise.
     pub fn le(&self, rhs: &Self) -> Result<Self> {
         self.cmp(rhs, CmpOp::Le)
     }
 
+    /// Upsample the input tensor to the `(target_h, target_w)` size, taking the value of the
+    /// nearest element.
+    ///
+    /// The input tensor should have four dimensions, `(batch, channels, h, w)`, the returned
+    /// tensor also has four dimensions, `(batch, channels, target_h, target_w)`.
     pub fn upsample_nearest2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
         let (n, c, _h, _w) = self.dims4()?;
         let op = BackpropOp::new1(self, Op::UpsampleNearest2D);
@@ -804,11 +831,19 @@ impl Tensor {
         Ok(from_storage(storage, (n, c, target_h, target_w), op, false))
     }
 
+    /// 2D average pooling over an input tensor with multiple channels.
+    ///
+    /// The input tensor should have four dimensions, `(batch, channels, h, w)`, the returned
+    /// tensor also has four dimensions, `(batch, channels, h', w')`. The pooling is performed on
+    /// the two last dimensions using a kernel of size `sz`. The returned element is the average
+    /// value over the kernel window.
     pub fn avg_pool2d<T: crate::ToUsize2>(&self, sz: T) -> Result<Self> {
         let sz = sz.to_usize2();
         self.avg_pool2d_with_stride(sz, sz)
     }
 
+    /// Same as `avg_pool2d` but with a `stride` that can be set to a value different from the
+    /// kernel size.
     pub fn avg_pool2d_with_stride<T: crate::ToUsize2>(
         &self,
         kernel_size: T,
@@ -831,11 +866,19 @@ impl Tensor {
         Ok(from_storage(storage, (n, c, h_out, w_out), op, false))
     }
 
+    /// 2D max pooling over an input tensor with multiple channels.
+    ///
+    /// The input tensor should have four dimensions, `(batch, channels, h, w)`, the returned
+    /// tensor also has four dimensions, `(batch, channels, h', w')`. The pooling is performed on
+    /// the two last dimensions using a kernel of size `sz`, the returned element is the maximum
+    /// value over the kernel window.
     pub fn max_pool2d<T: crate::ToUsize2>(&self, sz: T) -> Result<Self> {
         let sz = sz.to_usize2();
         self.max_pool2d_with_stride(sz, sz)
     }
 
+    /// Same as `max_pool2d` but with a `stride` that can be set to a value different from the
+    /// kernel size.
     pub fn max_pool2d_with_stride<T: crate::ToUsize2>(
         &self,
         kernel_size: T,
@@ -1022,6 +1065,7 @@ impl Tensor {
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
+    /// Accumulate element from `source` at indexes `indexes` and add them to `self`.
     pub fn index_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "index-add")?;
         let source_dims = source.dims();
@@ -1070,6 +1114,17 @@ impl Tensor {
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
+    /// Gather values across the target dimension.
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - The input tensor.
+    /// * `indexes` - The indices of elements to gather, this should have the same shape as `self`
+    ///   but can have a different number of elements on the target dimension.
+    /// * `dim` - the target dimension.
+    ///
+    /// The resulting tensor has the same shape as `indexes` and use values from `self` indexed on
+    /// dimension `dim` by the values in `indexes`.
     pub fn gather<D: Dim>(&self, indexes: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "gather")?;
         let self_dims = self.dims();
@@ -1100,6 +1155,13 @@ impl Tensor {
         Ok(from_storage(storage, indexes.shape(), op, false))
     }
 
+    /// Select values for the input tensor at the target indexes across the specified dimension.
+    ///
+    /// The `indexes` is argument is an int tensor with a single dimension.
+    /// The output has the same number of dimension as the `self` input. The target dimension of
+    /// the output has length the length of `indexes` and the values are taken from `self` using
+    /// the index from `indexes`. Other dimensions have the same number of elements as the input
+    /// tensor.
     pub fn index_select<D: Dim>(&self, indexes: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "index-select")?;
         let indexes_len = match indexes.dims() {
@@ -1858,6 +1920,8 @@ impl Tensor {
         Ok(from_storage(storage, shape, op, false))
     }
 
+    /// Pad the input tensor using 0s along dimension `dim`. This adds `left` elements before the
+    /// input tensor values and `right` elements after.
     pub fn pad_with_zeros<D: Dim>(&self, dim: D, left: usize, right: usize) -> Result<Self> {
         if left == 0 && right == 0 {
             Ok(self.clone())
@@ -1884,6 +1948,7 @@ impl Tensor {
         }
     }
 
+    /// Run the `forward` method of `m` on `self`.
     pub fn apply<M: crate::Module>(&self, m: &M) -> Result<Self> {
         m.forward(self)
     }
