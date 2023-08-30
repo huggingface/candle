@@ -42,3 +42,16 @@ pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
     // TODO: Should we have a specialized op for this?
     (xs.neg()?.exp()? + 1.0)?.recip()
 }
+
+pub fn dropout(xs: &Tensor, drop_p: f32) -> Result<Tensor> {
+    // This implementation is inefficient as it stores the full mask for the backward pass.
+    // Instead we could just store the seed and have a specialized kernel that would both
+    // generate the random mask and apply it.
+    // Another easier optimization would be to be able to generate boolean mask using just a bit of
+    // entropy per element rather than generating a full float per element.
+    let rand = Tensor::rand(0f32, 1f32, xs.shape(), xs.device())?;
+    let scale = 1.0 / (1.0 - drop_p as f64);
+    let drop_p = Tensor::new(drop_p, xs.device())?.broadcast_as(xs.shape())?;
+    let mask = (rand.ge(&drop_p)? * scale)?.to_dtype(xs.dtype())?;
+    xs * mask
+}
