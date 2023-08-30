@@ -95,7 +95,7 @@ impl ConvNet {
             .flatten_from(1)?
             .apply(&self.fc1)?
             .relu()?;
-        self.dropout(&xs, train)?.apply(&self.fc2)
+        self.dropout.forward(&xs, train)?.apply(&self.fc2)
     }
 }
 
