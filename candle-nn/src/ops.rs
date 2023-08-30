@@ -4,14 +4,14 @@ use candle::{Result, Tensor};
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
 ///
 /// ```rust
-/// use candle::{Tensor, Device};
+/// use candle::{Tensor, Device, test_utils::to_vec2_round};
 /// let a = Tensor::new(&[[0f32, 1., 0., 1.], [-2., 2., 3., -3.]], &Device::Cpu)?;
 /// let a = candle_nn::ops::softmax(&a, 1)?;
 /// assert_eq!(
-///     a.to_vec2::<f32>()?,
+///     to_vec2_round(&a, 4)?,
 ///     &[
-///         [0.13447072, 0.3655293, 0.13447072, 0.3655293],
-///         [0.0048928666, 0.26714146, 0.7261658, 0.0017999851]
+///         [0.1345, 0.3655, 0.1345, 0.3655],
+///         [0.0049, 0.2671, 0.7262, 0.0018]
 ///     ]);
 /// # Ok::<(), candle::Error>(())
 /// ```
