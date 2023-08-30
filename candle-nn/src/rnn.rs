@@ -1,5 +1,5 @@
 //! Recurrent Neural Networks
-use candle::{Device, Result, Tensor};
+use candle::{DType, Device, Result, Tensor};
 
 /// Trait for Recurrent Neural Networks.
 #[allow(clippy::upper_case_acronyms)]
@@ -75,34 +75,48 @@ impl Default for LSTMConfig {
 /// A Long Short-Term Memory (LSTM) layer.
 ///
 /// <https://en.wikipedia.org/wiki/Long_short-term_memory>
-#[allow(clippy::upper_case_acronyms)]
+#[allow(clippy::upper_case_acronyms, unused)]
 #[derive(Debug)]
 pub struct LSTM {
     flat_weights: Vec<Tensor>,
     hidden_dim: usize,
     config: LSTMConfig,
     device: Device,
+    dtype: DType,
 }
 
 /// Creates a LSTM layer.
 pub fn lstm(
     _in_dim: usize,
-    _hidden_dim: usize,
-    _cfg: LSTMConfig,
-    _vb: crate::VarBuilder,
+    hidden_dim: usize,
+    config: LSTMConfig,
+    vb: crate::VarBuilder,
 ) -> Result<LSTM> {
-    todo!()
+    let flat_weights = vec![]; // TODO
+    Ok(LSTM {
+        flat_weights,
+        hidden_dim,
+        config,
+        device: vb.device().clone(),
+        dtype: vb.dtype(),
+    })
 }
 
 impl RNN for LSTM {
     type State = LSTMState;
 
-    fn zero_state(&self, _batch_dim: usize) -> Result<Self::State> {
-        todo!()
+    fn zero_state(&self, batch_dim: usize) -> Result<Self::State> {
+        let zeros = Tensor::zeros((batch_dim, self.hidden_dim), self.dtype, &self.device)?;
+        Ok(Self::State {
+            h: zeros.clone(),
+            c: zeros.clone(),
+        })
     }
 
-    fn step(&self, _input: &Tensor, _in_state: &Self::State) -> Result<Self::State> {
-        todo!()
+    fn step(&self, input: &Tensor, in_state: &Self::State) -> Result<Self::State> {
+        let input = input.unsqueeze(1)?;
+        let (_output, state) = self.seq_init(&input, in_state)?;
+        Ok(state)
     }
 
     fn seq_init(&self, _input: &Tensor, _in_state: &Self::State) -> Result<(Tensor, Self::State)> {
