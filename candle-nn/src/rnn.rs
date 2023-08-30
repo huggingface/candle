@@ -110,7 +110,7 @@ pub fn lstm(
         config.w_ih_init,
     )?;
     let w_hh = vb.get_with_hints(
-        (4 * hidden_dim, in_dim),
+        (4 * hidden_dim, hidden_dim),
         "weight_hh_l0", // Only a single layer is supported.
         config.w_hh_init,
     )?;
