@@ -1,4 +1,4 @@
-use candle_wasm_example_whisper::worker::{Decoder as D, ModelData, WorkerOutput};
+use candle_wasm_example_whisper::worker::{Decoder as D, ModelData};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -31,8 +31,7 @@ impl Decoder {
         let segments = self
             .decoder
             .convert_and_run(&wav_input)
-            .map(WorkerOutput::Decoded)
-            .map_err(|e| e.to_string());
+            .map_err(|e| JsError::new(&e.to_string()))?;
 
         let json = serde_json::to_string(&segments)?;
         Ok(json)
