@@ -146,45 +146,43 @@ impl RNN for LSTM {
     }
 
     fn step(&self, input: &Tensor, in_state: &Self::State) -> Result<Self::State> {
-        let input = input.unsqueeze(1)?;
-        let (_output, state) = self.seq_init(&input, in_state)?;
-        Ok(state)
+        let w_ih = input.matmul(&self.w_ih.t()?)?;
+        let w_hh = in_state.h.matmul(&self.w_hh.t()?)?;
+        let w_ih = match &self.b_ih {
+            None => w_ih,
+            Some(b_ih) => w_ih.broadcast_add(b_ih)?,
+        };
+        let w_hh = match &self.b_hh {
+            None => w_hh,
+            Some(b_hh) => w_hh.broadcast_add(b_hh)?,
+        };
+        let chunks = (&w_ih + &w_hh)?.chunk(4, 1)?;
+        let in_gate = crate::ops::sigmoid(&chunks[0])?;
+        let forget_gate = crate::ops::sigmoid(&chunks[1])?;
+        // TODO: This should be a tanh
+        let cell_gate = crate::ops::sigmoid(&chunks[2])?;
+        let out_gate = crate::ops::sigmoid(&chunks[3])?;
+
+        let next_c = ((forget_gate * &in_state.c)? + (in_gate * cell_gate)?)?;
+        // TODO: This should be another tanh
+        let next_h = (out_gate * crate::ops::sigmoid(&next_c)?)?;
+        Ok(LSTMState {
+            c: next_c,
+            h: next_h,
+        })
     }
 
     /// The input should have dimensions [batch_size, seq_len, features].
     fn seq_init(&self, input: &Tensor, in_state: &Self::State) -> Result<(Tensor, Self::State)> {
         let (_b_size, seq_len, _features) = input.dims3()?;
-        let mut c = in_state.c.clone();
-        let mut h = in_state.h.clone();
+        let mut state = in_state.clone();
         let mut output: Vec<Tensor> = Vec::with_capacity(seq_len);
         for seq_index in 0..seq_len {
             let input = input.i((.., seq_index, ..))?;
-            let w_ih = input.matmul(&self.w_ih.t()?)?;
-            let w_hh = input.matmul(&self.w_hh.t()?)?;
-            let w_ih = match &self.b_ih {
-                None => w_ih,
-                Some(b_ih) => w_ih.broadcast_add(b_ih)?,
-            };
-            let w_hh = match &self.b_hh {
-                None => w_hh,
-                Some(b_hh) => w_hh.broadcast_add(b_hh)?,
-            };
-            let chunks = (&w_ih + &w_hh)?.chunk(4, 1)?;
-            let in_gate = crate::ops::sigmoid(&chunks[0])?;
-            let forget_gate = crate::ops::sigmoid(&chunks[1])?;
-            // TODO: This should be a tanh
-            let cell_gate = crate::ops::sigmoid(&chunks[2])?;
-            let out_gate = crate::ops::sigmoid(&chunks[3])?;
-
-            let next_c = ((forget_gate * c)? + (in_gate * cell_gate)?)?;
-            let next_h = (out_gate * crate::ops::sigmoid(&next_c)?)?;
-
-            c = next_c;
-            h = next_h;
-            output.push(h.clone());
+            state = self.step(&input, &state)?;
+            output.push(state.h.clone());
         }
         let output = Tensor::cat(&output, 1)?;
-        let out_state = LSTMState { h, c };
-        Ok((output, out_state))
+        Ok((output, state))
     }
 }
