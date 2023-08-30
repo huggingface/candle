@@ -379,6 +379,11 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.sub(&(&grad * arg.sin())?)?
                     }
+                    Op::Unary(arg, UnaryOp::Tanh) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        let minus_dtanh = (node.sqr()? - 1.)?;
+                        *sum_grad = sum_grad.sub(&(&grad * &minus_dtanh)?)?
+                    }
                     Op::Unary(arg, UnaryOp::Abs) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let ones = arg.ones_like()?;

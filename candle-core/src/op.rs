@@ -59,6 +59,7 @@ pub enum UnaryOp {
     Sqrt,
     Gelu,
     Relu,
+    Tanh,
 }
 
 #[derive(Clone)]
@@ -324,6 +325,7 @@ pub(crate) struct Sqr;
 pub(crate) struct Sqrt;
 pub(crate) struct Gelu;
 pub(crate) struct Relu;
+pub(crate) struct Tanh;
 
 macro_rules! bin_op {
     ($op:ident, $name: literal, $e: expr, $f32_vec: ident, $f64_vec: ident) => {
@@ -521,6 +523,7 @@ unary_op!(Exp, "exp", v, v.exp(), vs_exp, vd_exp);
 unary_op!(Log, "log", v, v.ln(), vs_ln, vd_ln);
 unary_op!(Sin, "sin", v, v.sin(), vs_sin, vd_sin);
 unary_op!(Cos, "cos", v, v.cos(), vs_cos, vd_cos);
+unary_op!(Tanh, "tanh", v, v.tanh(), vs_tanh, vd_tanh);
 unary_op!(Abs, "abs", v, v.abs());
 unary_op!(Neg, "neg", v, -v);
 unary_op!(Recip, "recip", v, v.recip());

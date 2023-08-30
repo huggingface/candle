@@ -301,7 +301,7 @@ pub fn vd_sqr(a: &[f64], y: &mut [f64]) {
 }
 
 #[inline]
-fn vs_tanh(a: &[f32], y: &mut [f32]) {
+pub fn vs_tanh(a: &[f32], y: &mut [f32]) {
     let a_len = a.len();
     let y_len = y.len();
     if a_len != y_len {
@@ -311,7 +311,7 @@ fn vs_tanh(a: &[f32], y: &mut [f32]) {
 }
 
 #[inline]
-fn vd_tanh(a: &[f64], y: &mut [f64]) {
+pub fn vd_tanh(a: &[f64], y: &mut [f64]) {
     let a_len = a.len();
     let y_len = y.len();
     if a_len != y_len {
