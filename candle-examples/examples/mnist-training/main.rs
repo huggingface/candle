@@ -65,33 +65,37 @@ struct ConvNet {
     conv2: Conv2d,
     fc1: Linear,
     fc2: Linear,
+    dropout: candle_nn::Dropout,
 }
 
-impl Model for ConvNet {
+impl ConvNet {
     fn new(vs: VarBuilder) -> Result<Self> {
         let conv1 = candle_nn::conv2d(1, 32, 5, Default::default(), vs.pp("c1"))?;
         let conv2 = candle_nn::conv2d(32, 64, 5, Default::default(), vs.pp("c2"))?;
         let fc1 = candle_nn::linear(1024, 1024, vs.pp("fc1"))?;
         let fc2 = candle_nn::linear(1024, LABELS, vs.pp("fc2"))?;
+        let dropout = candle_nn::Dropout::new(0.5);
         Ok(Self {
             conv1,
             conv2,
             fc1,
             fc2,
+            dropout,
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
         let (b_sz, _img_dim) = xs.dims2()?;
-        xs.reshape((b_sz, 1, 28, 28))?
+        let xs = xs
+            .reshape((b_sz, 1, 28, 28))?
             .apply(&self.conv1)?
             .max_pool2d(2)?
             .apply(&self.conv2)?
             .max_pool2d(2)?
             .flatten_from(1)?
             .apply(&self.fc1)?
-            .relu()?
-            .apply(&self.fc2)
+            .relu()?;
+        self.dropout(&xs, train)?.apply(&self.fc2)
     }
 }
 
@@ -138,7 +142,7 @@ fn training_loop_cnn(
         for batch_idx in batch_idxs.iter() {
             let train_images = train_images.narrow(0, batch_idx * BSIZE, BSIZE)?;
             let train_labels = train_labels.narrow(0, batch_idx * BSIZE, BSIZE)?;
-            let logits = model.forward(&train_images)?;
+            let logits = model.forward(&train_images, true)?;
             let log_sm = ops::log_softmax(&logits, D::Minus1)?;
             let loss = loss::nll(&log_sm, &train_labels)?;
             opt.backward_step(&loss)?;
@@ -146,7 +150,7 @@ fn training_loop_cnn(
         }
         let avg_loss = sum_loss / n_batches as f32;
 
-        let test_logits = model.forward(&test_images)?;
+        let test_logits = model.forward(&test_images, false)?;
         let sum_ok = test_logits
             .argmax(D::Minus1)?
             .eq(&test_labels)?
