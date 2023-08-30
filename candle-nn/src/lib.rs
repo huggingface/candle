@@ -10,6 +10,7 @@ pub mod linear;
 pub mod loss;
 pub mod ops;
 pub mod optim;
+pub mod rnn;
 pub mod var_builder;
 pub mod var_map;
 
@@ -23,6 +24,7 @@ pub use init::Init;
 pub use layer_norm::{layer_norm, rms_norm, LayerNorm, LayerNormConfig, RmsNorm};
 pub use linear::{linear, linear_no_bias, Linear};
 pub use optim::{AdamW, ParamsAdamW, SGD};
+pub use rnn::{lstm, LSTM, RNN};
 pub use var_builder::VarBuilder;
 pub use var_map::VarMap;
 
