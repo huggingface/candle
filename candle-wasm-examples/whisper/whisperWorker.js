@@ -2,7 +2,12 @@
 import init, { Decoder } from "./build/m.js";
 
 async function fetchArrayBuffer(url) {
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    cache: "force-cache",
+    headers: {
+      "Cache-Control": "public, max-age=31536000",
+    },
+  });
   const data = await res.arrayBuffer();
   return new Uint8Array(data);
 }
@@ -16,7 +21,7 @@ class Whisper {
     if (!this.instance[modelID]) {
       await init();
 
-      self.postMessage({ status: `loading model` });
+      self.postMessage({ status: "loading", message: "Loading Model" });
       const [weightsArrayU8, tokenizerArrayU8, mel_filtersArrayU8] =
         await Promise.all([
           fetchArrayBuffer(weightsURL),
@@ -30,7 +35,7 @@ class Whisper {
         mel_filtersArrayU8
       );
     } else {
-      self.postMessage({ status: "model already loaded" });
+      self.postMessage({ status: "loading", message: "Model Already Loaded" });
     }
     return this.instance[modelID];
   }
@@ -40,7 +45,7 @@ self.addEventListener("message", async (event) => {
   const { weightsURL, modelID, tokenizerURL, mel_filtersURL, audioURL } =
     event.data;
   try {
-    self.postMessage({ status: "starting decoder" });
+    self.postMessage({ status: "decoding", message: "Starting Decoder" });
 
     const decoder = await Whisper.getInstance(
       weightsURL,
@@ -49,15 +54,16 @@ self.addEventListener("message", async (event) => {
       mel_filtersURL
     );
 
-    self.postMessage({ status: "loading audio" });
+    self.postMessage({ status: "decoding", message: "Loading Audio" });
     const audioArrayU8 = await fetchArrayBuffer(audioURL);
 
-    self.postMessage({ status: `running decoder` });
+    self.postMessage({ status: "decoding", message: "Running Decoder..." });
     const segments = decoder.decode(audioArrayU8);
 
     // Send the segment back to the main thread as JSON
     self.postMessage({
       status: "complete",
+      message: "complete",
       output: JSON.parse(segments),
     });
   } catch (e) {
