@@ -27,7 +27,7 @@ impl Decoder {
     }
 
     #[wasm_bindgen]
-    pub fn decode(&self, wav_input: Vec<u8>) -> Result<String, JsError> {
+    pub fn decode(&mut self, wav_input: Vec<u8>) -> Result<String, JsError> {
         let segments = self
             .decoder
             .convert_and_run(&wav_input)

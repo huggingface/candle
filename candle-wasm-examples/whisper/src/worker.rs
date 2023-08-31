@@ -103,9 +103,9 @@ impl Decoder {
         })
     }
 
-    fn decode(&self, mel: &Tensor, t: f64, rng: &mut StdRng) -> anyhow::Result<DecodingResult> {
-        let model = &self.model;
-        let audio_features = model.encoder.forward(mel)?;
+    fn decode(&mut self, mel: &Tensor, t: f64, rng: &mut StdRng) -> anyhow::Result<DecodingResult> {
+        let model = &mut self.model;
+        let audio_features = model.encoder.forward(mel, true)?;
         console_log!("audio features: {:?}", audio_features.dims());
         let sample_len = model.config.max_target_positions / 2;
         let mut sum_logprob = 0f64;
@@ -117,7 +117,7 @@ impl Decoder {
             // The model expects a batch dim but this inference loop does not handle
             // it so we add it at this point.
             let tokens_t = tokens_t.unsqueeze(0)?;
-            let logits = model.decoder.forward(&tokens_t, &audio_features)?;
+            let logits = model.decoder.forward(&tokens_t, &audio_features, i == 0)?;
             let logits = logits.squeeze(0)?;
 
             // Extract the no speech probability on the first iteration by looking at the first
@@ -169,7 +169,7 @@ impl Decoder {
     }
 
     fn decode_with_fallback(
-        &self,
+        &mut self,
         segment: &Tensor,
         rng: &mut StdRng,
     ) -> anyhow::Result<DecodingResult> {
@@ -195,7 +195,7 @@ impl Decoder {
         unreachable!()
     }
 
-    fn run(&self, mel: &Tensor) -> anyhow::Result<Vec<Segment>> {
+    fn run(&mut self, mel: &Tensor) -> anyhow::Result<Vec<Segment>> {
         let mut rng = StdRng::seed_from_u64(299792458);
         let (_, _, content_frames) = mel.dims3()?;
         let mut seek = 0;
@@ -239,7 +239,7 @@ impl Decoder {
         Ok(decoder)
     }
 
-    pub fn convert_and_run(&self, wav_input: &[u8]) -> anyhow::Result<Vec<Segment>> {
+    pub fn convert_and_run(&mut self, wav_input: &[u8]) -> anyhow::Result<Vec<Segment>> {
         let device = Device::Cpu;
         let mut wav_input = std::io::Cursor::new(wav_input);
         let (header, data) = wav::read(&mut wav_input)?;
@@ -314,7 +314,7 @@ impl yew_agent::Worker for Worker {
                 }
                 Err(err) => Err(format!("model creation error {err:?}")),
             },
-            WorkerInput::DecodeTask { wav_bytes } => match &self.decoder {
+            WorkerInput::DecodeTask { wav_bytes } => match &mut self.decoder {
                 None => Err("model has not been set".to_string()),
                 Some(decoder) => decoder
                     .convert_and_run(&wav_bytes)
