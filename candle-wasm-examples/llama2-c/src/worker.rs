@@ -49,11 +49,11 @@ fn read_tensor<R: std::io::Read, S: Into<Shape>>(
     Ok(tensor)
 }
 
-struct Model {
-    cache: Cache,
+pub struct Model {
+    pub cache: Cache,
     config: Config,
-    llama: Llama,
-    tokenizer: Tokenizer,
+    pub llama: Llama,
+    pub tokenizer: Tokenizer,
 }
 
 pub struct LogitsProcessor {
@@ -275,7 +275,7 @@ impl TransformerWeights {
 }
 
 impl Model {
-    fn load(md: ModelData) -> Result<Self> {
+    pub fn load(md: ModelData) -> Result<Self> {
         let dev = Device::Cpu;
         let mut model = std::io::Cursor::new(md.model);
         let config = Config::from_reader(&mut model)?;
