@@ -102,6 +102,20 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         }
     }
 
+    /// Returns the prefix of the `VarBuilder`.
+    pub fn prefix(&self) -> String {
+        self.path.join(".")
+    }
+
+    /// Returns a new `VarBuilder` with the prefix set to `prefix`.
+    pub fn set_prefix(&self, prefix: impl ToString) -> Self {
+        Self {
+            data: self.data.clone(),
+            path: vec![prefix.to_string()],
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
     /// Return a new `VarBuilder` adding `s` to the current prefix. This can be think of as `cd`
     /// into a directory.
     pub fn push_prefix<S: ToString>(&self, s: S) -> Self {
