@@ -2088,6 +2088,22 @@ macro_rules! bin_trait {
             }
         }
 
+        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<Tensor> for Result<B> {
+            type Output = Result<Tensor>;
+
+            fn $fn1(self, rhs: Tensor) -> Self::Output {
+                Tensor::$fn1(self?.borrow(), &rhs)
+            }
+        }
+
+        impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<&Tensor> for Result<B> {
+            type Output = Result<Tensor>;
+
+            fn $fn1(self, rhs: &Tensor) -> Self::Output {
+                Tensor::$fn1(self?.borrow(), rhs)
+            }
+        }
+
         impl<B: std::borrow::Borrow<Tensor>> std::ops::$trait<Result<B>> for Tensor {
             type Output = Result<Tensor>;
 
