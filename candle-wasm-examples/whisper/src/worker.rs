@@ -40,9 +40,13 @@ pub const TEMPERATURES: [f64; 6] = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
 pub const COMPRESSION_RATIO_THRESHOLD: f64 = 2.4;
 
 // Tokenizer dependent bits.
-pub const SOT_TOKEN: u32 = 50257;
-pub const EOT_TOKEN: u32 = 50256;
-pub const NO_SPEECH_TOKEN: u32 = 50361;
+const SOT_TOKEN: &str = "<|startoftranscript|>";
+const TRANSCRIBE_TOKEN: &str = "<|transcribe|>";
+const TRANSLATE_TOKEN: &str = "<|translate|>";
+const NO_TIMESTAMPS_TOKEN: &str = "<|notimestamps|>";
+const EOT_TOKEN: &str = "<|endoftext|>";
+const NO_SPEECH_TOKEN: &str = "<|nocaptions|>";
+
 // From the _get_suppress_tokens function + 50362 (no timestamp)
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/decoding.py#L605
 pub const SUPPRESS_TOKENS: [u32; 91] = [
@@ -71,11 +75,18 @@ pub struct Segment {
     pub dr: DecodingResult,
 }
 
+#[allow(unused)]
 pub struct Decoder {
     model: Whisper,
     mel_filters: Vec<f32>,
     tokenizer: Tokenizer,
     suppress_tokens: Tensor,
+    sot_token: u32,
+    transcribe_token: u32,
+    translate_token: u32,
+    eot_token: u32,
+    no_speech_token: u32,
+    no_timestamps_token: u32,
 }
 
 impl Decoder {
@@ -94,12 +105,24 @@ impl Decoder {
                 }
             })
             .collect();
+        let no_timestamps_token = token_id(&tokenizer, NO_TIMESTAMPS_TOKEN)?;
         let suppress_tokens = Tensor::new(suppress_tokens.as_slice(), device)?;
+        let sot_token = token_id(&tokenizer, SOT_TOKEN)?;
+        let transcribe_token = token_id(&tokenizer, TRANSCRIBE_TOKEN)?;
+        let translate_token = token_id(&tokenizer, TRANSLATE_TOKEN)?;
+        let eot_token = token_id(&tokenizer, EOT_TOKEN)?;
+        let no_speech_token = token_id(&tokenizer, NO_SPEECH_TOKEN)?;
         Ok(Self {
             model,
             mel_filters,
             tokenizer,
             suppress_tokens,
+            sot_token,
+            transcribe_token,
+            translate_token,
+            eot_token,
+            no_speech_token,
+            no_timestamps_token,
         })
     }
 
@@ -110,7 +133,7 @@ impl Decoder {
         let sample_len = model.config.max_target_positions / 2;
         let mut sum_logprob = 0f64;
         let mut no_speech_prob = f64::NAN;
-        let mut tokens = vec![SOT_TOKEN];
+        let mut tokens = vec![self.sot_token, self.transcribe_token];
         for i in 0..sample_len {
             let tokens_t = Tensor::new(tokens.as_slice(), mel.device())?;
 
@@ -124,7 +147,7 @@ impl Decoder {
             // token logits and the probability for the according token.
             if i == 0 {
                 no_speech_prob = softmax(&logits.get(0)?, 0)?
-                    .get(NO_SPEECH_TOKEN as usize)?
+                    .get(self.no_speech_token as usize)?
                     .to_scalar::<f32>()? as f64;
             }
 
@@ -150,7 +173,7 @@ impl Decoder {
             let prob = softmax(&logits, candle::D::Minus1)?
                 .get(next_token as usize)?
                 .to_scalar::<f32>()? as f64;
-            if next_token == EOT_TOKEN || tokens.len() > model.config.max_target_positions {
+            if next_token == self.eot_token || tokens.len() > model.config.max_target_positions {
                 break;
             }
             sum_logprob += prob.ln();
@@ -259,6 +282,13 @@ impl Decoder {
         console_log!("loaded mel: {:?}", mel.dims());
         let segments = self.run(&mel)?;
         Ok(segments)
+    }
+}
+
+pub fn token_id(tokenizer: &Tokenizer, token: &str) -> candle::Result<u32> {
+    match tokenizer.token_to_id(token) {
+        None => candle::bail!("no token-id for {token}"),
+        Some(id) => Ok(id),
     }
 }
 
