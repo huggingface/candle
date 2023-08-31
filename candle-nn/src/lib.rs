@@ -25,7 +25,7 @@ pub use layer_norm::{layer_norm, rms_norm, LayerNorm, LayerNormConfig, RmsNorm};
 pub use linear::{linear, linear_no_bias, Linear};
 pub use ops::Dropout;
 pub use optim::{AdamW, ParamsAdamW, SGD};
-pub use rnn::{lstm, LSTM, RNN};
+pub use rnn::{gru, lstm, GRUConfig, LSTMConfig, GRU, LSTM, RNN};
 pub use var_builder::VarBuilder;
 pub use var_map::VarMap;
 
