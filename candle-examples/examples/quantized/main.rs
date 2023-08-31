@@ -209,7 +209,7 @@ fn main() -> anyhow::Result<()> {
         candle::utils::with_f16c()
     );
     println!(
-        "temp: {:.2} repeat-penalty {:.2} repeat-last-n {}",
+        "temp: {:.2} repeat-penalty: {:.2} repeat-last-n: {}",
         args.temperature, args.repeat_penalty, args.repeat_last_n
     );
 
