@@ -98,6 +98,7 @@ fn main() -> Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
+    let _ = env_logger::Builder::from_env(env_logger::Env::new().default_filter_or("info")).try_init();
     let args = Args::parse();
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
@@ -151,7 +152,6 @@ fn main() -> Result<()> {
             };
             let config: LlamaConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
             let config = config.into_config(args.use_flash_attn);
-
             let mut filenames = vec![];
             for rfilename in [
                 "model-00001-of-00002.safetensors",

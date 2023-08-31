@@ -34,7 +34,8 @@ clap = { version = "4.2.4", features = ["derive"] }
 cudarc = { version = "0.9.14", features = ["f16"] }
 # TODO: Switch back to the official gemm implementation once it has caught up.
 gemm = { version = "0.15.6", package = "candle-gemm" }
-hf-hub = "0.2.0"
+#hf-hub = "0.3.1"
+hf-hub = {version = "0.3.1", path = "../hf-hub"}
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
 image = { version = "0.24.7", default-features = false, features = ["jpeg", "png"] }
 imageproc = { version = "0.23.0", default-features = false }

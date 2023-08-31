@@ -39,6 +39,8 @@ tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
 wav = { workspace = true }
+log = "0.4.19"
+env_logger = "0.10.0"
 # Necessary to disambiguate with tokio in wasm examples which are 1.28.1
 tokio = "1.29.1"
 
