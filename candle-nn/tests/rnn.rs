@@ -96,6 +96,6 @@ fn gru() -> Result<()> {
         state = gru.step(&inp, &state)?
     }
     let h = state.h();
-    assert_eq!(to_vec2_round(h, 4)?, &[[0.053, 0.7511, -0.9984]]);
+    assert_eq!(to_vec2_round(h, 4)?, &[[0.0579, 0.8836, -0.9991]]);
     Ok(())
 }

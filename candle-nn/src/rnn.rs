@@ -306,7 +306,7 @@ impl RNN for GRU {
         let chunks_hh = w_hh.chunk(3, 1)?;
         let r_gate = crate::ops::sigmoid(&(&chunks_ih[0] + &chunks_hh[0])?)?;
         let z_gate = crate::ops::sigmoid(&(&chunks_ih[1] + &chunks_hh[1])?)?;
-        let n_gate = (&chunks_ih[2] + (r_gate * &chunks_hh[1])?)?.tanh();
+        let n_gate = (&chunks_ih[2] + (r_gate * &chunks_hh[2])?)?.tanh();
 
         let next_h = ((&z_gate * &in_state.h)? - ((&z_gate - 1.)? * n_gate)?)?;
         Ok(GRUState { h: next_h })
