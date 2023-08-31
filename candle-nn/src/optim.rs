@@ -58,6 +58,10 @@ impl SGD {
         let grads = loss.backward()?;
         self.step(&grads)
     }
+
+    pub fn set_learning_rate(&mut self, lr: f64) {
+        self.learning_rate = lr
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -125,6 +129,10 @@ impl AdamW {
             ..ParamsAdamW::default()
         };
         Self::new(vars, params)
+    }
+
+    pub fn set_learning_rate(&mut self, lr: f64) {
+        self.params.lr = lr
     }
 
     pub fn step(&mut self, grads: &candle::backprop::GradStore) -> Result<()> {
