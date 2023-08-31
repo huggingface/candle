@@ -304,12 +304,12 @@
           button.disabled = true;
           button.classList.add("bg-blue-700");
           button.classList.remove("bg-blue-950");
-          button.textContent = "Detecting...";
+          button.textContent = "Predicting...";
         } else if (statusMessage === "complete") {
           button.disabled = false;
           button.classList.add("bg-blue-950");
           button.classList.remove("bg-blue-700");
-          button.textContent = "Detect Objects";
+          button.textContent = "Predict";
           document.querySelector("#share-btn").hidden = false;
         }
       }
@@ -331,22 +331,25 @@
         <h1 class="text-5xl font-bold">Candle YOLOv8</h1>
         <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
         <p class="max-w-lg">
-          Running an object detection model in the browser using rust/wasm with
-          an image. This demo uses the
+          This demo showcases object detection and pose estimation models in
+          your browser using Rust/WASM. It utilizes
           <a
             href="https://huggingface.co/lmz/candle-yolo-v8"
             target="_blank"
             class="underline hover:text-blue-500 hover:no-underline"
           >
-            Candle YOLOv8
+            safetensor's YOLOv8 models
           </a>
-          models to detect objects in images and WASM runtime built with
+          and a WASM runtime built with
           <a
             href="https://github.com/huggingface/candle/"
             target="_blank"
             class="underline hover:text-blue-500 hover:no-underline"
-            >Candle
-          </a>
+            >Candle </a
+          >.
+        </p>
+        <p>
+          To run pose estimation, select a yolo pose model from the dropdown
         </p>
       </div>
 
@@ -492,7 +495,7 @@
           disabled
           class="bg-blue-950 hover:bg-blue-700 text-white font-normal py-2 px-4 rounded disabled:opacity-75 disabled:hover:bg-blue-950"
         >
-          Detect Objects
+          Predict
         </button>
       </div>
     </main>
