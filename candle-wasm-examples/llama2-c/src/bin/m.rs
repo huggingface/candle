@@ -25,7 +25,7 @@ impl Model {
             candle_transformers::utils::apply_repeat_penalty(
                 &logits,
                 self.repeat_penalty,
-                &tokens[start_at..],
+                &self.tokens[start_at..],
             )?
         };
 
