@@ -377,8 +377,12 @@ impl PyTensor {
         Ok(PyTensor(self.0.narrow(dim, start, len).map_err(wrap_err)?))
     }
 
-    fn sum_keepdim(&self, dims: Vec<usize>) -> PyResult<Self> {
-        // TODO: Support a single dim as input?
+    fn sum_keepdim(&self, dims: PyObject, py: Python<'_>) -> PyResult<Self> {
+        let dims = if let Ok(dim) = dims.extract::<usize>(py) {
+            vec![dim]
+        } else {
+            dims.extract::<Vec<usize>>(py)?
+        };
         Ok(PyTensor(
             self.0.sum_keepdim(dims.as_slice()).map_err(wrap_err)?,
         ))
