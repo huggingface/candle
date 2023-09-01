@@ -230,11 +230,19 @@ impl QTensor {
 }
 
 #[derive(Debug)]
-pub struct QMatMul(QTensor);
+pub struct QMatMul(std::sync::Arc<QTensor>);
 
 impl QMatMul {
-    pub fn from_qtensor(qtensor: QTensor) -> Self {
+    pub fn from_arc(qtensor: std::sync::Arc<QTensor>) -> Self {
         Self(qtensor)
+    }
+
+    pub fn from_qtensor(qtensor: QTensor) -> Self {
+        Self(std::sync::Arc::new(qtensor))
+    }
+
+    pub fn inner(&self) -> &std::sync::Arc<QTensor> {
+        &self.0
     }
 }
 
@@ -279,6 +287,6 @@ impl crate::CustomOp1 for QTensor {
 
 impl QMatMul {
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply_op1_no_bwd(&self.0)
+        xs.apply_op1_no_bwd(self.0.as_ref())
     }
 }
