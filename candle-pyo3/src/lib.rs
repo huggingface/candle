@@ -470,6 +470,7 @@ fn candle(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyDType>()?;
     m.add("u8", PyDType(DType::U8))?;
     m.add("u32", PyDType(DType::U32))?;
+    m.add("i16", PyDType(DType::I64))?;
     m.add("bf16", PyDType(DType::BF16))?;
     m.add("f16", PyDType(DType::F16))?;
     m.add("f32", PyDType(DType::F32))?;
