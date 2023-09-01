@@ -51,7 +51,7 @@ fn read_tensor<R: std::io::Read, S: Into<Shape>>(
 
 pub struct Model {
     pub cache: Cache,
-    config: Config,
+    pub config: Config,
     pub llama: Llama,
     pub tokenizer: Tokenizer,
 }
