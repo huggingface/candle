@@ -1,0 +1,249 @@
+<html>
+  <head>
+    <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+    <title>Candle Llama.c Rust/WASM</title>
+  </head>
+  <body></body>
+</html>
+
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
+      html,
+      body {
+        font-family: "Source Sans 3", sans-serif;
+      }
+      code,
+      output,
+      select,
+      pre {
+        font-family: "Source Code Pro", monospace;
+      }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      // base url for audio examples
+      const MODELS_BASE_URL =
+        "https://huggingface.co/karpathy/tinyllamas/resolve/main";
+
+      // models base url
+      const MODELS = {
+        stories15M: {
+          url: "stories15M.bin",
+          seq_len: 256,
+        },
+        stories42M: {
+          url: "stories42M.bin",
+          seq_len: 256,
+        },
+        stories110M: {
+          url: "stories110M.bin",
+          seq_len: 256,
+        },
+      };
+
+      const llamaWorker = new Worker("./llama2cWorker.js", {
+        type: "module",
+      });
+
+      async function generateSequence(
+        weightsURL,
+        modelID,
+        tokenizerURL,
+        prompt,
+        temp,
+        repeatPenalty,
+        seed,
+        updateStatus
+      ) {
+        return new Promise((resolve, reject) => {
+          llamaWorker.postMessage({
+            weightsURL,
+            modelID,
+            tokenizerURL,
+            prompt,
+            temp,
+            repeatPenalty,
+            seed,
+          });
+          llamaWorker.addEventListener("message", (event) => {
+            if ("status" in event.data) {
+              updateStatus(event.data);
+            }
+            if ("error" in event.data) {
+              reject(new Error(event.data.error));
+            }
+            if (event.data.status === "complete") {
+              resolve(event.data);
+            }
+          });
+        });
+      }
+      async function run() {
+        const modelID = document.querySelector("#model").value;
+        const model = MODELS[modelID];
+        // const weightsURL = `${MODELS_BASE_URL}/${model.url}`;
+        const weightsURL = "model.bin";
+        const prompt = document.querySelector("#prompt").value;
+        const temperature = document.querySelector("#temperature").value;
+        const repeatPenalty = document.querySelector("#repeat_penalty").value;
+        const seed = document.querySelector("#seed").value;
+
+        function updateStatus(data) {
+          const outStatus = document.querySelector("#output-status");
+          const outGen = document.querySelector("#output-generation");
+          const outPrompt = document.querySelector("#output-prompt");
+          if (data.status === "loading") {
+            outStatus.hidden = false;
+            outGen.hidden = true;
+            outPrompt.hidden = true;
+            outStatus.textContent = data.message;
+          } else if (data.status === "generating") {
+            outPrompt.hidden = false;
+            outStatus.hidden = true;
+            outGen.hidden = false;
+            outPrompt.textContent = data.prompt;
+            outGen.textContent = data.setence;
+          }
+        }
+
+        await generateSequence(
+          weightsURL,
+          modelID,
+          "tokenizer.json",
+          prompt,
+          temperature,
+          repeatPenalty,
+          BigInt(seed),
+          updateStatus
+        );
+      }
+      document.querySelector("#form").addEventListener("submit", (e) => {
+        e.preventDefault();
+        run();
+      });
+    </script>
+  </head>
+  <body class="container max-w-4xl mx-auto p-4 text-gray-800">
+    <main class="grid grid-cols-1 gap-8 relative">
+      <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
+      <div>
+        <h1 class="text-5xl font-bold">Candle Llama2.c</h1>
+        <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
+        <p class="max-w-lg">
+          <a
+            href="https://github.com/karpathy/llama2.c"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+            target="_blank"
+            >Llama2.c</a
+          >
+          is Andrey Karpathy's C implementation of the Llama 2 LLM model in C.
+          This demo uses
+          <a
+            href="https://github.com/huggingface/candle/"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+            >Candle
+          </a>
+          to run Llama2.c in the browser using rust/wasm.
+        </p>
+      </div>
+
+      <div>
+        <label for="model" class="font-medium">Models Options: </label>
+        <select
+          id="model"
+          class="border-2 border-gray-500 rounded-md font-light"
+        >
+          <option value="stories15M" selected>stories 15M (60.8 MB)</option>
+          <option value="stories42M">stories 42M (167 MB)</option>
+          <option value="stories110M">stories 110M (438 MB)</option>
+        </select>
+      </div>
+      <form
+        id="form"
+        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md"
+      >
+        <input
+          type="text"
+          id="prompt"
+          class="font-light w-full px-3 py-2 mx-1"
+          placeholder="Add your prompt here..."
+        />
+        <button
+          id="run"
+          class="bg-orange-900 hover:bg-orange-800 text-white font-normal py-2 px-4 rounded disabled:opacity-75 disabled:cursor-not-allowed"
+        >
+          Run
+        </button>
+      </form>
+      <div class="grid grid-cols-3 max-w-md items-center gap-3">
+        <label class="text-sm font-medium" for="temperature">Temperature</label>
+        <input
+          type="range"
+          id="temperature"
+          name="temperature"
+          min="0"
+          max="2"
+          step="0.01"
+          value="0.50"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)"
+        />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+        >
+          0.50</output
+        >
+
+        <label class="text-sm font-medium" for="repeat_penalty"
+          >Repeat Penalty</label
+        >
+
+        <input
+          type="range"
+          id="repeat_penalty"
+          name="repeat_penalty"
+          min="-2"
+          max="2"
+          step="0.01"
+          value="1.10"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)"
+        />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+          >1.10</output
+        >
+        <label class="text-sm font-medium" for="seed">Seed</label>
+        <input
+          type="number"
+          id="seed"
+          name="seed"
+          value="299792458"
+          class="font-light border border-gray-700 text-right rounded-md p-2"
+        />
+      </div>
+      <div>
+        <h3 class="font-medium">Generation:</h3>
+
+        <div
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md grid"
+        >
+          <p>
+            <span hidden id="output-prompt" class="font-semibold"></span>
+            <span hidden id="output-generation"></span>
+          </p>
+          <span
+            id="output-status"
+            class="justify-self-center self-center font-light"
+            >No output yet</span
+          >
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
