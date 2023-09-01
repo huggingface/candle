@@ -16,7 +16,6 @@ pub enum Device {
     Cuda(crate::CudaDevice),
 }
 
-// TODO: Should we back the cpu implementation using the NdArray crate or similar?
 pub trait NdArray {
     fn shape(&self) -> Result<Shape>;
 
