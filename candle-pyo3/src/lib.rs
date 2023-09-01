@@ -464,8 +464,39 @@ fn zeros(
     Ok(PyTensor(tensor))
 }
 
+#[pyfunction]
+fn cuda_is_available() -> bool {
+    ::candle::utils::cuda_is_available()
+}
+
+#[pyfunction]
+fn has_accelerate() -> bool {
+    ::candle::utils::has_accelerate()
+}
+
+#[pyfunction]
+fn has_mkl() -> bool {
+    ::candle::utils::has_mkl()
+}
+
+#[pyfunction]
+fn get_num_threads() -> usize {
+    ::candle::utils::get_num_threads()
+}
+
+fn candle_utils(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(cuda_is_available, m)?)?;
+    m.add_function(wrap_pyfunction!(get_num_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(has_accelerate, m)?)?;
+    m.add_function(wrap_pyfunction!(has_mkl, m)?)?;
+    Ok(())
+}
+
 #[pymodule]
-fn candle(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
+    let utils = PyModule::new(py, "utils")?;
+    candle_utils(py, utils)?;
+    m.add_submodule(utils)?;
     m.add_class::<PyTensor>()?;
     m.add_class::<PyDType>()?;
     m.add("u8", PyDType(DType::U8))?;
