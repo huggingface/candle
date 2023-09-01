@@ -18,7 +18,7 @@ impl Model {
         let input = Tensor::new(tokens, &dev)?.unsqueeze(0)?;
         let logits = self.inner.llama.forward(&input, tokens.len())?;
         let logits = logits.squeeze(0)?;
-        let logits = if self.repeat_penalty == 1. {
+        let logits = if self.repeat_penalty == 1. && !tokens.is_empty() {
             logits
         } else {
             let start_at = self.tokens.len().saturating_sub(REPEAT_LAST_N);
