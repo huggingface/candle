@@ -3,6 +3,7 @@
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
+use std::sync::Arc;
 
 use half::{bf16, f16};
 
@@ -466,13 +467,13 @@ fn zeros(
 
 #[derive(Debug)]
 #[pyclass(name = "QTensor")]
-struct PyQTensor(QTensor);
+struct PyQTensor(Arc<QTensor>);
 
 impl std::ops::Deref for PyQTensor {
     type Target = QTensor;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0.as_ref()
     }
 }
 
@@ -504,6 +505,12 @@ impl PyQTensor {
     fn dequantize(&self) -> PyResult<PyTensor> {
         let tensor = self.0.dequantize(&Device::Cpu).map_err(wrap_err)?;
         Ok(PyTensor(tensor))
+    }
+
+    fn matmul_t(&self, lhs: &PyTensor) -> PyResult<PyTensor> {
+        let qmatmul = ::candle::quantized::QMatMul::from_arc(self.0.clone());
+        let res = qmatmul.forward(lhs).map_err(wrap_err)?;
+        Ok(PyTensor(res))
     }
 }
 
