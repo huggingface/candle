@@ -262,6 +262,38 @@ impl PyTensor {
         self.__repr__()
     }
 
+    fn sin(&self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.sin().map_err(wrap_err)?))
+    }
+
+    fn cos(&self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.cos().map_err(wrap_err)?))
+    }
+
+    fn log(&self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.log().map_err(wrap_err)?))
+    }
+
+    fn sqr(&self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.sqr().map_err(wrap_err)?))
+    }
+
+    fn sqrt(&self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.sqrt().map_err(wrap_err)?))
+    }
+
+    fn recip(&self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.recip().map_err(wrap_err)?))
+    }
+
+    fn exp(&self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.exp().map_err(wrap_err)?))
+    }
+
+    fn powf(&self, p: f64) -> PyResult<Self> {
+        Ok(PyTensor(self.0.powf(p).map_err(wrap_err)?))
+    }
+
     fn matmul(&self, rhs: &Self) -> PyResult<Self> {
         Ok(PyTensor(self.0.matmul(rhs).map_err(wrap_err)?))
     }
@@ -354,6 +386,13 @@ impl PyTensor {
 
     fn sum_all(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.sum_all().map_err(wrap_err)?))
+    }
+
+    fn mean_all(&self) -> PyResult<Self> {
+        let elements = self.0.elem_count();
+        let sum = self.0.sum_all().map_err(wrap_err)?;
+        let mean = (sum / elements as f64).map_err(wrap_err)?;
+        Ok(PyTensor(mean))
     }
 
     fn flatten_all(&self) -> PyResult<Self> {
