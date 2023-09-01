@@ -5,7 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{linear, AdamW, Linear, Module, ParamsAdamW, VarBuilder, VarMap};
+use candle_nn::{linear, AdamW, Linear, Module, Optimizer, ParamsAdamW, VarBuilder, VarMap};
 
 fn gen_data() -> Result<(Tensor, Tensor)> {
     // Generate some sample linear data.
