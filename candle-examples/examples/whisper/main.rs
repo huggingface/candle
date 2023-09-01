@@ -146,11 +146,8 @@ impl Decoder {
             tokens.push(language_token);
         }
         match self.task {
-            Some(Task::Transcribe) => tokens.push(self.transcribe_token),
+            None | Some(Task::Transcribe) => tokens.push(self.transcribe_token),
             Some(Task::Translate) => tokens.push(self.translate_token),
-            None => {
-                // Nothing in this case, same as the Python implementation.
-            }
         }
         if !self.timestamps {
             tokens.push(self.no_timestamps_token);
