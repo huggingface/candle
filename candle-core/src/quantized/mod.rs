@@ -236,6 +236,10 @@ impl QMatMul {
     pub fn from_qtensor(qtensor: QTensor) -> Self {
         Self(qtensor)
     }
+
+    pub fn into_inner(self) -> QTensor {
+        self.0
+    }
 }
 
 impl crate::CustomOp1 for QTensor {

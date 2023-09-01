@@ -6,7 +6,7 @@ use pyo3::types::PyTuple;
 
 use half::{bf16, f16};
 
-use ::candle::{DType, Device, Tensor, WithDType};
+use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
 
 pub fn wrap_err(err: ::candle::Error) -> PyErr {
     PyErr::new::<PyValueError, _>(format!("{err:?}"))
@@ -464,6 +464,49 @@ fn zeros(
     Ok(PyTensor(tensor))
 }
 
+#[derive(Debug)]
+#[pyclass(name = "QTensor")]
+struct PyQTensor(QTensor);
+
+impl std::ops::Deref for PyQTensor {
+    type Target = QTensor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[pymethods]
+impl PyQTensor {
+    #[getter]
+    fn ggml_dtype(&self) -> String {
+        format!("{:?}", self.0.dtype())
+    }
+
+    #[getter]
+    fn rank(&self) -> usize {
+        self.0.rank()
+    }
+
+    #[getter]
+    fn shape(&self, py: Python<'_>) -> PyObject {
+        PyTuple::new(py, self.0.shape().dims()).to_object(py)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.0)
+    }
+
+    fn __str__(&self) -> String {
+        self.__repr__()
+    }
+
+    fn dequantize(&self) -> PyResult<PyTensor> {
+        let tensor = self.0.dequantize(&Device::Cpu).map_err(wrap_err)?;
+        Ok(PyTensor(tensor))
+    }
+}
+
 #[pyfunction]
 fn cuda_is_available() -> bool {
     ::candle::utils::cuda_is_available()
@@ -498,6 +541,7 @@ fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     candle_utils(py, utils)?;
     m.add_submodule(utils)?;
     m.add_class::<PyTensor>()?;
+    m.add_class::<PyQTensor>()?;
     m.add_class::<PyDType>()?;
     m.add("u8", PyDType(DType::U8))?;
     m.add("u32", PyDType(DType::U32))?;
