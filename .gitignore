@@ -22,7 +22,6 @@ perf.data
 flamegraph.svg
 *.dylib
 *.so
-*.swp
 trace-*.json
 
 candle-wasm-examples/*/build
@@ -32,5 +31,9 @@ candle-wasm-examples/*/*.wav
 candle-wasm-examples/*/*.safetensors
 candle-wasm-examples/*/package-lock.json
 
+Thumbs.db
 .DS_Store
+*.swp
+
+.vscode/*
 .idea/*
