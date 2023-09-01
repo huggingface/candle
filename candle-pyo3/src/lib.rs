@@ -393,6 +393,32 @@ impl PyTensor {
         let device = device.as_device()?;
         Ok(PyTensor(self.0.to_device(&device).map_err(wrap_err)?))
     }
+
+    fn quantize(&self, quantized_dtype: &str) -> PyResult<PyQTensor> {
+        use ::candle::quantized;
+        let res = match quantized_dtype {
+            "q2k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ2K>(self),
+            "q3k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ3K>(self),
+            "q4_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4_0>(self),
+            "q4_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4_1>(self),
+            "q4k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4K>(self),
+            "q5_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5_0>(self),
+            "q5_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5_1>(self),
+            "q5k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5K>(self),
+            "q6k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ6K>(self),
+            "q8_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8_0>(self),
+            "q8_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8_1>(self),
+            "q8k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8K>(self),
+            "f16" => quantized::QTensor::quantize::<f16>(self),
+            "f32" => quantized::QTensor::quantize::<f32>(self),
+            dt => {
+                return Err(PyErr::new::<PyValueError, _>(format!(
+                    "unknown quantized-dtype {dt}"
+                )))
+            }
+        };
+        Ok(PyQTensor(Arc::new(res.map_err(wrap_err)?)))
+    }
 }
 
 /// Concatenate the tensors across one axis.
