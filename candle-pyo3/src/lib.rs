@@ -700,7 +700,7 @@ fn load_safetensors(path: &str, py: Python<'_>) -> PyResult<PyObject> {
 }
 
 #[pyfunction]
-fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObject)> {
     let mut file = std::fs::File::open(path)?;
     let ggml = ::candle::quantized::ggml_file::Content::read(&mut file).map_err(wrap_err)?;
     let tensors = ggml
@@ -720,7 +720,14 @@ fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
         ("ftype", ggml.hparams.ftype),
     ];
     let hparams = hparams.into_py_dict(py).to_object(py);
-    Ok((tensors, hparams))
+    let vocab = ggml
+        .vocab
+        .token_score_pairs
+        .iter()
+        .map(|(bytes, _)| String::from_utf8_lossy(bytes.as_slice()).to_string())
+        .collect::<Vec<String>>()
+        .to_object(py);
+    Ok((tensors, hparams, vocab))
 }
 
 #[pyfunction]

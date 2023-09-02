@@ -155,22 +155,23 @@ def main():
     if filename.endswith("gguf"):
         all_tensors = candle.load_gguf(sys.argv[1])
         hparams = None
+        vocab = None
     else:
-        all_tensors, hparams = candle.load_ggml(sys.argv[1])
+        all_tensors, hparams, vocab = candle.load_ggml(sys.argv[1])
     print(hparams)
     model = QuantizedLlama(hparams, all_tensors)
     print("model built, starting inference")
 
     tokens = [1]
-    for token_idx in range(10):
+    for token_idx in range(500):
         last_token = tokens[-1]
-        print(last_token)
         lt = candle.tensor([last_token]).unsqueeze(0)
         logits = model(lt, len(tokens))
         # Greedy sampling for now
         # pr = candle.nn.softmax(logits, -1)
         m = logits.get(0).argmax_keepdim(-1)
         next_token = m.values()[0]
+        print(vocab[next_token], end='', flush=True)
         tokens.append(next_token)
 
 if __name__ == '__main__':
