@@ -16,6 +16,8 @@ for lib_file in ["libcandle.dylib", "libcandle.so"]:
 
 import candle
 
+MAX_SEQ_LEN = 4096
+
 def masked_fill(on_false, mask, on_true):
     shape = mask.shape
     on_true = candle.tensor(on_true).broadcast_as(shape)
@@ -32,7 +34,7 @@ class RmsNorm:
         return x_normed.broadcast_mul(self.weight)
 
 class QuantizedLayer:
-    def __init__(self, layer_idx, hparams, all_tensors):
+    def __init__(self, layer_idx, hparams, all_tensors, cos_sin):
         p = f"layers.{layer_idx}"
         self.attention_wq = all_tensors[f"{p}.attention.wq.weight"]
         self.attention_wk = all_tensors[f"{p}.attention.wk.weight"]
@@ -49,6 +51,8 @@ class QuantizedLayer:
         self.head_dim = hparams["n_embd"] // self.n_head
 
         self.kv_cache = None
+        self.cos = cos_sin[0]
+        self.sin = cos_sin[1]
 
     def __call__(self, x, mask, index_pos):
         residual = x
@@ -96,9 +100,9 @@ class QuantizedLayer:
 
     def apply_rotary_emb(self, x, index_pos):
         (b_size, n_head, seq_len, n_embd) = x.shape
-        cos = self.cos.narrow(0, index_pos, seq_len).reshape((seq_len, n_embd/2, 1))
-        sin = self.sin.narrow(0, index_pos, seq_len).reshape((seq_len, n_embd/2, 1))
-        x = x.reshape((b_size, n_head, seq_len, n_embd/2, 2))
+        cos = self.cos.narrow(0, index_pos, seq_len).reshape((seq_len, n_embd//2, 1))
+        sin = self.sin.narrow(0, index_pos, seq_len).reshape((seq_len, n_embd//2, 1))
+        x = x.reshape((b_size, n_head, seq_len, n_embd//2, 2))
         x0 = x.narrow(-1, 0, 1)
         x1 = x.narrow(-1, 1, 1)
         y0 = x0.broadcast_mul(cos) - x1.broadcast_mul(sin)
@@ -106,14 +110,25 @@ class QuantizedLayer:
         rope = candle.cat([y0, y1], -1)
         return rope.flatten_from(-2)
 
+def precompute_freqs_cis(hparams, freq_base):
+    head_dim = hparams["n_embd"] // hparams["n_head"]
+    theta = [1.0 / freq_base ** (i / head_dim) for i in range(0, head_dim, 2)]
+    theta = candle.tensor(theta)
+    idx_theta = [float(i) for i in range(MAX_SEQ_LEN)]
+    idx_theta = candle.tensor(idx_theta).reshape((MAX_SEQ_LEN, 1))
+    m = idx_theta.matmul(theta.unsqueeze(0))
+    print(m.shape)
+    return (m.cos(), m.sin())
+
 class QuantizedLlama:
     def __init__(self, hparams, all_tensors):
         self.tok_embeddings = all_tensors["tok_embeddings.weight"].dequantize()
         self.norm = RmsNorm(all_tensors["norm.weight"])
         self.output = all_tensors["output.weight"]
         self.layers = []
+        cos_sin = precompute_freqs_cis(hparams, 10000.)
         for layer_idx in range(hparams["n_layer"]):
-            layer = QuantizedLayer(layer_idx, hparams, all_tensors)
+            layer = QuantizedLayer(layer_idx, hparams, all_tensors, cos_sin)
             self.layers.append(layer)
 
     def __call__(self, token, index_pos):

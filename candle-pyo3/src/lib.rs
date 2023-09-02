@@ -452,6 +452,16 @@ impl PyTensor {
         Ok(PyTensor(mean))
     }
 
+    fn flatten_from(&self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        Ok(PyTensor(self.0.flatten_from(dim).map_err(wrap_err)?))
+    }
+
+    fn flatten_to(&self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        Ok(PyTensor(self.0.flatten_to(dim).map_err(wrap_err)?))
+    }
+
     fn flatten_all(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.flatten_all().map_err(wrap_err)?))
     }
