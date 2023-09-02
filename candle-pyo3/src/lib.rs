@@ -425,7 +425,8 @@ impl PyTensor {
         Ok(PyTensor(self.0.transpose(dim1, dim2).map_err(wrap_err)?))
     }
 
-    fn narrow(&self, dim: usize, start: usize, len: usize) -> PyResult<Self> {
+    fn narrow(&self, dim: i64, start: usize, len: usize) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.narrow(dim, start, len).map_err(wrap_err)?))
     }
 
@@ -713,11 +714,33 @@ fn candle_utils(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
+#[pyfunction]
+fn softmax(t: PyTensor, dim: i64) -> PyResult<PyTensor> {
+    let dim = actual_dim(&t, dim).map_err(wrap_err)?;
+    let sm = candle_nn::ops::softmax(&t.0, dim).map_err(wrap_err)?;
+    Ok(PyTensor(sm))
+}
+
+#[pyfunction]
+fn silu(t: PyTensor) -> PyResult<PyTensor> {
+    let s = candle_nn::ops::silu(&t.0).map_err(wrap_err)?;
+    Ok(PyTensor(s))
+}
+
+fn candle_nn_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(silu, m)?)?;
+    m.add_function(wrap_pyfunction!(softmax, m)?)?;
+    Ok(())
+}
+
 #[pymodule]
 fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     let utils = PyModule::new(py, "utils")?;
     candle_utils(py, utils)?;
     m.add_submodule(utils)?;
+    let nn = PyModule::new(py, "nn")?;
+    candle_nn_m(py, nn)?;
+    m.add_submodule(nn)?;
     m.add_class::<PyTensor>()?;
     m.add_class::<PyQTensor>()?;
     m.add_class::<PyDType>()?;

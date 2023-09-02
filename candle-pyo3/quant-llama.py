@@ -16,6 +16,11 @@ for lib_file in ["libcandle.dylib", "libcandle.so"]:
 
 import candle
 
+def masked_fill(on_false, mask, on_true):
+    shape = mask.shape
+    on_true = candle.tensor(on_true).broadcast_as(shape)
+    return mask.where_cond(on_true, on_false)
+
 class RmsNorm:
     def __init__(self, qtensor):
         self.weight = qtensor.dequantize()
@@ -35,7 +40,7 @@ class QuantizedLayer:
         self.attention_wo = all_tensors[f"{p}.attention.wo.weight"]
         self.ffw1 = all_tensors[f"{p}.feed_forward.w1.weight"]
         self.ffw2 = all_tensors[f"{p}.feed_forward.w2.weight"]
-        self.ffw2 = all_tensors[f"{p}.feed_forward.w2.weight"]
+        self.ffw3 = all_tensors[f"{p}.feed_forward.w3.weight"]
         self.attn_norm = RmsNorm(all_tensors[f"{p}.attention_norm.weight"])
         self.ffn_norm = RmsNorm(all_tensors[f"{p}.ffn_norm.weight"])
 
@@ -53,7 +58,7 @@ class QuantizedLayer:
         x = self.ffn_norm(x)
         w1 = self.ffw1.matmul_t(x)
         w3 = self.ffw3.matmul_t(x)
-        mlp = self.ffw2.matmul_t(w1.silu() * w3)
+        mlp = self.ffw2.matmul_t(candle.nn.silu(w1) * w3)
 
         return mlp + residual
 
@@ -73,8 +78,8 @@ class QuantizedLayer:
 
         att = q.matmul(k.t()) / self.head_dim**0.5
         mask = mask.broadcast_as(att.shape)
-        att = masked_fill(att, mask, neg_infinity)
-        att = att.softmax(-1)
+        att = masked_fill(att, mask, float("-inf"))
+        att = candle.nn.softmax(att, -1)
         y = att.matmul(v.contiguous())
         y = y.transpose(1, 2).reshape((b_size, seq_len, n_embd))
         return self.attention_wo.matmul_t(y)
@@ -94,7 +99,10 @@ class QuantizedLlama:
         token = token.reshape((b_size * seq_len,))
         x = self.tok_embeddings.index_select(token, 0)
         x = x.reshape((b_size, seq_len, hidden_size))
-        mask = None
+
+        mask = [int(j > i) for j in range(seq_len) for i in range(seq_len)]
+        mask = candle.tensor(mask).reshape((seq_len, seq_len))
+
         for layer in self.layers:
             x = layer(x, mask, index_pos)
         return x
