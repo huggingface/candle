@@ -145,6 +145,22 @@ pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
 pydtype!(f64, |v| v);
 
+fn actual_dim(t: &Tensor, dim: i64) -> ::candle::Result<usize> {
+    let rank = t.rank();
+    if 0 <= dim {
+        let dim = dim as usize;
+        if rank <= dim {
+            ::candle::bail!("dimension index {dim} is too large for tensor rank {rank}")
+        }
+        Ok(dim)
+    } else {
+        if (rank as i64) < -dim {
+            ::candle::bail!("dimension index {dim} is too low for tensor rank {rank}")
+        }
+        Ok((rank as i64 + dim) as usize)
+    }
+}
+
 // TODO: Something similar to this should probably be a part of candle core.
 trait MapDType {
     type Output;
@@ -182,7 +198,10 @@ impl PyTensor {
         } else if let Ok(vs) = vs.extract::<Vec<f32>>(py) {
             Tensor::new(vs.as_slice(), &Cpu).map_err(wrap_err)?
         } else {
-            Err(PyTypeError::new_err("incorrect type for tensor"))?
+            let ty = vs.as_ref(py).get_type();
+            Err(PyTypeError::new_err(format!(
+                "incorrect type {ty} for tensor"
+            )))?
         };
         Ok(Self(tensor))
     }
@@ -293,6 +312,11 @@ impl PyTensor {
 
     fn powf(&self, p: f64) -> PyResult<Self> {
         Ok(PyTensor(self.0.powf(p).map_err(wrap_err)?))
+    }
+
+    fn index_select(&self, rhs: &Self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        Ok(PyTensor(self.0.index_select(rhs, dim).map_err(wrap_err)?))
     }
 
     fn matmul(&self, rhs: &Self) -> PyResult<Self> {
@@ -595,16 +619,27 @@ fn load_safetensors(path: &str, py: Python<'_>) -> PyResult<PyObject> {
 }
 
 #[pyfunction]
-fn load_ggml(path: &str, py: Python<'_>) -> PyResult<PyObject> {
+fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
     let mut file = std::fs::File::open(path)?;
     let ggml = ::candle::quantized::ggml_file::Content::read(&mut file).map_err(wrap_err)?;
-    let res = ggml
+    let tensors = ggml
         .tensors
         .into_iter()
         .map(|(key, qtensor)| Ok((key, PyQTensor(Arc::new(qtensor)).into_py(py))))
         .collect::<::candle::Result<Vec<_>>>()
         .map_err(wrap_err)?;
-    Ok(res.into_py_dict(py).to_object(py))
+    let tensors = tensors.into_py_dict(py).to_object(py);
+    let hparams = [
+        ("n_vocab", ggml.hparams.n_vocab),
+        ("n_embd", ggml.hparams.n_embd),
+        ("n_mult", ggml.hparams.n_mult),
+        ("n_head", ggml.hparams.n_head),
+        ("n_layer", ggml.hparams.n_layer),
+        ("n_rot", ggml.hparams.n_rot),
+        ("ftype", ggml.hparams.ftype),
+    ];
+    let hparams = hparams.into_py_dict(py).to_object(py);
+    Ok((tensors, hparams))
 }
 
 #[pyfunction]
