@@ -142,6 +142,9 @@ class QuantizedLlama:
 
         for layer in self.layers:
             x = layer(x, mask, index_pos)
+        x = self.norm(x)
+        x = x.narrow(1, -1, 1).squeeze(1)
+        x = self.output.matmul_t(x)
         return x
 
 def main():
@@ -166,7 +169,7 @@ def main():
         logits = model(lt, len(tokens))
         # Greedy sampling for now
         # pr = candle.nn.softmax(logits, -1)
-        m = logits.get(0).get(-1).argmax_keepdim(-1)
+        m = logits.get(0).argmax_keepdim(-1)
         next_token = m.values()[0]
         tokens.append(next_token)
 
