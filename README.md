@@ -227,6 +227,22 @@ conditions](https://huggingface.co/meta-llama/Llama-2-7b-hf), and set up your
 authentication token. See issue
 [#350](https://github.com/huggingface/candle/issues/350) for more details.
 
+#### Missing cute/cutlass headers when compiling flash-attn
+
+```
+  In file included from kernels/flash_fwd_launch_template.h:11:0,
+                   from kernels/flash_fwd_hdim224_fp16_sm80.cu:5:
+  kernels/flash_fwd_kernel.h:8:10: fatal error: cute/algorithm/copy.hpp: No such file or directory
+   #include <cute/algorithm/copy.hpp>
+            ^~~~~~~~~~~~~~~~~~~~~~~~~
+  compilation terminated.
+  Error: nvcc error while compiling:
+```
+[cutlass](https://github.com/NVIDIA/cutlass) is provided as a git submodule so you may want to run the following command to check it in properly.
+```bash
+git submodule update --init
+```
+
 #### Tracking down errors
 
 You can set `RUST_BACKTRACE=1` to be provided with backtraces when a candle
