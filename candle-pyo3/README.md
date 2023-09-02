@@ -1,11 +1,7 @@
-From the top level directory run the following for linux.
-```
-cargo build --profile=release-with-debug --package candle-pyo3 && cp -f ./target/release-with-debug/libcandle.so candle.so
-PYTHONPATH=. python3 candle-pyo3/test.py
-```bash
+From the `candle-pyo3` directory, enable a virtual env where you will want the
+candle package to be installed then run.
 
-  Or for macOS users:
 ```bash
-cargo build --profile=release-with-debug --package candle-pyo3 && cp -f ./target/release-with-debug/libcandle.dylib candle.so
-PYTHONPATH=. python3 candle-pyo3/test.py
+maturin develop
+python test.py
 ```
