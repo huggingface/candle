@@ -519,7 +519,11 @@ impl PyTensor {
 
 /// Concatenate the tensors across one axis.
 #[pyfunction]
-fn cat(tensors: Vec<PyTensor>, dim: usize) -> PyResult<PyTensor> {
+fn cat(tensors: Vec<PyTensor>, dim: i64) -> PyResult<PyTensor> {
+    if tensors.is_empty() {
+        return Err(PyErr::new::<PyValueError, _>("empty input to cat"));
+    }
+    let dim = actual_dim(&tensors[0], dim).map_err(wrap_err)?;
     let tensors = tensors.into_iter().map(|t| t.0).collect::<Vec<_>>();
     let tensor = Tensor::cat(&tensors, dim).map_err(wrap_err)?;
     Ok(PyTensor(tensor))

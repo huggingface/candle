@@ -48,6 +48,8 @@ class QuantizedLayer:
         self.n_kv_head = self.n_head
         self.head_dim = hparams["n_embd"] // self.n_head
 
+        self.kv_cache = None
+
     def __call__(self, x, mask, index_pos):
         residual = x
         x = self.attn_norm(x)
@@ -72,9 +74,17 @@ class QuantizedLayer:
         k = k.reshape((b_size, seq_len, self.n_kv_head, self.head_dim)).transpose(1, 2)
         v = v.reshape((b_size, seq_len, self.n_kv_head, self.head_dim)).transpose(1, 2)
 
-        # TODO: rope
+        q = self.apply_rotary_emb(q, index_pos)
+        k = self.apply_rotary_emb(k, index_pos)
 
-        # TODO: kv-cache
+        if self.kv_cache is not None and index_pos > 0:
+            prev_k, prev_v = self.kv_cache
+            k = candle.cat([prev_k, k], 2).contiguous()
+            v = candle.cat([prev_v, v], 2).contiguous()
+
+        self.kv_cache = (k, v)
+
+        # TODO: maybe repeat k/v here if we start supporting MQA.
 
         att = q.matmul(k.t()) / self.head_dim**0.5
         mask = mask.broadcast_as(att.shape)
@@ -83,6 +93,19 @@ class QuantizedLayer:
         y = att.matmul(v.contiguous())
         y = y.transpose(1, 2).reshape((b_size, seq_len, n_embd))
         return self.attention_wo.matmul_t(y)
+
+    def apply_rotary_emb(self, x, index_pos):
+        (b_size, n_head, seq_len, n_embd) = x.shape
+        cos = self.cos.narrow(0, index_pos, seq_len).reshape((seq_len, n_embd/2, 1))
+        sin = self.sin.narrow(0, index_pos, seq_len).reshape((seq_len, n_embd/2, 1))
+        x = x.reshape((b_size, n_head, seq_len, n_embd/2, 2))
+        x0 = x.narrow(-1, 0, 1)
+        x1 = x.narrow(-1, 1, 1)
+        y0 = x0.broadcast_mul(cos) - x1.broadcast_mul(sin)
+        y1 = x0.broadcast_mul(sin) + x1.broadcast_mul(cos)
+        rope = candle.cat([y0, y1], -1)
+        return rope.flatten_from(-2)
+
 class QuantizedLlama:
     def __init__(self, hparams, all_tensors):
         self.tok_embeddings = all_tensors["tok_embeddings.weight"].dequantize()
@@ -125,7 +148,8 @@ def main():
         last_token = tokens[-1]
         lt = candle.tensor([last_token]).unsqueeze(0)
         logits = model(lt, len(tokens))
-        next_token = "TODO"
+        print(logits)
+        next_token = "TODO: sample"
         tokens.append(next_token)
 
 if __name__ == '__main__':
