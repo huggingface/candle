@@ -173,6 +173,25 @@ fn unary_grad(device: &Device) -> Result<()> {
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(y.to_vec1::<f32>()?, [6., 2., 8., 0.3]);
     assert_eq!(grad_x.to_vec1::<f32>()?, [2., 2., 2., 2.]);
+
+    let x = Var::new(&[3f32, 1., 4., 0.15], device)?;
+    let y = x.powf(2.5)?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(test_utils::to_vec1_round(&y, 2)?, [15.59, 1.0, 32.0, 0.01]);
+    assert_eq!(
+        test_utils::to_vec1_round(grad_x, 2)?,
+        [12.99, 2.5, 20.0, 0.15]
+    );
+
+    let y = x.tanh()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(test_utils::to_vec1_round(&y, 2)?, [1.0, 0.76, 1.0, 0.15]);
+    assert_eq!(
+        test_utils::to_vec1_round(grad_x, 2)?,
+        [0.01, 0.42, 0.0, 0.98],
+    );
     Ok(())
 }
 

@@ -1,6 +1,7 @@
 use crate::model::{Cache, Config, Llama};
 use candle::{DType, Device, Result};
 use candle_datasets::nlp::tinystories::{Dataset, DatasetRandomIter};
+use candle_nn::Optimizer;
 
 fn valid_loss(
     dataset: &Dataset,

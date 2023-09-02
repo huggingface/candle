@@ -109,6 +109,7 @@ struct MultiHeadAttention {
     value: Linear,
     out: Linear,
     n_head: usize,
+    kv_cache: Option<(Tensor, Tensor)>,
 }
 
 impl MultiHeadAttention {
@@ -123,14 +124,39 @@ impl MultiHeadAttention {
             value,
             out,
             n_head,
+            kv_cache: None,
         })
     }
 
-    fn forward(&self, x: &Tensor, xa: Option<&Tensor>, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        x: &Tensor,
+        xa: Option<&Tensor>,
+        mask: Option<&Tensor>,
+        flush_cache: bool,
+    ) -> Result<Tensor> {
         let _timer = crate::Timer::new("MultiHeadAttention::forward");
         let q = self.query.forward(x)?;
-        let k = self.key.forward(xa.unwrap_or(x))?;
-        let v = self.value.forward(xa.unwrap_or(x))?;
+        let (k, v) = match xa {
+            None => {
+                let k = self.key.forward(x)?;
+                let v = self.value.forward(x)?;
+                (k, v)
+            }
+            Some(x) => {
+                if flush_cache {
+                    self.kv_cache = None;
+                }
+                if let Some((k, v)) = &self.kv_cache {
+                    (k.clone(), v.clone())
+                } else {
+                    let k = self.key.forward(x)?;
+                    let v = self.value.forward(x)?;
+                    self.kv_cache = Some((k.clone(), v.clone()));
+                    (k, v)
+                }
+            }
+        };
         let wv = self.qkv_attention(&q, &k, &v, mask)?;
         let out = self.out.forward(&wv)?;
         Ok(out)
@@ -151,18 +177,9 @@ impl MultiHeadAttention {
     ) -> Result<Tensor> {
         let (_, n_ctx, n_state) = q.dims3()?;
         let scale = ((n_state / self.n_head) as f64).powf(-0.25);
-        let q = {
-            let _timer = crate::Timer::new("q::reshape");
-            (self.reshape_head(q)? * scale)?
-        };
-        let k = {
-            let _timer = crate::Timer::new("k::reshape");
-            (self.reshape_head(k)?.transpose(2, 3)? * scale)?
-        };
-        let v = {
-            let _timer = crate::Timer::new("v::reshape-contiguous");
-            self.reshape_head(v)?.contiguous()?
-        };
+        let q = (self.reshape_head(q)? * scale)?;
+        let k = (self.reshape_head(k)?.transpose(2, 3)? * scale)?;
+        let v = self.reshape_head(v)?.contiguous()?;
         let mut qk = {
             let _timer = crate::Timer::new("qk::matmul");
             q.matmul(&k)?
@@ -218,12 +235,20 @@ impl ResidualAttentionBlock {
         })
     }
 
-    fn forward(&self, x: &Tensor, xa: Option<&Tensor>, mask: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        x: &Tensor,
+        xa: Option<&Tensor>,
+        mask: Option<&Tensor>,
+        flush_kv_cache: bool,
+    ) -> Result<Tensor> {
         let _timer = crate::Timer::new("ResidualAttentionBlock::forward");
-        let attn = self.attn.forward(&self.attn_ln.forward(x)?, None, mask)?;
+        let attn = self
+            .attn
+            .forward(&self.attn_ln.forward(x)?, None, mask, flush_kv_cache)?;
         let mut x = (x + attn)?;
-        if let Some((attn, ln)) = &self.cross_attn {
-            x = (&x + attn.forward(&ln.forward(&x)?, xa, None)?)?;
+        if let Some((attn, ln)) = &mut self.cross_attn {
+            x = (&x + attn.forward(&ln.forward(&x)?, xa, None, flush_kv_cache)?)?;
         }
         let mlp = self.mlp_linear2.forward(
             &self
@@ -269,11 +294,13 @@ impl AudioEncoder {
             padding: 1,
             stride: 1,
             groups: 1,
+            dilation: 1,
         };
         let cfg2 = Conv1dConfig {
             padding: 1,
             stride: 2,
             groups: 1,
+            dilation: 1,
         };
         let conv1 = conv1d(cfg.num_mel_bins, n_state, 3, cfg1, vb.pp("conv1"))?;
         let conv2 = conv1d(n_state, n_state, 3, cfg2, vb.pp("conv2"))?;
@@ -292,7 +319,7 @@ impl AudioEncoder {
             ln_post,
         })
     }
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, x: &Tensor, flush_kv_cache: bool) -> Result<Tensor> {
         let _timer = crate::Timer::new("AudioEncoder::forward");
         let x = {
             let _timer = crate::Timer::new("conv1::forward");
@@ -306,8 +333,8 @@ impl AudioEncoder {
         let (_bsize, seq_len, _hidden) = x.dims3()?;
         let positional_embedding = self.positional_embedding.narrow(0, 0, seq_len)?;
         let mut x = x.broadcast_add(&positional_embedding)?;
-        for block in self.blocks.iter() {
-            x = block.forward(&x, None, None)?
+        for block in self.blocks.iter_mut() {
+            x = block.forward(&x, None, None, flush_kv_cache)?
         }
         let x = self.ln_post.forward(&x)?;
         Ok(x)
@@ -351,14 +378,14 @@ impl TextDecoder {
         })
     }
 
-    pub fn forward(&self, x: &Tensor, xa: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, x: &Tensor, xa: &Tensor, flush_kv_cache: bool) -> Result<Tensor> {
         let x_dims = x.dims();
         let last = x_dims[x_dims.len() - 1];
         let token_embedding = self.token_embedding.forward(x)?;
         let positional_embedding = self.positional_embedding.narrow(0, 0, last)?;
         let mut x = token_embedding.broadcast_add(&positional_embedding)?;
-        for block in self.blocks.iter() {
-            x = block.forward(&x, Some(xa), Some(&self.mask))?;
+        for block in self.blocks.iter_mut() {
+            x = block.forward(&x, Some(xa), Some(&self.mask), flush_kv_cache)?;
         }
         let x = self.ln.forward(&x)?;
         let w = self

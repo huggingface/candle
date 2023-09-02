@@ -5,6 +5,7 @@ use candle::{Result, Tensor};
 pub struct Conv1dConfig {
     pub padding: usize,
     pub stride: usize,
+    pub dilation: usize,
     pub groups: usize,
 }
 
@@ -13,6 +14,7 @@ impl Default for Conv1dConfig {
         Self {
             padding: 0,
             stride: 1,
+            dilation: 1,
             groups: 1,
         }
     }
@@ -45,6 +47,7 @@ impl crate::Module for Conv1d {
             &self.weight,
             self.config.padding,
             self.config.stride,
+            self.config.dilation,
             self.config.groups,
         )?;
         match &self.bias {
@@ -62,6 +65,7 @@ impl crate::Module for Conv1d {
 pub struct Conv2dConfig {
     pub padding: usize,
     pub stride: usize,
+    pub dilation: usize,
     pub groups: usize,
 }
 
@@ -70,6 +74,7 @@ impl Default for Conv2dConfig {
         Self {
             padding: 0,
             stride: 1,
+            dilation: 1,
             groups: 1,
         }
     }
@@ -103,6 +108,7 @@ impl crate::Module for Conv2d {
             &self.weight,
             self.config.padding,
             self.config.stride,
+            self.config.dilation,
             self.config.groups,
         )?;
         match &self.bias {

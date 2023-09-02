@@ -16,7 +16,6 @@ pub enum Device {
     Cuda(crate::CudaDevice),
 }
 
-// TODO: Should we back the cpu implementation using the NdArray crate or similar?
 pub trait NdArray {
     fn shape(&self) -> Result<Shape>;
 
@@ -75,6 +74,26 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize> NdArray
         for i1 in 0..N1 {
             for i2 in 0..N2 {
                 vec.extend(self[i1][i2])
+            }
+        }
+        S::to_cpu_storage_owned(vec)
+    }
+}
+
+impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize, const N4: usize> NdArray
+    for &[[[[S; N4]; N3]; N2]; N1]
+{
+    fn shape(&self) -> Result<Shape> {
+        Ok(Shape::from((N1, N2, N3, N4)))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        let mut vec = Vec::with_capacity(N1 * N2 * N3 * N4);
+        for i1 in 0..N1 {
+            for i2 in 0..N2 {
+                for i3 in 0..N3 {
+                    vec.extend(self[i1][i2][i3])
+                }
             }
         }
         S::to_cpu_storage_owned(vec)

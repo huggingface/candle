@@ -105,6 +105,7 @@ impl Tensor {
                     | Op::Narrow(node, _, _, _)
                     | Op::Unary(node, _)
                     | Op::Elu(node, _)
+                    | Op::Powf(node, _)
                     | Op::CustomOp1(node, _) => {
                         let (tg, nodes) = walk(node, nodes, already_seen);
                         track_grad |= tg;
@@ -197,21 +198,28 @@ impl Tensor {
                         kernel,
                         padding,
                         stride,
+                        dilation,
                     } => {
                         // The output height for conv_transpose2d is:
                         // (i_h - 1) * stride - 2 * padding + dilation * (k_h - 1) + out_padding + 1
                         let grad_h = grad.dim(2)?;
                         let k_h = kernel.dim(2)?;
-                        let out_size = (grad_h - 1) * stride + (k_h - 1) + 1 - 2 * padding;
+                        let out_size =
+                            (grad_h - 1) * stride + dilation * (k_h - 1) + 1 - 2 * padding;
                         let out_padding = arg.dim(2)? - out_size;
-                        let grad_arg =
-                            grad.conv_transpose2d(kernel, *padding, out_padding, *stride)?;
+                        let grad_arg = grad.conv_transpose2d(
+                            kernel,
+                            *padding,
+                            out_padding,
+                            *stride,
+                            *dilation,
+                        )?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
 
                         let grad_kernel = arg
                             .transpose(0, 1)?
-                            .conv2d(&grad.transpose(0, 1)?, *padding, *stride, 1)?
+                            .conv2d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
                             .transpose(0, 1)?;
                         let sum_grad = grads.or_insert(kernel)?;
                         *sum_grad = sum_grad.add(&grad_kernel)?;
@@ -249,7 +257,7 @@ impl Tensor {
                         // we scale the gradient for this case).
                         let node_upsampled = node.upsample_nearest2d(h, w)?;
                         let mask = arg.eq(&node_upsampled)?.to_dtype(arg.dtype())?;
-                        let avg = mask.avg_pool2d(*kernel_size, *stride)?;
+                        let avg = mask.avg_pool2d_with_stride(*kernel_size, *stride)?;
                         let grad_arg = ((grad * avg)?.upsample_nearest2d(h, w)? * mask)?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
@@ -371,6 +379,11 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.sub(&(&grad * arg.sin())?)?
                     }
+                    Op::Unary(arg, UnaryOp::Tanh) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        let minus_dtanh = (node.sqr()? - 1.)?;
+                        *sum_grad = sum_grad.sub(&(&grad * &minus_dtanh)?)?
+                    }
                     Op::Unary(arg, UnaryOp::Abs) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let ones = arg.ones_like()?;
@@ -430,6 +443,11 @@ impl Tensor {
                         *sum_grad = sum_grad.add(&(&grad * relu_grad)?)?
                     }
                     Op::Elu(..) => Err(Error::BackwardNotSupported { op: "elu" })?,
+                    Op::Powf(arg, e) => {
+                        let arg_grad = (&(grad * arg.powf(e - 1.)?)? * *e)?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&arg_grad)?
+                    }
                     Op::CustomOp1(arg, c) => {
                         if let Some(arg_grad) = c.bwd(arg, node, &grad)? {
                             let sum_grad = grads.or_insert(arg)?;

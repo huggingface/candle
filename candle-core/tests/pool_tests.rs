@@ -6,14 +6,14 @@ fn avg_pool2d(dev: &Device) -> Result<()> {
         1., 1., 1., 1., 0., 0., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
     ];
     let t = Tensor::from_vec(data, (1, 1, 4, 4), dev)?;
-    let pool = t.avg_pool2d((2, 2), (2, 2))?.squeeze(0)?.squeeze(0)?;
+    let pool = t.avg_pool2d(2)?.squeeze(0)?.squeeze(0)?;
     assert_eq!(pool.to_vec2::<f32>()?, [[0.5f32, 1.], [1., 1.]]);
 
     let data: Vec<f32> = vec![
         1., 2., 1., 3., 0., 0., 1., 1., 1., 1., 1., 1., 5., 1., 1., 1.,
     ];
     let t = Tensor::from_vec(data, (1, 1, 2, 8), dev)?;
-    let pool = t.avg_pool2d((2, 2), (2, 2))?.squeeze(0)?.squeeze(0)?;
+    let pool = t.avg_pool2d(2)?.squeeze(0)?.squeeze(0)?;
     assert_eq!(pool.to_vec2::<f32>()?, [[5. / 4., 6. / 4., 6. / 4., 1.]]);
     Ok(())
 }
@@ -24,11 +24,11 @@ fn max_pool2d(dev: &Device) -> Result<()> {
     ];
     let t = Tensor::from_vec(data, (1, 1, 4, 4), dev)?;
 
-    let pool = t.max_pool2d((2, 2), (2, 2))?.squeeze(0)?.squeeze(0)?;
+    let pool = t.max_pool2d(2)?.squeeze(0)?.squeeze(0)?;
     assert_eq!(pool.to_vec2::<f32>()?, [[2f32, 3.], [5., 1.]]);
 
     let t = t.reshape((1, 1, 2, 8))?;
-    let pool = t.max_pool2d((2, 2), (2, 2))?.squeeze(0)?.squeeze(0)?;
+    let pool = t.max_pool2d(2)?.squeeze(0)?.squeeze(0)?;
     assert_eq!(pool.to_vec2::<f32>()?, [[2.0, 3.0, 5.0, 1.0]]);
     Ok(())
 }
@@ -53,7 +53,7 @@ fn avg_pool2d_pytorch(dev: &Device) -> Result<()> {
         dev,
     )?
     .reshape((1, 2, 4, 4))?;
-    let pool = t.avg_pool2d((2, 2), (2, 2))?.squeeze(0)?;
+    let pool = t.avg_pool2d(2)?.squeeze(0)?;
     assert_eq!(
         test_utils::to_vec3_round(&pool, 4)?,
         [
@@ -61,14 +61,14 @@ fn avg_pool2d_pytorch(dev: &Device) -> Result<()> {
             [[0.1835, -0.1606], [0.6249, 0.3217]]
         ]
     );
-    let pool = t.avg_pool2d((3, 3), (3, 3))?.squeeze(0)?;
+    let pool = t.avg_pool2d(3)?.squeeze(0)?;
     assert_eq!(
         test_utils::to_vec3_round(&pool, 4)?,
         [[[0.085]], [[0.0078]]]
     );
 
     let t = t.reshape((1, 1, 4, 8))?;
-    let pool = t.avg_pool2d((2, 2), (2, 2))?.squeeze(0)?.squeeze(0)?;
+    let pool = t.avg_pool2d(2)?.squeeze(0)?.squeeze(0)?;
     assert_eq!(
         test_utils::to_vec2_round(&pool, 4)?,
         [

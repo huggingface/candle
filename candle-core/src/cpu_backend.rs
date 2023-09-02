@@ -1064,7 +1064,7 @@ impl<'a> Map2 for Conv1D<'a> {
                     let dst_idx = dst_idx + b_idx * p.c_out * l_out;
                     for dst_l in 0..l_out {
                         let dst_idx = dst_idx + dst_l;
-                        let src_l = p.stride * dst_l + offset;
+                        let src_l = p.stride * dst_l + offset * p.dilation;
                         if src_l < p.padding || src_l >= p.padding + p.l_in {
                             continue;
                         }
@@ -1141,14 +1141,14 @@ impl<'a> Map2 for Conv2D<'a> {
                         let dst_idx = dst_idx + b_idx * p.c_out * out_h * out_w;
                         for dst_h in 0..out_h {
                             let dst_idx = dst_idx + dst_h * out_w;
-                            let src_h = p.stride * dst_h + offset_h;
+                            let src_h = p.stride * dst_h + offset_h * p.dilation;
                             if src_h < p.padding || src_h >= p.i_h + p.padding {
                                 continue;
                             }
                             let src_h = src_h - p.padding;
                             for dst_w in 0..out_w {
                                 let dst_idx = dst_idx + dst_w;
-                                let src_w = p.stride * dst_w + offset_w;
+                                let src_w = p.stride * dst_w + offset_w * p.dilation;
                                 if src_w < p.padding || src_w >= p.i_w + p.padding {
                                     continue;
                                 }
@@ -1229,8 +1229,8 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
                     for b_idx in 0..p.b_size {
                         for inp_y in 0..p.i_h {
                             for inp_x in 0..p.i_w {
-                                let out_x = inp_x * p.stride + k_x;
-                                let out_y = inp_y * p.stride + k_y;
+                                let out_x = inp_x * p.stride + k_x * p.dilation;
+                                let out_y = inp_y * p.stride + k_y * p.dilation;
                                 if out_x < p.padding || out_y < p.padding {
                                     continue;
                                 }
@@ -1921,6 +1921,32 @@ impl BackendStorage for CpuStorage {
 
     fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
         UpsampleNearest2D(h, w).map(self, layout)
+    }
+
+    fn powf(&self, layout: &Layout, e: f64) -> Result<Self> {
+        use num_traits::Float;
+        // TODO: Have some generic map for functions that apply on num_traits::Float elements.
+        match self {
+            Self::BF16(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(bf16::from_f64(e)));
+                Ok(Self::BF16(data))
+            }
+            Self::F16(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(f16::from_f64(e)));
+                Ok(Self::F16(data))
+            }
+            Self::F32(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(e as f32));
+                Ok(Self::F32(data))
+            }
+            Self::F64(storage) => {
+                let data = unary_map(storage, layout, |v| v.powf(e));
+                Ok(Self::F64(data))
+            }
+            Self::U8(_) => Err(Error::UnsupportedDTypeForOp(DType::U8, "elu").bt()),
+            Self::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "elu").bt()),
+            Self::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "elu").bt()),
+        }
     }
 
     fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {

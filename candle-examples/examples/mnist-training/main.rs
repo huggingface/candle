@@ -6,9 +6,10 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use clap::{Parser, ValueEnum};
+use rand::prelude::*;
 
 use candle::{DType, Result, Tensor, D};
-use candle_nn::{loss, ops, Linear, Module, VarBuilder, VarMap};
+use candle_nn::{loss, ops, Conv2d, Linear, Module, Optimizer, VarBuilder, VarMap};
 
 const IMAGE_DIM: usize = 784;
 const LABELS: usize = 10;
@@ -58,11 +59,116 @@ impl Model for Mlp {
     }
 }
 
+#[derive(Debug)]
+struct ConvNet {
+    conv1: Conv2d,
+    conv2: Conv2d,
+    fc1: Linear,
+    fc2: Linear,
+    dropout: candle_nn::Dropout,
+}
+
+impl ConvNet {
+    fn new(vs: VarBuilder) -> Result<Self> {
+        let conv1 = candle_nn::conv2d(1, 32, 5, Default::default(), vs.pp("c1"))?;
+        let conv2 = candle_nn::conv2d(32, 64, 5, Default::default(), vs.pp("c2"))?;
+        let fc1 = candle_nn::linear(1024, 1024, vs.pp("fc1"))?;
+        let fc2 = candle_nn::linear(1024, LABELS, vs.pp("fc2"))?;
+        let dropout = candle_nn::Dropout::new(0.5);
+        Ok(Self {
+            conv1,
+            conv2,
+            fc1,
+            fc2,
+            dropout,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
+        let (b_sz, _img_dim) = xs.dims2()?;
+        let xs = xs
+            .reshape((b_sz, 1, 28, 28))?
+            .apply(&self.conv1)?
+            .max_pool2d(2)?
+            .apply(&self.conv2)?
+            .max_pool2d(2)?
+            .flatten_from(1)?
+            .apply(&self.fc1)?
+            .relu()?;
+        self.dropout.forward(&xs, train)?.apply(&self.fc2)
+    }
+}
+
 struct TrainingArgs {
     learning_rate: f64,
     load: Option<String>,
     save: Option<String>,
     epochs: usize,
+}
+
+fn training_loop_cnn(
+    m: candle_datasets::vision::Dataset,
+    args: &TrainingArgs,
+) -> anyhow::Result<()> {
+    const BSIZE: usize = 64;
+
+    let dev = candle::Device::cuda_if_available(0)?;
+
+    let train_labels = m.train_labels;
+    let train_images = m.train_images.to_device(&dev)?;
+    let train_labels = train_labels.to_dtype(DType::U32)?.to_device(&dev)?;
+
+    let mut varmap = VarMap::new();
+    let vs = VarBuilder::from_varmap(&varmap, DType::F32, &dev);
+    let model = ConvNet::new(vs.clone())?;
+
+    if let Some(load) = &args.load {
+        println!("loading weights from {load}");
+        varmap.load(load)?
+    }
+
+    let adamw_params = candle_nn::ParamsAdamW {
+        lr: args.learning_rate,
+        ..Default::default()
+    };
+    let mut opt = candle_nn::AdamW::new(varmap.all_vars(), adamw_params)?;
+    let test_images = m.test_images.to_device(&dev)?;
+    let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
+    let n_batches = train_images.dim(0)? / BSIZE;
+    let mut batch_idxs = (0..n_batches).collect::<Vec<usize>>();
+    for epoch in 1..args.epochs {
+        let mut sum_loss = 0f32;
+        batch_idxs.shuffle(&mut thread_rng());
+        for batch_idx in batch_idxs.iter() {
+            let train_images = train_images.narrow(0, batch_idx * BSIZE, BSIZE)?;
+            let train_labels = train_labels.narrow(0, batch_idx * BSIZE, BSIZE)?;
+            let logits = model.forward(&train_images, true)?;
+            let log_sm = ops::log_softmax(&logits, D::Minus1)?;
+            let loss = loss::nll(&log_sm, &train_labels)?;
+            opt.backward_step(&loss)?;
+            sum_loss += loss.to_vec0::<f32>()?;
+        }
+        let avg_loss = sum_loss / n_batches as f32;
+
+        let test_logits = model.forward(&test_images, false)?;
+        let sum_ok = test_logits
+            .argmax(D::Minus1)?
+            .eq(&test_labels)?
+            .to_dtype(DType::F32)?
+            .sum_all()?
+            .to_scalar::<f32>()?;
+        let test_accuracy = sum_ok / test_labels.dims1()? as f32;
+        println!(
+            "{epoch:4} train loss {:8.5} test acc: {:5.2}%",
+            avg_loss,
+            100. * test_accuracy
+        );
+    }
+    if let Some(save) = &args.save {
+        println!("saving trained weights in {save}");
+        varmap.save(save)?
+    }
+    Ok(())
 }
 
 fn training_loop<M: Model>(
@@ -84,7 +190,7 @@ fn training_loop<M: Model>(
         varmap.load(load)?
     }
 
-    let sgd = candle_nn::SGD::new(varmap.all_vars(), args.learning_rate);
+    let mut sgd = candle_nn::SGD::new(varmap.all_vars(), args.learning_rate)?;
     let test_images = m.test_images.to_device(&dev)?;
     let test_labels = m.test_labels.to_dtype(DType::U32)?.to_device(&dev)?;
     for epoch in 1..args.epochs {
@@ -118,6 +224,7 @@ fn training_loop<M: Model>(
 enum WhichModel {
     Linear,
     Mlp,
+    Cnn,
 }
 
 #[derive(Parser)]
@@ -139,7 +246,7 @@ struct Args {
     #[arg(long)]
     load: Option<String>,
 
-    /// The file where to load the trained weights from, in safetensors format.
+    /// The directory where to load the dataset from, in ubyte format.
     #[arg(long)]
     local_mnist: Option<String>,
 }
@@ -160,6 +267,7 @@ pub fn main() -> anyhow::Result<()> {
     let default_learning_rate = match args.model {
         WhichModel::Linear => 1.,
         WhichModel::Mlp => 0.05,
+        WhichModel::Cnn => 0.001,
     };
     let training_args = TrainingArgs {
         epochs: args.epochs,
@@ -170,5 +278,6 @@ pub fn main() -> anyhow::Result<()> {
     match args.model {
         WhichModel::Linear => training_loop::<LinearModel>(m, &training_args),
         WhichModel::Mlp => training_loop::<Mlp>(m, &training_args),
+        WhichModel::Cnn => training_loop_cnn(m, &training_args),
     }
 }

@@ -15,6 +15,8 @@ pub trait BackendStorage: Sized {
 
     fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self>;
 
+    fn powf(&self, _: &Layout, _: f64) -> Result<Self>;
+
     fn elu(&self, _: &Layout, _: f64) -> Result<Self>;
 
     fn reduce_op(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self>;
