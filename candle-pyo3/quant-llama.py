@@ -159,13 +159,15 @@ def main():
     print("model built, starting inference")
 
     tokens = [1]
-    for token_idx in range(1):
-        print(tokens)
+    for token_idx in range(10):
         last_token = tokens[-1]
+        print(last_token)
         lt = candle.tensor([last_token]).unsqueeze(0)
         logits = model(lt, len(tokens))
-        print(logits)
-        next_token = "TODO: sample"
+        # Greedy sampling for now
+        # pr = candle.nn.softmax(logits, -1)
+        m = logits.get(0).get(-1).argmax_keepdim(-1)
+        next_token = m.values()[0]
         tokens.append(next_token)
 
 if __name__ == '__main__':

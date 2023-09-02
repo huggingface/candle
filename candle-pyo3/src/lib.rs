@@ -449,6 +449,26 @@ impl PyTensor {
         Ok(PyTensor(self.0.narrow(dim, start, len).map_err(wrap_err)?))
     }
 
+    fn argmax_keepdim(&self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        Ok(PyTensor(self.0.argmax_keepdim(dim).map_err(wrap_err)?))
+    }
+
+    fn argmin_keepdim(&self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        Ok(PyTensor(self.0.argmin_keepdim(dim).map_err(wrap_err)?))
+    }
+
+    fn max_keepdim(&self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        Ok(PyTensor(self.0.max_keepdim(dim).map_err(wrap_err)?))
+    }
+
+    fn min_keepdim(&self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        Ok(PyTensor(self.0.min_keepdim(dim).map_err(wrap_err)?))
+    }
+
     fn sum_keepdim(&self, dims: PyObject, py: Python<'_>) -> PyResult<Self> {
         let dims = if let Ok(dim) = dims.extract::<usize>(py) {
             vec![dim]
