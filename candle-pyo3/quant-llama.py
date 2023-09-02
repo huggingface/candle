@@ -23,11 +23,11 @@ class RmsNorm:
     def __call__(self, x):
         b_size, seq_len, hidden_size = x.shape
         norm_x = x.sqr().sum_keepdim(2) / hidden_size
-        x_normed = x / (norm_x + 1e-5).sqrt()
-        return x_normed * self.weight
+        x_normed = x.broadcast_div((norm_x + 1e-5).sqrt())
+        return x_normed.broadcast_mul(self.weight)
 
 class QuantizedLayer:
-    def __init__(self, layer_idx, all_tensors):
+    def __init__(self, layer_idx, hparams, all_tensors):
         p = f"layers.{layer_idx}"
         self.attention_wq = all_tensors[f"{p}.attention.wq.weight"]
         self.attention_wk = all_tensors[f"{p}.attention.wk.weight"]
@@ -39,7 +39,11 @@ class QuantizedLayer:
         self.attn_norm = RmsNorm(all_tensors[f"{p}.attention_norm.weight"])
         self.ffn_norm = RmsNorm(all_tensors[f"{p}.ffn_norm.weight"])
 
-    def __call__(self, x, index_pos):
+        self.n_head = hparams["n_head"]
+        self.n_kv_head = self.n_head
+        self.head_dim = hparams["n_embd"] // self.n_head
+
+    def __call__(self, x, mask, index_pos):
         residual = x
         x = self.attn_norm(x)
         attn = self.forward_attn(x, mask, index_pos) 
@@ -53,6 +57,27 @@ class QuantizedLayer:
 
         return mlp + residual
 
+    def forward_attn(self, x, mask, index_pos):
+        b_size, seq_len, n_embd = x.shape
+        q = self.attention_wq.matmul_t(x)
+        k = self.attention_wk.matmul_t(x)
+        v = self.attention_wv.matmul_t(x)
+
+        q = q.reshape((b_size, seq_len, self.n_head, self.head_dim)).transpose(1, 2)
+        k = k.reshape((b_size, seq_len, self.n_kv_head, self.head_dim)).transpose(1, 2)
+        v = v.reshape((b_size, seq_len, self.n_kv_head, self.head_dim)).transpose(1, 2)
+
+        # TODO: rope
+
+        # TODO: kv-cache
+
+        att = q.matmul(k.t()) / self.head_dim**0.5
+        mask = mask.broadcast_as(att.shape)
+        att = masked_fill(att, mask, neg_infinity)
+        att = att.softmax(-1)
+        y = att.matmul(v.contiguous())
+        y = y.transpose(1, 2).reshape((b_size, seq_len, n_embd))
+        return self.attention_wo.matmul_t(y)
 class QuantizedLlama:
     def __init__(self, hparams, all_tensors):
         self.tok_embeddings = all_tensors["tok_embeddings.weight"].dequantize()
@@ -60,7 +85,7 @@ class QuantizedLlama:
         self.output = all_tensors["output.weight"]
         self.layers = []
         for layer_idx in range(hparams["n_layer"]):
-            layer = QuantizedLayer(layer_idx, all_tensors)
+            layer = QuantizedLayer(layer_idx, hparams, all_tensors)
             self.layers.append(layer)
 
     def __call__(self, token, index_pos):
@@ -69,8 +94,10 @@ class QuantizedLlama:
         token = token.reshape((b_size * seq_len,))
         x = self.tok_embeddings.index_select(token, 0)
         x = x.reshape((b_size, seq_len, hidden_size))
+        mask = None
         for layer in self.layers:
-            x = layer(x, index_pos)
+            x = layer(x, mask, index_pos)
+        return x
 
 def main():
     if len(sys.argv) < 2:

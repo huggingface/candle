@@ -323,6 +323,22 @@ impl PyTensor {
         Ok(PyTensor(self.0.matmul(rhs).map_err(wrap_err)?))
     }
 
+    fn broadcast_add(&self, rhs: &Self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.broadcast_add(rhs).map_err(wrap_err)?))
+    }
+
+    fn broadcast_sub(&self, rhs: &Self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.broadcast_sub(rhs).map_err(wrap_err)?))
+    }
+
+    fn broadcast_mul(&self, rhs: &Self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.broadcast_mul(rhs).map_err(wrap_err)?))
+    }
+
+    fn broadcast_div(&self, rhs: &Self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.broadcast_div(rhs).map_err(wrap_err)?))
+    }
+
     fn where_cond(&self, on_true: &Self, on_false: &Self) -> PyResult<Self> {
         Ok(PyTensor(
             self.0.where_cond(on_true, on_false).map_err(wrap_err)?,
@@ -366,6 +382,17 @@ impl PyTensor {
             (&self.0 - rhs).map_err(wrap_err)?
         } else {
             Err(PyTypeError::new_err("unsupported rhs for sub"))?
+        };
+        Ok(Self(tensor))
+    }
+
+    fn __truediv__(&self, rhs: &PyAny) -> PyResult<Self> {
+        let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
+            (&self.0 / &rhs.0).map_err(wrap_err)?
+        } else if let Ok(rhs) = rhs.extract::<f64>() {
+            (&self.0 / rhs).map_err(wrap_err)?
+        } else {
+            Err(PyTypeError::new_err("unsupported rhs for div"))?
         };
         Ok(Self(tensor))
     }
