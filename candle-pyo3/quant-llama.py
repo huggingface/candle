@@ -117,7 +117,6 @@ def precompute_freqs_cis(hparams, freq_base):
     idx_theta = [float(i) for i in range(MAX_SEQ_LEN)]
     idx_theta = candle.tensor(idx_theta).reshape((MAX_SEQ_LEN, 1))
     m = idx_theta.matmul(theta.unsqueeze(0))
-    print(m.shape)
     return (m.cos(), m.sin())
 
 class QuantizedLlama:
@@ -149,6 +148,7 @@ def main():
     if len(sys.argv) < 2:
         raise ValueError("missing weight file argument")
     filename = sys.argv[1]
+    print(f"reading model file {filename}")
     if filename.endswith("gguf"):
         all_tensors = candle.load_gguf(sys.argv[1])
         hparams = None
@@ -156,6 +156,7 @@ def main():
         all_tensors, hparams = candle.load_ggml(sys.argv[1])
     print(hparams)
     model = QuantizedLlama(hparams, all_tensors)
+    print("model built, starting inference")
 
     tokens = [1]
     for token_idx in range(1):

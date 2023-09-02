@@ -145,6 +145,22 @@ pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
 pydtype!(f64, |v| v);
 
+fn actual_index(t: &Tensor, dim: usize, index: i64) -> ::candle::Result<usize> {
+    let dim = t.dim(dim)?;
+    if 0 <= index {
+        let index = index as usize;
+        if dim <= index {
+            ::candle::bail!("index {index} is too large for tensor dimension {dim}")
+        }
+        Ok(index)
+    } else {
+        if (dim as i64) < -index {
+            ::candle::bail!("index {index} is too low for tensor dimension {dim}")
+        }
+        Ok((dim as i64 + index) as usize)
+    }
+}
+
 fn actual_dim(t: &Tensor, dim: i64) -> ::candle::Result<usize> {
     let rank = t.rank();
     if 0 <= dim {
@@ -409,7 +425,8 @@ impl PyTensor {
         Ok(PyTensor(self.0.broadcast_left(shape).map_err(wrap_err)?))
     }
 
-    fn squeeze(&self, dim: usize) -> PyResult<Self> {
+    fn squeeze(&self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.squeeze(dim).map_err(wrap_err)?))
     }
 
@@ -417,7 +434,8 @@ impl PyTensor {
         Ok(PyTensor(self.0.unsqueeze(dim).map_err(wrap_err)?))
     }
 
-    fn get(&self, index: usize) -> PyResult<Self> {
+    fn get(&self, index: i64) -> PyResult<Self> {
+        let index = actual_index(self, 0, index).map_err(wrap_err)?;
         Ok(PyTensor(self.0.get(index).map_err(wrap_err)?))
     }
 
@@ -425,8 +443,9 @@ impl PyTensor {
         Ok(PyTensor(self.0.transpose(dim1, dim2).map_err(wrap_err)?))
     }
 
-    fn narrow(&self, dim: i64, start: usize, len: usize) -> PyResult<Self> {
+    fn narrow(&self, dim: i64, start: i64, len: usize) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        let start = actual_index(self, dim, start).map_err(wrap_err)?;
         Ok(PyTensor(self.0.narrow(dim, start, len).map_err(wrap_err)?))
     }
 
