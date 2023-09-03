@@ -1370,6 +1370,10 @@ impl Tensor {
         self.sum(dims)
     }
 
+    pub fn mean_all(&self) -> Result<Tensor> {
+        self.sum_all()? / self.elem_count() as f64
+    }
+
     fn flatten_<D1: Dim, D2: Dim>(
         &self,
         start_dim: Option<D1>,
