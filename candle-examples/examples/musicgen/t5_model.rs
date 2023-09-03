@@ -166,6 +166,8 @@ struct T5Attention {
     n_heads: usize,
     d_kv: usize,
     relative_attention_bias: Option<Embedding>,
+    relative_attention_num_buckets: usize,
+    relative_attention_max_distance: usize,
     inner_dim: usize,
 }
 
@@ -194,6 +196,8 @@ impl T5Attention {
             n_heads: cfg.num_heads,
             d_kv: cfg.d_kv,
             relative_attention_bias,
+            relative_attention_num_buckets: cfg.relative_attention_num_buckets,
+            relative_attention_max_distance: cfg.relative_attention_max_distance,
             inner_dim,
         })
     }
@@ -218,7 +222,37 @@ impl T5Attention {
             .transpose(1, 2)?
             .contiguous()?;
         let scores = q.matmul(&k.t()?)?;
-        // TODO: position_bias_masked
+
+        let scores = match &self.relative_attention_bias {
+            None => scores,
+            Some(relative_attention_bias) => {
+                let query_length = seq_len;
+                let key_length = seq_len;
+                // This only handles the bidirectional case.
+                let num_buckets = self.relative_attention_num_buckets / 2;
+                let relative_position = (0..query_length as u32)
+                    .map(|i| {
+                        (0..key_length as u32)
+                            .map(|j| {
+                                if i < j {
+                                    j - i + num_buckets as u32
+                                } else {
+                                    i - j
+                                }
+                            })
+                            .collect::<Vec<u32>>()
+                    })
+                    .collect::<Vec<Vec<_>>>();
+                let relative_buckets = Tensor::new(relative_position, q.device())?;
+                let position_bias = relative_attention_bias
+                    .forward(&relative_buckets)?
+                    .permute((2, 0, 1))?
+                    .unsqueeze(0)?;
+                (scores + position_bias)?
+                // TODO: position_bias_masked?
+            }
+        };
+
         let attn_weights = candle_nn::ops::softmax(&scores, D::Minus1)?;
         let attn_output = attn_weights.matmul(&v)?;
         let attn_output = attn_output
