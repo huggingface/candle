@@ -96,10 +96,9 @@ impl T5LayerNorm {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let dtype = xs.dtype();
         let xs_f32 = xs.to_dtype(DType::F32)?;
-        let xs2_f32 = (&xs_f32 * &xs_f32)?;
-        let sum_xs2_f32 = xs2_f32.sum_keepdim(D::Minus1)?;
-        let variance = xs2_f32.broadcast_div(&sum_xs2_f32)?;
-        let xs = (xs / (variance + self.variance_epsilon)?.sqrt()?)?;
+        // variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        let variance = xs_f32.sqr()?.mean_keepdim(D::Minus1)?;
+        let xs = xs.broadcast_div(&(variance + self.variance_epsilon)?.sqrt()?)?;
         let xs = xs.to_dtype(dtype)?;
         let xs = xs.broadcast_mul(&self.weight)?;
         Ok(xs)
