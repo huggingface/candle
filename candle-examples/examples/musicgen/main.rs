@@ -16,10 +16,10 @@ mod nn;
 mod t5_model;
 
 use musicgen_model::{GenConfig, MusicgenForConditionalGeneration};
-use nn::VarBuilder;
 
 use anyhow::{Error as E, Result};
 use candle::DType;
+use candle_nn::VarBuilder;
 use clap::Parser;
 
 const DTYPE: DType = DType::F32;
