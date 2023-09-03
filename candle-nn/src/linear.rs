@@ -29,6 +29,14 @@ impl Linear {
     pub fn new(weight: Tensor, bias: Option<Tensor>) -> Self {
         Self { weight, bias }
     }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
 }
 
 impl super::Module for Linear {
