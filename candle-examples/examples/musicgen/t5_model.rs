@@ -167,6 +167,7 @@ struct T5Attention {
     n_heads: usize,
     d_kv: usize,
     relative_attention_bias: Option<Embedding>,
+    inner_dim: usize,
 }
 
 impl T5Attention {
@@ -194,6 +195,7 @@ impl T5Attention {
             n_heads: cfg.num_heads,
             d_kv: cfg.d_kv,
             relative_attention_bias,
+            inner_dim,
         })
     }
 
@@ -206,17 +208,23 @@ impl T5Attention {
         let v = self.v.forward(xs)?;
         let q = q
             .reshape((b_sz, seq_len, self.n_heads, self.d_kv))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let k = k
             .reshape((b_sz, seq_len, self.n_heads, self.d_kv))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let v = v
             .reshape((b_sz, seq_len, self.n_heads, self.d_kv))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let scores = q.matmul(&k.t()?)?;
         // TODO: position_bias_masked
         let attn_weights = candle_nn::ops::softmax(&scores, D::Minus1)?;
         let attn_output = attn_weights.matmul(&v)?;
+        let attn_output = attn_output
+            .transpose(1, 2)?
+            .reshape((b_sz, seq_len, self.inner_dim))?;
         let attn_output = self.o.forward(&attn_output)?;
         Ok(attn_output)
     }
@@ -324,7 +332,7 @@ impl T5Stack {
 
     fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
-        let (_b_sz, _seq_len) = input_embeds.dims2()?;
+        let (_b_sz, _seq_len) = (input_embeds.dim(0)?, input_embeds.dim(1)?);
 
         let mut hidden_states = input_embeds;
         for block in self.block.iter() {

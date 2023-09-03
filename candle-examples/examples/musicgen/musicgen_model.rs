@@ -370,9 +370,9 @@ impl MusicgenForCausalLM {
 
 #[derive(Debug)]
 pub struct MusicgenForConditionalGeneration {
-    text_encoder: crate::t5_model::T5EncoderModel,
-    audio_encoder: crate::encodec_model::EncodecModel,
-    decoder: MusicgenForCausalLM,
+    pub text_encoder: crate::t5_model::T5EncoderModel,
+    pub audio_encoder: crate::encodec_model::EncodecModel,
+    pub decoder: MusicgenForCausalLM,
     cfg: GenConfig,
 }
 
