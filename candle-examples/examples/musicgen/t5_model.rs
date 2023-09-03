@@ -229,13 +229,26 @@ impl T5Attention {
                 let query_length = seq_len;
                 let key_length = seq_len;
                 // This only handles the bidirectional case.
-                let num_buckets = self.relative_attention_num_buckets / 2;
+                let num_buckets = self.relative_attention_num_buckets as u32 / 2;
+                let max_exact = num_buckets / 2;
                 let relative_position = (0..query_length as u32)
                     .map(|i| {
                         (0..key_length as u32)
                             .map(|j| {
                                 if i < j {
-                                    j - i + num_buckets as u32
+                                    if j - i < max_exact {
+                                        j - i + num_buckets
+                                    } else {
+                                        let b = f32::log(
+                                            (j - i) as f32 / max_exact as f32,
+                                            self.relative_attention_max_distance as f32
+                                                / max_exact as f32,
+                                        ) * (num_buckets - max_exact) as f32;
+                                        u32::min(
+                                            max_exact + num_buckets + b as u32,
+                                            self.relative_attention_num_buckets as u32 - 1,
+                                        )
+                                    }
                                 } else {
                                     i - j
                                 }
