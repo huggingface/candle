@@ -28,6 +28,7 @@ impl TryFrom<u32> for Magic {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VersionedMagic {
     GgufV1,
+    GgufV2,
 }
 
 impl VersionedMagic {
@@ -37,6 +38,7 @@ impl VersionedMagic {
         let version = reader.read_u32::<LittleEndian>()?;
         let versioned_magic = match (magic, version) {
             (Magic::Gguf, 1) => Self::GgufV1,
+            (Magic::Gguf, 2) => Self::GgufV2,
             _ => crate::bail!("ggml: unsupported magic/version {magic:?}/{version}"),
         };
         Ok(versioned_magic)
@@ -74,9 +76,12 @@ pub struct Content {
     pub tensor_data_offset: u64,
 }
 
-fn read_string<R: std::io::Read>(reader: &mut R) -> Result<String> {
-    let len = reader.read_u32::<LittleEndian>()?;
-    let mut v = vec![0u8; len as usize];
+fn read_string<R: std::io::Read>(reader: &mut R, magic: &VersionedMagic) -> Result<String> {
+    let len = match magic {
+        VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
+        VersionedMagic::GgufV2 => reader.read_u64::<LittleEndian>()? as usize,
+    };
+    let mut v = vec![0u8; len];
     reader.read_exact(&mut v)?;
     // GGUF strings are supposed to be non-null terminated but in practice this happens.
     while let Some(0) = v.last() {
@@ -100,8 +105,14 @@ pub enum ValueType {
     U32,
     // The value is a 32-bit signed little-endian integer.
     I32,
+    // The value is a 64-bit unsigned little-endian integer.
+    U64,
+    // The value is a 64-bit signed little-endian integer.
+    I64,
     // The value is a 32-bit IEEE754 floating point number.
     F32,
+    // The value is a 64-bit IEEE754 floating point number.
+    F64,
     // The value is a boolean.
     // 1-byte value where 0 is false and 1 is true.
     // Anything else is invalid, and should be treated as either the model being invalid or the reader being buggy.
@@ -122,7 +133,10 @@ pub enum Value {
     I16(i16),
     U32(u32),
     I32(i32),
+    U64(u64),
+    I64(i64),
     F32(f32),
+    F64(f64),
     Bool(bool),
     String(String),
     Array(Vec<Value>),
@@ -137,7 +151,10 @@ impl Value {
             Self::I16(_) => ValueType::I16,
             Self::U32(_) => ValueType::U32,
             Self::I32(_) => ValueType::I32,
+            Self::U64(_) => ValueType::U64,
+            Self::I64(_) => ValueType::I64,
             Self::F32(_) => ValueType::F32,
+            Self::F64(_) => ValueType::F64,
             Self::Bool(_) => ValueType::Bool,
             Self::String(_) => ValueType::String,
             Self::Array(_) => ValueType::Array,
@@ -186,10 +203,31 @@ impl Value {
         }
     }
 
+    pub fn to_u64(&self) -> Result<u64> {
+        match self {
+            Self::U64(v) => Ok(*v),
+            v => crate::bail!("not a u64 {v:?}"),
+        }
+    }
+
+    pub fn to_i64(&self) -> Result<i64> {
+        match self {
+            Self::I64(v) => Ok(*v),
+            v => crate::bail!("not a i64 {v:?}"),
+        }
+    }
+
     pub fn to_f32(&self) -> Result<f32> {
         match self {
             Self::F32(v) => Ok(*v),
             v => crate::bail!("not a f32 {v:?}"),
+        }
+    }
+
+    pub fn to_f64(&self) -> Result<f64> {
+        match self {
+            Self::F64(v) => Ok(*v),
+            v => crate::bail!("not a f64 {v:?}"),
         }
     }
 
@@ -214,7 +252,11 @@ impl Value {
         }
     }
 
-    fn read<R: std::io::Read>(reader: &mut R, value_type: ValueType) -> Result<Self> {
+    fn read<R: std::io::Read>(
+        reader: &mut R,
+        value_type: ValueType,
+        magic: &VersionedMagic,
+    ) -> Result<Self> {
         let v = match value_type {
             ValueType::U8 => Self::U8(reader.read_u8()?),
             ValueType::I8 => Self::I8(reader.read_i8()?),
@@ -222,20 +264,26 @@ impl Value {
             ValueType::I16 => Self::I16(reader.read_i16::<LittleEndian>()?),
             ValueType::U32 => Self::U32(reader.read_u32::<LittleEndian>()?),
             ValueType::I32 => Self::I32(reader.read_i32::<LittleEndian>()?),
+            ValueType::U64 => Self::U64(reader.read_u64::<LittleEndian>()?),
+            ValueType::I64 => Self::I64(reader.read_i64::<LittleEndian>()?),
             ValueType::F32 => Self::F32(reader.read_f32::<LittleEndian>()?),
+            ValueType::F64 => Self::F64(reader.read_f64::<LittleEndian>()?),
             ValueType::Bool => match reader.read_u8()? {
                 0 => Self::Bool(false),
                 1 => Self::Bool(true),
                 b => crate::bail!("unexpected bool value {b}"),
             },
-            ValueType::String => Self::String(read_string(reader)?),
+            ValueType::String => Self::String(read_string(reader, magic)?),
             ValueType::Array => {
                 let value_type = reader.read_u32::<LittleEndian>()?;
                 let value_type = ValueType::from_u32(value_type)?;
-                let len = reader.read_u32::<LittleEndian>()? as usize;
+                let len = match magic {
+                    VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
+                    VersionedMagic::GgufV2 => reader.read_u64::<LittleEndian>()? as usize,
+                };
                 let mut vs = Vec::with_capacity(len);
                 for _ in 0..len {
-                    vs.push(Value::read(reader, value_type)?)
+                    vs.push(Value::read(reader, value_type, magic)?)
                 }
                 Self::Array(vs)
             }
@@ -251,7 +299,10 @@ impl Value {
             &Self::I16(v) => w.write_i16::<LittleEndian>(v)?,
             &Self::U32(v) => w.write_u32::<LittleEndian>(v)?,
             &Self::I32(v) => w.write_i32::<LittleEndian>(v)?,
+            &Self::U64(v) => w.write_u64::<LittleEndian>(v)?,
+            &Self::I64(v) => w.write_i64::<LittleEndian>(v)?,
             &Self::F32(v) => w.write_f32::<LittleEndian>(v)?,
+            &Self::F64(v) => w.write_f64::<LittleEndian>(v)?,
             &Self::Bool(v) => w.write_u8(u8::from(v))?,
             Self::String(v) => write_string(w, v.as_str())?,
             Self::Array(v) => {
@@ -269,7 +320,7 @@ impl Value {
                     value_type.into_iter().next().unwrap()
                 };
                 w.write_u32::<LittleEndian>(value_type.to_u32())?;
-                w.write_u32::<LittleEndian>(v.len() as u32)?;
+                w.write_u64::<LittleEndian>(v.len() as u64)?;
                 for elem in v.iter() {
                     elem.write(w)?
                 }
@@ -292,6 +343,9 @@ impl ValueType {
             7 => Self::Bool,
             8 => Self::String,
             9 => Self::Array,
+            10 => Self::U64,
+            11 => Self::I64,
+            12 => Self::F64,
             v => crate::bail!("unrecognized value-type {v:#08x}"),
         };
         Ok(v)
@@ -309,6 +363,9 @@ impl ValueType {
             Self::Bool => 7,
             Self::String => 8,
             Self::Array => 9,
+            Self::U64 => 10,
+            Self::I64 => 11,
+            Self::F64 => 12,
         }
     }
 }
@@ -316,24 +373,43 @@ impl ValueType {
 impl Content {
     pub fn read<R: std::io::Seek + std::io::Read>(reader: &mut R) -> Result<Self> {
         let magic = VersionedMagic::read(reader)?;
-        let tensor_count = reader.read_u32::<LittleEndian>()? as usize;
-        let metadata_kv_count = reader.read_u32::<LittleEndian>()?;
+
+        let tensor_count = match magic {
+            VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
+            VersionedMagic::GgufV2 => reader.read_u64::<LittleEndian>()? as usize,
+        };
+        let metadata_kv_count = match magic {
+            VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
+            VersionedMagic::GgufV2 => reader.read_u64::<LittleEndian>()? as usize,
+        };
+
         let mut metadata = HashMap::new();
         for _idx in 0..metadata_kv_count {
-            let key = read_string(reader)?;
+            let key = read_string(reader, &magic)?;
             let value_type = reader.read_u32::<LittleEndian>()?;
             let value_type = ValueType::from_u32(value_type)?;
-            let value = Value::read(reader, value_type)?;
+            let value = Value::read(reader, value_type, &magic)?;
             metadata.insert(key, value);
         }
         let mut tensor_infos = HashMap::new();
         for _idx in 0..tensor_count {
-            let tensor_name = read_string(reader)?;
+            let tensor_name = read_string(reader, &magic)?;
             let n_dimensions = reader.read_u32::<LittleEndian>()?;
-            let mut dimensions = vec![0u32; n_dimensions as usize];
-            reader.read_u32_into::<LittleEndian>(&mut dimensions)?;
+
+            let mut dimensions: Vec<usize> = match magic {
+                VersionedMagic::GgufV1 => {
+                    let mut dimensions = vec![0; n_dimensions as usize];
+                    reader.read_u32_into::<LittleEndian>(&mut dimensions)?;
+                    dimensions.into_iter().map(|c| c as usize).collect()
+                }
+                VersionedMagic::GgufV2 => {
+                    let mut dimensions = vec![0; n_dimensions as usize];
+                    reader.read_u64_into::<LittleEndian>(&mut dimensions)?;
+                    dimensions.into_iter().map(|c| c as usize).collect()
+                }
+            };
+
             dimensions.reverse();
-            let dimensions: Vec<usize> = dimensions.into_iter().map(|c| c as usize).collect();
             let ggml_dtype = reader.read_u32::<LittleEndian>()?;
             let ggml_dtype = GgmlDType::from_u32(ggml_dtype)?;
             let offset = reader.read_u64::<LittleEndian>()?;
@@ -380,7 +456,7 @@ impl Content {
 
 fn write_string<W: std::io::Write>(w: &mut W, str: &str) -> Result<()> {
     let bytes = str.as_bytes();
-    w.write_u32::<LittleEndian>(bytes.len() as u32)?;
+    w.write_u64::<LittleEndian>(bytes.len() as u64)?;
     w.write_all(bytes)?;
     Ok(())
 }
@@ -391,9 +467,9 @@ pub fn write<W: std::io::Seek + std::io::Write>(
     tensors: &[(&str, &QTensor)],
 ) -> Result<()> {
     w.write_u32::<LittleEndian>(0x46554747)?;
-    w.write_u32::<LittleEndian>(1)?; // version 1.
-    w.write_u32::<LittleEndian>(tensors.len() as u32)?;
-    w.write_u32::<LittleEndian>(metadata.len() as u32)?;
+    w.write_u32::<LittleEndian>(2)?; // version 2.
+    w.write_u64::<LittleEndian>(tensors.len() as u64)?;
+    w.write_u64::<LittleEndian>(metadata.len() as u64)?;
     for (name, value) in metadata.iter() {
         write_string(w, name)?;
         w.write_u32::<LittleEndian>(value.value_type().to_u32())?;
@@ -406,7 +482,7 @@ pub fn write<W: std::io::Seek + std::io::Write>(
         let dims = tensor.shape().dims();
         w.write_u32::<LittleEndian>(dims.len() as u32)?;
         for &dim in dims.iter().rev() {
-            w.write_u32::<LittleEndian>(dim as u32)?;
+            w.write_u64::<LittleEndian>(dim as u64)?;
         }
         w.write_u32::<LittleEndian>(tensor.dtype().to_u32())?;
         w.write_u64::<LittleEndian>(offset as u64)?;
