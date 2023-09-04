@@ -38,6 +38,7 @@ extern "C" {
         seqlen_k_rounded: u32,
 
         is_causal: c_int,
+        is_bf16: c_int,
     );
 
 }

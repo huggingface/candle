@@ -1,19 +1,18 @@
 #include "flash_fwd_launch_template.h"
 
-// TODO: Switch back to handling bf16.
-void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
-    FWD_HEADDIM_SWITCH(params.d, [&] {
-        run_mha_fwd_<cutlass::half_t, kHeadDim>(params, stream);
-    });
-}
-
 // void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
-//     FP16_SWITCH(!params.is_bf16, [&] {
-//         FWD_HEADDIM_SWITCH(params.d, [&] {
-//             run_mha_fwd_<elem_type, kHeadDim>(params, stream);
-//         });
+//     FWD_HEADDIM_SWITCH(params.d, [&] {
+//         run_mha_fwd_<cutlass::half_t, kHeadDim>(params, stream);
 //     });
 // }
+
+void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
+  FP16_SWITCH(!params.is_bf16, [&] {
+      FWD_HEADDIM_SWITCH(params.d, [&] {
+          run_mha_fwd_<elem_type, kHeadDim>(params, stream);
+          });
+      });
+}
 
 extern "C" void run_mha(
     void *q_ptr,
@@ -52,7 +51,8 @@ extern "C" void run_mha(
     uint32_t seqlen_q_rounded,
     uint32_t seqlen_k_rounded,
 
-    int is_causal
+    int is_causal,
+    int is_bf16
 ) {
     Flash_fwd_params params;
     // Reset the parameters
@@ -102,7 +102,7 @@ extern "C" void run_mha(
     params.p_dropout_in_uint8_t = uint8_t(std::floor(params.p_dropout * 255.0));
     params.rp_dropout = 1.f / params.p_dropout;
     params.scale_softmax_rp_dropout = params.rp_dropout * params.scale_softmax;
-    params.is_bf16 = 0;
+    params.is_bf16 = is_bf16;
     params.cu_seqlens_q = cu_seqlens_q_ptr;
     params.cu_seqlens_k = cu_seqlens_k_ptr;
     params.p_ptr = nullptr; // used for `return_softmax`.
