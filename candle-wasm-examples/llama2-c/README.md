@@ -11,18 +11,9 @@ Download assets:
 
 ```bash
 # Model and tokenizer
-wget -c https://huggingface.co/spaces/lmz/candle-whisper/resolve/main/mel_filters.safetensors
-wget -c https://huggingface.co/spaces/lmz/candle-whisper/resolve/main/tiny.en.safetensors
-wget -c https://huggingface.co/spaces/lmz/candle-whisper/resolve/main/tokenizer.en.json
 
-
-# Audio samples
-wget -c https://huggingface.co/datasets/Narsil/candle-examples/resolve/main/samples_gb0.wav -O gb0.wav
-wget -c https://huggingface.co/datasets/Narsil/candle-examples/resolve/main/samples_a13.wav -O a13.wav
-wget -c https://huggingface.co/datasets/Narsil/candle-examples/resolve/main/samples_gb1.wav -O gb1.wav
-wget -c https://huggingface.co/datasets/Narsil/candle-examples/resolve/main/samples_hp0.wav -O hp0.wav
-wget -c https://huggingface.co/datasets/Narsil/candle-examples/resolve/main/samples_jfk.wav -O jfk.wav
-wget -c https://huggingface.co/datasets/Narsil/candle-examples/resolve/main/samples_mm0.wav -O mm0.wav
+wget -c https://huggingface.co/spaces/lmz/candle-llama2/resolve/main/model.bin
+wget -c https://huggingface.co/spaces/lmz/candle-llama2/resolve/main/tokenizer.json
 
 ```
 
@@ -43,7 +34,7 @@ sh build-lib.sh
 This will bundle the library under `./build` and we can import it inside our WebWorker like a normal JS module:
 
 ```js
-import init, { Decoder } from "./build/m.js";
+import init, { Model } from "./build/m.js";
 ```
 
 The full example can be found under `./lib-example.html`. All needed assets are fetched from the web, so no need to download anything.

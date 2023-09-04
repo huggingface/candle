@@ -49,82 +49,113 @@
       const llamaWorker = new Worker("./llama2cWorker.js", {
         type: "module",
       });
+      async function generateSequence(controller) {
+        const getValue = (id) => document.querySelector(`#${id}`).value;
+        const modelID = getValue("model");
+        const model = MODELS[modelID];
+        const weightsURL = `${MODELS_BASE_URL}/${model.url}`;
+        const prompt = getValue("prompt");
+        const temperature = getValue("temperature");
+        const repeatPenalty = getValue("repeat_penalty");
+        const seed = getValue("seed");
+        const maxSeqLen = getValue("max-seq");
 
-      async function generateSequence(
-        weightsURL,
-        modelID,
-        tokenizerURL,
-        prompt,
-        temp,
-        repeatPenalty,
-        seed,
-        updateStatus
-      ) {
+        function updateStatus({ status, message, prompt, sentence }) {
+          const outStatus = document.querySelector("#output-status");
+          const outGen = document.querySelector("#output-generation");
+
+          switch (status) {
+            case "loading":
+              outStatus.hidden = false;
+              outStatus.textContent = message;
+              outGen.hidden = true;
+              break;
+            case "generating":
+              outStatus.hidden = true;
+              outGen.hidden = false;
+              outGen.innerHTML = `<span class="font-semibold">${prompt}</span>${sentence.replace(
+                /\<s\>|\<\/s\>/g,
+                ""
+              )}`;
+              break;
+            case "complete":
+              outStatus.hidden = true;
+              outGen.hidden = false;
+              break;
+          }
+        }
+
         return new Promise((resolve, reject) => {
           llamaWorker.postMessage({
             weightsURL,
             modelID,
-            tokenizerURL,
+            tokenizerURL: "tokenizer.json",
             prompt,
-            temp,
+            temp: temperature,
             repeatPenalty,
-            seed,
+            seed: BigInt(seed),
+            maxSeqLen,
+            command: "start",
           });
-          llamaWorker.addEventListener("message", (event) => {
-            if ("status" in event.data) {
-              updateStatus(event.data);
-            }
-            if ("error" in event.data) {
-              reject(new Error(event.data.error));
-            }
-            if (event.data.status === "complete") {
-              resolve(event.data);
-            }
-          });
+
+          const handleAbort = () => {
+            llamaWorker.postMessage({ command: "abort" });
+          };
+          const handleMessage = (event) => {
+            const { status, error, message, prompt, sentence } = event.data;
+            if (status) updateStatus(event.data);
+            if (error) reject(new Error(error));
+            if (status === "complete") resolve(event.data);
+          };
+
+          controller.signal.addEventListener("abort", handleAbort);
+          llamaWorker.addEventListener("message", handleMessage);
         });
       }
-      async function run() {
-        const modelID = document.querySelector("#model").value;
-        const model = MODELS[modelID];
-        // const weightsURL = `${MODELS_BASE_URL}/${model.url}`;
-        const weightsURL = "model.bin";
-        const prompt = document.querySelector("#prompt").value;
-        const temperature = document.querySelector("#temperature").value;
-        const repeatPenalty = document.querySelector("#repeat_penalty").value;
-        const seed = document.querySelector("#seed").value;
 
-        function updateStatus(data) {
-          const outStatus = document.querySelector("#output-status");
-          const outGen = document.querySelector("#output-generation");
-          const outPrompt = document.querySelector("#output-prompt");
-          if (data.status === "loading") {
-            outStatus.hidden = false;
-            outGen.hidden = true;
-            outPrompt.hidden = true;
-            outStatus.textContent = data.message;
-          } else if (data.status === "generating") {
-            outPrompt.hidden = false;
-            outStatus.hidden = true;
-            outGen.hidden = false;
-            outPrompt.textContent = data.prompt;
-            outGen.textContent = data.setence;
-          }
-        }
+      const form = document.querySelector("#form");
+      const prompt = document.querySelector("#prompt");
+      const clearBtn = document.querySelector("#clear-btn");
+      const runBtn = document.querySelector("#run");
+      let runController = new AbortController();
+      let isRunning = false;
 
-        await generateSequence(
-          weightsURL,
-          modelID,
-          "tokenizer.json",
-          prompt,
-          temperature,
-          repeatPenalty,
-          BigInt(seed),
-          updateStatus
-        );
-      }
-      document.querySelector("#form").addEventListener("submit", (e) => {
+      form.addEventListener("submit", async (e) => {
         e.preventDefault();
-        run();
+        if (isRunning) {
+          stopRunning();
+        } else {
+          startRunning();
+          await generateSequence(runController);
+          stopRunning();
+        }
+      });
+
+      function startRunning() {
+        isRunning = true;
+        runBtn.textContent = "Stop";
+      }
+
+      function stopRunning() {
+        runController.abort();
+        runController = new AbortController();
+        runBtn.textContent = "Run";
+        isRunning = false;
+      }
+      clearBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        prompt.value = "";
+        clearBtn.classList.add("invisible");
+        runBtn.disabled = true;
+        stopRunning();
+      });
+      prompt.addEventListener("input", (e) => {
+        runBtn.disabled = false;
+        if (e.target.value.length > 0) {
+          clearBtn.classList.remove("invisible");
+        } else {
+          clearBtn.classList.add("invisible");
+        }
       });
     </script>
   </head>
@@ -167,22 +198,56 @@
       </div>
       <form
         id="form"
-        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md"
+        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md items-center"
       >
+        <input type="submit" hidden />
         <input
           type="text"
           id="prompt"
-          class="font-light w-full px-3 py-2 mx-1"
+          class="font-light w-full px-3 py-2 mx-1 resize-none outline-none"
           placeholder="Add your prompt here..."
         />
+        <button class="invisible" id="clear-btn">
+          <svg
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            width="40"
+            viewBox="0 0 70 40"
+          >
+            <path opacity=".5" d="M39 .2v40.2" stroke="#1F2937" />
+            <path
+              d="M1.5 11.5 19 29.1m0-17.6L1.5 29.1"
+              opacity=".5"
+              stroke="#1F2937"
+              stroke-width="2"
+            />
+          </svg>
+        </button>
         <button
           id="run"
-          class="bg-orange-900 hover:bg-orange-800 text-white font-normal py-2 px-4 rounded disabled:opacity-75 disabled:cursor-not-allowed"
+          disabled
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed"
         >
           Run
         </button>
       </form>
       <div class="grid grid-cols-3 max-w-md items-center gap-3">
+        <label class="text-sm font-medium" for="max-seq">Maximum length </label>
+        <input
+          type="range"
+          id="max-seq"
+          name="temperature"
+          min="1"
+          max="256"
+          step="1"
+          value="200"
+          oninput="this.nextElementSibling.value = Number(this.value)"
+        />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+        >
+          200</output
+        >
         <label class="text-sm font-medium" for="temperature">Temperature</label>
         <input
           type="range"
@@ -233,10 +298,7 @@
         <div
           class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md grid"
         >
-          <p>
-            <span hidden id="output-prompt" class="font-semibold"></span>
-            <span hidden id="output-generation"></span>
-          </p>
+          <p hidden id="output-generation"></p>
           <span
             id="output-status"
             class="justify-self-center self-center font-light"

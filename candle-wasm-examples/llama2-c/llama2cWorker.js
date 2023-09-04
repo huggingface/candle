@@ -24,14 +24,22 @@ class Llama2C {
       ]);
 
       this.instance[modelID] = new Model(weightsArrayU8, tokenizerArrayU8);
-    } else {
-      self.postMessage({ status: "loading", message: "Model Already Loaded" });
     }
     return this.instance[modelID];
   }
 }
 
-self.addEventListener("message", async (event) => {
+let controller = null;
+self.addEventListener("message", (event) => {
+  if (event.data.command === "start") {
+    controller = new AbortController();
+    generate(event.data);
+  } else if (event.data.command === "abort") {
+    controller.abort();
+  }
+});
+
+async function generate(data) {
   const {
     weightsURL,
     modelID,
@@ -40,7 +48,8 @@ self.addEventListener("message", async (event) => {
     temp,
     repeatPenalty,
     seed,
-  } = event.data;
+    maxSeqLen,
+  } = data;
   try {
     self.postMessage({ status: "loading", message: "Starting llama2.c" });
     const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL);
@@ -49,28 +58,39 @@ self.addEventListener("message", async (event) => {
     model.init_with_prompt(prompt, temp, repeatPenalty, seed);
 
     const seq_len = model.get_seq_len();
-    console.log("seq_len", seq_len);
-    let setence = "";
 
-    let max_tokens = seq_len - prompt.length - 1;
+    let sentence = "";
+    let max_tokens = maxSeqLen ? maxSeqLen : seq_len - prompt.length - 1;
+
     while (max_tokens--) {
-      const token = await model.next_token();
+      await new Promise(async (resolve) => {
+        if (controller && controller.signal.aborted) {
+          self.postMessage({
+            status: "aborted",
+            message: "Aborted",
+            output: prompt + sentence,
+          });
+          return;
+        }
+        const token = await model.next_token();
 
-      setence += token;
-      self.postMessage({
-        status: "generating",
-        message: "Generating token",
-        token: token,
-        setence: setence,
-        prompt: prompt,
+        sentence += token;
+        self.postMessage({
+          status: "generating",
+          message: "Generating token",
+          token: token,
+          sentence: sentence,
+          prompt: prompt,
+        });
+        setTimeout(resolve, 0);
       });
     }
     self.postMessage({
       status: "complete",
       message: "complete",
-      output: prompt + setence,
+      output: prompt + sentence,
     });
   } catch (e) {
     self.postMessage({ error: e });
   }
-});
+}
