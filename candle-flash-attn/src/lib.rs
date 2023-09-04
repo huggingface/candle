@@ -146,6 +146,7 @@ impl candle::CustomOp3 for FlashAttn {
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
                 /* seqlen_k_rounded */ seqlen_k_rounded as u32,
                 /* is_causal */ causal,
+                /* is_bf16 */ 0,
             )
         }
 
@@ -354,6 +355,7 @@ impl candle::CustomOp3 for FlashAttnVarLen {
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
                 /* seqlen_k_rounded */ seqlen_k_rounded as u32,
                 /* is_causal */ causal,
+                /* is_bf16 */ 0,
             )
         }
 
