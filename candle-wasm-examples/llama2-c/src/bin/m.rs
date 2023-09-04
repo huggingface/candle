@@ -58,10 +58,10 @@ impl Model {
             Err(e) => Err(JsError::new(&e.to_string())),
         }
     }
+
     #[wasm_bindgen]
     pub fn get_seq_len(&mut self) -> usize {
-        let seq_len = self.inner.config.seq_len;
-        seq_len
+        self.inner.config.seq_len
     }
 
     #[wasm_bindgen]
