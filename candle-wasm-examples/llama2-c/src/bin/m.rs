@@ -58,6 +58,11 @@ impl Model {
             Err(e) => Err(JsError::new(&e.to_string())),
         }
     }
+    #[wasm_bindgen]
+    pub fn get_seq_len(&mut self) -> usize {
+        let seq_len = self.inner.config.seq_len;
+        seq_len
+    }
 
     #[wasm_bindgen]
     pub fn init_with_prompt(
@@ -65,6 +70,7 @@ impl Model {
         prompt: String,
         temp: f64,
         repeat_penalty: f32,
+        seed: u64,
     ) -> Result<String, JsError> {
         // First reset the cache.
         {
@@ -74,7 +80,7 @@ impl Model {
             }
         }
         let temp = if temp <= 0. { None } else { Some(temp) };
-        self.logits_processor = LogitsProcessor::new(299792458, temp);
+        self.logits_processor = LogitsProcessor::new(seed, temp);
         self.repeat_penalty = repeat_penalty;
         self.tokens.clear();
         let tokens = self
