@@ -80,7 +80,7 @@ impl Model {
         let tokens = self
             .inner
             .tokenizer
-            .encode(prompt.to_string(), true)
+            .encode(prompt, true)
             .map_err(|m| JsError::new(&m.to_string()))?
             .get_ids()
             .to_vec();
