@@ -54,7 +54,7 @@ async function generate(data) {
     self.postMessage({ status: "loading", message: "Starting llama2.c" });
     const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL);
 
-    self.postMessage({ status: "loading", message: "Inititng llama model" });
+    self.postMessage({ status: "loading", message: "Initializing model" });
     model.init_with_prompt(prompt, temp, repeatPenalty, seed);
 
     const seq_len = model.get_seq_len();
