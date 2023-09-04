@@ -139,9 +139,10 @@ def main():
     filename = sys.argv[1]
     print(f"reading model file {filename}")
     if filename.endswith("gguf"):
-        all_tensors = candle.load_gguf(sys.argv[1])
-        hparams = None
-        vocab = None
+        all_tensors, metadata = candle.load_gguf(sys.argv[1])
+        vocab = metadata["tokenizer.ggml.model"]
+        hparams = {k: v for (k, v) in metadata.items() if not k.startswith("tokenizer")}
+        # TODO: rename the tensors in all_tensors so that they can be used
     else:
         all_tensors, hparams, vocab = candle.load_ggml(sys.argv[1])
     print(hparams)
