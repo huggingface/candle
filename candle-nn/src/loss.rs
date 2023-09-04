@@ -1,6 +1,6 @@
 use candle::{Result, Tensor};
 
-/// The negative loss likelihodd loss.
+/// The negative log likelihood loss.
 ///
 /// Arguments
 ///
