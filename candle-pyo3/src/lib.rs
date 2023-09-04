@@ -1,5 +1,4 @@
 #![allow(clippy::redundant_closure_call)]
-// TODO: Handle negative dimension indexes.
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyTuple};
@@ -715,6 +714,18 @@ fn load_safetensors(path: &str, py: Python<'_>) -> PyResult<PyObject> {
 }
 
 #[pyfunction]
+fn save_safetensors(
+    path: &str,
+    tensors: std::collections::HashMap<String, PyTensor>,
+) -> PyResult<()> {
+    let tensors = tensors
+        .into_iter()
+        .map(|(s, t)| (s, t.0))
+        .collect::<std::collections::HashMap<_, _>>();
+    ::candle::safetensors::save(&tensors, path).map_err(wrap_err)
+}
+
+#[pyfunction]
 fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObject)> {
     let mut file = std::fs::File::open(path)?;
     let ggml = ::candle::quantized::ggml_file::Content::read(&mut file).map_err(wrap_err)?;
@@ -867,6 +878,7 @@ fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rand, m)?)?;
     m.add_function(wrap_pyfunction!(randn, m)?)?;
     m.add_function(wrap_pyfunction!(tensor, m)?)?;
+    m.add_function(wrap_pyfunction!(save_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(stack, m)?)?;
     m.add_function(wrap_pyfunction!(zeros, m)?)?;
     Ok(())
