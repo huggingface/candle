@@ -100,6 +100,29 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize, const N4: 
     }
 }
 
+impl<S: NdArray> NdArray for Vec<S> {
+    fn shape(&self) -> Result<Shape> {
+        if self.is_empty() {
+            crate::bail!("empty array")
+        }
+        let shape0 = self[0].shape()?;
+        let n = self.len();
+        for v in self.iter() {
+            let shape = v.shape()?;
+            if shape != shape0 {
+                crate::bail!("two elements have different shapes {shape:?} {shape0:?}")
+            }
+        }
+        Ok(Shape::from([[n].as_slice(), shape0.dims()].concat()))
+    }
+
+    fn to_cpu_storage(&self) -> CpuStorage {
+        // This allocates intermediary memory and shouldn't be necessary.
+        let storages = self.iter().map(|v| v.to_cpu_storage()).collect::<Vec<_>>();
+        CpuStorage::concat(storages.as_slice()).unwrap()
+    }
+}
+
 impl Device {
     pub fn new_cuda(ordinal: usize) -> Result<Self> {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))

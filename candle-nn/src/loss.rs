@@ -43,3 +43,8 @@ pub fn cross_entropy(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
     let inp = crate::ops::log_softmax(inp, 1)?;
     nll(&inp, target)
 }
+
+/// The mean squared error loss.
+pub fn mse(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
+    (inp - target)?.sqr()?.mean_all()
+}
