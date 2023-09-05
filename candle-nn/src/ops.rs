@@ -96,9 +96,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         };
 
         let mut dst = vec![0f32; el_count];
-        for idx in (0..el_count).step_by(dim_m1) {
-            let src = &src[idx..idx + dim_m1];
-            let dst = &mut dst[idx..idx + dim_m1];
+        for (src, dst) in src.chunks(dim_m1).zip(dst.chunks_mut(dim_m1)) {
             let mut max = f32::NEG_INFINITY;
             for &s in src.iter() {
                 max = f32::max(s, max)
