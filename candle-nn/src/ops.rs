@@ -87,11 +87,17 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     }
 
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
-        fn softmax<T: num_traits::NumAssign + num_traits::Float + Send + Sync>(
+        fn softmax<T: candle::WithDType + num_traits::Float>(
             src: &[T],
-            el_count: usize,
-            dim_m1: usize,
-        ) -> Vec<T> {
+            layout: &Layout,
+        ) -> Result<(CpuStorage, Shape)> {
+            let src = match layout.contiguous_offsets() {
+                None => candle::bail!("input has to be contiguous"),
+                Some((o1, o2)) => &src[o1..o2],
+            };
+            let el_count = layout.shape().elem_count();
+            let dims = layout.shape().dims();
+            let dim_m1 = dims[dims.len() - 1];
             let mut dst = vec![T::zero(); el_count];
             src.par_chunks(dim_m1)
                 .zip(dst.par_chunks_mut(dim_m1))
@@ -109,49 +115,15 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                         *d /= sum_exp
                     }
                 });
-            dst
+            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            Ok((storage, Shape::from_dims(dims)))
         }
 
-        let el_count = layout.shape().elem_count();
-        let dims = layout.shape().dims();
-        let dim_m1 = dims[dims.len() - 1];
         match storage {
-            CpuStorage::BF16(slice) => {
-                let src = match layout.contiguous_offsets() {
-                    None => candle::bail!("input has to be contiguous"),
-                    Some((o1, o2)) => &slice[o1..o2],
-                };
-                let dst = softmax::<half::bf16>(src, el_count, dim_m1);
-                let storage = candle::WithDType::to_cpu_storage_owned(dst);
-                Ok((storage, Shape::from_dims(dims)))
-            }
-            CpuStorage::F16(slice) => {
-                let src = match layout.contiguous_offsets() {
-                    None => candle::bail!("input has to be contiguous"),
-                    Some((o1, o2)) => &slice[o1..o2],
-                };
-                let dst = softmax::<half::f16>(src, el_count, dim_m1);
-                let storage = candle::WithDType::to_cpu_storage_owned(dst);
-                Ok((storage, Shape::from_dims(dims)))
-            }
-            CpuStorage::F32(slice) => {
-                let src = match layout.contiguous_offsets() {
-                    None => candle::bail!("input has to be contiguous"),
-                    Some((o1, o2)) => &slice[o1..o2],
-                };
-                let dst = softmax::<f32>(src, el_count, dim_m1);
-                let storage = candle::WithDType::to_cpu_storage_owned(dst);
-                Ok((storage, Shape::from_dims(dims)))
-            }
-            CpuStorage::F64(slice) => {
-                let src = match layout.contiguous_offsets() {
-                    None => candle::bail!("input has to be contiguous"),
-                    Some((o1, o2)) => &slice[o1..o2],
-                };
-                let dst = softmax::<f64>(src, el_count, dim_m1);
-                let storage = candle::WithDType::to_cpu_storage_owned(dst);
-                Ok((storage, Shape::from_dims(dims)))
-            }
+            CpuStorage::BF16(slice) => softmax::<half::bf16>(slice, layout),
+            CpuStorage::F16(slice) => softmax::<half::f16>(slice, layout),
+            CpuStorage::F32(slice) => softmax::<f32>(slice, layout),
+            CpuStorage::F64(slice) => softmax::<f64>(slice, layout),
             _ => candle::bail!("unsupported dtype for softmax {:?}", storage),
         }
     }
