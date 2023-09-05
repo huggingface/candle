@@ -1,15 +1,24 @@
+//! Types for elements that can be stored and manipulated using tensors.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::BackendStorage;
 use crate::{CpuStorage, Error, Result};
 
+/// The different types of elements allowed in tensors.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum DType {
+    // Unsigned 8 bits integer.
     U8,
+    // Unsigned 32 bits integer.
     U32,
+    // Signed 64 bits integer.
     I64,
+    // Brain floating-point using half precision (16 bits).
     BF16,
+    // Floating-point using half precision (16 bits).
     F16,
+    // Floating-point using single precision (32 bits).
     F32,
+    // Floating-point using double precision (64 bits).
     F64,
 }
 
@@ -33,6 +42,7 @@ impl std::str::FromStr for DType {
 }
 
 impl DType {
+    /// String representation for dtypes.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::U8 => "u8",
@@ -45,6 +55,7 @@ impl DType {
         }
     }
 
+    /// The size used by each element in bytes, i.e. 1 for `U8`, 4 for `F32`.
     pub fn size_in_bytes(&self) -> usize {
         match self {
             Self::U8 => 1,

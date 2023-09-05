@@ -5,18 +5,9 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle_core::quantized::GgmlType;
-use candle_core::{Device, Result, Tensor, D};
+use candle::quantized::GgmlType;
+use candle::{Device, Result, Tensor, D};
 use clap::{Parser, Subcommand};
-
-fn softmax<D: candle_core::shape::Dim>(xs: &Tensor, dim: D) -> Result<Tensor> {
-    let dim = dim.to_index(xs.shape(), "softmax")?;
-    let max = xs.max_keepdim(dim)?;
-    let diff = xs.broadcast_sub(&max)?;
-    let num = diff.exp()?;
-    let den = num.sum_keepdim(dim)?;
-    num.broadcast_div(&den)
-}
 
 trait Benchmark {
     type PreProcessData;
@@ -86,12 +77,12 @@ impl Benchmark for Matmul {
 // https://github.com/ggerganov/llama.cpp/blob/master/examples/benchmark/benchmark-matmult.cpp
 struct QMatMul;
 impl Benchmark for QMatMul {
-    type PreProcessData = (candle_core::quantized::QMatMul, Tensor);
+    type PreProcessData = (candle::quantized::QMatMul, Tensor);
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
-        let zeros = vec![candle_core::quantized::k_quants::BlockQ4_0::zeros(); 4096 * 11008 / 32];
-        let mm = candle_core::quantized::QTensor::new(zeros, (4096, 11008))?;
-        let mm = candle_core::quantized::QMatMul::from_qtensor(mm);
+        let zeros = vec![candle::quantized::k_quants::BlockQ4_0::zeros(); 4096 * 11008 / 32];
+        let mm = candle::quantized::QTensor::new(zeros, (4096, 11008))?;
+        let mm = candle::quantized::QMatMul::from_qtensor(mm);
         let arg = Tensor::randn(0f32, 1., (128, 11008), &Device::Cpu)?;
         Ok((mm, arg))
     }
@@ -114,7 +105,24 @@ impl Benchmark for Softmax {
     }
 
     fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
-        softmax(d, D::Minus1)
+        candle_nn::ops::softmax(d, D::Minus1)
+    }
+
+    const ITERS: usize = 100;
+}
+
+struct SoftmaxLastDim;
+impl Benchmark for SoftmaxLastDim {
+    type PreProcessData = Tensor;
+    type RunResult = Tensor;
+    fn preprocess() -> Result<Self::PreProcessData> {
+        // Typical whisper tiny size.
+        let x = Tensor::randn(0f32, 1., (1, 6, 200, 1500), &Device::Cpu)?;
+        Ok(x)
+    }
+
+    fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
+        candle_nn::ops::softmax_last_dim(d)
     }
 
     const ITERS: usize = 100;
@@ -140,6 +148,7 @@ enum Task {
     Matmul,
     Qmatmul,
     Softmax,
+    SoftmaxLastDim,
 }
 
 #[derive(Parser, Debug)]
@@ -160,6 +169,7 @@ fn main() -> Result<()> {
         Task::Conv2d => run::<Conv2d>(args.iters)?,
         Task::Matmul => run::<Matmul>(args.iters)?,
         Task::Softmax => run::<Softmax>(args.iters)?,
+        Task::SoftmaxLastDim => run::<SoftmaxLastDim>(args.iters)?,
         Task::Qmatmul => run::<QMatMul>(args.iters)?,
     }
     Ok(())

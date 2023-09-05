@@ -1,3 +1,4 @@
+//! Tensors are N-dimenional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{
