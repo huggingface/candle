@@ -127,6 +127,14 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             _ => candle::bail!("unsupported dtype for softmax {:?}", storage),
         }
     }
+
+    fn cuda_fwd(
+        &self,
+        _storage: &candle::CudaStorage,
+        _layout: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        candle::bail!("TODO: implement a cuda kernel")
+    }
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
