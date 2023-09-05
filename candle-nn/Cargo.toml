@@ -18,6 +18,7 @@ safetensors = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+clap = { workspace = true }
 
 [features]
 default = []
