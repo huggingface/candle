@@ -1,4 +1,7 @@
-pub trait VecOps: num_traits::NumAssign + PartialOrd + Copy {
+pub trait VecOps: num_traits::NumAssign + Copy {
+    fn min(self, rhs: Self) -> Self;
+    fn max(self, rhs: Self) -> Self;
+
     /// Dot-product of two vectors.
     ///
     /// # Safety
@@ -37,10 +40,7 @@ pub trait VecOps: num_traits::NumAssign + PartialOrd + Copy {
     unsafe fn vec_reduce_max(xs: *const Self, res: *mut Self, len: usize) {
         *res = *xs;
         for i in 1..len {
-            let x = *xs.add(i);
-            if x > *res {
-                *res = x
-            }
+            *res = (*res).max(*xs.add(i))
         }
     }
 
@@ -54,15 +54,22 @@ pub trait VecOps: num_traits::NumAssign + PartialOrd + Copy {
     unsafe fn vec_reduce_min(xs: *const Self, res: *mut Self, len: usize) {
         *res = *xs;
         for i in 1..len {
-            let x = *xs.add(i);
-            if x < *res {
-                *res = x
-            }
+            *res = (*res).min(*xs.add(i))
         }
     }
 }
 
 impl VecOps for f32 {
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        Self::min(self, other)
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        Self::max(self, other)
+    }
+
     #[inline(always)]
     unsafe fn vec_dot(lhs: *const Self, rhs: *const Self, res: *mut Self, len: usize) {
         super::vec_dot_f32(lhs, rhs, res, len)
@@ -76,6 +83,16 @@ impl VecOps for f32 {
 
 impl VecOps for half::f16 {
     #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        Self::min(self, other)
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        Self::max(self, other)
+    }
+
+    #[inline(always)]
     unsafe fn vec_dot(lhs: *const Self, rhs: *const Self, res: *mut Self, len: usize) {
         let mut res_f32 = 0f32;
         super::vec_dot_f16(lhs, rhs, &mut res_f32, len);
@@ -83,11 +100,61 @@ impl VecOps for half::f16 {
     }
 }
 
-impl VecOps for f64 {}
-impl VecOps for half::bf16 {}
-impl VecOps for u8 {}
-impl VecOps for u32 {}
-impl VecOps for i64 {}
+impl VecOps for f64 {
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        Self::min(self, other)
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        Self::max(self, other)
+    }
+}
+impl VecOps for half::bf16 {
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        Self::min(self, other)
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        Self::max(self, other)
+    }
+}
+impl VecOps for u8 {
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        <Self as Ord>::min(self, other)
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        <Self as Ord>::max(self, other)
+    }
+}
+impl VecOps for u32 {
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        <Self as Ord>::min(self, other)
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        <Self as Ord>::max(self, other)
+    }
+}
+impl VecOps for i64 {
+    #[inline(always)]
+    fn min(self, other: Self) -> Self {
+        <Self as Ord>::min(self, other)
+    }
+
+    #[inline(always)]
+    fn max(self, other: Self) -> Self {
+        <Self as Ord>::max(self, other)
+    }
+}
 
 #[inline(always)]
 pub fn par_for_each(n_threads: usize, func: impl Fn(usize) + Send + Sync) {
