@@ -1,4 +1,4 @@
-use candle::{Result, Tensor};
+use candle::{CpuStorage, Layout, Result, Shape, Tensor};
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
@@ -76,4 +76,47 @@ impl Dropout {
             Ok(xs.clone())
         }
     }
+}
+
+struct SoftmaxLastDim;
+
+impl candle::CustomOp1 for SoftmaxLastDim {
+    fn name(&self) -> &'static str {
+        "softmax-last-dim"
+    }
+
+    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        let el_count = layout.shape().elem_count();
+        let dims = layout.shape().dims();
+        let dim_m1 = dims[dims.len() - 1];
+        let slice = storage.as_slice::<f32>()?;
+        let src = match layout.contiguous_offsets() {
+            None => candle::bail!("input has to be contiguous"),
+            Some((o1, o2)) => &slice[o1..o2],
+        };
+
+        let mut dst = vec![0f32; el_count];
+        for idx in (0..el_count).step_by(dim_m1) {
+            let src = &src[idx..idx + dim_m1];
+            let dst = &mut dst[idx..idx + dim_m1];
+            let mut max = f32::NEG_INFINITY;
+            for &s in src.iter() {
+                max = f32::max(s, max)
+            }
+            let mut sum_exp = 0f32;
+            for (s, d) in src.iter().zip(dst.iter_mut()) {
+                *d = (*s - max).exp();
+                sum_exp += *d
+            }
+            for d in dst.iter_mut() {
+                *d /= sum_exp
+            }
+        }
+        let storage = candle::WithDType::to_cpu_storage_owned(dst);
+        Ok((storage, Shape::from_dims(dims)))
+    }
+}
+
+pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
+    xs.apply_op1_no_bwd(&SoftmaxLastDim)
 }
