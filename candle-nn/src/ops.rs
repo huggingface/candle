@@ -1,4 +1,5 @@
 use candle::{CpuStorage, Layout, Result, Shape, Tensor};
+use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
@@ -86,32 +87,73 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     }
 
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        fn softmax<T: num_traits::NumAssign + num_traits::Float + Send + Sync>(
+            src: &[T],
+            el_count: usize,
+            dim_m1: usize,
+        ) -> Vec<T> {
+            let mut dst = vec![T::zero(); el_count];
+            src.par_chunks(dim_m1)
+                .zip(dst.par_chunks_mut(dim_m1))
+                .for_each(|(src, dst)| {
+                    let mut max = T::neg_infinity();
+                    for &s in src.iter() {
+                        max = T::max(s, max)
+                    }
+                    let mut sum_exp = T::zero();
+                    for (s, d) in src.iter().zip(dst.iter_mut()) {
+                        *d = (*s - max).exp();
+                        sum_exp += *d
+                    }
+                    for d in dst.iter_mut() {
+                        *d /= sum_exp
+                    }
+                });
+            dst
+        }
+
         let el_count = layout.shape().elem_count();
         let dims = layout.shape().dims();
         let dim_m1 = dims[dims.len() - 1];
-        let slice = storage.as_slice::<f32>()?;
-        let src = match layout.contiguous_offsets() {
-            None => candle::bail!("input has to be contiguous"),
-            Some((o1, o2)) => &slice[o1..o2],
-        };
-
-        let mut dst = vec![0f32; el_count];
-        for (src, dst) in src.chunks(dim_m1).zip(dst.chunks_mut(dim_m1)) {
-            let mut max = f32::NEG_INFINITY;
-            for &s in src.iter() {
-                max = f32::max(s, max)
+        match storage {
+            CpuStorage::BF16(slice) => {
+                let src = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => &slice[o1..o2],
+                };
+                let dst = softmax::<half::bf16>(src, el_count, dim_m1);
+                let storage = candle::WithDType::to_cpu_storage_owned(dst);
+                Ok((storage, Shape::from_dims(dims)))
             }
-            let mut sum_exp = 0f32;
-            for (s, d) in src.iter().zip(dst.iter_mut()) {
-                *d = (*s - max).exp();
-                sum_exp += *d
+            CpuStorage::F16(slice) => {
+                let src = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => &slice[o1..o2],
+                };
+                let dst = softmax::<half::f16>(src, el_count, dim_m1);
+                let storage = candle::WithDType::to_cpu_storage_owned(dst);
+                Ok((storage, Shape::from_dims(dims)))
             }
-            for d in dst.iter_mut() {
-                *d /= sum_exp
+            CpuStorage::F32(slice) => {
+                let src = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => &slice[o1..o2],
+                };
+                let dst = softmax::<f32>(src, el_count, dim_m1);
+                let storage = candle::WithDType::to_cpu_storage_owned(dst);
+                Ok((storage, Shape::from_dims(dims)))
             }
+            CpuStorage::F64(slice) => {
+                let src = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => &slice[o1..o2],
+                };
+                let dst = softmax::<f64>(src, el_count, dim_m1);
+                let storage = candle::WithDType::to_cpu_storage_owned(dst);
+                Ok((storage, Shape::from_dims(dims)))
+            }
+            _ => candle::bail!("unsupported dtype for softmax {:?}", storage),
         }
-        let storage = candle::WithDType::to_cpu_storage_owned(dst);
-        Ok((storage, Shape::from_dims(dims)))
     }
 }
 
