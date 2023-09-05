@@ -38,11 +38,11 @@
         },
         stories42M: {
           url: "stories42M.bin",
-          seq_len: 256,
+          seq_len: 1024,
         },
         stories110M: {
           url: "stories110M.bin",
-          seq_len: 256,
+          seq_len: 1024,
         },
       };
 
@@ -124,8 +124,16 @@
       const prompt = document.querySelector("#prompt");
       const clearBtn = document.querySelector("#clear-btn");
       const runBtn = document.querySelector("#run");
+      const modelSelect = document.querySelector("#model");
       let runController = new AbortController();
       let isRunning = false;
+
+      modelSelect.addEventListener("change", (e) => {
+        const model = MODELS[e.target.value];
+        document.querySelector("#max-seq").max = model.seq_len;
+        document.querySelector("#max-seq").nextElementSibling.value =
+          model.seq_len;
+      });
 
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
