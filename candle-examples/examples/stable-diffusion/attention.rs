@@ -198,7 +198,7 @@ impl CrossAttention {
             let xs = query.matmul(&(key.t()? * self.scale)?)?;
             let xs = {
                 let _enter = self.span_softmax.enter();
-                nn::ops::softmax(&xs, D::Minus1)?
+                nn::ops::softmax_last_dim(&xs)?
             };
             xs.matmul(&value)?.to_dtype(in_dtype)?
         };

@@ -130,5 +130,9 @@ impl candle::CustomOp1 for SoftmaxLastDim {
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
-    xs.apply_op1_no_bwd(&SoftmaxLastDim)
+    if xs.device().is_cpu() {
+        xs.apply_op1_no_bwd(&SoftmaxLastDim)
+    } else {
+        softmax(xs, candle::D::Minus1)
+    }
 }
