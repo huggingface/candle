@@ -141,7 +141,9 @@
             const { output } = result;
             const text = output.map((segment) => segment.dr.text).join(" ");
             console.log(text);
-            document.getElementById("output").textContent = text;
+            document.querySelector("#output-status").hidden = true;
+            document.querySelector("#output-generation").hidden = false;
+            document.querySelector("#output-generation").textContent = text;
           })
           .catch((error) => {
             console.error(error);
@@ -295,18 +297,21 @@
         <button
           id="detect"
           disabled
-          class="bg-orange-900 hover:bg-orange-800 text-white font-normal py-2 px-4 rounded disabled:opacity-75 disabled:cursor-not-allowed"
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 px-4 rounded disabled:bg-gray-300 disabled:cursor-not-allowed"
         >
           Transcribe Audio
         </button>
       </div>
       <div>
         <h3 class="font-medium">Transcription:</h3>
-
         <div
-          id="output"
-          class="min-h-[100px] bg-slate-500 text-white p-4 rounded-md"
-        ></div>
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2"
+        >
+          <p hidden id="output-generation" class="grid-rows-2"></p>
+          <span id="output-status" class="m-auto font-light"
+            >No transcription results yet</span
+          >
+        </div>
       </div>
     </main>
   </body>
