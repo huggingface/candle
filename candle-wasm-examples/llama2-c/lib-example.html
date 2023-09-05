@@ -298,6 +298,13 @@
           value="299792458"
           class="font-light border border-gray-700 text-right rounded-md p-2"
         />
+        <button
+          id="run"
+          onclick="document.querySelector('#seed').value = BigInt(Math.floor(Math.random() * 2**64-1))"
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
+        >
+          Rand
+        </button>
       </div>
       <div>
         <h3 class="font-medium">Generation:</h3>
