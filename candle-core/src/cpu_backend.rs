@@ -445,7 +445,7 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
 }
 
 // This function maps over two strided index sequences.
-fn binary_map<T: Copy, U: Copy, F: FnMut(T, T) -> U>(
+pub fn binary_map<T: Copy, U: Copy, F: FnMut(T, T) -> U>(
     lhs_l: &Layout,
     rhs_l: &Layout,
     lhs: &[T],
@@ -525,7 +525,7 @@ fn binary_map<T: Copy, U: Copy, F: FnMut(T, T) -> U>(
 }
 
 // Similar to binary_map but with vectorized variants.
-fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>(
+pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [T])>(
     lhs_l: &Layout,
     rhs_l: &Layout,
     lhs: &[T],
