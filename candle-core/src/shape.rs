@@ -1,3 +1,4 @@
+//! The shape of a tensor is a tuple with the size of each of its dimensions.
 #![allow(clippy::redundant_closure_call)]
 use crate::{Error, Result};
 
@@ -119,6 +120,7 @@ impl Shape {
         Self(dims.to_vec())
     }
 
+    /// The rank is the number of dimensions, 0 for a scalar value, 1 for a vector, etc.
     pub fn rank(&self) -> usize {
         self.0.len()
     }
@@ -127,10 +129,12 @@ impl Shape {
         self.0
     }
 
+    /// The dimensions as a slice of `usize`.
     pub fn dims(&self) -> &[usize] {
         &self.0
     }
 
+    /// The total number of elements, this is the product of all dimension sizes.
     pub fn elem_count(&self) -> usize {
         self.0.iter().product()
     }
@@ -182,6 +186,8 @@ impl Shape {
         true
     }
 
+    /// Modifies the shape by adding a list of additional dimensions at the end of the existing
+    /// dimensions.
     pub fn extend(mut self, additional_dims: &[usize]) -> Self {
         self.0.extend(additional_dims);
         self
