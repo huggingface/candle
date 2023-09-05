@@ -60,23 +60,30 @@
         const seed = getValue("seed");
         const maxSeqLen = getValue("max-seq");
 
-        function updateStatus({ status, message, prompt, sentence }) {
+        function updateStatus(data) {
           const outStatus = document.querySelector("#output-status");
           const outGen = document.querySelector("#output-generation");
+          const outCounter = document.querySelector("#output-counter");
 
-          switch (status) {
+          switch (data.status) {
             case "loading":
               outStatus.hidden = false;
-              outStatus.textContent = message;
+              outStatus.textContent = data.message;
               outGen.hidden = true;
+              outCounter.hidden = true;
               break;
             case "generating":
+              const { message, prompt, sentence, tokensSec, totalTime } = data;
               outStatus.hidden = true;
+              outCounter.hidden = false;
               outGen.hidden = false;
               outGen.innerHTML = `<span class="font-semibold">${prompt}</span>${sentence.replace(
                 /\<s\>|\<\/s\>/g,
                 ""
               )}`;
+              outCounter.innerHTML = `${(totalTime / 1000).toFixed(
+                2
+              )}s (${tokensSec.toFixed(2)} tok/s)`;
               break;
             case "complete":
               outStatus.hidden = true;
@@ -206,8 +213,9 @@
           id="prompt"
           class="font-light w-full px-3 py-2 mx-1 resize-none outline-none"
           placeholder="Add your prompt here..."
+          value="Once upon a time"
         />
-        <button class="invisible" id="clear-btn">
+        <button id="clear-btn">
           <svg
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
@@ -225,7 +233,6 @@
         </button>
         <button
           id="run"
-          disabled
           class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed"
         >
           Run
@@ -294,14 +301,16 @@
       </div>
       <div>
         <h3 class="font-medium">Generation:</h3>
-
         <div
-          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md grid"
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2"
         >
-          <p hidden id="output-generation"></p>
-          <span
-            id="output-status"
-            class="justify-self-center self-center font-light"
+          <div
+            id="output-counter"
+            hidden
+            class="ml-auto font-semibold grid-rows-1 text-sm"
+          ></div>
+          <p hidden id="output-generation" class="grid-rows-2"></p>
+          <span id="output-status" class="m-auto font-light"
             >No output yet</span
           >
         </div>
