@@ -35,14 +35,14 @@ pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
 }
 
 /// Saves an image to disk using the image crate, this expects an input with shape
-/// (c, width, height).
+/// (c, height, width).
 pub fn save_image<P: AsRef<std::path::Path>>(img: &Tensor, p: P) -> Result<()> {
     let p = p.as_ref();
-    let (channel, width, height) = img.dims3()?;
+    let (channel, height, width) = img.dims3()?;
     if channel != 3 {
-        candle::bail!("save_image expects an input of shape (3, width, height)")
+        candle::bail!("save_image expects an input of shape (3, height, width)")
     }
-    let img = img.transpose(0, 1)?.t()?.flatten_all()?;
+    let img = img.permute((1, 2, 0))?.flatten_all()?;
     let pixels = img.to_vec1::<u8>()?;
     let image: image::ImageBuffer<image::Rgb<u8>, Vec<u8>> =
         match image::ImageBuffer::from_raw(width as u32, height as u32, pixels) {
