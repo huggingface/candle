@@ -5,14 +5,14 @@ use crate::VarMap;
 use candle::{safetensors::Load, DType, Device, Error, Result, Shape, Tensor};
 use safetensors::{slice::IndexOp, tensor::SafeTensors};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// A structure used to retrieve variables, these variables can either come from storage or be
 /// generated via some form of initialization.
 ///
 /// The way to retrieve variables is defined in the backend embedded in the `VarBuilder`.
 pub struct VarBuilderArgs<'a, B: Backend> {
-    data: Rc<TensorData<B>>,
+    data: Arc<TensorData<B>>,
     path: Vec<String>,
     _phantom: std::marker::PhantomData<&'a B>,
 }
@@ -99,7 +99,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
             device: dev.clone(),
         };
         Self {
-            data: Rc::new(data),
+            data: Arc::new(data),
             path: vec![],
             _phantom: std::marker::PhantomData,
         }
@@ -333,7 +333,7 @@ impl<'a> VarBuilder<'a> {
             device,
         };
         Self {
-            data: Rc::new(data),
+            data: Arc::new(data),
             path: vec![],
             _phantom: std::marker::PhantomData,
         }
