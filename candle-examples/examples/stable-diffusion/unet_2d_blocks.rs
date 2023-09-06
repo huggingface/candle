@@ -754,6 +754,7 @@ impl UpBlock2D {
         let mut xs = xs.clone();
         for (index, resnet) in self.resnets.iter().enumerate() {
             xs = Tensor::cat(&[&xs, &res_xs[res_xs.len() - index - 1]], 1)?;
+            xs = xs.contiguous()?;
             xs = resnet.forward(&xs, temb)?;
         }
         match &self.upsampler {
@@ -855,6 +856,7 @@ impl CrossAttnUpBlock2D {
         let mut xs = xs.clone();
         for (index, resnet) in self.upblock.resnets.iter().enumerate() {
             xs = Tensor::cat(&[&xs, &res_xs[res_xs.len() - index - 1]], 1)?;
+            xs = xs.contiguous()?;
             xs = resnet.forward(&xs, temb)?;
             xs = self.attentions[index].forward(&xs, encoder_hidden_states)?;
         }
