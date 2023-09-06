@@ -98,13 +98,13 @@ struct Args {
     use_f16: bool,
 
     #[arg(long, value_name = "FILE")]
-    inpaint: Option<String>,
+    img2img: Option<String>,
 
     /// The strength, indicates how much to transform the initial image. The
     /// value must be between 0 and 1, a value of 1 discards the initial image
     /// information.
     #[arg(long, default_value_t = 0.8)]
-    inpaint_strength: f64,
+    img2img_strength: f64,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -357,13 +357,13 @@ fn run(args: Args) -> Result<()> {
         tracing,
         use_f16,
         use_flash_attn,
-        inpaint,
-        inpaint_strength,
+        img2img,
+        img2img_strength,
         ..
     } = args;
 
-    if !(0. ..=1.).contains(&inpaint_strength) {
-        anyhow::bail!("inpaint-strength should be between 0 and 1, got {inpaint_strength}")
+    if !(0. ..=1.).contains(&img2img_strength) {
+        anyhow::bail!("img2img-strength should be between 0 and 1, got {img2img_strength}")
     }
 
     let _guard = if tracing {
@@ -417,10 +417,10 @@ fn run(args: Args) -> Result<()> {
     println!("Building the autoencoder.");
     let vae_weights = ModelFile::Vae.get(vae_weights, sd_version, use_f16)?;
     let vae = sd_config.build_vae(&vae_weights, &device, dtype)?;
-    let init_latent_dist = match &inpaint {
+    let init_latent_dist = match &img2img {
         None => None,
         Some(image) => {
-            let image = image_preprocess(image)?;
+            let image = image_preprocess(image)?.to_device(&device)?;
             Some(vae.encode(&image)?)
         }
     };
@@ -428,8 +428,8 @@ fn run(args: Args) -> Result<()> {
     let unet_weights = ModelFile::Unet.get(unet_weights, sd_version, use_f16)?;
     let unet = sd_config.build_unet(&unet_weights, &device, 4, use_flash_attn, dtype)?;
 
-    let t_start = if inpaint.is_some() {
-        n_steps - (n_steps as f64 * inpaint_strength) as usize
+    let t_start = if img2img.is_some() {
+        n_steps - (n_steps as f64 * img2img_strength) as usize
     } else {
         0
     };
