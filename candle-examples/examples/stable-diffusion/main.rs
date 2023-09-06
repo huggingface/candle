@@ -327,8 +327,8 @@ fn image_preprocess<T: AsRef<std::path::Path>>(path: T) -> anyhow::Result<Tensor
     );
     let img = img.to_rgb8();
     let img = img.into_raw();
-    let img = Tensor::from_vec(img, (height, width, 3), &Device::Cpu)?
-        .permute((2, 0, 1))?
+    let img = Tensor::from_vec(img, (width, height, 3), &Device::Cpu)?
+        .permute((2, 1, 0))?
         .to_dtype(DType::F32)?
         .affine(2. / 255., -1.)?
         .unsqueeze(0)?;
