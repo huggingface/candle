@@ -43,7 +43,7 @@ struct TensorData<B: Backend> {
 /// Note that there is a speciliazed version of this trait (`SimpleBackend`) that can be used most
 /// of the time. The main restriction is that it doesn't allow for specific args (besides
 /// initialization hints).
-pub trait Backend {
+pub trait Backend: Send {
     type Hints: Default;
 
     /// Retrieve a tensor with some target shape.
@@ -59,7 +59,7 @@ pub trait Backend {
     fn contains_tensor(&self, name: &str) -> bool;
 }
 
-pub trait SimpleBackend {
+pub trait SimpleBackend: Send {
     /// Retrieve a tensor based on a target name and shape.
     fn get(
         &self,
