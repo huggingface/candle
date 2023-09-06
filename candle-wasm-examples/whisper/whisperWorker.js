@@ -2,16 +2,17 @@
 import init, { Decoder } from "./build/m.js";
 
 async function fetchArrayBuffer(url) {
-  const res = await fetch(url, {
-    cache: "force-cache",
-    headers: {
-      "Cache-Control": "public, max-age=31536000",
-    },
-  });
-  const data = await res.arrayBuffer();
-  return new Uint8Array(data);
+  const cacheName = "whisper-candle-cache";
+  const cache = await caches.open(cacheName);
+  const cachedResponse = await cache.match(url);
+  if (cachedResponse) {
+    const data = await cachedResponse.arrayBuffer();
+    return new Uint8Array(data);
+  }
+  const res = await fetch(url, { cache: "force-cache" });
+  cache.put(url, res.clone());
+  return new Uint8Array(await res.arrayBuffer());
 }
-
 class Whisper {
   static instance = {};
   // Retrieve the Whisper model. When called for the first time,

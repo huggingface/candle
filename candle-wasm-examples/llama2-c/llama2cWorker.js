@@ -1,13 +1,17 @@
 import init, { Model } from "./build/m.js";
 
 async function fetchArrayBuffer(url) {
-  const res = await fetch(url, {
-    cache: "force-cache",
-  });
-  const data = await res.arrayBuffer();
-  return new Uint8Array(data);
+  const cacheName = "llama2c-candle-cache";
+  const cache = await caches.open(cacheName);
+  const cachedResponse = await cache.match(url);
+  if (cachedResponse) {
+    const data = await cachedResponse.arrayBuffer();
+    return new Uint8Array(data);
+  }
+  const res = await fetch(url, { cache: "force-cache" });
+  cache.put(url, res.clone());
+  return new Uint8Array(await res.arrayBuffer());
 }
-
 class Llama2C {
   static instance = {};
 
