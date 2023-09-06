@@ -300,6 +300,92 @@ impl Module for ImageEncoderViT {
     }
 }
 
+#[derive(Debug)]
+struct MlpMaskDecoder {
+    layers: Vec<Linear>,
+    sigmoid_output: bool,
+}
+
+impl MlpMaskDecoder {
+    fn new(
+        input_dim: usize,
+        hidden_dim: usize,
+        output_dim: usize,
+        num_layers: usize,
+        sigmoid_output: bool,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let mut layers = Vec::with_capacity(num_layers);
+        let vb = vb.pp("layers");
+        for i in 0..num_layers {
+            let in_dim = if i == 0 { input_dim } else { hidden_dim };
+            let out_dim = if i + 1 == num_layers {
+                output_dim
+            } else {
+                hidden_dim
+            };
+            let layer = linear(vb.pp(i), in_dim, out_dim, true)?;
+            layers.push(layer)
+        }
+        Ok(Self {
+            layers,
+            sigmoid_output,
+        })
+    }
+}
+
+impl Module for MlpMaskDecoder {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut xs = xs.clone();
+        for (i, layer) in self.layers.iter().enumerate() {
+            xs = layer.forward(&xs)?;
+            if i + 1 < self.layers.len() {
+                xs = xs.relu()?
+            }
+        }
+        if self.sigmoid_output {
+            candle_nn::ops::sigmoid(&xs)
+        } else {
+            Ok(xs)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MaskDecoder {
+    iou_tokens: candle_nn::Embedding,
+    mask_tokens: candle_nn::Embedding,
+    iou_prediction_head: MlpMaskDecoder,
+}
+
+impl MaskDecoder {
+    fn new(
+        transformer_dim: usize,
+        num_multimask_outputs: usize,
+        iou_head_depth: usize,
+        iou_head_hidden_dim: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let num_mask_tokens = num_multimask_outputs - 1;
+        let iou_prediction_head = MlpMaskDecoder::new(
+            transformer_dim,
+            iou_head_hidden_dim,
+            num_mask_tokens,
+            iou_head_depth,
+            false,
+            vb.pp("iou_prediction_head"),
+        )?;
+        let iou_tokens = candle_nn::embedding(1, transformer_dim, vb.pp("iou_tokens"))?;
+        let mask_tokens =
+            candle_nn::embedding(num_mask_tokens, transformer_dim, vb.pp("mask_tokens"))?;
+        Ok(Self {
+            iou_tokens,
+            mask_tokens,
+            iou_prediction_head,
+        })
+    }
+}
+
 /*
     fn interpolate_pos_encoding(&self, xs: &Tensor, w: usize, h: usize) -> Result<Tensor> {
         let npatch = xs.dim(1)? - 1;
