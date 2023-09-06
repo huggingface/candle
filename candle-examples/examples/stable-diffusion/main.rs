@@ -439,8 +439,12 @@ fn run(args: Args) -> Result<()> {
         let latents = match &init_latent_dist {
             Some(init_latent_dist) => {
                 let latents = (init_latent_dist.sample()? * 0.18215)?.to_device(&device)?;
-                let noise = latents.randn_like(0f64, 1f64)?;
-                scheduler.add_noise(&latents, noise, timesteps[t_start])?
+                if t_start < timesteps.len() {
+                    let noise = latents.randn_like(0f64, 1f64)?;
+                    scheduler.add_noise(&latents, noise, timesteps[t_start])?
+                } else {
+                    latents
+                }
             }
             None => Tensor::randn(
                 0f32,
