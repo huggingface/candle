@@ -446,17 +446,18 @@ fn run(args: Args) -> Result<()> {
                     latents
                 }
             }
-            None => Tensor::randn(
-                0f32,
-                1f32,
-                (bsize, 4, sd_config.height / 8, sd_config.width / 8),
-                &device,
-            )?,
+            None => {
+                let latents = Tensor::randn(
+                    0f32,
+                    1f32,
+                    (bsize, 4, sd_config.height / 8, sd_config.width / 8),
+                    &device,
+                )?;
+                // scale the initial noise by the standard deviation required by the scheduler
+                (latents * scheduler.init_noise_sigma())?
+            }
         };
         let mut latents = latents.to_dtype(dtype)?;
-
-        // scale the initial noise by the standard deviation required by the scheduler
-        latents = (latents * scheduler.init_noise_sigma())?;
 
         println!("starting sampling");
         for (timestep_index, &timestep) in timesteps.iter().enumerate() {
