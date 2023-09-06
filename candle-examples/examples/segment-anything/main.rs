@@ -210,6 +210,7 @@ struct ImageEncoderViT {
 }
 
 impl ImageEncoderViT {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         img_size: usize,
         patch_size: usize,
