@@ -84,7 +84,7 @@ impl Module for MlpBlock {
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
-    model: Option<String>,
+    model: String,
 
     #[arg(long)]
     image: String,
@@ -97,10 +97,15 @@ struct Args {
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let _device = candle_examples::device(args.cpu)?;
+    let device = candle_examples::device(args.cpu)?;
 
-    let image = candle_examples::imagenet::load_image224(args.image)?;
+    let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device);
     println!("loaded image {image:?}");
+
+    let weights = unsafe { candle::safetensors::MmapedFile::new(args.model)? };
+    let weights = weights.deserialize()?;
+    let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
+    let _sam = model_sam::Sam::new(768, 12, 12, &[2, 5, 8, 11], vb)?; // sam_vit_b
 
     Ok(())
 }
