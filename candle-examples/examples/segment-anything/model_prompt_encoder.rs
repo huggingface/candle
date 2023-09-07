@@ -160,14 +160,20 @@ impl PromptEncoder {
         boxes: Option<&Tensor>,
         masks: Option<&Tensor>,
     ) -> Result<(Tensor, Tensor)> {
-        let mut sparse_embeddings = Tensor::zeros(1, DType::F32, &candle::Device::Cpu)?;
-
-        if let Some((coords, labels)) = points {
-            sparse_embeddings = self.embed_points(coords, labels, boxes.is_none())?
-        }
-        if let Some(boxes) = boxes {
-            sparse_embeddings = self.embed_boxes(boxes)?
-        }
+        let se_points = match points {
+            Some((coords, labels)) => Some(self.embed_points(coords, labels, boxes.is_none())?),
+            None => None,
+        };
+        let se_boxes = match boxes {
+            Some(boxes) => Some(self.embed_boxes(boxes)?),
+            None => None,
+        };
+        let sparse_embeddings = match (se_points, se_boxes) {
+            (Some(se_points), Some(se_boxes)) => Tensor::cat(&[se_points, se_boxes], 1)?,
+            (Some(se_points), None) => se_points,
+            (None, Some(se_boxes)) => se_boxes,
+            (None, None) => Tensor::zeros(1, DType::F32, &candle::Device::Cpu)?,
+        };
 
         let dense_embeddings = match masks {
             None => {
