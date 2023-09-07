@@ -116,4 +116,43 @@ impl TwoWayAttentionBlock {
             skip_first_layer_pe,
         })
     }
+
+    fn forward(
+        &self,
+        queries: &Tensor,
+        keys: &Tensor,
+        query_pe: &Tensor,
+        key_pe: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        // Self attention block
+        let queries = if self.skip_first_layer_pe {
+            self.self_attn.forward(queries, keys, queries)?
+        } else {
+            let q = (queries + query_pe)?;
+            let attn_out = self.self_attn.forward(&q, &q, queries)?;
+            (queries + attn_out)?
+        };
+        let queries = self.norm1.forward(&queries)?;
+
+        // Cross attention block, tokens attending to image embedding
+        let q = (&queries + query_pe)?;
+        let k = (keys + key_pe)?;
+        let attn_out = self.cross_attn_token_to_image.forward(&q, &k, keys)?;
+        let queries = (&queries + attn_out)?;
+        let queries = self.norm2.forward(&queries)?;
+
+        // MLP block
+        let mlp_out = self.mlp.forward(&queries);
+        let queries = (queries + mlp_out)?;
+        let queries = self.norm3.forward(&queries)?;
+
+        // Cross attention block, image embedding attending to tokens
+        let q = (&queries + query_pe)?;
+        let k = (keys + key_pe)?;
+        let attn_out = self.cross_attn_image_to_token.forward(&k, &q, &queries)?;
+        let keys = (keys + attn_out)?;
+        let keys = self.norm4.forward(&keys)?;
+
+        Ok((queries, keys))
+    }
 }
