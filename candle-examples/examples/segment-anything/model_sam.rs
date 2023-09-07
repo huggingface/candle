@@ -40,6 +40,7 @@ impl Sam {
             /* use_rel_pos */ true,
             /* use_abs_pos */ true,
             /* window_size */ 14,
+            /* global_attn_indexes */ encoder_global_attn_indexes,
             vb.pp("image_encoder"),
         )?;
         let prompt_encoder = PromptEncoder::new(
