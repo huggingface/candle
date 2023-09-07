@@ -75,7 +75,7 @@ impl MaskDecoder {
         iou_head_hidden_dim: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let num_mask_tokens = num_multimask_outputs - 1;
+        let num_mask_tokens = num_multimask_outputs + 1;
         let iou_prediction_head = MlpMaskDecoder::new(
             transformer_dim,
             iou_head_hidden_dim,

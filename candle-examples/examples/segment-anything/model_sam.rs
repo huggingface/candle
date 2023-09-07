@@ -57,8 +57,10 @@ impl Sam {
             /* iou_head_hidden_dim */ 256,
             vb.pp("mask_decoder"),
         )?;
-        let pixel_mean = vb.get(3, "pixel_mean")?;
-        let pixel_std = vb.get(3, "pixel_std")?;
+        let pixel_mean =
+            Tensor::new(&[123.675f32, 116.28, 103.53], vb.device())?.reshape((3, 1, 1))?;
+        let pixel_std =
+            Tensor::new(&[58.395f32, 57.12, 57.375], vb.device())?.reshape((3, 1, 1))?;
         Ok(Self {
             image_encoder,
             prompt_encoder,

@@ -100,7 +100,7 @@ impl PromptEncoder {
             layer_norm(mask_in_chans / 4, 1e-6, vb.pp("mask_downscaling.1"))?;
         let mask_downscaling_ln2 = layer_norm(mask_in_chans, 1e-6, vb.pp("mask_downscaling.4"))?;
         let mut point_embeddings = Vec::with_capacity(num_points_embeddings);
-        let vb_e = vb.pp("points_embeddings");
+        let vb_e = vb.pp("point_embeddings");
         for i in 0..num_points_embeddings {
             let emb = candle_nn::embedding(1, embed_dim, vb_e.pp(i))?;
             point_embeddings.push(emb)
