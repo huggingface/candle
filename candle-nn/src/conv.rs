@@ -240,3 +240,44 @@ pub fn conv2d_no_bias(
     )?;
     Ok(Conv2d::new(ws, None, cfg))
 }
+
+pub fn conv_transpose2d(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: ConvTranspose2dConfig,
+    vs: crate::VarBuilder,
+) -> Result<ConvTranspose2d> {
+    let bound = 1. / (out_channels as f64).sqrt() / kernel_size as f64;
+    let init = crate::Init::Uniform {
+        lo: -bound,
+        up: bound,
+    };
+    let ws = vs.get_with_hints(
+        (in_channels, out_channels, kernel_size, kernel_size),
+        "weight",
+        init,
+    )?;
+    let bs = vs.get_with_hints(out_channels, "bias", init)?;
+    Ok(ConvTranspose2d::new(ws, Some(bs), cfg))
+}
+
+pub fn conv_transpose2d_no_bias(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: ConvTranspose2dConfig,
+    vs: crate::VarBuilder,
+) -> Result<ConvTranspose2d> {
+    let bound = 1. / (out_channels as f64).sqrt() / kernel_size as f64;
+    let init = crate::Init::Uniform {
+        lo: -bound,
+        up: bound,
+    };
+    let ws = vs.get_with_hints(
+        (out_channels, in_channels, kernel_size, kernel_size),
+        "weight",
+        init,
+    )?;
+    Ok(ConvTranspose2d::new(ws, None, cfg))
+}
