@@ -142,7 +142,16 @@ impl PromptEncoder {
 
     fn embed_points(&self, points: &Tensor, labels: &Tensor, pad: bool) -> Result<Tensor> {
         let points = (points + 0.5)?;
-        let points = if pad { todo!() } else { points };
+        let dev = points.device();
+        let (points, labels) = if pad {
+            let padding_point = Tensor::zeros((points.dim(0)?, 1, 2), DType::F32, dev)?;
+            let padding_label = (Tensor::ones((labels.dim(0)?, 1), DType::F32, dev)? * (-1f64))?;
+            let points = Tensor::cat(&[&points, &padding_point], 1)?;
+            let labels = Tensor::cat(&[labels, &padding_label], 1)?;
+            (points, labels)
+        } else {
+            (points, labels.clone())
+        };
         let point_embedding = self
             .pe_layer
             .forward_with_coords(&points, self.input_image_size)?;
