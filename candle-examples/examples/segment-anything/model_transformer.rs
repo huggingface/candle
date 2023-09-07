@@ -156,3 +156,65 @@ impl TwoWayAttentionBlock {
         Ok((queries, keys))
     }
 }
+
+#[derive(Debug)]
+struct TwoWayTransformer {
+    layers: Vec<TwoWayAttentionBlock>,
+    final_attn_token_to_image: Attention,
+    norm_final_attn: LayerNorm,
+}
+
+impl TwoWayTransformer {
+    fn new(
+        depth: usize,
+        embedding_dim: usize,
+        num_heads: usize,
+        mlp_dim: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let vb_l = vb.pp("layers");
+        let mut layers = Vec::with_capacity(depth);
+        for i in 0..depth {
+            let layer =
+                TwoWayAttentionBlock::new(embedding_dim, num_heads, mlp_dim, i == 0, vb_l.pp(i))?;
+            layers.push(layer)
+        }
+        let final_attn_token_to_image = Attention::new(
+            embedding_dim,
+            num_heads,
+            2,
+            vb.pp("final_attn_token_to_image"),
+        )?;
+        let norm_final_attn = layer_norm(embedding_dim, 1e-5, vb.pp("norm_final_attn"))?;
+        Ok(Self {
+            layers,
+            final_attn_token_to_image,
+            norm_final_attn,
+        })
+    }
+
+    fn forward(
+        &self,
+        image_embedding: &Tensor,
+        image_pe: &Tensor,
+        point_embedding: &Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        let (bs, c, h, w) = image_embedding.dims4()?;
+        let image_embedding = image_embedding.flatten_from(2)?.permute((0, 2, 1))?;
+        let image_pe = image_pe.flatten_from(2)?.permute((0, 2, 1))?;
+
+        let mut queries = point_embedding.clone();
+        let mut keys = image_embedding;
+
+        for layer in self.layers.iter() {
+            (queries, keys) = layer.forward(&queries, &keys, point_embedding, &image_pe)?
+        }
+
+        let q = (&queries + point_embedding)?;
+        let k = (&keys + image_pe)?;
+        let attn_out = self.final_attn_token_to_image.forward(&q, &k, &keys)?;
+        let queries = (queries + attn_out)?.apply(&self.norm_final_attn)?;
+
+        Ok((queries, keys))
+    }
+}
