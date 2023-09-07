@@ -30,6 +30,7 @@ pub fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Resu
 pub struct LayerNorm2d {
     weight: Tensor,
     bias: Tensor,
+    num_channels: usize,
     eps: f64,
 }
 
@@ -37,7 +38,12 @@ impl LayerNorm2d {
     pub fn new(num_channels: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
         let weight = vb.get(num_channels, "weight")?;
         let bias = vb.get(num_channels, "bias")?;
-        Ok(Self { weight, bias, eps })
+        Ok(Self {
+            weight,
+            bias,
+            num_channels,
+            eps,
+        })
     }
 }
 
@@ -47,7 +53,8 @@ impl Module for LayerNorm2d {
         let xs = xs.broadcast_sub(&u)?;
         let s = xs.sqr()?.mean_keepdim(1)?;
         let xs = xs.broadcast_div(&(s + self.eps)?.sqrt()?)?;
-        xs.broadcast_mul(&self.weight)?.broadcast_add(&self.bias)
+        xs.broadcast_mul(&self.weight.reshape((1, self.num_channels, 1, 1))?)?
+            .broadcast_add(&self.bias.reshape((1, self.num_channels, 1, 1))?)
     }
 }
 

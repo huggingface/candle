@@ -17,7 +17,7 @@ impl PostionEmbeddingRandom {
 
     fn pe_encoding(&self, coords: &Tensor) -> Result<Tensor> {
         let coords = coords.affine(2., -1.)?;
-        let coords = coords.matmul(&self.positional_encoding_gaussian_matrix)?;
+        let coords = coords.broadcast_matmul(&self.positional_encoding_gaussian_matrix)?;
         let coords = (coords * (2. * std::f64::consts::PI))?;
         Tensor::cat(&[coords.sin()?, coords.cos()?], D::Minus1)
     }
