@@ -108,7 +108,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device)?;
+    let image = candle_examples::load_image(args.image)?.to_device(&device)?;
     println!("loaded image {image:?}");
 
     let model = match args.model {
@@ -125,7 +125,7 @@ pub fn main() -> anyhow::Result<()> {
     let sam = model_sam::Sam::new(768, 12, 12, &[2, 5, 8, 11], vb)?; // sam_vit_b
 
     let (mask, iou_predictions) = sam.forward(&image, false)?;
-    println!("mask: {mask:?}");
+    println!("mask:\n{mask}");
     println!("iou_predictions: {iou_predictions:?}");
     Ok(())
 }
