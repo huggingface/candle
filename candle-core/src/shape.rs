@@ -73,6 +73,14 @@ impl From<(usize, usize, usize, usize, usize)> for Shape {
     }
 }
 
+impl From<(usize, usize, usize, usize, usize, usize)> for Shape {
+    fn from(d123456: (usize, usize, usize, usize, usize, usize)) -> Self {
+        Self(vec![
+            d123456.0, d123456.1, d123456.2, d123456.3, d123456.4, d123456.5,
+        ])
+    }
+}
+
 impl From<Vec<usize>> for Shape {
     fn from(dims: Vec<usize>) -> Self {
         Self(dims)

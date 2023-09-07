@@ -143,17 +143,67 @@ impl Block {
     }
 }
 
+fn window_partition(xs: Tensor, window_size: usize) -> Result<(Tensor, (usize, usize))> {
+    let (b, h, w, c) = xs.dims4()?;
+    let pad_h = (window_size - h % window_size) % window_size;
+    let pad_w = (window_size - w % window_size) % window_size;
+    let xs = if pad_h > 0 {
+        xs.pad_with_zeros(1, 0, pad_h)?
+    } else {
+        xs
+    };
+    let xs = if pad_w > 0 {
+        xs.pad_with_zeros(2, 0, pad_w)?
+    } else {
+        xs
+    };
+    let (h_p, w_p) = (h + pad_h, w + pad_w);
+    let windows = xs
+        .reshape((b, h_p / window_size, w_p / window_size, window_size, c))?
+        .transpose(2, 3)?
+        .contiguous()?
+        .reshape((window_size, window_size, c))?;
+    Ok((windows, (h_p, w_p)))
+}
+
+fn window_unpartition(
+    windows: Tensor,
+    window_size: usize,
+    (h_p, w_p): (usize, usize),
+    (h, w): (usize, usize),
+) -> Result<Tensor> {
+    let b = windows.dim(0)? / (h_p * w_p / window_size / window_size);
+    let xs = windows
+        .reshape((
+            b,
+            h_p / window_size,
+            w_p / window_size,
+            window_size,
+            window_size,
+            0,
+        ))?
+        .transpose(2, 3)?
+        .contiguous()?
+        .reshape((b, h_p, w_p, 0))?;
+    Ok(xs)
+}
+
 impl Module for Block {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let shortcut = xs;
         let xs = self.norm1.forward(xs)?;
-        if self.window_size > 0 {
-            todo!()
-        }
+        let hw = (xs.dim(1)?, xs.dim(2)?);
+        let (xs, pad_hw) = if self.window_size > 0 {
+            window_partition(xs, self.window_size)?
+        } else {
+            (xs, (0, 0))
+        };
         let xs = self.attn.forward(&xs)?;
-        if self.window_size > 0 {
-            todo!()
-        }
+        let xs = if self.window_size > 0 {
+            window_unpartition(xs, self.window_size, pad_hw, hw)?
+        } else {
+            xs
+        };
         let xs = (xs + shortcut)?;
         &xs + xs.apply(&self.norm2)?.apply(&self.mlp)?
     }
