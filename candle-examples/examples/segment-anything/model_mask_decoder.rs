@@ -213,9 +213,8 @@ impl MaskDecoder {
         }
         let hyper_in = Tensor::stack(hyper_in_list.as_slice(), 1)?;
         let (b, c, h, w) = upscaled_embedding.dims4()?;
-        let masks = hyper_in
-            .matmul(&upscaled_embedding.reshape((b, c, h * w))?)?
-            .reshape((b, 0, h, w))?;
+        let masks = hyper_in.matmul(&upscaled_embedding.reshape((b, c, h * w))?)?;
+        let masks = masks.reshape((b, masks.elem_count() / b / h / w, h, w))?;
 
         // Generate mask quality predictions.
         let iou_pred = self.iou_prediction_head.forward(&iou_token_out)?;
