@@ -60,6 +60,8 @@ struct PromptEncoder {
     mask_downscaling_ln2: LayerNorm,
     mask_downscaling_conv3: candle_nn::Conv2d,
     no_mask_embed: candle_nn::Embedding,
+    image_embedding_size: (usize, usize),
+    input_image_size: (usize, usize),
 }
 
 impl PromptEncoder {
@@ -113,6 +115,72 @@ impl PromptEncoder {
             mask_downscaling_ln2,
             mask_downscaling_conv3,
             no_mask_embed,
+            image_embedding_size,
+            input_image_size,
         })
+    }
+
+    fn embed_masks(&self, masks: &Tensor) -> Result<Tensor> {
+        masks
+            .apply(&self.mask_downscaling_conv1)?
+            .apply(&self.mask_downscaling_ln1)?
+            .gelu()?
+            .apply(&self.mask_downscaling_conv2)?
+            .apply(&self.mask_downscaling_ln2)?
+            .gelu()?
+            .apply(&self.mask_downscaling_conv3)
+    }
+
+    fn embed_points(&self, points: &Tensor, labels: &Tensor, pad: bool) -> Result<Tensor> {
+        let points = (points + 0.5)?;
+        let points = if pad { todo!() } else { points };
+        let point_embedding = self
+            .pe_layer
+            .forward_with_coords(&points, self.input_image_size)?;
+        // TODO: tweak based on labels.
+        Ok(point_embedding)
+    }
+
+    fn embed_boxes(&self, boxes: &Tensor) -> Result<Tensor> {
+        let boxes = (boxes + 0.5)?;
+        let coords = boxes.reshape((boxes.elem_count() / 4, 2, 2))?;
+        let corner_embedding = self
+            .pe_layer
+            .forward_with_coords(&coords, self.input_image_size)?;
+        let ce1 = corner_embedding.i((.., 0))?;
+        let ce2 = corner_embedding.i((.., 1))?;
+        let ce1 = (ce1 + self.point_embeddings[2].embeddings())?;
+        let ce2 = (ce2 + self.point_embeddings[3].embeddings())?;
+        Tensor::cat(&[&ce1, &ce2], 1)
+    }
+
+    fn forward(
+        &self,
+        points: Option<(&Tensor, &Tensor)>,
+        boxes: Option<&Tensor>,
+        masks: Option<&Tensor>,
+    ) -> Result<(Tensor, Tensor)> {
+        let mut sparse_embeddings = Tensor::zeros(1, DType::F32, &candle::Device::Cpu)?;
+
+        if let Some((coords, labels)) = points {
+            sparse_embeddings = self.embed_points(coords, labels, boxes.is_none())?
+        }
+        if let Some(boxes) = boxes {
+            sparse_embeddings = self.embed_boxes(boxes)?
+        }
+
+        let dense_embeddings = match masks {
+            None => {
+                let emb = self.no_mask_embed.embeddings();
+                emb.reshape((1, emb.elem_count(), 1, 1))?.expand((
+                    1,
+                    0,
+                    self.image_embedding_size.0,
+                    self.image_embedding_size.1,
+                ))?
+            }
+            Some(masks) => self.embed_masks(masks)?,
+        };
+        Ok((sparse_embeddings, dense_embeddings))
     }
 }
