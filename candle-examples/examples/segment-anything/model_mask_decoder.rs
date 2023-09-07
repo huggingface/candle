@@ -195,7 +195,7 @@ impl MaskDecoder {
         // Run the transformer
         let (hs, src) = self.transformer.forward(&src, &pos_src, &tokens)?;
         let iou_token_out = hs.i((.., 0))?;
-        let mask_tokens_out = hs.i((.., 1, 1 + self.num_mask_tokens))?;
+        let mask_tokens_out = hs.i((.., 1..1 + self.num_mask_tokens))?;
 
         // Upscale mask embeddings and predict masks using the masks tokens.
         let src = src.transpose(1, 2)?.reshape((b, c, h, w))?;

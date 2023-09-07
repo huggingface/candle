@@ -131,7 +131,7 @@ impl TwoWayAttentionBlock {
     ) -> Result<(Tensor, Tensor)> {
         // Self attention block
         let queries = if self.skip_first_layer_pe {
-            self.self_attn.forward(queries, keys, queries)?
+            self.self_attn.forward(queries, queries, queries)?
         } else {
             let q = (queries + query_pe)?;
             let attn_out = self.self_attn.forward(&q, &q, queries)?;
