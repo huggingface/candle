@@ -117,8 +117,8 @@ impl Block {
         input_size: (usize, usize),
         vb: VarBuilder,
     ) -> Result<Self> {
-        let norm1 = layer_norm(dim, 1e-5, vb.pp("norm1"))?;
-        let norm2 = layer_norm(dim, 1e-5, vb.pp("norm2"))?;
+        let norm1 = layer_norm(dim, 1e-6, vb.pp("norm1"))?;
+        let norm2 = layer_norm(dim, 1e-6, vb.pp("norm2"))?;
         let input_size_attn = if window_size == 0 {
             input_size
         } else {
