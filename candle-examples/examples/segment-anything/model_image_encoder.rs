@@ -165,9 +165,9 @@ pub struct ImageEncoderViT {
     patch_embed: PatchEmbed,
     blocks: Vec<Block>,
     neck_conv1: candle_nn::Conv2d,
-    neck_ln1: LayerNorm,
+    neck_ln1: crate::LayerNorm2d,
     neck_conv2: candle_nn::Conv2d,
-    neck_ln2: LayerNorm,
+    neck_ln2: crate::LayerNorm2d,
     pos_embed: Option<Tensor>,
 }
 
@@ -222,13 +222,13 @@ impl ImageEncoderViT {
             Default::default(),
             vb.pp("neck.0"),
         )?;
-        let neck_ln1 = layer_norm(out_chans, 1e-6, vb.pp("neck.1"))?;
+        let neck_ln1 = crate::LayerNorm2d::new(out_chans, 1e-6, vb.pp("neck.1"))?;
         let cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
         let neck_conv2 = candle_nn::conv2d_no_bias(out_chans, out_chans, 3, cfg, vb.pp("neck.2"))?;
-        let neck_ln2 = layer_norm(out_chans, 1e-6, vb.pp("neck.3"))?;
+        let neck_ln2 = crate::LayerNorm2d::new(out_chans, 1e-6, vb.pp("neck.3"))?;
         let pos_embed = if use_abs_pos {
             let p = vb.get(
                 (1, img_size / patch_size, img_size / patch_size, embed_dim),

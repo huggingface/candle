@@ -1,5 +1,5 @@
 use candle::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
+use candle_nn::{Linear, Module, VarBuilder};
 
 use crate::model_transformer::TwoWayTransformer;
 
@@ -60,7 +60,7 @@ pub struct MaskDecoder {
     mask_tokens: candle_nn::Embedding,
     iou_prediction_head: MlpMaskDecoder,
     output_upscaling_conv1: candle_nn::ConvTranspose2d,
-    output_upscaling_ln: LayerNorm,
+    output_upscaling_ln: crate::LayerNorm2d,
     output_upscaling_conv2: candle_nn::ConvTranspose2d,
     num_mask_tokens: usize,
     output_hypernetworks_mlps: Vec<MlpMaskDecoder>,
@@ -99,7 +99,7 @@ impl MaskDecoder {
             vb.pp("output_upscaling.0"),
         )?;
         let output_upscaling_ln =
-            layer_norm(transformer_dim / 4, 1e-6, vb.pp("output_upscaling.1"))?;
+            crate::LayerNorm2d::new(transformer_dim / 4, 1e-6, vb.pp("output_upscaling.1"))?;
         let output_upscaling_conv2 = candle_nn::conv_transpose2d(
             transformer_dim / 4,
             transformer_dim / 8,
