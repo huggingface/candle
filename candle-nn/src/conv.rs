@@ -130,6 +130,17 @@ pub struct ConvTranspose2dConfig {
     // TODO: support groups.
 }
 
+impl Default for ConvTranspose2dConfig {
+    fn default() -> Self {
+        Self {
+            padding: 0,
+            output_padding: 0,
+            stride: 1,
+            dilation: 1,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ConvTranspose2d {
     weight: Tensor,
