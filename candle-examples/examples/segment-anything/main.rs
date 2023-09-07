@@ -10,6 +10,7 @@ extern crate accelerate_src;
 
 mod model_image_encoder;
 mod model_mask_decoder;
+mod model_prompt_encoder;
 mod model_transformer;
 
 use candle::{DType, IndexOp, Result, Tensor, D};
