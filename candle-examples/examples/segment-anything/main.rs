@@ -77,9 +77,14 @@ impl MlpBlock {
 
 impl Module for MlpBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.lin1)?
+        let (d1, d2, d3, d4) = xs.dims4()?;
+        let xs = xs
+            .reshape((d1 * d2, d3, d4))?
+            .apply(&self.lin1)?
             .apply(&self.activation)?
-            .apply(&self.lin2)
+            .apply(&self.lin2)?;
+        let (_, d3, d4) = xs.dims3()?;
+        xs.reshape((d1, d2, d3, d4))
     }
 }
 

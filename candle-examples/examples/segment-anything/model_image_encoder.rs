@@ -85,14 +85,15 @@ impl Attention {
                 let (b, _, dim) = q.dims3()?;
                 let r_q = q.reshape((b, q_h, q_w, dim))?;
                 // rel_h = torch.einsum("bhwc,hkc->bhwk", r_q, Rh)
-                let rel_h = r_q.matmul(&r_h.broadcast_left(b)?.t()?)?;
+                let rel_h = r_q.matmul(&r_h.broadcast_left(b)?.t()?.contiguous()?)?;
                 // rel_w = torch.einsum("bhwc,wkc->bhwk", r_q, Rw)
                 let rel_w = r_q
                     .transpose(1, 2)? // -> bwhc
-                    .matmul(&r_w.broadcast_left(b)?.t()?)? // bwhc,bwck -> bwhk
+                    .contiguous()?
+                    .matmul(&r_w.broadcast_left(b)?.t()?.contiguous()?)? // bwhc,bwck -> bwhk
                     .transpose(1, 2)?;
                 (attn.reshape((b, q_h, q_w, k_h, k_w))?
-                    + (rel_h.unsqueeze(4)? + rel_w.unsqueeze(3)?)?)?
+                    + rel_h.unsqueeze(4)?.broadcast_add(&rel_w.unsqueeze(3)?)?)?
                 .reshape((b, q_h * q_w, k_h * k_w))
             }
             None => Ok(attn),
@@ -118,8 +119,11 @@ fn get_rel_pos(q_size: usize, k_size: usize, rel_pos: &Tensor) -> Result<Tensor>
     let k_coords = (k_coords * f64::max(1f64, q_size as f64 / k_size as f64))?;
     let relative_coords = (q_coords.broadcast_sub(&k_coords)?
         + (k_size as f64 - 1.) * f64::max(1f64, q_size as f64 / k_size as f64))?;
-    // TODO
-    rel_pos_resized.index_select(&relative_coords.to_dtype(DType::U32)?, 0)
+    let (d1, d2) = relative_coords.dims2()?;
+    let relative_coords = relative_coords.to_dtype(DType::U32)?;
+    rel_pos_resized
+        .index_select(&relative_coords.reshape(d1 * d2)?, 0)?
+        .reshape((d1, d2, rel_pos_resized.dim(1)?))
 }
 
 impl Module for Attention {
@@ -137,12 +141,12 @@ impl Module for Attention {
         let attn = (&q * self.scale)?.matmul(&k.t()?)?;
         let attn = self.add_decomposed_rel_pos(attn, &q, (h, w), (h, w))?;
         let attn = candle_nn::ops::softmax_last_dim(&attn)?;
+        let attn = attn.matmul(&v)?;
         let attn = attn
-            .matmul(&v)?
             .reshape((b, self.num_heads, h, w, c / self.num_heads))?
             .permute((0, 2, 3, 1, 4))?
-            .reshape((b, h, w, c / self.num_heads))?;
-        self.proj.forward(&attn)
+            .reshape((b, h * w, c))?;
+        self.proj.forward(&attn)?.reshape((b, h, w, c))
     }
 }
 
@@ -235,11 +239,13 @@ fn window_unpartition(
             w_p / window_size,
             window_size,
             window_size,
-            0,
+            windows.elem_count() / b / h_p / w_p,
         ))?
         .transpose(2, 3)?
         .contiguous()?
-        .reshape((b, h_p, w_p, 0))?;
+        .reshape((b, h_p, w_p, windows.elem_count() / b / h_p / w_p))?;
+    let xs = if h_p > h { xs.narrow(1, 0, h)? } else { xs };
+    let xs = if w_p > w { xs.narrow(2, 0, w)? } else { xs };
     Ok(xs)
 }
 
