@@ -154,7 +154,7 @@ impl Module for Block {
 }
 
 #[derive(Debug)]
-struct ImageEncoderViT {
+pub struct ImageEncoderViT {
     img_size: usize,
     patch_embed: PatchEmbed,
     blocks: Vec<Block>,
@@ -167,7 +167,7 @@ struct ImageEncoderViT {
 
 impl ImageEncoderViT {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub fn new(
         img_size: usize,
         patch_size: usize,
         in_chans: usize,

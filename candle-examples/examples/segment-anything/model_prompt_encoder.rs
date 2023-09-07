@@ -50,7 +50,7 @@ impl PostionEmbeddingRandom {
 }
 
 #[derive(Debug)]
-struct PromptEncoder {
+pub struct PromptEncoder {
     pe_layer: PostionEmbeddingRandom,
     point_embeddings: Vec<candle_nn::Embedding>,
     not_a_point_embed: candle_nn::Embedding,
@@ -65,7 +65,7 @@ struct PromptEncoder {
 }
 
 impl PromptEncoder {
-    fn new(
+    pub fn new(
         embed_dim: usize,
         image_embedding_size: (usize, usize),
         input_image_size: (usize, usize),

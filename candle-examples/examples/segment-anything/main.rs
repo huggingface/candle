@@ -8,10 +8,11 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-mod model_image_encoder;
-mod model_mask_decoder;
-mod model_prompt_encoder;
-mod model_transformer;
+pub mod model_image_encoder;
+pub mod model_mask_decoder;
+pub mod model_prompt_encoder;
+pub mod model_sam;
+pub mod model_transformer;
 
 use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};

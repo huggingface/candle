@@ -53,7 +53,7 @@ impl Module for MlpMaskDecoder {
 }
 
 #[derive(Debug)]
-struct MaskDecoder {
+pub struct MaskDecoder {
     iou_token: candle_nn::Embedding,
     mask_tokens: candle_nn::Embedding,
     iou_prediction_head: MlpMaskDecoder,
@@ -65,7 +65,7 @@ struct MaskDecoder {
 }
 
 impl MaskDecoder {
-    fn new(
+    pub fn new(
         transformer_dim: usize,
         num_multimask_outputs: usize,
         iou_head_depth: usize,
