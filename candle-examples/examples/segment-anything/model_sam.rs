@@ -73,7 +73,7 @@ impl Sam {
     pub fn forward(&self, img: &Tensor, multimask_output: bool) -> Result<(Tensor, Tensor)> {
         let img = self.preprocess(img)?.unsqueeze(0)?;
         let img_embeddings = self.image_encoder.forward(&img)?;
-        // TODO: Handle prompt_encoder and the spares/dense embeddings
+        // TODO: Handle prompt_encoder and the sparse/dense embeddings
         let image_pe = self.prompt_encoder.get_dense_pe()?;
         let dense_prompt_embeddings = Tensor::new(&[0f32], img.device())?;
         let sparse_prompt_embeddings = Tensor::new(&[0f32], img.device())?;

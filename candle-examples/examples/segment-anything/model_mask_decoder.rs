@@ -224,6 +224,9 @@ impl MaskDecoder {
 }
 
 // Equivalent to torch.repeat_interleave
-fn repeat_interleave(_img: &Tensor, _repeats: usize, _dim: usize) -> Result<Tensor> {
-    todo!()
+fn repeat_interleave(img: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
+    let img = img.unsqueeze(dim + 1)?;
+    let mut dims = img.dims().to_vec();
+    dims[dim + 1] = repeats;
+    img.broadcast_as(dims)?.flatten(dim, dim + 1)
 }
