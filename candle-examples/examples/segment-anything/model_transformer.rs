@@ -75,3 +75,45 @@ struct TwoWayAttentionBlock {
     cross_attn_image_to_token: Attention,
     skip_first_layer_pe: bool,
 }
+
+impl TwoWayAttentionBlock {
+    fn new(
+        embedding_dim: usize,
+        num_heads: usize,
+        mlp_dim: usize,
+        skip_first_layer_pe: bool,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let self_attn = Attention::new(embedding_dim, num_heads, 1, vb.pp("self_attn"))?;
+        let norm1 = layer_norm(embedding_dim, 1e-5, vb.pp("norm1"))?;
+        let norm2 = layer_norm(embedding_dim, 1e-5, vb.pp("norm2"))?;
+        let norm3 = layer_norm(embedding_dim, 1e-5, vb.pp("norm3"))?;
+        let norm4 = layer_norm(embedding_dim, 1e-5, vb.pp("norm4"))?;
+        let self_attn = Attention::new(embedding_dim, num_heads, 1, vb.pp("self_attn"))?;
+        let cross_attn_token_to_image = Attention::new(
+            embedding_dim,
+            num_heads,
+            2,
+            vb.pp("cross_attn_token_to_image"),
+        )?;
+        let cross_attn_image_to_token = Attention::new(
+            embedding_dim,
+            num_heads,
+            2,
+            vb.pp("cross_attn_image_to_token"),
+        )?;
+        // TODO: use relu in this mlp
+        let mlp = crate::MlpBlock::new(embedding_dim, mlp_dim, vb.pp("mlp"))?;
+        Ok(Self {
+            self_attn,
+            norm1,
+            cross_attn_image_to_token,
+            norm2,
+            mlp,
+            norm3,
+            norm4,
+            cross_attn_token_to_image,
+            skip_first_layer_pe,
+        })
+    }
+}
