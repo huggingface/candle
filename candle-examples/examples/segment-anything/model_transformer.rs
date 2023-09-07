@@ -36,7 +36,8 @@ impl Attention {
     fn separate_heads(&self, x: &Tensor) -> Result<Tensor> {
         let (b, n, c) = x.dims3()?;
         x.reshape((b, n, self.num_heads, c / self.num_heads))?
-            .transpose(1, 2)
+            .transpose(1, 2)?
+            .contiguous()
     }
 
     fn recombine_heads(&self, x: &Tensor) -> Result<Tensor> {
@@ -102,8 +103,12 @@ impl TwoWayAttentionBlock {
             2,
             vb.pp("cross_attn_image_to_token"),
         )?;
-        // TODO: use relu in this mlp
-        let mlp = crate::MlpBlock::new(embedding_dim, mlp_dim, vb.pp("mlp"))?;
+        let mlp = crate::MlpBlock::new(
+            embedding_dim,
+            mlp_dim,
+            candle_nn::Activation::Relu,
+            vb.pp("mlp"),
+        )?;
         Ok(Self {
             self_attn,
             norm1,
@@ -126,7 +131,7 @@ impl TwoWayAttentionBlock {
     ) -> Result<(Tensor, Tensor)> {
         // Self attention block
         let queries = if self.skip_first_layer_pe {
-            self.self_attn.forward(queries, keys, queries)?
+            self.self_attn.forward(queries, queries, queries)?
         } else {
             let q = (queries + query_pe)?;
             let attn_out = self.self_attn.forward(&q, &q, queries)?;
