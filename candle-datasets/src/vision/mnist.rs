@@ -9,12 +9,9 @@ use std::fs::File;
 use std::io::{self, BufReader, Read};
 
 fn read_u32<T: Read>(reader: &mut T) -> Result<u32> {
-    let mut b = vec![0u8; 4];
+    let mut b = [0u8; 4];
     reader.read_exact(&mut b)?;
-    let (result, _) = b.iter().rev().fold((0u64, 1u64), |(s, basis), &x| {
-        (s + basis * u64::from(x), basis * 256)
-    });
-    Ok(result as u32)
+    Ok(u32::from_be_bytes(b))
 }
 
 fn check_magic_number<T: Read>(reader: &mut T, expected: u32) -> Result<()> {
