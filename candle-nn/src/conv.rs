@@ -80,7 +80,6 @@ impl Default for Conv2dConfig {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Conv2d {
     weight: Tensor,
@@ -110,6 +109,56 @@ impl crate::Module for Conv2d {
             self.config.stride,
             self.config.dilation,
             self.config.groups,
+        )?;
+        match &self.bias {
+            None => Ok(x),
+            Some(bias) => {
+                let b = bias.dims1()?;
+                let bias = bias.reshape((1, b, 1, 1))?;
+                Ok(x.broadcast_add(&bias)?)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConvTranspose2dConfig {
+    pub padding: usize,
+    pub output_padding: usize,
+    pub stride: usize,
+    pub dilation: usize,
+    // TODO: support groups.
+}
+
+#[derive(Debug)]
+pub struct ConvTranspose2d {
+    weight: Tensor,
+    bias: Option<Tensor>,
+    config: ConvTranspose2dConfig,
+}
+
+impl ConvTranspose2d {
+    pub fn new(weight: Tensor, bias: Option<Tensor>, config: ConvTranspose2dConfig) -> Self {
+        Self {
+            weight,
+            bias,
+            config,
+        }
+    }
+
+    pub fn config(&self) -> &ConvTranspose2dConfig {
+        &self.config
+    }
+}
+
+impl crate::Module for ConvTranspose2d {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let x = x.conv_transpose2d(
+            &self.weight,
+            self.config.padding,
+            self.config.output_padding,
+            self.config.stride,
+            self.config.dilation,
         )?;
         match &self.bias {
             None => Ok(x),
