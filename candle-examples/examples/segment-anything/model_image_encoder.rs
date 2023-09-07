@@ -2,26 +2,6 @@ use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
 #[derive(Debug)]
-struct MlpBlock {
-    lin1: Linear,
-    lin2: Linear,
-}
-
-impl MlpBlock {
-    fn new(embedding_dim: usize, mlp_dim: usize, vb: VarBuilder) -> Result<Self> {
-        let lin1 = candle_nn::linear(embedding_dim, mlp_dim, vb.pp("lin1"))?;
-        let lin2 = candle_nn::linear(mlp_dim, embedding_dim, vb.pp("lin2"))?;
-        Ok(Self { lin1, lin2 })
-    }
-}
-
-impl Module for MlpBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.lin1)?.gelu()?.apply(&self.lin2)
-    }
-}
-
-#[derive(Debug)]
 struct PatchEmbed {
     proj: candle_nn::Conv2d,
 }
@@ -123,7 +103,7 @@ struct Block {
     norm1: LayerNorm,
     attn: Attention,
     norm2: LayerNorm,
-    mlp: MlpBlock,
+    mlp: crate::MlpBlock,
     window_size: usize,
 }
 
@@ -146,7 +126,7 @@ impl Block {
             window_size,
             vb.pp("attn"),
         )?;
-        let mlp = MlpBlock::new(dim, dim * 4, vb.pp("mlp"))?;
+        let mlp = crate::MlpBlock::new(dim, dim * 4, vb.pp("mlp"))?;
         Ok(Self {
             norm1,
             attn,

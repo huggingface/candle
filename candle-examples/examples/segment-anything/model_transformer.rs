@@ -62,3 +62,16 @@ impl Attention {
         self.recombine_heads(&out)?.apply(&self.out_proj)
     }
 }
+
+#[derive(Debug)]
+struct TwoWayAttentionBlock {
+    self_attn: Attention,
+    norm1: LayerNorm,
+    cross_attn_token_to_image: Attention,
+    norm2: LayerNorm,
+    mlp: crate::MlpBlock,
+    norm3: LayerNorm,
+    norm4: LayerNorm,
+    cross_attn_image_to_token: Attention,
+    skip_first_layer_pe: bool,
+}

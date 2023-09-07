@@ -24,6 +24,26 @@ pub fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Resu
     }
 }
 
+#[derive(Debug)]
+pub struct MlpBlock {
+    lin1: Linear,
+    lin2: Linear,
+}
+
+impl MlpBlock {
+    pub fn new(embedding_dim: usize, mlp_dim: usize, vb: VarBuilder) -> Result<Self> {
+        let lin1 = candle_nn::linear(embedding_dim, mlp_dim, vb.pp("lin1"))?;
+        let lin2 = candle_nn::linear(mlp_dim, embedding_dim, vb.pp("lin2"))?;
+        Ok(Self { lin1, lin2 })
+    }
+}
+
+impl Module for MlpBlock {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.lin1)?.gelu()?.apply(&self.lin2)
+    }
+}
+
 /*
     fn interpolate_pos_encoding(&self, xs: &Tensor, w: usize, h: usize) -> Result<Tensor> {
         let npatch = xs.dim(1)? - 1;
