@@ -120,6 +120,12 @@ impl PromptEncoder {
         })
     }
 
+    pub fn get_dense_pe(&self) -> Result<Tensor> {
+        self.pe_layer
+            .forward(self.image_embedding_size.0, self.image_embedding_size.1)?
+            .unsqueeze(0)
+    }
+
     fn embed_masks(&self, masks: &Tensor) -> Result<Tensor> {
         masks
             .apply(&self.mask_downscaling_conv1)?

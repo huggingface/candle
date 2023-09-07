@@ -140,7 +140,7 @@ impl MaskDecoder {
         })
     }
 
-    fn forward(
+    pub fn forward(
         &self,
         image_embeddings: &Tensor,
         image_pe: &Tensor,
