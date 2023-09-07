@@ -70,7 +70,7 @@ impl Sam {
         })
     }
 
-    fn forward(&self, img: &Tensor, multimask_output: bool) -> Result<(Tensor, Tensor)> {
+    pub fn forward(&self, img: &Tensor, multimask_output: bool) -> Result<(Tensor, Tensor)> {
         let img = self.preprocess(img)?.unsqueeze(0)?;
         let img_embeddings = self.image_encoder.forward(&img)?;
         // TODO: Handle prompt_encoder and the spares/dense embeddings

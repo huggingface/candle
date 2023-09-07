@@ -27,6 +27,31 @@ pub fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Resu
 }
 
 #[derive(Debug)]
+pub struct LayerNorm2d {
+    weight: Tensor,
+    bias: Tensor,
+    eps: f64,
+}
+
+impl LayerNorm2d {
+    pub fn new(num_channels: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+        let weight = vb.get(num_channels, "weight")?;
+        let bias = vb.get(num_channels, "bias")?;
+        Ok(Self { weight, bias, eps })
+    }
+}
+
+impl Module for LayerNorm2d {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let u = xs.mean_keepdim(1)?;
+        let xs = xs.broadcast_sub(&u)?;
+        let s = xs.sqr()?.mean_keepdim(1)?;
+        let xs = xs.broadcast_div(&(s + self.eps)?.sqrt()?)?;
+        xs.broadcast_mul(&self.weight)?.broadcast_add(&self.bias)
+    }
+}
+
+#[derive(Debug)]
 pub struct MlpBlock {
     lin1: Linear,
     lin2: Linear,
@@ -99,13 +124,16 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device);
+    let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device)?;
     println!("loaded image {image:?}");
 
     let weights = unsafe { candle::safetensors::MmapedFile::new(args.model)? };
     let weights = weights.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
-    let _sam = model_sam::Sam::new(768, 12, 12, &[2, 5, 8, 11], vb)?; // sam_vit_b
+    let sam = model_sam::Sam::new(768, 12, 12, &[2, 5, 8, 11], vb)?; // sam_vit_b
 
+    let (mask, iou_predictions) = sam.forward(&image, false)?;
+    println!("mask: {mask:?}");
+    println!("iou_predictions: {iou_predictions:?}");
     Ok(())
 }
