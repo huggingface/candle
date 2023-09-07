@@ -71,9 +71,55 @@ impl Attention {
         })
     }
 
-    fn add_decomposed_rel_pos(&self, _attn: &Tensor, _q: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn add_decomposed_rel_pos(
+        &self,
+        attn: Tensor,
+        q: &Tensor,
+        (q_h, q_w): (usize, usize),
+        (k_h, k_w): (usize, usize),
+    ) -> Result<Tensor> {
+        match &self.rel_pos_hw {
+            Some((rel_pos_h, rel_pos_w)) => {
+                let r_h = get_rel_pos(q_h, k_h, rel_pos_h)?;
+                let r_w = get_rel_pos(q_w, k_w, rel_pos_w)?;
+                let (b, _, dim) = q.dims3()?;
+                let r_q = q.reshape((b, q_h, q_w, dim))?;
+                // rel_h = torch.einsum("bhwc,hkc->bhwk", r_q, Rh)
+                let rel_h = r_q.matmul(&r_h.broadcast_left(b)?.t()?)?;
+                // rel_w = torch.einsum("bhwc,wkc->bhwk", r_q, Rw)
+                let rel_w = r_q
+                    .transpose(1, 2)? // -> bwhc
+                    .matmul(&r_w.broadcast_left(b)?.t()?)? // bwhc,bwck -> bwhk
+                    .transpose(1, 2)?;
+                (attn.reshape((b, q_h, q_w, k_h, k_w))?
+                    + (rel_h.unsqueeze(4)? + rel_w.unsqueeze(3)?)?)?
+                .reshape((b, q_h * q_w, k_h * k_w))
+            }
+            None => Ok(attn),
+        }
     }
+}
+
+fn get_rel_pos(q_size: usize, k_size: usize, rel_pos: &Tensor) -> Result<Tensor> {
+    let max_rel_dist = 2 * usize::max(q_size, k_size) - 1;
+    let dev = rel_pos.device();
+    let rel_pos_resized = if rel_pos.dim(0)? != max_rel_dist {
+        todo!("interpolation")
+    } else {
+        rel_pos
+    };
+    let q_coords = Tensor::arange(0u32, q_size as u32, dev)?
+        .reshape((q_size, 1))?
+        .to_dtype(DType::F32)?;
+    let k_coords = Tensor::arange(0u32, k_size as u32, dev)?
+        .reshape((1, k_size))?
+        .to_dtype(DType::F32)?;
+    let q_coords = (q_coords * f64::max(1f64, k_size as f64 / q_size as f64))?;
+    let k_coords = (k_coords * f64::max(1f64, q_size as f64 / k_size as f64))?;
+    let relative_coords = (q_coords.broadcast_sub(&k_coords)?
+        + (k_size as f64 - 1.) * f64::max(1f64, q_size as f64 / k_size as f64))?;
+    // TODO
+    rel_pos_resized.index_select(&relative_coords.to_dtype(DType::U32)?, 0)
 }
 
 impl Module for Attention {
@@ -89,11 +135,7 @@ impl Module for Attention {
         let k = qkv.i(1)?;
         let v = qkv.i(2)?;
         let attn = (&q * self.scale)?.matmul(&k.t()?)?;
-        let attn = if self.use_rel_pos {
-            self.add_decomposed_rel_pos(&attn, &q)?
-        } else {
-            attn
-        };
+        let attn = self.add_decomposed_rel_pos(attn, &q, (h, w), (h, w))?;
         let attn = candle_nn::ops::softmax_last_dim(&attn)?;
         let attn = attn
             .matmul(&v)?
