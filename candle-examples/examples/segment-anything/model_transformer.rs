@@ -36,7 +36,8 @@ impl Attention {
     fn separate_heads(&self, x: &Tensor) -> Result<Tensor> {
         let (b, n, c) = x.dims3()?;
         x.reshape((b, n, self.num_heads, c / self.num_heads))?
-            .transpose(1, 2)
+            .transpose(1, 2)?
+            .contiguous()
     }
 
     fn recombine_heads(&self, x: &Tensor) -> Result<Tensor> {

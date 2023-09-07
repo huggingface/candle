@@ -64,6 +64,7 @@ pub struct PromptEncoder {
     no_mask_embed: candle_nn::Embedding,
     image_embedding_size: (usize, usize),
     input_image_size: (usize, usize),
+    embed_dim: usize,
 }
 
 impl PromptEncoder {
@@ -120,6 +121,7 @@ impl PromptEncoder {
             no_mask_embed,
             image_embedding_size,
             input_image_size,
+            embed_dim,
         })
     }
 
@@ -172,7 +174,7 @@ impl PromptEncoder {
         Tensor::cat(&[&ce1, &ce2], 1)
     }
 
-    fn forward(
+    pub fn forward(
         &self,
         points: Option<(&Tensor, &Tensor)>,
         boxes: Option<&Tensor>,
@@ -190,7 +192,9 @@ impl PromptEncoder {
             (Some(se_points), Some(se_boxes)) => Tensor::cat(&[se_points, se_boxes], 1)?,
             (Some(se_points), None) => se_points,
             (None, Some(se_boxes)) => se_boxes,
-            (None, None) => Tensor::zeros(1, DType::F32, &candle::Device::Cpu)?,
+            (None, None) => {
+                Tensor::zeros((1, 0, self.embed_dim), DType::F32, &candle::Device::Cpu)?
+            }
         };
 
         let dense_embeddings = match masks {
@@ -198,7 +202,7 @@ impl PromptEncoder {
                 let emb = self.no_mask_embed.embeddings();
                 emb.reshape((1, emb.elem_count(), 1, 1))?.expand((
                     1,
-                    0,
+                    emb.elem_count(),
                     self.image_embedding_size.0,
                     self.image_embedding_size.1,
                 ))?

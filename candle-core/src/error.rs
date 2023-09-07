@@ -30,7 +30,7 @@ pub enum Error {
     UnsupportedDTypeForOp(DType, &'static str),
 
     // === Dimension Index Errors ===
-    #[error("{op}: dimension index {dim} out of range for {shape:?}")]
+    #[error("{op}: dimension index {dim} out of range for shape {shape:?}")]
     DimOutOfRange {
         shape: Shape,
         dim: i32,
