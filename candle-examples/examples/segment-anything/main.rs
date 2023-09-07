@@ -91,7 +91,7 @@ impl Module for MlpBlock {
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
-    model: String,
+    model: Option<String>,
 
     #[arg(long)]
     image: String,
@@ -109,7 +109,15 @@ pub fn main() -> anyhow::Result<()> {
     let image = candle_examples::imagenet::load_image224(args.image)?.to_device(&device)?;
     println!("loaded image {image:?}");
 
-    let weights = unsafe { candle::safetensors::MmapedFile::new(args.model)? };
+    let model = match args.model {
+        Some(model) => std::path::PathBuf::from(model),
+        None => {
+            let api = hf_hub::api::sync::Api::new()?;
+            let api = api.model("lmz/candle-sam".to_string());
+            api.get("sam_vit_b_01ec64.safetensors")?
+        }
+    };
+    let weights = unsafe { candle::safetensors::MmapedFile::new(model)? };
     let weights = weights.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
     let sam = model_sam::Sam::new(768, 12, 12, &[2, 5, 8, 11], vb)?; // sam_vit_b
