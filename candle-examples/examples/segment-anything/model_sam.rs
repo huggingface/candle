@@ -6,7 +6,7 @@ use crate::model_mask_decoder::MaskDecoder;
 use crate::model_prompt_encoder::PromptEncoder;
 
 const PROMPT_EMBED_DIM: usize = 256;
-const IMAGE_SIZE: usize = 1024;
+pub const IMAGE_SIZE: usize = 1024;
 const VIT_PATCH_SIZE: usize = 16;
 
 #[derive(Debug)]
@@ -90,6 +90,7 @@ impl Sam {
     fn preprocess(&self, img: &Tensor) -> Result<Tensor> {
         let (c, h, w) = img.dims3()?;
         let img = img
+            .to_dtype(DType::F32)?
             .broadcast_sub(&self.pixel_mean)?
             .broadcast_div(&self.pixel_std)?;
         if h > IMAGE_SIZE || w > IMAGE_SIZE {

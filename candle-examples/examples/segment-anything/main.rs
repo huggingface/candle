@@ -108,7 +108,8 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image = candle_examples::load_image(args.image)?.to_device(&device)?;
+    let image =
+        candle_examples::load_image(args.image, Some(model_sam::IMAGE_SIZE))?.to_device(&device)?;
     println!("loaded image {image:?}");
 
     let model = match args.model {
