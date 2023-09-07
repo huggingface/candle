@@ -25,12 +25,14 @@ impl PostionEmbeddingRandom {
     fn forward(&self, h: usize, w: usize) -> Result<Tensor> {
         let device = self.positional_encoding_gaussian_matrix.device();
         let grid = Tensor::ones((h, w), DType::F32, device)?;
-        // TODO: cumsum
-        let x_embed = (&grid - 0.5)?;
-        // TODO: cumsum
-        let y_embed = (&grid - 0.5)?;
-        let x_embed = (x_embed / w as f64)?;
-        let y_embed = (y_embed / h as f64)?;
+        let x_embed = (Tensor::arange(0u32, w as u32, device)?.to_dtype(DType::F32)? + 0.5)?;
+        let y_embed = (Tensor::arange(0u32, h as u32, device)?.to_dtype(DType::F32)? + 0.5)?;
+        let x_embed = (x_embed / w as f64)?
+            .reshape((1, w))?
+            .broadcast_as((h, w))?;
+        let y_embed = (y_embed / h as f64)?
+            .reshape((h, 1))?
+            .broadcast_as((h, w))?;
         let coords = Tensor::stack(&[&x_embed, &y_embed], D::Minus1)?;
         self.pe_encoding(&coords)?.permute((2, 0, 1))
     }

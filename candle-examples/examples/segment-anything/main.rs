@@ -55,19 +55,31 @@ impl Module for LayerNorm2d {
 pub struct MlpBlock {
     lin1: Linear,
     lin2: Linear,
+    activation: candle_nn::Activation,
 }
 
 impl MlpBlock {
-    pub fn new(embedding_dim: usize, mlp_dim: usize, vb: VarBuilder) -> Result<Self> {
+    pub fn new(
+        embedding_dim: usize,
+        mlp_dim: usize,
+        activation: candle_nn::Activation,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let lin1 = candle_nn::linear(embedding_dim, mlp_dim, vb.pp("lin1"))?;
         let lin2 = candle_nn::linear(mlp_dim, embedding_dim, vb.pp("lin2"))?;
-        Ok(Self { lin1, lin2 })
+        Ok(Self {
+            lin1,
+            lin2,
+            activation,
+        })
     }
 }
 
 impl Module for MlpBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.lin1)?.gelu()?.apply(&self.lin2)
+        xs.apply(&self.lin1)?
+            .apply(&self.activation)?
+            .apply(&self.lin2)
     }
 }
 

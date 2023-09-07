@@ -70,6 +70,10 @@ impl Attention {
             rel_pos_hw,
         })
     }
+
+    fn add_decomposed_rel_pos(&self, _attn: &Tensor, _q: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 impl Module for Attention {
@@ -77,17 +81,19 @@ impl Module for Attention {
         let (b, h, w, c) = xs.dims4()?;
         let qkv = self
             .qkv
-            .forward(xs)?
+            .forward(&xs.flatten_to(1)?)?
             .reshape((b, h * w, 3, self.num_heads, c / self.num_heads))?
             .permute((2, 0, 3, 1, 4))?
             .reshape((3, b * self.num_heads, h * w, c / self.num_heads))?;
         let q = qkv.i(0)?;
         let k = qkv.i(1)?;
         let v = qkv.i(2)?;
-        let attn = (q * self.scale)?.matmul(&k.t()?)?;
-        if self.use_rel_pos {
-            todo!()
-        }
+        let attn = (&q * self.scale)?.matmul(&k.t()?)?;
+        let attn = if self.use_rel_pos {
+            self.add_decomposed_rel_pos(&attn, &q)?
+        } else {
+            attn
+        };
         let attn = candle_nn::ops::softmax_last_dim(&attn)?;
         let attn = attn
             .matmul(&v)?
@@ -132,7 +138,7 @@ impl Block {
             input_size_attn,
             vb.pp("attn"),
         )?;
-        let mlp = crate::MlpBlock::new(dim, dim * 4, vb.pp("mlp"))?;
+        let mlp = crate::MlpBlock::new(dim, dim * 4, candle_nn::Activation::Gelu, vb.pp("mlp"))?;
         Ok(Self {
             norm1,
             attn,
@@ -159,10 +165,17 @@ fn window_partition(xs: Tensor, window_size: usize) -> Result<(Tensor, (usize, u
     };
     let (h_p, w_p) = (h + pad_h, w + pad_w);
     let windows = xs
-        .reshape((b, h_p / window_size, w_p / window_size, window_size, c))?
+        .reshape((
+            b,
+            h_p / window_size,
+            window_size,
+            w_p / window_size,
+            window_size,
+            c,
+        ))?
         .transpose(2, 3)?
         .contiguous()?
-        .reshape((window_size, window_size, c))?;
+        .flatten_to(2)?;
     Ok((windows, (h_p, w_p)))
 }
 

@@ -102,8 +102,12 @@ impl TwoWayAttentionBlock {
             2,
             vb.pp("cross_attn_image_to_token"),
         )?;
-        // TODO: use relu in this mlp
-        let mlp = crate::MlpBlock::new(embedding_dim, mlp_dim, vb.pp("mlp"))?;
+        let mlp = crate::MlpBlock::new(
+            embedding_dim,
+            mlp_dim,
+            candle_nn::Activation::Relu,
+            vb.pp("mlp"),
+        )?;
         Ok(Self {
             self_attn,
             norm1,
