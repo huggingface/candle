@@ -1,6 +1,8 @@
 use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
+use crate::model_transformer::TwoWayTransformer;
+
 #[derive(Debug)]
 struct MlpMaskDecoder {
     layers: Vec<Linear>,
@@ -62,6 +64,7 @@ pub struct MaskDecoder {
     output_upscaling_conv2: candle_nn::ConvTranspose2d,
     num_mask_tokens: usize,
     output_hypernetworks_mlps: Vec<MlpMaskDecoder>,
+    transformer: TwoWayTransformer,
 }
 
 impl MaskDecoder {
@@ -117,6 +120,13 @@ impl MaskDecoder {
             )?;
             output_hypernetworks_mlps.push(mlp)
         }
+        let transformer = TwoWayTransformer::new(
+            /* depth */ 2,
+            /* embedding_dim */ transformer_dim,
+            /* num_heads */ 8,
+            /* mlp_dim */ 2048,
+            vb.pp("transformer"),
+        )?;
         Ok(Self {
             iou_token,
             mask_tokens,
@@ -126,6 +136,7 @@ impl MaskDecoder {
             output_upscaling_conv2,
             num_mask_tokens,
             output_hypernetworks_mlps,
+            transformer,
         })
     }
 

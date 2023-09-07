@@ -158,14 +158,14 @@ impl TwoWayAttentionBlock {
 }
 
 #[derive(Debug)]
-struct TwoWayTransformer {
+pub struct TwoWayTransformer {
     layers: Vec<TwoWayAttentionBlock>,
     final_attn_token_to_image: Attention,
     norm_final_attn: LayerNorm,
 }
 
 impl TwoWayTransformer {
-    fn new(
+    pub fn new(
         depth: usize,
         embedding_dim: usize,
         num_heads: usize,
@@ -193,7 +193,7 @@ impl TwoWayTransformer {
         })
     }
 
-    fn forward(
+    pub fn forward(
         &self,
         image_embedding: &Tensor,
         image_pe: &Tensor,
