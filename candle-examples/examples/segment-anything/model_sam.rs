@@ -87,7 +87,15 @@ impl Sam {
         Ok((low_res_mask, iou_predictions))
     }
 
-    fn preprocess(&self, img: &Tensor) -> Result<Tensor> {
+    pub fn unpreprocess(&self, img: &Tensor) -> Result<Tensor> {
+        let img = img
+            .broadcast_mul(&self.pixel_std)?
+            .broadcast_add(&self.pixel_mean)?;
+        img.maximum(&img.zeros_like()?)?
+            .minimum(&(img.ones_like()? * 255.)?)
+    }
+
+    pub fn preprocess(&self, img: &Tensor) -> Result<Tensor> {
         let (c, h, w) = img.dims3()?;
         let img = img
             .to_dtype(DType::F32)?

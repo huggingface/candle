@@ -108,8 +108,20 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image =
-        candle_examples::load_image(args.image, Some(model_sam::IMAGE_SIZE))?.to_device(&device)?;
+    let image = if args.image.ends_with(".safetensors") {
+        let mut tensors = candle::safetensors::load(&args.image, &device)?;
+        match tensors.remove("image") {
+            Some(image) => image,
+            None => {
+                if tensors.len() != 1 {
+                    anyhow::bail!("multiple tensors in '{}'", args.image)
+                }
+                tensors.into_values().next().unwrap()
+            }
+        }
+    } else {
+        candle_examples::load_image(args.image, Some(model_sam::IMAGE_SIZE))?.to_device(&device)?
+    };
     println!("loaded image {image:?}");
 
     let model = match args.model {
@@ -128,5 +140,16 @@ pub fn main() -> anyhow::Result<()> {
     let (mask, iou_predictions) = sam.forward(&image, false)?;
     println!("mask:\n{mask}");
     println!("iou_predictions: {iou_predictions:?}");
+
+    // Save the mask as an image.
+    let mask = mask.ge(&mask.zeros_like()?)?;
+    let mask = (mask * 255.)?.squeeze(0)?;
+    let (_one, h, w) = mask.dims3()?;
+    let mask = mask.expand((3, h, w))?;
+    candle_examples::save_image(&mask, "sam_mask.png")?;
+
+    let image = sam.preprocess(&image)?;
+    let image = sam.unpreprocess(&image)?.to_dtype(DType::U8)?;
+    candle_examples::save_image(&image, "sam_input_scaled.png")?;
     Ok(())
 }
