@@ -85,7 +85,7 @@ const _: () = assert!(std::mem::size_of::<BlockQ8_0>() == 34);
 pub struct BlockQ8_1 {
     pub(crate) d: f16,
     pub(crate) s: f16,
-    pub(crate) qs: [u8; QK8_1],
+    pub(crate) qs: [i8; QK8_1],
 }
 const _: () = assert!(std::mem::size_of::<BlockQ8_1>() == 36);
 
@@ -652,8 +652,8 @@ impl GgmlType for BlockQ8_1 {
             for j in 0..Self::BLCK_SIZE / 2 {
                 let v0 = xs[j] * id;
                 let v1 = xs[j + Self::BLCK_SIZE / 2] * id;
-                ys.qs[j] = f32::round(v0) as u8;
-                ys.qs[j + Self::BLCK_SIZE / 2] = f32::round(v1) as u8;
+                ys.qs[j] = f32::round(v0) as i8;
+                ys.qs[j + Self::BLCK_SIZE / 2] = f32::round(v1) as i8;
                 sum += ys.qs[j] as i32 + ys.qs[j + Self::BLCK_SIZE / 2] as i32;
             }
             ys.s = f16::from_f32(sum as f32) * ys.d;
