@@ -116,7 +116,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image = if args.image.ends_with(".safetensors") {
+    let (image, initial_h, initial_w) = if args.image.ends_with(".safetensors") {
         let mut tensors = candle::safetensors::load(&args.image, &device)?;
         let image = match tensors.remove("image") {
             Some(image) => image,
@@ -127,13 +127,16 @@ pub fn main() -> anyhow::Result<()> {
                 tensors.into_values().next().unwrap()
             }
         };
-        if image.rank() == 4 {
+        let image = if image.rank() == 4 {
             image.get(0)?
         } else {
             image
-        }
+        };
+        let (_c, h, w) = image.dims3()?;
+        (image, h, w)
     } else {
-        candle_examples::load_image(args.image, Some(model_sam::IMAGE_SIZE))?.to_device(&device)?
+        let (image, h, w) = candle_examples::load_image(args.image, Some(model_sam::IMAGE_SIZE))?;
+        (image.to_device(&device)?, h, w)
     };
     println!("loaded image {image:?}");
 
@@ -166,11 +169,10 @@ pub fn main() -> anyhow::Result<()> {
         println!("iou_predictions: {iou_predictions:?}");
 
         // Save the mask as an image.
-        let mask = mask.ge(&mask.zeros_like()?)?;
-        let mask = (mask * 255.)?.squeeze(0)?;
+        let mask = (mask.ge(&mask.zeros_like()?)? * 255.)?;
         let (_one, h, w) = mask.dims3()?;
         let mask = mask.expand((3, h, w))?;
-        candle_examples::save_image(&mask, "sam_mask.png")?;
+        candle_examples::save_image_resize(&mask, "sam_mask.png", initial_h, initial_w)?;
 
         let image = sam.preprocess(&image)?;
         let image = sam.unpreprocess(&image)?.to_dtype(DType::U8)?;

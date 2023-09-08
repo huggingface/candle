@@ -101,8 +101,11 @@ impl Sam {
             &dense_prompt_embeddings,
             multimask_output,
         )?;
-        // TODO: post-processing.
-        Ok((low_res_mask, iou_predictions))
+        let mask = low_res_mask
+            .upsample_nearest2d(IMAGE_SIZE, IMAGE_SIZE)?
+            .get(0)?
+            .i((.., ..original_h, ..original_w))?;
+        Ok((mask, iou_predictions))
     }
 
     pub fn unpreprocess(&self, img: &Tensor) -> Result<Tensor> {
