@@ -128,5 +128,16 @@ pub fn main() -> anyhow::Result<()> {
     let (mask, iou_predictions) = sam.forward(&image, false)?;
     println!("mask:\n{mask}");
     println!("iou_predictions: {iou_predictions:?}");
+
+    // Save the mask as an image.
+    let mask = mask.ge(&mask.zeros_like()?)?;
+    let mask = (mask * 255.)?.squeeze(0)?;
+    let (_one, h, w) = mask.dims3()?;
+    let mask = mask.expand((3, h, w))?;
+    candle_examples::save_image(&mask, "sam_mask.png")?;
+
+    let image = sam.preprocess(&image)?;
+    let image = sam.unpreprocess(&image)?.to_dtype(DType::U8)?;
+    candle_examples::save_image(&image, "sam_input_scaled.png")?;
     Ok(())
 }
