@@ -214,7 +214,7 @@ pub fn main() -> anyhow::Result<()> {
         println!("iou_predictions: {iou_predictions:?}");
 
         // Save the mask as an image.
-        let mask = (mask.ge(&mask.zeros_like()?)? * 255.)?;
+        let mask = (mask.ge(0f32)? * 255.)?;
         let (_one, h, w) = mask.dims3()?;
         let mask = mask.expand((3, h, w))?;
         candle_examples::save_image_resize(&mask, "sam_mask.png", initial_h, initial_w)?;
