@@ -213,7 +213,7 @@ impl Sam {
                         xmax: x1 as f32,
                         ymax: y1 as f32,
                         confidence: *iou,
-                        keypoints: Vec::new(),
+                        data: low_res_mask,
                     };
                     bboxes.push(bbox);
                 }
