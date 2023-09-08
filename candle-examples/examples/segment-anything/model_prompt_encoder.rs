@@ -159,7 +159,7 @@ impl PromptEncoder {
             .forward_with_coords(&points, self.input_image_size)?;
         let labels = labels.unsqueeze(2)?.broadcast_as(point_embedding.shape())?;
         let zeros = point_embedding.zeros_like()?;
-        let point_embeddings = labels.lt(&labels.zeros_like()?)?.where_cond(
+        let point_embedding = labels.lt(&labels.zeros_like()?)?.where_cond(
             &self
                 .not_a_point_embed
                 .embeddings()
