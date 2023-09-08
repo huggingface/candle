@@ -370,6 +370,38 @@ pub fn vd_sqr(a: &[f64], y: &mut [f64]) {
     y.iter_mut().zip(a.iter()).for_each(|(y, a)| *y = *a * *a)
 }
 
+#[inline]
+pub fn vs_tanh_inplace(y: &mut [f32]) {
+    unsafe { ffi::vvtanhf(y.as_mut_ptr(), y.as_ptr(), &(y.len() as i32)) }
+}
+
+#[inline]
+pub fn vd_tanh_inplace(y: &mut [f64]) {
+    unsafe { ffi::vvtanh(y.as_mut_ptr(), y.as_ptr(), &(y.len() as i32)) }
+}
+
+#[inline]
+pub fn vs_gelu(vs: &[f32], ys: &mut [f32]) {
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = (2.0f32 / std::f32::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)
+    }
+    vs_tanh_inplace(ys);
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = 0.5 * v * (1.0 + *y)
+    }
+}
+
+#[inline]
+pub fn vd_gelu(vs: &[f64], ys: &mut [f64]) {
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = (2.0f64 / std::f64::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)
+    }
+    vd_tanh_inplace(ys);
+    for (&v, y) in vs.iter().zip(ys.iter_mut()) {
+        *y = 0.5 * v * (1.0 + *y)
+    }
+}
+
 macro_rules! binary_op {
     ($fn_name:ident, $ty:ty, $accelerate_name:ident) => {
         #[inline]
