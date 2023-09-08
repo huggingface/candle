@@ -64,6 +64,8 @@ Check out our [examples](./candle-examples/examples/):
 - [yolo-v3](./candle-examples/examples/yolo-v3/) and
   [yolo-v8](./candle-examples/examples/yolo-v8/): object detection and pose
   estimation models.
+  [segment-anything](./candle-examples/examples/segment-anything/): image
+  segmentation model with prompt.
 Run them using the following commands:
 ```
 cargo run --example whisper --release
@@ -76,6 +78,7 @@ cargo run --example dinov2 --release -- --image path/to/myinput.jpg
 cargo run --example quantized --release
 cargo run --example yolo-v3 --release -- myimage.jpg
 cargo run --example yolo-v8 --release -- myimage.jpg # for pose estimation, add --task pose 
+cargo run --example segment-anything --release -- --image myimage.jpg
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
