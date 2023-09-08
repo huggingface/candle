@@ -1889,6 +1889,9 @@ impl BackendStorage for CudaStorage {
         let src_shape = src_l.shape();
         let dims = src_shape.dims();
         let el_count = src_shape.elem_count();
+        if el_count == 0 {
+            return Ok(());
+        }
         let cfg = LaunchConfig::for_num_elems(el_count as u32);
         let dev = &self.device;
         let ds = dev.htod_copy([dims, src_l.stride()].concat()).w()?;
