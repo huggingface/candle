@@ -57,3 +57,8 @@ nccl = ["cuda", "cudarc/nccl", "dep:half"]
 [[example]]
 name = "llama_multiprocess"
 required-features = ["cuda", "nccl", "flash-attn"]
+[[example]]
+name = "simplified-example"
+path  = "examples/simplified-example/src/main.rs"
+
+

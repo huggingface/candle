@@ -76,6 +76,7 @@ cargo run --example dinov2 --release -- --image path/to/myinput.jpg
 cargo run --example quantized --release
 cargo run --example yolo-v3 --release -- myimage.jpg
 cargo run --example yolo-v8 --release -- myimage.jpg # for pose estimation, add --task pose 
+cargo run --example simplified-example
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
