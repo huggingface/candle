@@ -1,6 +1,5 @@
 //! SAM: Segment Anything Model
 //! https://github.com/facebookresearch/segment-anything
-#![allow(unused)]
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -14,7 +13,7 @@ pub mod model_prompt_encoder;
 pub mod model_sam;
 pub mod model_transformer;
 
-use candle::{DType, IndexOp, Result, Tensor, D};
+use candle::{DType, Result, Tensor};
 use candle_nn::{Linear, Module, VarBuilder};
 use clap::Parser;
 

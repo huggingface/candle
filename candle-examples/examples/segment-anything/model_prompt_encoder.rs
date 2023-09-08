@@ -1,5 +1,5 @@
 use candle::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_nn::VarBuilder;
 
 #[derive(Debug)]
 struct PostionEmbeddingRandom {
@@ -24,7 +24,6 @@ impl PostionEmbeddingRandom {
 
     fn forward(&self, h: usize, w: usize) -> Result<Tensor> {
         let device = self.positional_encoding_gaussian_matrix.device();
-        let grid = Tensor::ones((h, w), DType::F32, device)?;
         let x_embed = (Tensor::arange(0u32, w as u32, device)?.to_dtype(DType::F32)? + 0.5)?;
         let y_embed = (Tensor::arange(0u32, h as u32, device)?.to_dtype(DType::F32)? + 0.5)?;
         let x_embed = (x_embed / w as f64)?

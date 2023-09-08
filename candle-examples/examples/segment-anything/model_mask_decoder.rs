@@ -1,4 +1,4 @@
-use candle::{DType, IndexOp, Result, Tensor, D};
+use candle::{IndexOp, Result, Tensor};
 use candle_nn::{Linear, Module, VarBuilder};
 
 use crate::model_transformer::TwoWayTransformer;

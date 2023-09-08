@@ -1,5 +1,5 @@
-use candle::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
+use candle::{DType, IndexOp, Result, Tensor};
+use candle_nn::{Module, VarBuilder};
 
 use crate::model_image_encoder::ImageEncoderViT;
 use crate::model_mask_decoder::MaskDecoder;
@@ -114,7 +114,7 @@ impl Sam {
     }
 
     pub fn preprocess(&self, img: &Tensor) -> Result<Tensor> {
-        let (c, h, w) = img.dims3()?;
+        let (_c, h, w) = img.dims3()?;
         let img = img
             .to_dtype(DType::F32)?
             .broadcast_sub(&self.pixel_mean)?
@@ -148,7 +148,7 @@ impl Sam {
             let (sparse_prompt_embeddings, dense_prompt_embeddings) =
                 self.prompt_encoder
                     .forward(Some((&in_points, &in_labels)), None, None)?;
-            let (low_res_mask, iou_predictions) = self.mask_decoder.forward(
+            let (_low_res_mask, iou_predictions) = self.mask_decoder.forward(
                 &img_embeddings,
                 &image_pe,
                 &sparse_prompt_embeddings,

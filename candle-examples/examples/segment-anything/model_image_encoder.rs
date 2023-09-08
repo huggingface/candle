@@ -1,4 +1,4 @@
-use candle::{DType, IndexOp, Result, Tensor, D};
+use candle::{DType, IndexOp, Result, Tensor};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
 #[derive(Debug)]
@@ -37,7 +37,6 @@ struct Attention {
     proj: Linear,
     num_heads: usize,
     scale: f64,
-    use_rel_pos: bool,
     rel_pos_hw: Option<(Tensor, Tensor)>,
 }
 
@@ -66,7 +65,6 @@ impl Attention {
             proj,
             num_heads,
             scale,
-            use_rel_pos,
             rel_pos_hw,
         })
     }
@@ -272,7 +270,6 @@ impl Module for Block {
 
 #[derive(Debug)]
 pub struct ImageEncoderViT {
-    img_size: usize,
     patch_embed: PatchEmbed,
     blocks: Vec<Block>,
     neck_conv1: candle_nn::Conv2d,
@@ -350,7 +347,6 @@ impl ImageEncoderViT {
             None
         };
         Ok(Self {
-            img_size,
             patch_embed,
             blocks,
             neck_conv1,
