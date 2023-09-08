@@ -45,9 +45,9 @@ impl Attention {
     }
 
     fn forward(&self, q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
-        let q = self.q_proj.forward(q)?;
-        let k = self.k_proj.forward(k)?;
-        let v = self.v_proj.forward(v)?;
+        let q = self.q_proj.forward(&q.contiguous()?)?;
+        let k = self.k_proj.forward(&k.contiguous()?)?;
+        let v = self.v_proj.forward(&v.contiguous()?)?;
 
         let q = self.separate_heads(&q)?;
         let k = self.separate_heads(&k)?;

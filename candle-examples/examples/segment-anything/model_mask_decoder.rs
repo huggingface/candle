@@ -219,7 +219,7 @@ impl MaskDecoder {
             let h = mlp.forward(&mask_tokens_out.i((.., i))?)?;
             hyper_in_list.push(h)
         }
-        let hyper_in = Tensor::stack(hyper_in_list.as_slice(), 1)?;
+        let hyper_in = Tensor::stack(hyper_in_list.as_slice(), 1)?.contiguous()?;
         let (b, c, h, w) = upscaled_embedding.dims4()?;
         let masks = hyper_in.matmul(&upscaled_embedding.reshape((b, c, h * w))?)?;
         let masks = masks.reshape((b, (), h, w))?;
