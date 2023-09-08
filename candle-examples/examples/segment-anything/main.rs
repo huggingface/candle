@@ -175,10 +175,9 @@ pub fn main() -> anyhow::Result<()> {
         candle_examples::save_image_resize(&mask, "sam_mask.png", initial_h, initial_w)?;
 
         if !args.image.ends_with(".safetensors") {
-            let img = image::io::Reader::open(&args.image)?
+            let mut img = image::io::Reader::open(&args.image)?
                 .decode()
                 .map_err(candle::Error::wrap)?;
-            let mut img = image::DynamicImage::from(img);
             let mask_pixels = mask.permute((1, 2, 0))?.flatten_all()?.to_vec1::<u8>()?;
             let mask_img: image::ImageBuffer<image::Rgb<u8>, Vec<u8>> =
                 match image::ImageBuffer::from_raw(w as u32, h as u32, mask_pixels) {
