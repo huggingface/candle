@@ -108,8 +108,20 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image =
-        candle_examples::load_image(args.image, Some(model_sam::IMAGE_SIZE))?.to_device(&device)?;
+    let image = if args.image.ends_with(".safetensors") {
+        let mut tensors = candle::safetensors::load(&args.image, &device)?;
+        match tensors.remove("image") {
+            Some(image) => image,
+            None => {
+                if tensors.len() != 1 {
+                    anyhow::bail!("multiple tensors in '{}'", args.image)
+                }
+                tensors.into_values().next().unwrap()
+            }
+        }
+    } else {
+        candle_examples::load_image(args.image, Some(model_sam::IMAGE_SIZE))?.to_device(&device)?
+    };
     println!("loaded image {image:?}");
 
     let model = match args.model {
