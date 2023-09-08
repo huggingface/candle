@@ -42,6 +42,8 @@ struct Attention {
     scale: f64,
     rel_pos_hw: Option<(Tensor, Tensor)>,
     span: tracing::Span,
+    span_rel_pos: tracing::Span,
+    span_softmax: tracing::Span,
 }
 
 impl Attention {
@@ -54,6 +56,8 @@ impl Attention {
         vb: VarBuilder,
     ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "attention");
+        let span_rel_pos = tracing::span!(tracing::Level::TRACE, "attn-rel-pos");
+        let span_softmax = tracing::span!(tracing::Level::TRACE, "attn-sm");
         let qkv = crate::linear(vb.pp("qkv"), dim, dim * 3, qkv_bias)?;
         let proj = crate::linear(vb.pp("proj"), dim, dim, true)?;
         let head_dim = dim / num_heads;
@@ -72,6 +76,8 @@ impl Attention {
             scale,
             rel_pos_hw,
             span,
+            span_rel_pos,
+            span_softmax,
         })
     }
 
@@ -144,8 +150,14 @@ impl Module for Attention {
         let k = qkv.i(1)?;
         let v = qkv.i(2)?;
         let attn = (&q * self.scale)?.matmul(&k.t()?)?;
-        let attn = self.add_decomposed_rel_pos(attn, &q, (h, w), (h, w))?;
-        let attn = candle_nn::ops::softmax_last_dim(&attn)?;
+        let attn = {
+            let _enter = self.span_rel_pos.enter();
+            self.add_decomposed_rel_pos(attn, &q, (h, w), (h, w))?
+        };
+        let attn = {
+            let _enter = self.span_softmax.enter();
+            candle_nn::ops::softmax_last_dim(&attn)?
+        };
         let attn = attn.matmul(&v)?;
         let attn = attn
             .reshape((b, self.num_heads, h, w, c / self.num_heads))?
