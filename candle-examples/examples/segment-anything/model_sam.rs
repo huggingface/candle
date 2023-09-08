@@ -134,7 +134,12 @@ impl Sam {
         img.pad_with_zeros(2, 0, IMAGE_SIZE - w)
     }
 
-    fn process_crop(&self, img: &Tensor, cb: CropBox, point_grids: &[(f64, f64)]) -> Result<()> {
+    fn process_crop(
+        &self,
+        img: &Tensor,
+        cb: CropBox,
+        point_grids: &[(f64, f64)],
+    ) -> Result<Vec<candle_examples::object_detection::Bbox<Tensor>>> {
         // Crop the image and calculate embeddings.
         let img = img.i((.., cb.y0..cb.y1, cb.x0..cb.x1))?;
         let img = self.preprocess(&img)?.unsqueeze(0)?;
@@ -227,12 +232,8 @@ impl Sam {
         // Remove duplicates within this crop.
         candle_examples::object_detection::non_maximum_suppression(&mut bboxes, CROP_NMS_THRESH);
 
-        for bbox in bboxes[0].iter() {
-            println!("{bbox:?}");
-        }
-
-        // Return to the original image frame.
-        Ok(())
+        // TODO: Return to the original image frame.
+        Ok(bboxes.remove(0))
     }
 
     pub fn generate_masks(
@@ -242,7 +243,7 @@ impl Sam {
         crop_n_layer: usize,
         crop_overlap_ratio: f64,
         crop_n_points_downscale_factor: usize,
-    ) -> Result<()> {
+    ) -> Result<Vec<candle_examples::object_detection::Bbox<Tensor>>> {
         let (_c, h, w) = img.dims3()?;
         let point_grids = build_all_layer_point_grids(
             points_per_side,
@@ -250,12 +251,14 @@ impl Sam {
             crop_n_points_downscale_factor,
         );
         let crop_boxes = generate_crop_boxes((h, w), crop_n_layer, crop_overlap_ratio);
+        let mut bboxes = Vec::new();
         for crop_box in crop_boxes.into_iter() {
             let layer_idx = crop_box.layer_idx;
-            self.process_crop(img, crop_box, &point_grids[layer_idx])?
+            let b = self.process_crop(img, crop_box, &point_grids[layer_idx])?;
+            bboxes.extend(b)
         }
         // TODO: remove duplicates
-        Ok(())
+        Ok(bboxes)
     }
 }
 
