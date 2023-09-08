@@ -110,7 +110,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let image = if args.image.ends_with(".safetensors") {
         let mut tensors = candle::safetensors::load(&args.image, &device)?;
-        match tensors.remove("image") {
+        let image = match tensors.remove("image") {
             Some(image) => image,
             None => {
                 if tensors.len() != 1 {
@@ -118,6 +118,11 @@ pub fn main() -> anyhow::Result<()> {
                 }
                 tensors.into_values().next().unwrap()
             }
+        };
+        if image.rank() == 4 {
+            image.get(0)?
+        } else {
+            image
         }
     } else {
         candle_examples::load_image(args.image, Some(model_sam::IMAGE_SIZE))?.to_device(&device)?
