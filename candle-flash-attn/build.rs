@@ -60,12 +60,7 @@ fn main() -> Result<()> {
         Ok(build_dir) =>
         {
             let path = PathBuf::from(build_dir);
-            let path = if path.is_relative() {
-                let mut cur = std::env::current_dir()?;
-                cur.push(&path);
-                cur
-            } else { path };
-            path.canonicalize().expect(&format!("Directory doesn't exists: {}", &path.display()))
+            path.canonicalize().expect(&format!("Directory doesn't exists: {} (the current directory is {})", &path.display(), std::env::current_dir()?.display()))
         }
     };
     set_cuda_include_dir()?;
