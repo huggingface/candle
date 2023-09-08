@@ -101,6 +101,9 @@ struct Args {
     /// Run on CPU rather than on GPU.
     #[arg(long)]
     cpu: bool,
+
+    #[arg(long)]
+    generate_masks: bool,
 }
 
 pub fn main() -> anyhow::Result<()> {
@@ -142,19 +145,30 @@ pub fn main() -> anyhow::Result<()> {
     let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
     let sam = model_sam::Sam::new(768, 12, 12, &[2, 5, 8, 11], vb)?; // sam_vit_b
 
-    let (mask, iou_predictions) = sam.forward(&image, false)?;
-    println!("mask:\n{mask}");
-    println!("iou_predictions: {iou_predictions:?}");
+    if args.generate_masks {
+        // Default options similar to the Python version.
+        sam.generate_masks(
+            &image,
+            /* points_per_side */ 32,
+            /* crop_n_layer */ 0,
+            /* crop_overlap_ratio */ 512. / 1500.,
+            /* crop_n_points_downscale_factor */ 1,
+        )?
+    } else {
+        let (mask, iou_predictions) = sam.forward(&image, false)?;
+        println!("mask:\n{mask}");
+        println!("iou_predictions: {iou_predictions:?}");
 
-    // Save the mask as an image.
-    let mask = mask.ge(&mask.zeros_like()?)?;
-    let mask = (mask * 255.)?.squeeze(0)?;
-    let (_one, h, w) = mask.dims3()?;
-    let mask = mask.expand((3, h, w))?;
-    candle_examples::save_image(&mask, "sam_mask.png")?;
+        // Save the mask as an image.
+        let mask = mask.ge(&mask.zeros_like()?)?;
+        let mask = (mask * 255.)?.squeeze(0)?;
+        let (_one, h, w) = mask.dims3()?;
+        let mask = mask.expand((3, h, w))?;
+        candle_examples::save_image(&mask, "sam_mask.png")?;
 
-    let image = sam.preprocess(&image)?;
-    let image = sam.unpreprocess(&image)?.to_dtype(DType::U8)?;
-    candle_examples::save_image(&image, "sam_input_scaled.png")?;
+        let image = sam.preprocess(&image)?;
+        let image = sam.unpreprocess(&image)?.to_dtype(DType::U8)?;
+        candle_examples::save_image(&image, "sam_input_scaled.png")?;
+    }
     Ok(())
 }
