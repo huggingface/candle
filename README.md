@@ -243,6 +243,17 @@ authentication token. See issue
 git submodule update --init
 ```
 
+#### Compiling with flash-attention fails
+
+```
+/usr/include/c++/11/bits/std_function.h:530:146: error: parameter packs not expanded with ‘...’:
+```
+
+This is a bug in gcc-11 triggered by the Cuda compiler. To fix this, install a different, supported gcc version - for example gcc-10, and specify the path to the compiler in the CANDLE_NVCC_CCBIN environment variable.
+```
+env CANDLE_NVCC_CCBIN=/usr/lib/gcc/x86_64-linux-gnu/10 cargo ...
+```
+
 #### Tracking down errors
 
 You can set `RUST_BACKTRACE=1` to be provided with backtraces when a candle
