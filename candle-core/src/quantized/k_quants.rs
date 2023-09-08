@@ -472,6 +472,7 @@ impl GgmlType for BlockQ5_1 {
             }
 
             sumf += sumi as f32 * f16::to_f32(xs.d) * f16::to_f32(ys.d)
+                + f16::to_f32(xs.m) * f16::to_f32(ys.s)
         }
         Ok(sumf)
     }
