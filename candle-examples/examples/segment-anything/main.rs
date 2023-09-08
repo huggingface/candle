@@ -104,6 +104,12 @@ struct Args {
 
     #[arg(long)]
     generate_masks: bool,
+
+    #[arg(long)]
+    point_x: Option<f64>,
+
+    #[arg(long)]
+    point_y: Option<f64>,
 }
 
 pub fn main() -> anyhow::Result<()> {
@@ -155,7 +161,8 @@ pub fn main() -> anyhow::Result<()> {
             /* crop_n_points_downscale_factor */ 1,
         )?
     } else {
-        let (mask, iou_predictions) = sam.forward(&image, false)?;
+        let point = args.point_x.zip(args.point_y);
+        let (mask, iou_predictions) = sam.forward(&image, point, false)?;
         println!("mask:\n{mask}");
         println!("iou_predictions: {iou_predictions:?}");
 

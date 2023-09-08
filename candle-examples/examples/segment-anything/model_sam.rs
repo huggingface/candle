@@ -70,12 +70,30 @@ impl Sam {
         })
     }
 
-    pub fn forward(&self, img: &Tensor, multimask_output: bool) -> Result<(Tensor, Tensor)> {
+    pub fn forward(
+        &self,
+        img: &Tensor,
+        point: Option<(f64, f64)>,
+        multimask_output: bool,
+    ) -> Result<(Tensor, Tensor)> {
+        let (_c, original_h, original_w) = img.dims3()?;
         let img = self.preprocess(img)?.unsqueeze(0)?;
         let img_embeddings = self.image_encoder.forward(&img)?;
         let image_pe = self.prompt_encoder.get_dense_pe()?;
+        let points = match point {
+            None => None,
+            Some((x, y)) => {
+                let points = Tensor::new(
+                    &[[[x as f32 * original_w as f32, y as f32 * original_h as f32]]],
+                    img.device(),
+                )?;
+                let labels = Tensor::ones((1, 1), DType::F32, img.device())?;
+                Some((points, labels))
+            }
+        };
+        let points = points.as_ref().map(|(x, y)| (x, y));
         let (sparse_prompt_embeddings, dense_prompt_embeddings) =
-            self.prompt_encoder.forward(None, None, None)?;
+            self.prompt_encoder.forward(points, None, None)?;
         let (low_res_mask, iou_predictions) = self.mask_decoder.forward(
             &img_embeddings,
             &image_pe,
