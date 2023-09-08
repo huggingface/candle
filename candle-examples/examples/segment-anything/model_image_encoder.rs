@@ -1,9 +1,10 @@
 use candle::{DType, IndexOp, Result, Tensor};
-use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
+use candle_nn::{layer_norm, LayerNorm, Module, VarBuilder};
 
 #[derive(Debug)]
 struct PatchEmbed {
     proj: candle_nn::Conv2d,
+    span: tracing::Span,
 }
 
 impl PatchEmbed {
@@ -21,23 +22,26 @@ impl PatchEmbed {
             ..Default::default()
         };
         let proj = candle_nn::conv2d(in_chans, embed_dim, k_size, cfg, vb.pp("proj"))?;
-        Ok(Self { proj })
+        let span = tracing::span!(tracing::Level::TRACE, "patch-embed");
+        Ok(Self { proj, span })
     }
 }
 
 impl Module for PatchEmbed {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         xs.apply(&self.proj)?.permute((0, 2, 3, 1))
     }
 }
 
 #[derive(Debug)]
 struct Attention {
-    qkv: Linear,
-    proj: Linear,
+    qkv: crate::Linear,
+    proj: crate::Linear,
     num_heads: usize,
     scale: f64,
     rel_pos_hw: Option<(Tensor, Tensor)>,
+    span: tracing::Span,
 }
 
 impl Attention {
@@ -49,6 +53,7 @@ impl Attention {
         input_size: (usize, usize),
         vb: VarBuilder,
     ) -> Result<Self> {
+        let span = tracing::span!(tracing::Level::TRACE, "attention");
         let qkv = crate::linear(vb.pp("qkv"), dim, dim * 3, qkv_bias)?;
         let proj = crate::linear(vb.pp("proj"), dim, dim, true)?;
         let head_dim = dim / num_heads;
@@ -66,6 +71,7 @@ impl Attention {
             num_heads,
             scale,
             rel_pos_hw,
+            span,
         })
     }
 
@@ -126,6 +132,7 @@ fn get_rel_pos(q_size: usize, k_size: usize, rel_pos: &Tensor) -> Result<Tensor>
 
 impl Module for Attention {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let (b, h, w, c) = xs.dims4()?;
         let qkv = self
             .qkv
@@ -155,6 +162,7 @@ struct Block {
     norm2: LayerNorm,
     mlp: crate::MlpBlock,
     window_size: usize,
+    span: tracing::Span,
 }
 
 impl Block {
@@ -183,12 +191,14 @@ impl Block {
             vb.pp("attn"),
         )?;
         let mlp = crate::MlpBlock::new(dim, dim * 4, candle_nn::Activation::Gelu, vb.pp("mlp"))?;
+        let span = tracing::span!(tracing::Level::TRACE, "ie-block");
         Ok(Self {
             norm1,
             attn,
             norm2,
             mlp,
             window_size,
+            span,
         })
     }
 }
@@ -249,6 +259,7 @@ fn window_unpartition(
 
 impl Module for Block {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let shortcut = xs;
         let xs = self.norm1.forward(xs)?;
         let hw = (xs.dim(1)?, xs.dim(2)?);
@@ -277,6 +288,7 @@ pub struct ImageEncoderViT {
     neck_conv2: candle_nn::Conv2d,
     neck_ln2: crate::LayerNorm2d,
     pos_embed: Option<Tensor>,
+    span: tracing::Span,
 }
 
 impl ImageEncoderViT {
@@ -346,6 +358,7 @@ impl ImageEncoderViT {
         } else {
             None
         };
+        let span = tracing::span!(tracing::Level::TRACE, "image-encoder-vit");
         Ok(Self {
             patch_embed,
             blocks,
@@ -354,12 +367,14 @@ impl ImageEncoderViT {
             neck_conv2,
             neck_ln2,
             pos_embed,
+            span,
         })
     }
 }
 
 impl Module for ImageEncoderViT {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let xs = self.patch_embed.forward(xs)?;
         let mut xs = match &self.pos_embed {
             Some(pos_embed) => (xs + pos_embed)?,
