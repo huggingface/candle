@@ -57,10 +57,13 @@ fn main() -> Result<()> {
             #[allow(clippy::redundant_clone)]
             out_dir.clone()
         }
-        Ok(build_dir) =>
-        {
+        Ok(build_dir) => {
             let path = PathBuf::from(build_dir);
-            path.canonicalize().expect(&format!("Directory doesn't exists: {} (the current directory is {})", &path.display(), std::env::current_dir()?.display()))
+            path.canonicalize().expect(&format!(
+                "Directory doesn't exists: {} (the current directory is {})",
+                &path.display(),
+                std::env::current_dir()?.display()
+            ))
         }
     };
     set_cuda_include_dir()?;
