@@ -24,6 +24,7 @@ intel-mkl-src = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 half = { workspace = true, optional = true }
 image = { workspace = true }
+rayon = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

@@ -56,6 +56,8 @@ impl candle::CustomOp3 for Add3 {
         s3: &candle::CpuStorage,
         l3: &candle::Layout,
     ) -> Result<(candle::CpuStorage, candle::Shape)> {
+        use rayon::prelude::*;
+
         let Add3(b, q_h, q_w, k_h, k_w) = *self;
         let s1 = s1.as_slice::<f32>()?;
         let s1 = match l1.contiguous_offsets() {
@@ -73,20 +75,24 @@ impl candle::CustomOp3 for Add3 {
             Some((o1, o2)) => &s3[o1..o2],
         };
         let mut dst = vec![0f32; b * q_h * q_w * k_h * k_w];
-        for b_idx in 0..(b * q_h * q_w) {
-            let s1_idx = b_idx * k_h * k_w;
-            let s2_idx = b_idx * k_h;
-            let s3_idx = b_idx * k_w;
-            for h_idx in 0..k_h {
-                let s1_idx = s1_idx + h_idx * k_w;
-                let s2_idx = s2_idx + h_idx;
-                for w_idx in 0..k_w {
-                    let s1_idx = s1_idx + w_idx;
-                    let s3_idx = s3_idx + w_idx;
-                    dst[s1_idx] = s1[s1_idx] + s2[s2_idx] + s3[s3_idx]
+        dst.par_chunks_exact_mut(k_h * k_w)
+            .enumerate()
+            .for_each(|(b_idx, dst)| {
+                let s1_idx = b_idx * k_h * k_w;
+                let s2_idx = b_idx * k_h;
+                let s3_idx = b_idx * k_w;
+                for h_idx in 0..k_h {
+                    let s1_idx = s1_idx + h_idx * k_w;
+                    let s2_idx = s2_idx + h_idx;
+                    let dst_idx = h_idx * k_w;
+                    for w_idx in 0..k_w {
+                        let s1_idx = s1_idx + w_idx;
+                        let s3_idx = s3_idx + w_idx;
+                        let dst_idx = dst_idx + w_idx;
+                        dst[dst_idx] = s1[s1_idx] + s2[s2_idx] + s3[s3_idx]
+                    }
                 }
-            }
-        }
+            });
         let dst = candle::WithDType::to_cpu_storage_owned(dst);
         Ok((dst, (b, q_h * q_w, k_h * k_w).into()))
     }
