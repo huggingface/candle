@@ -213,6 +213,7 @@ impl Tensor {
                             out_padding,
                             *stride,
                             *dilation,
+                            1,
                         )?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;

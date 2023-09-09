@@ -1190,8 +1190,9 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
         let (out_h, out_w) = (p.out_h(), p.out_w());
 
         // Output shape: [b_size, c_out, out_h, out_w].
-        let dst = vec![T::zero(); p.b_size * p.c_out * out_h * out_w];
-        let dst_s0 = p.c_out * out_h * out_w;
+        let c_out = p.groups * p.c_out_per_group;
+        let dst = vec![T::zero(); p.b_size * c_out * out_h * out_w];
+        let dst_s0 = c_out * out_h * out_w;
         let dst_s1 = out_h * out_w;
         let dst_s2 = out_w;
         let dst_s3 = 1;
@@ -1214,12 +1215,16 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
             }
         }
 
+        let c_in_per_group = p.c_in / p.groups;
         for k_y in 0..p.k_h {
             for k_x in 0..p.k_w {
-                (0..p.c_out).into_par_iter().for_each(|dst_c_idx| {
-                    let k_cont = (0..p.c_in)
+                (0..c_out).into_par_iter().for_each(|dst_c_idx| {
+                    let (group_idx, dst_c_idx_in_group) =
+                        (c_out / p.c_out_per_group, c_out % p.c_out_per_group);
+                    let k_cont = (0..c_in_per_group)
                         .map(|c_in_idx| {
-                            k[c_in_idx * k_s0 + dst_c_idx * k_s1 + k_y * k_s2 + k_x * k_s3]
+                            let c_in_idx = group_idx * c_in_per_group + c_in_idx;
+                            k[c_in_idx * k_s0 + dst_c_idx_in_group * k_s1 + k_y * k_s2 + k_x * k_s3]
                         })
                         .collect::<Vec<_>>();
                     for b_idx in 0..p.b_size {
@@ -1245,7 +1250,7 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
                                             inp_cont.as_ptr(),
                                             k_cont.as_ptr(),
                                             &mut d,
-                                            p.c_in,
+                                            c_in_per_group,
                                         )
                                     }
                                     let dst_p = dst.as_ptr();
