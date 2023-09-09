@@ -72,6 +72,7 @@ impl PyDType {
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[pyclass(name = "Device")]
 enum PyDevice {
     Cpu,
     Cuda,
@@ -98,28 +99,6 @@ impl PyDevice {
                 Ok(d)
             }
         }
-    }
-}
-
-impl<'source> FromPyObject<'source> for PyDevice {
-    fn extract(ob: &'source PyAny) -> PyResult<Self> {
-        let device: &str = ob.extract()?;
-        let device = match device {
-            "cpu" => PyDevice::Cpu,
-            "cuda" => PyDevice::Cuda,
-            _ => Err(PyTypeError::new_err(format!("invalid device '{device}'")))?,
-        };
-        Ok(device)
-    }
-}
-
-impl ToPyObject for PyDevice {
-    fn to_object(&self, py: Python<'_>) -> PyObject {
-        let str = match self {
-            PyDevice::Cpu => "cpu",
-            PyDevice::Cuda => "cuda",
-        };
-        str.to_object(py)
     }
 }
 
@@ -295,8 +274,8 @@ impl PyTensor {
     }
 
     #[getter]
-    fn device(&self, py: Python<'_>) -> PyObject {
-        PyDevice::from_device(self.0.device()).to_object(py)
+    fn device(&self, _py: Python<'_>) -> PyDevice {
+        PyDevice::from_device(self.0.device())
     }
 
     #[getter]
@@ -863,6 +842,7 @@ fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyTensor>()?;
     m.add_class::<PyQTensor>()?;
     m.add_class::<PyDType>()?;
+    m.add_class::<PyDevice>()?;
     m.add("u8", PyDType(DType::U8))?;
     m.add("u32", PyDType(DType::U32))?;
     m.add("i16", PyDType(DType::I64))?;

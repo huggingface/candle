@@ -34,3 +34,6 @@ candle-wasm-examples/*/package-lock.json
 
 .DS_Store
 .idea/*
+
+# Python virtual environment
+.venv/
