@@ -1,7 +1,6 @@
 // Adapted from:
 // https://github.com/ChaoningZhang/MobileSAM/blob/master/mobile_sam/modeling/tiny_vit_sam.py
-#![allow(unused)]
-use candle::{DType, IndexOp, Result, Tensor, D};
+use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2dConfig, Module, VarBuilder};
 
 const MBCONV_EXPAND_RATIO: usize = 4;
@@ -222,7 +221,6 @@ struct Attention {
     norm: candle_nn::LayerNorm,
     qkv: candle_nn::Linear,
     proj: candle_nn::Linear,
-    attention_biases: Tensor,
     ab: Tensor,
     key_dim: usize,
     num_heads: usize,
@@ -268,7 +266,6 @@ impl Attention {
             norm,
             qkv,
             proj,
-            attention_biases,
             ab,
             key_dim,
             num_heads,
@@ -460,8 +457,8 @@ pub struct TinyViT {
     patch_embed: PatchEmbed,
     layer0: ConvLayer,
     layers: Vec<BasicLayer>,
-    norm_head: candle_nn::LayerNorm,
-    head: candle_nn::Linear,
+    // norm_head: candle_nn::LayerNorm,
+    // head: candle_nn::Linear,
     neck_conv1: candle_nn::Conv2d,
     neck_ln1: crate::LayerNorm2d,
     neck_conv2: candle_nn::Conv2d,
@@ -474,7 +471,7 @@ impl TinyViT {
         depths: &[usize],
         num_heads: &[usize],
         window_sizes: &[usize],
-        num_classes: usize,
+        _num_classes: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
         let patch_embed = PatchEmbed::new(IN_CHANNELS, embed_dims[0], vb.pp("patch_embed"))?;
@@ -509,8 +506,8 @@ impl TinyViT {
         }
 
         let last_embed_dim = embed_dims[embed_dims.len() - 1];
-        let norm_head = candle_nn::layer_norm(last_embed_dim, 1e-5, vb.pp("norm_head"))?;
-        let head = candle_nn::linear(last_embed_dim, num_classes, vb.pp("head"))?;
+        // let norm_head = candle_nn::layer_norm(last_embed_dim, 1e-5, vb.pp("norm_head"))?;
+        // let head = candle_nn::linear(last_embed_dim, num_classes, vb.pp("head"))?;
         let neck_conv1 =
             candle_nn::conv2d_no_bias(last_embed_dim, 256, 1, Default::default(), vb.pp("neck.0"))?;
         let neck_ln1 = crate::LayerNorm2d::new(256, 1e-6, vb.pp("neck.1"))?;
@@ -525,8 +522,6 @@ impl TinyViT {
             patch_embed,
             layer0,
             layers,
-            norm_head,
-            head,
             neck_conv1,
             neck_ln1,
             neck_conv2,
@@ -537,7 +532,8 @@ impl TinyViT {
 
 impl Module for TinyViT {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut xs = self.patch_embed.forward(xs)?;
+        let xs = self.patch_embed.forward(xs)?;
+        let mut xs = self.layer0.forward(&xs)?;
         for layer in self.layers.iter() {
             xs = layer.forward(&xs)?
         }
