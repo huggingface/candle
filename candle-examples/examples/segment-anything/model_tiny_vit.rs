@@ -7,6 +7,8 @@ use candle_nn::{Conv2dConfig, Module, VarBuilder};
 const MBCONV_EXPAND_RATIO: usize = 4;
 const MLP_RATIO: usize = 4;
 const LOCAL_CONV_SIZE: usize = 3;
+const IMG_SIZE: usize = 224;
+const IN_CHANNELS: usize = 3;
 
 #[derive(Debug)]
 struct Conv2dBN {
@@ -259,7 +261,6 @@ impl Attention {
                 idxs.push(*idx as u32)
             }
         }
-        // TODO: replace 0, get the proper ab
         let attention_biases = vb.get((num_heads, attention_offsets.len()), "attention_biases")?;
         let idxs = Tensor::new(idxs, attention_biases.device())?;
         let ab = attention_biases.index_select(&idxs, 1)?;
@@ -455,7 +456,7 @@ impl Module for BasicLayer {
 }
 
 #[derive(Debug)]
-struct TinyViT {
+pub struct TinyViT {
     patch_embed: PatchEmbed,
     layer0: ConvLayer,
     layers: Vec<BasicLayer>,
@@ -468,10 +469,7 @@ struct TinyViT {
 }
 
 impl TinyViT {
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        img_size: usize,
-        in_: usize,
+    pub fn new(
         embed_dims: &[usize],
         depths: &[usize],
         num_heads: &[usize],
@@ -479,8 +477,8 @@ impl TinyViT {
         num_classes: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let patch_embed = PatchEmbed::new(in_, embed_dims[0], vb.pp("patch_embed"))?;
-        let patches_resolution = img_size / 4;
+        let patch_embed = PatchEmbed::new(IN_CHANNELS, embed_dims[0], vb.pp("patch_embed"))?;
+        let patches_resolution = IMG_SIZE / 4;
 
         let vb_l = vb.pp("layers");
         let layer0 = ConvLayer::new(
@@ -551,4 +549,15 @@ impl Module for TinyViT {
             .apply(&self.neck_conv2)?
             .apply(&self.neck_ln2)
     }
+}
+
+pub fn tiny_vit_5m_224(vb: VarBuilder) -> Result<TinyViT> {
+    TinyViT::new(
+        /* embed_dims */ &[64, 128, 160, 320],
+        /* depths */ &[2, 2, 6, 2],
+        /* num_heads */ &[2, 4, 5, 10],
+        /* window_sizes */ &[7, 7, 14, 7],
+        /* num_classes */ 1000,
+        vb,
+    )
 }
