@@ -57,8 +57,8 @@ struct MBConv {
 }
 
 impl MBConv {
-    fn new(in_: usize, out: usize, expand_ratio: f64, vb: VarBuilder) -> Result<Self> {
-        let hidden = (in_ as f64 * expand_ratio) as usize;
+    fn new(in_: usize, out: usize, expand_ratio: usize, vb: VarBuilder) -> Result<Self> {
+        let hidden = in_ * expand_ratio;
         let cfg2 = candle_nn::Conv2dConfig {
             padding: 1,
             groups: hidden,
@@ -138,5 +138,75 @@ impl Module for PatchMerging {
             .apply(&self.conv3)?
             .flatten_from(2)?
             .transpose(1, 2)
+    }
+}
+
+#[derive(Debug)]
+struct ConvLayer {
+    blocks: Vec<MBConv>,
+    downsample: Option<PatchMerging>,
+}
+
+impl ConvLayer {
+    fn new(
+        dim: usize,
+        out: usize,
+        input_resolution: (usize, usize),
+        depth: usize,
+        downsample: bool,
+        conv_expand_ratio: usize,
+        vb: VarBuilder,
+    ) -> Result<Self> {
+        let vb_b = vb.pp("blocks");
+        let mut blocks = Vec::with_capacity(depth);
+        for index in 0..depth {
+            let block = MBConv::new(dim, dim, conv_expand_ratio, vb_b.pp(index))?;
+            blocks.push(block)
+        }
+        let downsample = if downsample {
+            let downsample = PatchMerging::new(input_resolution, dim, out, vb.pp("downsample"))?;
+            Some(downsample)
+        } else {
+            None
+        };
+        Ok(Self { blocks, downsample })
+    }
+}
+
+impl Module for ConvLayer {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut xs = xs.clone();
+        for block in self.blocks.iter() {
+            xs = block.forward(&xs)?
+        }
+        match &self.downsample {
+            None => Ok(xs),
+            Some(downsample) => downsample.forward(&xs),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Mlp {
+    norm: candle_nn::LayerNorm,
+    fc1: candle_nn::Linear,
+    fc2: candle_nn::Linear,
+}
+
+impl Mlp {
+    fn new(in_: usize, hidden: usize, vb: VarBuilder) -> Result<Self> {
+        let norm = candle_nn::layer_norm(in_, 1e-5, vb.pp("norm"))?;
+        let fc1 = candle_nn::linear(in_, hidden, vb.pp("fc1"))?;
+        let fc2 = candle_nn::linear(hidden, in_, vb.pp("fc2"))?;
+        Ok(Self { norm, fc1, fc2 })
+    }
+}
+
+impl Module for Mlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.norm)?
+            .apply(&self.fc1)?
+            .gelu()?
+            .apply(&self.fc2)
     }
 }
