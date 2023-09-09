@@ -183,7 +183,12 @@ pub fn main() -> anyhow::Result<()> {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
             let api = api.model("lmz/candle-sam".to_string());
-            api.get("sam_vit_b_01ec64.safetensors")?
+            let filename = if args.use_tiny {
+                "mobile_sam-tiny-vitt.safetensors"
+            } else {
+                "sam_vit_b_01ec64.safetensors"
+            };
+            api.get(filename)?
         }
     };
     let weights = unsafe { candle::safetensors::MmapedFile::new(model)? };
