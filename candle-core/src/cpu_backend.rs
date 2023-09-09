@@ -1220,7 +1220,7 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
             for k_x in 0..p.k_w {
                 (0..c_out).into_par_iter().for_each(|dst_c_idx| {
                     let (group_idx, dst_c_idx_in_group) =
-                        (c_out / p.c_out_per_group, c_out % p.c_out_per_group);
+                        (dst_c_idx / p.c_out_per_group, dst_c_idx % p.c_out_per_group);
                     let k_cont = (0..c_in_per_group)
                         .map(|c_in_idx| {
                             let c_in_idx = group_idx * c_in_per_group + c_in_idx;
