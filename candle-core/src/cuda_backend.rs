@@ -312,6 +312,13 @@ impl BackendDevice for CudaDevice {
         // cudarc changes.
         let elem_count = shape.elem_count();
         let curand = self.curand.lock().unwrap();
+        // curand can only generate an odd number of values.
+        // https://github.com/huggingface/candle/issues/734
+        let elem_count_round = if elem_count % 2 == 1 {
+            elem_count + 1
+        } else {
+            elem_count
+        };
         let slice = match dtype {
             DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::BF16 => {
                 Err(CudaError::UnsupportedDtype {
@@ -321,7 +328,7 @@ impl BackendDevice for CudaDevice {
                 .w()?
             }
             DType::F32 => {
-                let mut data = unsafe { self.alloc::<f32>(elem_count) }.w()?;
+                let mut data = unsafe { self.alloc::<f32>(elem_count_round) }.w()?;
                 curand
                     .0
                     .fill_with_normal(&mut data, mean as f32, std as f32)
@@ -329,7 +336,7 @@ impl BackendDevice for CudaDevice {
                 CudaStorageSlice::F32(data)
             }
             DType::F64 => {
-                let mut data = unsafe { self.alloc::<f64>(elem_count) }.w()?;
+                let mut data = unsafe { self.alloc::<f64>(elem_count_round) }.w()?;
                 curand.0.fill_with_normal(&mut data, mean, std).w()?;
                 CudaStorageSlice::F64(data)
             }
