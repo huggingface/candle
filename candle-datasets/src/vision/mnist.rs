@@ -8,10 +8,9 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use std::fs::File;
 use std::io::{self, BufReader, Read};
 
-fn read_u32<T: Read>(reader: &mut T) -> Result<u32> {
-    let mut b = [0u8; 4];
-    reader.read_exact(&mut b)?;
-    Ok(u32::from_be_bytes(b))
+fn read_u32<T: Read>(reader: &mut T) -> std::io::Result<u32> {
+    use byteorder::ReadBytesExt;
+    reader.read_u32::<byteorder::BigEndian>()
 }
 
 fn check_magic_number<T: Read>(reader: &mut T, expected: u32) -> Result<()> {
