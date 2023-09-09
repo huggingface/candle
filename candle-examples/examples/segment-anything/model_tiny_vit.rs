@@ -293,6 +293,7 @@ struct TinyViTBlock {
     local_conv: Conv2dBN,
     mlp: Mlp,
     window_size: usize,
+    input_resolution: (usize, usize),
 }
 
 impl TinyViTBlock {
@@ -323,13 +324,65 @@ impl TinyViTBlock {
             local_conv,
             mlp,
             window_size,
+            input_resolution,
         })
     }
 }
 
 impl Module for TinyViTBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+        let (h, w) = self.input_resolution;
+        let (b, l, c) = xs.dims3()?;
+        let res_x = xs;
+        let xs = if h == self.window_size && w == self.window_size {
+            self.attn.forward(xs)?
+        } else {
+            let xs = xs.reshape((b, h, w, c))?;
+            let pad_b = (self.window_size - h % self.window_size) % self.window_size;
+            let pad_r = (self.window_size - w % self.window_size) % self.window_size;
+
+            let xs = if pad_b > 0 {
+                xs.pad_with_zeros(D::Minus2, 0, pad_b)?
+            } else {
+                xs
+            };
+            let xs = if pad_r > 0 {
+                xs.pad_with_zeros(D::Minus1, 0, pad_r)?
+            } else {
+                xs
+            };
+            let (p_h, p_w) = (h + pad_b, w + pad_r);
+            let n_h = p_h / self.window_size;
+            let n_w = p_w / self.window_size;
+            let xs = xs
+                .reshape((b, n_h, self.window_size, n_w, self.window_size, c))?
+                .transpose(2, 3)?
+                .reshape((b * n_h * n_w, self.window_size * self.window_size, c))?;
+            let xs = self.attn.forward(&xs)?;
+            let xs = xs
+                .reshape((b, n_h, n_w, self.window_size, self.window_size, c))?
+                .transpose(2, 3)?
+                .reshape((b, p_h, p_w, c))?;
+            let xs = if pad_r > 0 {
+                xs.i((.., .., ..w))?.contiguous()?
+            } else {
+                xs
+            };
+            let xs = if pad_b > 0 {
+                xs.i((.., ..h, ..))?.contiguous()?
+            } else {
+                xs
+            };
+            xs.reshape((b, l, c))?
+        };
+        let xs = (xs + res_x)?;
+        let xs = xs
+            .transpose(1, 2)?
+            .reshape((b, c, h, w))?
+            .apply(&self.local_conv)?
+            .reshape((b, c, l))?
+            .transpose(1, 2)?;
+        &xs + self.mlp.forward(&xs)?
     }
 }
 
