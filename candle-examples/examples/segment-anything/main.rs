@@ -11,6 +11,7 @@ pub mod model_image_encoder;
 pub mod model_mask_decoder;
 pub mod model_prompt_encoder;
 pub mod model_sam;
+pub mod model_tiny_vit;
 pub mod model_transformer;
 
 use candle::{DType, Result, Tensor};
