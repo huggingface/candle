@@ -133,6 +133,10 @@ struct Args {
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
+
+    /// Use the TinyViT based models from MobileSAM
+    #[arg(long)]
+    use_tiny: bool,
 }
 
 pub fn main() -> anyhow::Result<()> {
@@ -185,7 +189,11 @@ pub fn main() -> anyhow::Result<()> {
     let weights = unsafe { candle::safetensors::MmapedFile::new(model)? };
     let weights = weights.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
-    let sam = model_sam::Sam::new(768, 12, 12, &[2, 5, 8, 11], vb)?; // sam_vit_b
+    let sam = if args.use_tiny {
+        model_sam::Sam::new_tiny(vb)? // tiny vit_t
+    } else {
+        model_sam::Sam::new(768, 12, 12, &[2, 5, 8, 11], vb)? // sam_vit_b
+    };
 
     if args.generate_masks {
         // Default options similar to the Python version.

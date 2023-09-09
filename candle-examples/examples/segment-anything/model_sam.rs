@@ -4,7 +4,7 @@ use candle_nn::{Module, VarBuilder};
 use crate::model_image_encoder::ImageEncoderViT;
 use crate::model_mask_decoder::MaskDecoder;
 use crate::model_prompt_encoder::PromptEncoder;
-use crate::model_tiny_vit::{tiny_vit_5m_224, TinyViT};
+use crate::model_tiny_vit::{tiny_vit_5m, TinyViT};
 
 const PROMPT_EMBED_DIM: usize = 256;
 pub const IMAGE_SIZE: usize = 1024;
@@ -94,7 +94,7 @@ impl Sam {
     pub fn new_tiny(vb: VarBuilder) -> Result<Self> {
         let image_embedding_size = IMAGE_SIZE / VIT_PATCH_SIZE;
 
-        let image_encoder = tiny_vit_5m_224(vb.pp("image_encoder"))?;
+        let image_encoder = tiny_vit_5m(vb.pp("image_encoder"))?;
         let prompt_encoder = PromptEncoder::new(
             PROMPT_EMBED_DIM,
             (image_embedding_size, image_embedding_size),

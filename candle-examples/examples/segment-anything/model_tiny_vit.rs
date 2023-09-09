@@ -6,7 +6,7 @@ use candle_nn::{Conv2dConfig, Module, VarBuilder};
 const MBCONV_EXPAND_RATIO: usize = 4;
 const MLP_RATIO: usize = 4;
 const LOCAL_CONV_SIZE: usize = 3;
-const IMG_SIZE: usize = 224;
+const IMG_SIZE: usize = 1024;
 const IN_CHANNELS: usize = 3;
 
 #[derive(Debug)]
@@ -17,7 +17,7 @@ struct Conv2dBN {
 
 impl Conv2dBN {
     fn new(in_: usize, out: usize, ks: usize, cfg: Conv2dConfig, vb: VarBuilder) -> Result<Self> {
-        let c = candle_nn::conv2d(in_, out, ks, cfg, vb.pp("c"))?;
+        let c = candle_nn::conv2d_no_bias(in_, out, ks, cfg, vb.pp("c"))?;
         let bn = candle_nn::batch_norm(out, 1e-5, vb.pp("bn"))?;
         Ok(Self { c, bn })
     }
@@ -261,7 +261,10 @@ impl Attention {
         }
         let attention_biases = vb.get((num_heads, attention_offsets.len()), "attention_biases")?;
         let idxs = Tensor::new(idxs, attention_biases.device())?;
-        let ab = attention_biases.index_select(&idxs, 1)?;
+        let ab =
+            attention_biases
+                .index_select(&idxs, 1)?
+                .reshape(((), points.len(), points.len()))?;
         Ok(Self {
             norm,
             qkv,
@@ -283,15 +286,18 @@ impl Module for Attention {
         let qkv = xs.apply(&self.qkv)?.reshape((b, n, self.num_heads, ()))?;
         let q = qkv
             .narrow(D::Minus1, 0, self.key_dim)?
-            .permute((0, 2, 1, 3))?;
+            .permute((0, 2, 1, 3))?
+            .contiguous()?;
         let k = qkv
             .narrow(D::Minus1, self.key_dim, self.key_dim)?
-            .permute((0, 2, 1, 3))?;
+            .permute((0, 2, 1, 3))?
+            .contiguous()?;
         let v = qkv
             .narrow(D::Minus1, 2 * self.key_dim, self.d)?
-            .permute((0, 2, 1, 3))?;
+            .permute((0, 2, 1, 3))?
+            .contiguous()?;
         let attn = (q.matmul(&k.t()?)? * self.scale)?;
-        let attn = (attn + &self.ab)?;
+        let attn = attn.broadcast_add(&self.ab)?;
         let attn = candle_nn::ops::softmax_last_dim(&attn)?;
         attn.matmul(&v)?
             .transpose(1, 2)?
@@ -329,6 +335,7 @@ impl TinyViTBlock {
         let mlp = Mlp::new(dim, dim * MLP_RATIO, vb.pp("mlp"))?;
         let cfg = candle_nn::Conv2dConfig {
             padding: LOCAL_CONV_SIZE / 2,
+            groups: dim,
             ..Default::default()
         };
         let local_conv = Conv2dBN::new(dim, dim, LOCAL_CONV_SIZE, cfg, vb.pp("local_conv"))?;
@@ -355,12 +362,12 @@ impl Module for TinyViTBlock {
             let pad_r = (self.window_size - w % self.window_size) % self.window_size;
 
             let xs = if pad_b > 0 {
-                xs.pad_with_zeros(D::Minus2, 0, pad_b)?
+                xs.pad_with_zeros(1, 0, pad_b)?
             } else {
                 xs
             };
             let xs = if pad_r > 0 {
-                xs.pad_with_zeros(D::Minus1, 0, pad_r)?
+                xs.pad_with_zeros(2, 0, pad_r)?
             } else {
                 xs
             };
@@ -547,7 +554,7 @@ impl Module for TinyViT {
     }
 }
 
-pub fn tiny_vit_5m_224(vb: VarBuilder) -> Result<TinyViT> {
+pub fn tiny_vit_5m(vb: VarBuilder) -> Result<TinyViT> {
     TinyViT::new(
         /* embed_dims */ &[64, 128, 160, 320],
         /* depths */ &[2, 2, 6, 2],
