@@ -245,9 +245,24 @@ impl Attention {
         let norm = candle_nn::layer_norm(dim, 1e-5, vb.pp("norm"))?;
         let qkv = candle_nn::linear(dim, h, vb.pp("qkv"))?;
         let proj = candle_nn::linear(dh, dim, vb.pp("proj"))?;
+
+        let points = (0..resolution.0)
+            .flat_map(|x| (0..resolution.1).map(move |y| (x as i64, y as i64)))
+            .collect::<Vec<_>>();
+        let mut idxs = Vec::with_capacity(points.len() * points.len());
+        let mut attention_offsets = std::collections::HashMap::new();
+        for &(x1, y1) in points.iter() {
+            for &(x2, y2) in points.iter() {
+                let offset = ((x2 - x1).abs(), (y2 - y1).abs());
+                let l = attention_offsets.len();
+                let idx = attention_offsets.entry(offset).or_insert(l);
+                idxs.push(*idx as u32)
+            }
+        }
         // TODO: replace 0, get the proper ab
-        let attention_biases = vb.get((num_heads, 0), "attention_biases")?;
-        let ab = attention_biases.clone();
+        let attention_biases = vb.get((num_heads, attention_offsets.len()), "attention_biases")?;
+        let idxs = Tensor::new(idxs, attention_biases.device())?;
+        let ab = attention_biases.index_select(&idxs, 1)?;
         Ok(Self {
             norm,
             qkv,
