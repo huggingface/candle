@@ -8,6 +8,7 @@ members = [
     "candle-pyo3",
     "candle-transformers",
     "candle-wasm-examples/llama2-c",
+    "candle-wasm-examples/segment-anything",
     "candle-wasm-examples/whisper",
     "candle-wasm-examples/yolo",
 ]
