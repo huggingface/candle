@@ -198,17 +198,13 @@ fn log_mel_spectrogram_<T: Float + std::fmt::Display>(
     mel
 }
 
-pub fn pcm_to_mel<T: Float + std::fmt::Display>(
-    samples: &[T],
-    filters: &[T],
-) -> anyhow::Result<Vec<T>> {
-    let mel = log_mel_spectrogram_(
+pub fn pcm_to_mel<T: Float + std::fmt::Display>(samples: &[T], filters: &[T]) -> Vec<T> {
+    log_mel_spectrogram_(
         samples,
         filters,
         super::N_FFT,
         super::HOP_LENGTH,
         super::N_MELS,
         false,
-    );
-    Ok(mel)
+    )
 }
