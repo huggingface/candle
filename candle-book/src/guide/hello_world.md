@@ -5,8 +5,8 @@ We will now create the hello world of the ML world, building a model capable of 
 Open `src/main.rs` and fill in this content:
 
 ```rust
-# extern crate candle;
-use candle::{DType, Device, Result, Tensor};
+# extern crate candle_core;
+use candle_core::{DType, Device, Result, Tensor};
 
 struct Model {
     first: Tensor,
@@ -49,8 +49,8 @@ Now that we have this, we might want to complexify things a bit, for instance by
 the classical `Linear` layer. We can do as such
 
 ```rust
-# extern crate candle;
-# use candle::{DType, Device, Result, Tensor};
+# extern crate candle_core;
+# use candle_core::{DType, Device, Result, Tensor};
 struct Linear{
     weight: Tensor,
     bias: Tensor,
@@ -79,8 +79,8 @@ impl Model {
 This will change the model running code into a new function
 
 ```rust
-# extern crate candle;
-# use candle::{DType, Device, Result, Tensor};
+# extern crate candle_core;
+# use candle_core::{DType, Device, Result, Tensor};
 # struct Linear{
 #     weight: Tensor,
 #     bias: Tensor,
@@ -144,9 +144,9 @@ cargo add --git https://github.com/huggingface/candle.git candle-nn
 And rewrite our examples using it
 
 ```rust
-# extern crate candle;
+# extern crate candle_core;
 # extern crate candle_nn;
-use candle::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Linear, Module};
 
 struct Model {
