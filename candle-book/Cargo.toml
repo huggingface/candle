@@ -11,7 +11,7 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle-core = { path = "../candle-core", version = "0.2.1", package = "candle-core" }
+candle = { path = "../candle-core", version = "0.2.1", package = "candle-core" }
 candle-datasets = { path = "../candle-datasets", version = "0.2.1" }
 candle-nn = { path = "../candle-nn", version = "0.2.1" }
 candle-transformers = { path = "../candle-transformers", version = "0.2.1" }

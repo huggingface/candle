@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use candle_core::{DType, Device, Tensor};
+    use candle::{DType, Device, Tensor};
     use parquet::file::reader::SerializedFileReader;
 
     // NOTE: Waiting on https://github.com/rust-lang/mdBook/pull/1856
@@ -9,7 +9,7 @@ mod tests {
     #[tokio::test]
     async fn book_hub_1() {
 // ANCHOR: book_hub_1
-use candle_core::Device;
+use candle::Device;
 use hf_hub::api::tokio::Api;
 
 let api = Api::new().unwrap();
@@ -17,7 +17,7 @@ let repo = api.model("bert-base-uncased".to_string());
 
 let weights_filename = repo.get("model.safetensors").await.unwrap();
 
-let weights = candle_core::safetensors::load(weights_filename, &Device::Cpu).unwrap();
+let weights = candle::safetensors::load(weights_filename, &Device::Cpu).unwrap();
 // ANCHOR_END: book_hub_1
         assert_eq!(weights.len(), 206);
     }
@@ -26,7 +26,7 @@ let weights = candle_core::safetensors::load(weights_filename, &Device::Cpu).unw
     #[test]
     fn book_hub_2() {
 // ANCHOR: book_hub_2
-use candle_core::Device;
+use candle::Device;
 use hf_hub::api::sync::Api;
 use memmap2::Mmap;
 use std::fs;
@@ -37,7 +37,7 @@ let weights_filename = repo.get("model.safetensors").unwrap();
 
 let file = fs::File::open(weights_filename).unwrap();
 let mmap = unsafe { Mmap::map(&file).unwrap() };
-let weights = candle_core::safetensors::load_buffer(&mmap[..], &Device::Cpu).unwrap();
+let weights = candle::safetensors::load_buffer(&mmap[..], &Device::Cpu).unwrap();
 // ANCHOR_END: book_hub_2
         assert_eq!(weights.len(), 206);
     }
@@ -46,7 +46,7 @@ let weights = candle_core::safetensors::load_buffer(&mmap[..], &Device::Cpu).unw
     #[test]
     fn book_hub_3() {
 // ANCHOR: book_hub_3
-use candle_core::{DType, Device, Tensor};
+use candle::{DType, Device, Tensor};
 use hf_hub::api::sync::Api;
 use memmap2::Mmap;
 use safetensors::slice::IndexOp;
