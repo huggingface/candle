@@ -198,37 +198,37 @@ trait MapDType {
 impl PyTensor {
     #[new]
     // TODO: Handle arbitrary input dtype and shape.
-    fn new(py: Python<'_>, vs: PyObject) -> PyResult<Self> {
+    fn new(py: Python<'_>, data: PyObject) -> PyResult<Self> {
         use Device::Cpu;
-        let tensor = if let Ok(vs) = vs.extract::<u32>(py) {
+        let tensor = if let Ok(vs) = data.extract::<u32>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<i64>(py) {
+        } else if let Ok(vs) = data.extract::<i64>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<f32>(py) {
+        } else if let Ok(vs) = data.extract::<f32>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<Vec<u32>>(py) {
+        } else if let Ok(vs) = data.extract::<Vec<u32>>(py) {
             let len = vs.len();
             Tensor::from_vec(vs, len, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<Vec<i64>>(py) {
+        } else if let Ok(vs) = data.extract::<Vec<i64>>(py) {
             let len = vs.len();
             Tensor::from_vec(vs, len, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<Vec<f32>>(py) {
+        } else if let Ok(vs) = data.extract::<Vec<f32>>(py) {
             let len = vs.len();
             Tensor::from_vec(vs, len, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<Vec<Vec<u32>>>(py) {
+        } else if let Ok(vs) = data.extract::<Vec<Vec<u32>>>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<Vec<Vec<i64>>>(py) {
+        } else if let Ok(vs) = data.extract::<Vec<Vec<i64>>>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<Vec<Vec<f32>>>(py) {
+        } else if let Ok(vs) = data.extract::<Vec<Vec<f32>>>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<Vec<Vec<Vec<u32>>>>(py) {
+        } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<u32>>>>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<Vec<Vec<Vec<i64>>>>(py) {
+        } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<i64>>>>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
-        } else if let Ok(vs) = vs.extract::<Vec<Vec<Vec<f32>>>>(py) {
+        } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<f32>>>>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
         } else {
-            let ty = vs.as_ref(py).get_type();
+            let ty = data.as_ref(py).get_type();
             Err(PyTypeError::new_err(format!(
                 "incorrect type {ty} for tensor"
             )))?
@@ -280,6 +280,7 @@ impl PyTensor {
     }
 
     #[getter]
+    /// Gets the tensor shape as a Python tuple.
     fn shape(&self, py: Python<'_>) -> PyObject {
         PyTuple::new(py, self.0.dims()).to_object(py)
     }
@@ -582,6 +583,7 @@ impl PyTensor {
 
 /// Concatenate the tensors across one axis.
 #[pyfunction]
+#[pyo3(text_signature = "(tensors:List[Tensor], dim:int )")]
 fn cat(tensors: Vec<PyTensor>, dim: i64) -> PyResult<PyTensor> {
     if tensors.is_empty() {
         return Err(PyErr::new::<PyValueError, _>("empty input to cat"));

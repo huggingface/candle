@@ -12,7 +12,6 @@ readme = "README.md"
 [lib]
 name = "candle"
 crate-type = ["cdylib"]
-doc = false
 
 [dependencies]
 candle = { path = "../candle-core", version = "0.2.1", package = "candle-core" }
