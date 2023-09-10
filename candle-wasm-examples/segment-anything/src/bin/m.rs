@@ -78,7 +78,7 @@ impl Model {
     // x and y have to be between 0 and 1
     pub fn mask_for_point(&self, x: f64, y: f64) -> Result<String, JsError> {
         let embeddings = match &self.embeddings {
-            None => todo!(),
+            None => Err(JsError::new("image embeddings have not been set"))?,
             Some(embeddings) => embeddings,
         };
         let (mask, iou_predictions) = self.sam.forward_for_embeddings(
