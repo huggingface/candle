@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use super::MAX_SEQ_LEN;
+pub const MAX_SEQ_LEN: usize = 4096;
 
 #[derive(Deserialize)]
 pub struct LlamaConfig {

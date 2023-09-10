@@ -21,11 +21,10 @@ use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::io::Write;
 
-mod model;
+use candle_transformers::models::llama as model;
 use model::{Config, Llama, LlamaConfig};
 
 const EOS_TOKEN: &str = "</s>";
-const MAX_SEQ_LEN: usize = 4096;
 const DEFAULT_PROMPT: &str = "My favorite theorem is ";
 
 #[derive(Parser, Debug)]
