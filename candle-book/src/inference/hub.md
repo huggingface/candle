@@ -71,7 +71,7 @@ let input_ids = Tensor::zeros((3, 768), DType::F32, &Device::Cpu).unwrap();
 let output = linear.forward(&input_ids).unwrap();
 ```
 
-For a full reference, you can check out the full [bert](https://github.com/LaurentMazare/candle/tree/main/candle-examples/examples/bert) example.
+For a full reference, you can check out the full [bert](https://github.com/huggingface/candle/tree/main/candle-examples/examples/bert) example.
 
 ## Memory mapping
 

@@ -34,7 +34,7 @@ Not super pretty at the moment, but we can see error occured on `{ fn: "myapp::m
 
 Another thing to note, is that since Rust is compiled it is not necessarily as easy to recover proper stacktraces
 especially in release builds. We're using [`anyhow`](https://docs.rs/anyhow/latest/anyhow/) for that.
-The library is still young, please [report](https://github.com/LaurentMazare/candle/issues) any issues detecting where an error is coming from.
+The library is still young, please [report](https://github.com/huggingface/candle/issues) any issues detecting where an error is coming from.
 
 ## Cuda error management
 
