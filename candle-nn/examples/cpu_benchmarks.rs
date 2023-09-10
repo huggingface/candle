@@ -112,8 +112,12 @@ impl Benchmark for Conv2dIm2Col {
 
     fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
         // d.0.conv2d(&d.1, 0, 1, 1, 1)
-        let col = d.0.apply_op1_no_bwd(&Im2Col(3, 3))?;
-        col.matmul(&d.1.flatten_from(1)?.t()?)
+        let (b, _, h, w) = d.0.dims4()?;
+        let (h_k, w_k) = (3, 3);
+        let (h_out, w_out) = (h - h_k + 1, w - w_k + 1);
+        let col = d.0.apply_op1_no_bwd(&Im2Col(h_k, w_k))?;
+        let res = col.matmul(&d.1.flatten_from(1)?.t()?)?;
+        res.reshape((b, (), h_out, w_out))
     }
 
     const ITERS: usize = 5;
