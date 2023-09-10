@@ -600,6 +600,58 @@ impl Map1 for Elu {
     }
 }
 
+struct Im2Col {
+    h_k: usize,
+    w_k: usize,
+    stride: usize,
+    dilation: usize,
+    padding: usize,
+}
+
+impl Im2Col {
+    fn hw_out(&self, h: usize, w: usize) -> (usize, usize) {
+        let h_out = (h + 2 * self.padding - self.dilation * (self.h_k - 1) - 1) / self.stride + 1;
+        let w_out = (w + 2 * self.padding - self.dilation * (self.w_k - 1) - 1) / self.stride + 1;
+        (h_out, w_out)
+    }
+}
+
+impl Map1 for Im2Col {
+    fn f<T: DeviceRepr + WithDType>(
+        &self,
+        src: &CudaSlice<T>,
+        dev: &CudaDevice,
+        layout: &Layout,
+    ) -> Result<CudaSlice<T>> {
+        let shape = layout.shape();
+        let dims = shape.dims();
+        let (h_out, w_out) = self.hw_out(dims[2], dims[3]);
+        let dst_el = dims[0] * h_out * w_out * dims[1] * self.h_k * self.w_k;
+        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let src = &src.slice(layout.start_offset()..);
+        let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), kernels::CONV)?;
+        // SAFETY: Set later by running the kernel.
+        let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let params = (
+            dst_el,
+            h_out,
+            w_out,
+            self.h_k,
+            self.w_k,
+            self.stride,
+            self.padding,
+            self.dilation,
+            &ds,
+            src,
+            &dst,
+        );
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }.w()?;
+        Ok(dst)
+    }
+}
+
 struct Powf(f64);
 impl Map1 for Powf {
     fn f<T: DeviceRepr + WithDType>(
