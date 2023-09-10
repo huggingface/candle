@@ -53,19 +53,19 @@ impl candle::CustomOp1 for Im2Col {
         let (b, c, h, w) = layout.shape().dims4()?;
         let (h_out, w_out) = self.hw_out(h, w);
         let slice = storage.as_slice::<f32>()?;
-        let src = match layout.contiguous_offsets() {
-            None => candle::bail!("input has to be contiguous"),
-            Some((o1, o2)) => &slice[o1..o2],
-        };
+        let src = &slice[layout.start_offset()..];
         let mut dst = vec![0f32; b * h_out * w_out * c * h_k * w_k];
-        let (s_b, s_c, s_h) = (c * h * w, h * w, w);
+        let (src_s0, src_s1, src_s2, src_s3) = {
+            let s = layout.stride();
+            (s[0], s[1], s[2], s[3])
+        };
         // TODO: provide specialized kernels for the common use cases.
         // - h_k = w_k = 1
         // - padding = 0
         // - stride = 1
         // - dilation = 1
         for b_idx in 0..b {
-            let src_idx = b_idx * s_b;
+            let src_idx = b_idx * src_s0;
             let dst_idx = b_idx * h_out * w_out * c * h_k * w_k;
             for h_idx in 0..h_out {
                 let dst_idx = dst_idx + h_idx * w_out * c * h_k * w_k;
@@ -73,14 +73,14 @@ impl candle::CustomOp1 for Im2Col {
                     let dst_idx = dst_idx + w_idx * c * h_k * w_k;
                     for c_idx in 0..c {
                         let dst_idx = dst_idx + c_idx * h_k * w_k;
-                        let src_idx = c_idx * s_c + src_idx;
+                        let src_idx = c_idx * src_s1 + src_idx;
                         for h_k_idx in 0..h_k {
                             let src_h = h_idx * stride + h_k_idx * dilation;
                             if padding != 0 && (src_h < padding || src_h >= h + padding) {
                                 continue;
                             }
                             let src_h = src_h - padding;
-                            let src_idx = src_idx + src_h * s_h;
+                            let src_idx = src_idx + src_h * src_s2;
                             let dst_idx = dst_idx + h_k_idx * w_k;
                             for w_k_idx in 0..w_k {
                                 let src_w = w_idx * stride + w_k_idx * dilation;
@@ -88,7 +88,7 @@ impl candle::CustomOp1 for Im2Col {
                                     continue;
                                 }
                                 let src_w = src_w - padding;
-                                let src_idx = src_idx + src_w;
+                                let src_idx = src_idx + src_w * src_s3;
                                 let dst_idx = dst_idx + w_k_idx;
                                 dst[dst_idx] = src[src_idx]
                             }
