@@ -77,6 +77,16 @@ impl Model {
 
     // x and y have to be between 0 and 1
     pub fn mask_for_point(&self, x: f64, y: f64) -> Result<String, JsError> {
+        if !(0. ..=1.).contains(&x) {
+            Err(JsError::new(&format!(
+                "x has to be between 0 and 1, got {x}"
+            )))?
+        }
+        if !(0. ..=1.).contains(&y) {
+            Err(JsError::new(&format!(
+                "y has to be between 0 and 1, got {y}"
+            )))?
+        }
         let embeddings = match &self.embeddings {
             None => Err(JsError::new("image embeddings have not been set"))?,
             Some(embeddings) => embeddings,
