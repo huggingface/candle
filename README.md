@@ -64,7 +64,7 @@ Check out our [examples](./candle-examples/examples/):
 - [yolo-v3](./candle-examples/examples/yolo-v3/) and
   [yolo-v8](./candle-examples/examples/yolo-v8/): object detection and pose
   estimation models.
-  [segment-anything](./candle-examples/examples/segment-anything/): image
+- [segment-anything](./candle-examples/examples/segment-anything/): image
   segmentation model with prompt.
 Run them using the following commands:
 ```
