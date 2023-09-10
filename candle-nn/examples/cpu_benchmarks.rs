@@ -6,7 +6,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::quantized::GgmlType;
-use candle::{Device, Result, Tensor, D};
+use candle::{CpuStorage, Device, Layout, Result, Shape, Tensor, D};
 use clap::{Parser, Subcommand};
 
 trait Benchmark {
@@ -17,6 +17,48 @@ trait Benchmark {
     fn run_one(_: &Self::PreProcessData) -> Result<Self::RunResult>;
 
     const ITERS: usize;
+}
+
+struct Im2Col(usize, usize);
+impl candle::CustomOp1 for Im2Col {
+    fn name(&self) -> &'static str {
+        "im2col"
+    }
+
+    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        let &Self(h_k, w_k) = self;
+        let (b, c, h, w) = layout.shape().dims4()?;
+        let (h_out, w_out) = (h - h_k + 1, w - w_k + 1);
+        let slice = storage.as_slice::<f32>()?;
+        let src = match layout.contiguous_offsets() {
+            None => candle::bail!("input has to be contiguous"),
+            Some((o1, o2)) => &slice[o1..o2],
+        };
+        let mut dst = vec![0f32; b * h_out * w_out * c * h_k * w_k];
+        let (s_b, s_c, s_h) = (c * h * w, h * w, w);
+        for b_idx in 0..b {
+            let src_idx = b_idx * s_b;
+            let dst_idx = b_idx * h_out * w_out * c * h_k * w_k;
+            for h_idx in 0..h_out {
+                let dst_idx = dst_idx + h_idx * w_out * c * h_k * w_k;
+                for w_idx in 0..w_out {
+                    let dst_idx = dst_idx + w_idx * c * h_k * w_k;
+                    for c_idx in 0..c {
+                        let dst_idx = dst_idx + c_idx * h_k * w_k;
+                        let src_idx = c_idx * s_c + src_idx;
+                        for h_k_idx in 0..h_k {
+                            let src_idx = src_idx + (h_idx + h_k_idx) * s_h + w_idx;
+                            let dst_idx = dst_idx + h_k_idx * w_k;
+                            dst[dst_idx..dst_idx + w_k]
+                                .copy_from_slice(&src[src_idx..src_idx + w_k])
+                        }
+                    }
+                }
+            }
+        }
+        let storage = candle::WithDType::to_cpu_storage_owned(dst);
+        Ok((storage, (b * h_out * w_out, c * h_k * w_k).into()))
+    }
 }
 
 // Conv1d example as used in whisper.
@@ -53,7 +95,28 @@ impl Benchmark for Conv2d {
         d.0.conv2d(&d.1, 0, 1, 1, 1)
     }
 
-    const ITERS: usize = 1;
+    const ITERS: usize = 5;
+}
+
+// Conv2d example as used in stable-diffusion, im2col implementation.
+struct Conv2dIm2Col;
+impl Benchmark for Conv2dIm2Col {
+    type PreProcessData = (Tensor, Tensor);
+    type RunResult = Tensor;
+
+    fn preprocess() -> Result<Self::PreProcessData> {
+        let inp = Tensor::randn(0f32, 1., (2, 320, 96, 96), &Device::Cpu)?;
+        let w = Tensor::randn(0f32, 1., (320, 320, 3, 3), &Device::Cpu)?;
+        Ok((inp, w))
+    }
+
+    fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
+        // d.0.conv2d(&d.1, 0, 1, 1, 1)
+        let col = d.0.apply_op1_no_bwd(&Im2Col(3, 3))?;
+        col.matmul(&d.1.flatten_from(1)?.t()?)
+    }
+
+    const ITERS: usize = 5;
 }
 
 struct Matmul;
@@ -145,6 +208,7 @@ fn run<B: Benchmark>(iters: Option<usize>) -> Result<()> {
 enum Task {
     Conv1d,
     Conv2d,
+    Conv2dIm2Col,
     Matmul,
     Qmatmul,
     Softmax,
@@ -167,6 +231,7 @@ fn main() -> Result<()> {
     match args.task {
         Task::Conv1d => run::<Conv1d>(args.iters)?,
         Task::Conv2d => run::<Conv2d>(args.iters)?,
+        Task::Conv2dIm2Col => run::<Conv2dIm2Col>(args.iters)?,
         Task::Matmul => run::<Matmul>(args.iters)?,
         Task::Softmax => run::<Softmax>(args.iters)?,
         Task::SoftmaxLastDim => run::<SoftmaxLastDim>(args.iters)?,
