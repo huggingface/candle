@@ -10,10 +10,10 @@
 
 # Reference Guide
 
-- [Running a model](inference/README.md)
+- [Running a model](inference/inference.md)
     - [Using the hub](inference/hub.md)
 - [Error management](error_manage.md)
-- [Training](training/README.md)
+- [Training](training/training.md)
     - [MNIST](training/mnist.md)
     - [Fine-tuning]()
     - [Serialization]()
