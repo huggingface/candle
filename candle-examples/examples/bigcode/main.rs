@@ -7,8 +7,7 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-mod model;
-use model::{Config, GPTBigCode};
+use candle_transformers::models::bigcode::{Config, GPTBigCode};
 
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;

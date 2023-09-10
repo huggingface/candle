@@ -14,7 +14,11 @@ accelerate-src = { workspace = true, optional = true }
 candle = { path = "../candle-core", version = "0.2.1", package = "candle-core" }
 candle-nn = { path = "../candle-nn", version = "0.2.1" }
 intel-mkl-src = { workspace = true, optional = true }
+num-traits = { workspace = true }
 rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
 wav = { workspace = true }
 
 [features]

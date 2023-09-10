@@ -14,8 +14,7 @@ use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-mod model;
-use model::{Config, Falcon};
+use candle_transformers::models::falcon::{Config, Falcon};
 
 struct TextGeneration {
     model: Falcon,

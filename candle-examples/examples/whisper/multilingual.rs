@@ -113,7 +113,7 @@ pub fn detect_language(model: &mut Whisper, tokenizer: &Tokenizer, mel: &Tensor)
         .iter()
         .map(|(t, _)| crate::token_id(tokenizer, &format!("<|{t}|>")))
         .collect::<Result<Vec<_>>>()?;
-    let sot_token = crate::token_id(tokenizer, crate::SOT_TOKEN)?;
+    let sot_token = crate::token_id(tokenizer, crate::m::SOT_TOKEN)?;
     let audio_features = model.encoder.forward(&mel, true)?;
     let tokens = Tensor::new(&[[sot_token]], device)?;
     let language_token_ids = Tensor::new(language_token_ids.as_slice(), device)?;

@@ -1,5 +1,4 @@
-use anyhow::Result;
-use candle::{DType, Device, Tensor, D};
+use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder};
 
 const MAX_SEQ_LEN: usize = 5000;
@@ -21,7 +20,7 @@ fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
             if let (Ok(weight), Ok(bias)) = (vb.get(size, "gamma"), vb.get(size, "beta")) {
                 (weight, bias)
             } else {
-                return Err(err.into());
+                return Err(err);
             }
         }
     };
@@ -82,13 +81,13 @@ impl Default for Config {
 impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.alibi {
-            anyhow::bail!("alibi is not supported");
+            candle::bail!("alibi is not supported");
         }
         if self.new_decoder_architecture {
-            anyhow::bail!("new_decoder_architecture is not supported");
+            candle::bail!("new_decoder_architecture is not supported");
         }
         if self.n_head_kv.is_some() {
-            anyhow::bail!("n_head_kv is not supported");
+            candle::bail!("n_head_kv is not supported");
         }
         Ok(())
     }
