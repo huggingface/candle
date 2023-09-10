@@ -2336,7 +2336,7 @@ impl BackendStorage for CpuStorage {
         let res_l = Layout::contiguous((b, h_out, w_out, params.c_out))
             .transpose(1, 2)?
             .transpose(1, 3)?;
-        let mut res_t = res.try_clone(&res_l)?;
+        let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
         res.copy_strided_src(&mut res_t, 0, &res_l)?;
         Ok(res_t)
     }
