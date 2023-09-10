@@ -215,16 +215,16 @@ impl Module for ConvLayer {
 #[derive(Debug)]
 struct Mlp {
     norm: candle_nn::LayerNorm,
-    fc1: crate::Linear,
-    fc2: crate::Linear,
+    fc1: super::Linear,
+    fc2: super::Linear,
     span: tracing::Span,
 }
 
 impl Mlp {
     fn new(in_: usize, hidden: usize, vb: VarBuilder) -> Result<Self> {
         let norm = candle_nn::layer_norm(in_, 1e-5, vb.pp("norm"))?;
-        let fc1 = crate::linear(vb.pp("fc1"), in_, hidden, true)?;
-        let fc2 = crate::linear(vb.pp("fc2"), hidden, in_, true)?;
+        let fc1 = super::linear(vb.pp("fc1"), in_, hidden, true)?;
+        let fc2 = super::linear(vb.pp("fc2"), hidden, in_, true)?;
         let span = tracing::span!(tracing::Level::TRACE, "mlp");
         Ok(Self {
             norm,
@@ -248,8 +248,8 @@ impl Module for Mlp {
 #[derive(Debug)]
 struct Attention {
     norm: candle_nn::LayerNorm,
-    qkv: crate::Linear,
-    proj: crate::Linear,
+    qkv: super::Linear,
+    proj: super::Linear,
     ab: Tensor,
     key_dim: usize,
     num_heads: usize,
@@ -275,8 +275,8 @@ impl Attention {
         let nh_kd = key_dim * num_heads;
         let h = dh + nh_kd * 2;
         let norm = candle_nn::layer_norm(dim, 1e-5, vb.pp("norm"))?;
-        let qkv = crate::linear(vb.pp("qkv"), dim, h, true)?;
-        let proj = crate::linear(vb.pp("proj"), dh, dim, true)?;
+        let qkv = super::linear(vb.pp("qkv"), dim, h, true)?;
+        let proj = super::linear(vb.pp("proj"), dh, dim, true)?;
 
         let points = (0..resolution.0)
             .flat_map(|x| (0..resolution.1).map(move |y| (x as i64, y as i64)))
@@ -526,9 +526,9 @@ pub struct TinyViT {
     // norm_head: candle_nn::LayerNorm,
     // head: candle_nn::Linear,
     neck_conv1: candle_nn::Conv2d,
-    neck_ln1: crate::LayerNorm2d,
+    neck_ln1: super::LayerNorm2d,
     neck_conv2: candle_nn::Conv2d,
-    neck_ln2: crate::LayerNorm2d,
+    neck_ln2: super::LayerNorm2d,
     span: tracing::Span,
     span_neck: tracing::Span,
 }
@@ -578,13 +578,13 @@ impl TinyViT {
         // let head = candle_nn::linear(last_embed_dim, num_classes, vb.pp("head"))?;
         let neck_conv1 =
             candle_nn::conv2d_no_bias(last_embed_dim, 256, 1, Default::default(), vb.pp("neck.0"))?;
-        let neck_ln1 = crate::LayerNorm2d::new(256, 1e-6, vb.pp("neck.1"))?;
+        let neck_ln1 = super::LayerNorm2d::new(256, 1e-6, vb.pp("neck.1"))?;
         let cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
         let neck_conv2 = candle_nn::conv2d_no_bias(256, 256, 3, cfg, vb.pp("neck.2"))?;
-        let neck_ln2 = crate::LayerNorm2d::new(256, 1e-6, vb.pp("neck.3"))?;
+        let neck_ln2 = super::LayerNorm2d::new(256, 1e-6, vb.pp("neck.3"))?;
 
         let span = tracing::span!(tracing::Level::TRACE, "tiny-vit");
         let span_neck = tracing::span!(tracing::Level::TRACE, "neck");

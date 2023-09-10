@@ -56,9 +56,9 @@ pub struct PromptEncoder {
     point_embeddings: Vec<candle_nn::Embedding>,
     not_a_point_embed: candle_nn::Embedding,
     mask_downscaling_conv1: candle_nn::Conv2d,
-    mask_downscaling_ln1: crate::LayerNorm2d,
+    mask_downscaling_ln1: super::LayerNorm2d,
     mask_downscaling_conv2: candle_nn::Conv2d,
-    mask_downscaling_ln2: crate::LayerNorm2d,
+    mask_downscaling_ln2: super::LayerNorm2d,
     mask_downscaling_conv3: candle_nn::Conv2d,
     no_mask_embed: candle_nn::Embedding,
     image_embedding_size: (usize, usize),
@@ -100,9 +100,9 @@ impl PromptEncoder {
             vb.pp("mask_downscaling.6"),
         )?;
         let mask_downscaling_ln1 =
-            crate::LayerNorm2d::new(mask_in_chans / 4, 1e-6, vb.pp("mask_downscaling.1"))?;
+            super::LayerNorm2d::new(mask_in_chans / 4, 1e-6, vb.pp("mask_downscaling.1"))?;
         let mask_downscaling_ln2 =
-            crate::LayerNorm2d::new(mask_in_chans, 1e-6, vb.pp("mask_downscaling.4"))?;
+            super::LayerNorm2d::new(mask_in_chans, 1e-6, vb.pp("mask_downscaling.4"))?;
         let mut point_embeddings = Vec::with_capacity(num_points_embeddings);
         let vb_e = vb.pp("point_embeddings");
         for i in 0..num_points_embeddings {

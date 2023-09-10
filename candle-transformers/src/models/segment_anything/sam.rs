@@ -1,10 +1,10 @@
 use candle::{DType, IndexOp, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 
-use crate::model_image_encoder::ImageEncoderViT;
-use crate::model_mask_decoder::MaskDecoder;
-use crate::model_prompt_encoder::PromptEncoder;
-use crate::model_tiny_vit::{tiny_vit_5m, TinyViT};
+use super::image_encoder::ImageEncoderViT;
+use super::mask_decoder::MaskDecoder;
+use super::prompt_encoder::PromptEncoder;
+use super::tiny_vit::{tiny_vit_5m, TinyViT};
 
 const PROMPT_EMBED_DIM: usize = 256;
 pub const IMAGE_SIZE: usize = 1024;
@@ -186,7 +186,7 @@ impl Sam {
         img: &Tensor,
         cb: CropBox,
         point_grids: &[(f64, f64)],
-    ) -> Result<Vec<candle_examples::object_detection::Bbox<Tensor>>> {
+    ) -> Result<Vec<crate::object_detection::Bbox<Tensor>>> {
         // Crop the image and calculate embeddings.
         let img = img.i((.., cb.y0..cb.y1, cb.x0..cb.x1))?;
         let img = self.preprocess(&img)?.unsqueeze(0)?;
@@ -259,7 +259,7 @@ impl Sam {
                 let min_max_x = min_max_indexes(&low_res_mask_per_x);
                 let min_max_y = min_max_indexes(&low_res_mask_per_y);
                 if let Some(((x0, x1), (y0, y1))) = min_max_x.zip(min_max_y) {
-                    let bbox = candle_examples::object_detection::Bbox {
+                    let bbox = crate::object_detection::Bbox {
                         xmin: x0 as f32,
                         ymin: y0 as f32,
                         xmax: x1 as f32,
@@ -277,7 +277,7 @@ impl Sam {
 
         let mut bboxes = vec![bboxes];
         // Remove duplicates within this crop.
-        candle_examples::object_detection::non_maximum_suppression(&mut bboxes, CROP_NMS_THRESH);
+        crate::object_detection::non_maximum_suppression(&mut bboxes, CROP_NMS_THRESH);
 
         // TODO: Return to the original image frame.
         Ok(bboxes.remove(0))
@@ -290,7 +290,7 @@ impl Sam {
         crop_n_layer: usize,
         crop_overlap_ratio: f64,
         crop_n_points_downscale_factor: usize,
-    ) -> Result<Vec<candle_examples::object_detection::Bbox<Tensor>>> {
+    ) -> Result<Vec<crate::object_detection::Bbox<Tensor>>> {
         let (_c, h, w) = img.dims3()?;
         let point_grids = build_all_layer_point_grids(
             points_per_side,
