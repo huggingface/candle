@@ -6,7 +6,7 @@ Open `src/main.rs` and fill in this content:
 
 ```rust
 # extern crate candle_core;
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 
 struct Model {
     first: Tensor,
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
     let second = Tensor::randn(0f32, 1.0, (100, 10), &device)?;
     let model = Model { first, second };
 
-    let dummy_image = Tensor::zeros((1, 784), DType::F32, &device)?;
+    let dummy_image = Tensor::randn(0f32, 1.0, (1, 784), &device)?;
 
     let digit = model.forward(&dummy_image)?;
     println!("Digit {digit:?} digit");
@@ -50,7 +50,7 @@ the classical `Linear` layer. We can do as such
 
 ```rust
 # extern crate candle_core;
-# use candle_core::{DType, Device, Result, Tensor};
+# use candle_core::{Device, Result, Tensor};
 struct Linear{
     weight: Tensor,
     bias: Tensor,
@@ -80,7 +80,7 @@ This will change the model running code into a new function
 
 ```rust
 # extern crate candle_core;
-# use candle_core::{DType, Device, Result, Tensor};
+# use candle_core::{Device, Result, Tensor};
 # struct Linear{
 #     weight: Tensor,
 #     bias: Tensor,
@@ -111,7 +111,7 @@ fn main() -> Result<()> {
 
     // Creating a dummy model
     let weight = Tensor::randn(0f32, 1.0, (784, 100), &device)?;
-    let bias = Tensor::zeros((100, ), DType::F32, &device)?;
+    let bias = Tensor::randn(0f32, 1.0, (100, ), &device)?;
     let first = Linear{weight, bias};
     let weight = Tensor::randn(0f32, 1.0, (100, 10), &device)?;
     let bias = Tensor::randn(0f32, 1.0, (10, ), &device)?;
@@ -146,7 +146,7 @@ And rewrite our examples using it
 ```rust
 # extern crate candle_core;
 # extern crate candle_nn;
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use candle_nn::{Linear, Module};
 
 struct Model {
@@ -189,7 +189,7 @@ Feel free to modify this example to use `Conv2d` to create a classical convnet i
 Now that we have the running dummy code we can get to more advanced topics:
 
 - [For PyTorch users](../guide/cheatsheet.md)
-- [Running existing models](../inference/README.md)
-- [Training models](../training/README.md)
+- [Running existing models](../inference/inference.md)
+- [Training models](../training/training.md)
 
 
