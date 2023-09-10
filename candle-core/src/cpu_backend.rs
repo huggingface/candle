@@ -2312,7 +2312,8 @@ impl BackendStorage for CpuStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        // Conv2D(params).map(self, l, kernel, kernel_l)
+        // println!("{kernel_l:?}");
+        // return Conv2D(params).map(self, l, kernel, kernel_l);
         // TODO: handle kernel_l
         let op = Im2Col {
             h_k: params.k_h,
@@ -2323,13 +2324,12 @@ impl BackendStorage for CpuStorage {
         };
         let col = op.map(self, l)?;
         let b = params.b_size;
-        println!("{params:?}");
         let n = params.c_out;
         let (h_out, w_out) = (params.out_h(), params.out_w());
         let k = op.h_k * op.w_k * params.c_in;
         let m = h_out * w_out;
         let col_l = Layout::contiguous((b, m, k));
-        let kernel_l = Layout::contiguous((1, n, k))
+        let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
             .transpose(1, 2)?
             .broadcast_as((b, k, n))?;
         let res = col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?;
