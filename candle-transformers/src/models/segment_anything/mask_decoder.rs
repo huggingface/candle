@@ -1,11 +1,11 @@
 use candle::{IndexOp, Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 
-use crate::model_transformer::TwoWayTransformer;
+use super::transformer::TwoWayTransformer;
 
 #[derive(Debug)]
 struct MlpMaskDecoder {
-    layers: Vec<crate::Linear>,
+    layers: Vec<super::Linear>,
     sigmoid_output: bool,
     span: tracing::Span,
 }
@@ -28,7 +28,7 @@ impl MlpMaskDecoder {
             } else {
                 hidden_dim
             };
-            let layer = crate::linear(vb.pp(i), in_dim, out_dim, true)?;
+            let layer = super::linear(vb.pp(i), in_dim, out_dim, true)?;
             layers.push(layer)
         }
         let span = tracing::span!(tracing::Level::TRACE, "mlp-mask-decoder");
@@ -64,7 +64,7 @@ pub struct MaskDecoder {
     mask_tokens: candle_nn::Embedding,
     iou_prediction_head: MlpMaskDecoder,
     output_upscaling_conv1: candle_nn::ConvTranspose2d,
-    output_upscaling_ln: crate::LayerNorm2d,
+    output_upscaling_ln: super::LayerNorm2d,
     output_upscaling_conv2: candle_nn::ConvTranspose2d,
     num_mask_tokens: usize,
     output_hypernetworks_mlps: Vec<MlpMaskDecoder>,
@@ -104,7 +104,7 @@ impl MaskDecoder {
             vb.pp("output_upscaling.0"),
         )?;
         let output_upscaling_ln =
-            crate::LayerNorm2d::new(transformer_dim / 4, 1e-6, vb.pp("output_upscaling.1"))?;
+            super::LayerNorm2d::new(transformer_dim / 4, 1e-6, vb.pp("output_upscaling.1"))?;
         let output_upscaling_conv2 = candle_nn::conv_transpose2d(
             transformer_dim / 4,
             transformer_dim / 8,

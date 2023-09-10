@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle_examples::object_detection::{non_maximum_suppression, Bbox};
+use candle_transformers::object_detection::{non_maximum_suppression, Bbox};
 mod darknet;
 
 use anyhow::Result;

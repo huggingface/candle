@@ -1,6 +1,5 @@
 pub mod coco_classes;
 pub mod imagenet;
-pub mod object_detection;
 
 use candle::{Device, Result, Tensor};
 

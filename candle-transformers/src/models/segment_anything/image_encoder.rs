@@ -100,8 +100,8 @@ impl candle::CustomOp3 for Add3 {
 
 #[derive(Debug)]
 struct Attention {
-    qkv: crate::Linear,
-    proj: crate::Linear,
+    qkv: super::Linear,
+    proj: super::Linear,
     num_heads: usize,
     scale: f64,
     rel_pos_hw: Option<(Tensor, Tensor)>,
@@ -124,8 +124,8 @@ impl Attention {
         let span_matmul = tracing::span!(tracing::Level::TRACE, "attn-matmul");
         let span_rel_pos = tracing::span!(tracing::Level::TRACE, "attn-rel-pos");
         let span_softmax = tracing::span!(tracing::Level::TRACE, "attn-sm");
-        let qkv = crate::linear(vb.pp("qkv"), dim, dim * 3, qkv_bias)?;
-        let proj = crate::linear(vb.pp("proj"), dim, dim, true)?;
+        let qkv = super::linear(vb.pp("qkv"), dim, dim * 3, qkv_bias)?;
+        let proj = super::linear(vb.pp("proj"), dim, dim, true)?;
         let head_dim = dim / num_heads;
         let scale = 1. / (head_dim as f64).sqrt();
         let rel_pos_hw = if use_rel_pos {
@@ -251,7 +251,7 @@ struct Block {
     norm1: LayerNorm,
     attn: Attention,
     norm2: LayerNorm,
-    mlp: crate::MlpBlock,
+    mlp: super::MlpBlock,
     window_size: usize,
     span: tracing::Span,
 }
@@ -281,7 +281,7 @@ impl Block {
             input_size_attn,
             vb.pp("attn"),
         )?;
-        let mlp = crate::MlpBlock::new(dim, dim * 4, candle_nn::Activation::Gelu, vb.pp("mlp"))?;
+        let mlp = super::MlpBlock::new(dim, dim * 4, candle_nn::Activation::Gelu, vb.pp("mlp"))?;
         let span = tracing::span!(tracing::Level::TRACE, "ie-block");
         Ok(Self {
             norm1,
@@ -375,9 +375,9 @@ pub struct ImageEncoderViT {
     patch_embed: PatchEmbed,
     blocks: Vec<Block>,
     neck_conv1: candle_nn::Conv2d,
-    neck_ln1: crate::LayerNorm2d,
+    neck_ln1: super::LayerNorm2d,
     neck_conv2: candle_nn::Conv2d,
-    neck_ln2: crate::LayerNorm2d,
+    neck_ln2: super::LayerNorm2d,
     pos_embed: Option<Tensor>,
     span: tracing::Span,
 }
@@ -433,13 +433,13 @@ impl ImageEncoderViT {
             Default::default(),
             vb.pp("neck.0"),
         )?;
-        let neck_ln1 = crate::LayerNorm2d::new(out_chans, 1e-6, vb.pp("neck.1"))?;
+        let neck_ln1 = super::LayerNorm2d::new(out_chans, 1e-6, vb.pp("neck.1"))?;
         let cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
         };
         let neck_conv2 = candle_nn::conv2d_no_bias(out_chans, out_chans, 3, cfg, vb.pp("neck.2"))?;
-        let neck_ln2 = crate::LayerNorm2d::new(out_chans, 1e-6, vb.pp("neck.3"))?;
+        let neck_ln2 = super::LayerNorm2d::new(out_chans, 1e-6, vb.pp("neck.3"))?;
         let pos_embed = if use_abs_pos {
             let p = vb.get(
                 (1, img_size / patch_size, img_size / patch_size, embed_dim),

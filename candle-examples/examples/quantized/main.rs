@@ -12,7 +12,7 @@ use candle::quantized::{ggml_file, gguf_file};
 use candle::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 
-mod model;
+use candle_transformers::models::quantized_llama as model;
 use model::ModelWeights;
 
 const DEFAULT_PROMPT: &str = "My favorite theorem is ";

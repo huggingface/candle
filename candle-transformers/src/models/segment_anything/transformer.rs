@@ -68,7 +68,7 @@ struct TwoWayAttentionBlock {
     norm1: LayerNorm,
     cross_attn_token_to_image: Attention,
     norm2: LayerNorm,
-    mlp: crate::MlpBlock,
+    mlp: super::MlpBlock,
     norm3: LayerNorm,
     norm4: LayerNorm,
     cross_attn_image_to_token: Attention,
@@ -100,7 +100,7 @@ impl TwoWayAttentionBlock {
             2,
             vb.pp("cross_attn_image_to_token"),
         )?;
-        let mlp = crate::MlpBlock::new(
+        let mlp = super::MlpBlock::new(
             embedding_dim,
             mlp_dim,
             candle_nn::Activation::Relu,
