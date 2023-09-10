@@ -2312,7 +2312,33 @@ impl BackendStorage for CpuStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        Conv2D(params).map(self, l, kernel, kernel_l)
+        // Conv2D(params).map(self, l, kernel, kernel_l)
+        // TODO: handle kernel_l
+        let op = Im2Col {
+            h_k: params.k_h,
+            w_k: params.k_w,
+            padding: params.padding,
+            stride: params.stride,
+            dilation: params.dilation,
+        };
+        let col = op.map(self, l)?;
+        let b = params.b_size;
+        println!("{params:?}");
+        let n = params.c_out;
+        let (h_out, w_out) = (params.out_h(), params.out_w());
+        let k = op.h_k * op.w_k * params.c_in;
+        let m = h_out * w_out;
+        let col_l = Layout::contiguous((b, m, k));
+        let kernel_l = Layout::contiguous((1, n, k))
+            .transpose(1, 2)?
+            .broadcast_as((b, k, n))?;
+        let res = col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?;
+        let res_l = Layout::contiguous((b, h_out, w_out, params.c_out))
+            .transpose(1, 2)?
+            .transpose(1, 3)?;
+        let mut res_t = res.try_clone(&res_l)?;
+        res.copy_strided_src(&mut res_t, 0, &res_l)?;
+        Ok(res_t)
     }
 
     fn conv_transpose2d(
