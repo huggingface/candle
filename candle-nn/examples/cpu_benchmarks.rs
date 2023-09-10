@@ -9,7 +9,7 @@ use candle::quantized::GgmlType;
 use candle::{CpuStorage, Device, Layout, Result, Shape, Tensor, D};
 use clap::{Parser, Subcommand};
 
-const CHECK_CONV2D: bool = true;
+const CHECK_CONV2D: bool = false;
 
 trait Benchmark {
     type PreProcessData;
@@ -76,7 +76,7 @@ impl candle::CustomOp1 for Im2Col {
                         let src_idx = c_idx * s_c + src_idx;
                         for h_k_idx in 0..h_k {
                             let src_h = h_idx * stride + h_k_idx * dilation;
-                            if src_h < padding || src_h >= h + padding {
+                            if padding != 0 && (src_h < padding || src_h >= h + padding) {
                                 continue;
                             }
                             let src_h = src_h - padding;
@@ -84,7 +84,7 @@ impl candle::CustomOp1 for Im2Col {
                             let dst_idx = dst_idx + h_k_idx * w_k;
                             for w_k_idx in 0..w_k {
                                 let src_w = w_idx * stride + w_k_idx * dilation;
-                                if src_w < padding || src_w >= h + padding {
+                                if padding != 0 && (src_w < padding || src_w >= h + padding) {
                                     continue;
                                 }
                                 let src_w = src_w - padding;
