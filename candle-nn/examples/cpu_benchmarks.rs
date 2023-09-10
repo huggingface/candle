@@ -9,6 +9,8 @@ use candle::quantized::GgmlType;
 use candle::{CpuStorage, Device, Layout, Result, Shape, Tensor, D};
 use clap::{Parser, Subcommand};
 
+const CHECK_CONV2D: bool = false;
+
 trait Benchmark {
     type PreProcessData;
     type RunResult;
@@ -19,14 +21,27 @@ trait Benchmark {
     const ITERS: usize;
 }
 
-struct Im2Col(usize, usize);
+struct Im2Col {
+    h_k: usize,
+    w_k: usize,
+    stride: usize,
+    dilation: usize,
+    padding: usize,
+}
+
 impl candle::CustomOp1 for Im2Col {
     fn name(&self) -> &'static str {
         "im2col"
     }
 
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
-        let &Self(h_k, w_k) = self;
+        let &Self {
+            h_k,
+            w_k,
+            stride,
+            dilation,
+            padding,
+        } = self;
         let (b, c, h, w) = layout.shape().dims4()?;
         let (h_out, w_out) = (h - h_k + 1, w - w_k + 1);
         let slice = storage.as_slice::<f32>()?;
@@ -47,10 +62,23 @@ impl candle::CustomOp1 for Im2Col {
                         let dst_idx = dst_idx + c_idx * h_k * w_k;
                         let src_idx = c_idx * s_c + src_idx;
                         for h_k_idx in 0..h_k {
-                            let src_idx = src_idx + (h_idx + h_k_idx) * s_h + w_idx;
-                            let dst_idx = dst_idx + h_k_idx * w_k;
-                            dst[dst_idx..dst_idx + w_k]
-                                .copy_from_slice(&src[src_idx..src_idx + w_k])
+                            let src_h = h_idx * stride + h_k_idx * dilation;
+                            if src_h < padding || src_h >= h + padding {
+                                continue;
+                            }
+                            let src_h = src_h - padding;
+                            let src_idx = src_idx + src_h * s_h;
+                            let dst_idx = dst_idx + h_k_idx * dilation * w_k;
+                            for w_k_idx in 0..w_k {
+                                let src_w = w_idx * stride + w_k_idx * dilation;
+                                if src_w < padding || src_w >= h + padding {
+                                    continue;
+                                }
+                                let src_w = src_w - padding;
+                                let src_idx = src_idx + src_w;
+                                let dst_idx = dst_idx + w_k_idx * dilation;
+                                dst[dst_idx] = src[src_idx]
+                            }
                         }
                     }
                 }
@@ -113,14 +141,26 @@ impl Benchmark for Conv2dIm2Col {
     fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
         // d.0.conv2d(&d.1, 0, 1, 1, 1)
         let (b, _, h, w) = d.0.dims4()?;
-        let (h_k, w_k) = (3, 3);
+        let (_, _, h_k, w_k) = d.1.dims4()?;
         let (h_out, w_out) = (h - h_k + 1, w - w_k + 1);
-        let col = d.0.apply_op1_no_bwd(&Im2Col(h_k, w_k))?;
+        let op = Im2Col {
+            h_k,
+            w_k,
+            stride: 1,
+            dilation: 1,
+            padding: 0,
+        };
+        let col = d.0.apply_op1_no_bwd(&op)?;
         let res = col.matmul(&d.1.flatten_from(1)?.t()?)?;
         let res = res
             .reshape((b, h_out, w_out, ()))?
             .permute((0, 3, 1, 2))?
             .contiguous()?;
+        if CHECK_CONV2D {
+            let res2 = d.0.conv2d(&d.1, 0, 1, 1, 1);
+            let diff = (&res - res2)?.sqr()?.mean_all()?;
+            println!("{diff}");
+        }
         Ok(res)
     }
 
