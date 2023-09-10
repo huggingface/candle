@@ -9,7 +9,7 @@ use candle::quantized::GgmlType;
 use candle::{CpuStorage, Device, Layout, Result, Shape, Tensor, D};
 use clap::{Parser, Subcommand};
 
-const CHECK_CONV2D: bool = false;
+const CHECK_CONV2D: bool = true;
 
 trait Benchmark {
     type PreProcessData;
@@ -29,6 +29,14 @@ struct Im2Col {
     padding: usize,
 }
 
+impl Im2Col {
+    fn hw_out(&self, h: usize, w: usize) -> (usize, usize) {
+        let h_out = (h + 2 * self.padding - self.dilation * (self.h_k - 1) - 1) / self.stride + 1;
+        let w_out = (w + 2 * self.padding - self.dilation * (self.w_k - 1) - 1) / self.stride + 1;
+        (h_out, w_out)
+    }
+}
+
 impl candle::CustomOp1 for Im2Col {
     fn name(&self) -> &'static str {
         "im2col"
@@ -43,7 +51,7 @@ impl candle::CustomOp1 for Im2Col {
             padding,
         } = self;
         let (b, c, h, w) = layout.shape().dims4()?;
-        let (h_out, w_out) = (h - h_k + 1, w - w_k + 1);
+        let (h_out, w_out) = self.hw_out(h, w);
         let slice = storage.as_slice::<f32>()?;
         let src = match layout.contiguous_offsets() {
             None => candle::bail!("input has to be contiguous"),
@@ -51,6 +59,11 @@ impl candle::CustomOp1 for Im2Col {
         };
         let mut dst = vec![0f32; b * h_out * w_out * c * h_k * w_k];
         let (s_b, s_c, s_h) = (c * h * w, h * w, w);
+        // TODO: provide specialized kernels for the common use cases.
+        // - h_k = w_k = 1
+        // - padding = 0
+        // - stride = 1
+        // - dilation = 1
         for b_idx in 0..b {
             let src_idx = b_idx * s_b;
             let dst_idx = b_idx * h_out * w_out * c * h_k * w_k;
@@ -68,7 +81,7 @@ impl candle::CustomOp1 for Im2Col {
                             }
                             let src_h = src_h - padding;
                             let src_idx = src_idx + src_h * s_h;
-                            let dst_idx = dst_idx + h_k_idx * dilation * w_k;
+                            let dst_idx = dst_idx + h_k_idx * w_k;
                             for w_k_idx in 0..w_k {
                                 let src_w = w_idx * stride + w_k_idx * dilation;
                                 if src_w < padding || src_w >= h + padding {
@@ -76,7 +89,7 @@ impl candle::CustomOp1 for Im2Col {
                                 }
                                 let src_w = src_w - padding;
                                 let src_idx = src_idx + src_w;
-                                let dst_idx = dst_idx + w_k_idx * dilation;
+                                let dst_idx = dst_idx + w_k_idx;
                                 dst[dst_idx] = src[src_idx]
                             }
                         }
@@ -142,7 +155,6 @@ impl Benchmark for Conv2dIm2Col {
         // d.0.conv2d(&d.1, 0, 1, 1, 1)
         let (b, _, h, w) = d.0.dims4()?;
         let (_, _, h_k, w_k) = d.1.dims4()?;
-        let (h_out, w_out) = (h - h_k + 1, w - w_k + 1);
         let op = Im2Col {
             h_k,
             w_k,
@@ -150,6 +162,7 @@ impl Benchmark for Conv2dIm2Col {
             dilation: 1,
             padding: 0,
         };
+        let (h_out, w_out) = op.hw_out(h, w);
         let col = d.0.apply_op1_no_bwd(&op)?;
         let res = col.matmul(&d.1.flatten_from(1)?.t()?)?;
         let res = res
@@ -157,7 +170,7 @@ impl Benchmark for Conv2dIm2Col {
             .permute((0, 3, 1, 2))?
             .contiguous()?;
         if CHECK_CONV2D {
-            let res2 = d.0.conv2d(&d.1, 0, 1, 1, 1);
+            let res2 = d.0.conv2d(&d.1, op.padding, op.stride, op.dilation, 1);
             let diff = (&res - res2)?.sqr()?.mean_all()?;
             println!("{diff}");
         }
