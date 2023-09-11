@@ -1,10 +1,10 @@
 //! 2D UNet Building Blocks
 //!
-use crate::attention::{
+use super::attention::{
     AttentionBlock, AttentionBlockConfig, SpatialTransformer, SpatialTransformerConfig,
 };
-use crate::resnet::{ResnetBlock2D, ResnetBlock2DConfig};
-use crate::utils::{conv2d, Conv2d};
+use super::resnet::{ResnetBlock2D, ResnetBlock2DConfig};
+use super::utils::{conv2d, Conv2d};
 use candle::{Result, Tensor, D};
 use candle_nn as nn;
 

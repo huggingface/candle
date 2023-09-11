@@ -7,7 +7,7 @@
 //!
 //! Denoising Diffusion Implicit Models, J. Song et al, 2020.
 //! https://arxiv.org/abs/2010.02502
-use crate::schedulers::{betas_for_alpha_bar, BetaSchedule, PredictionType};
+use super::schedulers::{betas_for_alpha_bar, BetaSchedule, PredictionType};
 use candle::{Result, Tensor};
 
 /// The configuration for the DDIM scheduler.
@@ -67,14 +67,14 @@ impl DDIMScheduler {
             .rev()
             .collect();
         let betas = match config.beta_schedule {
-            BetaSchedule::ScaledLinear => crate::utils::linspace(
+            BetaSchedule::ScaledLinear => super::utils::linspace(
                 config.beta_start.sqrt(),
                 config.beta_end.sqrt(),
                 config.train_timesteps,
             )?
             .sqr()?,
             BetaSchedule::Linear => {
-                crate::utils::linspace(config.beta_start, config.beta_end, config.train_timesteps)?
+                super::utils::linspace(config.beta_start, config.beta_end, config.train_timesteps)?
             }
             BetaSchedule::SquaredcosCapV2 => betas_for_alpha_bar(config.train_timesteps, 0.999)?,
         };

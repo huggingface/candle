@@ -2,9 +2,9 @@
 //!
 //! The 2D Unet models take as input a noisy sample and the current diffusion
 //! timestep and return a denoised version of the input.
-use crate::embeddings::{TimestepEmbedding, Timesteps};
-use crate::unet_2d_blocks::*;
-use crate::utils::{conv2d, Conv2d};
+use super::embeddings::{TimestepEmbedding, Timesteps};
+use super::unet_2d_blocks::*;
+use super::utils::{conv2d, Conv2d};
 use candle::{Result, Tensor};
 use candle_nn as nn;
 use candle_nn::Module;
