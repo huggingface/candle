@@ -39,6 +39,14 @@ impl Conv1d {
     pub fn config(&self) -> &Conv1dConfig {
         &self.config
     }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
 }
 
 impl crate::Module for Conv1d {
@@ -98,6 +106,14 @@ impl Conv2d {
 
     pub fn config(&self) -> &Conv2dConfig {
         &self.config
+    }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
     }
 }
 
