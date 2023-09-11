@@ -120,6 +120,7 @@ And then head over to
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.
 - Quantization support using the llama.cpp quantized types.
+- LoRA support with `candle-lora`.
 
 <!--- ANCHOR_END: features --->
 
