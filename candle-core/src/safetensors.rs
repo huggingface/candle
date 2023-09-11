@@ -78,11 +78,7 @@ impl st::View for &Tensor {
 }
 
 impl Tensor {
-    pub fn save_safetensors<P: AsRef<std::path::Path>>(
-        &self,
-        name: &str,
-        filename: P,
-    ) -> Result<()> {
+    pub fn save_safetensors<P: AsRef<Path>>(&self, name: &str, filename: P) -> Result<()> {
         let data = [(name, self.clone())];
         Ok(st::serialize_to_file(data, &None, filename.as_ref())?)
     }
@@ -267,7 +263,7 @@ impl MmapedFile {
     /// # Safety
     ///
     /// The unsafe is inherited from [`memmap2::MmapOptions`].
-    pub unsafe fn new<P: AsRef<std::path::Path>>(p: P) -> Result<Self> {
+    pub unsafe fn new<P: AsRef<Path>>(p: P) -> Result<Self> {
         let p = p.as_ref();
         let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
         let inner = memmap2::MmapOptions::new()

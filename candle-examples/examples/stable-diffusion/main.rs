@@ -7,7 +7,7 @@ extern crate intel_mkl_src;
 use candle_transformers::models::stable_diffusion;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, IndexOp, Tensor, D};
+use candle::{DType, Device, IndexOp, Module, Tensor, D};
 use clap::Parser;
 use tokenizers::Tokenizer;
 
