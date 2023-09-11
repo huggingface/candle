@@ -84,7 +84,7 @@ impl candle::CustomOp1 for Im2Col {
                             let dst_idx = dst_idx + h_k_idx * w_k;
                             for w_k_idx in 0..w_k {
                                 let src_w = w_idx * stride + w_k_idx * dilation;
-                                if padding != 0 && (src_w < padding || src_w >= h + padding) {
+                                if padding != 0 && (src_w < padding || src_w >= w + padding) {
                                     continue;
                                 }
                                 let src_w = src_w - padding;
