@@ -17,8 +17,8 @@ impl TimestepEmbedding {
     }
 }
 
-impl TimestepEmbedding {
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl Module for TimestepEmbedding {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = nn::ops::silu(&self.linear_1.forward(xs)?)?;
         self.linear_2.forward(&xs)
     }
@@ -41,8 +41,8 @@ impl Timesteps {
     }
 }
 
-impl Timesteps {
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl Module for Timesteps {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let half_dim = (self.num_channels / 2) as u32;
         let exponent = (Tensor::arange(0, half_dim, xs.device())?.to_dtype(candle::DType::F32)?
             * -f64::ln(10000.))?;
