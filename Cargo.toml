@@ -11,6 +11,7 @@ members = [
     "candle-wasm-examples/segment-anything",
     "candle-wasm-examples/whisper",
     "candle-wasm-examples/yolo",
+    "candle-lora",
 ]
 exclude = [
     "candle-flash-attn",
