@@ -11,7 +11,7 @@ use cudarc::driver::{
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex};
 
-const USE_IM2COL_CONV2D: bool = false;
+const USE_IM2COL_CONV2D: bool = true;
 
 /// cudarc related errors
 #[derive(thiserror::Error, Debug)]
