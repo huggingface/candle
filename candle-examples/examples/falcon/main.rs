@@ -31,11 +31,12 @@ impl TextGeneration {
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
+        top_p: Option<f64>,
         device: &Device,
         repeat_penalty: f32,
         repeat_last_n: usize,
     ) -> Self {
-        let logits_processor = LogitsProcessor::new(seed, temp);
+        let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
             model,
             tokenizer,
@@ -118,6 +119,10 @@ struct Args {
     #[arg(long)]
     temperature: Option<f64>,
 
+    /// Nucleus sampling probability cutoff.
+    #[arg(long)]
+    top_p: Option<f64>,
+
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
@@ -190,6 +195,7 @@ fn main() -> Result<()> {
         tokenizer,
         args.seed,
         args.temperature,
+        args.top_p,
         &device,
         args.repeat_penalty,
         args.repeat_last_n,

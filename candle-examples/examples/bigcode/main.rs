@@ -28,9 +28,10 @@ impl TextGeneration {
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
+        top_p: Option<f64>,
         device: &Device,
     ) -> Self {
-        let logits_processor = LogitsProcessor::new(seed, temp);
+        let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
             model,
             tokenizer,
@@ -94,6 +95,10 @@ struct Args {
     #[arg(long)]
     temperature: Option<f64>,
 
+    /// Nucleus sampling probability cutoff.
+    #[arg(long)]
+    top_p: Option<f64>,
+
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
@@ -149,7 +154,7 @@ fn main() -> Result<()> {
     let model = GPTBigCode::load(vb, config)?;
     println!("loaded the model in {:?}", start.elapsed());
 
-    let mut pipeline = TextGeneration::new(model, tokenizer, args.seed, args.temperature, &device);
+    let mut pipeline = TextGeneration::new(model, tokenizer, args.seed, args.temperature, args.top_p, &device);
     pipeline.run(&args.prompt, args.sample_len)?;
     Ok(())
 }
