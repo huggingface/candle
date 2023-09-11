@@ -21,7 +21,7 @@ impl Embedding {
 
     /// Get the hidden size of the embedding matrix
     pub fn hidden_size(&self) -> usize {
-        self.embeddings.dim(1).unwrap()
+        self.hidden_size
     }
 }
 
