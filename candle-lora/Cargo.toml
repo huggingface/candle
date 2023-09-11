@@ -1,0 +1,14 @@
+[package]
+name = "candle-lora"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+readme = "README.md"
+
+[dependencies]
+candle = { path = "../candle-core", version = "0.2.1", package = "candle-core" }
+candle-nn = { path = "../candle-nn", version = "0.2.1" }
