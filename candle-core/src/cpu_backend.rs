@@ -4,6 +4,8 @@ use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use half::{bf16, f16};
 use rayon::prelude::*;
 
+const USE_IM2COL_CONV2D: bool = true;
+
 // TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
 // intercept the oom errors to avoid panicking and provide a proper error.
 #[derive(Debug, Clone)]
@@ -2312,7 +2314,9 @@ impl BackendStorage for CpuStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConv2D,
     ) -> Result<Self> {
-        // return Conv2D(params).map(self, l, kernel, kernel_l);
+        if !USE_IM2COL_CONV2D {
+            return Conv2D(params).map(self, l, kernel, kernel_l);
+        }
         let op = Im2Col {
             h_k: params.k_h,
             w_k: params.k_w,
