@@ -1,5 +1,14 @@
-use crate::schedulers::PredictionType;
-use crate::{clip, ddim, unet_2d, vae};
+pub mod attention;
+pub mod clip;
+pub mod ddim;
+pub mod embeddings;
+pub mod resnet;
+pub mod schedulers;
+pub mod unet_2d;
+pub mod unet_2d_blocks;
+pub mod utils;
+pub mod vae;
+
 use candle::{DType, Device, Result};
 use candle_nn as nn;
 
@@ -80,7 +89,7 @@ impl StableDiffusionConfig {
         sliced_attention_size: Option<usize>,
         height: Option<usize>,
         width: Option<usize>,
-        prediction_type: PredictionType,
+        prediction_type: schedulers::PredictionType,
     ) -> Self {
         let bc = |out_channels, use_cross_attn, attention_head_dim| unet_2d::BlockConfig {
             out_channels,
@@ -154,7 +163,7 @@ impl StableDiffusionConfig {
             sliced_attention_size,
             height,
             width,
-            PredictionType::VPrediction,
+            schedulers::PredictionType::VPrediction,
         )
     }
 
@@ -162,7 +171,7 @@ impl StableDiffusionConfig {
         sliced_attention_size: Option<usize>,
         height: Option<usize>,
         width: Option<usize>,
-        prediction_type: PredictionType,
+        prediction_type: schedulers::PredictionType,
     ) -> Self {
         let bc = |out_channels, use_cross_attn, attention_head_dim| unet_2d::BlockConfig {
             out_channels,
@@ -235,7 +244,7 @@ impl StableDiffusionConfig {
             height,
             width,
             // https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/scheduler/scheduler_config.json
-            PredictionType::Epsilon,
+            schedulers::PredictionType::Epsilon,
         )
     }
 
