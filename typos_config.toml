@@ -1,0 +1,16 @@
+[default]
+extend-ignore-identifiers-re = [
+    "nd",
+    "usin_",
+    "MmapedFile",
+    "ba",
+    "ot",
+    "fo",
+    "americanus",
+    "mexicanus",
+    "_cna",
+    "NdArray",
+    "mone",
+    "Nd",
+    "MemoryPerBlockOptin",
+]

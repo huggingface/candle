@@ -522,7 +522,7 @@ pub const CLASSES: [&str; 1000] = [
     "cleaver, meat cleaver, chopper",
     "cliff dwelling",
     "cloak",
-    "clog, geta, patten, sabot",
+    "clog, geta, pattern, sabot",
     "cocktail shaker",
     "coffee mug",
     "coffeepot",

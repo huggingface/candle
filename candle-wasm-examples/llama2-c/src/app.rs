@@ -108,7 +108,7 @@ impl Component for App {
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::SetModel(md) => {
-                self.status = "weights loaded succesfully!".to_string();
+                self.status = "weights loaded successfully!".to_string();
                 self.loaded = true;
                 console_log!("loaded weights");
                 self.worker.send(WorkerInput::ModelData(md));
