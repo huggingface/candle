@@ -11,7 +11,7 @@ All conversions are done as implemented in HuggingFace's official LoRA implement
 
 ## How to use
 1) In your model structs, replace any concrete `Linear`, `Conv1d`, `Conv2d`, or `Embedding` types with `Box<dyn ...LayerLike>`. This will allow `candle-lora` to
-generate new layers that can easily be swaped out without forcing you to redefine your model structs.
+generate new layers that can easily be swapped out without forcing you to redefine your model structs.
 2) Select the layers and perform the conversion.
 3) Swap out the layers.
 4) Enjoy your new LoRA model!
