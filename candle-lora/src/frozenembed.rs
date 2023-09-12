@@ -1,19 +1,18 @@
 use candle::{Result, Tensor};
+use candle_nn::Embedding;
 
 use crate::EmbeddingLayerLike;
 
 /// Embedding, but with a `new` implementation that ensures the embeddings are detached (frozen).
 #[derive(Debug)]
 pub(crate) struct FrozenEmbedding {
-    embeddings: Tensor,
-    hidden_size: usize,
+    embed: Embedding,
 }
 
 impl FrozenEmbedding {
     pub(crate) fn new(embeddings: &Tensor, hidden_size: usize) -> Result<Self> {
         Ok(Self {
-            embeddings: embeddings.detach()?,
-            hidden_size,
+            embed: Embedding::new(embeddings.detach()?, hidden_size),
         })
     }
 
@@ -24,20 +23,15 @@ impl FrozenEmbedding {
 
 impl crate::Module for FrozenEmbedding {
     fn forward(&self, indexes: &Tensor) -> Result<Tensor> {
-        let mut final_dims = indexes.dims().to_vec();
-        final_dims.push(self.hidden_size);
-        let indexes = indexes.flatten_all()?;
-        let values = self.embeddings.index_select(&indexes, 0)?;
-        let values = values.reshape(final_dims)?;
-        Ok(values)
+        self.embed.forward(indexes)
     }
 }
 
 impl EmbeddingLayerLike for FrozenEmbedding {
     fn embeddings(&self) -> &Tensor {
-        &self.embeddings
+        self.embed.embeddings()
     }
     fn hidden_size(&self) -> usize {
-        self.hidden_size
+        self.embed.hidden_size()
     }
 }

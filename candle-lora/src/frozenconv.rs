@@ -1,14 +1,12 @@
 use candle::{Module, Result, Tensor};
-use candle_nn::{Conv1dConfig, Conv2dConfig};
+use candle_nn::{Conv1d, Conv1dConfig, Conv2d, Conv2dConfig};
 
 use crate::{Conv1dLayerLike, Conv2dLayerLike};
 
 /// Conv1d, but with a `new` implementation that ensures the weights are detached (frozen).
 #[derive(Debug)]
 pub(crate) struct FrozenConv1d {
-    weight: Tensor,
-    bias: Option<Tensor>,
-    config: Conv1dConfig,
+    conv: Conv1d,
 }
 
 impl FrozenConv1d {
@@ -18,9 +16,11 @@ impl FrozenConv1d {
         config: Conv1dConfig,
     ) -> Result<Self> {
         Ok(Self {
-            weight: weight.detach()?,
-            bias: bias.cloned(), //Bias is still trainable
-            config,
+            conv: Conv1d::new(
+                weight.detach()?,
+                bias.cloned(), //Bias is still trainable
+                config,
+            ),
         })
     }
 
@@ -29,36 +29,22 @@ impl FrozenConv1d {
     }
 
     pub(crate) fn weight(&self) -> &Tensor {
-        &self.weight
+        self.conv.weight()
     }
     pub(crate) fn bias(&self) -> Option<&Tensor> {
-        self.bias.as_ref()
+        self.conv.bias()
     }
 }
 
 impl Module for FrozenConv1d {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = x.conv1d(
-            &self.weight,
-            self.config.padding,
-            self.config.stride,
-            self.config.dilation,
-            self.config.groups,
-        )?;
-        match &self.bias {
-            None => Ok(x),
-            Some(bias) => {
-                let b = bias.dims1()?;
-                let bias = bias.reshape((1, b, 1))?;
-                Ok(x.broadcast_add(&bias)?)
-            }
-        }
+        self.conv.forward(x)
     }
 }
 
 impl Conv1dLayerLike for FrozenConv1d {
     fn config(&self) -> &Conv1dConfig {
-        &self.config
+        self.conv.config()
     }
     fn bias(&self) -> Option<&Tensor> {
         self.bias()
@@ -71,9 +57,7 @@ impl Conv1dLayerLike for FrozenConv1d {
 /// Conv2d, but with a `new` implementation that ensures the weights are detached (frozen).
 #[derive(Debug)]
 pub(crate) struct FrozenConv2d {
-    weight: Tensor,
-    bias: Option<Tensor>,
-    config: Conv2dConfig,
+    conv: Conv2d,
 }
 
 impl FrozenConv2d {
@@ -83,9 +67,11 @@ impl FrozenConv2d {
         config: Conv2dConfig,
     ) -> Result<Self> {
         Ok(Self {
-            weight: weight.detach()?,
-            bias: bias.cloned(), //Bias is still trainable
-            config,
+            conv: Conv2d::new(
+                weight.detach()?,
+                bias.cloned(), //Bias is still trainable
+                config,
+            ),
         })
     }
 
@@ -94,36 +80,22 @@ impl FrozenConv2d {
     }
 
     pub(crate) fn weight(&self) -> &Tensor {
-        &self.weight
+        self.conv.weight()
     }
     pub(crate) fn bias(&self) -> Option<&Tensor> {
-        self.bias.as_ref()
+        self.conv.bias()
     }
 }
 
 impl Module for FrozenConv2d {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = x.conv2d(
-            &self.weight,
-            self.config.padding,
-            self.config.stride,
-            self.config.dilation,
-            self.config.groups,
-        )?;
-        match &self.bias {
-            None => Ok(x),
-            Some(bias) => {
-                let b = bias.dims1()?;
-                let bias = bias.reshape((1, b, 1, 1))?;
-                Ok(x.broadcast_add(&bias)?)
-            }
-        }
+        self.conv.forward(x)
     }
 }
 
 impl Conv2dLayerLike for FrozenConv2d {
     fn config(&self) -> &Conv2dConfig {
-        &self.config
+        self.conv.config()
     }
     fn bias(&self) -> Option<&Tensor> {
         self.bias()
