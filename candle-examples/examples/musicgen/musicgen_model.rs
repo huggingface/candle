@@ -1,10 +1,10 @@
-use crate::{encodec_model};
-use candle_transformers::models::t5;
+use crate::encodec_model;
 use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{
     embedding, layer_norm, linear_no_bias, Activation, Embedding, LayerNorm, Linear, Module,
     VarBuilder,
 };
+use candle_transformers::models::t5;
 
 // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/models/musicgen/configuration_musicgen.py#L83
 #[derive(Debug, Clone, PartialEq)]
