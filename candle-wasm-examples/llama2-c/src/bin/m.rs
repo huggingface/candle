@@ -81,7 +81,11 @@ impl Model {
             }
         }
         let temp = if temp <= 0. { None } else { Some(temp) };
-        let top_p = if top_p <= 0. || top_p >= 1. { None } else { Some(top_p) };
+        let top_p = if top_p <= 0. || top_p >= 1. {
+            None
+        } else {
+            Some(top_p)
+        };
         self.logits_processor = LogitsProcessor::new(seed, temp, top_p);
         self.repeat_penalty = repeat_penalty;
         self.tokens.clear();

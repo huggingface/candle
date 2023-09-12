@@ -38,10 +38,10 @@ impl LogitsProcessor {
         // tokens that exceed probability top_p. This way we never sample tokens that
         // have very low probabilities and are less likely to go "off the rails".
         let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
-        
+
         // Sort by descending probability.
         argsort_indices.sort_by(|&i, &j| prs[j].partial_cmp(&prs[i]).unwrap());
-        
+
         // Clamp smaller probabilities to zero.
         let mut cumsum = 0.;
         for i in 0..argsort_indices.len() {

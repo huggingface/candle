@@ -154,7 +154,14 @@ fn main() -> Result<()> {
     let model = GPTBigCode::load(vb, config)?;
     println!("loaded the model in {:?}", start.elapsed());
 
-    let mut pipeline = TextGeneration::new(model, tokenizer, args.seed, args.temperature, args.top_p, &device);
+    let mut pipeline = TextGeneration::new(
+        model,
+        tokenizer,
+        args.seed,
+        args.temperature,
+        args.top_p,
+        &device,
+    );
     pipeline.run(&args.prompt, args.sample_len)?;
     Ok(())
 }

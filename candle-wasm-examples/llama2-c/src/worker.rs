@@ -67,7 +67,11 @@ impl Model {
     ) -> Result<()> {
         let dev = Device::Cpu;
         let temp = if temp <= 0. { None } else { Some(temp) };
-        let top_p = if top_p <= 0. || top_p >= 1.0 { None } else { Some(top_p) };
+        let top_p = if top_p <= 0. || top_p >= 1.0 {
+            None
+        } else {
+            Some(top_p)
+        };
         console_log!("temp: {temp:?} top_p: {top_p:?} prompt: {prompt}");
         let mut logits_processor = LogitsProcessor::new(299792458, temp, top_p);
         let mut index_pos = 0;
