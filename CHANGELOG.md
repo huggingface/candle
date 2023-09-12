@@ -4,6 +4,8 @@ This documents the main changes to the `candle` crate.
 ## v0.2.1 - Unreleased
 
 ### Added
+- Support for `top_p` sampling
+  [819](https://github.com/huggingface/candle/pull/819).
 
 ### Modified
 - Dilations are now supported in conv-transpose2d.
