@@ -101,6 +101,16 @@ trunk serve --release --port 8081
 And then head over to
 [http://localhost:8081/](http://localhost:8081/).
 
+<!--- ANCHOR: useful_libraries --->
+
+## Useful Libraries
+- `candle-lora`
+    - `candle-lora` provides a LoRA implementation that conforms to the official `peft` implementation.
+    
+If you have an addition to this list, please submit a pull request.
+
+<!--- ANCHOR_END: useful_libraries --->
+
 <!--- ANCHOR: features --->
 
 ## Features
