@@ -28,6 +28,8 @@ of the target mask.
 The values used for `--point-x` and `--point-y` should be between 0 and 1 and
 are proportional to the image dimension, i.e. use 0.5 for the image center.
 
+![Leading group, Giro d'Italia 2021](../yolo-v8/assets/bike.jpg)
+
 ![Leading group, Giro d'Italia 2021](./assets/sam_merged.jpg)
 
 ### Command-line flags
