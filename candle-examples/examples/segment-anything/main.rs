@@ -27,11 +27,18 @@ struct Args {
     #[arg(long)]
     generate_masks: bool,
 
+    /// The target point x coordinate, between 0 and 1 (0.5 is at the middle of the image).
     #[arg(long, default_value_t = 0.5)]
     point_x: f64,
 
+    /// The target point y coordinate, between 0 and 1 (0.5 is at the middle of the image).
     #[arg(long, default_value_t = 0.5)]
     point_y: f64,
+
+    /// The detection threshold for the mask, 0 is the default value, negative values mean a larger
+    /// mask, positive makes the mask more selective.
+    #[arg(long, default_value_t = 0.)]
+    threshold: f32,
 
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
@@ -136,10 +143,9 @@ pub fn main() -> anyhow::Result<()> {
         println!("iou_predictions: {iou_predictions:?}");
 
         // Save the mask as an image.
-        let mask = (mask.ge(0f32)? * 255.)?;
+        let mask = (mask.ge(args.threshold)? * 255.)?;
         let (_one, h, w) = mask.dims3()?;
         let mask = mask.expand((3, h, w))?;
-        candle_examples::save_image_resize(&mask, "sam_mask.png", initial_h, initial_w)?;
 
         if !args.image.ends_with(".safetensors") {
             let mut img = image::io::Reader::open(&args.image)?
@@ -168,22 +174,12 @@ pub fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-            match point {
-                Some((x, y)) => {
-                    let (x, y) = (
-                        (x * img.width() as f64) as i32,
-                        (y * img.height() as f64) as i32,
-                    );
-                    imageproc::drawing::draw_filled_circle(
-                        &img,
-                        (x, y),
-                        3,
-                        image::Rgba([255, 0, 0, 200]),
-                    )
-                    .save("sam_merged.jpg")?
-                }
-                None => img.save("sam_merged.jpg")?,
-            };
+            let (x, y) = (
+                (args.point_x * img.width() as f64) as i32,
+                (args.point_y * img.height() as f64) as i32,
+            );
+            imageproc::drawing::draw_filled_circle(&img, (x, y), 3, image::Rgba([255, 0, 0, 200]))
+                .save("sam_merged.jpg")?
         }
     }
     Ok(())
