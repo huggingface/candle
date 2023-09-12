@@ -13,6 +13,12 @@ from the hub.
 
 ```bash
  cargo run --example whisper --release
+
+> No audio file submitted: Downloading https://huggingface.co/datasets/Narsil/candle_demo/blob/main/samples_jfk.wav
+> loaded wav data: Header { audio_format: 1, channel_count: 1, sampling_rate: 16000, bytes_per_second: 32000, bytes_per_sample: 2, bits_per_sample: 16 }
+> pcm data loaded 176000
+> loaded mel: [1, 80, 3000]
+> 0.0s -- 30.0s:  And so my fellow Americans ask not what your country can do for you ask what you can do for your country
  ```
 
  In order to use the multilingual mode, specify a multilingual model via the
