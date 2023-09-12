@@ -25,18 +25,25 @@ struct TextGeneration {
     repeat_last_n: usize,
 }
 
+struct GenerationOptions {
+    temp: Option<f64>,
+    top_p: Option<f64>,
+    repeat_penalty: f32,
+    repeat_last_n: usize,
+}
+
 impl TextGeneration {
     fn new(
         model: Falcon,
         tokenizer: Tokenizer,
+        generation_options: GenerationOptions,
         seed: u64,
-        temp: Option<f64>,
-        top_p: Option<f64>,
         device: &Device,
-        repeat_penalty: f32,
-        repeat_last_n: usize,
     ) -> Self {
-        let logits_processor = LogitsProcessor::new(seed, temp, top_p);
+        let logits_processor =
+            LogitsProcessor::new(seed, generation_options.temp, generation_options.top_p);
+        let repeat_penalty = generation_options.repeat_penalty;
+        let repeat_last_n = generation_options.repeat_last_n;
         Self {
             model,
             tokenizer,
@@ -190,16 +197,14 @@ fn main() -> Result<()> {
     let model = Falcon::load(vb, config)?;
     println!("loaded the model in {:?}", start.elapsed());
 
-    let mut pipeline = TextGeneration::new(
-        model,
-        tokenizer,
-        args.seed,
-        args.temperature,
-        args.top_p,
-        &device,
-        args.repeat_penalty,
-        args.repeat_last_n,
-    );
+    let generation_options = GenerationOptions {
+        temp: args.temperature,
+        top_p: args.top_p,
+        repeat_penalty: args.repeat_penalty,
+        repeat_last_n: args.repeat_last_n,
+    };
+    let mut pipeline =
+        TextGeneration::new(model, tokenizer, generation_options, args.seed, &device);
     pipeline.run(&args.prompt, args.sample_len)?;
     Ok(())
 }
