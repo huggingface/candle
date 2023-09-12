@@ -24,7 +24,7 @@ cargo run --example quantized --release -- --prompt "The best thing about coding
 > The best thing about coding in rust is 1.) that I don’t need to worry about memory leaks, 2.) speed and 3.) my program will compile even on old machines.
 ```
 
-### Command-line flags
+## Command-line flags
 
 Run with `--help` to see all options.
 
