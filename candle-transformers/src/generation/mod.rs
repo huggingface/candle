@@ -44,12 +44,11 @@ impl LogitsProcessor {
 
         // Clamp smaller probabilities to zero.
         let mut cumsum = 0.;
-        for i in 0..argsort_indices.len() {
-            let index = argsort_indices[i];
+        for index in &argsort_indices {
             if cumsum >= top_p {
-                prs[index] = 0.0;
+                prs[*index] = 0.0;
             } else {
-                cumsum += prs[index];
+                cumsum += prs[*index];
             }
         }
 
