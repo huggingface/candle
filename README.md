@@ -105,8 +105,8 @@ And then head over to
 
 ## Useful Libraries
 - `candle-lora`
-    - `candle-lora` provides a LoRA implementation that conforms to the official `peft` implementation.
-    
+    - [`candle-lora`](https://github.com/EricLBuehler/candle-lora) provides a LoRA implementation that conforms to the official `peft` implementation.
+
 If you have an addition to this list, please submit a pull request.
 
 <!--- ANCHOR_END: useful_libraries --->
