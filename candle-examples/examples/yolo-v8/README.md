@@ -13,7 +13,7 @@ Space](https://huggingface.co/spaces/lmz/candle-yolo). The model then fully runs
 in your browser using WebAssembly - if you use a custom image it will never
 leave your phone/computer!
 
-## Running some example.
+## Running some example
 
 ### Object Detection
 ```bash

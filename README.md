@@ -45,7 +45,13 @@ For more advanced examples, please have a look at the following section.
 
 ## Check out our examples
 
-Check out our [examples](./candle-examples/examples/):
+These online demos run entirely in your browser:
+- [yolo](https://huggingface.co/spaces/lmz/candle-yolo): pose estimation and
+  object recognition.
+- [whisper](https://huggingface.co/spaces/lmz/candle-whisper): text to speech.
+- [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
+
+We also provide a bunch of command line based examples:
 
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
 - [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM.
@@ -66,19 +72,10 @@ Check out our [examples](./candle-examples/examples/):
   estimation models.
 - [segment-anything](./candle-examples/examples/segment-anything/): image
   segmentation model with prompt.
-Run them using the following commands:
+
+Run them using commands like:
 ```
-cargo run --example whisper --release
-cargo run --example llama --release
-cargo run --example falcon --release
-cargo run --example bert --release
-cargo run --example bigcode --release
-cargo run --example stable-diffusion --release -- --prompt "a rusty robot holding a fire torch"
-cargo run --example dinov2 --release -- --image path/to/myinput.jpg
 cargo run --example quantized --release
-cargo run --example yolo-v3 --release -- myimage.jpg
-cargo run --example yolo-v8 --release -- myimage.jpg # for pose estimation, add --task pose 
-cargo run --example segment-anything --release -- --image myimage.jpg
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
