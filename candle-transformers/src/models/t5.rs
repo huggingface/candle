@@ -245,7 +245,10 @@ impl T5Attention {
         let scores = q.matmul(&k.t()?)?;
 
         let (scores, position_bias) = match position_bias {
-            Some(position_bias) => ((scores + position_bias)?, Some(position_bias.clone())),
+            Some(position_bias) => (
+                scores.broadcast_add(position_bias)?,
+                Some(position_bias.clone()),
+            ),
             None => match &self.relative_attention_bias {
                 None => (scores, None),
                 Some(relative_attention_bias) => {
@@ -291,7 +294,7 @@ impl T5Attention {
                         .forward(&relative_buckets)?
                         .permute((2, 0, 1))?
                         .unsqueeze(0)?;
-                    ((scores + &position_bias)?, Some(position_bias))
+                    (scores.broadcast_add(&position_bias)?, Some(position_bias))
                     // TODO: position_bias_masked?
                 }
             },
