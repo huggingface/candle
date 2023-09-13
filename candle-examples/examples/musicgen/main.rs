@@ -13,7 +13,6 @@ extern crate accelerate_src;
 mod encodec_model;
 mod musicgen_model;
 mod nn;
-mod t5_model;
 
 use musicgen_model::{GenConfig, MusicgenForConditionalGeneration};
 

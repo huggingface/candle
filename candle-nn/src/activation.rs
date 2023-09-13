@@ -1,7 +1,10 @@
 use candle::Tensor;
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum Activation {
+    #[default]
     Gelu,
     Relu,
     Elu(f64),
