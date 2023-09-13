@@ -45,40 +45,48 @@ For more advanced examples, please have a look at the following section.
 
 ## Check out our examples
 
-Check out our [examples](./candle-examples/examples/):
+These online demos run entirely in your browser:
+- [yolo](https://huggingface.co/spaces/lmz/candle-yolo): pose estimation and
+  object recognition.
+- [whisper](https://huggingface.co/spaces/lmz/candle-whisper): text to speech.
+- [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
 
-- [Whisper](./candle-examples/examples/whisper/): speech recognition model.
+We also provide a some command line based examples using state of the art models:
+
 - [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
-- [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code
   generation.
-- [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
-  image generative model, support for the 1.5, 2.1, and SDXL 1.0 versions.
-- [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
-  using self-supervision (can be used for imagenet classification, depth
-  evaluation, segmentation).
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/quantized/assets/aoc.gif" width="600">
+  
+- [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
+  image generative model, support for the 1.5, 2.1, and SDXL 1.0 versions.
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/stable-diffusion/assets/stable-diffusion-xl.jpg" width="200">
+
 - [yolo-v3](./candle-examples/examples/yolo-v3/) and
   [yolo-v8](./candle-examples/examples/yolo-v8/): object detection and pose
   estimation models.
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.od.jpg" width="200"><img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.pose.jpg" width="200">
 - [segment-anything](./candle-examples/examples/segment-anything/): image
   segmentation model with prompt.
-Run them using the following commands:
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
+
+- [Whisper](./candle-examples/examples/whisper/): speech recognition model.
+- [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
+- [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
+  using self-supervision (can be used for imagenet classification, depth
+  evaluation, segmentation).
+
+Run them using commands like:
 ```
-cargo run --example whisper --release
-cargo run --example llama --release
-cargo run --example falcon --release
-cargo run --example bert --release
-cargo run --example bigcode --release
-cargo run --example stable-diffusion --release -- --prompt "a rusty robot holding a fire torch"
-cargo run --example dinov2 --release -- --image path/to/myinput.jpg
 cargo run --example quantized --release
-cargo run --example yolo-v3 --release -- myimage.jpg
-cargo run --example yolo-v8 --release -- myimage.jpg # for pose estimation, add --task pose 
-cargo run --example segment-anything --release -- --image myimage.jpg
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
