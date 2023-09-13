@@ -98,7 +98,7 @@ impl Model {
             Some((x, y)),
             false,
         )?;
-        let iou = iou_predictions.to_vec1::<f32>()?[0];
+        let iou = iou_predictions.flatten(0, 1)?.to_vec1::<f32>()?[0];
         let mask_shape = mask.dims().to_vec();
         let mask_data = mask.ge(0f32)?.flatten_all()?.to_vec1::<u8>()?;
         let mask = Mask {
