@@ -433,7 +433,7 @@ impl T5Stack {
 #[derive(Debug)]
 pub struct T5EncoderModel {
     encoder: T5Stack,
-    pub device: Device,
+    device: Device,
 }
 
 impl T5EncoderModel {
@@ -450,5 +450,9 @@ impl T5EncoderModel {
     pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
         let encoder_outputs = self.encoder.forward(input_ids)?;
         Ok(encoder_outputs)
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
     }
 }

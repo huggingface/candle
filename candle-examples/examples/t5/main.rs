@@ -98,7 +98,6 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
 
     let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
-    let device = &model.device;
     let prompt = args.prompt.unwrap_or_else(|| DEFAULT_PROMPT.to_string());
     let tokenizer = tokenizer
         .with_padding(None)
@@ -109,7 +108,7 @@ fn main() -> Result<()> {
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
-    let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
+    let token_ids = Tensor::new(&tokens[..], model.device())?.unsqueeze(0)?;
     println!("Loaded and encoded {:?}", start.elapsed());
     for idx in 0..args.n {
         let start = std::time::Instant::now();
