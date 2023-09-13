@@ -6,6 +6,18 @@ use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, Module
 use serde::Deserialize;
 use std::sync::Arc;
 
+fn default_relative_attention_max_distance() -> usize {
+    128
+}
+
+fn default_is_decoder() -> bool {
+    false
+}
+
+fn default_use_cache() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
     vocab_size: usize,
@@ -16,15 +28,18 @@ pub struct Config {
     num_decoder_layers: Option<usize>,
     num_heads: usize,
     relative_attention_num_buckets: usize,
-    relative_attention_max_distance: Option<usize>,
+    #[serde(default = "default_relative_attention_max_distance")]
+    relative_attention_max_distance: usize,
     dropout_rate: f64,
     layer_norm_epsilon: f64,
     initializer_factor: f64,
     #[serde(default)]
     feed_forward_proj: Activation,
-    is_decoder: Option<bool>,
+    #[serde(default = "default_is_decoder")]
+    is_decoder: bool,
     is_encoder_decoder: bool,
-    use_cache: Option<bool>,
+    #[serde(default = "default_use_cache")]
+    use_cache: bool,
     pad_token_id: usize,
     eos_token_id: usize,
 }
@@ -40,14 +55,14 @@ impl Default for Config {
             num_decoder_layers: None,
             num_heads: 8,
             relative_attention_num_buckets: 32,
-            relative_attention_max_distance: Some(128),
+            relative_attention_max_distance: 128,
             dropout_rate: 0.1,
             layer_norm_epsilon: 1e-6,
             initializer_factor: 1.0,
             feed_forward_proj: Activation::Relu,
-            is_decoder: Some(false),
+            is_decoder: false,
             is_encoder_decoder: true,
-            use_cache: Some(true),
+            use_cache: true,
             pad_token_id: 0,
             eos_token_id: 1,
         }
@@ -65,16 +80,16 @@ impl Config {
             eos_token_id: 1,
             feed_forward_proj: Activation::Relu,
             initializer_factor: 1.0,
-            is_decoder: Some(false),
+            is_decoder: false,
             is_encoder_decoder: true,
             layer_norm_epsilon: 1e-6,
             num_decoder_layers: Some(12),
             num_heads: 12,
             num_layers: 12,
             pad_token_id: 0,
-            relative_attention_max_distance: Some(128),
+            relative_attention_max_distance: 128,
             relative_attention_num_buckets: 32,
-            use_cache: Some(true),
+            use_cache: true,
             vocab_size: 32128,
         }
     }
@@ -199,7 +214,7 @@ impl T5Attention {
             d_kv: cfg.d_kv,
             relative_attention_bias,
             relative_attention_num_buckets: cfg.relative_attention_num_buckets,
-            relative_attention_max_distance: cfg.relative_attention_max_distance.unwrap_or(128),
+            relative_attention_max_distance: cfg.relative_attention_max_distance,
             inner_dim,
         })
     }
@@ -345,7 +360,7 @@ impl T5Block {
     fn load(has_relative_attention_bias: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let vb = vb.pp("layer");
         let self_attn = T5LayerSelfAttention::load(has_relative_attention_bias, vb.pp("0"), cfg)?;
-        let cross_attn = if cfg.is_decoder.unwrap_or(false) {
+        let cross_attn = if cfg.is_decoder {
             Some(T5LayerCrossAttention::load(vb.pp("1"), cfg)?)
         } else {
             None

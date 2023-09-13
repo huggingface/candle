@@ -30,7 +30,7 @@ struct Args {
     #[arg(long)]
     tracing: bool,
 
-    /// The model to use, check out available models: https://huggingface.co/models?library=sentence-transformers&sort=trending
+    /// The model repository to use on the HuggingFace hub.
     #[arg(long)]
     model_id: Option<String>,
 
@@ -94,18 +94,7 @@ impl Args {
 }
 
 fn main() -> Result<()> {
-    use tracing_chrome::ChromeLayerBuilder;
-    use tracing_subscriber::prelude::*;
-
     let args = Args::parse();
-    let _guard = if args.tracing {
-        println!("tracing...");
-        let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
-        tracing_subscriber::registry().with(chrome_layer).init();
-        Some(guard)
-    } else {
-        None
-    };
     let start = std::time::Instant::now();
 
     let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
