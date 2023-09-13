@@ -1954,6 +1954,10 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn upsample_nearest1d(&self, _: &Layout, _out_sz: usize) -> Result<Self> {
+        crate::bail!("upsample-nearest1d is not supported on cuda")
+    }
+
     fn upsample_nearest2d(&self, l: &Layout, out_w: usize, out_h: usize) -> Result<Self> {
         let device = self.device().clone();
         let slice = UpsampleNearest2D(out_w, out_h).map(&self.slice, &device, l)?;

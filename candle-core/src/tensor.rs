@@ -854,6 +854,19 @@ impl Tensor {
         self.maximum(min)?.minimum(max)
     }
 
+    /// Upsample the input tensor to the `target_size` size, taking the value of the nearest element.
+    ///
+    /// The input tensor should have three dimensions, `(batch, channels, l)`, the returned
+    /// tensor also has three dimensions, `(batch, channels, target_size)`.
+    pub fn upsample_nearest1d(&self, target_size: usize) -> Result<Self> {
+        let (n, c, _l) = self.dims3()?;
+        let op = BackpropOp::new1(self, Op::UpsampleNearest1D);
+        let storage = self
+            .storage()
+            .upsample_nearest1d(self.layout(), target_size)?;
+        Ok(from_storage(storage, (n, c, target_size), op, false))
+    }
+
     /// Upsample the input tensor to the `(target_h, target_w)` size, taking the value of the
     /// nearest element.
     ///
