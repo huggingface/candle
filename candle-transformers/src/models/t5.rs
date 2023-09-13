@@ -417,16 +417,13 @@ impl T5Stack {
 
     fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
-        let (_b_sz, _seq_len) = (input_embeds.dim(0)?, input_embeds.dim(1)?);
-
         let mut hidden_states = input_embeds;
         let mut position_bias = None;
         for block in self.block.iter() {
             (hidden_states, position_bias) =
                 block.forward(&hidden_states, position_bias.as_ref())?
         }
-        let hidden_states = self.final_layer_norm.forward(&hidden_states)?;
-        Ok(hidden_states)
+        self.final_layer_norm.forward(&hidden_states)
     }
 }
 
@@ -448,8 +445,7 @@ impl T5EncoderModel {
     }
 
     pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
-        let encoder_outputs = self.encoder.forward(input_ids)?;
-        Ok(encoder_outputs)
+        self.encoder.forward(input_ids)
     }
 
     pub fn device(&self) -> &Device {
