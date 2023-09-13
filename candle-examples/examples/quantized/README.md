@@ -12,6 +12,8 @@ The weights are automatically downloaded for you from the [HuggingFace
 Hub](https://huggingface.co/) on the first run. There are various command line
 flags to use local files instead, run with `--help` to learn about them.
 
+![Axiom of Choice](./assets/aoc.gif)
+
 ## Running some example.
 
 ```bash
