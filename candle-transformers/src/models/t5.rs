@@ -417,7 +417,6 @@ impl T5Stack {
 
 #[derive(Debug)]
 pub struct T5EncoderModel {
-    shared: Arc<Embedding>,
     encoder: T5Stack,
     pub device: Device,
 }
@@ -428,7 +427,6 @@ impl T5EncoderModel {
         let shared = Arc::new(shared);
         let encoder = T5Stack::load(vb.pp("encoder"), &shared, cfg)?;
         Ok(Self {
-            shared,
             encoder,
             device: vb.device().clone(),
         })
