@@ -3,10 +3,12 @@ extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
+use std::path::PathBuf;
+
 use candle_transformers::models::t5;
 
 use anyhow::{anyhow, Error as E, Result};
-use candle::{DType, Tensor};
+use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use hf_hub::{api::sync::Api, Cache, Repo, RepoType};
@@ -14,7 +16,7 @@ use tokenizers::Tokenizer;
 
 const DTYPE: DType = DType::F32;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Run on CPU rather than on GPU.
@@ -36,7 +38,11 @@ struct Args {
     #[arg(long)]
     revision: Option<String>,
 
-    /// Compute embeddings for this prompt, otherwise compute sentence similarities.
+    /// Enable decoding.
+    #[arg(long)]
+    decode: bool,
+
+    /// Use this prompt, otherwise compute sentence similarities.
     #[arg(long)]
     prompt: Option<String>,
 
@@ -49,12 +55,18 @@ struct Args {
     normalize_embeddings: bool,
 }
 
-impl Args {
-    fn build_model_and_tokenizer(&self) -> Result<(t5::T5EncoderModel, Tokenizer)> {
-        let device = candle_examples::device(self.cpu)?;
+struct T5ModelBuilder {
+    device: Device,
+    config: t5::Config,
+    weights_filename: PathBuf,
+}
+
+impl T5ModelBuilder {
+    pub fn load(args: &Args) -> Result<(Self, Tokenizer)> {
+        let device = candle_examples::device(args.cpu)?;
         let default_model = "t5-small".to_string();
         let default_revision = "refs/pr/15".to_string();
-        let (model_id, revision) = match (self.model_id.to_owned(), self.revision.to_owned()) {
+        let (model_id, revision) = match (args.model_id.to_owned(), args.revision.to_owned()) {
             (Some(model_id), Some(revision)) => (model_id, revision),
             (Some(model_id), None) => (model_id, "main".to_string()),
             (None, Some(revision)) => (default_model, revision),
@@ -62,7 +74,7 @@ impl Args {
         };
 
         let repo = Repo::with_revision(model_id, RepoType::Model, revision);
-        let (config_filename, tokenizer_filename, weights_filename) = if self.offline {
+        let (config_filename, tokenizer_filename, weights_filename) = if args.offline {
             let cache = Cache::default().repo(repo);
             (
                 cache
@@ -87,18 +99,36 @@ impl Args {
         let config = std::fs::read_to_string(config_filename)?;
         let config: t5::Config = serde_json::from_str(&config)?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+        Ok((
+            Self {
+                device,
+                config,
+                weights_filename,
+            },
+            tokenizer,
+        ))
+    }
 
-        let weights = unsafe { candle::safetensors::MmapedFile::new(weights_filename)? };
+    pub fn build_encoder(&self) -> Result<t5::T5EncoderModel> {
+        let weights =
+            unsafe { candle::safetensors::MmapedFile::new(self.weights_filename.clone())? };
         let weights = weights.deserialize()?;
-        let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &device);
-        let model = t5::T5EncoderModel::load(vb, &config)?;
-        Ok((model, tokenizer))
+        let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &self.device);
+        Ok(t5::T5EncoderModel::load(vb, &self.config)?)
+    }
+
+    pub fn build_conditional_generation(&self) -> Result<t5::T5ForConditionalGeneration> {
+        let weights =
+            unsafe { candle::safetensors::MmapedFile::new(self.weights_filename.clone())? };
+        let weights = weights.deserialize()?;
+        let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &self.device);
+        Ok(t5::T5ForConditionalGeneration::load(vb, &self.config)?)
     }
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
+    let (builder, mut tokenizer) = T5ModelBuilder::load(&args)?;
     let tokenizer = tokenizer
         .with_padding(None)
         .with_truncation(None)
@@ -110,17 +140,25 @@ fn main() -> Result<()> {
                 .map_err(E::msg)?
                 .get_ids()
                 .to_vec();
-            let token_ids = Tensor::new(&tokens[..], model.device())?.unsqueeze(0)?;
-            for idx in 0..args.n {
-                let start = std::time::Instant::now();
-                let ys = model.forward(&token_ids)?;
-                if idx == 0 {
-                    println!("{ys}");
+            let token_ids = Tensor::new(&tokens[..], &builder.device)?.unsqueeze(0)?;
+            if !args.decode {
+                let model = builder.build_encoder()?;
+                for idx in 0..args.n {
+                    let start = std::time::Instant::now();
+                    let ys = model.forward(&token_ids)?;
+                    if idx == 0 {
+                        println!("{ys}");
+                    }
+                    println!("Took {:?}", start.elapsed());
                 }
-                println!("Took {:?}", start.elapsed());
+            } else {
+                let model = builder.build_conditional_generation()?;
+                let ys = model.forward(&token_ids)?;
+                println!("Decode: {ys}");
             }
         }
         None => {
+            let model = builder.build_encoder()?;
             let sentences = [
                 "The cat sits outside",
                 "A man is playing guitar",

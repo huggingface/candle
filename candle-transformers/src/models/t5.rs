@@ -495,7 +495,6 @@ impl T5Stack {
 #[derive(Debug)]
 pub struct T5EncoderModel {
     encoder: T5Stack,
-    decoder: Option<T5Stack>,
     device: Device,
 }
 
@@ -504,24 +503,63 @@ impl T5EncoderModel {
         let shared = embedding(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
         let shared = Arc::new(shared);
         let encoder = T5Stack::load(vb.pp("encoder"), &shared, cfg)?;
-
-        let decoder = if cfg.is_encoder_decoder {
-            let mut decoder_cfg = cfg.clone();
-            decoder_cfg.is_decoder = true;
-            Some(T5Stack::load(vb.pp("decoder"), &shared, &decoder_cfg)?)
-        } else {
-            None
-        };
-
         Ok(Self {
             encoder,
-            decoder,
             device: vb.device().clone(),
         })
     }
 
     pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
         self.encoder.forward(input_ids)
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+}
+
+#[derive(Debug)]
+pub struct T5ForConditionalGeneration {
+    encoder: T5Stack,
+    decoder: T5Stack,
+    shared: Arc<Embedding>,
+    device: Device,
+}
+
+impl T5ForConditionalGeneration {
+    pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+        assert!(cfg.is_encoder_decoder);
+        let shared = embedding(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
+        let shared = Arc::new(shared);
+
+        let mut encoder_cfg = cfg.clone();
+        encoder_cfg.is_decoder = false;
+        encoder_cfg.use_cache = false;
+        encoder_cfg.is_encoder_decoder = false;
+        let encoder = T5Stack::load(vb.pp("encoder"), &shared, &encoder_cfg)?;
+
+        let mut decoder_cfg = cfg.clone();
+        decoder_cfg.is_decoder = true;
+        decoder_cfg.is_encoder_decoder = false;
+        decoder_cfg.num_layers = cfg.num_decoder_layers.unwrap_or(cfg.num_layers);
+        let decoder = T5Stack::load(vb.pp("decoder"), &shared, &decoder_cfg)?;
+
+        Ok(Self {
+            encoder,
+            decoder,
+            shared,
+            device: vb.device().clone(),
+        })
+    }
+
+    pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+        let _encoder_output = self.encoder.forward(input_ids)?;
+        // TODO: pass encoder_output to decoder.
+        let decoder_output = self.decoder.forward(input_ids)?;
+        let sequence_output = decoder_output.narrow(1, 0, 1)?.squeeze(1)?;
+        let lm_head_weights = self.shared.embeddings().t()?;
+        let output = sequence_output.matmul(&lm_head_weights)?;
+        Ok(output)
     }
 
     pub fn device(&self) -> &Device {
