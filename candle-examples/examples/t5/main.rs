@@ -98,8 +98,6 @@ impl Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let start = std::time::Instant::now();
-
     let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
     let tokenizer = tokenizer
         .with_padding(None)
