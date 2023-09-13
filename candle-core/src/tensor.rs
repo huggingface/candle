@@ -849,6 +849,11 @@ impl Tensor {
         self.cmp(rhs, CmpOp::Le)
     }
 
+    /// Clamp the tensor values to be between `min` and `max`.
+    pub fn clamp<T1: TensorOrScalar, T2: TensorOrScalar>(&self, min: T1, max: T2) -> Result<Self> {
+        self.maximum(min)?.minimum(max)
+    }
+
     /// Upsample the input tensor to the `(target_h, target_w)` size, taking the value of the
     /// nearest element.
     ///
