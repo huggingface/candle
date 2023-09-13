@@ -116,6 +116,7 @@ pub enum Op {
         stride: (usize, usize),
     },
 
+    UpsampleNearest1D(Tensor),
     UpsampleNearest2D(Tensor),
 
     Cat(Vec<Tensor>, usize),
