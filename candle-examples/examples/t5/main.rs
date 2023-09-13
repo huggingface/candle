@@ -132,48 +132,39 @@ fn main() -> Result<()> {
                 "Do you like pizza?",
             ];
             let n_sentences = sentences.len();
-            if let Some(pp) = tokenizer.get_padding_mut() {
-                pp.strategy = tokenizers::PaddingStrategy::BatchLongest
-            } else {
-                let pp = tokenizers::PaddingParams {
-                    strategy: tokenizers::PaddingStrategy::BatchLongest,
-                    ..Default::default()
+            let mut all_embeddings = Vec::with_capacity(n_sentences);
+            for sentence in sentences {
+                let tokens = tokenizer
+                    .encode(sentence, true)
+                    .map_err(E::msg)?
+                    .get_ids()
+                    .to_vec();
+                let token_ids = Tensor::new(&tokens[..], model.device())?.unsqueeze(0)?;
+                let embeddings = model.forward(&token_ids)?;
+                println!("generated embeddings {:?}", embeddings.shape());
+                // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
+                let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
+                let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
+                let embeddings = if args.normalize_embeddings {
+                    normalize_l2(&embeddings)?
+                } else {
+                    embeddings
                 };
-                tokenizer.with_padding(Some(pp));
+                println!("pooled embeddings {:?}", embeddings.shape());
+                all_embeddings.push(embeddings)
             }
-            let tokens = tokenizer
-                .encode_batch(sentences.to_vec(), true)
-                .map_err(E::msg)?;
-            let token_ids = tokens
-                .iter()
-                .map(|tokens| {
-                    let tokens = tokens.get_ids().to_vec();
-                    Ok(Tensor::new(tokens.as_slice(), model.device())?)
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            let token_ids = Tensor::stack(&token_ids, 0)?;
-            println!("running inference on batch {:?}", token_ids.shape());
-            let embeddings = model.forward(&token_ids)?;
-            println!("generated embeddings {:?}", embeddings.shape());
-            // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
-            let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
-            let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
-            let embeddings = if args.normalize_embeddings {
-                normalize_l2(&embeddings)?
-            } else {
-                embeddings
-            };
-            println!("pooled embeddings {:?}", embeddings.shape());
 
             let mut similarities = vec![];
-            for i in 0..n_sentences {
-                let e_i = embeddings.get(i)?;
-                for j in (i + 1)..n_sentences {
-                    let e_j = embeddings.get(j)?;
-                    let sum_ij = (&e_i * &e_j)?.sum_all()?.to_scalar::<f32>()?;
-                    let sum_i2 = (&e_i * &e_i)?.sum_all()?.to_scalar::<f32>()?;
-                    let sum_j2 = (&e_j * &e_j)?.sum_all()?.to_scalar::<f32>()?;
+            for (i, e_i) in all_embeddings.iter().enumerate() {
+                for (j, e_j) in all_embeddings
+                    .iter()
+                    .enumerate()
+                    .take(n_sentences)
+                    .skip(i + 1)
+                {
+                    let sum_ij = (e_i * e_j)?.sum_all()?.to_scalar::<f32>()?;
+                    let sum_i2 = (e_i * e_i)?.sum_all()?.to_scalar::<f32>()?;
+                    let sum_j2 = (e_j * e_j)?.sum_all()?.to_scalar::<f32>()?;
                     let cosine_similarity = sum_ij / (sum_i2 * sum_j2).sqrt();
                     similarities.push((cosine_similarity, i, j))
                 }
