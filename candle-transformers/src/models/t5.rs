@@ -384,15 +384,32 @@ impl T5LayerSelfAttention {
 }
 
 #[derive(Debug)]
-struct T5LayerCrossAttention {}
+struct T5LayerCrossAttention {
+    cross_attention: T5Attention,
+    layer_norm: T5LayerNorm,
+}
 
 impl T5LayerCrossAttention {
-    fn load(_vb: VarBuilder, _cfg: &Config) -> Result<Self> {
-        todo!()
+    fn load(has_relative_attention_bias: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+        let cross_attention =
+            T5Attention::load(has_relative_attention_bias, vb.pp("EncDecAttention"), cfg)?;
+        let layer_norm =
+            T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
+        Ok(Self {
+            cross_attention,
+            layer_norm,
+        })
     }
 
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(
+        &self,
+        xs: &Tensor,
+        position_bias: Option<&Tensor>,
+    ) -> Result<(Tensor, Option<Tensor>)> {
+        let normed_xs = self.layer_norm.forward(xs)?;
+        let (ys, position_bias) = self.cross_attention.forward(&normed_xs, position_bias)?;
+        let ys = (xs + ys)?;
+        Ok((ys, position_bias))
     }
 }
 
@@ -408,7 +425,7 @@ impl T5Block {
         let vb = vb.pp("layer");
         let self_attn = T5LayerSelfAttention::load(has_relative_attention_bias, vb.pp("0"), cfg)?;
         let cross_attn = if cfg.is_decoder {
-            Some(T5LayerCrossAttention::load(vb.pp("1"), cfg)?)
+            Some(T5LayerCrossAttention::load(false, vb.pp("1"), cfg)?)
         } else {
             None
         };
@@ -429,7 +446,8 @@ impl T5Block {
         let (mut xs, position_bias) = self.self_attn.forward(xs, position_bias)?;
         // TODO: clamp for f16?
         if let Some(cross_attn) = &self.cross_attn {
-            xs = cross_attn.forward(&xs)?;
+            let cross_attn_outputs = cross_attn.forward(&xs, position_bias.as_ref())?;
+            xs = cross_attn_outputs.0;
             // TODO: clamp for f16?
         }
         let xs = self.ff.forward(&xs)?;
@@ -477,6 +495,7 @@ impl T5Stack {
 #[derive(Debug)]
 pub struct T5EncoderModel {
     encoder: T5Stack,
+    decoder: Option<T5Stack>,
     device: Device,
 }
 
@@ -485,8 +504,18 @@ impl T5EncoderModel {
         let shared = embedding(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
         let shared = Arc::new(shared);
         let encoder = T5Stack::load(vb.pp("encoder"), &shared, cfg)?;
+
+        let decoder = if cfg.is_encoder_decoder {
+            let mut decoder_cfg = cfg.clone();
+            decoder_cfg.is_decoder = true;
+            Some(T5Stack::load(vb.pp("decoder"), &shared, &decoder_cfg)?)
+        } else {
+            None
+        };
+
         Ok(Self {
             encoder,
+            decoder,
             device: vb.device().clone(),
         })
     }
