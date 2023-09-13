@@ -51,27 +51,38 @@ These online demos run entirely in your browser:
 - [whisper](https://huggingface.co/spaces/lmz/candle-whisper): text to speech.
 - [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
 
-We also provide a bunch of command line based examples:
+We also provide a some command line based examples using state of the art models:
 
-- [Whisper](./candle-examples/examples/whisper/): speech recognition model.
 - [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
-- [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code
   generation.
-- [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
-  image generative model, support for the 1.5, 2.1, and SDXL 1.0 versions.
-- [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
-  using self-supervision (can be used for imagenet classification, depth
-  evaluation, segmentation).
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/quantized/assets/aoc.gif" width="600">
+  
+- [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
+  image generative model, support for the 1.5, 2.1, and SDXL 1.0 versions.
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/stable-diffusion/assets/stable-diffusion-xl.jpg" width="200">
+
 - [yolo-v3](./candle-examples/examples/yolo-v3/) and
   [yolo-v8](./candle-examples/examples/yolo-v8/): object detection and pose
   estimation models.
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.od.jpg" width="200"><img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.pose.jpg" width="200">
 - [segment-anything](./candle-examples/examples/segment-anything/): image
   segmentation model with prompt.
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
+
+- [Whisper](./candle-examples/examples/whisper/): speech recognition model.
+- [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
+- [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
+  using self-supervision (can be used for imagenet classification, depth
+  evaluation, segmentation).
 
 Run them using commands like:
 ```
