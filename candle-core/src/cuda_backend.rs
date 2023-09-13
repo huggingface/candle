@@ -12,6 +12,7 @@ use half::{bf16, f16};
 use std::sync::{Arc, Mutex};
 
 const USE_IM2COL_CONV1D: bool = true;
+#[cfg(not(feature = "cudnn"))]
 const USE_IM2COL_CONV2D: bool = true;
 
 /// cudarc related errors
