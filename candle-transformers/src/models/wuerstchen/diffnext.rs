@@ -97,6 +97,9 @@ impl WDiffNeXt {
         vb: VarBuilder,
     ) -> Result<Self> {
         const C_HIDDEN: [usize; 4] = [320, 640, 1280, 1280];
+        const BLOCKS: [usize; 4] = [4, 4, 14, 4];
+        const NHEAD: [usize; 4] = [0, 10, 20, 20];
+        const INJECT_EFFNET: [bool; 4] = [false, true, true, true];
 
         let clip_mapper = candle_nn::linear(clip_embd, c_cond, vb.pp("clip_mapper"))?;
         let effnet_mappers = vec![];
@@ -113,8 +116,50 @@ impl WDiffNeXt {
             vb.pp("embedding.2"),
         )?;
 
-        // TODO: populate.
-        let down_blocks = Vec::with_capacity(C_HIDDEN.len());
+        let mut down_blocks = Vec::with_capacity(C_HIDDEN.len());
+        for (i, &c_hidden) in C_HIDDEN.iter().enumerate() {
+            let vb = vb.pp("down_blocks").pp(i);
+            let (layer_norm, conv, start_layer_i) = if i > 0 {
+                let layer_norm = WLayerNorm::new(C_HIDDEN[i - 1], vb.pp(0))?;
+                let cfg = candle_nn::Conv2dConfig {
+                    stride: 2,
+                    ..Default::default()
+                };
+                let conv = candle_nn::conv2d(C_HIDDEN[i - 1], c_hidden, 2, cfg, vb.pp(1))?;
+                (Some(layer_norm), Some(conv), 2)
+            } else {
+                (None, None, 0)
+            };
+            let mut sub_blocks = Vec::with_capacity(BLOCKS[i]);
+            let mut layer_i = start_layer_i;
+            for j in 0..BLOCKS[i] {
+                let c_skip = if INJECT_EFFNET[i] { c_cond } else { 0 };
+                let res_block = ResBlockStageB::new(c_hidden, c_skip, 3, vb.pp(layer_i))?;
+                layer_i += 1;
+                let ts_block = TimestepBlock::new(c_hidden, c_r, vb.pp(layer_i))?;
+                layer_i += 1;
+                let attn_block = if j == 0 {
+                    None
+                } else {
+                    let attn_block =
+                        AttnBlock::new(c_hidden, c_cond, NHEAD[i], true, vb.pp(layer_i))?;
+                    layer_i += 1;
+                    Some(attn_block)
+                };
+                let sub_block = SubBlock {
+                    res_block,
+                    ts_block,
+                    attn_block,
+                };
+                sub_blocks.push(sub_block)
+            }
+            let down_block = DownBlock {
+                layer_norm,
+                conv,
+                sub_blocks,
+            };
+            down_blocks.push(down_block)
+        }
 
         // TODO: populate.
         let up_blocks = Vec::with_capacity(C_HIDDEN.len());
