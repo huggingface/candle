@@ -279,6 +279,7 @@ impl T5Attention {
         // TODO: Apply the mask(s)?
         // TODO: kv caching.
         let (b_sz, seq_len) = (xs.dim(0)?, xs.dim(1)?);
+        let input_seq_len = kv_input.dim(1)?;
         let q = self.q.forward(xs)?;
         let k = self.k.forward(kv_input)?;
         let v = self.v.forward(kv_input)?;
@@ -287,11 +288,11 @@ impl T5Attention {
             .transpose(1, 2)?
             .contiguous()?;
         let k = k
-            .reshape((b_sz, seq_len, self.n_heads, self.d_kv))?
+            .reshape((b_sz, input_seq_len, self.n_heads, self.d_kv))?
             .transpose(1, 2)?
             .contiguous()?;
         let v = v
-            .reshape((b_sz, seq_len, self.n_heads, self.d_kv))?
+            .reshape((b_sz, input_seq_len, self.n_heads, self.d_kv))?
             .transpose(1, 2)?
             .contiguous()?;
         let scores = q.matmul(&k.t()?)?;
@@ -576,9 +577,11 @@ impl T5ForConditionalGeneration {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor, decoder_input_ids: &Tensor) -> Result<Tensor> {
         let encoder_output = self.encoder.forward(input_ids, None)?;
-        let decoder_output = self.decoder.forward(input_ids, Some(&encoder_output))?;
+        let decoder_output = self
+            .decoder
+            .forward(decoder_input_ids, Some(&encoder_output))?;
         let sequence_output = decoder_output.narrow(1, 0, 1)?.squeeze(1)?;
         // TODO: check cfg.tie_word_embeddings to load from model instead.
         let lm_head_weights = self.shared.embeddings().t()?;

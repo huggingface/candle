@@ -153,7 +153,8 @@ fn main() -> Result<()> {
                 }
             } else {
                 let model = builder.build_conditional_generation()?;
-                let ys = model.forward(&token_ids)?;
+                let decoder_token_ids = Tensor::new(&[0 as u32], &builder.device)?.unsqueeze(0)?;
+                let ys = model.forward(&token_ids, &decoder_token_ids)?;
                 println!("Decode: {ys}");
             }
         }
