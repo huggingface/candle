@@ -267,13 +267,21 @@ impl T5Attention {
         &self,
         xs: &Tensor,
         position_bias: Option<&Tensor>,
+        key_value_states: Option<&Tensor>,
     ) -> Result<(Tensor, Option<Tensor>)> {
+        // Performs Self-attention (if key_value_states is None) or attention
+        // over source sentence (provided by key_value_states).
+        let kv_input = match key_value_states {
+            None => xs,
+            Some(key_value_states) => key_value_states,
+        };
+
         // TODO: Apply the mask(s)?
         // TODO: kv caching.
         let (b_sz, seq_len) = (xs.dim(0)?, xs.dim(1)?);
         let q = self.q.forward(xs)?;
-        let k = self.k.forward(xs)?;
-        let v = self.v.forward(xs)?;
+        let k = self.k.forward(kv_input)?;
+        let v = self.v.forward(kv_input)?;
         let q = q
             .reshape((b_sz, seq_len, self.n_heads, self.d_kv))?
             .transpose(1, 2)?
@@ -377,7 +385,9 @@ impl T5LayerSelfAttention {
         position_bias: Option<&Tensor>,
     ) -> Result<(Tensor, Option<Tensor>)> {
         let normed_xs = self.layer_norm.forward(xs)?;
-        let (ys, position_bias) = self.self_attention.forward(&normed_xs, position_bias)?;
+        let (ys, position_bias) = self
+            .self_attention
+            .forward(&normed_xs, position_bias, None)?;
         let ys = (xs + ys)?;
         Ok((ys, position_bias))
     }
@@ -403,12 +413,17 @@ impl T5LayerCrossAttention {
 
     fn forward(
         &self,
-        xs: &Tensor,
+        hidden_states: &Tensor,
         position_bias: Option<&Tensor>,
+        key_value_states: &Tensor,
     ) -> Result<(Tensor, Option<Tensor>)> {
-        let normed_xs = self.layer_norm.forward(xs)?;
-        let (ys, position_bias) = self.cross_attention.forward(&normed_xs, position_bias)?;
-        let ys = (xs + ys)?;
+        let normed_hidden_states = self.layer_norm.forward(hidden_states)?;
+        let (ys, position_bias) = self.cross_attention.forward(
+            &normed_hidden_states,
+            position_bias,
+            Some(key_value_states),
+        )?;
+        let ys = (hidden_states + ys)?;
         Ok((ys, position_bias))
     }
 }
@@ -442,11 +457,13 @@ impl T5Block {
         &self,
         xs: &Tensor,
         position_bias: Option<&Tensor>,
+        encoder_hidden_states: Option<&Tensor>,
     ) -> Result<(Tensor, Option<Tensor>)> {
         let (mut xs, position_bias) = self.self_attn.forward(xs, position_bias)?;
         // TODO: clamp for f16?
         if let Some(cross_attn) = &self.cross_attn {
-            let cross_attn_outputs = cross_attn.forward(&xs, position_bias.as_ref())?;
+            let cross_attn_outputs =
+                cross_attn.forward(&xs, position_bias.as_ref(), encoder_hidden_states.unwrap())?;
             xs = cross_attn_outputs.0;
             // TODO: clamp for f16?
         }
@@ -480,13 +497,20 @@ impl T5Stack {
         })
     }
 
-    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        encoder_hidden_states: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
         let mut hidden_states = input_embeds;
         let mut position_bias = None;
         for block in self.block.iter() {
-            (hidden_states, position_bias) =
-                block.forward(&hidden_states, position_bias.as_ref())?
+            (hidden_states, position_bias) = block.forward(
+                &hidden_states,
+                position_bias.as_ref(),
+                encoder_hidden_states,
+            )?
         }
         self.final_layer_norm.forward(&hidden_states)
     }
@@ -510,7 +534,7 @@ impl T5EncoderModel {
     }
 
     pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.encoder.forward(input_ids)
+        self.encoder.forward(input_ids, None)
     }
 
     pub fn device(&self) -> &Device {
@@ -553,12 +577,13 @@ impl T5ForConditionalGeneration {
     }
 
     pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
-        let _encoder_output = self.encoder.forward(input_ids)?;
-        // TODO: pass encoder_output to decoder.
-        let decoder_output = self.decoder.forward(input_ids)?;
+        let encoder_output = self.encoder.forward(input_ids, None)?;
+        let decoder_output = self.decoder.forward(input_ids, Some(&encoder_output))?;
         let sequence_output = decoder_output.narrow(1, 0, 1)?.squeeze(1)?;
+        // TODO: check cfg.tie_word_embeddings to load from model instead.
         let lm_head_weights = self.shared.embeddings().t()?;
         let output = sequence_output.matmul(&lm_head_weights)?;
+        // TODO: Rescale output before projecting on vocab? * (self.model_dim**-0.5)
         Ok(output)
     }
 
