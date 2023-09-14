@@ -79,9 +79,9 @@ impl Module for GlobalResponseNorm {
 pub struct ResBlock {
     depthwise: candle_nn::Conv2d,
     norm: WLayerNorm,
-    channelwise_ln1: candle_nn::Linear,
+    channelwise_lin1: candle_nn::Linear,
     channelwise_grn: GlobalResponseNorm,
-    channelwise_ln2: candle_nn::Linear,
+    channelwise_lin2: candle_nn::Linear,
 }
 
 impl ResBlock {
@@ -93,15 +93,15 @@ impl ResBlock {
         };
         let depthwise = candle_nn::conv2d(c + c_skip, c, ksize, cfg, vb.pp("depthwise"))?;
         let norm = WLayerNorm::new(c, vb.pp("norm"))?;
-        let channelwise_ln1 = candle_nn::linear(c, c * 4, vb.pp("channelwise.0"))?;
+        let channelwise_lin1 = candle_nn::linear(c, c * 4, vb.pp("channelwise.0"))?;
         let channelwise_grn = GlobalResponseNorm::new(c * 4, vb.pp("channelwise.2"))?;
-        let channelwise_ln2 = candle_nn::linear(c * 4, c, vb.pp("channelwise.4"))?;
+        let channelwise_lin2 = candle_nn::linear(c * 4, c, vb.pp("channelwise.4"))?;
         Ok(Self {
             depthwise,
             norm,
-            channelwise_ln1,
+            channelwise_lin1,
             channelwise_grn,
-            channelwise_ln2,
+            channelwise_lin2,
         })
     }
 
@@ -116,10 +116,10 @@ impl ResBlock {
             .apply(&self.norm)?
             .permute((0, 2, 3, 1))?;
         let xs = xs
-            .apply(&self.channelwise_ln1)?
+            .apply(&self.channelwise_lin1)?
             .gelu()?
             .apply(&self.channelwise_grn)?
-            .apply(&self.channelwise_ln2)?
+            .apply(&self.channelwise_lin2)?
             .permute((0, 3, 1, 2))?;
         xs + x_res
     }
