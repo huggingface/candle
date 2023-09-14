@@ -110,12 +110,18 @@ impl ToUsize2 for (usize, usize) {
 }
 
 // A simple trait defining a module with forward method using a single argument.
-pub trait Module: std::fmt::Debug {
+pub trait Module {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
 }
 
 impl Module for quantized::QMatMul {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self.forward(xs)
+    }
+}
+
+impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        self(xs)
     }
 }
