@@ -106,7 +106,13 @@ impl Model {
             mask_shape,
             mask_data,
         };
-        let json = serde_json::to_string(&mask)?;
+        let image = Image {
+            original_width: embeddings.original_width,
+            original_height: embeddings.original_height,
+            width: embeddings.width,
+            height: embeddings.height,
+        };
+        let json = serde_json::to_string(&MaskImage { mask, image })?;
         Ok(json)
     }
 }
@@ -116,6 +122,18 @@ struct Mask {
     iou: f32,
     mask_shape: Vec<usize>,
     mask_data: Vec<u8>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Image {
+    original_width: u32,
+    original_height: u32,
+    width: u32,
+    height: u32,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MaskImage {
+    mask: Mask,
+    image: Image,
 }
 
 fn main() {
