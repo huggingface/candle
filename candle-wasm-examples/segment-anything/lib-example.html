@@ -236,6 +236,7 @@
           canvas.width = img.width;
           canvas.height = img.height;
           ctxCanvas.drawImage(img, 0, 0);
+          canvas.parentElement.style.height = canvas.offsetHeight + "px";
           hasImage = true;
           clearBtn.classList.remove("invisible");
           dropButtons.classList.add("invisible");
