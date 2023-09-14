@@ -44,6 +44,10 @@ pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
     (xs.neg()?.exp()? + 1.0)?.recip()
 }
 
+pub fn leaky_relu(xs: &Tensor, negative_slope: f64) -> Result<Tensor> {
+    xs.relu()?.minimum(&(xs * negative_slope)?)
+}
+
 pub fn dropout(xs: &Tensor, drop_p: f32) -> Result<Tensor> {
     // This implementation is inefficient as it stores the full mask for the backward pass.
     // Instead we could just store the seed and have a specialized kernel that would both
