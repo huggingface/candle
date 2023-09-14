@@ -275,6 +275,24 @@ This is a bug in gcc-11 triggered by the Cuda compiler. To fix this, install a d
 env CANDLE_NVCC_CCBIN=/usr/lib/gcc/x86_64-linux-gnu/10 cargo ...
 ```
 
+#### Linking error on windows when running rustdoc or mdbook tests
+
+```
+Couldn't compile the test.
+---- .\candle-book\src\inference\hub.md - Using_the_hub::Using_in_a_real_model_ (line 50) stdout ----
+error: linking with `link.exe` failed: exit code: 1181
+//very long chain of linking
+ = note: LINK : fatal error LNK1181: cannot open input file 'windows.0.48.5.lib'
+```
+
+Make sure you link all native libraries that might be located not in a project target, e.g. to run mdbook tests you should to run:
+
+```
+mdbook test candle-book -L .\target\debug\deps\ `
+-L native=$env:USERPROFILE\.cargo\registry\src\index.crates.io-6f17d22bba15001f\windows_x86_64_msvc-0.42.2\lib `
+-L native=$env:USERPROFILE\.cargo\registry\src\index.crates.io-6f17d22bba15001f\windows_x86_64_msvc-0.48.5\lib
+```
+
 #### Tracking down errors
 
 You can set `RUST_BACKTRACE=1` to be provided with backtraces when a candle
