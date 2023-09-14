@@ -285,7 +285,7 @@ error: linking with `link.exe` failed: exit code: 1181
  = note: LINK : fatal error LNK1181: cannot open input file 'windows.0.48.5.lib'
 ```
 
-Make sure you link all native libraries that might be located not in a project target, e.g. to run mdbook tests you should to run:
+Make sure you link all native libraries that might be located outside a project target, e.g., to run mdbook tests, you should run:
 
 ```
 mdbook test candle-book -L .\target\debug\deps\ `
