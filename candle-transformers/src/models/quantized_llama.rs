@@ -144,7 +144,7 @@ impl LayerWeights {
         let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
         let mask = mask.broadcast_as(att.shape())?;
         let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
-        let att = candle_nn::ops::softmax(&att, D::Minus1)?;
+        let att = candle_nn::ops::softmax_last_dim(&att)?;
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
