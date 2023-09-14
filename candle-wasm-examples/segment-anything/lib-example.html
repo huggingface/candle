@@ -1,7 +1,7 @@
 <html>
   <head>
     <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
-    <title>Candle Segment Anything Rust/WASM</title>
+    <title>Candle Segment Anything Model (SAM) Rust/WASM</title>
   </head>
   <body></body>
 </html>
@@ -75,11 +75,12 @@
 
       const clearBtn = document.querySelector("#clear-btn");
       const canvas = document.querySelector("#canvas");
-      const canvasResult = document.querySelector("#canvas-result");
+      const mask = document.querySelector("#mask");
       const ctxCanvas = canvas.getContext("2d");
-      const ctxCanvasResult = canvasResult.getContext("2d");
+      const ctxMask = mask.getContext("2d");
       const fileUpload = document.querySelector("#file-upload");
       const dropArea = document.querySelector("#drop-area");
+      const dropButtons = document.querySelector("#drop-buttons");
       const imagesExamples = document.querySelector("#image-select");
       const modelSelection = document.querySelector("#model");
       const statusOutput = document.querySelector("#output-status");
@@ -89,6 +90,7 @@
         const target = e.target;
         if (target.files.length > 0) {
           const href = URL.createObjectURL(target.files[0]);
+          cleanImageCanvas();
           drawImageCanvas(href);
           setImageEmbeddings(href);
         }
@@ -113,22 +115,29 @@
 
         if (files.length > 0) {
           const href = URL.createObjectURL(files[0]);
+          cleanImageCanvas();
           drawImageCanvas(href);
           setImageEmbeddings(href);
         } else if (url) {
+          cleanImageCanvas();
           drawImageCanvas(url);
           setImageEmbeddings(url);
         }
       });
 
       let hasImage = false;
-      let embeddingsReady = false;
+      let isSegmenting = false;
+      let isEmbedding = false;
       let currentImageURL = "";
       //add event listener to image examples
       imagesExamples.addEventListener("click", (e) => {
+        if (isEmbedding || isSegmenting) {
+          return;
+        }
         const target = e.target;
         if (target.nodeName === "IMG") {
           const href = target.src;
+          cleanImageCanvas();
           drawImageCanvas(href);
           setImageEmbeddings(href);
         }
@@ -138,14 +147,16 @@
         cleanImageCanvas();
       });
       //add click event to canvas
-      canvasResult.addEventListener("click", async (event) => {
-        if (!hasImage || !embeddingsReady) {
+      canvas.addEventListener("click", async (event) => {
+        if (!hasImage || isEmbedding || isSegmenting) {
           return;
         }
         const targetBox = event.target.getBoundingClientRect();
         const x = (event.clientX - targetBox.left) / targetBox.width;
         const y = (event.clientY - targetBox.top) / targetBox.height;
+        isSegmenting = true;
         const { maskURL } = await getSegmentationMask({ x, y });
+        isSegmenting = false;
         drawMask(maskURL);
       });
 
@@ -153,39 +164,42 @@
         const modelID = modelSelection.value;
         const modelURL = MODEL_BASEURL + MODELS[modelID].url;
         const imageURL = currentImageURL;
-        const { mask, maskURL } = await segmentPoints(
+        const { maskURL } = await segmentPoints(
           modelURL,
           modelID,
           imageURL,
           points
         );
-        console.log(mask, maskURL);
-        return { mask, maskURL };
+        return { maskURL };
       }
       async function setImageEmbeddings(imageURL) {
-        if (embeddingsReady) {
+        if (isEmbedding) {
           return;
         }
-        canvasResult.classList.add("cursor-wait");
+        canvas.classList.remove("cursor-pointer");
+        canvas.classList.add("cursor-wait");
         clearBtn.disabled = true;
         const modelID = modelSelection.value;
         const modelURL = MODEL_BASEURL + MODELS[modelID].url;
+        isEmbedding = true;
         await segmentPoints(modelURL, modelID, imageURL);
-        canvasResult.classList.remove("cursor-wait");
+        canvas.classList.remove("cursor-wait");
+        canvas.classList.add("cursor-pointer");
         clearBtn.disabled = false;
-        embeddingsReady = true;
+        isEmbedding = false;
         currentImageURL = imageURL;
       }
 
       function cleanImageCanvas() {
         ctxCanvas.clearRect(0, 0, canvas.width, canvas.height);
-        ctxCanvasResult.clearRect(0, 0, canvas.width, canvas.height);
+        ctxMask.clearRect(0, 0, canvas.width, canvas.height);
         hasImage = false;
-        embeddingsReady = false;
+        isEmbedding = false;
+        isSegmenting = false;
         currentImageURL = "";
         clearBtn.classList.add("invisible");
         canvas.parentElement.style.height = "auto";
-        canvasResult.classList.remove("z-20");
+        dropButtons.classList.remove("invisible");
       }
       function drawMask(maskURL) {
         if (!maskURL) {
@@ -196,13 +210,14 @@
         img.crossOrigin = "anonymous";
 
         img.onload = () => {
-          ctxCanvasResult.drawImage(canvas, 0, 0);
-          ctxCanvasResult.globalCompositeOperation = "source-atop";
-          ctxCanvasResult.fillStyle = "rgba(255, 0, 0, 0.5)";
-          ctxCanvasResult.fillRect(0, 0, canvas.width, canvas.height);
-          ctxCanvasResult.globalCompositeOperation = "destination-in";
-          ctxCanvasResult.drawImage(img, 0, 0);
-          ctxCanvasResult.globalCompositeOperation = "source-over";
+          mask.width = canvas.width;
+          mask.height = canvas.height;
+          ctxMask.drawImage(canvas, 0, 0);
+          ctxMask.globalCompositeOperation = "source-atop";
+          ctxMask.fillStyle = "rgba(255, 0, 0, 0.6)";
+          ctxMask.fillRect(0, 0, canvas.width, canvas.height);
+          ctxMask.globalCompositeOperation = "destination-in";
+          ctxMask.drawImage(img, 0, 0);
         };
         img.src = maskURL;
       }
@@ -210,12 +225,9 @@
         if (!imgURL) {
           throw new Error("No image URL provided");
         }
-        canvasResult
-          .getContext("2d")
-          .clearRect(0, 0, canvas.width, canvas.height);
 
         ctxCanvas.clearRect(0, 0, canvas.width, canvas.height);
-        ctxCanvasResult.clearRect(0, 0, canvas.width, canvas.height);
+        ctxCanvas.clearRect(0, 0, canvas.width, canvas.height);
 
         const img = new Image();
         img.crossOrigin = "anonymous";
@@ -223,43 +235,45 @@
         img.onload = () => {
           canvas.width = img.width;
           canvas.height = img.height;
-          canvasResult.width = img.width;
-          canvasResult.height = img.height;
           ctxCanvas.drawImage(img, 0, 0);
-          ctxCanvasResult.drawImage(img, 0, 0);
-
-          canvas.parentElement.style.height = canvas.offsetHeight + "px";
-          canvasResult.classList.add("z-20");
           hasImage = true;
           clearBtn.classList.remove("invisible");
+          dropButtons.classList.add("invisible");
         };
         img.src = imgURL;
       }
+
+      const observer = new ResizeObserver((entries) => {
+        for (let entry of entries) {
+          if (entry.target === canvas) {
+            canvas.parentElement.style.height = canvas.offsetHeight + "px";
+          }
+        }
+      });
+      observer.observe(canvas);
     </script>
   </head>
   <body class="container max-w-4xl mx-auto p-4">
     <main class="grid grid-cols-1 gap-8 relative">
-      <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
+      <span class="absolute text-5xl -ml-[1em]">🕯️</span>
       <div>
         <h1 class="text-5xl font-bold">Candle Segment Anything</h1>
         <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
         <p class="max-w-lg">
-          Zero shot segmentation of images with
+          Zero-shot image segmentation with
           <a
             href="https://segment-anything.com"
             class="underline hover:text-blue-500 hover:no-underline"
             target="_blank"
+            >Segment Anything Model (SAM)</a
           >
-            SAM - Segment Anything Model
-          </a>
           and
           <a
             href="https://github.com/ChaoningZhang/MobileSAM"
             class="underline hover:text-blue-500 hover:no-underline"
             target="_blank"
-            >MobileSAM
-          </a>
-          and WASM runtime built with
+            >MobileSAM </a
+          >. It runs in the browser with a WASM runtime built with
           <a
             href="https://github.com/huggingface/candle/"
             target="_blank"
@@ -268,7 +282,6 @@
           </a>
         </p>
       </div>
-
       <div>
         <label for="model" class="font-medium">Models Options: </label>
         <select
@@ -281,10 +294,17 @@
           <option value="sam_base">SAM Base (375 MB)</option>
         </select>
       </div>
-      <!-- drag and drop area -->
+      <div>
+        <p class="text-xs italic max-w-lg">
+          <b>Note:</b>
+          The model's first run may take a few seconds as it loads and caches
+          the model in the browser, and then creates the image embeddings. Any
+          subsequent clicks on points will be significantly faster.
+        </p>
+      </div>
       <div class="relative max-w-lg">
-        <div class="py-1 flex justify-between items-center">
-          <div class="px-2 rounded-md inline text-sm">
+        <div class="flex justify-between items-center">
+          <div class="px-2 rounded-md inline text-xs">
             <span id="output-status" class="m-auto font-light"></span>
           </div>
           <button
@@ -308,13 +328,10 @@
         </div>
         <div
           id="drop-area"
-          class="flex flex-col items-center justify-center border-2 border-gray-300 border-dashed rounded-xl relative aspect-video w-full overflow-hidden"
+          class="flex flex-col items-center justify-center border-2 border-gray-300 border-dashed rounded-xl relative p-20 w-full overflow-hidden"
         >
-          <canvas
-            id="canvas"
-            class="absolute pointer-events-none w-full"
-          ></canvas>
           <div
+            id="drop-buttons"
             class="flex flex-col items-center justify-center space-y-1 text-center relative z-10"
           >
             <svg
@@ -346,7 +363,11 @@
               class="sr-only"
             />
           </div>
-          <canvas id="canvas-result" class="absolute w-full"></canvas>
+          <canvas id="canvas" class="absolute w-full"></canvas>
+          <canvas
+            id="mask"
+            class="pointer-events-none absolute w-full"
+          ></canvas>
         </div>
         <div class="text-right py-2">
           <button
@@ -360,7 +381,10 @@
         </div>
       </div>
       <div>
-        <div class="flex gap-3 items-center" id="image-select">
+        <div
+          class="flex gap-3 items-center overflow-x-scroll"
+          id="image-select"
+        >
           <h3 class="font-medium">Examples:</h3>
 
           <img

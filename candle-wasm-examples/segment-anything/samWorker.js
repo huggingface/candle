@@ -65,10 +65,10 @@ class SAMModel {
   static getSimpleHash(imageArrayU8) {
     // get simple hash of imageArrayU8
     let imageArrayHash = 0;
-    for (let i = 0; i < imageArrayU8.length; i++) {
+    for (let i = 0; i < imageArrayU8.length; i += 100) {
       imageArrayHash ^= imageArrayU8[i];
     }
-    return imageArrayHash;
+    return imageArrayHash.toString(16);
   }
 }
 
@@ -148,7 +148,7 @@ self.addEventListener("message", async (event) => {
     self.postMessage({
       status: "complete",
       message: "Segmentation Complete",
-      output: { mask, maskURL: maskDataURL },
+      output: { maskURL: maskDataURL },
     });
   } catch (e) {
     self.postMessage({ error: e });
