@@ -75,7 +75,7 @@ struct UpBlock {
 #[derive(Debug)]
 pub struct WDiffNeXt {
     clip_mapper: candle_nn::Linear,
-    effnet_mappers: Vec<candle_nn::Conv2d>,
+    effnet_mappers: Vec<Option<candle_nn::Conv2d>>,
     seq_norm: candle_nn::LayerNorm,
     embedding_conv: candle_nn::Conv2d,
     embedding_ln: WLayerNorm,
@@ -102,6 +102,7 @@ impl WDiffNeXt {
         const INJECT_EFFNET: [bool; 4] = [false, true, true, true];
 
         let clip_mapper = candle_nn::linear(clip_embd, c_cond, vb.pp("clip_mapper"))?;
+        // TODO: populate effnet_mappers
         let effnet_mappers = vec![];
         let cfg = candle_nn::layer_norm::LayerNormConfig {
             ..Default::default()
@@ -274,12 +275,63 @@ impl WDiffNeXt {
         let x_in = xs;
 
         // TODO: pixel unshuffle.
-        let xs = xs.apply(&self.embedding_conv)?.apply(&self.embedding_ln)?;
-        // TODO: down blocks
-        let level_outputs = xs.clone();
-        // TODO: up blocks
-        let xs = level_outputs;
-        // TODO: pxel shuffle
+        let mut xs = xs.apply(&self.embedding_conv)?.apply(&self.embedding_ln)?;
+
+        let mut level_outputs = Vec::new();
+        for (i, down_block) in self.down_blocks.iter().enumerate() {
+            if let Some(ln) = &down_block.layer_norm {
+                xs = xs.apply(ln)?
+            }
+            if let Some(conv) = &down_block.conv {
+                xs = xs.apply(conv)?
+            }
+            let skip = match &self.effnet_mappers[i] {
+                None => None,
+                Some(m) => {
+                    let effnet = effnet.interpolate2d(xs.dim(D::Minus2)?, xs.dim(D::Minus1)?)?;
+                    Some(m.forward(&effnet)?)
+                }
+            };
+            for block in down_block.sub_blocks.iter() {
+                xs = block.res_block.forward(&xs, skip.as_ref())?;
+                xs = block.ts_block.forward(&xs, &r_embed)?;
+                if let Some(attn_block) = &block.attn_block {
+                    xs = attn_block.forward(&xs, clip.as_ref().unwrap())?;
+                }
+            }
+            level_outputs.push(xs.clone())
+        }
+        level_outputs.reverse();
+
+        for (i, up_block) in self.up_blocks.iter().enumerate() {
+            let skip = match &self.effnet_mappers[self.down_blocks.len() + i] {
+                None => None,
+                Some(m) => {
+                    let effnet = effnet.interpolate2d(xs.dim(D::Minus2)?, xs.dim(D::Minus1)?)?;
+                    Some(m.forward(&effnet)?)
+                }
+            };
+            for (j, block) in up_block.sub_blocks.iter().enumerate() {
+                let skip = if j == 0 && i > 0 {
+                    Some(&level_outputs[i])
+                } else {
+                    None
+                };
+                xs = block.res_block.forward(&xs, skip)?;
+                xs = block.ts_block.forward(&xs, &r_embed)?;
+                if let Some(attn_block) = &block.attn_block {
+                    xs = attn_block.forward(&xs, clip.as_ref().unwrap())?;
+                }
+            }
+            if let Some(ln) = &up_block.layer_norm {
+                xs = xs.apply(ln)?
+            }
+            if let Some(conv) = &up_block.conv {
+                xs = xs.apply(conv)?
+            }
+        }
+
+        // TODO: pixel shuffle
         let ab = xs.apply(&self.clf_ln)?.apply(&self.clf_conv)?.chunk(1, 2)?;
         let b = ((candle_nn::ops::sigmoid(&ab[1])? * (1. - EPS * 2.))? + EPS)?;
         (x_in - &ab[0])? / b
