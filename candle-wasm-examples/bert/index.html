@@ -59,13 +59,14 @@
           tokenizerArrayU8,
           configArrayU8
         );
-
+        const total = 10;
         const input = "Hello World!";
+        const t0 = performance.now();
         const output = model.get_embeddings({
-          sentences: ["hello how are you"],
+          sentences: Array(total).fill(input),
           normalize_embeddings: true,
         });
-        console.log(output);
+        console.log("output", output);
       }
       globalThis.run = run;
     </script>
