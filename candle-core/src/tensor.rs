@@ -666,7 +666,12 @@ impl Tensor {
         let storage = self.storage().reduce_op(op, self.layout(), &[dim])?;
         let mut dims = self.dims().to_vec();
         dims[dim] = 1;
-        let op = BackpropOp::new1(self, |arg| Op::Reduce(arg, op, dims.to_vec()));
+        let op = match op {
+            ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => {
+                BackpropOp::new1(self, |arg| Op::Reduce(arg, op, dims.to_vec()))
+            }
+            ReduceOp::ArgMin | ReduceOp::ArgMax => BackpropOp::none(),
+        };
         let res = from_storage(storage, dims, op, false);
         if keepdim {
             Ok(res)

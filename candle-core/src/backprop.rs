@@ -98,7 +98,7 @@ impl Tensor {
                     | Op::Copy(node)
                     | Op::Broadcast(node)
                     | Op::Cmp(node, _)
-                    | Op::Reduce(node, _, _)
+                    | Op::Reduce(node, ReduceOp::Min | ReduceOp::Sum | ReduceOp::Max, _)
                     | Op::ToDType(node)
                     | Op::ToDevice(node)
                     | Op::Transpose(node, _, _)
@@ -112,6 +112,7 @@ impl Tensor {
                         track_grad |= tg;
                         nodes
                     }
+                    Op::Reduce(_, ReduceOp::ArgMin | ReduceOp::ArgMax, _) => nodes,
                 }
             } else {
                 nodes
@@ -521,6 +522,7 @@ impl Tensor {
     }
 }
 
+#[derive(Debug)]
 pub struct GradStore(HashMap<TensorId, Tensor>);
 
 impl GradStore {
