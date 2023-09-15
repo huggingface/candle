@@ -88,10 +88,10 @@ impl PaellaVQ {
         }
         xs.apply(&self.down_blocks_conv)?
             .apply(&self.down_blocks_bn)
-        // TODO: quantizer
     }
 
     pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {
+        // TODO: quantizer if we want to support `force_not_quantize=False`.
         let mut xs = xs.apply(&self.up_blocks_conv)?;
         for up_block in self.up_blocks.iter() {
             xs = xs.apply(&up_block.0)?;
