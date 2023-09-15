@@ -6,7 +6,7 @@
   <body></body>
 </html>
 
-<!doctype html>
+<!DOCTYPE html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -199,17 +199,21 @@
             confidence,
             iou_threshold,
           });
-          yoloWorker.addEventListener("message", (event) => {
+          function handleMessage(event) {
+            console.log("message", event.data);
             if ("status" in event.data) {
               updateStatus(event.data.status);
             }
             if ("error" in event.data) {
+              yoloWorker.removeEventListener("message", handleMessage);
               reject(new Error(event.data.error));
             }
             if (event.data.status === "complete") {
+              yoloWorker.removeEventListener("message", handleMessage);
               resolve(event.data);
             }
-          });
+          }
+          yoloWorker.addEventListener("message", handleMessage);
         });
       }
       // add event listener to detect button
@@ -393,7 +397,7 @@
         </button>
       </div>
       <!-- drag and drop area -->
-      <div class="relative">
+      <div class="relative max-w-lg">
         <div class="py-1">
           <button
             id="clear-btn"
@@ -471,7 +475,10 @@
         </div>
       </div>
       <div>
-        <div class="flex gap-3 items-center" id="image-select">
+        <div
+          class="flex gap-3 items-center overflow-x-scroll"
+          id="image-select"
+        >
           <h3 class="font-medium">Examples:</h3>
 
           <img

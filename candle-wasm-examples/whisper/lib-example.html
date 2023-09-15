@@ -6,7 +6,7 @@
   <body></body>
 </html>
 
-<!doctype html>
+<!DOCTYPE html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -51,18 +51,21 @@
             mel_filtersURL,
             audioURL,
           });
-          whisperWorker.addEventListener("message", (event) => {
+          function messageHandler(event) {
             console.log(event.data);
             if ("status" in event.data) {
               updateStatus(event.data);
             }
             if ("error" in event.data) {
+              whisperWorker.removeEventListener("message", messageHandler);
               reject(new Error(event.data.error));
             }
             if (event.data.status === "complete") {
+              whisperWorker.removeEventListener("message", messageHandler);
               resolve(event.data);
             }
-          });
+          }
+          whisperWorker.addEventListener("message", messageHandler);
         });
       }
 
