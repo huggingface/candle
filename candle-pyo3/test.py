@@ -1,4 +1,5 @@
 import candle
+from candle import Tensor
 
 t = candle.Tensor(42.0)
 print(t)
@@ -9,7 +10,7 @@ t = candle.Tensor([3.0, 1, 4, 1, 5, 9, 2, 6])
 print(t)
 print(t+t)
 
-t = t.reshape([2, 4])
+t:Tensor = t.reshape([2, 4])
 print(t.matmul(t.t()))
 
 print(t.to_dtype(candle.u8))

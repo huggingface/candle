@@ -9,6 +9,7 @@ import black
 
 INDENT = " " * 4
 GENERATED_COMMENT = "# Generated content DO NOT EDIT\n"
+TYPING = "from typing import Any, Callable, Dict, List, Optional, Tuple, Union\n"
 
 
 def do_indent(text: Optional[str], indent: str):
@@ -17,9 +18,11 @@ def do_indent(text: Optional[str], indent: str):
     return text.replace("\n", f"\n{indent}")
 
 
-def function(obj, indent, text_signature=None):
+def function(obj, indent:str, text_signature:str=None):
     if text_signature is None:
         text_signature = obj.__text_signature__
+
+    text_signature = text_signature.replace("$self", "self").lstrip().rstrip()
     string = ""
     string += f"{indent}def {obj.__name__}{text_signature}:\n"
     indent += INDENT
@@ -43,9 +46,9 @@ def member_sort(member):
 def fn_predicate(obj):
     value = inspect.ismethoddescriptor(obj) or inspect.isbuiltin(obj)
     if value:
-        return obj.__doc__ and obj.__text_signature__ and not obj.__name__.startswith("_")
+        return obj.__text_signature__ and not obj.__name__.startswith("_")
     if inspect.isgetsetdescriptor(obj):
-        return obj.__doc__ and not obj.__name__.startswith("_")
+        return not obj.__name__.startswith("_")
     return False
 
 
@@ -63,6 +66,7 @@ def pyi_file(obj, indent=""):
     string = ""
     if inspect.ismodule(obj):
         string += GENERATED_COMMENT
+        string += TYPING
         members = get_module_members(obj)
         for member in members:
             string += pyi_file(member, indent)
@@ -110,7 +114,8 @@ def pyi_file(obj, indent=""):
         string += function(obj, indent, text_signature="(self)")
 
     elif obj.__class__.__name__ == "DType":
-        pass
+        string += f"class {str(obj).lower()}(DType):\n"
+        string += f"{indent+INDENT}pass\n"
     else:
         raise Exception(f"Object {obj} is not supported")
     return string
@@ -150,7 +155,7 @@ def write(module, directory, origin, check=False):
 
     filename = os.path.join(directory, "__init__.pyi")
     pyi_content = pyi_file(module)
-    #pyi_content = do_black(pyi_content, is_pyi=True)
+    pyi_content = do_black(pyi_content, is_pyi=True)
     os.makedirs(directory, exist_ok=True)
     if check:
         with open(filename, "r") as f:
@@ -194,4 +199,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     import candle
 
-    write(candle.candle, "candle-pyo3/py_src/candle/", "candle", check=args.check)
+    write(candle.candle, "candle-pyo3/py-src/candle/", "candle", check=args.check)
