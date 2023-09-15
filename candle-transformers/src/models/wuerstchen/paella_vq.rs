@@ -1,10 +1,8 @@
-#![allow(unused)]
-use super::common::{AttnBlock, ResBlock, TimestepBlock};
-use candle::{DType, Module, Result, Tensor, D};
+use candle::{Module, Result, Tensor};
 use candle_nn::VarBuilder;
 
 #[derive(Debug)]
-struct MixingResidualBlock {
+pub struct MixingResidualBlock {
     norm1: candle_nn::LayerNorm,
     depthwise_conv: candle_nn::Conv2d,
     norm2: candle_nn::LayerNorm,
