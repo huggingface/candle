@@ -65,3 +65,48 @@ impl Module for MixingResidualBlock {
         xs + x_temp * mods[5] as f64
     }
 }
+
+#[derive(Debug)]
+struct PaellaVQ {
+    in_block_conv: candle_nn::Conv2d,
+    out_block_conv: candle_nn::Conv2d,
+    down_blocks: Vec<(Option<candle_nn::Conv2d>, MixingResidualBlock)>,
+    down_blocks_conv: candle_nn::Conv2d,
+    down_blocks_bn: candle_nn::BatchNorm,
+    up_blocks_conv: candle_nn::Conv2d,
+    up_blocks: Vec<(MixingResidualBlock, Option<candle_nn::ConvTranspose2d>)>,
+}
+
+impl PaellaVQ {
+    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+        // TODO: pixel unshuffle
+        let mut xs = xs.apply(&self.in_block_conv)?;
+        for down_block in self.down_blocks.iter() {
+            if let Some(conv) = &down_block.0 {
+                xs = xs.apply(conv)?
+            }
+            xs = xs.apply(&down_block.1)?
+        }
+        xs.apply(&self.down_blocks_conv)?
+            .apply(&self.down_blocks_bn)
+        // TODO: quantizer
+    }
+
+    pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut xs = xs.apply(&self.up_blocks_conv)?;
+        for up_block in self.up_blocks.iter() {
+            xs = xs.apply(&up_block.0)?;
+            if let Some(conv) = &up_block.1 {
+                xs = xs.apply(conv)?
+            }
+        }
+        xs.apply(&self.out_block_conv)
+        // TODO: pixel shuffle
+    }
+}
+
+impl Module for PaellaVQ {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        self.decode(&self.encode(xs)?)
+    }
+}
