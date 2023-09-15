@@ -10,6 +10,7 @@ pub enum Activation {
     NewGelu,
     Relu,
     Elu(f64),
+    LeakyRelu(f64),
 }
 
 impl super::Module for Activation {
@@ -22,6 +23,7 @@ impl super::Module for Activation {
             Self::NewGelu => xs.gelu(),
             Self::Relu => xs.relu(),
             &Self::Elu(alpha) => xs.elu(alpha),
+            &Self::LeakyRelu(negative_slope) => crate::ops::leaky_relu(xs, negative_slope),
         }
     }
 }
