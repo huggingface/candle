@@ -122,6 +122,11 @@ impl Sam {
         })
     }
 
+    pub fn embeddings(&self, img: &Tensor) -> Result<Tensor> {
+        let img = self.preprocess(img)?.unsqueeze(0)?;
+        self.image_encoder.forward(&img)
+    }
+
     pub fn forward(
         &self,
         img: &Tensor,
@@ -131,33 +136,50 @@ impl Sam {
         let (_c, original_h, original_w) = img.dims3()?;
         let img = self.preprocess(img)?.unsqueeze(0)?;
         let img_embeddings = self.image_encoder.forward(&img)?;
-        let image_pe = self.prompt_encoder.get_dense_pe()?;
-        let points = match point {
-            None => None,
-            Some((x, y)) => {
-                let points = Tensor::new(
-                    &[[[x as f32 * original_w as f32, y as f32 * original_h as f32]]],
-                    img.device(),
-                )?;
-                let labels = Tensor::ones((1, 1), DType::F32, img.device())?;
-                Some((points, labels))
-            }
-        };
-        let points = points.as_ref().map(|(x, y)| (x, y));
-        let (sparse_prompt_embeddings, dense_prompt_embeddings) =
-            self.prompt_encoder.forward(points, None, None)?;
-        let (low_res_mask, iou_predictions) = self.mask_decoder.forward(
+        let (low_res_mask, iou) = self.forward_for_embeddings(
             &img_embeddings,
-            &image_pe,
-            &sparse_prompt_embeddings,
-            &dense_prompt_embeddings,
+            original_h,
+            original_w,
+            point,
             multimask_output,
         )?;
         let mask = low_res_mask
             .upsample_nearest2d(IMAGE_SIZE, IMAGE_SIZE)?
             .get(0)?
             .i((.., ..original_h, ..original_w))?;
-        Ok((mask, iou_predictions))
+        Ok((mask, iou))
+    }
+
+    pub fn forward_for_embeddings(
+        &self,
+        img_embeddings: &Tensor,
+        original_h: usize,
+        original_w: usize,
+        point: Option<(f64, f64)>,
+        multimask_output: bool,
+    ) -> Result<(Tensor, Tensor)> {
+        let image_pe = self.prompt_encoder.get_dense_pe()?;
+        let points = match point {
+            None => None,
+            Some((x, y)) => {
+                let points = Tensor::new(
+                    &[[[x as f32 * original_w as f32, y as f32 * original_h as f32]]],
+                    img_embeddings.device(),
+                )?;
+                let labels = Tensor::ones((1, 1), DType::F32, img_embeddings.device())?;
+                Some((points, labels))
+            }
+        };
+        let points = points.as_ref().map(|(x, y)| (x, y));
+        let (sparse_prompt_embeddings, dense_prompt_embeddings) =
+            self.prompt_encoder.forward(points, None, None)?;
+        self.mask_decoder.forward(
+            img_embeddings,
+            &image_pe,
+            &sparse_prompt_embeddings,
+            &dense_prompt_embeddings,
+            multimask_output,
+        )
     }
 
     pub fn unpreprocess(&self, img: &Tensor) -> Result<Tensor> {

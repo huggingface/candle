@@ -105,6 +105,28 @@ macro_rules! binary_op {
     };
 }
 
+macro_rules! binary_op_scalar {
+    ($fn_name:ident, $op_name:ident) => {
+        pub fn $fn_name<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
+            let rhs = match rhs.to_tensor_scalar()? {
+                crate::scalar::TensorScalar::Tensor(rhs) => rhs,
+                crate::scalar::TensorScalar::Scalar(rhs) => rhs
+                    .to_dtype(self.dtype())?
+                    .to_device(self.device())?
+                    .broadcast_as(self.shape())?,
+            };
+            let shape = self.same_shape_binary_op(&rhs, stringify!($fn_name))?;
+            let storage = self.storage().binary_impl::<crate::op::$op_name>(
+                &*rhs.storage(),
+                self.layout(),
+                rhs.layout(),
+            )?;
+            let op = BackpropOp::new2(self, &rhs, |t1, t2| Op::Binary(t1, t2, BinaryOp::$op_name));
+            Ok(from_storage(storage, shape.clone(), op, false))
+        }
+    };
+}
+
 macro_rules! broadcast_binary_op {
     ($fn_name:ident, $inner_fn_name:ident) => {
         pub fn $fn_name(&self, rhs: &Self) -> Result<Self> {
@@ -447,8 +469,8 @@ impl Tensor {
     binary_op!(mul, Mul);
     binary_op!(sub, Sub);
     binary_op!(div, Div);
-    binary_op!(maximum, Maximum);
-    binary_op!(minimum, Minimum);
+    binary_op_scalar!(maximum, Maximum);
+    binary_op_scalar!(minimum, Minimum);
     broadcast_binary_op!(broadcast_add, add);
     broadcast_binary_op!(broadcast_mul, mul);
     broadcast_binary_op!(broadcast_sub, sub);
@@ -827,18 +849,46 @@ impl Tensor {
         self.cmp(rhs, CmpOp::Le)
     }
 
-    /// Upsample the input tensor to the `(target_h, target_w)` size, taking the value of the
+    /// Clamp the tensor values to be between `min` and `max`.
+    pub fn clamp<T1: TensorOrScalar, T2: TensorOrScalar>(&self, min: T1, max: T2) -> Result<Self> {
+        self.maximum(min)?.minimum(max)
+    }
+
+    /// Interpolate the input tensor to the `target_size` size, taking the value of the nearest element.
+    ///
+    /// The input tensor should have three dimensions, `(batch, channels, l)`, the returned
+    /// tensor also has three dimensions, `(batch, channels, target_size)`.
+    pub fn interpolate1d(&self, target_size: usize) -> Result<Self> {
+        let (n, c, _l) = self.dims3()?;
+        let op = BackpropOp::new1(self, Op::UpsampleNearest1D);
+        let storage = self
+            .storage()
+            .upsample_nearest1d(self.layout(), target_size)?;
+        Ok(from_storage(storage, (n, c, target_size), op, false))
+    }
+
+    /// Alias for `interpolate1d`.
+    pub fn upsample_nearest1d(&self, target_size: usize) -> Result<Self> {
+        self.interpolate1d(target_size)
+    }
+
+    /// Interpolate the input tensor to the `(target_h, target_w)` size, taking the value of the
     /// nearest element.
     ///
     /// The input tensor should have four dimensions, `(batch, channels, h, w)`, the returned
     /// tensor also has four dimensions, `(batch, channels, target_h, target_w)`.
-    pub fn upsample_nearest2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
+    pub fn interpolate2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
         let (n, c, _h, _w) = self.dims4()?;
         let op = BackpropOp::new1(self, Op::UpsampleNearest2D);
         let storage = self
             .storage()
             .upsample_nearest2d(self.layout(), target_h, target_w)?;
         Ok(from_storage(storage, (n, c, target_h, target_w), op, false))
+    }
+
+    /// Alias for `interpolate2d`.
+    pub fn upsample_nearest2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
+        self.interpolate2d(target_h, target_w)
     }
 
     /// 2D average pooling over an input tensor with multiple channels.

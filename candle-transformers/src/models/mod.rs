@@ -6,4 +6,7 @@ pub mod falcon;
 pub mod llama;
 pub mod quantized_llama;
 pub mod segment_anything;
+pub mod stable_diffusion;
+pub mod t5;
 pub mod whisper;
+pub mod wuerstchen;

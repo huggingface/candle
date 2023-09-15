@@ -17,7 +17,7 @@ impl GeGlu {
     }
 }
 
-impl GeGlu {
+impl Module for GeGlu {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let hidden_states_and_gate = self.proj.forward(xs)?.chunk(2, D::Minus1)?;
@@ -53,7 +53,7 @@ impl FeedForward {
     }
 }
 
-impl FeedForward {
+impl Module for FeedForward {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let xs = self.project_in.forward(xs)?;
@@ -78,7 +78,7 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
 }
 
 #[derive(Debug)]
-struct CrossAttention {
+pub struct CrossAttention {
     to_q: nn::Linear,
     to_k: nn::Linear,
     to_v: nn::Linear,
@@ -94,7 +94,7 @@ struct CrossAttention {
 
 impl CrossAttention {
     // Defaults should be heads = 8, dim_head = 64, context_dim = None
-    fn new(
+    pub fn new(
         vs: nn::VarBuilder,
         query_dim: usize,
         context_dim: Option<usize>,
@@ -205,7 +205,7 @@ impl CrossAttention {
         self.reshape_batch_dim_to_heads(&xs)
     }
 
-    fn forward(&self, xs: &Tensor, context: Option<&Tensor>) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, context: Option<&Tensor>) -> Result<Tensor> {
         let _enter = self.span.enter();
         let query = self.to_q.forward(xs)?;
         let context = context.unwrap_or(xs).contiguous()?;
@@ -501,8 +501,10 @@ impl AttentionBlock {
         xs.reshape((batch, t, self.num_heads, h_times_d / self.num_heads))?
             .transpose(1, 2)
     }
+}
 
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl Module for AttentionBlock {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let in_dtype = xs.dtype();
         let residual = xs;

@@ -18,6 +18,11 @@ impl Embedding {
     pub fn embeddings(&self) -> &Tensor {
         &self.embeddings
     }
+
+    /// Get the hidden size of the embedding matrix
+    pub fn hidden_size(&self) -> usize {
+        self.hidden_size
+    }
 }
 
 impl crate::Module for Embedding {

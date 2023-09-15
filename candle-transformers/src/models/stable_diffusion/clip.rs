@@ -14,7 +14,7 @@ pub enum Activation {
     Gelu,
 }
 
-impl Activation {
+impl Module for Activation {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Activation::QuickGelu => xs * nn::ops::sigmoid(&(xs * 1.702f64)?)?,
@@ -129,7 +129,7 @@ impl ClipTextEmbeddings {
     }
 }
 
-impl ClipTextEmbeddings {
+impl Module for ClipTextEmbeddings {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let token_embedding = self.token_embedding.forward(xs)?;
         let position_embedding = self.position_embedding.forward(&self.position_ids)?;
@@ -328,8 +328,8 @@ impl ClipTextTransformer {
     }
 }
 
-impl ClipTextTransformer {
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl Module for ClipTextTransformer {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bsz, seq_len) = xs.dims2()?;
         let xs = self.embeddings.forward(xs)?;
         let causal_attention_mask = Self::build_causal_attention_mask(bsz, seq_len, xs.device())?;

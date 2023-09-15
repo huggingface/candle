@@ -1,11 +1,11 @@
 //! 2D UNet Building Blocks
 //!
-use crate::attention::{
+use super::attention::{
     AttentionBlock, AttentionBlockConfig, SpatialTransformer, SpatialTransformerConfig,
 };
-use crate::resnet::{ResnetBlock2D, ResnetBlock2DConfig};
-use crate::utils::{conv2d, Conv2d};
-use candle::{Result, Tensor, D};
+use super::resnet::{ResnetBlock2D, ResnetBlock2DConfig};
+use super::utils::{conv2d, Conv2d};
+use candle::{Module, Result, Tensor, D};
 use candle_nn as nn;
 
 #[derive(Debug)]
@@ -43,7 +43,7 @@ impl Downsample2D {
     }
 }
 
-impl Downsample2D {
+impl Module for Downsample2D {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         match &self.conv {
@@ -172,8 +172,8 @@ impl DownEncoderBlock2D {
     }
 }
 
-impl DownEncoderBlock2D {
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl Module for DownEncoderBlock2D {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let mut xs = xs.clone();
         for resnet in self.resnets.iter() {
@@ -256,8 +256,8 @@ impl UpDecoderBlock2D {
     }
 }
 
-impl UpDecoderBlock2D {
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl Module for UpDecoderBlock2D {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let mut xs = xs.clone();
         for resnet in self.resnets.iter() {

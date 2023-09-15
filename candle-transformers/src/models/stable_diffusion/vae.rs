@@ -4,7 +4,7 @@
 //! Auto-encoder models compress their input to a usually smaller latent space
 //! before expanding it back to its original shape. This results in the latent values
 //! compressing the original information.
-use crate::unet_2d_blocks::{
+use super::unet_2d_blocks::{
     DownEncoderBlock2D, DownEncoderBlock2DConfig, UNetMidBlock2D, UNetMidBlock2DConfig,
     UpDecoderBlock2D, UpDecoderBlock2DConfig,
 };
@@ -132,14 +132,15 @@ impl Encoder {
 
 impl Encoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut xs = self.conv_in.forward(xs)?;
+        let mut xs = xs.apply(&self.conv_in)?;
         for down_block in self.down_blocks.iter() {
-            xs = down_block.forward(&xs)?
+            xs = xs.apply(down_block)?
         }
-        let xs = self.mid_block.forward(&xs, None)?;
-        let xs = self.conv_norm_out.forward(&xs)?;
-        let xs = nn::ops::silu(&xs)?;
-        self.conv_out.forward(&xs)
+        let xs = self
+            .mid_block
+            .forward(&xs, None)?
+            .apply(&self.conv_norm_out)?;
+        nn::ops::silu(&xs)?.apply(&self.conv_out)
     }
 }
 
@@ -302,7 +303,7 @@ impl DiagonalGaussianDistribution {
     }
 
     pub fn sample(&self) -> Result<Tensor> {
-        let sample = Tensor::randn(0., 1f32, self.mean.shape(), self.mean.device());
+        let sample = self.mean.randn_like(0., 1.);
         &self.mean + &self.std * sample
     }
 }

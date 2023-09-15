@@ -1,11 +1,24 @@
 // T5 Text Encoder
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
-use candle::{DType, Result, Tensor, D};
+use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, Module, VarBuilder};
+use serde::Deserialize;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
+fn default_relative_attention_max_distance() -> usize {
+    128
+}
+
+fn default_is_decoder() -> bool {
+    false
+}
+
+fn default_use_cache() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
     vocab_size: usize,
     d_model: usize,
@@ -15,13 +28,17 @@ pub struct Config {
     num_decoder_layers: Option<usize>,
     num_heads: usize,
     relative_attention_num_buckets: usize,
+    #[serde(default = "default_relative_attention_max_distance")]
     relative_attention_max_distance: usize,
     dropout_rate: f64,
     layer_norm_epsilon: f64,
     initializer_factor: f64,
+    #[serde(default)]
     feed_forward_proj: Activation,
+    #[serde(default = "default_is_decoder")]
     is_decoder: bool,
     is_encoder_decoder: bool,
+    #[serde(default = "default_use_cache")]
     use_cache: bool,
     pad_token_id: usize,
     eos_token_id: usize,
@@ -132,26 +149,70 @@ impl T5DenseActDense {
 }
 
 #[derive(Debug)]
+struct T5DenseGatedActDense {
+    wi_0: Linear,
+    wi_1: Linear,
+    wo: Linear,
+    act: Activation,
+}
+
+impl T5DenseGatedActDense {
+    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+        let wi_0 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_0"))?;
+        let wi_1 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_1"))?;
+        let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
+        Ok(Self {
+            wi_0,
+            wi_1,
+            wo,
+            act: Activation::NewGelu,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let hidden_gelu = self.act.forward(&self.wi_0.forward(xs)?)?;
+        let hidden_linear = self.wi_1.forward(xs)?;
+        let xs = hidden_gelu.broadcast_mul(&hidden_linear)?;
+        let xs = self.wo.forward(&xs)?;
+        Ok(xs)
+    }
+}
+
+#[derive(Debug)]
 struct T5LayerFF {
-    dense_relu_dense: T5DenseActDense,
+    dense_act: Option<T5DenseActDense>,
+    gated_dense_act: Option<T5DenseGatedActDense>,
     layer_norm: T5LayerNorm,
 }
 
 impl T5LayerFF {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        // is_gated_act is not supported.
-        let dense_relu_dense = T5DenseActDense::load(vb.pp("DenseReluDense"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
+        let (dense_act, gated_dense_act) = if cfg.feed_forward_proj == Activation::NewGelu {
+            (
+                None,
+                Some(T5DenseGatedActDense::load(vb.pp("DenseReluDense"), cfg)?),
+            )
+        } else {
+            (
+                Some(T5DenseActDense::load(vb.pp("DenseReluDense"), cfg)?),
+                None,
+            )
+        };
         Ok(Self {
-            dense_relu_dense,
+            dense_act,
+            gated_dense_act,
             layer_norm,
         })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let ys = self.layer_norm.forward(xs)?;
-        let ys = self.dense_relu_dense.forward(&ys)?;
+        let ys = match &self.dense_act {
+            Some(dense_act) => dense_act.forward(&ys)?,
+            None => self.gated_dense_act.as_ref().unwrap().forward(&ys)?,
+        };
         let xs = (xs + ys)?;
         Ok(xs)
     }
@@ -228,7 +289,10 @@ impl T5Attention {
         let scores = q.matmul(&k.t()?)?;
 
         let (scores, position_bias) = match position_bias {
-            Some(position_bias) => ((scores + position_bias)?, Some(position_bias.clone())),
+            Some(position_bias) => (
+                scores.broadcast_add(position_bias)?,
+                Some(position_bias.clone()),
+            ),
             None => match &self.relative_attention_bias {
                 None => (scores, None),
                 Some(relative_attention_bias) => {
@@ -274,7 +338,7 @@ impl T5Attention {
                         .forward(&relative_buckets)?
                         .permute((2, 0, 1))?
                         .unsqueeze(0)?;
-                    ((scores + &position_bias)?, Some(position_bias))
+                    (scores.broadcast_add(&position_bias)?, Some(position_bias))
                     // TODO: position_bias_masked?
                 }
             },
@@ -400,23 +464,20 @@ impl T5Stack {
 
     fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
-        let (_b_sz, _seq_len) = (input_embeds.dim(0)?, input_embeds.dim(1)?);
-
         let mut hidden_states = input_embeds;
         let mut position_bias = None;
         for block in self.block.iter() {
             (hidden_states, position_bias) =
                 block.forward(&hidden_states, position_bias.as_ref())?
         }
-        let hidden_states = self.final_layer_norm.forward(&hidden_states)?;
-        Ok(hidden_states)
+        self.final_layer_norm.forward(&hidden_states)
     }
 }
 
 #[derive(Debug)]
 pub struct T5EncoderModel {
-    shared: Arc<Embedding>,
     encoder: T5Stack,
+    device: Device,
 }
 
 impl T5EncoderModel {
@@ -424,11 +485,17 @@ impl T5EncoderModel {
         let shared = embedding(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
         let shared = Arc::new(shared);
         let encoder = T5Stack::load(vb.pp("encoder"), &shared, cfg)?;
-        Ok(Self { shared, encoder })
+        Ok(Self {
+            encoder,
+            device: vb.device().clone(),
+        })
     }
 
     pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
-        let encoder_outputs = self.encoder.forward(input_ids)?;
-        Ok(encoder_outputs)
+        self.encoder.forward(input_ids)
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
     }
 }

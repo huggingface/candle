@@ -71,6 +71,10 @@ struct Args {
     #[arg(long, default_value_t = 0.8)]
     temperature: f64,
 
+    /// Nucleus sampling probability cutoff.
+    #[arg(long)]
+    top_p: Option<f64>,
+
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
@@ -310,7 +314,7 @@ fn main() -> anyhow::Result<()> {
             prompt_tokens
         };
         let mut all_tokens = vec![];
-        let mut logits_processor = LogitsProcessor::new(args.seed, temperature);
+        let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
 
         let start_prompt_processing = std::time::Instant::now();
         let mut next_token = {
