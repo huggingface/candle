@@ -294,7 +294,7 @@ impl T5Attention {
         };
         let (b_sz, q_len) = (xs.dim(0)?, xs.dim(1)?);
         let kv_len = kv_input.dim(1)?;
-        let q = self.q.forward(&xs)?;
+        let q = self.q.forward(xs)?;
         let k = self.k.forward(kv_input)?;
         let v = self.v.forward(kv_input)?;
         let q = q
@@ -315,14 +315,17 @@ impl T5Attention {
             None => scores,
             Some(mask) => masked_fill(
                 &scores,
-                &mask.unsqueeze(0)?.unsqueeze(0)?.repeat((b_sz, self.n_heads))?,
+                &mask
+                    .unsqueeze(0)?
+                    .unsqueeze(0)?
+                    .repeat((b_sz, self.n_heads))?,
                 f32::NEG_INFINITY,
             )?,
         };
 
         let (scores, position_bias) = match position_bias {
             Some(position_bias) => (
-                scores.broadcast_add(&position_bias)?,
+                scores.broadcast_add(position_bias)?,
                 Some(position_bias.clone()),
             ),
             None => match &self.relative_attention_bias {
