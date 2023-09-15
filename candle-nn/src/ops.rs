@@ -213,3 +213,12 @@ pub fn pixel_unshuffle(xs: &Tensor, downscale_factor: usize) -> Result<Tensor> {
     .permute((0, 1, 3, 5, 2, 4))?
     .reshape((b_size, out_c, h / downscale_factor, w / downscale_factor))
 }
+
+// https://pytorch.org/docs/stable/generated/torch.nn.ReplicationPad2d.html
+pub fn replication_pad2d(xs: &Tensor) -> Result<Tensor> {
+    let (_b_size, _c, h, w) = xs.dims4()?;
+    let (first, last) = (xs.narrow(3, 0, 1)?, xs.narrow(3, w - 1, 1)?);
+    let xs = Tensor::cat(&[&first, xs, &last], 3)?;
+    let (first, last) = (xs.narrow(2, 0, 1)?, xs.narrow(2, h - 1, 1)?);
+    Tensor::cat(&[&first, &xs, &last], 2)
+}
