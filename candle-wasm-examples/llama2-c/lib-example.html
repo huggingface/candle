@@ -6,7 +6,7 @@
   <body></body>
 </html>
 
-<!doctype html>
+<!DOCTYPE html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -113,8 +113,14 @@
           const handleMessage = (event) => {
             const { status, error, message, prompt, sentence } = event.data;
             if (status) updateStatus(event.data);
-            if (error) reject(new Error(error));
-            if (status === "complete") resolve(event.data);
+            if (error) {
+              llamaWorker.removeEventListener("message", handleMessage);
+              reject(new Error(error));
+            }
+            if (status === "complete") {
+              llamaWorker.removeEventListener("message", handleMessage);
+              resolve(event.data);
+            }
           };
 
           controller.signal.addEventListener("abort", handleAbort);
