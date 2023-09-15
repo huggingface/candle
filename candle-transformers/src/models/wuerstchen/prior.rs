@@ -1,6 +1,5 @@
-#![allow(unused)]
 use super::common::{AttnBlock, ResBlock, TimestepBlock};
-use candle::{DType, Module, Result, Tensor, D};
+use candle::{DType, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 #[derive(Debug)]
