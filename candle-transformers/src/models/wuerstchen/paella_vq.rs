@@ -49,7 +49,7 @@ impl Module for MixingResidualBlock {
             .apply(&self.norm1)?
             .permute((0, 3, 1, 2))?
             .affine(1. + mods[0] as f64, mods[1] as f64)?;
-        // TODO: Add the ReplicationPad2d
+        let x_temp = candle_nn::ops::replication_pad2d(&x_temp, 1)?;
         let xs = (xs + x_temp.apply(&self.depthwise_conv)? * mods[2] as f64)?;
         let x_temp = xs
             .permute((0, 2, 3, 1))?
