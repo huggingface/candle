@@ -79,8 +79,7 @@ struct PaellaVQ {
 
 impl PaellaVQ {
     pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
-        // TODO: pixel unshuffle
-        let mut xs = xs.apply(&self.in_block_conv)?;
+        let mut xs = candle_nn::ops::pixel_unshuffle(xs, 2)?.apply(&self.in_block_conv)?;
         for down_block in self.down_blocks.iter() {
             if let Some(conv) = &down_block.0 {
                 xs = xs.apply(conv)?
@@ -100,8 +99,8 @@ impl PaellaVQ {
                 xs = xs.apply(conv)?
             }
         }
-        xs.apply(&self.out_block_conv)
-        // TODO: pixel shuffle
+        xs.apply(&self.out_block_conv)?
+            .apply(&|xs: &_| candle_nn::ops::pixel_shuffle(xs, 2))
     }
 }
 

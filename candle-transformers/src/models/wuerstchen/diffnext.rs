@@ -84,6 +84,7 @@ pub struct WDiffNeXt {
     clf_ln: WLayerNorm,
     clf_conv: candle_nn::Conv2d,
     c_r: usize,
+    patch_size: usize,
 }
 
 impl WDiffNeXt {
@@ -233,6 +234,7 @@ impl WDiffNeXt {
             clf_ln,
             clf_conv,
             c_r,
+            patch_size,
         })
     }
 
@@ -274,8 +276,10 @@ impl WDiffNeXt {
         };
         let x_in = xs;
 
-        // TODO: pixel unshuffle.
-        let mut xs = xs.apply(&self.embedding_conv)?.apply(&self.embedding_ln)?;
+        let mut xs = xs
+            .apply(&|xs: &_| candle_nn::ops::pixel_unshuffle(xs, self.patch_size))?
+            .apply(&self.embedding_conv)?
+            .apply(&self.embedding_ln)?;
 
         let mut level_outputs = Vec::new();
         for (i, down_block) in self.down_blocks.iter().enumerate() {
@@ -331,8 +335,11 @@ impl WDiffNeXt {
             }
         }
 
-        // TODO: pixel shuffle
-        let ab = xs.apply(&self.clf_ln)?.apply(&self.clf_conv)?.chunk(1, 2)?;
+        let ab = xs
+            .apply(&self.clf_ln)?
+            .apply(&self.clf_conv)?
+            .apply(&|xs: &_| candle_nn::ops::pixel_shuffle(xs, self.patch_size))?
+            .chunk(1, 2)?;
         let b = ((candle_nn::ops::sigmoid(&ab[1])? * (1. - EPS * 2.))? + EPS)?;
         (x_in - &ab[0])? / b
     }
