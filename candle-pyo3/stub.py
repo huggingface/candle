@@ -2,7 +2,6 @@
 import argparse
 import inspect
 import os
-from pathlib import Path
 from typing import Optional
 import black
 
@@ -199,4 +198,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     import candle
 
-    write(candle.candle, "candle-pyo3/py-src/candle/", "candle", check=args.check)
+    write(candle.candle, "candle-pyo3/py_src/candle/", "candle", check=args.check)

@@ -1,5 +1,5 @@
 import candle
-from candle import Tensor
+from candle import Tensor, QTensor
 
 t = candle.Tensor(42.0)
 print(t)
@@ -21,7 +21,7 @@ print(t)
 print(t.dtype)
 
 t = candle.randn((16, 256))
-quant_t = t.quantize("q6k")
-dequant_t = quant_t.dequantize()
-diff2 = (t - dequant_t).sqr()
+quant_t:QTensor = t.quantize("q6k")
+dequant_t:Tensor = quant_t.dequantize()
+diff2:Tensor = (t - dequant_t).sqr()
 print(diff2.mean_all())
