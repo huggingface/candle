@@ -239,6 +239,7 @@ impl PyTensor {
     }
 
     /// Gets the tensor's data as a Python scalar or array-like object.
+    /// &RETURNS&: _ArrayLike
     fn values(&self, py: Python<'_>) -> PyResult<PyObject> {
         struct M<'a>(Python<'a>);
         impl<'a> MapDType for M<'a> {
@@ -497,10 +498,14 @@ impl PyTensor {
         ))
     }
 
+    /// Returns the sum of the tensor.
+    /// &RETURNS&: Tensor
     fn sum_all(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.sum_all().map_err(wrap_err)?))
     }
 
+    /// Returns the mean of the tensor.
+    /// &RETURNS&: Tensor
     fn mean_all(&self) -> PyResult<Self> {
         let elements = self.0.elem_count();
         let sum = self.0.sum_all().map_err(wrap_err)?;
@@ -508,54 +513,83 @@ impl PyTensor {
         Ok(PyTensor(mean))
     }
 
+    #[pyo3(text_signature = "(dim:int)")]
+    /// Flattens the tensor on the dimension indexes from `dim` (inclusive) to the last dimension.
     fn flatten_from(&self, dim: i64) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.flatten_from(dim).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(dim:int)")]
+    ///Flattens the tensor on the dimension indexes from `0` to `dim` (inclusive).
+    /// &RETURNS&: Tensor
     fn flatten_to(&self, dim: i64) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.flatten_to(dim).map_err(wrap_err)?))
     }
 
+    /// Flattens the tensor into a 1D tensor.
+    /// &RETURNS&: Tensor
     fn flatten_all(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.flatten_all().map_err(wrap_err)?))
     }
 
+    /// Transposes the tensor.
+    /// &RETURNS&: Tensor
     fn t(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.t().map_err(wrap_err)?))
     }
 
+    /// Makes the tensor contiguous in memory.
+    /// &RETURNS&: Tensor
     fn contiguous(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.contiguous().map_err(wrap_err)?))
     }
 
+    /// Returns true if the tensor is contiguous in C order.
+    /// &RETURNS&: bool
     fn is_contiguous(&self) -> bool {
         self.0.is_contiguous()
     }
 
+    /// Returns true if the tensor is contiguous in Fortran order.
+    /// &RETURNS&: bool
     fn is_fortran_contiguous(&self) -> bool {
         self.0.is_fortran_contiguous()
     }
 
+    /// Detach the tensor from the computation graph.
+    /// &RETURNS&: Tensor
     fn detach(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.detach().map_err(wrap_err)?))
     }
 
+    /// Returns a copy of the tensor.
+    /// &RETURNS&: Tensor
     fn copy(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.copy().map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(dtype:Union[str,DType])")]
+    /// Convert the tensor to a new dtype.
+    /// &RETURNS&: Tensor
     fn to_dtype(&self, dtype: PyObject, py: Python<'_>) -> PyResult<Self> {
         let dtype = PyDType::from_pyobject(dtype, py)?;
         Ok(PyTensor(self.0.to_dtype(dtype.0).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(device:Union[str,Device])")]
+    /// Move the tensor to a new device.
+    /// &RETURNS&: Tensor
     fn to_device(&self, device: PyDevice) -> PyResult<Self> {
         let device = device.as_device()?;
         Ok(PyTensor(self.0.to_device(&device).map_err(wrap_err)?))
     }
 
+
+    #[pyo3(text_signature = "(quantized_dtype:str)")]
+    /// Quantize the tensor.
+    /// &RETURNS&: QTensor
     fn quantize(&self, quantized_dtype: &str) -> PyResult<PyQTensor> {
         use ::candle::quantized;
         let res = match quantized_dtype {
@@ -586,6 +620,7 @@ impl PyTensor {
 #[pyfunction]
 #[pyo3(text_signature = "(tensors:List[Tensor], dim:int )")]
 /// Concatenate the tensors across one axis.
+/// &RETURNS&: Tensor
 fn cat(tensors: Vec<PyTensor>, dim: i64) -> PyResult<PyTensor> {
     if tensors.is_empty() {
         return Err(PyErr::new::<PyValueError, _>("empty input to cat"));
@@ -599,6 +634,7 @@ fn cat(tensors: Vec<PyTensor>, dim: i64) -> PyResult<PyTensor> {
 #[pyfunction]
 #[pyo3(text_signature = "(tensors:List[Tensor], dim:int)")]
 /// Stack the tensors along a new axis.
+/// &RETURNS&: Tensor
 fn stack(tensors: Vec<PyTensor>, dim: usize) -> PyResult<PyTensor> {
     let tensors = tensors.into_iter().map(|t| t.0).collect::<Vec<_>>();
     let tensor = Tensor::stack(&tensors, dim).map_err(wrap_err)?;
@@ -608,6 +644,7 @@ fn stack(tensors: Vec<PyTensor>, dim: usize) -> PyResult<PyTensor> {
 #[pyfunction]
 #[pyo3(text_signature = "(data:_ArrayLike)")]
 /// Creates a new tensor from a Python value. The value can be a scalar or array-like object.
+/// &RETURNS&: Tensor
 fn tensor(py: Python<'_>, data: PyObject) -> PyResult<PyTensor> {
     PyTensor::new(py, data)
 }
@@ -615,6 +652,7 @@ fn tensor(py: Python<'_>, data: PyObject) -> PyResult<PyTensor> {
 #[pyfunction]
 #[pyo3(signature = (shape, *, device=None), text_signature = "(shape:Sequence[int], device:Optional[Device]=None)")]
 /// Creates a new tensor with random values.
+/// &RETURNS&: Tensor
 fn rand(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<PyTensor> {
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
     let tensor = Tensor::rand(0f32, 1f32, shape.0, &device).map_err(wrap_err)?;
@@ -623,6 +661,8 @@ fn rand(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<P
 
 #[pyfunction]
 #[pyo3(signature = (shape, *, device=None), text_signature = "(shape:Sequence[int], device:Optional[Device]=None)")]
+/// Creates a new tensor with random values from a normal distribution.
+/// &RETURNS&: Tensor
 fn randn(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<PyTensor> {
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
     let tensor = Tensor::randn(0f32, 1f32, shape.0, &device).map_err(wrap_err)?;
@@ -631,6 +671,8 @@ fn randn(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<
 
 #[pyfunction]
 #[pyo3(signature = (shape, *, dtype=None, device=None),text_signature = "(shape:Sequence[int], dtype:Optional[DType]=None, device:Optional[Device]=None)")]
+/// Creates a new tensor filled with ones.
+/// &RETURNS&: Tensor
 fn ones(
     py: Python<'_>,
     shape: PyShape,
@@ -648,6 +690,8 @@ fn ones(
 
 #[pyfunction]
 #[pyo3(signature = (shape, *, dtype=None, device=None), text_signature = "(shape:Sequence[int], dtype:Optional[DType]=None, device:Optional[Device]=None)")]
+/// Creates a new tensor filled with zeros.
+/// &RETURNS&: Tensor
 fn zeros(
     py: Python<'_>,
     shape: PyShape,
@@ -678,16 +722,22 @@ impl std::ops::Deref for PyQTensor {
 #[pymethods]
 impl PyQTensor {
     #[getter]
+    ///Gets the tensors quantized dtype.
+    /// &RETURNS&: str
     fn ggml_dtype(&self) -> String {
         format!("{:?}", self.0.dtype())
     }
 
     #[getter]
+    ///Gets the rank of the tensor.
+    /// &RETURNS&: int
     fn rank(&self) -> usize {
         self.0.rank()
     }
 
     #[getter]
+    ///Gets the shape of the tensor.
+    /// &RETURNS&: Tuple[int]
     fn shape(&self, py: Python<'_>) -> PyObject {
         PyTuple::new(py, self.0.shape().dims()).to_object(py)
     }
@@ -700,11 +750,16 @@ impl PyQTensor {
         self.__repr__()
     }
 
+    /// Dequantizes the tensor.
+    /// &RETURNS&: Tensor  
     fn dequantize(&self) -> PyResult<PyTensor> {
         let tensor = self.0.dequantize(&Device::Cpu).map_err(wrap_err)?;
         Ok(PyTensor(tensor))
     }
 
+    #[pyo3(text_signature = "(lhs:Tensor)")]
+    /// Performs a quantized matrix multiplication, with the quantized tensor as the left hand side.
+    /// &RETURNS&: Tensor
     fn matmul_t(&self, lhs: &PyTensor) -> PyResult<PyTensor> {
         let qmatmul = ::candle::quantized::QMatMul::from_arc(self.0.clone());
         let res = qmatmul.forward(lhs).map_err(wrap_err)?;
@@ -715,6 +770,7 @@ impl PyQTensor {
 #[pyfunction]
 #[pyo3(text_signature = "(path:Union[str,PathLike])")]
 /// Loads a safetensors file. Returns a dictionary mapping tensor names to tensors.
+/// &RETURNS&: Dict[str,Tensor]
 fn load_safetensors(path: &str, py: Python<'_>) -> PyResult<PyObject> {
     let res = ::candle::safetensors::load(path, &Device::Cpu).map_err(wrap_err)?;
     let res = res
@@ -727,6 +783,7 @@ fn load_safetensors(path: &str, py: Python<'_>) -> PyResult<PyObject> {
 #[pyfunction]
 #[pyo3(text_signature = "(path:Union[str,PathLike], tensors:Dict[str,Tensor])")]
 /// Saves a dictionary of tensors to a safetensors file.
+/// &RETURNS&: None
 fn save_safetensors(
     path: &str,
     tensors: std::collections::HashMap<String, PyTensor>,
@@ -742,6 +799,7 @@ fn save_safetensors(
 #[pyo3(text_signature = "(path:Union[str,PathLike])")]
 /// Load a GGML file. Returns a tuple of three objects: a dictionary mapping tensor names to tensors,
 /// a dictionary mapping hyperparameter names to hyperparameter values, and a vocabulary.
+/// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any], List[str]]
 fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObject)> {
     let mut file = std::fs::File::open(path)?;
     let ggml = ::candle::quantized::ggml_file::Content::read(&mut file).map_err(wrap_err)?;
@@ -776,6 +834,7 @@ fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObje
 #[pyo3(text_signature = "(path:Union[str,PathLike])")]
 /// Loads a GGUF file. Returns a tuple of two dictionaries: the first maps tensor names to tensors,
 /// and the second maps metadata keys to metadata values.
+/// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any]]
 fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
     use ::candle::quantized::gguf_file;
     fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<PyObject> {
@@ -826,24 +885,28 @@ fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
 
 #[pyfunction]
 /// Returns true if the 'cuda' backend is available.
+/// &RETURNS&: bool
 fn cuda_is_available() -> bool {
     ::candle::utils::cuda_is_available()
 }
 
 #[pyfunction]
 /// Returns true if candle was compiled with 'accelerate' support.
+/// &RETURNS&: bool
 fn has_accelerate() -> bool {
     ::candle::utils::has_accelerate()
 }
 
 #[pyfunction]
 /// Returns true if candle was compiled with MKL support.
+/// &RETURNS&: bool
 fn has_mkl() -> bool {
     ::candle::utils::has_mkl()
 }
 
 #[pyfunction]
 /// Returns the number of threads used by the candle.
+/// &RETURNS&: int
 fn get_num_threads() -> usize {
     ::candle::utils::get_num_threads()
 }
@@ -862,7 +925,8 @@ fn candle_utils(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 
 #[pyfunction]
 #[pyo3(text_signature = "(tensor:Tensor, dim:int)")]
-/// Applies the Softmax function to a given tensor.
+/// Applies the Softmax function to a given tensor.#
+/// &RETURNS&: Tensor
 fn softmax(tensor: PyTensor, dim: i64) -> PyResult<PyTensor> {
     let dim = actual_dim(&tensor, dim).map_err(wrap_err)?;
     let sm = candle_nn::ops::softmax(&tensor.0, dim).map_err(wrap_err)?;
@@ -872,6 +936,7 @@ fn softmax(tensor: PyTensor, dim: i64) -> PyResult<PyTensor> {
 #[pyfunction]
 #[pyo3(text_signature = "(tensor:Tensor)")]
 /// Applies the Sigmoid Linear Unit (SiLU) function to a given tensor.
+/// &RETURNS&: Tensor
 fn silu(tensor: PyTensor) -> PyResult<PyTensor> {
     let s = candle_nn::ops::silu(&tensor.0).map_err(wrap_err)?;
     Ok(PyTensor(s))

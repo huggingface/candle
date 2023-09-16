@@ -7,7 +7,7 @@ class bf16(DType):
     pass
 
 @staticmethod
-def cat(tensors: List[Tensor], dim: int):
+def cat(tensors: List[Tensor], dim: int) -> Tensor:
     """
     Concatenate the tensors across one axis.
     """
@@ -26,31 +26,35 @@ class i64(DType):
     pass
 
 @staticmethod
-def ones(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None):
-    """ """
+def ones(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+    """
+    Creates a new tensor filled with ones.
+    """
     pass
 
 @staticmethod
-def rand(shape: Sequence[int], device: Optional[Device] = None):
+def rand(shape: Sequence[int], device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor with random values.
     """
     pass
 
 @staticmethod
-def randn(shape: Sequence[int], device: Optional[Device] = None):
-    """ """
+def randn(shape: Sequence[int], device: Optional[Device] = None) -> Tensor:
+    """
+    Creates a new tensor with random values from a normal distribution.
+    """
     pass
 
 @staticmethod
-def stack(tensors: List[Tensor], dim: int):
+def stack(tensors: List[Tensor], dim: int) -> Tensor:
     """
     Stack the tensors along a new axis.
     """
     pass
 
 @staticmethod
-def tensor(data: _ArrayLike):
+def tensor(data: _ArrayLike) -> Tensor:
     """
     Creates a new tensor from a Python value. The value can be a scalar or array-like object.
     """
@@ -63,31 +67,43 @@ class u8(DType):
     pass
 
 @staticmethod
-def zeros(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None):
-    """ """
+def zeros(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+    """
+    Creates a new tensor filled with zeros.
+    """
     pass
 
 class DType:
     pass
 
 class QTensor:
-    def dequantize(self):
-        """ """
+    def dequantize(self) -> Tensor:
+        """
+        Dequantizes the tensor.
+        """
         pass
     @property
-    def ggml_dtype(self):
-        """ """
+    def ggml_dtype(self) -> str:
+        """
+        Gets the tensors quantized dtype.
+        """
         pass
-    def matmul_t(self, lhs):
-        """ """
+    def matmul_t(lhs: Tensor) -> Tensor:
+        """
+        Performs a quantized matrix multiplication, with the quantized tensor as the left hand side.
+        """
         pass
     @property
-    def rank(self):
-        """ """
+    def rank(self) -> int:
+        """
+        Gets the rank of the tensor.
+        """
         pass
     @property
-    def shape(self):
-        """ """
+    def shape(self) -> Tuple[int]:
+        """
+        Gets the shape of the tensor.
+        """
         pass
 
 class Tensor:
@@ -117,17 +133,23 @@ class Tensor:
     def broadcast_sub(self, rhs):
         """ """
         pass
-    def contiguous(self):
-        """ """
+    def contiguous(self) -> Tensor:
+        """
+        Makes the tensor contiguous in memory.
+        """
         pass
-    def copy(self):
-        """ """
+    def copy(self) -> Tensor:
+        """
+        Returns a copy of the tensor.
+        """
         pass
     def cos(self):
         """ """
         pass
-    def detach(self):
-        """ """
+    def detach(self) -> Tensor:
+        """
+        Detach the tensor from the computation graph.
+        """
         pass
     @property
     def device(self):
@@ -140,14 +162,20 @@ class Tensor:
     def exp(self):
         """ """
         pass
-    def flatten_all(self):
-        """ """
+    def flatten_all(self) -> Tensor:
+        """
+        Flattens the tensor into a 1D tensor.
+        """
         pass
-    def flatten_from(self, dim):
-        """ """
+    def flatten_from(dim: int):
+        """
+        Flattens the tensor on the dimension indexes from `dim` (inclusive) to the last dimension.
+        """
         pass
-    def flatten_to(self, dim):
-        """ """
+    def flatten_to(dim: int) -> Tensor:
+        """
+        Flattens the tensor on the dimension indexes from `0` to `dim` (inclusive).
+        """
         pass
     def get(self, index):
         """ """
@@ -155,11 +183,15 @@ class Tensor:
     def index_select(self, rhs, dim):
         """ """
         pass
-    def is_contiguous(self):
-        """ """
+    def is_contiguous(self) -> bool:
+        """
+        Returns true if the tensor is contiguous in C order.
+        """
         pass
-    def is_fortran_contiguous(self):
-        """ """
+    def is_fortran_contiguous(self) -> bool:
+        """
+        Returns true if the tensor is contiguous in Fortran order.
+        """
         pass
     def log(self):
         """ """
@@ -170,8 +202,10 @@ class Tensor:
     def max_keepdim(self, dim):
         """ """
         pass
-    def mean_all(self):
-        """ """
+    def mean_all(self) -> Tensor:
+        """
+        Returns the mean of the tensor.
+        """
         pass
     def min_keepdim(self, dim):
         """ """
@@ -182,8 +216,10 @@ class Tensor:
     def powf(self, p):
         """ """
         pass
-    def quantize(self, quantized_dtype):
-        """ """
+    def quantize(quantized_dtype: str) -> QTensor:
+        """
+        Quantize the tensor.
+        """
         pass
     @property
     def rank(self):
@@ -217,20 +253,28 @@ class Tensor:
     def stride(self):
         """ """
         pass
-    def sum_all(self):
-        """ """
+    def sum_all(self) -> Tensor:
+        """
+        Returns the sum of the tensor.
+        """
         pass
     def sum_keepdim(self, dims):
         """ """
         pass
-    def t(self):
-        """ """
+    def t(self) -> Tensor:
+        """
+        Transposes the tensor.
+        """
         pass
-    def to_device(self, device):
-        """ """
+    def to_device(device: Union[str, Device]) -> Tensor:
+        """
+        Move the tensor to a new device.
+        """
         pass
-    def to_dtype(self, dtype):
-        """ """
+    def to_dtype(dtype: Union[str, DType]) -> Tensor:
+        """
+        Convert the tensor to a new dtype.
+        """
         pass
     def transpose(self, dim1, dim2):
         """ """
@@ -238,7 +282,7 @@ class Tensor:
     def unsqueeze(self, dim):
         """ """
         pass
-    def values(self):
+    def values(self) -> _ArrayLike:
         """
         Gets the tensor's data as a Python scalar or array-like object.
         """
