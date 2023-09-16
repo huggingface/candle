@@ -583,7 +583,6 @@ impl PyTensor {
     }
 }
 
-
 #[pyfunction]
 #[pyo3(text_signature = "(tensors:List[Tensor], dim:int )")]
 /// Concatenate the tensors across one axis.
