@@ -1,5 +1,7 @@
 # Generated content DO NOT EDIT
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Sequence
+from os import PathLike
+from candle.typing import _ArrayLike, Device
 
 class bf16(DType):
     pass
@@ -24,48 +26,34 @@ class i64(DType):
     pass
 
 @staticmethod
-def load_ggml(path):
+def ones(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None):
     """ """
     pass
 
 @staticmethod
-def load_gguf(path):
+def rand(shape: Sequence[int], device: Optional[Device] = None):
+    """
+    Creates a new tensor with random values.
+    """
+    pass
+
+@staticmethod
+def randn(shape: Sequence[int], device: Optional[Device] = None):
     """ """
     pass
 
 @staticmethod
-def load_safetensors(path):
-    """ """
+def stack(tensors: List[Tensor], dim: int):
+    """
+    Stack the tensors along a new axis.
+    """
     pass
 
 @staticmethod
-def ones(shape, *, dtype=None, device=None):
-    """ """
-    pass
-
-@staticmethod
-def rand(shape, *, device=None):
-    """ """
-    pass
-
-@staticmethod
-def randn(shape, *, device=None):
-    """ """
-    pass
-
-@staticmethod
-def save_safetensors(path, tensors):
-    """ """
-    pass
-
-@staticmethod
-def stack(tensors, dim):
-    """ """
-    pass
-
-@staticmethod
-def tensor(vs):
-    """ """
+def tensor(data: _ArrayLike):
+    """
+    Creates a new tensor from a Python value. The value can be a scalar or array-like object.
+    """
     pass
 
 class u32(DType):
@@ -75,7 +63,7 @@ class u8(DType):
     pass
 
 @staticmethod
-def zeros(shape, *, dtype=None, device=None):
+def zeros(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None):
     """ """
     pass
 
@@ -103,7 +91,7 @@ class QTensor:
         pass
 
 class Tensor:
-    def __init__(data):
+    def __init__(data: _ArrayLike):
         pass
     def argmax_keepdim(self, dim):
         """ """
@@ -252,7 +240,7 @@ class Tensor:
         pass
     def values(self):
         """
-        Gets the tensor data as a Python value/array/array of array/...
+        Gets the tensor's data as a Python scalar or array-like object.
         """
         pass
     def where_cond(self, on_true, on_false):

@@ -8,7 +8,12 @@ import black
 
 INDENT = " " * 4
 GENERATED_COMMENT = "# Generated content DO NOT EDIT\n"
-TYPING = "from typing import Any, Callable, Dict, List, Optional, Tuple, Union\n"
+TYPING = """from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Sequence
+from os import PathLike
+"""
+CANDLE_SPECIFIC_TYPING = "from candle.typing import _ArrayLike, Device\n"
+CANDLE_TENSOR_IMPORTS = "from candle import Tensor,DType\n"
+
 
 
 def do_indent(text: Optional[str], indent: str):
@@ -66,6 +71,9 @@ def pyi_file(obj, indent=""):
     if inspect.ismodule(obj):
         string += GENERATED_COMMENT
         string += TYPING
+        string += CANDLE_SPECIFIC_TYPING
+        if obj.__name__ != "candle.candle":
+            string += CANDLE_TENSOR_IMPORTS
         members = get_module_members(obj)
         for member in members:
             string += pyi_file(member, indent)
