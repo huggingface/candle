@@ -4,6 +4,7 @@ import inspect
 import os
 from typing import Optional
 import black
+from pathlib import Path
 
 
 INDENT = " " * 4
@@ -204,6 +205,13 @@ if __name__ == "__main__":
     parser.add_argument("--check", action="store_true")
 
     args = parser.parse_args()
+
+    #Enable execution from the candle and candle-pyo3 directories
+    cwd = Path.cwd()
+    directory = "py_src/candle/"
+    if cwd.name != "candle-pyo3":
+        directory = f"candle-pyo3/{directory}"
+        
     import candle
 
-    write(candle.candle, "candle-pyo3/py_src/candle/", "candle", check=args.check)
+    write(candle.candle, directory, "candle", check=args.check)

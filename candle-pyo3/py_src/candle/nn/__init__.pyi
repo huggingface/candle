@@ -1,5 +1,5 @@
 # Generated content DO NOT EDIT
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Sequence
 from os import PathLike
 from candle.typing import _ArrayLike, Device
 from candle import Tensor, DType
