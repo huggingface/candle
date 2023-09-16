@@ -1,6 +1,8 @@
 //! A `VarBuilder` is used to retrieve variables used by a model. These variables can either come
 //! from a pre-trained checkpoint, e.g. using `VarBuilder::from_safetensors`, or initialized for
 //! training, e.g. using `VarBuilder::from_varmap`.
+//!
+#![feature(type_name_of_val)]
 use crate::VarMap;
 use candle::{safetensors::Load, DType, Device, Error, Result, Shape, Tensor};
 use safetensors::{slice::IndexOp, tensor::SafeTensors};
@@ -57,6 +59,8 @@ pub trait Backend: Send + Sync {
     ) -> Result<Tensor>;
 
     fn contains_tensor(&self, name: &str) -> bool;
+
+    fn keys(&self) -> Option<Vec<&str>>;
 }
 
 pub trait SimpleBackend: Send + Sync {
@@ -71,6 +75,8 @@ pub trait SimpleBackend: Send + Sync {
     ) -> Result<Tensor>;
 
     fn contains_tensor(&self, name: &str) -> bool;
+
+    fn keys(&self) -> Option<Vec<&str>>;
 }
 
 impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
@@ -89,6 +95,10 @@ impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
     fn contains_tensor(&self, name: &str) -> bool {
         self.as_ref().contains_tensor(name)
     }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        self.as_ref().keys()
+    }
 }
 
 impl<'a, B: Backend> VarBuilderArgs<'a, B> {
@@ -103,6 +113,12 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
             path: vec![],
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    pub fn hey(&self) -> String {
+        let keys = self.data.backend.keys();
+        println!("Type: {:?}", keys);
+        "hey".to_string()
     }
 
     /// Returns the prefix of the `VarBuilder`.
@@ -199,6 +215,10 @@ impl SimpleBackend for Zeros {
     fn contains_tensor(&self, _name: &str) -> bool {
         true
     }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        None
+    }
 }
 
 impl SimpleBackend for HashMap<String, Tensor> {
@@ -233,6 +253,10 @@ impl SimpleBackend for HashMap<String, Tensor> {
     fn contains_tensor(&self, name: &str) -> bool {
         self.contains_key(name)
     }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        None
+    }
 }
 
 impl SimpleBackend for VarMap {
@@ -249,6 +273,10 @@ impl SimpleBackend for VarMap {
 
     fn contains_tensor(&self, name: &str) -> bool {
         self.data().lock().unwrap().contains_key(name)
+    }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        None
     }
 }
 
@@ -290,6 +318,10 @@ impl<'a> SimpleBackend for SafeTensorWithRouting<'a> {
     fn contains_tensor(&self, name: &str) -> bool {
         self.routing.contains_key(name)
     }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        Some(self.routing.keys().map(|s| &s[..]).collect())
+    }
 }
 
 impl SimpleBackend for candle::npy::NpzTensors {
@@ -322,6 +354,10 @@ impl SimpleBackend for candle::npy::NpzTensors {
 
     fn contains_tensor(&self, name: &str) -> bool {
         self.get(name).map_or(false, |v| v.is_some())
+    }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        None
     }
 }
 
@@ -506,5 +542,9 @@ impl<'a> Backend for ShardedSafeTensors<'a> {
 
     fn contains_tensor(&self, name: &str) -> bool {
         self.0.routing.contains_key(name)
+    }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        None
     }
 }
