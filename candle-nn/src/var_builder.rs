@@ -1,8 +1,6 @@
 //! A `VarBuilder` is used to retrieve variables used by a model. These variables can either come
 //! from a pre-trained checkpoint, e.g. using `VarBuilder::from_safetensors`, or initialized for
 //! training, e.g. using `VarBuilder::from_varmap`.
-//!
-#![feature(type_name_of_val)]
 use crate::VarMap;
 use candle::{safetensors::Load, DType, Device, Error, Result, Shape, Tensor};
 use safetensors::{slice::IndexOp, tensor::SafeTensors};
@@ -115,10 +113,8 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         }
     }
 
-    pub fn hey(&self) -> String {
-        let keys = self.data.backend.keys();
-        println!("Type: {:?}", keys);
-        "hey".to_string()
+    pub fn keys(&self) -> Option<Vec<&str>> {
+        self.data.backend.keys()
     }
 
     /// Returns the prefix of the `VarBuilder`.
