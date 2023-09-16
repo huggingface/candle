@@ -76,7 +76,7 @@ impl Model {
     }
 
     // x and y have to be between 0 and 1
-    pub fn mask_for_point(&self, x: f64, y: f64) -> Result<String, JsError> {
+    pub fn mask_for_point(&self, x: f64, y: f64) -> Result<JsValue, JsError> {
         if !(0. ..=1.).contains(&x) {
             Err(JsError::new(&format!(
                 "x has to be between 0 and 1, got {x}"
@@ -112,8 +112,7 @@ impl Model {
             width: embeddings.width,
             height: embeddings.height,
         };
-        let json = serde_json::to_string(&MaskImage { mask, image })?;
-        Ok(json)
+        Ok(serde_wasm_bindgen::to_value(&MaskImage { mask, image })?)
     }
 }
 

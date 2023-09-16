@@ -50,6 +50,7 @@ These online demos run entirely in your browser:
   object recognition.
 - [whisper](https://huggingface.co/spaces/lmz/candle-whisper): text to speech.
 - [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
+- [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
 
 We also provide a some command line based examples using state of the art models:
 
@@ -96,7 +97,8 @@ There are also some wasm examples for whisper and
 [llama2.c](https://github.com/karpathy/llama2.c). You can either build them with
 `trunk` or try them online:
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
-[llama2](https://huggingface.co/spaces/lmz/candle-llama2).
+[llama2](https://huggingface.co/spaces/lmz/candle-llama2),
+[Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm).
 
 For LLaMA2, run the following command to retrieve the weight files and start a
 test server:
