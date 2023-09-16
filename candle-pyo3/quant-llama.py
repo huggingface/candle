@@ -169,7 +169,7 @@ def main():
             'n_head_kv': metadata['llama.attention.head_count_kv'],
             'n_layer': metadata['llama.block_count'],
             'n_rot': metadata['llama.rope.dimension_count'],
-            'rope_freq': metadata['llama.rope.freq_base'],
+            'rope_freq': metadata.get('llama.rope.freq_base', 10000.),
             'ftype': metadata['general.file_type'],
         }
         all_tensors = { gguf_rename(k): v for k, v in all_tensors.items() }
