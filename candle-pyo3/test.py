@@ -1,5 +1,4 @@
 import candle
-from candle import Tensor, QTensor
 
 t = candle.Tensor(42.0)
 print(t)

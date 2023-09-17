@@ -31,6 +31,7 @@ impl From<PyShape> for ::candle::Shape {
 
 #[derive(Clone, Debug)]
 #[pyclass(name = "Tensor")]
+/// A `candle` tensor.
 struct PyTensor(Tensor);
 
 impl std::ops::Deref for PyTensor {
@@ -43,6 +44,7 @@ impl std::ops::Deref for PyTensor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[pyclass(name = "DType")]
+/// A `candle` dtype.
 struct PyDType(DType);
 
 #[pymethods]
@@ -197,7 +199,7 @@ trait MapDType {
 #[pymethods]
 impl PyTensor {
     #[new]
-    #[pyo3(text_signature = "(data:_ArrayLike)")]
+    #[pyo3(text_signature = "(self, data:_ArrayLike)")]
     // TODO: Handle arbitrary input dtype and shape.
     /// Creates a new tensor from a Python value. The value can be a scalar or array-like object.
     fn new(py: Python<'_>, data: PyObject) -> PyResult<Self> {
@@ -283,27 +285,36 @@ impl PyTensor {
     }
 
     #[getter]
-    /// Gets the tensor shape as a Python tuple.
+    /// Gets the tensor's shape.
+    /// &RETURNS&: Tuple[int]
     fn shape(&self, py: Python<'_>) -> PyObject {
         PyTuple::new(py, self.0.dims()).to_object(py)
     }
 
     #[getter]
+    /// Gets the tensor's strides.
+    /// &RETURNS&: Tuple[int]
     fn stride(&self, py: Python<'_>) -> PyObject {
         PyTuple::new(py, self.0.stride()).to_object(py)
     }
 
     #[getter]
+    /// Gets the tensor's dtype.
+    /// &RETURNS&: DType
     fn dtype(&self) -> PyDType {
         PyDType(self.0.dtype())
     }
 
     #[getter]
+    /// Gets the tensor's device.
+    /// &RETURNS&: Device
     fn device(&self, py: Python<'_>) -> PyObject {
         PyDevice::from_device(self.0.device()).to_object(py)
     }
 
     #[getter]
+    /// Gets the tensor's rank.
+    /// &RETURNS&: int
     fn rank(&self) -> usize {
         self.0.rank()
     }
@@ -316,69 +327,117 @@ impl PyTensor {
         self.__repr__()
     }
 
+    /// Performs the `sin` operation on the tensor.
+    /// &RETURNS&: Tensor
     fn sin(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.sin().map_err(wrap_err)?))
     }
 
+    /// Performs the `cos` operation on the tensor.
+    /// &RETURNS&: Tensor
     fn cos(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.cos().map_err(wrap_err)?))
     }
 
+    /// Performs the `log` operation on the tensor.
+    /// &RETURNS&: Tensor
     fn log(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.log().map_err(wrap_err)?))
     }
 
+    /// Squares the tensor.
+    /// &RETURNS&: Tensor
     fn sqr(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.sqr().map_err(wrap_err)?))
     }
 
+    /// Calculates the square root of the tensor.
+    /// &RETURNS&: Tensor
     fn sqrt(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.sqrt().map_err(wrap_err)?))
     }
 
+    /// Get the `recip` of the tensor.
+    /// &RETURNS&: Tensor
     fn recip(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.recip().map_err(wrap_err)?))
     }
 
+    /// Performs the `exp` operation on the tensor.
+    /// &RETURNS&: Tensor
     fn exp(&self) -> PyResult<Self> {
         Ok(PyTensor(self.0.exp().map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, p:float)")]
+    /// Performs the `pow` operation on the tensor with the given exponent.
+    /// &RETURNS&: Tensor
     fn powf(&self, p: f64) -> PyResult<Self> {
         Ok(PyTensor(self.0.powf(p).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, rhs:Tensor, dim:int)")]
+    /// Select values for the input tensor at the target indexes across the specified dimension.
+    ///
+    /// The `indexes` is argument is an int tensor with a single dimension.
+    /// The output has the same number of dimension as the `self` input. The target dimension of
+    /// the output has length the length of `indexes` and the values are taken from `self` using
+    /// the index from `indexes`. Other dimensions have the same number of elements as the input
+    /// tensor.
+    /// &RETURNS&: Tensor
     fn index_select(&self, rhs: &Self, dim: i64) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.index_select(rhs, dim).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, rhs:Tensor)")]
+    /// Performs a matrix multiplication between the two tensors.
+    /// &RETURNS&: Tensor
     fn matmul(&self, rhs: &Self) -> PyResult<Self> {
         Ok(PyTensor(self.0.matmul(rhs).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, rhs:Tensor)")]
+    /// Adds the two tensors, while broadcasting the right-hand-side tensor to match the shape of the left-hand-side tensor.
+    /// &RETURNS&: Tensor
     fn broadcast_add(&self, rhs: &Self) -> PyResult<Self> {
         Ok(PyTensor(self.0.broadcast_add(rhs).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, rhs:Tensor)")]
+    /// Subtracts the two tensors, while broadcasting the right-hand-side tensor to match the shape of the left-hand-side tensor.
+    /// &RETURNS&: Tensor
     fn broadcast_sub(&self, rhs: &Self) -> PyResult<Self> {
         Ok(PyTensor(self.0.broadcast_sub(rhs).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, rhs:Tensor)")]
+    /// Multiplies the two tensors, while broadcasting the right-hand-side tensor to match the shape of the left-hand-side tensor.
+    /// &RETURNS&: Tensor
     fn broadcast_mul(&self, rhs: &Self) -> PyResult<Self> {
         Ok(PyTensor(self.0.broadcast_mul(rhs).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, rhs:Tensor)")]
+    /// Divides the two tensors, while broadcasting the right-hand-side tensor to match the shape of the left-hand-side tensor.
+    /// &RETURNS&: Tensor
     fn broadcast_div(&self, rhs: &Self) -> PyResult<Self> {
         Ok(PyTensor(self.0.broadcast_div(rhs).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, on_true:Tensor, on_false:Tensor)")]
+    /// Returns a tensor with the same shape as the input tensor, the values are taken from
+    /// `on_true` if the input tensor value is not zero, and `on_false` at the positions where the
+    /// input tensor is equal to zero.
+    /// &RETURNS&: Tensor
     fn where_cond(&self, on_true: &Self, on_false: &Self) -> PyResult<Self> {
         Ok(PyTensor(
             self.0.where_cond(on_true, on_false).map_err(wrap_err)?,
         ))
     }
 
+    /// Add two tensors.
+    /// &RETURNS&: Tensor
     fn __add__(&self, rhs: &PyAny) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
             (&self.0 + &rhs.0).map_err(wrap_err)?
@@ -394,6 +453,8 @@ impl PyTensor {
         self.__add__(rhs)
     }
 
+    /// Multiply two tensors.
+    /// &RETURNS&: Tensor
     fn __mul__(&self, rhs: &PyAny) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
             (&self.0 * &rhs.0).map_err(wrap_err)?
@@ -409,6 +470,8 @@ impl PyTensor {
         self.__mul__(rhs)
     }
 
+    /// Subtract two tensors.
+    /// &RETURNS&: Tensor
     fn __sub__(&self, rhs: &PyAny) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
             (&self.0 - &rhs.0).map_err(wrap_err)?
@@ -420,6 +483,8 @@ impl PyTensor {
         Ok(Self(tensor))
     }
 
+    /// Divide two tensors.
+    /// &RETURNS&: Tensor
     fn __truediv__(&self, rhs: &PyAny) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
             (&self.0 / &rhs.0).map_err(wrap_err)?
@@ -431,62 +496,102 @@ impl PyTensor {
         Ok(Self(tensor))
     }
 
+    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+    /// Reshapes the tensor to the given shape.
+    /// &RETURNS&: Tensor
     fn reshape(&self, shape: PyShape) -> PyResult<Self> {
         Ok(PyTensor(self.0.reshape(shape).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+    /// Broadcasts the tensor to the given shape.
+    /// &RETURNS&: Tensor
     fn broadcast_as(&self, shape: PyShape) -> PyResult<Self> {
         Ok(PyTensor(self.0.broadcast_as(shape).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+    /// Broadcasts the tensor to the given shape, adding new dimensions on the left.
+    /// &RETURNS&: Tensor
     fn broadcast_left(&self, shape: PyShape) -> PyResult<Self> {
         Ok(PyTensor(self.0.broadcast_left(shape).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, dim:int)")]
+    /// Creates a new tensor with the specified dimension removed if its size was one.
+    /// &RETURNS&: Tensor
     fn squeeze(&self, dim: i64) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.squeeze(dim).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, dim:int)")]
+    /// Creates a new tensor with a dimension of size one inserted at the specified position.
+    /// &RETURNS&: Tensor
     fn unsqueeze(&self, dim: usize) -> PyResult<Self> {
         Ok(PyTensor(self.0.unsqueeze(dim).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, index:int)")]
+    /// Gets the value at the specified index.
+    /// &RETURNS&: Tensor
     fn get(&self, index: i64) -> PyResult<Self> {
         let index = actual_index(self, 0, index).map_err(wrap_err)?;
         Ok(PyTensor(self.0.get(index).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, dim1:int, dim2:int)")]
+    /// Returns a tensor that is a transposed version of the input, the given dimensions are swapped.
+    /// &RETURNS&: Tensor
     fn transpose(&self, dim1: usize, dim2: usize) -> PyResult<Self> {
         Ok(PyTensor(self.0.transpose(dim1, dim2).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, dim:int, start:int, len:int)")]
+    /// Returns a new tensor that is a narrowed version of the input, the dimension `dim`
+    /// ranges from `start` to `start + len`.
+    /// &RETURNS&: Tensor
     fn narrow(&self, dim: i64, start: i64, len: usize) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         let start = actual_index(self, dim, start).map_err(wrap_err)?;
         Ok(PyTensor(self.0.narrow(dim, start, len).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, dim:int)")]
+    /// Returns the indices of the maximum value(s) across the selected dimension.
+    /// &RETURNS&: Tensor
     fn argmax_keepdim(&self, dim: i64) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.argmax_keepdim(dim).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, dim:int)")]
+    /// Returns the indices of the minimum value(s) across the selected dimension.
+    /// &RETURNS&: Tensor
     fn argmin_keepdim(&self, dim: i64) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.argmin_keepdim(dim).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, dim:int)")]
+    /// Gathers the maximum value across the selected dimension.
+    /// &RETURNS&: Tensor
     fn max_keepdim(&self, dim: i64) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.max_keepdim(dim).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, dim:int)")]
+    /// Gathers the minimum value across the selected dimension.
+    /// &RETURNS&: Tensor
     fn min_keepdim(&self, dim: i64) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.min_keepdim(dim).map_err(wrap_err)?))
     }
 
+    #[pyo3(text_signature = "(self, dim:Union[int, List[int]])")]
+    /// Returns the sum of all elements in the input tensor. The sum is performed over all the input dimensions.
+    /// &RETURNS&: Tensor
     fn sum_keepdim(&self, dims: PyObject, py: Python<'_>) -> PyResult<Self> {
         let dims = if let Ok(dim) = dims.extract::<usize>(py) {
             vec![dim]
@@ -513,14 +618,14 @@ impl PyTensor {
         Ok(PyTensor(mean))
     }
 
-    #[pyo3(text_signature = "(dim:int)")]
+    #[pyo3(text_signature = "(self, dim:int)")]
     /// Flattens the tensor on the dimension indexes from `dim` (inclusive) to the last dimension.
     fn flatten_from(&self, dim: i64) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.flatten_from(dim).map_err(wrap_err)?))
     }
 
-    #[pyo3(text_signature = "(dim:int)")]
+    #[pyo3(text_signature = "(self, dim:int)")]
     ///Flattens the tensor on the dimension indexes from `0` to `dim` (inclusive).
     /// &RETURNS&: Tensor
     fn flatten_to(&self, dim: i64) -> PyResult<Self> {
@@ -570,7 +675,7 @@ impl PyTensor {
         Ok(PyTensor(self.0.copy().map_err(wrap_err)?))
     }
 
-    #[pyo3(text_signature = "(dtype:Union[str,DType])")]
+    #[pyo3(text_signature = "(self, dtype:Union[str,DType])")]
     /// Convert the tensor to a new dtype.
     /// &RETURNS&: Tensor
     fn to_dtype(&self, dtype: PyObject, py: Python<'_>) -> PyResult<Self> {
@@ -578,7 +683,7 @@ impl PyTensor {
         Ok(PyTensor(self.0.to_dtype(dtype.0).map_err(wrap_err)?))
     }
 
-    #[pyo3(text_signature = "(device:Union[str,Device])")]
+    #[pyo3(text_signature = "(self, device:Union[str,Device])")]
     /// Move the tensor to a new device.
     /// &RETURNS&: Tensor
     fn to_device(&self, device: PyDevice) -> PyResult<Self> {
@@ -586,8 +691,7 @@ impl PyTensor {
         Ok(PyTensor(self.0.to_device(&device).map_err(wrap_err)?))
     }
 
-
-    #[pyo3(text_signature = "(quantized_dtype:str)")]
+    #[pyo3(text_signature = "(self, quantized_dtype:str)")]
     /// Quantize the tensor.
     /// &RETURNS&: QTensor
     fn quantize(&self, quantized_dtype: &str) -> PyResult<PyQTensor> {
@@ -709,6 +813,7 @@ fn zeros(
 
 #[derive(Debug)]
 #[pyclass(name = "QTensor")]
+/// A quantized tensor.
 struct PyQTensor(Arc<QTensor>);
 
 impl std::ops::Deref for PyQTensor {
@@ -757,7 +862,7 @@ impl PyQTensor {
         Ok(PyTensor(tensor))
     }
 
-    #[pyo3(text_signature = "(lhs:Tensor)")]
+    #[pyo3(text_signature = "(self, lhs:Tensor)")]
     /// Performs a quantized matrix multiplication, with the quantized tensor as the left hand side.
     /// &RETURNS&: Tensor
     fn matmul_t(&self, lhs: &PyTensor) -> PyResult<PyTensor> {

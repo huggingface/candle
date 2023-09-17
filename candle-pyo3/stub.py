@@ -32,7 +32,7 @@ def function(obj, indent:str, text_signature:str=None):
     if doc_string is None:
         doc_string = ""
 
-    # Chech if we have a return type annotation in the docstring 
+    # Check if we have a return type annotation in the docstring 
     return_type = None
     doc_lines = doc_string.split("\n")
     if doc_lines[-1].lstrip().startswith(RETURN_TYPE_MARKER):
