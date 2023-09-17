@@ -75,7 +75,7 @@ struct UpBlock {
 pub struct WDiffNeXt {
     clip_mapper: candle_nn::Linear,
     effnet_mappers: Vec<Option<candle_nn::Conv2d>>,
-    seq_norm: candle_nn::LayerNorm,
+    seq_norm: WLayerNorm,
     embedding_conv: candle_nn::Conv2d,
     embedding_ln: WLayerNorm,
     down_blocks: Vec<DownBlock>,
@@ -133,17 +133,14 @@ impl WDiffNeXt {
             };
             effnet_mappers.push(c)
         }
-        let cfg = candle_nn::layer_norm::LayerNormConfig {
-            ..Default::default()
-        };
-        let seq_norm = candle_nn::layer_norm(c_cond, cfg, vb.pp("seq_norm"))?;
+        let seq_norm = WLayerNorm::new(c_cond)?;
         let embedding_ln = WLayerNorm::new(C_HIDDEN[0])?;
         let embedding_conv = candle_nn::conv2d(
             c_in * patch_size * patch_size,
             C_HIDDEN[1],
             1,
             Default::default(),
-            vb.pp("embedding.2"),
+            vb.pp("embedding.1"),
         )?;
 
         let mut down_blocks = Vec::with_capacity(C_HIDDEN.len());
