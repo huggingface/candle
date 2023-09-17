@@ -116,15 +116,15 @@ impl PaellaVQ {
             d_idx += 1;
             down_blocks.push((conv_block, res_block))
         }
+        let vb_d = vb_d.pp(d_idx);
         let down_blocks_conv = candle_nn::conv2d_no_bias(
             C_LEVELS[1],
             LATENT_CHANNELS,
             1,
             Default::default(),
-            vb_d.pp(d_idx),
+            vb_d.pp(0),
         )?;
-        d_idx += 1;
-        let down_blocks_bn = candle_nn::batch_norm(LATENT_CHANNELS, 1e-5, vb_d.pp(d_idx))?;
+        let down_blocks_bn = candle_nn::batch_norm(LATENT_CHANNELS, 1e-5, vb_d.pp(1))?;
 
         let mut up_blocks = Vec::new();
         let vb_u = vb.pp("up_blocks");
@@ -134,7 +134,7 @@ impl PaellaVQ {
             C_LEVELS[1],
             1,
             Default::default(),
-            vb_u.pp(u_idx),
+            vb_u.pp(u_idx).pp(0),
         )?;
         u_idx += 1;
         for (i, &c_level) in C_LEVELS.iter().rev().enumerate() {
@@ -153,7 +153,7 @@ impl PaellaVQ {
                 };
                 let block = candle_nn::conv_transpose2d_no_bias(
                     c_level,
-                    C_LEVELS[i - 1],
+                    C_LEVELS[C_LEVELS.len() - i - 2],
                     4,
                     cfg,
                     vb_u.pp(u_idx),
