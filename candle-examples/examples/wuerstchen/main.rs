@@ -16,6 +16,7 @@ use tokenizers::Tokenizer;
 
 const GUIDANCE_SCALE: f64 = 7.5;
 const RESOLUTION_MULTIPLE: f64 = 42.67;
+const PRIOR_CIN: usize = 16;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -239,8 +240,8 @@ fn run(args: Args) -> Result<()> {
         let weights = weights.deserialize()?;
         let vb = candle_nn::VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
         wuerstchen::prior::WPrior::new(
-            /* c_in */ 16, /* c */ 1536, /* c_cond */ 1280, /* c_r */ 64,
-            /* depth */ 32, /* nhead */ 24, vb,
+            /* c_in */ PRIOR_CIN, /* c */ 1536, /* c_cond */ 1280,
+            /* c_r */ 64, /* depth */ 32, /* nhead */ 24, vb,
         )?
     };
 
@@ -274,7 +275,7 @@ fn run(args: Args) -> Result<()> {
         let latents = Tensor::randn(
             0f32,
             1f32,
-            (b_size, 4, latent_height, latent_width),
+            (b_size, PRIOR_CIN, latent_height, latent_width),
             &device,
         )?;
         // TODO: latents denoising loop, use the scheduler values.
