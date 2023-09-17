@@ -245,6 +245,8 @@ struct T5Attention {
     relative_attention_num_buckets: usize,
     relative_attention_max_distance: usize,
     inner_dim: usize,
+    use_cache: bool,
+    kv_cache: Option<(Tensor, Tensor)>,
 }
 
 impl T5Attention {
@@ -275,11 +277,13 @@ impl T5Attention {
             relative_attention_num_buckets: cfg.relative_attention_num_buckets,
             relative_attention_max_distance: cfg.relative_attention_max_distance,
             inner_dim,
+            use_cache: false,
+            kv_cache: None,
         })
     }
 
     fn forward(
-        &self,
+        &mut self,
         xs: &Tensor,
         position_bias: Option<&Tensor>,
         key_value_states: Option<&Tensor>,
@@ -287,7 +291,6 @@ impl T5Attention {
     ) -> Result<(Tensor, Option<Tensor>)> {
         // Performs Self-attention (if key_value_states is None) or attention
         // over source sentence (provided by key_value_states).
-        // TODO: kv caching.
         let kv_input = match key_value_states {
             None => xs,
             Some(key_value_states) => key_value_states,
@@ -301,14 +304,22 @@ impl T5Attention {
             .reshape((b_sz, q_len, self.n_heads, self.d_kv))?
             .transpose(1, 2)?
             .contiguous()?;
-        let k = k
+        let mut k = k
             .reshape((b_sz, kv_len, self.n_heads, self.d_kv))?
             .transpose(1, 2)?
             .contiguous()?;
-        let v = v
+        let mut v = v
             .reshape((b_sz, kv_len, self.n_heads, self.d_kv))?
             .transpose(1, 2)?
             .contiguous()?;
+
+        if self.use_cache {
+            if let Some((kv_cache_k, kv_cache_v)) = &self.kv_cache {
+                k = Tensor::cat(&[kv_cache_k, &k], 2)?;
+                v = Tensor::cat(&[kv_cache_v, &v], 2)?;
+            };
+            self.kv_cache = Some((k.clone(), v.clone()));
+        };
         // TODO: Use flash_attn.
         let scores = q.matmul(&k.t()?)?;
         let scores = match mask {
@@ -405,7 +416,7 @@ impl T5LayerSelfAttention {
     }
 
     fn forward(
-        &self,
+        &mut self,
         xs: &Tensor,
         position_bias: Option<&Tensor>,
         mask: Option<&Tensor>,
@@ -437,7 +448,7 @@ impl T5LayerCrossAttention {
     }
 
     fn forward(
-        &self,
+        &mut self,
         hidden_states: &Tensor,
         position_bias: Option<&Tensor>,
         key_value_states: &Tensor,
@@ -480,7 +491,7 @@ impl T5Block {
     }
 
     fn forward(
-        &self,
+        &mut self,
         xs: &Tensor,
         position_bias: Option<&Tensor>,
         encoder_hidden_states: Option<&Tensor>,
@@ -492,7 +503,7 @@ impl T5Block {
         };
         let (mut xs, position_bias) = self.self_attn.forward(xs, position_bias, mask.as_ref())?;
         // TODO: clamp for f16?
-        if let Some(cross_attn) = &self.cross_attn {
+        if let Some(cross_attn) = &mut self.cross_attn {
             (xs, _) = cross_attn.forward(&xs, None, encoder_hidden_states.unwrap())?;
             // TODO: clamp for f16?
         }
@@ -527,14 +538,14 @@ impl T5Stack {
     }
 
     fn forward(
-        &self,
+        &mut self,
         input_ids: &Tensor,
         encoder_hidden_states: Option<&Tensor>,
     ) -> Result<Tensor> {
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
         let mut hidden_states = input_embeds;
         let mut position_bias = None;
-        for block in self.block.iter() {
+        for block in self.block.iter_mut() {
             (hidden_states, position_bias) = block.forward(
                 &hidden_states,
                 position_bias.as_ref(),
@@ -562,7 +573,7 @@ impl T5EncoderModel {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         self.encoder.forward(input_ids, None)
     }
 
@@ -605,7 +616,7 @@ impl T5ForConditionalGeneration {
         })
     }
 
-    pub fn forward(&self, input_ids: &Tensor, decoder_input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, input_ids: &Tensor, decoder_input_ids: &Tensor) -> Result<Tensor> {
         let encoder_output = self.encoder.forward(input_ids, None)?;
         let decoder_output = self
             .decoder
