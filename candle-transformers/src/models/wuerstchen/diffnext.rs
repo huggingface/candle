@@ -98,7 +98,7 @@ impl WDiffNeXt {
     ) -> Result<Self> {
         const C_HIDDEN: [usize; 4] = [320, 640, 1280, 1280];
         const BLOCKS: [usize; 4] = [4, 4, 14, 4];
-        const NHEAD: [usize; 4] = [0, 10, 20, 20];
+        const NHEAD: [usize; 4] = [1, 10, 20, 20];
         const INJECT_EFFNET: [bool; 4] = [false, true, true, true];
         const EFFNET_EMBD: usize = 16;
 
@@ -137,7 +137,7 @@ impl WDiffNeXt {
         let embedding_ln = WLayerNorm::new(C_HIDDEN[0])?;
         let embedding_conv = candle_nn::conv2d(
             c_in * patch_size * patch_size,
-            C_HIDDEN[1],
+            C_HIDDEN[0],
             1,
             Default::default(),
             vb.pp("embedding.1"),
