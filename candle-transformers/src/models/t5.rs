@@ -511,6 +511,8 @@ impl T5Block {
         let mask = match self.cross_attn.is_some() {
             true => {
                 let mask_len = xs.dim(1)?;
+                // If the input seq length is 1, no need for a mask, this is also helpful to avoid shape
+                // issues when using the KV cache in the decoder.
                 if mask_len <= 1 {
                     None
                 } else {
