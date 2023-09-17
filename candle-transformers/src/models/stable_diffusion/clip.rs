@@ -99,6 +99,21 @@ impl Config {
             activation: Activation::Gelu,
         }
     }
+
+    // https://huggingface.co/warp-ai/wuerstchen/blob/main/text_encoder/config.json
+    pub fn wuerstchen() -> Self {
+        Self {
+            vocab_size: 49408,
+            embed_dim: 1024,
+            intermediate_size: 4096,
+            max_position_embeddings: 77,
+            pad_with: Some("!".to_string()),
+            num_hidden_layers: 24,
+            num_attention_heads: 16,
+            projection_dim: 1024,
+            activation: Activation::Gelu,
+        }
+    }
 }
 
 // CLIP Text Model

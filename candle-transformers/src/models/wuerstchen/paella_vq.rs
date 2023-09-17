@@ -65,7 +65,7 @@ impl Module for MixingResidualBlock {
 }
 
 #[derive(Debug)]
-struct PaellaVQ {
+pub struct PaellaVQ {
     in_block_conv: candle_nn::Conv2d,
     out_block_conv: candle_nn::Conv2d,
     down_blocks: Vec<(Option<candle_nn::Conv2d>, MixingResidualBlock)>,
