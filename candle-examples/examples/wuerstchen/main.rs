@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
@@ -219,12 +221,12 @@ fn run(args: Args) -> Result<()> {
     println!("{text_embeddings:?}");
 
     println!("Building the vqgan.");
-    let vqgan_weights = ModelFile::VqGan.get(vqgan_weights)?;
+    let _vqgan_weights = ModelFile::VqGan.get(vqgan_weights)?;
 
     println!("Building the decoder.");
 
     // https://huggingface.co/warp-ai/wuerstchen/blob/main/decoder/config.json
-    let decoder = {
+    let _decoder = {
         let decoder_weights = ModelFile::Decoder.get(decoder_weights)?;
         let weights = unsafe { candle::safetensors::MmapedFile::new(decoder_weights)? };
         let weights = weights.deserialize()?;
@@ -235,8 +237,9 @@ fn run(args: Args) -> Result<()> {
         )?
     };
 
-    let bsize = 1;
+    let _bsize = 1;
     for idx in 0..num_samples {
+        /*
         let timesteps = scheduler.timesteps();
         let latents = Tensor::randn(
             0f32,
@@ -263,18 +266,21 @@ fn run(args: Args) -> Result<()> {
             let dt = start_time.elapsed().as_secs_f32();
             println!("step {}/{n_steps} done, {:.2}s", timestep_index + 1, dt);
         }
+        */
 
         println!(
             "Generating the final image for sample {}/{}.",
             idx + 1,
             num_samples
         );
+        /*
         let image = vae.decode(&(&latents / 0.18215)?)?;
         // TODO: Add the clamping between 0 and 1.
         let image = ((image / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
         let image = (image * 255.)?.to_dtype(DType::U8)?.i(0)?;
         let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
         candle_examples::save_image(&image, image_filename)?
+        */
     }
     Ok(())
 }
