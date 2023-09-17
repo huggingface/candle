@@ -53,6 +53,10 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     clip_weights: Option<String>,
 
+    /// The prior weight file, in .safetensors format.
+    #[arg(long, value_name = "FILE")]
+    prior_weights: Option<String>,
+
     /// The VQGAN weight file, in .safetensors format.
     #[arg(long, value_name = "FILE")]
     vqgan_weights: Option<String>,
@@ -84,6 +88,7 @@ enum ModelFile {
     Clip,
     Decoder,
     VqGan,
+    Prior,
 }
 
 impl ModelFile {
@@ -98,6 +103,7 @@ impl ModelFile {
                     Self::Clip => "clip.safetensors",
                     Self::Decoder => "decoder.safetensors",
                     Self::VqGan => "vqgan.safetensors",
+                    Self::Prior => "prior.safetensors",
                 };
                 let filename = Api::new()?.model(repo.to_string()).get(path)?;
                 Ok(filename)
@@ -194,6 +200,7 @@ fn run(args: Args) -> Result<()> {
         sliced_attention_size,
         num_samples,
         clip_weights,
+        prior_weights,
         vqgan_weights,
         decoder_weights,
         tracing,
@@ -220,8 +227,27 @@ fn run(args: Args) -> Result<()> {
     );
     println!("{text_embeddings:?}");
 
+    println!("Building the prior.");
+    // https://huggingface.co/warp-ai/wuerstchen-prior/blob/main/prior/config.json
+    let _prior = {
+        let prior_weights = ModelFile::Prior.get(prior_weights)?;
+        let weights = unsafe { candle::safetensors::MmapedFile::new(prior_weights)? };
+        let weights = weights.deserialize()?;
+        let vb = candle_nn::VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
+        wuerstchen::prior::WPrior::new(
+            /* c_in */ 16, /* c */ 1536, /* c_cond */ 1280, /* c_r */ 64,
+            /* depth */ 32, /* nhead */ 24, vb,
+        )
+    };
+
     println!("Building the vqgan.");
-    let _vqgan_weights = ModelFile::VqGan.get(vqgan_weights)?;
+    let _vqgan = {
+        let vqgan_weights = ModelFile::VqGan.get(vqgan_weights)?;
+        let weights = unsafe { candle::safetensors::MmapedFile::new(vqgan_weights)? };
+        let weights = weights.deserialize()?;
+        let vb = candle_nn::VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
+        wuerstchen::paella_vq::PaellaVQ::new(vb)?
+    };
 
     println!("Building the decoder.");
 
