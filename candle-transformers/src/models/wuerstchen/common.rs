@@ -75,9 +75,9 @@ impl Module for GlobalResponseNorm {
         let agg_norm = xs.sqr()?.sum_keepdim((1, 2))?;
         let stand_div_norm =
             agg_norm.broadcast_div(&(agg_norm.mean_keepdim(D::Minus1)? + 1e-6)?)?;
-        (xs.broadcast_mul(&stand_div_norm)?
-            .broadcast_mul(&self.gamma)
-            + &self.beta)?
+        xs.broadcast_mul(&stand_div_norm)?
+            .broadcast_mul(&self.gamma)?
+            .broadcast_add(&self.beta)?
             + xs
     }
 }
