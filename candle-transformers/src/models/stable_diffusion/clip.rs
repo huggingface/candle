@@ -349,21 +349,39 @@ impl ClipTextTransformer {
     }
 
     // https://github.com/huggingface/transformers/blob/674f750a57431222fa2832503a108df3badf1564/src/transformers/models/clip/modeling_clip.py#L678
-    fn build_causal_attention_mask(bsz: usize, seq_len: usize, device: &Device) -> Result<Tensor> {
+    fn build_causal_attention_mask(
+        bsz: usize,
+        seq_len: usize,
+        mask_after: usize,
+        device: &Device,
+    ) -> Result<Tensor> {
         let mask: Vec<_> = (0..seq_len)
-            .flat_map(|i| (0..seq_len).map(move |j| if j > i { f32::MIN } else { 0. }))
+            .flat_map(|i| {
+                (0..seq_len).map(move |j| {
+                    if j > i || j > mask_after {
+                        f32::MIN
+                    } else {
+                        0.
+                    }
+                })
+            })
             .collect();
         let mask = Tensor::from_slice(&mask, (seq_len, seq_len), device)?;
         mask.broadcast_as((bsz, seq_len, seq_len))
+    }
+
+    pub fn forward_with_mask(&self, xs: &Tensor, mask_after: usize) -> Result<Tensor> {
+        let (bsz, seq_len) = xs.dims2()?;
+        let xs = self.embeddings.forward(xs)?;
+        let causal_attention_mask =
+            Self::build_causal_attention_mask(bsz, seq_len, mask_after, xs.device())?;
+        let xs = self.encoder.forward(&xs, &causal_attention_mask)?;
+        self.final_layer_norm.forward(&xs)
     }
 }
 
 impl Module for ClipTextTransformer {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let (bsz, seq_len) = xs.dims2()?;
-        let xs = self.embeddings.forward(xs)?;
-        let causal_attention_mask = Self::build_causal_attention_mask(bsz, seq_len, xs.device())?;
-        let xs = self.encoder.forward(&xs, &causal_attention_mask)?;
-        self.final_layer_norm.forward(&xs)
+        self.forward_with_mask(xs, usize::MAX)
     }
 }

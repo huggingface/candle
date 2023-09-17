@@ -173,6 +173,7 @@ fn encode_prompt(
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
+    let tokens_len = tokens.len();
     while tokens.len() < clip_config.max_position_embeddings {
         tokens.push(pad_id)
     }
@@ -183,6 +184,7 @@ fn encode_prompt(
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
+    let uncond_tokens_len = uncond_tokens.len();
     while uncond_tokens.len() < clip_config.max_position_embeddings {
         uncond_tokens.push(pad_id)
     }
@@ -191,8 +193,8 @@ fn encode_prompt(
     println!("Building the clip transformer.");
     let text_model =
         stable_diffusion::build_clip_transformer(&clip_config, clip_weights, device, DType::F32)?;
-    let text_embeddings = text_model.forward(&tokens)?;
-    let uncond_embeddings = text_model.forward(&uncond_tokens)?;
+    let text_embeddings = text_model.forward_with_mask(&tokens, tokens_len)?;
+    let uncond_embeddings = text_model.forward_with_mask(&uncond_tokens, uncond_tokens_len)?;
     let text_embeddings = Tensor::cat(&[uncond_embeddings, text_embeddings], 0)?;
     Ok(text_embeddings)
 }
