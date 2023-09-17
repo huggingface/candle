@@ -64,8 +64,8 @@ pub struct GlobalResponseNorm {
 
 impl GlobalResponseNorm {
     pub fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let gamma = vb.get((1, 1, 1, 1, dim), "gamma")?;
-        let beta = vb.get((1, 1, 1, 1, dim), "beta")?;
+        let gamma = vb.get((1, 1, 1, dim), "gamma")?;
+        let beta = vb.get((1, 1, 1, dim), "beta")?;
         Ok(Self { gamma, beta })
     }
 }
