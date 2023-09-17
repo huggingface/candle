@@ -56,6 +56,13 @@ def load_safetensors(path: Union[str, PathLike]) -> Dict[str, Tensor]:
     pass
 
 @staticmethod
+def save_gguf(path: Union[str, PathLike], tensors: Dict[str, QTensor], metadata: Dict[str, Any]):
+    """
+    Save quanitzed tensors and metadata to a GGUF file.
+    """
+    pass
+
+@staticmethod
 def save_safetensors(path: Union[str, PathLike], tensors: Dict[str, Tensor]) -> None:
     """
     Saves a dictionary of tensors to a safetensors file.

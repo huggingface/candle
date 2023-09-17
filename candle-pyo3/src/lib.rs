@@ -1,7 +1,7 @@
 #![allow(clippy::redundant_closure_call)]
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{IntoPyDict, PyTuple};
+use pyo3::types::{IntoPyDict, PyDict, PyTuple};
 use pyo3::ToPyObject;
 use std::sync::Arc;
 
@@ -811,7 +811,7 @@ fn zeros(
     Ok(PyTensor(tensor))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[pyclass(name = "QTensor")]
 /// A quantized tensor.
 struct PyQTensor(Arc<QTensor>);
@@ -989,6 +989,94 @@ fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
 }
 
 #[pyfunction]
+#[pyo3(
+    text_signature = "(path:Union[str,PathLike], tensors:Dict[str,QTensor], metadata:Dict[str,Any])"
+)]
+/// Save quanitzed tensors and metadata to a GGUF file.
+fn save_gguf(path: &str, tensors: PyObject, metadata: PyObject, py: Python<'_>) -> PyResult<()> {
+    use ::candle::quantized::gguf_file;
+
+    fn pyobject_to_gguf_value(v: &PyAny, py: Python<'_>) -> PyResult<gguf_file::Value> {
+        let v: gguf_file::Value = if let Ok(x) = v.extract::<u8>() {
+            gguf_file::Value::U8(x)
+        } else if let Ok(x) = v.extract::<i8>() {
+            gguf_file::Value::I8(x)
+        } else if let Ok(x) = v.extract::<u16>() {
+            gguf_file::Value::U16(x)
+        } else if let Ok(x) = v.extract::<i16>() {
+            gguf_file::Value::I16(x)
+        } else if let Ok(x) = v.extract::<u32>() {
+            gguf_file::Value::U32(x)
+        } else if let Ok(x) = v.extract::<i32>() {
+            gguf_file::Value::I32(x)
+        } else if let Ok(x) = v.extract::<u64>() {
+            gguf_file::Value::U64(x)
+        } else if let Ok(x) = v.extract::<i64>() {
+            gguf_file::Value::I64(x)
+        } else if let Ok(x) = v.extract::<f32>() {
+            gguf_file::Value::F32(x)
+        } else if let Ok(x) = v.extract::<f64>() {
+            gguf_file::Value::F64(x)
+        } else if let Ok(x) = v.extract::<bool>() {
+            gguf_file::Value::Bool(x)
+        } else if let Ok(x) = v.extract::<String>() {
+            gguf_file::Value::String(x)
+        } else if let Ok(x) = v.extract::<Vec<PyObject>>() {
+            let x = x
+                .into_iter()
+                .map(|f| pyobject_to_gguf_value(f.as_ref(py), py))
+                .collect::<PyResult<Vec<_>>>()?;
+            gguf_file::Value::Array(x)
+        } else {
+            return Err(PyErr::new::<PyValueError, _>(format!(
+                "unsupported type {:?}",
+                v
+            )));
+        };
+        Ok(v)
+    }
+    let tensors = tensors
+        .extract::<&PyDict>(py)
+        .map_err(|_| PyErr::new::<PyValueError, _>("expected a dict"))?
+        .iter()
+        .map(|(key, value)| {
+            Ok((
+                key.extract::<String>()
+                    .map_err(|_| PyErr::new::<PyValueError, _>("keys must be strings"))?,
+                value.extract::<PyQTensor>()?.0,
+            ))
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let metadata = metadata
+        .extract::<&PyDict>(py)
+        .map_err(|_| PyErr::new::<PyValueError, _>("expected a dict"))?
+        .iter()
+        .map(|(key, value)| {
+            Ok((
+                key.extract::<String>()
+                    .map_err(|_| PyErr::new::<PyValueError, _>("keys must be strings"))?,
+                pyobject_to_gguf_value(value, py)?,
+            ))
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+
+    let converted_metadata: Vec<_> = metadata
+        .iter()
+        .map(|(name, value)| (name.as_str(), value))
+        .collect();
+
+    let converted_tensors: Vec<_> = tensors
+        .iter()
+        .map(|(name, tensor)| (name.as_str(), tensor.as_ref()))
+        .collect();
+
+    let mut file = std::fs::File::create(path)?;
+
+    gguf_file::write(&mut file, &converted_metadata, &converted_tensors).map_err(wrap_err)
+}
+
+#[pyfunction]
 /// Returns true if the 'cuda' backend is available.
 /// &RETURNS&: bool
 fn cuda_is_available() -> bool {
@@ -1023,6 +1111,7 @@ fn candle_utils(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(has_mkl, m)?)?;
     m.add_function(wrap_pyfunction!(load_ggml, m)?)?;
     m.add_function(wrap_pyfunction!(load_gguf, m)?)?;
+    m.add_function(wrap_pyfunction!(save_gguf, m)?)?;
     m.add_function(wrap_pyfunction!(load_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(save_safetensors, m)?)?;
     Ok(())
