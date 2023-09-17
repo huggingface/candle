@@ -636,11 +636,18 @@ impl T5ForConditionalGeneration {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor, decoder_input_ids: &Tensor) -> Result<Tensor> {
-        let encoder_output = self.encoder.forward(input_ids, None)?;
+    pub fn encode(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        self.encoder.forward(input_ids, None)
+    }
+
+    pub fn decode(
+        &mut self,
+        decoder_input_ids: &Tensor,
+        encoder_output: &Tensor,
+    ) -> Result<Tensor> {
         let decoder_output = self
             .decoder
-            .forward(decoder_input_ids, Some(&encoder_output))?;
+            .forward(decoder_input_ids, Some(encoder_output))?;
         let sequence_output = decoder_output
             .narrow(1, decoder_output.dim(1)? - 1, 1)?
             .squeeze(1)?;
@@ -649,6 +656,11 @@ impl T5ForConditionalGeneration {
         let output = sequence_output.matmul(&lm_head_weights)?;
         // TODO: Rescale output before projecting on vocab? * (self.model_dim**-0.5)
         Ok(output)
+    }
+
+    pub fn forward(&mut self, input_ids: &Tensor, decoder_input_ids: &Tensor) -> Result<Tensor> {
+        let encoder_output = self.encode(input_ids)?;
+        self.decode(decoder_input_ids, &encoder_output)
     }
 
     pub fn device(&self) -> &Device {
