@@ -3,7 +3,7 @@
 ## Encoder-decoder example:
 
 ```bash
-$ cargo run --example t5 -- --model-id "t5-small" --prompt "translate to German: A beautiful candle." --decode
+$ cargo run --example t5 --release -- --model-id "t5-small" --prompt "translate to German: A beautiful candle." --decode
 ...
 Running on CPU, to run on GPU, build this example with `--features cuda`
  Eine schöne Kerze.
@@ -13,7 +13,7 @@ Running on CPU, to run on GPU, build this example with `--features cuda`
 ## Sentence embedding example:
 
 ```bash
-$ cargo run --example t5 -- --model-id "t5-small" --prompt "A beautiful candle."
+$ cargo run --example t5 --release -- --model-id "t5-small" --prompt "A beautiful candle."
 ...
 [[[ 0.0515, -0.0541, -0.0761, ..., -0.0392,  0.1511, -0.0265],
   [-0.0974,  0.0998, -0.1659, ..., -0.2450,  0.1738, -0.0164],
