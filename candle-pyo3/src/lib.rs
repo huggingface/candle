@@ -620,6 +620,7 @@ impl PyTensor {
 
     #[pyo3(text_signature = "(self, dim:int)")]
     /// Flattens the tensor on the dimension indexes from `dim` (inclusive) to the last dimension.
+    /// &RETURNS&: Tensor
     fn flatten_from(&self, dim: i64) -> PyResult<Self> {
         let dim = actual_dim(self, dim).map_err(wrap_err)?;
         Ok(PyTensor(self.0.flatten_from(dim).map_err(wrap_err)?))
@@ -863,7 +864,7 @@ impl PyQTensor {
     }
 
     #[pyo3(text_signature = "(self, lhs:Tensor)")]
-    /// Performs a quantized matrix multiplication, with the quantized tensor as the left hand side.
+    /// Performs a quantized matrix multiplication, with the quantized tensor as the right hand side.
     /// &RETURNS&: Tensor
     fn matmul_t(&self, lhs: &PyTensor) -> PyResult<PyTensor> {
         let qmatmul = ::candle::quantized::QMatMul::from_arc(self.0.clone());

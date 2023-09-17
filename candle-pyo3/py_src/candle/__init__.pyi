@@ -96,7 +96,7 @@ class QTensor:
         pass
     def matmul_t(self, lhs: Tensor) -> Tensor:
         """
-        Performs a quantized matrix multiplication, with the quantized tensor as the left hand side.
+        Performs a quantized matrix multiplication, with the quantized tensor as the right hand side.
         """
         pass
     @property
@@ -201,7 +201,7 @@ class Tensor:
         Flattens the tensor into a 1D tensor.
         """
         pass
-    def flatten_from(self, dim: int):
+    def flatten_from(self, dim: int) -> Tensor:
         """
         Flattens the tensor on the dimension indexes from `dim` (inclusive) to the last dimension.
         """
