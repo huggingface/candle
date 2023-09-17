@@ -77,7 +77,7 @@ fn main() -> Result<()> {
     let model = model.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![model], DTYPE, &device);
     let config = GenConfig::small();
-    let model = MusicgenForConditionalGeneration::load(vb, config)?;
+    let mut model = MusicgenForConditionalGeneration::load(vb, config)?;
 
     let tokens = tokenizer
         .encode(args.prompt.as_str(), true)
