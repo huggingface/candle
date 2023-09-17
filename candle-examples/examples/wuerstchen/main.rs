@@ -97,13 +97,14 @@ impl ModelFile {
         match filename {
             Some(filename) => Ok(std::path::PathBuf::from(filename)),
             None => {
-                let repo = "warp-ai/wuerstchen";
-                let path = match self {
-                    Self::Tokenizer => "tokenizer.json",
-                    Self::Clip => "clip.safetensors",
-                    Self::Decoder => "decoder.safetensors",
-                    Self::VqGan => "vqgan.safetensors",
-                    Self::Prior => "prior.safetensors",
+                let repo_main = "warp-ai/wuerstchen";
+                let repo_prior = "warp-ai/wuerstchen-prior";
+                let (repo, path) = match self {
+                    Self::Tokenizer => (repo_main, "tokenizer/tokenizer.json"),
+                    Self::Clip => (repo_main, "text_encoder/model.safetensors"),
+                    Self::Decoder => (repo_main, "decoder/diffusion_pytorch_model.safetensors"),
+                    Self::VqGan => (repo_main, "vqgan/diffusion_pytorch_model.safetensors"),
+                    Self::Prior => (repo_prior, "prior/diffusion_pytorch_model.safetensors"),
                 };
                 let filename = Api::new()?.model(repo.to_string()).get(path)?;
                 Ok(filename)
