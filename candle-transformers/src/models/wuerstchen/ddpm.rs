@@ -38,6 +38,10 @@ impl DDPMWScheduler {
         })
     }
 
+    pub fn timesteps(&self) -> &[f64] {
+        &self.timesteps
+    }
+
     fn alpha_cumprod(&self, t: f64) -> f64 {
         let scaler = self.config.scaler;
         let s = self.config.s;
