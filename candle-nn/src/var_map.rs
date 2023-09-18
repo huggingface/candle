@@ -19,6 +19,17 @@ impl VarMap {
         Self { data }
     }
 
+    /// Create a `VarMap` from provided tensors.
+    pub fn from_tensors(tensors: HashMap<String, Tensor>) -> Result<Self> {
+        let this = Self::new();
+        let mut data = this.data.lock().unwrap();
+        for (name, v) in tensors {
+            data.insert(name, Var::from_tensor(&v)?);
+        }
+        drop(data);
+        Ok(this)
+    }
+
     /// Retrieve all the variables currently stored in the map.
     pub fn all_vars(&self) -> Vec<Var> {
         let tensor_data = self.data.lock().unwrap();
