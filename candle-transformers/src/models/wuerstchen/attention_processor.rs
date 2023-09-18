@@ -1,5 +1,5 @@
 #![allow(unused)]
-use candle::{Result, Tensor};
+use candle::{Module, Result, Tensor};
 use candle_nn::{linear, Linear, VarBuilder};
 
 // A simplified version of:
@@ -44,5 +44,37 @@ impl Attention {
         xs.reshape((b_size, seq_len, self.heads, dim / self.heads))?
             .permute((0, 2, 1, 3))?
             .reshape((b_size * self.heads, seq_len, dim / self.heads))
+    }
+
+    fn prepare_attention_mask(&self, b_size: usize, seq_len: usize) -> Result<Tensor> {
+        todo!()
+    }
+
+    fn get_attention_scores(
+        &self,
+        query: &Tensor,
+        key: &Tensor,
+        attn_mask: &Tensor,
+    ) -> Result<Tensor> {
+        todo!()
+    }
+
+    pub fn forward(&self, xs: &Tensor, encoder_hidden_states: &Tensor) -> Result<Tensor> {
+        let (b_size, seq_len, _dim) = xs.dims3()?;
+        let attn_mask = self.prepare_attention_mask(b_size, seq_len)?;
+
+        let query = self.to_q.forward(xs)?;
+        let key = self.to_k.forward(encoder_hidden_states)?;
+        let value = self.to_v.forward(encoder_hidden_states)?;
+
+        let query = self.head_to_batch_dim(&query)?;
+        let key = self.head_to_batch_dim(&key)?;
+        let value = self.head_to_batch_dim(&value)?;
+
+        let attn_prs = self.get_attention_scores(&query, &key, &attn_mask)?;
+        let xs = attn_prs.matmul(&value)?;
+        let xs = self.batch_to_head_dim(&xs)?;
+
+        self.to_out.forward(&xs)
     }
 }
