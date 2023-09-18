@@ -2,12 +2,15 @@
 use candle::{Result, Tensor};
 use candle_nn::{linear, Linear, VarBuilder};
 
+// A simplified version of:
+// https://github.com/huggingface/diffusers/blob/119ad2c3dc8a8fb8446a83f4bf6f20929487b47f/src/diffusers/models/attention_processor.py#L38
 #[derive(Debug)]
 struct Attention {
     to_q: Linear,
     to_k: Linear,
     to_v: Linear,
     to_out: Linear,
+    heads: usize,
     scale: f64,
 }
 
@@ -25,6 +28,21 @@ impl Attention {
             to_v,
             to_out,
             scale,
+            heads,
         })
+    }
+
+    fn batch_to_head_dim(&self, xs: &Tensor) -> Result<Tensor> {
+        let (b_size, seq_len, dim) = xs.dims3()?;
+        xs.reshape((b_size / self.heads, self.heads, seq_len, dim))?
+            .permute((0, 2, 1, 3))?
+            .reshape((b_size / self.heads, seq_len, dim * self.heads))
+    }
+
+    fn head_to_batch_dim(&self, xs: &Tensor) -> Result<Tensor> {
+        let (b_size, seq_len, dim) = xs.dims3()?;
+        xs.reshape((b_size, seq_len, self.heads, dim / self.heads))?
+            .permute((0, 2, 1, 3))?
+            .reshape((b_size * self.heads, seq_len, dim / self.heads))
     }
 }
