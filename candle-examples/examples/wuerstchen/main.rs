@@ -256,7 +256,7 @@ fn run(args: Args) -> Result<()> {
             &uncond_prompt,
             tokenizer.clone(),
             weights,
-            stable_diffusion::clip::Config::wuerstchen_prior(),
+            stable_diffusion::clip::Config::wuerstchen(),
             &device,
         )?
     };
