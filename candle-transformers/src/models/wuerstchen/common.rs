@@ -165,7 +165,7 @@ impl AttnBlock {
         let kv = if self.self_attn {
             let (b_size, channel, _, _) = xs.dims4()?;
             let norm_xs = norm_xs.reshape((b_size, channel, ()))?.transpose(1, 2)?;
-            Tensor::cat(&[&norm_xs, &kv], 1)?
+            Tensor::cat(&[&norm_xs, &kv], 1)?.contiguous()?
         } else {
             kv
         };
