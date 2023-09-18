@@ -1,3 +1,4 @@
+pub mod attention_processor;
 pub mod common;
 pub mod ddpm;
 pub mod diffnext;
