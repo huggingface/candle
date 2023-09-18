@@ -45,8 +45,8 @@ struct Args {
     decode: bool,
 
     // Enable/disable decoding.
-    #[arg(long)]
-    use_cache: Option<bool>,
+    #[arg(long, default_value = "false")]
+    use_cache: bool,
 
     /// Use this prompt, otherwise compute sentence similarities.
     #[arg(long)]
@@ -116,9 +116,7 @@ impl T5ModelBuilder {
         };
         let config = std::fs::read_to_string(config_filename)?;
         let mut config: t5::Config = serde_json::from_str(&config)?;
-        if args.use_cache.is_some() {
-            config.use_cache = args.use_cache.unwrap();
-        }
+        config.use_cache = args.use_cache;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
         Ok((
             Self {
