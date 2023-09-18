@@ -5,7 +5,7 @@ use candle_nn::{linear, Linear, VarBuilder};
 // A simplified version of:
 // https://github.com/huggingface/diffusers/blob/119ad2c3dc8a8fb8446a83f4bf6f20929487b47f/src/diffusers/models/attention_processor.py#L38
 #[derive(Debug)]
-struct Attention {
+pub struct Attention {
     to_q: Linear,
     to_k: Linear,
     to_v: Linear,
@@ -47,14 +47,15 @@ impl Attention {
     }
 
     fn get_attention_scores(&self, query: &Tensor, key: &Tensor) -> Result<Tensor> {
-        let attn_probs = (query.matmul(key)? * self.scale)?;
+        let attn_probs = (query.matmul(&key.t()?)? * self.scale)?;
         candle_nn::ops::softmax_last_dim(&attn_probs)
     }
 
     pub fn forward(&self, xs: &Tensor, encoder_hidden_states: &Tensor) -> Result<Tensor> {
-        let (b_size, seq_len, _dim) = xs.dims3()?;
+        let (b_size, channel, h, w) = xs.dims4()?;
+        let xs = xs.reshape((b_size, channel, h * w))?.t()?;
 
-        let query = self.to_q.forward(xs)?;
+        let query = self.to_q.forward(&xs)?;
         let key = self.to_k.forward(encoder_hidden_states)?;
         let value = self.to_v.forward(encoder_hidden_states)?;
 
@@ -66,6 +67,9 @@ impl Attention {
         let xs = attn_prs.matmul(&value)?;
         let xs = self.batch_to_head_dim(&xs)?;
 
-        self.to_out.forward(&xs)
+        self.to_out
+            .forward(&xs)?
+            .t()?
+            .reshape((b_size, channel, h, w))
     }
 }
