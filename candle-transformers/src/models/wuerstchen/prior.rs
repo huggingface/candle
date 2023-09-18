@@ -94,7 +94,7 @@ impl WPrior {
             xs = block.ts_block.forward(&xs, &r_embed)?;
             xs = block.attn_block.forward(&xs, &c_embed)?;
         }
-        let ab = xs.apply(&self.out_ln)?.apply(&self.out_conv)?.chunk(1, 2)?;
+        let ab = xs.apply(&self.out_ln)?.apply(&self.out_conv)?.chunk(2, 1)?;
         (x_in - &ab[0])? / ((&ab[1] - 1.)?.abs()? + 1e-5)
     }
 }

@@ -1,4 +1,3 @@
-#![allow(unused)]
 use candle::{Module, Result, Tensor};
 use candle_nn::{linear, Linear, VarBuilder};
 
