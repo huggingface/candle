@@ -52,6 +52,7 @@ impl Module for MixingResidualBlock {
             .affine(1. + mods[3] as f64, mods[4] as f64)?;
         let x_temp = x_temp
             .permute((0, 2, 3, 1))?
+            .contiguous()?
             .apply(&self.channelwise_lin1)?
             .gelu()?
             .apply(&self.channelwise_lin2)?
