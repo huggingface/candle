@@ -129,6 +129,10 @@ __device__ __forceinline__ float powg(float a, float b) { return powf(a, b); }
 __device__ __forceinline__ double powg(double a, double b) { return pow(a, b); }
 __device__ __forceinline__ float tanhg(float a) { return tanhf(a); }
 __device__ __forceinline__ double tanhg(double a) { return tanh(a); }
+__device__ __forceinline__ float erfg(float a) { return erff(a); }
+__device__ __forceinline__ double erfg(double a) { return erf(a); }
+__device__ __forceinline__ float normcdfg(float a) { return normcdff(a); }
+__device__ __forceinline__ double normcdfg(double a) { return normcdf(a); }
 __device__ __forceinline__ float maxg(float a, float b) { return fmaxf(a, b); }
 __device__ __forceinline__ double maxg(double a, double b) { return fmax(a, b); }
 __device__ __forceinline__ float ming(float a, float b) { return fminf(a, b); }
@@ -157,6 +161,8 @@ __device__ __forceinline__ __half sing(__half a) { return hsin(a); }
 __device__ __forceinline__ __half recipg(__half a) { __half one = 1.0; return one / a; }
 __device__ __forceinline__ __half maxg(__half a, __half b) { return __hmax_nan(a, b); }
 __device__ __forceinline__ __half tanhg(__half a) { return __float2half(tanhf(__half2float(a))); }
+__device__ __forceinline__ __half erfg(__half a) { return __float2half(erff(__half2float(a))); }
+__device__ __forceinline__ __half normcdfg(__half a) { return __float2half(normcdff(__half2float(a))); }
 __device__ __forceinline__ __half ming(__half a, __half b) { return __hmin_nan(a, b); }
 __device__ __forceinline__ __half logg(__half a) { return hlog(a); }
 __device__ __forceinline__ __half expg(__half a) { return hexp(a); }
@@ -173,6 +179,8 @@ __device__ __forceinline__ __nv_bfloat16 sing(__nv_bfloat16 a) { return hsin(a);
 __device__ __forceinline__ __nv_bfloat16 recipg(__nv_bfloat16 a) { __nv_bfloat16 one = 1.0; return one / a; }
 __device__ __forceinline__ __nv_bfloat16 maxg(__nv_bfloat16 a, __nv_bfloat16 b) { return __hmax_nan(a, b); }
 __device__ __forceinline__ __nv_bfloat16 tanhg(__nv_bfloat16 a) { return __float2bfloat16(tanhf(__bfloat162float(a))); }
+__device__ __forceinline__ __nv_bfloat16 erfg(__nv_bfloat16 a) { return __float2bfloat16(erff(__bfloat162float(a))); }
+__device__ __forceinline__ __nv_bfloat16 normcdfg(__nv_bfloat16 a) { return __float2bfloat16(normcdff(__bfloat162float(a))); }
 __device__ __forceinline__ __nv_bfloat16 ming(__nv_bfloat16 a, __nv_bfloat16 b) { return __hmin_nan(a, b); }
 __device__ __forceinline__ __nv_bfloat16 logg(__nv_bfloat16 a) { return hlog(a); }
 __device__ __forceinline__ __nv_bfloat16 expg(__nv_bfloat16 a) { return hexp(a); }

@@ -1,3 +1,4 @@
+pub mod erf;
 pub mod kernels;
 
 trait Cpu<const ARR: usize> {
