@@ -12,6 +12,7 @@ use candle_nn::Module;
 pub enum Activation {
     QuickGelu,
     Gelu,
+    GeluErf,
 }
 
 impl Module for Activation {
@@ -19,6 +20,7 @@ impl Module for Activation {
         match self {
             Activation::QuickGelu => xs * nn::ops::sigmoid(&(xs * 1.702f64)?)?,
             Activation::Gelu => xs.gelu(),
+            Activation::GeluErf => xs.gelu_erf(),
         }
     }
 }
@@ -111,7 +113,7 @@ impl Config {
             num_hidden_layers: 24,
             num_attention_heads: 16,
             projection_dim: 1024,
-            activation: Activation::Gelu,
+            activation: Activation::GeluErf,
         }
     }
 
@@ -126,7 +128,7 @@ impl Config {
             num_hidden_layers: 32,
             num_attention_heads: 20,
             projection_dim: 512,
-            activation: Activation::Gelu,
+            activation: Activation::GeluErf,
         }
     }
 }

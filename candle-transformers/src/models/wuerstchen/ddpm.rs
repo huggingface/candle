@@ -52,8 +52,10 @@ impl DDPMWScheduler {
         } else {
             t
         };
-        let alpha_cumprod =
-            ((t + s) / (1. + s) * std::f64::consts::PI * 0.5).powi(2) / self.init_alpha_cumprod;
+        let alpha_cumprod = ((t + s) / (1. + s) * std::f64::consts::PI * 0.5)
+            .cos()
+            .powi(2)
+            / self.init_alpha_cumprod;
         alpha_cumprod.clamp(0.0001, 0.9999)
     }
 

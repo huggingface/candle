@@ -100,7 +100,7 @@ impl GlobalResponseNorm {
 
 impl Module for GlobalResponseNorm {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let agg_norm = xs.sqr()?.sum_keepdim((1, 2))?;
+        let agg_norm = xs.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
         let stand_div_norm =
             agg_norm.broadcast_div(&(agg_norm.mean_keepdim(D::Minus1)? + 1e-6)?)?;
         xs.broadcast_mul(&stand_div_norm)?
@@ -152,7 +152,7 @@ impl ResBlock {
             .permute((0, 2, 3, 1))?;
         let xs = xs
             .apply(&self.channelwise_lin1)?
-            .gelu()?
+            .gelu_erf()?
             .apply(&self.channelwise_grn)?
             .apply(&self.channelwise_lin2)?
             .permute((0, 3, 1, 2))?;
