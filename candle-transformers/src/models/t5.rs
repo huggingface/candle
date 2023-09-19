@@ -350,7 +350,7 @@ impl T5Attention {
                     // This only handles the bidirectional case.
                     let kv_len = k.dim(2)?;
                     let (q_start, q_end) = match self.use_cache {
-                        true => ((kv_len - 1) as u32, kv_len as u32),
+                        true => ((kv_len - q_len) as u32, kv_len as u32),
                         false => (0_u32, kv_len as u32),
                     };
                     let num_buckets = self.relative_attention_num_buckets as u32 / 2;
