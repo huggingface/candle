@@ -645,13 +645,14 @@ impl T5ForConditionalGeneration {
         let decoder = T5Stack::load(true, vb.pp("decoder"), &shared, &decoder_cfg)?;
 
         let tie_word_embeddings = cfg.tie_word_embeddings;
-        let lm_head = match tie_word_embeddings {
-            true => None,
-            false => Some(linear_no_bias(
+        let lm_head = if tie_word_embeddings {
+            None
+        } else {
+            Some(linear_no_bias(
                 cfg.d_model,
                 cfg.vocab_size,
                 vb.pp("lm_head"),
-            )?),
+            )?)
         };
 
         Ok(Self {
@@ -677,14 +678,18 @@ impl T5ForConditionalGeneration {
         let decoder_output = self
             .decoder
             .forward(decoder_input_ids, Some(encoder_output))?;
-        let mut sequence_output = decoder_output
-            .narrow(1, decoder_output.dim(1)? - 1, 1)?
-            .squeeze(1)?;
-        if self.tie_word_embeddings {
+
+        let scaling_factor = if self.tie_word_embeddings {
             // Rescale output before projecting on vocab
             // See https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/transformer/transformer.py#L586
-            sequence_output = (sequence_output * (self.d_model as f64).sqrt())?;
-        }
+            (self.d_model as f64).sqrt()
+        } else {
+            1.0
+        };
+        let sequence_output = ((decoder_output
+            .narrow(1, decoder_output.dim(1)? - 1, 1)?
+            .squeeze(1)?)
+            * scaling_factor)?;
         let output = match self.lm_head {
             None => sequence_output.matmul(&self.shared.embeddings().t()?)?,
             Some(ref lm_head) => lm_head.forward(&sequence_output)?,
