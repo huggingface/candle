@@ -297,7 +297,6 @@ fn run(args: Args) -> Result<()> {
         let timesteps = prior_scheduler.timesteps();
         println!("prior denoising");
         for (index, &t) in timesteps.iter().enumerate() {
-            continue;
             let start_time = std::time::Instant::now();
             if index == timesteps.len() - 1 {
                 continue;
