@@ -1,0 +1,368 @@
+<html>
+  <head>
+    <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+    <title>Candle Bert</title>
+  </head>
+  <body></body>
+</html>
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
+      html,
+      body {
+        font-family: "Source Sans 3", sans-serif;
+      }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module" src="./code.js"></script>
+    <script type="module">
+      import { hcl } from "https://cdn.skypack.dev/d3-color@3";
+      import { interpolateReds } from "https://cdn.skypack.dev/d3-scale-chromatic@3";
+      import { scaleLinear } from "https://cdn.skypack.dev/d3-scale@4";
+      import {
+        getModelInfo,
+        getEmbeddings,
+        getWikiText,
+        cosineSimilarity,
+      } from "./utils.js";
+
+      const bertWorker = new Worker("./bertWorker.js", {
+        type: "module",
+      });
+
+      const inputContainerEL = document.querySelector("#input-container");
+      const textAreaEl = document.querySelector("#input-area");
+      const outputAreaEl = document.querySelector("#output-area");
+      const formEl = document.querySelector("#form");
+      const searchInputEl = document.querySelector("#search-input");
+      const formWikiEl = document.querySelector("#form-wiki");
+      const searchWikiEl = document.querySelector("#search-wiki");
+      const outputStatusEl = document.querySelector("#output-status");
+      const modelSelectEl = document.querySelector("#model");
+
+      const sentencesRegex =
+        /(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<![A-Z]\.)(?<=\.|\?)\s/gm;
+
+      let sentenceEmbeddings = [];
+      let currInputText = "";
+      let isCalculating = false;
+
+      function toggleTextArea(state) {
+        if (state) {
+          textAreaEl.hidden = false;
+          textAreaEl.focus();
+        } else {
+          textAreaEl.hidden = true;
+        }
+      }
+      inputContainerEL.addEventListener("focus", (e) => {
+        toggleTextArea(true);
+      });
+      textAreaEl.addEventListener("blur", (e) => {
+        toggleTextArea(false);
+      });
+      textAreaEl.addEventListener("focusout", (e) => {
+        toggleTextArea(false);
+        if (currInputText === textAreaEl.value || isCalculating) return;
+        populateOutputArea(textAreaEl.value);
+        calculateEmbeddings(textAreaEl.value);
+      });
+
+      modelSelectEl.addEventListener("change", (e) => {
+        if (currInputText === "" || isCalculating) return;
+        populateOutputArea(textAreaEl.value);
+        calculateEmbeddings(textAreaEl.value);
+      });
+
+      function populateOutputArea(text) {
+        currInputText = text;
+        const sentences = text.split(sentencesRegex);
+
+        outputAreaEl.innerHTML = "";
+        for (const [id, sentence] of sentences.entries()) {
+          const sentenceEl = document.createElement("span");
+          sentenceEl.id = `sentence-${id}`;
+          sentenceEl.innerText = sentence + " ";
+          outputAreaEl.appendChild(sentenceEl);
+        }
+      }
+      formEl.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (isCalculating || currInputText === "") return;
+        toggleInputs(true);
+        const modelID = modelSelectEl.value;
+        const { modelURL, tokenizerURL, configURL, search_prefix } =
+          getModelInfo(modelID);
+
+        const text = searchInputEl.value;
+        const query = search_prefix + searchInputEl.value;
+        outputStatusEl.classList.remove("invisible");
+        outputStatusEl.innerText = "Calculating embeddings for query...";
+        isCalculating = true;
+        const out = await getEmbeddings(
+          bertWorker,
+          modelURL,
+          tokenizerURL,
+          configURL,
+          modelID,
+          [query]
+        );
+        outputStatusEl.classList.add("invisible");
+        const queryEmbeddings = out.output[0];
+        // calculate cosine similarity with all sentences given the query
+        const distances = sentenceEmbeddings
+          .map((embedding, id) => ({
+            id,
+            similarity: cosineSimilarity(queryEmbeddings, embedding),
+          }))
+          .sort((a, b) => b.similarity - a.similarity)
+          // getting top 10 most similar sentences
+          .slice(0, 10);
+
+        const colorScale = scaleLinear()
+          .domain([
+            distances[distances.length - 1].similarity,
+            distances[0].similarity,
+          ])
+          .range([0, 1])
+          .interpolate(() => interpolateReds);
+        outputAreaEl.querySelectorAll("span").forEach((el) => {
+          el.style.color = "unset";
+          el.style.backgroundColor = "unset";
+        });
+        distances.forEach((d) => {
+          const el = outputAreaEl.querySelector(`#sentence-${d.id}`);
+          const color = colorScale(d.similarity);
+          const fontColor = hcl(color).l < 70 ? "white" : "black";
+          el.style.color = fontColor;
+          el.style.backgroundColor = color;
+        });
+
+        outputAreaEl
+          .querySelector(`#sentence-${distances[0].id}`)
+          .scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+            inline: "nearest",
+          });
+
+        isCalculating = false;
+        toggleInputs(false);
+      });
+      async function calculateEmbeddings(text) {
+        isCalculating = true;
+        toggleInputs(true);
+        const modelID = modelSelectEl.value;
+        const { modelURL, tokenizerURL, configURL, document_prefix } =
+          getModelInfo(modelID);
+
+        const sentences = text.split(sentencesRegex);
+        const allEmbeddings = [];
+        outputStatusEl.classList.remove("invisible");
+        for (const [id, sentence] of sentences.entries()) {
+          const query = document_prefix + sentence;
+          outputStatusEl.innerText = `Calculating embeddings: sentence ${
+            id + 1
+          } of ${sentences.length}`;
+          const embeddings = await getEmbeddings(
+            bertWorker,
+            modelURL,
+            tokenizerURL,
+            configURL,
+            modelID,
+            [query],
+            updateStatus
+          );
+          allEmbeddings.push(embeddings);
+        }
+        outputStatusEl.classList.add("invisible");
+        sentenceEmbeddings = allEmbeddings.map((e) => e.output[0]);
+        isCalculating = false;
+        toggleInputs(false);
+      }
+
+      function updateStatus(data) {
+        if ("status" in data) {
+          if (data.status === "loading") {
+            outputStatusEl.innerText = data.message;
+            outputStatusEl.classList.remove("invisible");
+          }
+        }
+      }
+      function toggleInputs(state) {
+        const interactive = document.querySelectorAll(".interactive");
+        interactive.forEach((el) => {
+          if (state) {
+            el.disabled = true;
+          } else {
+            el.disabled = false;
+          }
+        });
+      }
+
+      searchWikiEl.addEventListener("input", () => {
+        searchWikiEl.setCustomValidity("");
+      });
+
+      formWikiEl.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if ("example" in e.submitter.dataset) {
+          searchWikiEl.value = e.submitter.innerText;
+        }
+        const text = searchWikiEl.value;
+
+        if (isCalculating || text === "") return;
+        try {
+          const wikiText = await getWikiText(text);
+          searchWikiEl.setCustomValidity("");
+          textAreaEl.innerHTML = wikiText;
+          populateOutputArea(wikiText);
+          calculateEmbeddings(wikiText);
+          searchWikiEl.value = "";
+        } catch {
+          searchWikiEl.setCustomValidity("Invalid Wikipedia article name");
+          searchWikiEl.reportValidity();
+        }
+      });
+    </script>
+  </head>
+  <body class="container max-w-4xl mx-auto p-4">
+    <main class="grid grid-cols-1 gap-5 relative">
+      <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
+      <div>
+        <h1 class="text-5xl font-bold">Candle BERT</h1>
+        <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
+        <p class="max-w-lg">
+          Running sentence embeddings and similarity search in the browser using
+          the Bert Model written with
+          <a
+            href="https://github.com/huggingface/candle/"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+            >Candle
+          </a>
+          and compiled to Wasm. Embeddings models from are from
+          <a
+            href="https://huggingface.co/sentence-transformers/"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+          >
+            Sentence Transformers
+          </a>
+          and
+          <a
+            href="https://huggingface.co/intfloat/"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+          >
+            Liang Wang - e5 Models
+          </a>
+        </p>
+      </div>
+
+      <div>
+        <label for="model" class="font-medium block">Models Options: </label>
+        <select
+          id="model"
+          class="border-2 border-gray-500 rounded-md font-light interactive disabled:cursor-not-allowed w-full max-w-max"
+        >
+          <option value="intfloat_e5_small_v2" selected>
+            intfloat/e5-small-v2 (133 MB)
+          </option>
+          <option value="intfloat_e5_base_v2">
+            intfloat/e5-base-v2 (438 MB)
+          </option>
+          <option value="intfloat_multilingual_e5_small">
+            intfloat/multilingual-e5-small (471 MB)
+          </option>
+          <option value="sentence_transformers_all_MiniLM_L6_v2">
+            sentence-transformers/all-MiniLM-L6-v2 (90.9 MB)
+          </option>
+          <option value="sentence_transformers_all_MiniLM_L12_v2">
+            sentence-transformers/all-MiniLM-L12-v2 (133 MB)
+          </option>
+        </select>
+      </div>
+      <div>
+        <h3 class="font-medium">Examples:</h3>
+        <form
+          id="form-wiki"
+          class="flex text-xs rounded-md justify-between w-min gap-3"
+        >
+          <input type="submit" hidden />
+
+          <button data-example class="disabled:cursor-not-allowed interactive">
+            Pizza
+          </button>
+          <button data-example class="disabled:cursor-not-allowed interactive">
+            Paris
+          </button>
+          <button data-example class="disabled:cursor-not-allowed interactive">
+            Physics
+          </button>
+          <input
+            type="text"
+            id="search-wiki"
+            title="Search Wikipedia article by title"
+            class="font-light py-0 mx-1 resize-none outline-none w-32 disabled:cursor-not-allowed interactive"
+            placeholder="Load Wikipedia article..."
+          />
+          <button
+            title="Search Wikipedia article and load into input"
+            class="bg-gray-700 hover:bg-gray-800 text-white font-normal px-2 py-1 rounded disabled:bg-gray-300 disabled:cursor-not-allowed interactive"
+          >
+            Load
+          </button>
+        </form>
+      </div>
+      <form
+        id="form"
+        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md items-center"
+      >
+        <input type="submit" hidden />
+        <input
+          type="text"
+          id="search-input"
+          class="font-light w-full px-3 py-2 mx-1 resize-none outline-none interactive disabled:cursor-not-allowed"
+          placeholder="Search query here..."
+        />
+        <button
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed interactive"
+        >
+          Search
+        </button>
+      </form>
+      <div>
+        <h3 class="font-medium">Input text:</h3>
+        <div class="flex justify-between items-center">
+          <div class="rounded-md inline text-xs">
+            <span id="output-status" class="m-auto font-light invisible"
+              >C</span
+            >
+          </div>
+        </div>
+        <div
+          id="input-container"
+          tabindex="0"
+          class="min-h-[250px] bg-slate-100 text-gray-500 rounded-md p-4 flex flex-col gap-2 relative"
+        >
+          <textarea
+            id="input-area"
+            hidden
+            value=""
+            placeholder="Input text to perform semantic similarity search..."
+            class="flex-1 resize-none outline-none left-0 right-0 top-0 bottom-0 m-4 absolute interactive disabled:invisible"
+          ></textarea>
+          <p id="output-area" class="grid-rows-2">
+            Input text to perform semantic similarity search...
+          </p>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

@@ -11,11 +11,9 @@ members = [
     "candle-wasm-examples/segment-anything",
     "candle-wasm-examples/whisper",
     "candle-wasm-examples/yolo",
+    "candle-wasm-examples/bert",
 ]
-exclude = [
-    "candle-flash-attn",
-    "candle-kernels",
-]
+exclude = ["candle-flash-attn", "candle-kernels"]
 resolver = "2"
 
 [workspace.package]
