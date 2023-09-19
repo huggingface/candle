@@ -442,6 +442,9 @@ impl Tensor {
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
                     Op::Unary(_, UnaryOp::Gelu) => Err(Error::BackwardNotSupported { op: "gelu" })?,
+                    Op::Unary(_, UnaryOp::GeluErf) => {
+                        Err(Error::BackwardNotSupported { op: "gelu-erf" })?
+                    }
                     Op::Unary(arg, UnaryOp::Relu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let relu_grad = arg.ge(&arg.zeros_like()?)?.to_dtype(arg.dtype())?;

@@ -489,6 +489,7 @@ impl Tensor {
     unary_op!(sqr, Sqr);
     unary_op!(sqrt, Sqrt);
     unary_op!(gelu, Gelu);
+    unary_op!(gelu_erf, GeluErf);
     unary_op!(relu, Relu);
 
     /// Retrieves the single scalar value hold in the tensor. If the tensor contains multiple
