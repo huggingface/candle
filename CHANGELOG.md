@@ -1,13 +1,27 @@
 # Changelog
 This documents the main changes to the `candle` crate.
 
-## v0.2.2 - Unreleased
+## v0.2.3 - Unreleased
+
+### Added
+
+### Modified
+
+## v0.2.2 - 2023-09-18
 
 ### Added
 - Support for `top_p` sampling
   [819](https://github.com/huggingface/candle/pull/819).
+- T5 model including decoding
+  [864](https://github.com/huggingface/candle/pull/864).
+- 1-d upsampling
+  [839](https://github.com/huggingface/candle/pull/839).
 
 ### Modified
+- Bugfix for conv2d
+  [820](https://github.com/huggingface/candle/pull/820).
+- Support tensor based indexing using `.i`
+  [842](https://github.com/huggingface/candle/pull/842).
 
 ## v0.2.1 - 2023-09-11
 

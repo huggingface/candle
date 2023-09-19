@@ -45,7 +45,8 @@ pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
 }
 
 pub fn leaky_relu(xs: &Tensor, negative_slope: f64) -> Result<Tensor> {
-    xs.relu()?.minimum(&(xs * negative_slope)?)
+    let zeros = xs.zeros_like()?;
+    xs.maximum(&zeros)? + xs.minimum(&zeros)? * negative_slope
 }
 
 pub fn dropout(xs: &Tensor, drop_p: f32) -> Result<Tensor> {
@@ -188,4 +189,43 @@ impl candle::CustomOp1 for SoftmaxLastDim {
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
     xs.apply_op1_no_bwd(&SoftmaxLastDim)
+}
+
+// https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
+pub fn pixel_shuffle(xs: &Tensor, upscale_factor: usize) -> Result<Tensor> {
+    let (b_size, c, h, w) = xs.dims4()?;
+    let out_c = c / upscale_factor / upscale_factor;
+    xs.reshape((b_size, out_c, upscale_factor, upscale_factor, h, w))?
+        .permute((0, 1, 4, 2, 5, 3))?
+        .reshape((b_size, out_c, h * upscale_factor, w * upscale_factor))
+}
+
+pub fn pixel_unshuffle(xs: &Tensor, downscale_factor: usize) -> Result<Tensor> {
+    let (b_size, c, h, w) = xs.dims4()?;
+    let out_c = c * downscale_factor * downscale_factor;
+    xs.reshape((
+        b_size,
+        c,
+        h / downscale_factor,
+        downscale_factor,
+        w / downscale_factor,
+        downscale_factor,
+    ))?
+    .permute((0, 1, 3, 5, 2, 4))?
+    .reshape((b_size, out_c, h / downscale_factor, w / downscale_factor))
+}
+
+// https://pytorch.org/docs/stable/generated/torch.nn.ReplicationPad2d.html
+pub fn replication_pad2d(xs: &Tensor, pad: usize) -> Result<Tensor> {
+    match pad {
+        0 => Ok(xs.clone()),
+        1 => {
+            let (_b_size, _c, h, w) = xs.dims4()?;
+            let (first, last) = (xs.narrow(3, 0, 1)?, xs.narrow(3, w - 1, 1)?);
+            let xs = Tensor::cat(&[&first, xs, &last], 3)?;
+            let (first, last) = (xs.narrow(2, 0, 1)?, xs.narrow(2, h - 1, 1)?);
+            Tensor::cat(&[&first, &xs, &last], 2)
+        }
+        n => candle::bail!("replication-pad with a size of {n} is not supported"),
+    }
 }

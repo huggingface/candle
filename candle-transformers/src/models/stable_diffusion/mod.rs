@@ -1,6 +1,7 @@
 pub mod attention;
 pub mod clip;
 pub mod ddim;
+pub mod ddpm;
 pub mod embeddings;
 pub mod resnet;
 pub mod schedulers;

@@ -12,11 +12,10 @@ readme = "README.md"
 [lib]
 name = "candle"
 crate-type = ["cdylib"]
-doc = false
 
 [dependencies]
-candle = { path = "../candle-core", version = "0.2.2", package = "candle-core" }
-candle-nn = { path = "../candle-nn", version = "0.2.2" }
+candle = { path = "../candle-core", version = "0.2.3", package = "candle-core" }
+candle-nn = { path = "../candle-nn", version = "0.2.3" }
 half = { workspace = true }
 pyo3 = { version = "0.19.0", features = ["extension-module"] }
 

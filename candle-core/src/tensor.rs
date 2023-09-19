@@ -489,6 +489,7 @@ impl Tensor {
     unary_op!(sqr, Sqr);
     unary_op!(sqrt, Sqrt);
     unary_op!(gelu, Gelu);
+    unary_op!(gelu_erf, GeluErf);
     unary_op!(relu, Relu);
 
     /// Retrieves the single scalar value hold in the tensor. If the tensor contains multiple
@@ -666,7 +667,12 @@ impl Tensor {
         let storage = self.storage().reduce_op(op, self.layout(), &[dim])?;
         let mut dims = self.dims().to_vec();
         dims[dim] = 1;
-        let op = BackpropOp::new1(self, |arg| Op::Reduce(arg, op, dims.to_vec()));
+        let op = match op {
+            ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => {
+                BackpropOp::new1(self, |arg| Op::Reduce(arg, op, dims.to_vec()))
+            }
+            ReduceOp::ArgMin | ReduceOp::ArgMax => BackpropOp::none(),
+        };
         let res = from_storage(storage, dims, op, false);
         if keepdim {
             Ok(res)
@@ -1901,6 +1907,34 @@ impl Tensor {
         let dim = dim.to_index(arg0.shape(), "cat")?;
         for arg in args {
             arg.as_ref().check_dim(dim, "cat")?;
+        }
+        for (arg_idx, arg) in args.iter().enumerate() {
+            let arg = arg.as_ref();
+            if arg0.rank() != arg.rank() {
+                Err(Error::UnexpectedNumberOfDims {
+                    expected: arg0.rank(),
+                    got: arg.rank(),
+                    shape: arg.shape().clone(),
+                }
+                .bt())?
+            }
+            for (dim_idx, (v1, v2)) in arg0
+                .shape()
+                .dims()
+                .iter()
+                .zip(arg.shape().dims().iter())
+                .enumerate()
+            {
+                if dim_idx != dim && v1 != v2 {
+                    Err(Error::ShapeMismatchCat {
+                        dim: dim_idx,
+                        first_shape: arg0.shape().clone(),
+                        n: arg_idx + 1,
+                        nth_shape: arg.shape().clone(),
+                    }
+                    .bt())?
+                }
+            }
         }
         if dim == 0 {
             Self::cat0(args)

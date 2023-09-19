@@ -1,0 +1,30 @@
+[project]
+name = 'candle-nn'
+requires-python = '>=3.7'
+authors = [
+    {name = 'The Candle Team'},
+]
+
+dynamic = [
+    'description',
+    'license',
+    'readme',
+]
+
+[project.urls]
+Homepage = 'https://github.com/huggingface/candle'
+Source = 'https://github.com/huggingface/candle'
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+python-source = "py_src"
+module-name = "candle.candle"
+bindings = 'pyo3'
+features = ["pyo3/extension-module"]
+
+[tool.black]
+line-length = 119
+target-version = ['py35']

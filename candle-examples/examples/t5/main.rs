@@ -3,18 +3,22 @@ extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
+use std::io::Write;
+use std::path::PathBuf;
+
 use candle_transformers::models::t5;
 
 use anyhow::{anyhow, Error as E, Result};
-use candle::{DType, Tensor};
+use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
+use candle_transformers::generation::LogitsProcessor;
 use clap::Parser;
 use hf_hub::{api::sync::Api, Cache, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 const DTYPE: DType = DType::F32;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Run on CPU rather than on GPU.
@@ -36,25 +40,55 @@ struct Args {
     #[arg(long)]
     revision: Option<String>,
 
-    /// Compute embeddings for this prompt, otherwise compute sentence similarities.
+    /// Enable decoding.
+    #[arg(long)]
+    decode: bool,
+
+    // Enable/disable decoding.
+    #[arg(long, default_value = "false")]
+    disable_cache: bool,
+
+    /// Use this prompt, otherwise compute sentence similarities.
     #[arg(long)]
     prompt: Option<String>,
 
-    /// The number of times to run the prompt.
-    #[arg(long, default_value = "1")]
-    n: usize,
+    /// If set along with --decode, will use this prompt to initialize the decoder.
+    #[arg(long)]
+    decoder_prompt: Option<String>,
 
     /// L2 normalization for embeddings.
     #[arg(long, default_value = "true")]
     normalize_embeddings: bool,
+
+    /// The temperature used to generate samples.
+    #[arg(long, default_value_t = 0.8)]
+    temperature: f64,
+
+    /// Nucleus sampling probability cutoff.
+    #[arg(long)]
+    top_p: Option<f64>,
+
+    /// Penalty to be applied for repeating tokens, 1. means no penalty.
+    #[arg(long, default_value_t = 1.1)]
+    repeat_penalty: f32,
+
+    /// The context size to consider for the repeat penalty.
+    #[arg(long, default_value_t = 64)]
+    repeat_last_n: usize,
 }
 
-impl Args {
-    fn build_model_and_tokenizer(&self) -> Result<(t5::T5EncoderModel, Tokenizer)> {
-        let device = candle_examples::device(self.cpu)?;
+struct T5ModelBuilder {
+    device: Device,
+    config: t5::Config,
+    weights_filename: PathBuf,
+}
+
+impl T5ModelBuilder {
+    pub fn load(args: &Args) -> Result<(Self, Tokenizer)> {
+        let device = candle_examples::device(args.cpu)?;
         let default_model = "t5-small".to_string();
         let default_revision = "refs/pr/15".to_string();
-        let (model_id, revision) = match (self.model_id.to_owned(), self.revision.to_owned()) {
+        let (model_id, revision) = match (args.model_id.to_owned(), args.revision.to_owned()) {
             (Some(model_id), Some(revision)) => (model_id, revision),
             (Some(model_id), None) => (model_id, "main".to_string()),
             (None, Some(revision)) => (default_model, revision),
@@ -62,7 +96,7 @@ impl Args {
         };
 
         let repo = Repo::with_revision(model_id, RepoType::Model, revision);
-        let (config_filename, tokenizer_filename, weights_filename) = if self.offline {
+        let (config_filename, tokenizer_filename, weights_filename) = if args.offline {
             let cache = Cache::default().repo(repo);
             (
                 cache
@@ -85,20 +119,40 @@ impl Args {
             )
         };
         let config = std::fs::read_to_string(config_filename)?;
-        let config: t5::Config = serde_json::from_str(&config)?;
+        let mut config: t5::Config = serde_json::from_str(&config)?;
+        config.use_cache = !args.disable_cache;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+        Ok((
+            Self {
+                device,
+                config,
+                weights_filename,
+            },
+            tokenizer,
+        ))
+    }
 
-        let weights = unsafe { candle::safetensors::MmapedFile::new(weights_filename)? };
+    pub fn build_encoder(&self) -> Result<t5::T5EncoderModel> {
+        let weights =
+            unsafe { candle::safetensors::MmapedFile::new(self.weights_filename.clone())? };
         let weights = weights.deserialize()?;
-        let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &device);
-        let model = t5::T5EncoderModel::load(vb, &config)?;
-        Ok((model, tokenizer))
+        let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &self.device);
+        Ok(t5::T5EncoderModel::load(vb, &self.config)?)
+    }
+
+    pub fn build_conditional_generation(&self) -> Result<t5::T5ForConditionalGeneration> {
+        let weights =
+            unsafe { candle::safetensors::MmapedFile::new(self.weights_filename.clone())? };
+        let weights = weights.deserialize()?;
+        let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &self.device);
+        Ok(t5::T5ForConditionalGeneration::load(vb, &self.config)?)
     }
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
+    let (builder, mut tokenizer) = T5ModelBuilder::load(&args)?;
+    let device = &builder.device;
     let tokenizer = tokenizer
         .with_padding(None)
         .with_truncation(None)
@@ -110,17 +164,80 @@ fn main() -> Result<()> {
                 .map_err(E::msg)?
                 .get_ids()
                 .to_vec();
-            let token_ids = Tensor::new(&tokens[..], model.device())?.unsqueeze(0)?;
-            for idx in 0..args.n {
+            let input_token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
+            if !args.decode {
+                let mut model = builder.build_encoder()?;
                 let start = std::time::Instant::now();
-                let ys = model.forward(&token_ids)?;
-                if idx == 0 {
-                    println!("{ys}");
-                }
+                let ys = model.forward(&input_token_ids)?;
+                println!("{ys}");
                 println!("Took {:?}", start.elapsed());
+            } else {
+                let mut model = builder.build_conditional_generation()?;
+                let mut output_token_ids = [builder.config.pad_token_id as u32].to_vec();
+                if let Some(decoder_prompt) = &args.decoder_prompt {
+                    print!("{decoder_prompt}");
+                    output_token_ids.extend(
+                        tokenizer
+                            .encode(decoder_prompt.to_string(), false)
+                            .map_err(E::msg)?
+                            .get_ids()
+                            .to_vec(),
+                    );
+                }
+                let temperature = if args.temperature <= 0. {
+                    None
+                } else {
+                    Some(args.temperature)
+                };
+                let mut logits_processor = LogitsProcessor::new(299792458, temperature, args.top_p);
+                let encoder_output = model.encode(&input_token_ids)?;
+                let start = std::time::Instant::now();
+
+                for index in 0.. {
+                    if output_token_ids.len() > 512 {
+                        break;
+                    }
+                    let decoder_token_ids = if index == 0 || !builder.config.use_cache {
+                        Tensor::new(output_token_ids.as_slice(), device)?.unsqueeze(0)?
+                    } else {
+                        let last_token = *output_token_ids.last().unwrap();
+                        Tensor::new(&[last_token], device)?.unsqueeze(0)?
+                    };
+                    let logits = model
+                        .decode(&decoder_token_ids, &encoder_output)?
+                        .squeeze(0)?;
+                    let logits = if args.repeat_penalty == 1. {
+                        logits
+                    } else {
+                        let start_at = output_token_ids.len().saturating_sub(args.repeat_last_n);
+                        candle_transformers::utils::apply_repeat_penalty(
+                            &logits,
+                            args.repeat_penalty,
+                            &output_token_ids[start_at..],
+                        )?
+                    };
+
+                    let next_token_id = logits_processor.sample(&logits)?;
+                    if next_token_id as usize == builder.config.eos_token_id {
+                        break;
+                    }
+                    output_token_ids.push(next_token_id);
+                    if let Some(text) = tokenizer.id_to_token(next_token_id) {
+                        let text = text.replace('▁', " ").replace("<0x0A>", "\n");
+                        print!("{text}");
+                        std::io::stdout().flush()?;
+                    }
+                }
+                let dt = start.elapsed();
+                println!(
+                    "\n{} tokens generated ({:.2} token/s)\n",
+                    output_token_ids.len(),
+                    output_token_ids.len() as f64 / dt.as_secs_f64(),
+                );
             }
         }
         None => {
+            let mut model = builder.build_encoder()?;
             let sentences = [
                 "The cat sits outside",
                 "A man is playing guitar",

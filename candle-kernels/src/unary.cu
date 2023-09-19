@@ -29,6 +29,11 @@ extern "C" __global__ void FN_NAME( \
 } \
 
 template<typename T>
+__device__ __forceinline__ T gelu_erf_fwd(T x) {
+  return x * normcdfg(x);
+}
+
+template<typename T>
 __device__ __forceinline__ T gelu_fwd(T x) {
     T x_sq = x * x;
     T x_cube = x_sq * x;
@@ -86,10 +91,13 @@ UNARY_OP(__nv_bfloat16, ulog_bf16, logg(x))
 UNARY_OP(__nv_bfloat16, usin_bf16, sing(x))
 UNARY_OP(__nv_bfloat16, ucos_bf16, cosg(x))
 UNARY_OP(__nv_bfloat16, utanh_bf16, tanhg(x))
+UNARY_OP(__nv_bfloat16, uerf_bf16, erfg(x))
+UNARY_OP(__nv_bfloat16, unormcdf_bf16, normcdfg(x))
 UNARY_OP(__nv_bfloat16, uabs_bf16, absg(x))
 UNARY_OP(__nv_bfloat16, usqr_bf16, x*x)
 UNARY_OP(__nv_bfloat16, usqrt_bf16, sqrtg(x))
 UNARY_OP(__nv_bfloat16, ugelu_bf16, gelu_fwd(x))
+UNARY_OP(__nv_bfloat16, ugelu_erf_bf16, gelu_erf_fwd(x))
 UNARY_OP(__nv_bfloat16, urelu_bf16, relu_fwd(x))
 UNARY_OP1(__nv_bfloat16, uelu_bf16, elu_fwd(x, param))
 UNARY_OP1(__nv_bfloat16, upowf_bf16, powg(x, param))
@@ -104,10 +112,13 @@ UNARY_OP(__half, ulog_f16, logg(x))
 UNARY_OP(__half, usin_f16, sing(x))
 UNARY_OP(__half, ucos_f16, cosg(x))
 UNARY_OP(__half, utanh_f16, tanhg(x))
+UNARY_OP(__half, uerf_f16, erfg(x))
+UNARY_OP(__half, unormcdf_f16, normcdfg(x))
 UNARY_OP(__half, uabs_f16, absg(x))
 UNARY_OP(__half, usqr_f16, x*x)
 UNARY_OP(__half, usqrt_f16, sqrtg(x))
 UNARY_OP(__half, ugelu_f16, gelu_fwd(x))
+UNARY_OP(__half, ugelu_erf_f16, gelu_erf_fwd(x))
 UNARY_OP(__half, urelu_f16, relu_fwd(x))
 UNARY_OP1(__half, uelu_f16, elu_fwd(x, param))
 UNARY_OP1(__half, upowf_f16, powg(x, param))
@@ -131,6 +142,10 @@ UNARY_OP(float, ucos_f32, cosg(x))
 UNARY_OP(double, ucos_f64, cosg(x))
 UNARY_OP(float, utanh_f32, tanhg(x))
 UNARY_OP(double, utanh_f64, tanhg(x))
+UNARY_OP(float, uerf_f32, erfg(x))
+UNARY_OP(double, uerf_f64, erfg(x))
+UNARY_OP(float, unormcdf_f32, normcdfg(x))
+UNARY_OP(double, unormcdf_f64, normcdfg(x))
 UNARY_OP(float, uabs_f32, absg(x))
 UNARY_OP(double, uabs_f64, absg(x))
 UNARY_OP(float, usqr_f32, x*x)
@@ -139,6 +154,8 @@ UNARY_OP(float, usqrt_f32, sqrtg(x))
 UNARY_OP(double, usqrt_f64, sqrtg(x))
 UNARY_OP(float, ugelu_f32, gelu_fwd(x))
 UNARY_OP(double, ugelu_f64, gelu_fwd(x))
+UNARY_OP(float, ugelu_erf_f32, gelu_erf_fwd(x))
+UNARY_OP(double, ugelu_erf_f64, gelu_erf_fwd(x))
 UNARY_OP(float, urelu_f32, relu_fwd(x))
 UNARY_OP(double, urelu_f64, relu_fwd(x))
 UNARY_OP1(float, uelu_f32, elu_fwd(x, param))

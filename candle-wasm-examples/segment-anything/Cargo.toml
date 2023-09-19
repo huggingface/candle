@@ -9,9 +9,9 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-candle = { path = "../../candle-core", version = "0.2.2", package = "candle-core" }
-candle-nn = { path = "../../candle-nn", version = "0.2.2" }
-candle-transformers = { path = "../../candle-transformers", version = "0.2.2" }
+candle = { path = "../../candle-core", version = "0.2.3", package = "candle-core" }
+candle-nn = { path = "../../candle-nn", version = "0.2.3" }
+candle-transformers = { path = "../../candle-transformers", version = "0.2.3" }
 num-traits = { workspace = true }
 
 # App crates.
@@ -27,3 +27,4 @@ serde_json = { workspace = true }
 # Wasm specific crates.
 console_error_panic_hook = "0.1.7"
 wasm-bindgen = "0.2.87"
+serde-wasm-bindgen = "0.6.0"

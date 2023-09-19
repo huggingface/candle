@@ -1,6 +1,5 @@
-#![allow(unused)]
 use super::common::{AttnBlock, ResBlock, TimestepBlock};
-use candle::{DType, Module, Result, Tensor, D};
+use candle::{DType, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 #[derive(Debug)]
@@ -34,7 +33,7 @@ impl WPrior {
         let projection = candle_nn::conv2d(c_in, c, 1, Default::default(), vb.pp("projection"))?;
         let cond_mapper_lin1 = candle_nn::linear(c_cond, c, vb.pp("cond_mapper.0"))?;
         let cond_mapper_lin2 = candle_nn::linear(c, c, vb.pp("cond_mapper.2"))?;
-        let out_ln = super::common::WLayerNorm::new(c, vb.pp("out.0"))?;
+        let out_ln = super::common::WLayerNorm::new(c)?;
         let out_conv = candle_nn::conv2d(c, c_in * 2, 1, Default::default(), vb.pp("out.1"))?;
         let mut blocks = Vec::with_capacity(depth);
         for index in 0..depth {
@@ -95,7 +94,7 @@ impl WPrior {
             xs = block.ts_block.forward(&xs, &r_embed)?;
             xs = block.attn_block.forward(&xs, &c_embed)?;
         }
-        let ab = xs.apply(&self.out_ln)?.apply(&self.out_conv)?.chunk(1, 2)?;
+        let ab = xs.apply(&self.out_ln)?.apply(&self.out_conv)?.chunk(2, 1)?;
         (x_in - &ab[0])? / ((&ab[1] - 1.)?.abs()? + 1e-5)
     }
 }

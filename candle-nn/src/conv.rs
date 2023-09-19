@@ -302,7 +302,7 @@ pub fn conv_transpose2d_no_bias(
         up: bound,
     };
     let ws = vb.get_with_hints(
-        (out_channels, in_channels, kernel_size, kernel_size),
+        (in_channels, out_channels, kernel_size, kernel_size),
         "weight",
         init,
     )?;
