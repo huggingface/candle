@@ -252,7 +252,7 @@ fn run(args: Args) -> Result<()> {
             &device,
         )?
     };
-    println!("{prior_text_embeddings}");
+    println!("generated prior text embeddings {prior_text_embeddings:?}");
 
     let text_embeddings = {
         let tokenizer = ModelFile::Tokenizer.get(tokenizer)?;
@@ -266,7 +266,7 @@ fn run(args: Args) -> Result<()> {
             &device,
         )?
     };
-    println!("{prior_text_embeddings}");
+    println!("generated text embeddings {text_embeddings:?}");
 
     println!("Building the prior.");
     // https://huggingface.co/warp-ai/wuerstchen-prior/blob/main/prior/config.json
