@@ -70,7 +70,6 @@ impl Model {
         } else {
             embeddings
         };
-        console_log!("pooled embeddings {:?}", embeddings.shape());
         let embeddings_data = embeddings.to_vec2()?;
         Ok(serde_wasm_bindgen::to_value(&Embeddings {
             data: embeddings_data,
