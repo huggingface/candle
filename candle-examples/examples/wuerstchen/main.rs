@@ -350,7 +350,7 @@ fn run(args: Args) -> Result<()> {
             &device,
         )?;
 
-        println!("diffusion process");
+        println!("diffusion process with prior {effnet:?}");
         let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(60, Default::default())?;
         let timesteps = scheduler.timesteps();
         for (index, &t) in timesteps.iter().enumerate() {
