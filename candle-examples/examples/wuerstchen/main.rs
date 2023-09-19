@@ -373,7 +373,6 @@ fn run(args: Args) -> Result<()> {
         );
         let image = vqgan.decode(&(&latents * 0.3764)?)?;
         // TODO: Add the clamping between 0 and 1.
-        let image = ((image / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
         let image = (image * 255.)?.to_dtype(DType::U8)?.i(0)?;
         let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
         candle_examples::save_image(&image, image_filename)?
