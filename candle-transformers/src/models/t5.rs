@@ -686,12 +686,8 @@ impl T5ForConditionalGeneration {
             sequence_output = (sequence_output * (self.d_model as f64).sqrt())?;
         }
         let output = match self.lm_head {
-            None => {
-                sequence_output.matmul(&self.shared.embeddings().t()?)?
-            }
-            Some(ref lm_head) => {
-                lm_head.forward(&sequence_output)?
-            }
+            None => sequence_output.matmul(&self.shared.embeddings().t()?)?,
+            Some(ref lm_head) => lm_head.forward(&sequence_output)?,
         };
 
         // TODO: Rescale output before projecting on vocab? * (self.model_dim**-0.5)
