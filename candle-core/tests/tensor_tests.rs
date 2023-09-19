@@ -1,4 +1,4 @@
-use candle_core::{test_device, DType, Device, IndexOp, Result, Tensor};
+use candle_core::{test_device, test_utils, DType, Device, IndexOp, Result, Tensor};
 
 fn zeros(device: &Device) -> Result<()> {
     let tensor = Tensor::zeros((5, 2), DType::F32, device)?;
@@ -40,6 +40,26 @@ fn clamp(device: &Device) -> Result<()> {
     assert_eq!(
         tensor.to_vec2::<f32>()?,
         [[3.0, 1.5, 4.0, 1.5, 5.0], [2.0, 1.5, 6.2, 6.2, 2.0]],
+    );
+    Ok(())
+}
+
+fn unary_op(device: &Device) -> Result<()> {
+    let data = &[[-3f32, 1., 4., -0.1, 0.5], [2.7, -1.8, -0.28, 1.8, 2.8]];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(
+        test_utils::to_vec2_round(&tensor.gelu()?, 4)?,
+        [
+            [-0.0036, 0.8412, 3.9999, -0.046, 0.3457],
+            [2.6911, -0.0647, -0.1091, 1.7353, 2.7933]
+        ]
+    );
+    assert_eq!(
+        test_utils::to_vec2_round(&tensor.gelu_erf()?, 4)?,
+        [
+            [-0.004, 0.8413, 3.9999, -0.046, 0.3457],
+            [2.6906, -0.0647, -0.1091, 1.7353, 2.7928]
+        ]
     );
     Ok(())
 }
@@ -908,6 +928,7 @@ test_device!(max, max_cpu, max_gpu);
 test_device!(argmax, argmax_cpu, argmax_gpu);
 test_device!(argmin, argmin_cpu, argmin_gpu);
 test_device!(transpose, transpose_cpu, transpose_gpu);
+test_device!(unary_op, unary_op_cpu, unary_op_gpu);
 test_device!(binary_op, binary_op_cpu, binary_op_gpu);
 test_device!(embeddings, embeddings_cpu, embeddings_gpu);
 test_device!(cmp, cmp_cpu, cmp_gpu);
