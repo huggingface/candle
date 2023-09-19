@@ -335,6 +335,7 @@ impl WDiffNeXt {
             level_outputs.push(xs.clone())
         }
         level_outputs.reverse();
+        let mut xs = level_outputs[0].clone();
 
         for (i, up_block) in self.up_blocks.iter().enumerate() {
             let effnet_c = match &self.effnet_mappers[self.down_blocks.len() + i] {
