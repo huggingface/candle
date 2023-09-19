@@ -232,7 +232,7 @@
     </script>
   </head>
   <body class="container max-w-4xl mx-auto p-4">
-    <main class="grid grid-cols-1 gap-8 relative">
+    <main class="grid grid-cols-1 gap-5 relative">
       <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
       <div>
         <h1 class="text-5xl font-bold">Candle BERT</h1>
@@ -266,7 +266,7 @@
       </div>
 
       <div>
-        <label for="model" class="font-medium">Models Options: </label>
+        <label for="model" class="font-medium block">Models Options: </label>
         <select
           id="model"
           class="border-2 border-gray-500 rounded-md font-light interactive disabled:cursor-not-allowed w-full max-w-max"
@@ -287,6 +287,38 @@
             sentence-transformers/all-MiniLM-L12-v2 (133 MB)
           </option>
         </select>
+      </div>
+      <div>
+        <h3 class="font-medium">Examples:</h3>
+        <form
+          id="form-wiki"
+          class="flex text-xs rounded-md justify-between w-min gap-3"
+        >
+          <input type="submit" hidden />
+
+          <button data-example class="disabled:cursor-not-allowed interactive">
+            Pizza
+          </button>
+          <button data-example class="disabled:cursor-not-allowed interactive">
+            Paris
+          </button>
+          <button data-example class="disabled:cursor-not-allowed interactive">
+            Physics
+          </button>
+          <input
+            type="text"
+            id="search-wiki"
+            title="Search Wikipedia article by title"
+            class="font-light py-0 mx-1 resize-none outline-none w-32 disabled:cursor-not-allowed interactive"
+            placeholder="Load Wikipedia article..."
+          />
+          <button
+            title="Search Wikipedia article and load into input"
+            class="bg-gray-700 hover:bg-gray-800 text-white font-normal px-2 py-1 rounded disabled:bg-gray-300 disabled:cursor-not-allowed interactive"
+          >
+            Load
+          </button>
+        </form>
       </div>
       <form
         id="form"
@@ -330,37 +362,6 @@
             Input text to perform semantic similarity search...
           </p>
         </div>
-      </div>
-      <div>
-        <h3 class="font-medium">Examples</h3>
-
-        <form
-          id="form-wiki"
-          class="flex text-xs rounded-md items-center w-min gap-3"
-        >
-          <input type="submit" hidden />
-
-          <button data-example class="disabled:cursor-not-allowed interactive">
-            Pizza
-          </button>
-          <button data-example class="disabled:cursor-not-allowed interactive">
-            Paris
-          </button>
-          <button data-example class="disabled:cursor-not-allowed interactive">
-            Physics
-          </button>
-          <input
-            type="text"
-            id="search-wiki"
-            class="font-light py-0 mx-1 resize-none outline-none w-32 disabled:cursor-not-allowed interactive"
-            placeholder="search Wikipedia article..."
-          />
-          <button
-            class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed interactive"
-          >
-            Enter
-          </button>
-        </form>
       </div>
     </main>
   </body>
