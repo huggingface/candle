@@ -1,12 +1,12 @@
-use super::common::WLayerNorm;
+use super::common::LayerNormNoWeights;
 use candle::{Module, Result, Tensor};
 use candle_nn::VarBuilder;
 
 #[derive(Debug)]
 pub struct MixingResidualBlock {
-    norm1: WLayerNorm,
+    norm1: LayerNormNoWeights,
     depthwise_conv: candle_nn::Conv2d,
-    norm2: WLayerNorm,
+    norm2: LayerNormNoWeights,
     channelwise_lin1: candle_nn::Linear,
     channelwise_lin2: candle_nn::Linear,
     gammas: Vec<f32>,
@@ -14,8 +14,8 @@ pub struct MixingResidualBlock {
 
 impl MixingResidualBlock {
     pub fn new(inp: usize, embed_dim: usize, vb: VarBuilder) -> Result<Self> {
-        let norm1 = WLayerNorm::new(inp)?;
-        let norm2 = WLayerNorm::new(inp)?;
+        let norm1 = LayerNormNoWeights::new(inp)?;
+        let norm2 = LayerNormNoWeights::new(inp)?;
         let cfg = candle_nn::Conv2dConfig {
             groups: inp,
             ..Default::default()
