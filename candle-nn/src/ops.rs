@@ -45,7 +45,8 @@ pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
 }
 
 pub fn leaky_relu(xs: &Tensor, negative_slope: f64) -> Result<Tensor> {
-    xs.relu()?.minimum(&(xs * negative_slope)?)
+    let zeros = xs.zeros_like()?;
+    xs.maximum(&zeros)? + xs.minimum(&zeros)? * negative_slope
 }
 
 pub fn dropout(xs: &Tensor, drop_p: f32) -> Result<Tensor> {
