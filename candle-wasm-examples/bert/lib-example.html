@@ -175,7 +175,8 @@
             tokenizerURL,
             configURL,
             modelID,
-            [query]
+            [query],
+            updateStatus
           );
           allEmbeddings.push(embeddings);
         }
@@ -187,8 +188,10 @@
 
       function updateStatus(data) {
         if ("status" in data) {
-          outputStatusEl.innerText = data.message;
-          outputStatusEl.classList.remove("invisible");
+          if (data.status === "loading") {
+            outputStatusEl.innerText = data.message;
+            outputStatusEl.classList.remove("invisible");
+          }
         }
       }
       function toggleInputs(state) {

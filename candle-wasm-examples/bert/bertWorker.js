@@ -34,7 +34,7 @@ class Bert {
         mel_filtersArrayU8
       );
     } else {
-      self.postMessage({ status: "loading", message: "Model Already Loaded" });
+      self.postMessage({ status: "ready", message: "Model Already Loaded" });
     }
     return this.instance[modelID];
   }
@@ -50,7 +50,7 @@ self.addEventListener("message", async (event) => {
     normalize = true,
   } = event.data;
   try {
-    self.postMessage({ status: "loading", message: "Starting Bert Model" });
+    self.postMessage({ status: "ready", message: "Starting Bert Model" });
     const model = await Bert.getInstance(
       weightsURL,
       tokenizerURL,
