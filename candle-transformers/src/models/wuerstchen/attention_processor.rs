@@ -11,6 +11,23 @@ pub struct Attention {
     to_out: Linear,
     heads: usize,
     scale: f64,
+    use_flash_attn: bool,
+}
+
+#[cfg(feature = "flash-attn")]
+fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    causal: bool,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
+}
+
+#[cfg(not(feature = "flash-attn"))]
+fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+    unimplemented!("compile with '--features flash-attn'")
 }
 
 impl Attention {
@@ -28,6 +45,7 @@ impl Attention {
             to_out,
             scale,
             heads,
+            use_flash_attn: false,
         })
     }
 
@@ -62,8 +80,28 @@ impl Attention {
         let key = self.head_to_batch_dim(&key)?;
         let value = self.head_to_batch_dim(&value)?;
 
-        let attn_prs = self.get_attention_scores(&query, &key)?;
-        let xs = attn_prs.matmul(&value)?;
+        let xs = if self.use_flash_attn {
+            let init_dtype = query.dtype();
+            let q = query
+                .to_dtype(candle::DType::F16)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let k = key
+                .to_dtype(candle::DType::F16)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let v = value
+                .to_dtype(candle::DType::F16)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            flash_attn(&q, &k, &v, self.scale as f32, false)?
+                .transpose(1, 2)?
+                .squeeze(0)?
+                .to_dtype(init_dtype)?
+        } else {
+            let attn_prs = self.get_attention_scores(&query, &key)?;
+            attn_prs.matmul(&value)?
+        };
         let xs = self.batch_to_head_dim(&xs)?;
 
         self.to_out
