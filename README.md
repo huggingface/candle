@@ -71,6 +71,11 @@ We also provide a some command line based examples using state of the art models
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/stable-diffusion/assets/stable-diffusion-xl.jpg" width="200">
 
+- [Wuerstchen](./candle-examples/examples/wuerstchen/): another text to
+  image generative model.
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/wuerstchen/assets/cat.jpg" width="200">
+
 - [yolo-v3](./candle-examples/examples/yolo-v3/) and
   [yolo-v8](./candle-examples/examples/yolo-v8/): object detection and pose
   estimation models.
@@ -142,6 +147,7 @@ If you have an addition to this list, please submit a pull request.
         - Bert.
     - Whisper (multi-lingual support).
     - Stable Diffusion v1.5, v2.1, XL v1.0.
+    - Wurstchen v2.
     - Computer Vision Models.
         - DINOv2.
         - EfficientNet.
