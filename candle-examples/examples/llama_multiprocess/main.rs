@@ -89,6 +89,10 @@ struct Args {
     #[arg(long)]
     temperature: Option<f64>,
 
+    /// Nucleus sampling probability cutoff.
+    #[arg(long)]
+    top_p: Option<f64>,
+
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
@@ -222,7 +226,7 @@ fn main() -> Result<()> {
         .to_vec();
 
     println!("starting the inference loop");
-    let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature);
+    let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature, args.top_p);
     let mut new_tokens = vec![];
     let start_gen = std::time::Instant::now();
     let mut index_pos = 0;
