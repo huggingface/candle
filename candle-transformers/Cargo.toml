@@ -12,6 +12,7 @@ readme = "README.md"
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
 candle = { path = "../candle-core", version = "0.2.3", package = "candle-core" }
+candle-flash-attn = { path = "../candle-flash-attn", version = "0.2.3", optional = true }
 candle-nn = { path = "../candle-nn", version = "0.2.3" }
 intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
@@ -26,4 +27,5 @@ wav = { workspace = true }
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda"]
+flash-attn = ["cuda", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl"]
