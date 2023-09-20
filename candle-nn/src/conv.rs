@@ -20,7 +20,7 @@ impl Default for Conv1dConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Conv1d {
     weight: Tensor,
     bias: Option<Tensor>,
@@ -88,7 +88,7 @@ impl Default for Conv2dConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Conv2d {
     weight: Tensor,
     bias: Option<Tensor>,
@@ -157,7 +157,7 @@ impl Default for ConvTranspose2dConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ConvTranspose2d {
     weight: Tensor,
     bias: Option<Tensor>,

@@ -19,7 +19,7 @@
 //! ```
 use candle::{Result, Tensor};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Linear {
     weight: Tensor,
     bias: Option<Tensor>,

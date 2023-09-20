@@ -1,7 +1,7 @@
 //! Embedding Layer.
 use candle::{Result, Tensor};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Embedding {
     embeddings: Tensor,
     hidden_size: usize,
