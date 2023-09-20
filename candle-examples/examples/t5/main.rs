@@ -150,7 +150,20 @@ impl T5ModelBuilder {
 }
 
 fn main() -> Result<()> {
+    use tracing_chrome::ChromeLayerBuilder;
+    use tracing_subscriber::prelude::*;
+
     let args = Args::parse();
+
+    let _guard = if args.tracing {
+        println!("tracing...");
+        let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
+        tracing_subscriber::registry().with(chrome_layer).init();
+        Some(guard)
+    } else {
+        None
+    };
+
     let (builder, mut tokenizer) = T5ModelBuilder::load(&args)?;
     let device = &builder.device;
     let tokenizer = tokenizer
