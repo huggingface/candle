@@ -14,7 +14,7 @@ use candle::{DType, Device, IndexOp, Module, Tensor, D};
 use clap::Parser;
 use tokenizers::Tokenizer;
 
-const PRIOR_GUIDANCE_SCALE: f64 = 8.0;
+const PRIOR_GUIDANCE_SCALE: f64 = 4.0;
 const RESOLUTION_MULTIPLE: f64 = 42.67;
 const LATENT_DIM_SCALE: f64 = 10.67;
 const PRIOR_CIN: usize = 16;
@@ -354,7 +354,7 @@ fn run(args: Args) -> Result<()> {
         )?;
 
         println!("diffusion process with prior {image_embeddings:?}");
-        let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(60, Default::default())?;
+        let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(12, Default::default())?;
         let timesteps = scheduler.timesteps();
         let timesteps = &timesteps[..timesteps.len() - 1];
         for (index, &t) in timesteps.iter().enumerate() {
