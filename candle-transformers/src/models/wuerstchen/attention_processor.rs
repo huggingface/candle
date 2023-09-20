@@ -31,7 +31,13 @@ fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Ten
 }
 
 impl Attention {
-    pub fn new(query_dim: usize, heads: usize, dim_head: usize, vb: VarBuilder) -> Result<Self> {
+    pub fn new(
+        query_dim: usize,
+        heads: usize,
+        dim_head: usize,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let inner_dim = dim_head * heads;
         let scale = 1.0 / f64::sqrt(dim_head as f64);
         let to_q = linear(query_dim, inner_dim, vb.pp("to_q"))?;
@@ -45,7 +51,7 @@ impl Attention {
             to_out,
             scale,
             heads,
-            use_flash_attn: false,
+            use_flash_attn,
         })
     }
 
