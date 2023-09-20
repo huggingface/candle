@@ -60,7 +60,7 @@ impl From<f64> for LayerNormConfig {
 }
 
 // This layer norm version handles both weight and bias so removes the mean.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LayerNorm {
     weight: Tensor,
     bias: Option<Tensor>,
@@ -143,7 +143,7 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
 }
 
 /// RmsNorm is a specialized version of the LayerNorm module.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RmsNorm(LayerNorm);
 
 impl RmsNorm {

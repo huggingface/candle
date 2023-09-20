@@ -38,7 +38,7 @@ impl From<f64> for BatchNormConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BatchNorm {
     running_mean: Tensor,
     running_var: Tensor,

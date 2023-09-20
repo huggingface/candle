@@ -4,7 +4,7 @@
 use candle::{DType, Result, Tensor};
 
 // This group norm version handles both weight and bias so removes the mean.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GroupNorm {
     weight: Tensor,
     bias: Tensor,
