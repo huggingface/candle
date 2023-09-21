@@ -1,4 +1,4 @@
-## Running BERT with Candle and WASM
+## Running T5 with Candle and WASM
 
 Here, we provide two examples of how to run Bert using a Candle-compiled WASM binary and runtime.
 
@@ -13,7 +13,7 @@ sh build-lib.sh
 This will bundle the library under `./build` and we can import it inside our WebWorker like a normal JS module:
 
 ```js
-import init, { Model } from "./build/m.js";
+import init, { ModelConditionalGeneration, ModelEncoder } from "./build/m.js";
 ```
 
 The full example can be found under `./lib-example.html`. All needed assets are fetched from the web, so no need to download anything.
