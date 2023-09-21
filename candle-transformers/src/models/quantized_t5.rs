@@ -1,10 +1,72 @@
-// T5 Text Model
+// T5 Text Model, quantized version
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
-use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Activation, VarBuilder};
+use candle::quantized::QTensor;
+use candle::{DType, Device, Module, Result, Shape, Tensor, D};
+use candle_nn::Activation;
 use serde::Deserialize;
 use std::sync::Arc;
+
+// VarBuilder specialized for QTensors
+pub struct VarBuilder {
+    data: Arc<std::collections::HashMap<String, Arc<QTensor>>>,
+    path: Vec<String>,
+    device: Device,
+}
+
+impl VarBuilder {
+    pub fn from_gguf<P: AsRef<std::path::Path>>(p: P) -> Result<Self> {
+        let mut file = std::fs::File::open(p)?;
+        let content = candle::quantized::gguf_file::Content::read(&mut file)?;
+        let mut data = std::collections::HashMap::new();
+        for tensor_name in content.tensor_infos.keys() {
+            let tensor = content.tensor(&mut file, tensor_name)?;
+            data.insert(tensor_name.to_string(), Arc::new(tensor));
+        }
+        Ok(Self {
+            data: Arc::new(data),
+            path: Vec::new(),
+            device: Device::Cpu,
+        })
+    }
+
+    fn pp<S: ToString>(&self, s: S) -> Self {
+        let mut path = self.path.clone();
+        path.push(s.to_string());
+        Self {
+            data: self.data.clone(),
+            path,
+            device: self.device.clone(),
+        }
+    }
+
+    fn path(&self, tensor_name: &str) -> String {
+        if self.path.is_empty() {
+            tensor_name.to_string()
+        } else {
+            [&self.path.join("."), tensor_name].join(".")
+        }
+    }
+
+    fn get<S: Into<Shape>>(&self, s: S, name: &str) -> Result<Arc<QTensor>> {
+        let path = self.path(name);
+        match self.data.get(&path) {
+            None => {
+                candle::bail!("cannot find tensor {name}")
+            }
+            Some(qtensor) => {
+                let shape = s.into();
+                if qtensor.shape() != &shape {
+                    candle::bail!(
+                        "shape mismatch for {name}, got {:?}, expected {shape:?}",
+                        qtensor.shape()
+                    )
+                }
+                Ok(qtensor.clone())
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 struct Embedding {
@@ -14,7 +76,8 @@ struct Embedding {
 
 impl Embedding {
     fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::embedding(d1, d2, vb)?;
+        let embeddings = vb.get((d1, d2), "weight")?.dequantize(&vb.device)?;
+        let inner = candle_nn::Embedding::new(embeddings, d2);
         let span = tracing::span!(tracing::Level::TRACE, "embedding");
         Ok(Self { inner, span })
     }
@@ -31,24 +94,31 @@ impl Module for Embedding {
     }
 }
 
-#[derive(Debug)]
-struct Linear {
-    inner: candle_nn::Linear,
+// QMatMul wrapper adding some tracing.
+struct QMatMul {
+    inner: candle::quantized::QMatMul,
     span: tracing::Span,
 }
 
-impl Linear {
-    fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::linear_no_bias(d1, d2, vb)?;
-        let span = tracing::span!(tracing::Level::TRACE, "linear");
+impl QMatMul {
+    fn new(out_dim: usize, in_dim: usize, vb: VarBuilder) -> Result<Self> {
+        let ws = vb.get((in_dim, out_dim), "weight")?;
+        let inner = candle::quantized::QMatMul::from_arc(ws);
+        let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
         Ok(Self { inner, span })
     }
 }
 
-impl Module for Linear {
+impl Module for QMatMul {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         self.inner.forward(xs)
+    }
+}
+
+impl std::fmt::Debug for QMatMul {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "QMatMul")
     }
 }
 
@@ -136,33 +206,6 @@ impl Default for Config {
     }
 }
 
-impl Config {
-    // https://huggingface.co/facebook/musicgen-small/blob/495da4ad086b3416a27c6187f9239f9fd96f3962/config.json#L184
-    pub fn musicgen_small() -> Self {
-        Self {
-            d_ff: 3072,
-            d_kv: 64,
-            d_model: 768,
-            dropout_rate: 0.1,
-            eos_token_id: 1,
-            feed_forward_proj: Activation::Relu,
-            tie_word_embeddings: true,
-            initializer_factor: 1.0,
-            is_decoder: false,
-            is_encoder_decoder: true,
-            layer_norm_epsilon: 1e-6,
-            num_decoder_layers: Some(12),
-            num_heads: 12,
-            num_layers: 12,
-            pad_token_id: 0,
-            relative_attention_max_distance: 128,
-            relative_attention_num_buckets: 32,
-            use_cache: true,
-            vocab_size: 32128,
-        }
-    }
-}
-
 #[derive(Debug)]
 struct T5LayerNorm {
     weight: Tensor,
@@ -172,7 +215,7 @@ struct T5LayerNorm {
 
 impl T5LayerNorm {
     fn load(h: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get(h, "weight")?;
+        let weight = vb.get(h, "weight")?.dequantize(&vb.device)?;
         Ok(Self {
             weight,
             variance_epsilon: eps,
@@ -197,16 +240,16 @@ impl Module for T5LayerNorm {
 
 #[derive(Debug)]
 struct T5DenseActDense {
-    wi: Linear,
-    wo: Linear,
+    wi: QMatMul,
+    wo: QMatMul,
     act: Activation,
     span: tracing::Span,
 }
 
 impl T5DenseActDense {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let wi = Linear::new(cfg.d_model, cfg.d_ff, vb.pp("wi"))?;
-        let wo = Linear::new(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
+        let wi = QMatMul::new(cfg.d_model, cfg.d_ff, vb.pp("wi"))?;
+        let wo = QMatMul::new(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
         Ok(Self {
             wi,
             wo,
@@ -228,18 +271,18 @@ impl Module for T5DenseActDense {
 
 #[derive(Debug)]
 struct T5DenseGatedActDense {
-    wi_0: Linear,
-    wi_1: Linear,
-    wo: Linear,
+    wi_0: QMatMul,
+    wi_1: QMatMul,
+    wo: QMatMul,
     act: Activation,
     span: tracing::Span,
 }
 
 impl T5DenseGatedActDense {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let wi_0 = Linear::new(cfg.d_model, cfg.d_ff, vb.pp("wi_0"))?;
-        let wi_1 = Linear::new(cfg.d_model, cfg.d_ff, vb.pp("wi_1"))?;
-        let wo = Linear::new(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
+        let wi_0 = QMatMul::new(cfg.d_model, cfg.d_ff, vb.pp("wi_0"))?;
+        let wi_1 = QMatMul::new(cfg.d_model, cfg.d_ff, vb.pp("wi_1"))?;
+        let wo = QMatMul::new(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
         Ok(Self {
             wi_0,
             wi_1,
@@ -308,10 +351,10 @@ impl Module for T5LayerFF {
 
 #[derive(Debug)]
 struct T5Attention {
-    q: Linear,
-    k: Linear,
-    v: Linear,
-    o: Linear,
+    q: QMatMul,
+    k: QMatMul,
+    v: QMatMul,
+    o: QMatMul,
     n_heads: usize,
     d_kv: usize,
     relative_attention_bias: Option<Embedding>,
@@ -334,10 +377,10 @@ impl T5Attention {
         cfg: &Config,
     ) -> Result<Self> {
         let inner_dim = cfg.num_heads * cfg.d_kv;
-        let q = Linear::new(cfg.d_model, inner_dim, vb.pp("q"))?;
-        let k = Linear::new(cfg.d_model, inner_dim, vb.pp("k"))?;
-        let v = Linear::new(cfg.d_model, inner_dim, vb.pp("v"))?;
-        let o = Linear::new(inner_dim, cfg.d_model, vb.pp("o"))?;
+        let q = QMatMul::new(cfg.d_model, inner_dim, vb.pp("q"))?;
+        let k = QMatMul::new(cfg.d_model, inner_dim, vb.pp("k"))?;
+        let v = QMatMul::new(cfg.d_model, inner_dim, vb.pp("v"))?;
+        let o = QMatMul::new(inner_dim, cfg.d_model, vb.pp("o"))?;
         let relative_attention_bias = if has_relative_attention_bias {
             let emb = Embedding::new(
                 cfg.relative_attention_num_buckets,
@@ -606,7 +649,7 @@ impl T5Block {
             None
         };
         let ff_i = if cross_attn.is_some() { 2 } else { 1 };
-        let ff = T5LayerFF::load(vb.pp(&ff_i.to_string()), cfg)?;
+        let ff = T5LayerFF::load(vb.pp(ff_i), cfg)?;
         Ok(Self {
             self_attn,
             cross_attn,
@@ -664,7 +707,7 @@ struct T5Stack {
 impl T5Stack {
     fn load(decoder: bool, vb: VarBuilder, shared: &Arc<Embedding>, cfg: &Config) -> Result<Self> {
         let block = (0..cfg.num_layers)
-            .map(|i| T5Block::load(i == 0, decoder, vb.pp(&format!("block.{i}")), cfg))
+            .map(|i| T5Block::load(i == 0, decoder, vb.pp(format!("block.{i}")), cfg))
             .collect::<Result<Vec<_>>>()?;
         let final_layer_norm = T5LayerNorm::load(
             cfg.d_model,
@@ -717,7 +760,7 @@ impl T5EncoderModel {
         let encoder = T5Stack::load(false, vb.pp("encoder"), &shared, cfg)?;
         Ok(Self {
             encoder,
-            device: vb.device().clone(),
+            device: vb.device.clone(),
             span: tracing::span!(tracing::Level::TRACE, "encoder"),
         })
     }
@@ -742,7 +785,7 @@ pub struct T5ForConditionalGeneration {
     decoder: T5Stack,
     d_model: usize,
     tie_word_embeddings: bool,
-    lm_head: Option<Linear>,
+    lm_head: Option<QMatMul>,
     shared: Arc<Embedding>,
     device: Device,
     span_decode: tracing::Span,
@@ -772,7 +815,7 @@ impl T5ForConditionalGeneration {
         let lm_head = if tie_word_embeddings {
             None
         } else {
-            Some(Linear::new(cfg.d_model, cfg.vocab_size, vb.pp("lm_head"))?)
+            Some(QMatMul::new(cfg.d_model, cfg.vocab_size, vb.pp("lm_head"))?)
         };
 
         Ok(Self {
@@ -782,7 +825,7 @@ impl T5ForConditionalGeneration {
             tie_word_embeddings,
             lm_head,
             shared,
-            device: vb.device().clone(),
+            device: vb.device.clone(),
             span_decode: tracing::span!(tracing::Level::TRACE, "decode"),
             span_decode_head: tracing::span!(tracing::Level::TRACE, "decode-head"),
         })
