@@ -15,6 +15,21 @@ pub struct VarBuilder {
 }
 
 impl VarBuilder {
+    pub fn from_gguf<P: AsRef<std::path::Path>>(p: P) -> Result<Self> {
+        let mut file = std::fs::File::open(p)?;
+        let content = candle::quantized::gguf_file::Content::read(&mut file)?;
+        let mut data = std::collections::HashMap::new();
+        for tensor_name in content.tensor_infos.keys() {
+            let tensor = content.tensor(&mut file, tensor_name)?;
+            data.insert(tensor_name.to_string(), Arc::new(tensor));
+        }
+        Ok(Self {
+            data: Arc::new(data),
+            path: Vec::new(),
+            device: Device::Cpu,
+        })
+    }
+
     fn pp<S: ToString>(&self, s: S) -> Self {
         let mut path = self.path.clone();
         path.push(s.to_string());
