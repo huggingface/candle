@@ -8,20 +8,16 @@ use std::path::PathBuf;
 
 use candle_transformers::models::quantized_t5 as t5;
 
-use anyhow::{anyhow, Error as E, Result};
+use anyhow::{Error as E, Result};
 use candle::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use clap::Parser;
-use hf_hub::{api::sync::Api, Cache, Repo, RepoType};
+use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Run offline (you must have the files already cached)
-    #[arg(long)]
-    offline: bool,
-
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
@@ -80,27 +76,13 @@ impl T5ModelBuilder {
         };
 
         let repo = Repo::with_revision(model_id, RepoType::Model, revision);
-        let (config_filename, tokenizer_filename, weights_filename) = if args.offline {
-            let cache = Cache::default().repo(repo);
-            (
-                cache
-                    .get("config.json")
-                    .ok_or(anyhow!("Missing config file in cache"))?,
-                cache
-                    .get("tokenizer.json")
-                    .ok_or(anyhow!("Missing tokenizer file in cache"))?,
-                cache
-                    .get("model.safetensors")
-                    .ok_or(anyhow!("Missing weights file in cache"))?,
-            )
-        } else {
-            let api = Api::new()?;
-            let api = api.repo(repo);
-            (
-                api.get("config.json")?,
-                api.get("tokenizer.json")?,
-                api.get("model.safetensors")?,
-            )
+        let api = Api::new()?;
+        let api = api.repo(repo);
+        let config_filename = api.get("config.json")?;
+        let tokenizer_filename = api.get("tokenizer.json")?;
+        let weights_filename = match &args.weight_file {
+            Some(filename) => std::path::PathBuf::from(filename),
+            None => api.get("model.gguf")?,
         };
         let config = std::fs::read_to_string(config_filename)?;
         let mut config: t5::Config = serde_json::from_str(&config)?;
