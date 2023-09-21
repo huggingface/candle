@@ -248,9 +248,9 @@ fn run_quantize_safetensors(
         .into_par_iter()
         .map(|(name, tensor)| {
             println!("  quantizing {name} {tensor:?}");
-            let should_quantize =
-                tensor.rank() == 2 && tensor.dim(candle_core::D::Minus1)? % 256 == 0;
+            let should_quantize = tensor.rank() == 2 && tensor.dim(0)? % 256 == 0;
             let tensor = if should_quantize {
+                let tensor = tensor.t()?;
                 quantize_fn(&tensor)?
             } else {
                 QTensor::quantize::<f32>(&tensor)?
