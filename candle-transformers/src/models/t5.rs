@@ -495,6 +495,10 @@ impl T5Attention {
         let attn_output = self.o.forward(&attn_output)?;
         Ok((attn_output, position_bias))
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None
+    }
 }
 
 #[derive(Debug)]
@@ -529,6 +533,10 @@ impl T5LayerSelfAttention {
                 .forward(&normed_xs, position_bias, None, mask)?;
         let ys = (xs + ys)?;
         Ok((ys, position_bias))
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attention.clear_kv_cache()
     }
 }
 
@@ -567,6 +575,10 @@ impl T5LayerCrossAttention {
         )?;
         let ys = (hidden_states + ys)?;
         Ok((ys, position_bias))
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.cross_attention.clear_kv_cache()
     }
 }
 
@@ -634,6 +646,11 @@ impl T5Block {
         // TODO: clamp for f16?
         Ok((xs, position_bias))
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attn.clear_kv_cache();
+        self.cross_attn.iter_mut().for_each(|c| c.clear_kv_cache());
+    }
 }
 
 #[derive(Debug)]
@@ -680,6 +697,10 @@ impl T5Stack {
         }
         self.final_layer_norm.forward(&hidden_states)
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.block.iter_mut().for_each(|b| b.clear_kv_cache())
+    }
 }
 
 #[derive(Debug)]
@@ -708,6 +729,10 @@ impl T5EncoderModel {
 
     pub fn device(&self) -> &Device {
         &self.device
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.encoder.clear_kv_cache()
     }
 }
 
@@ -807,5 +832,10 @@ impl T5ForConditionalGeneration {
 
     pub fn device(&self) -> &Device {
         &self.device
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.encoder.clear_kv_cache();
+        self.decoder.clear_kv_cache();
     }
 }
