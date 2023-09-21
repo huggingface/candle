@@ -18,7 +18,11 @@ use tokenizers::Tokenizer;
 #[derive(Clone, Debug, Copy, ValueEnum)]
 enum Which {
     T5Small,
+    FlanT5Small,
+    FlanT5Base,
     FlanT5Large,
+    FlanT5Xl,
+    FlanT5Xxl,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -89,14 +93,22 @@ impl T5ModelBuilder {
         let api = api.repo(repo);
         let config_filename = match args.which {
             Which::T5Small => api.get("config.json")?,
+            Which::FlanT5Small => api.get("config-flan-t5-small.json")?,
+            Which::FlanT5Base => api.get("config-flan-t5-base.json")?,
             Which::FlanT5Large => api.get("config-flan-t5-large.json")?,
+            Which::FlanT5Xl => api.get("config-flan-t5-xl.json")?,
+            Which::FlanT5Xxl => api.get("config-flan-t5-xxl.json")?,
         };
         let tokenizer_filename = api.get("tokenizer.json")?;
         let weights_filename = match &args.weight_file {
             Some(filename) => std::path::PathBuf::from(filename),
             None => match args.which {
                 Which::T5Small => api.get("model.gguf")?,
+                Which::FlanT5Small => api.get("model-flan-t5-small.gguf")?,
+                Which::FlanT5Base => api.get("model-flan-t5-base.gguf")?,
                 Which::FlanT5Large => api.get("model-flan-t5-large.gguf")?,
+                Which::FlanT5Xl => api.get("model-flan-t5-xl.gguf")?,
+                Which::FlanT5Xxl => api.get("model-flan-t5-xxl.gguf")?,
             },
         };
         let config = std::fs::read_to_string(config_filename)?;
