@@ -29,8 +29,9 @@
     <script type="module">
       import {
         getModelInfo,
-        encodeSentences,
-        decodeSentence,
+        MODELS,
+        extractEmbeddings,
+        generateText,
       } from "./utils.js";
 
       const t5ModelEncoderWorker = new Worker("./T5ModelEncoderWorker.js", {
@@ -39,38 +40,8 @@
 
       const t5ModelConditionalGeneration = new Worker(
         "./T5ModelConditionalGeneration.js",
-        {
-          type: "module",
-        }
+        { type: "module" }
       );
-
-      function encode(sentences) {
-        const { modelURL, configURL, tokenizerURL } = getModelInfo("t5_small");
-        encodeSentences(
-          t5ModelEncoderWorker,
-          modelURL,
-          tokenizerURL,
-          configURL,
-          "t5_small",
-          sentences,
-          (status) => console.log(status)
-        ).then(({ output }) => console.log(output));
-      }
-      function decode(prompt, params = {}) {
-        const { modelURL, configURL, tokenizerURL } = getModelInfo("t5_small");
-        decodeSentence(
-          t5ModelConditionalGeneration,
-          modelURL,
-          tokenizerURL,
-          configURL,
-          "t5_small",
-          prompt,
-          params,
-          (status) => console.log(status)
-        ).then(({ output }) => console.log(output));
-      }
-      globalThis.decode = decode;
-      globalThis.encode = encode;
 
       const formEl = document.querySelector("#form");
       const modelEl = document.querySelector("#model");
@@ -80,19 +51,65 @@
       const repeatPenaltyEl = document.querySelector("#repeat_penalty");
       const seedEl = document.querySelector("#seed");
       const outputEl = document.querySelector("#output-generation");
+      const tasksEl = document.querySelector("#tasks");
+      let selectedTaskID = "";
+
+      document.addEventListener("DOMContentLoaded", () => {
+        for (const [id, model] of Object.entries(MODELS)) {
+          const option = document.createElement("option");
+          option.value = id;
+          option.innerText = `${id} (${model.size})`;
+          modelEl.appendChild(option);
+        }
+        populateTasks(modelEl.value);
+        modelEl.addEventListener("change", (e) => {
+          populateTasks(e.target.value);
+        });
+        tasksEl.addEventListener("change", (e) => {
+          const task = e.target.value;
+          const modelID = modelEl.value;
+          promptEl.value = MODELS[modelID].tasks[task].prefix;
+          selectedTaskID = task;
+        });
+      });
+      function populateTasks(modelID) {
+        const tasks = MODELS[modelID].tasks;
+        tasksEl.innerHTML = "";
+        for (const [task, params] of Object.entries(tasks)) {
+          const div = document.createElement("div");
+          div.innerHTML = `
+          <input
+            type="radio"
+            name="task"
+            id="${task}"
+            class="font-light cursor-pointer"
+            value="${task}" />
+          <label for="${task}" class="cursor-pointer">
+            ${params.prefix}
+          </label>
+          `;
+          tasksEl.appendChild(div);
+        }
+        selectedTaskID = Object.keys(tasks)[0];
+        tasksEl.querySelector(`#${selectedTaskID}`).checked = true;
+      }
       form.addEventListener("submit", (e) => {
         e.preventDefault();
+
+        const promptText = promptEl.value;
+        const modelID = modelEl.value;
+        const { modelURL, configURL, tokenizerURL, maxLength } = getModelInfo(
+          modelID,
+          selectedTaskID
+        );
         const params = {
           temperature: Number(temperatureEl.value),
           top_p: Number(toppEL.value),
           repetition_penalty: Number(repeatPenaltyEl.value),
           seed: BigInt(seedEl.value),
+          max_length: maxLength,
         };
-        const promptText = promptEl.value;
-        const modelID = modelEl.value;
-        const { modelURL, configURL, tokenizerURL } = getModelInfo(modelID);
-
-        decodeSentence(
+        generateText(
           t5ModelConditionalGeneration,
           modelURL,
           tokenizerURL,
@@ -101,8 +118,6 @@
           promptText,
           params,
           (status) => {
-            console.log(status);
-
             if (status.status === "loading") {
               outputEl.innerText = "Loading model...";
             }
@@ -163,12 +178,12 @@
         <label for="model" class="font-medium">Models Options: </label>
         <select
           id="model"
-          class="border-2 border-gray-500 rounded-md font-light">
-          <option value="t5_small" selected>t5 small (242 MB)</option>
-          <option value="t5_base">t5 base (892 MB)</option>
-          <option value="flan_t5_small">flan-t5 small (308 MB)</option>
-          <option value="flan_t5_base">flan-t5 base (990 MB)</option>
-        </select>
+          class="border-2 border-gray-500 rounded-md font-light"></select>
+      </div>
+
+      <div>
+        <h3 class="font-medium">Task Prefix:</h3>
+        <form id="tasks" class="flex flex-col gap-1 my-2"></form>
       </div>
       <form
         id="form"
@@ -178,8 +193,8 @@
           type="text"
           id="prompt"
           class="font-light w-full px-3 py-2 mx-1 resize-none outline-none"
-          placeholder="Add prompt here, e.g. 'Translate English to French: Today I'm going to eat Ice Cream'"
-          value="Translate English to French: Today I'm going to eat Ice Cream" />
+          placeholder="Add prompt here, e.g. 'translate English to German: Today I'm going to eat Ice Cream'"
+          value="translate English to German: Today I'm going to eat Ice Cream" />
         <button
           class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed">
           Run
