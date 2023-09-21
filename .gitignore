@@ -23,6 +23,7 @@ flamegraph.svg
 *.dylib
 *.so
 *.swp
+*.swo
 trace-*.json
 
 candle-wasm-examples/*/build
