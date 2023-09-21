@@ -59,6 +59,7 @@ pub enum UnaryOp {
     Sqrt,
     Gelu,
     GeluErf,
+    Erf,
     Relu,
     Tanh,
 }
@@ -327,6 +328,7 @@ pub(crate) struct Sqr;
 pub(crate) struct Sqrt;
 pub(crate) struct Gelu;
 pub(crate) struct GeluErf;
+pub(crate) struct Erf;
 pub(crate) struct Relu;
 pub(crate) struct Tanh;
 
@@ -620,6 +622,40 @@ impl UnaryOpT for Gelu {
     #[inline(always)]
     fn f64_vec(xs: &[f64], ys: &mut [f64]) {
         crate::accelerate::vd_gelu(xs, ys)
+    }
+}
+
+impl UnaryOpT for Erf {
+    const NAME: &'static str = "erf";
+    const KERNEL: &'static str = "uerf";
+    const V: Self = Erf;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        bf16::from_f64(Self::f64(v.to_f64()))
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        f16::from_f64(Self::f64(v.to_f64()))
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        Self::f64(v as f64) as f32
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        crate::cpu::erf::erf(v)
+    }
+    #[inline(always)]
+    fn u8(_: u8) -> u8 {
+        0
+    }
+    #[inline(always)]
+    fn u32(_: u32) -> u32 {
+        0
+    }
+    #[inline(always)]
+    fn i64(_: i64) -> i64 {
+        0
     }
 }
 
