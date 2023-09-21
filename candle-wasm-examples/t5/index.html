@@ -1,8 +1,9 @@
 <html>
   <head>
     <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
-    <title>Candle Bert</title>
+    <title>Candle T5</title>
   </head>
+
   <body></body>
 </html>
 
@@ -13,9 +14,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
       @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
+
       html,
       body {
         font-family: "Source Sans 3", sans-serif;
+      }
+    </style>
+    <style type="text/tailwindcss">
+      .link {
+        @apply underline hover:text-blue-500 hover:no-underline;
       }
     </style>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -24,8 +31,6 @@
         getModelInfo,
         encodeSentences,
         decodeSentence,
-        getWikiText,
-        cosineSimilarity,
       } from "./utils.js";
 
       const t5ModelEncoderWorker = new Worker("./T5ModelEncoderWorker.js", {
@@ -48,8 +53,8 @@
           configURL,
           "t5_small",
           sentences,
-          (a) => console.log(a)
-        ).then((a) => console.log("RESULT", a));
+          (status) => console.log(status)
+        ).then(({ output }) => console.log(output));
       }
       function decode(prompt, params = {}) {
         const { modelURL, configURL, tokenizerURL } = getModelInfo("t5_small");
@@ -61,12 +66,193 @@
           "t5_small",
           prompt,
           params,
-          (a) => console.log(a)
-        ).then((a) => console.log("RESULT", a));
+          (status) => console.log(status)
+        ).then(({ output }) => console.log(output));
       }
       globalThis.decode = decode;
       globalThis.encode = encode;
+
+      const formEl = document.querySelector("#form");
+      const modelEl = document.querySelector("#model");
+      const promptEl = document.querySelector("#prompt");
+      const temperatureEl = document.querySelector("#temperature");
+      const toppEL = document.querySelector("#top-p");
+      const repeatPenaltyEl = document.querySelector("#repeat_penalty");
+      const seedEl = document.querySelector("#seed");
+      const outputEl = document.querySelector("#output-generation");
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const params = {
+          temperature: Number(temperatureEl.value),
+          top_p: Number(toppEL.value),
+          repetition_penalty: Number(repeatPenaltyEl.value),
+          seed: BigInt(seedEl.value),
+        };
+        const promptText = promptEl.value;
+        const modelID = modelEl.value;
+        const { modelURL, configURL, tokenizerURL } = getModelInfo(modelID);
+
+        decodeSentence(
+          t5ModelConditionalGeneration,
+          modelURL,
+          tokenizerURL,
+          configURL,
+          modelID,
+          promptText,
+          params,
+          (status) => {
+            console.log(status);
+
+            if (status.status === "loading") {
+              outputEl.innerText = "Loading model...";
+            }
+            if (status.status === "decoding") {
+              outputEl.innerText = "Generating...";
+            }
+          }
+        ).then(({ output }) => {
+          outputEl.innerText = output.generation;
+        });
+      });
     </script>
   </head>
-  <body class="container max-w-4xl mx-auto p-4 bg-black"></body>
+
+  <body class="container max-w-4xl mx-auto p-4">
+    <main class="grid grid-cols-1 gap-8 relative">
+      <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
+      <div>
+        <h1 class="text-5xl font-bold">Candle T5 Transformer</h1>
+        <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
+        <p class="max-w-lg">
+          This demo runs Text-To-Text Transfer Transformer
+          <a
+            href="https://blog.research.google/2020/02/exploring-transfer-learning-with-t5.html"
+            target="_blank"
+            class="link">
+            T5
+          </a>
+          with
+          <a
+            href="https://github.com/huggingface/candle/"
+            target="_blank"
+            class="link">
+            Candle
+          </a>
+          in the browser using rust/wasm. Models
+          <a
+            href="https://huggingface.co/t5-small"
+            target="_blank"
+            class="link">
+            t5-small </a
+          >,
+          <a href="https://huggingface.co/t5-base" target="_blank" class="link">
+            t5-base
+          </a>
+          and
+          <a
+            href="https://huggingface.co/google/flan-t5-small"
+            target="_blank"
+            class="link"
+            >flan-t5-small
+          </a>
+          are available.
+        </p>
+      </div>
+
+      <div>
+        <label for="model" class="font-medium">Models Options: </label>
+        <select
+          id="model"
+          class="border-2 border-gray-500 rounded-md font-light">
+          <option value="t5_small" selected>t5 small 15M (242 MB)</option>
+          <option value="t5_base">t5 base (892 MB)</option>
+          <option value="flan_t5_small">flan-t5 small (308 MB)</option>
+          <option value="flan_t5_base">flan-t5 base (990 MB)</option>
+        </select>
+      </div>
+      <form
+        id="form"
+        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md items-center">
+        <input type="submit" hidden />
+        <input
+          type="text"
+          id="prompt"
+          class="font-light w-full px-3 py-2 mx-1 resize-none outline-none"
+          placeholder="Add prompt here, e.g. 'Translate English to French: Today I'm going to eat Ice Cream'"
+          value="Translate English to French: Today I'm going to eat Ice Cream" />
+        <button
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed">
+          Run
+        </button>
+      </form>
+      <div class="grid grid-cols-3 max-w-md items-center gap-3">
+        <label class="text-sm font-medium" for="temperature">Temperature</label>
+        <input
+          type="range"
+          id="temperature"
+          name="temperature"
+          min="0"
+          max="2"
+          step="0.01"
+          value="0.50"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+          0.50</output
+        >
+        <label class="text-sm font-medium" for="top-p">Top-p</label>
+        <input
+          type="range"
+          id="top-p"
+          name="top-p"
+          min="0"
+          max="1"
+          step="0.01"
+          value="1.00"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+          1.00</output
+        >
+
+        <label class="text-sm font-medium" for="repeat_penalty"
+          >Repeat Penalty</label
+        >
+
+        <input
+          type="range"
+          id="repeat_penalty"
+          name="repeat_penalty"
+          min="-2"
+          max="2"
+          step="0.01"
+          value="1.10"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+          >1.10</output
+        >
+        <label class="text-sm font-medium" for="seed">Seed</label>
+        <input
+          type="number"
+          id="seed"
+          name="seed"
+          value="299792458"
+          class="font-light border border-gray-700 text-right rounded-md p-2" />
+        <button
+          id="run"
+          onclick="document.querySelector('#seed').value = BigInt(Math.floor(Math.random() * 2**64-1))"
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm">
+          Rand
+        </button>
+      </div>
+      <div>
+        <h3 class="font-medium">Generation:</h3>
+        <div
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2 text-lg">
+          <p id="output-generation" class="grid-rows-2">No output yet</p>
+        </div>
+      </div>
+    </main>
+  </body>
 </html>

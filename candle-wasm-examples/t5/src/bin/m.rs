@@ -79,7 +79,7 @@ impl ModelConditionalGeneration {
             if output_token_ids.len() > 512 {
                 break;
             }
-            let decoder_token_ids = if index == 0 || use_cache {
+            let decoder_token_ids = if index == 0 || !use_cache {
                 Tensor::new(output_token_ids.as_slice(), device)?.unsqueeze(0)?
             } else {
                 let last_token = *output_token_ids.last().unwrap();

@@ -48,8 +48,8 @@ self.addEventListener("message", async (event) => {
     seed = 299792458,
     repeat_penalty = 1.1,
     repeat_last_n = 64,
-    top_p = 0.0,
-    use_cache = false,
+    top_p = 1,
+    use_cache = true,
   } = { ...params };
   try {
     self.postMessage({

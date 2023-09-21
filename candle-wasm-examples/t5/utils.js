@@ -68,7 +68,10 @@ export async function decodeSentence(
 
 const MODELS = {
   t5_small: {
-    base_url: "https://huggingface.co/t5-small/resolve/refs%2Fpr%2F15/",
+    base_url: "https://huggingface.co/t5-small/resolve/main/",
+  },
+  t5_base: {
+    base_url: "https://huggingface.co/t5-base/resolve/main/",
   },
   flan_t5_small: {
     base_url:
