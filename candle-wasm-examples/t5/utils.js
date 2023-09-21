@@ -1,4 +1,4 @@
-export async function decodePrompt(
+export async function encodeSentences(
   worker,
   weightsURL,
   tokenizerURL,
@@ -32,14 +32,15 @@ export async function decodePrompt(
   });
 }
 
-export async function getEmbeddings(
+export async function decodeSentence(
   worker,
   weightsURL,
   tokenizerURL,
   configURL,
   modelID,
-  sentences,
-  updateStatus = null
+  prompt,
+  params,
+  updateStatus
 ) {
   return new Promise((resolve, reject) => {
     worker.postMessage({
@@ -47,7 +48,8 @@ export async function getEmbeddings(
       tokenizerURL,
       configURL,
       modelID,
-      sentences,
+      prompt,
+      params,
     });
     function messageHandler(event) {
       if ("error" in event.data) {
@@ -68,6 +70,13 @@ const MODELS = {
   t5_small: {
     base_url: "https://huggingface.co/t5-small/resolve/refs%2Fpr%2F15/",
   },
+  flan_t5_small: {
+    base_url:
+      "https://huggingface.co/google/flan-t5-small/resolve/refs%2Fpr%2F14/",
+  },
+  flan_t5_base: {
+    base_url: "https://huggingface.co/google/flan-t5-base/resolve/main/",
+  },
 };
 export function getModelInfo(id) {
   return {
@@ -75,32 +84,4 @@ export function getModelInfo(id) {
     configURL: MODELS[id].base_url + "config.json",
     tokenizerURL: MODELS[id].base_url + "tokenizer.json",
   };
-}
-
-export function cosineSimilarity(vec1, vec2) {
-  const dot = vec1.reduce((acc, val, i) => acc + val * vec2[i], 0);
-  const a = Math.sqrt(vec1.reduce((acc, val) => acc + val * val, 0));
-  const b = Math.sqrt(vec2.reduce((acc, val) => acc + val * val, 0));
-  return dot / (a * b);
-}
-export async function getWikiText(article) {
-  // thanks to wikipedia for the API
-  const URL = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exlimit=1&titles=${article}&explaintext=1&exsectionformat=plain&format=json&origin=*`;
-  return fetch(URL, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-    },
-  })
-    .then((r) => r.json())
-    .then((data) => {
-      const pages = data.query.pages;
-      const pageId = Object.keys(pages)[0];
-      const extract = pages[pageId].extract;
-      if (extract === undefined || extract === "") {
-        throw new Error("No article found");
-      }
-      return extract;
-    })
-    .catch((error) => console.error("Error:", error));
 }

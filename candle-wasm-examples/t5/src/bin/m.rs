@@ -36,6 +36,7 @@ impl ModelConditionalGeneration {
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
         let model = T5ForConditionalGeneration::load(vb, &config)?;
+
         Ok(Self {
             model,
             tokenizer,
@@ -43,32 +44,27 @@ impl ModelConditionalGeneration {
         })
     }
     pub fn decode(&mut self, input: JsValue) -> Result<JsValue, JsError> {
-        let device = &Device::Cpu;
-
-        let mut output_token_ids = [self.config.pad_token_id as u32].to_vec();
-
         let input: ConditionalGenerationParams =
             serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
+        let device = &Device::Cpu;
+        let mut output_token_ids = [self.config.pad_token_id as u32].to_vec();
         let prompt = input.prompt;
-        if let Some(decoder_prompt) = input.decoder_prompt {
-            output_token_ids.extend(
-                self.tokenizer
-                    .encode(decoder_prompt, false)
-                    .map_err(|m| JsError::new(&m.to_string()))?
-                    .get_ids()
-                    .to_vec(),
-            );
-        }
         let repeat_penalty = input.repeat_penalty;
         let repeat_last_n = input.repeat_last_n;
-        let top_p = input.top_p;
+        let seed = input.seed;
         let temperature = if input.temperature <= 0. {
             None
         } else {
             Some(input.temperature)
         };
-        let use_cache = self.config.use_cache && !input.disable_cache;
-        let mut logits_processor = LogitsProcessor::new(299792458, temperature, Some(top_p));
+        let top_p = if input.top_p <= 0. || input.top_p >= 1. {
+            None
+        } else {
+            Some(input.top_p)
+        };
+        let use_cache = input.use_cache;
+        let mut logits_processor = LogitsProcessor::new(seed, temperature, top_p);
+        console_log!("prompt: {} repeat_penalty: {} repeat_last_n: {} seed: {} temperature: {:?} top_p: {:?} use_cache: {}", prompt, repeat_penalty, repeat_last_n, seed, temperature, top_p, use_cache);
         let tokens = self
             .tokenizer
             .encode(prompt, true)
@@ -83,7 +79,7 @@ impl ModelConditionalGeneration {
             if output_token_ids.len() > 512 {
                 break;
             }
-            let decoder_token_ids = if index == 0 || !use_cache {
+            let decoder_token_ids = if index == 0 || use_cache {
                 Tensor::new(output_token_ids.as_slice(), device)?.unsqueeze(0)?
             } else {
                 let last_token = *output_token_ids.last().unwrap();
@@ -111,12 +107,13 @@ impl ModelConditionalGeneration {
             output_token_ids.push(next_token_id);
             if let Some(text) = self.tokenizer.id_to_token(next_token_id) {
                 let text = text.replace('▁', " ").replace("<0x0A>", "\n");
-                console_log!("{text}");
                 decoded += &text;
             }
         }
         Ok(serde_wasm_bindgen::to_value(
-            &ConditionalGenerationOutput { output: decoded },
+            &ConditionalGenerationOutput {
+                generation: decoded,
+            },
         )?)
     }
 }
@@ -147,7 +144,6 @@ impl ModelEncoder {
             serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
         let sentences = input.sentences;
         let normalize_embeddings = input.normalize_embeddings;
-
         let n_sentences = sentences.len();
         let mut all_embeddings = Vec::with_capacity(n_sentences);
         for sentence in sentences {
@@ -180,7 +176,7 @@ impl ModelEncoder {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ConditionalGenerationOutput {
-    output: String,
+    generation: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -196,13 +192,12 @@ pub struct DecoderParams {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ConditionalGenerationParams {
     prompt: String,
-    decoder_prompt: Option<String>,
     temperature: f64,
     seed: u64,
     top_p: f64,
     repeat_penalty: f32,
     repeat_last_n: usize,
-    disable_cache: bool,
+    use_cache: bool,
 }
 fn main() {
     console_error_panic_hook::set_once();

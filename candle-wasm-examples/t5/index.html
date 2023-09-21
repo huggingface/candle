@@ -22,20 +22,27 @@
     <script type="module">
       import {
         getModelInfo,
-        getEmbeddings,
-        decodePrompt,
+        encodeSentences,
+        decodeSentence,
         getWikiText,
         cosineSimilarity,
       } from "./utils.js";
 
-      const t5DecoderWorker = new Worker("./T5DecoderWorker.js", {
+      const t5ModelEncoderWorker = new Worker("./T5ModelEncoderWorker.js", {
         type: "module",
       });
 
-      function run(sentences) {
+      const t5ModelConditionalGeneration = new Worker(
+        "./T5ModelConditionalGeneration.js",
+        {
+          type: "module",
+        }
+      );
+
+      function encode(sentences) {
         const { modelURL, configURL, tokenizerURL } = getModelInfo("t5_small");
-        decodePrompt(
-          t5DecoderWorker,
+        encodeSentences(
+          t5ModelEncoderWorker,
           modelURL,
           tokenizerURL,
           configURL,
@@ -44,8 +51,22 @@
           (a) => console.log(a)
         ).then((a) => console.log("RESULT", a));
       }
-      globalThis.run = run;
+      function decode(prompt, params = {}) {
+        const { modelURL, configURL, tokenizerURL } = getModelInfo("t5_small");
+        decodeSentence(
+          t5ModelConditionalGeneration,
+          modelURL,
+          tokenizerURL,
+          configURL,
+          "t5_small",
+          prompt,
+          params,
+          (a) => console.log(a)
+        ).then((a) => console.log("RESULT", a));
+      }
+      globalThis.decode = decode;
+      globalThis.encode = encode;
     </script>
   </head>
-  <body class="container max-w-4xl mx-auto p-4"></body>
+  <body class="container max-w-4xl mx-auto p-4 bg-black"></body>
 </html>
