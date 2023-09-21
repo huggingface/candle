@@ -66,13 +66,12 @@ struct T5ModelBuilder {
 impl T5ModelBuilder {
     pub fn load(args: &Args) -> Result<(Self, Tokenizer)> {
         let device = Device::Cpu;
-        let default_model = "t5-small".to_string();
-        let default_revision = "refs/pr/15".to_string();
+        let default_model = "lmz/candle-quantized-t5".to_string();
         let (model_id, revision) = match (args.model_id.to_owned(), args.revision.to_owned()) {
             (Some(model_id), Some(revision)) => (model_id, revision),
             (Some(model_id), None) => (model_id, "main".to_string()),
             (None, Some(revision)) => (default_model, revision),
-            (None, None) => (default_model, default_revision),
+            (None, None) => (default_model, "main".to_string()),
         };
 
         let repo = Repo::with_revision(model_id, RepoType::Model, revision);
