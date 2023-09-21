@@ -53,6 +53,7 @@ impl ModelConditionalGeneration {
         let repeat_penalty = input.repeat_penalty;
         let repeat_last_n = input.repeat_last_n;
         let seed = input.seed;
+        let max_length = usize::clamp(input.max_length.unwrap_or(512), 0, 512);
         let temperature = if input.temperature <= 0. {
             None
         } else {
@@ -75,7 +76,7 @@ impl ModelConditionalGeneration {
         let encoder_output = self.model.encode(&input_token_ids)?;
         let mut decoded = String::new();
         for index in 0.. {
-            if output_token_ids.len() > 512 {
+            if output_token_ids.len() > max_length {
                 break;
             }
             let decoder_token_ids = if index == 0 {
@@ -199,6 +200,7 @@ pub struct ConditionalGenerationParams {
     top_p: f64,
     repeat_penalty: f32,
     repeat_last_n: usize,
+    max_length: Option<usize>,
 }
 fn main() {
     console_error_panic_hook::set_once();
