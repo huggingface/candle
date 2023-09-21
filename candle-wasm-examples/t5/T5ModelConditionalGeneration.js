@@ -44,12 +44,11 @@ self.addEventListener("message", async (event) => {
   const { weightsURL, tokenizerURL, configURL, modelID, prompt, params } =
     event.data;
   let {
-    temperature = 1,
+    temperature = 0.0,
     seed = 299792458,
     repeat_penalty = 1.1,
     repeat_last_n = 64,
     top_p = 1,
-    use_cache = true,
   } = { ...params };
   try {
     self.postMessage({
@@ -73,7 +72,6 @@ self.addEventListener("message", async (event) => {
       top_p,
       repeat_penalty,
       repeat_last_n,
-      use_cache,
     });
     self.postMessage({
       status: "complete",

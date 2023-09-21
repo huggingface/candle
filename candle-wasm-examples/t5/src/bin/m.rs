@@ -32,11 +32,11 @@ impl ModelConditionalGeneration {
         let device = &Device::Cpu;
         let weights = safetensors::tensor::SafeTensors::deserialize(&weights)?;
         let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, device);
-        let config: Config = serde_json::from_slice(&config)?;
+        let mut config: Config = serde_json::from_slice(&config)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
         let model = T5ForConditionalGeneration::load(vb, &config)?;
-
+        config.use_cache = false;
         Ok(Self {
             model,
             tokenizer,
@@ -47,6 +47,7 @@ impl ModelConditionalGeneration {
         let input: ConditionalGenerationParams =
             serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
         let device = &Device::Cpu;
+        self.model.clear_kv_cache();
         let mut output_token_ids = [self.config.pad_token_id as u32].to_vec();
         let prompt = input.prompt;
         let repeat_penalty = input.repeat_penalty;
@@ -62,9 +63,7 @@ impl ModelConditionalGeneration {
         } else {
             Some(input.top_p)
         };
-        let use_cache = input.use_cache;
         let mut logits_processor = LogitsProcessor::new(seed, temperature, top_p);
-        console_log!("prompt: {} repeat_penalty: {} repeat_last_n: {} seed: {} temperature: {:?} top_p: {:?} use_cache: {}", prompt, repeat_penalty, repeat_last_n, seed, temperature, top_p, use_cache);
         let tokens = self
             .tokenizer
             .encode(prompt, true)
@@ -79,7 +78,7 @@ impl ModelConditionalGeneration {
             if output_token_ids.len() > 512 {
                 break;
             }
-            let decoder_token_ids = if index == 0 || !use_cache {
+            let decoder_token_ids = if index == 0 {
                 Tensor::new(output_token_ids.as_slice(), device)?.unsqueeze(0)?
             } else {
                 let last_token = *output_token_ids.last().unwrap();
@@ -131,7 +130,8 @@ impl ModelEncoder {
         let device = &Device::Cpu;
         let weights = safetensors::tensor::SafeTensors::deserialize(&weights)?;
         let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, device);
-        let config: Config = serde_json::from_slice(&config)?;
+        let mut config: Config = serde_json::from_slice(&config)?;
+        config.use_cache = false;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
         let model = T5EncoderModel::load(vb, &config)?;
@@ -142,6 +142,8 @@ impl ModelEncoder {
         let device = &Device::Cpu;
         let input: DecoderParams =
             serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
+
+        self.model.clear_kv_cache();
         let sentences = input.sentences;
         let normalize_embeddings = input.normalize_embeddings;
         let n_sentences = sentences.len();
@@ -197,7 +199,6 @@ pub struct ConditionalGenerationParams {
     top_p: f64,
     repeat_penalty: f32,
     repeat_last_n: usize,
-    use_cache: bool,
 }
 fn main() {
     console_error_panic_hook::set_once();
