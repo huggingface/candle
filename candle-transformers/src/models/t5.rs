@@ -1,10 +1,56 @@
 // T5 Text Encoder
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
-use candle::{DType, Device, Result, Tensor, D};
-use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, Module, VarBuilder};
+use candle::{DType, Device, Module, Result, Tensor, D};
+use candle_nn::{Activation, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
+
+#[derive(Debug)]
+struct Embedding {
+    inner: candle_nn::Embedding,
+    span: tracing::Span,
+}
+
+impl Embedding {
+    fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
+        let inner = candle_nn::embedding(d1, d2, vb)?;
+        let span = tracing::span!(tracing::Level::TRACE, "embedding");
+        Ok(Self { inner, span })
+    }
+
+    fn embeddings(&self) -> &Tensor {
+        self.inner.embeddings()
+    }
+}
+
+impl Module for Embedding {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        self.inner.forward(xs)
+    }
+}
+
+#[derive(Debug)]
+struct Linear {
+    inner: candle_nn::Linear,
+    span: tracing::Span,
+}
+
+impl Linear {
+    fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
+        let inner = candle_nn::linear_no_bias(d1, d2, vb)?;
+        let span = tracing::span!(tracing::Level::TRACE, "linear");
+        Ok(Self { inner, span })
+    }
+}
+
+impl Module for Linear {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        self.inner.forward(xs)
+    }
+}
 
 fn default_relative_attention_max_distance() -> usize {
     128
@@ -121,6 +167,7 @@ impl Config {
 struct T5LayerNorm {
     weight: Tensor,
     variance_epsilon: f64,
+    span: tracing::Span,
 }
 
 impl T5LayerNorm {
@@ -129,10 +176,14 @@ impl T5LayerNorm {
         Ok(Self {
             weight,
             variance_epsilon: eps,
+            span: tracing::span!(tracing::Level::TRACE, "layer-norm"),
         })
     }
+}
 
+impl Module for T5LayerNorm {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let dtype = xs.dtype();
         let xs_f32 = xs.to_dtype(DType::F32)?;
         // variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
@@ -149,20 +200,25 @@ struct T5DenseActDense {
     wi: Linear,
     wo: Linear,
     act: Activation,
+    span: tracing::Span,
 }
 
 impl T5DenseActDense {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let wi = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi"))?;
-        let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
+        let wi = Linear::new(cfg.d_model, cfg.d_ff, vb.pp("wi"))?;
+        let wo = Linear::new(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
         Ok(Self {
             wi,
             wo,
             act: Activation::Relu,
+            span: tracing::span!(tracing::Level::TRACE, "dense-act-dense"),
         })
     }
+}
 
+impl Module for T5DenseActDense {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let xs = self.wi.forward(xs)?;
         let xs = self.act.forward(&xs)?;
         let xs = self.wo.forward(&xs)?;
@@ -176,22 +232,27 @@ struct T5DenseGatedActDense {
     wi_1: Linear,
     wo: Linear,
     act: Activation,
+    span: tracing::Span,
 }
 
 impl T5DenseGatedActDense {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let wi_0 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_0"))?;
-        let wi_1 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_1"))?;
-        let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
+        let wi_0 = Linear::new(cfg.d_model, cfg.d_ff, vb.pp("wi_0"))?;
+        let wi_1 = Linear::new(cfg.d_model, cfg.d_ff, vb.pp("wi_1"))?;
+        let wo = Linear::new(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
         Ok(Self {
             wi_0,
             wi_1,
             wo,
             act: Activation::NewGelu,
+            span: tracing::span!(tracing::Level::TRACE, "dense-gated-act-dense"),
         })
     }
+}
 
+impl Module for T5DenseGatedActDense {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let hidden_gelu = self.act.forward(&self.wi_0.forward(xs)?)?;
         let hidden_linear = self.wi_1.forward(xs)?;
         let xs = hidden_gelu.broadcast_mul(&hidden_linear)?;
@@ -205,6 +266,7 @@ struct T5LayerFF {
     dense_act: Option<T5DenseActDense>,
     gated_dense_act: Option<T5DenseGatedActDense>,
     layer_norm: T5LayerNorm,
+    span: tracing::Span,
 }
 
 impl T5LayerFF {
@@ -226,10 +288,14 @@ impl T5LayerFF {
             dense_act,
             gated_dense_act,
             layer_norm,
+            span: tracing::span!(tracing::Level::TRACE, "layer-ff"),
         })
     }
+}
 
+impl Module for T5LayerFF {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let ys = self.layer_norm.forward(xs)?;
         let ys = match &self.dense_act {
             Some(dense_act) => dense_act.forward(&ys)?,
@@ -254,6 +320,10 @@ struct T5Attention {
     inner_dim: usize,
     use_cache: bool,
     kv_cache: Option<(Tensor, Tensor)>,
+    span: tracing::Span,
+    span_cache: tracing::Span,
+    span_mm: tracing::Span,
+    span_sm: tracing::Span,
 }
 
 impl T5Attention {
@@ -264,12 +334,12 @@ impl T5Attention {
         cfg: &Config,
     ) -> Result<Self> {
         let inner_dim = cfg.num_heads * cfg.d_kv;
-        let q = linear_no_bias(cfg.d_model, inner_dim, vb.pp("q"))?;
-        let k = linear_no_bias(cfg.d_model, inner_dim, vb.pp("k"))?;
-        let v = linear_no_bias(cfg.d_model, inner_dim, vb.pp("v"))?;
-        let o = linear_no_bias(inner_dim, cfg.d_model, vb.pp("o"))?;
+        let q = Linear::new(cfg.d_model, inner_dim, vb.pp("q"))?;
+        let k = Linear::new(cfg.d_model, inner_dim, vb.pp("k"))?;
+        let v = Linear::new(cfg.d_model, inner_dim, vb.pp("v"))?;
+        let o = Linear::new(inner_dim, cfg.d_model, vb.pp("o"))?;
         let relative_attention_bias = if has_relative_attention_bias {
-            let emb = embedding(
+            let emb = Embedding::new(
                 cfg.relative_attention_num_buckets,
                 cfg.num_heads,
                 vb.pp("relative_attention_bias"),
@@ -291,6 +361,10 @@ impl T5Attention {
             inner_dim,
             use_cache: cfg.use_cache && decoder,
             kv_cache: None,
+            span: tracing::span!(tracing::Level::TRACE, "attention"),
+            span_cache: tracing::span!(tracing::Level::TRACE, "attention-cache"),
+            span_mm: tracing::span!(tracing::Level::TRACE, "attention-mm"),
+            span_sm: tracing::span!(tracing::Level::TRACE, "attention-sm"),
         })
     }
 
@@ -303,6 +377,7 @@ impl T5Attention {
     ) -> Result<(Tensor, Option<Tensor>)> {
         // Performs Self-attention (if key_value_states is None) or attention
         // over source sentence (provided by key_value_states).
+        let _enter = self.span.enter();
         let kv_input = match key_value_states {
             None => xs,
             Some(key_value_states) => key_value_states,
@@ -326,6 +401,7 @@ impl T5Attention {
             .contiguous()?;
 
         if self.use_cache {
+            let _enter = self.span_cache.enter();
             if let Some((kv_cache_k, kv_cache_v)) = &self.kv_cache {
                 k = Tensor::cat(&[kv_cache_k, &k], 2)?.contiguous()?;
                 v = Tensor::cat(&[kv_cache_v, &v], 2)?.contiguous()?;
@@ -333,7 +409,10 @@ impl T5Attention {
             self.kv_cache = Some((k.clone(), v.clone()));
         };
         // TODO: Use flash_attn.
-        let scores = q.matmul(&k.t()?)?;
+        let scores = {
+            let _enter = self.span_mm.enter();
+            q.matmul(&k.t()?)?
+        };
         let scores = match mask {
             None => scores,
             Some(mask) => masked_fill(
@@ -405,7 +484,10 @@ impl T5Attention {
             },
         };
 
-        let attn_weights = candle_nn::ops::softmax(&scores, D::Minus1)?;
+        let attn_weights = {
+            let _enter = self.span_sm.enter();
+            candle_nn::ops::softmax(&scores, D::Minus1)?
+        };
         let attn_output = attn_weights.matmul(&v)?;
         let attn_output = attn_output
             .transpose(1, 2)?
@@ -419,6 +501,7 @@ impl T5Attention {
 struct T5LayerSelfAttention {
     self_attention: T5Attention,
     layer_norm: T5LayerNorm,
+    span: tracing::Span,
 }
 
 impl T5LayerSelfAttention {
@@ -429,6 +512,7 @@ impl T5LayerSelfAttention {
         Ok(Self {
             self_attention,
             layer_norm,
+            span: tracing::span!(tracing::Level::TRACE, "self-attn"),
         })
     }
 
@@ -438,6 +522,7 @@ impl T5LayerSelfAttention {
         position_bias: Option<&Tensor>,
         mask: Option<&Tensor>,
     ) -> Result<(Tensor, Option<Tensor>)> {
+        let _enter = self.span.enter();
         let normed_xs = self.layer_norm.forward(xs)?;
         let (ys, position_bias) =
             self.self_attention
@@ -451,6 +536,7 @@ impl T5LayerSelfAttention {
 struct T5LayerCrossAttention {
     cross_attention: T5Attention,
     layer_norm: T5LayerNorm,
+    span: tracing::Span,
 }
 
 impl T5LayerCrossAttention {
@@ -461,6 +547,7 @@ impl T5LayerCrossAttention {
         Ok(Self {
             cross_attention,
             layer_norm,
+            span: tracing::span!(tracing::Level::TRACE, "cross-attn"),
         })
     }
 
@@ -470,6 +557,7 @@ impl T5LayerCrossAttention {
         position_bias: Option<&Tensor>,
         key_value_states: &Tensor,
     ) -> Result<(Tensor, Option<Tensor>)> {
+        let _enter = self.span.enter();
         let normed_hidden_states = self.layer_norm.forward(hidden_states)?;
         let (ys, position_bias) = self.cross_attention.forward(
             &normed_hidden_states,
@@ -487,6 +575,7 @@ struct T5Block {
     self_attn: T5LayerSelfAttention,
     cross_attn: Option<T5LayerCrossAttention>,
     ff: T5LayerFF,
+    span: tracing::Span,
 }
 
 impl T5Block {
@@ -510,6 +599,7 @@ impl T5Block {
             self_attn,
             cross_attn,
             ff,
+            span: tracing::span!(tracing::Level::TRACE, "block"),
         })
     }
 
@@ -519,6 +609,7 @@ impl T5Block {
         position_bias: Option<&Tensor>,
         encoder_hidden_states: Option<&Tensor>,
     ) -> Result<(Tensor, Option<Tensor>)> {
+        let _enter = self.span.enter();
         // TODO: Cache masks
         let mask = match self.cross_attn.is_some() {
             true => {
@@ -550,6 +641,7 @@ struct T5Stack {
     block: Vec<T5Block>,
     shared: Arc<Embedding>,
     final_layer_norm: T5LayerNorm,
+    span: tracing::Span,
 }
 
 impl T5Stack {
@@ -566,6 +658,7 @@ impl T5Stack {
             block,
             shared: shared.clone(),
             final_layer_norm,
+            span: tracing::span!(tracing::Level::TRACE, "stack"),
         })
     }
 
@@ -574,6 +667,7 @@ impl T5Stack {
         input_ids: &Tensor,
         encoder_hidden_states: Option<&Tensor>,
     ) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let input_embeds = self.shared.as_ref().forward(input_ids)?;
         let mut hidden_states = input_embeds;
         let mut position_bias = None;
@@ -592,20 +686,23 @@ impl T5Stack {
 pub struct T5EncoderModel {
     encoder: T5Stack,
     device: Device,
+    span: tracing::Span,
 }
 
 impl T5EncoderModel {
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let shared = embedding(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
+        let shared = Embedding::new(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
         let shared = Arc::new(shared);
         let encoder = T5Stack::load(false, vb.pp("encoder"), &shared, cfg)?;
         Ok(Self {
             encoder,
             device: vb.device().clone(),
+            span: tracing::span!(tracing::Level::TRACE, "encoder"),
         })
     }
 
     pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         self.encoder.forward(input_ids, None)
     }
 
@@ -623,13 +720,15 @@ pub struct T5ForConditionalGeneration {
     lm_head: Option<Linear>,
     shared: Arc<Embedding>,
     device: Device,
+    span_decode: tracing::Span,
+    span_decode_head: tracing::Span,
 }
 
 impl T5ForConditionalGeneration {
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         assert!(cfg.is_encoder_decoder);
         let d_model = cfg.d_model;
-        let shared = embedding(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
+        let shared = Embedding::new(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
         let shared = Arc::new(shared);
 
         let mut encoder_cfg = cfg.clone();
@@ -648,11 +747,7 @@ impl T5ForConditionalGeneration {
         let lm_head = if tie_word_embeddings {
             None
         } else {
-            Some(linear_no_bias(
-                cfg.d_model,
-                cfg.vocab_size,
-                vb.pp("lm_head"),
-            )?)
+            Some(Linear::new(cfg.d_model, cfg.vocab_size, vb.pp("lm_head"))?)
         };
 
         Ok(Self {
@@ -663,6 +758,8 @@ impl T5ForConditionalGeneration {
             lm_head,
             shared,
             device: vb.device().clone(),
+            span_decode: tracing::span!(tracing::Level::TRACE, "decode"),
+            span_decode_head: tracing::span!(tracing::Level::TRACE, "decode-head"),
         })
     }
 
@@ -675,6 +772,7 @@ impl T5ForConditionalGeneration {
         decoder_input_ids: &Tensor,
         encoder_output: &Tensor,
     ) -> Result<Tensor> {
+        let _enter = self.span_decode.enter();
         let decoder_output = self
             .decoder
             .forward(decoder_input_ids, Some(encoder_output))?;
@@ -690,9 +788,12 @@ impl T5ForConditionalGeneration {
             .narrow(1, decoder_output.dim(1)? - 1, 1)?
             .squeeze(1)?)
             * scaling_factor)?;
-        let output = match self.lm_head {
-            None => sequence_output.matmul(&self.shared.embeddings().t()?)?,
-            Some(ref lm_head) => lm_head.forward(&sequence_output)?,
+        let output = {
+            let _enter = self.span_decode_head.enter();
+            match self.lm_head {
+                None => sequence_output.matmul(&self.shared.embeddings().t()?)?,
+                Some(ref lm_head) => lm_head.forward(&sequence_output)?,
+            }
         };
 
         // TODO: Rescale output before projecting on vocab? * (self.model_dim**-0.5)

@@ -14,7 +14,7 @@ use candle::{DType, Device, IndexOp, Module, Tensor, D};
 use clap::Parser;
 use tokenizers::Tokenizer;
 
-const PRIOR_GUIDANCE_SCALE: f64 = 8.0;
+const PRIOR_GUIDANCE_SCALE: f64 = 4.0;
 const RESOLUTION_MULTIPLE: f64 = 42.67;
 const LATENT_DIM_SCALE: f64 = 10.67;
 const PRIOR_CIN: usize = 16;
@@ -40,6 +40,9 @@ struct Args {
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
+
+    #[arg(long)]
+    use_flash_attn: bool,
 
     /// The height in pixels of the generated image.
     #[arg(long)]
@@ -289,8 +292,14 @@ fn run(args: Args) -> Result<()> {
             let weights = weights.deserialize()?;
             let vb = candle_nn::VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
             wuerstchen::prior::WPrior::new(
-                /* c_in */ PRIOR_CIN, /* c */ 1536, /* c_cond */ 1280,
-                /* c_r */ 64, /* depth */ 32, /* nhead */ 24, vb,
+                /* c_in */ PRIOR_CIN,
+                /* c */ 1536,
+                /* c_cond */ 1280,
+                /* c_r */ 64,
+                /* depth */ 32,
+                /* nhead */ 24,
+                args.use_flash_attn,
+                vb,
             )?
         };
         let prior_scheduler = wuerstchen::ddpm::DDPMWScheduler::new(60, Default::default())?;
@@ -337,6 +346,7 @@ fn run(args: Args) -> Result<()> {
             /* c_cond */ 1024,
             /* clip_embd */ 1024,
             /* patch_size */ 2,
+            args.use_flash_attn,
             vb,
         )?
     };
@@ -354,7 +364,7 @@ fn run(args: Args) -> Result<()> {
         )?;
 
         println!("diffusion process with prior {image_embeddings:?}");
-        let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(60, Default::default())?;
+        let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(12, Default::default())?;
         let timesteps = scheduler.timesteps();
         let timesteps = &timesteps[..timesteps.len() - 1];
         for (index, &t) in timesteps.iter().enumerate() {

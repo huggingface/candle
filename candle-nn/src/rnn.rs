@@ -85,7 +85,7 @@ impl LSTMConfig {
 ///
 /// <https://en.wikipedia.org/wiki/Long_short-term_memory>
 #[allow(clippy::upper_case_acronyms, unused)]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LSTM {
     w_ih: Tensor,
     w_hh: Tensor,
@@ -235,7 +235,7 @@ impl GRUConfig {
 ///
 /// <https://en.wikipedia.org/wiki/Gated_recurrent_unit>
 #[allow(clippy::upper_case_acronyms, unused)]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GRU {
     w_ih: Tensor,
     w_hh: Tensor,

@@ -174,10 +174,11 @@ impl AttnBlock {
         c_cond: usize,
         nhead: usize,
         self_attn: bool,
+        use_flash_attn: bool,
         vb: VarBuilder,
     ) -> Result<Self> {
         let norm = WLayerNorm::new(c)?;
-        let attention = Attention::new(c, nhead, c / nhead, vb.pp("attention"))?;
+        let attention = Attention::new(c, nhead, c / nhead, use_flash_attn, vb.pp("attention"))?;
         let kv_mapper_lin = candle_nn::linear(c_cond, c, vb.pp("kv_mapper.1"))?;
         Ok(Self {
             self_attn,

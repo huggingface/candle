@@ -21,6 +21,7 @@ pub struct WPrior {
 }
 
 impl WPrior {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         c_in: usize,
         c: usize,
@@ -28,6 +29,7 @@ impl WPrior {
         c_r: usize,
         depth: usize,
         nhead: usize,
+        use_flash_attn: bool,
         vb: VarBuilder,
     ) -> Result<Self> {
         let projection = candle_nn::conv2d(c_in, c, 1, Default::default(), vb.pp("projection"))?;
@@ -44,6 +46,7 @@ impl WPrior {
                 c,
                 nhead,
                 true,
+                use_flash_attn,
                 vb.pp(format!("blocks.{}", 3 * index + 2)),
             )?;
             blocks.push(Block {
