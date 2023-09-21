@@ -113,9 +113,9 @@ pub fn main() -> anyhow::Result<()> {
             )?;
         }
     } else {
-        let point = Some((args.point_x, args.point_y));
+        let points = vec![(args.point_x, args.point_y)];
         let start_time = std::time::Instant::now();
-        let (mask, iou_predictions) = sam.forward(&image, point, false)?;
+        let (mask, iou_predictions) = sam.forward(&image, points.clone(), false)?;
         println!(
             "mask generated in {:.2}s",
             start_time.elapsed().as_secs_f32()
