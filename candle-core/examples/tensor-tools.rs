@@ -250,7 +250,6 @@ fn run_quantize_safetensors(
             println!("  quantizing {name} {tensor:?}");
             let should_quantize = tensor.rank() == 2 && tensor.dim(0)? % 256 == 0;
             let tensor = if should_quantize {
-                let tensor = tensor.t()?;
                 quantize_fn(&tensor)?
             } else {
                 QTensor::quantize::<f32>(&tensor)?

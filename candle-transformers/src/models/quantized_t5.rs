@@ -102,7 +102,7 @@ struct QMatMul {
 
 impl QMatMul {
     fn new(out_dim: usize, in_dim: usize, vb: VarBuilder) -> Result<Self> {
-        let ws = vb.get((out_dim, in_dim), "weight")?;
+        let ws = vb.get((in_dim, out_dim), "weight")?;
         let inner = candle::quantized::QMatMul::from_arc(ws);
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
         Ok(Self { inner, span })
