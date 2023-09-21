@@ -1,5 +1,5 @@
 //load Candle Bert Module wasm module
-import init, { ModelEncoder } from "./build/m.js";
+import init, { ModelConditionalGeneration } from "./build/m.js";
 
 async function fetchArrayBuffer(url) {
   const cacheName = "t5-candle-cache";
@@ -13,7 +13,7 @@ async function fetchArrayBuffer(url) {
   cache.put(url, res.clone());
   return new Uint8Array(await res.arrayBuffer());
 }
-class T5Decoder {
+class ConditionalGeneration {
   static instance = {};
 
   static async getInstance(weightsURL, tokenizerURL, configURL, modelID) {
@@ -28,7 +28,7 @@ class T5Decoder {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = new ModelEncoder(
+      this.instance[modelID] = new ModelConditionalGeneration(
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8
@@ -41,17 +41,22 @@ class T5Decoder {
 }
 
 self.addEventListener("message", async (event) => {
-  const {
-    weightsURL,
-    tokenizerURL,
-    configURL,
-    modelID,
-    sentences,
-    normalize_embeddings,
-  } = event.data;
+  const { weightsURL, tokenizerURL, configURL, modelID, prompt, params } =
+    event.data;
+  let {
+    temperature = 1,
+    seed = 299792458,
+    repeat_penalty = 1.1,
+    repeat_last_n = 64,
+    top_p = 0.0,
+    use_cache = false,
+  } = { ...params };
   try {
-    self.postMessage({ status: "ready", message: "Starting T5 Decoder Model" });
-    const model = await T5Decoder.getInstance(
+    self.postMessage({
+      status: "ready",
+      message: "Starting T5 Conditional Generation",
+    });
+    const model = await ConditionalGeneration.getInstance(
       weightsURL,
       tokenizerURL,
       configURL,
@@ -62,15 +67,18 @@ self.addEventListener("message", async (event) => {
       message: "Decoding Prompt",
     });
     const output = model.decode({
-      sentences: sentences,
-      normalize_embeddings: normalize_embeddings || true,
+      prompt,
+      temperature,
+      seed,
+      top_p,
+      repeat_penalty,
+      repeat_last_n,
+      use_cache,
     });
-    console.log(output);
-
     self.postMessage({
       status: "complete",
       message: "complete",
-      output: output.data,
+      output: output,
     });
   } catch (e) {
     self.postMessage({ error: e });
