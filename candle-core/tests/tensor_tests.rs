@@ -674,6 +674,48 @@ fn index_add(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn slice_scatter(device: &Device) -> Result<()> {
+    let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
+    let src = Tensor::arange(100f32, 106f32, device)?.reshape((2, 3))?;
+    assert_eq!(
+        t.slice_scatter0(&src, 0)?.to_vec2::<f32>()?,
+        &[
+            [100.0, 101.0, 102.0],
+            [103.0, 104.0, 105.0],
+            [6.0, 7.0, 8.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
+    assert_eq!(
+        t.slice_scatter0(&src, 1)?.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [100.0, 101.0, 102.0],
+            [103.0, 104.0, 105.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
+    assert_eq!(
+        t.slice_scatter0(&src, 2)?.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [100.0, 101.0, 102.0],
+            [103.0, 104.0, 105.0],
+        ]
+    );
+    Ok(())
+}
+
 fn scatter_add(device: &Device) -> Result<()> {
     let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
     assert_eq!(
@@ -946,6 +988,7 @@ test_device!(index_select, index_select_cpu, index_select_gpu);
 test_device!(index_add, index_add_cpu, index_add_gpu);
 test_device!(gather, gather_cpu, gather_gpu);
 test_device!(scatter_add, scatter_add_cpu, scatter_add_gpu);
+test_device!(slice_scatter, slice_scatter_cpu, slice_scatter_gpu);
 test_device!(randn, randn_cpu, randn_gpu);
 test_device!(clamp, clamp_cpu, clamp_gpu);
 

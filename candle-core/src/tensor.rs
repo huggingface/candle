@@ -1132,8 +1132,8 @@ impl Tensor {
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
-    /// Embeds the values of the `src` tensor into the `self` tensor at the specified dimension.
-    pub fn slice_scatter<D: Dim>(&self, src: &Self, dim: D, start: usize) -> Result<Self> {
+    /// Embeds the values of the `src` tensor into the `self` tensor on the first dimension.
+    pub fn slice_scatter0(&self, src: &Self, start: usize) -> Result<Self> {
         if self.dtype() != src.dtype() {
             Err(Error::DTypeMismatchBinaryOp {
                 lhs: self.dtype(),
@@ -1158,14 +1158,13 @@ impl Tensor {
             }
             .bt())?
         }
-        let dim = dim.to_index(self.shape(), "slice-scatter")?;
         let shape_ok =
             self.dims()
                 .iter()
                 .zip(src.dims().iter())
                 .enumerate()
                 .all(|(dim_idx, (&d1, &d2))| {
-                    if dim == dim_idx {
+                    if 0 == dim_idx {
                         d2 + start <= d1
                     } else {
                         d1 == d2
@@ -1178,11 +1177,13 @@ impl Tensor {
                 rhs: src.shape().clone(),
             })?
         }
-
         let mut storage = self.device().zeros(self.shape(), self.dtype())?;
         self.storage()
             .copy_strided_src(&mut storage, 0, self.layout())?;
-        let op = BackpropOp::new2(self, src, |t1, t2| Op::SliceScatter(t1, t2, dim, start));
+        let offset = start * src.dims()[1..].iter().product::<usize>();
+        src.storage()
+            .copy_strided_src(&mut storage, offset, src.layout())?;
+        let op = BackpropOp::new2(self, src, |t1, t2| Op::SliceScatter(t1, t2, 0, start));
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
