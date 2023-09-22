@@ -6,7 +6,7 @@ export async function extractEmbeddings(
   modelID,
   sentences,
   updateStatus,
-  normalize_embeddings
+  normalize_embeddings = true
 ) {
   return new Promise((resolve, reject) => {
     worker.postMessage({
