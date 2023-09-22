@@ -67,7 +67,7 @@ export async function generateText(
 }
 export const MODELS = {
   t5_small_quantized: {
-    size: "102 MB",
+    size: "64.4 MB",
     base_url: "https://huggingface.co/lmz/candle-quantized-t5/resolve/main/",
     model: "model.gguf",
     tokenizer: "tokenizer.json",
@@ -135,7 +135,7 @@ export const MODELS = {
   },
 
   flan_t5_base_quantized: {
-    size: "360 MB",
+    size: "263 MB",
     base_url: "https://huggingface.co/lmz/candle-quantized-t5/resolve/main/",
     model: "model-flan-t5-base.gguf",
     tokenizer: "tokenizer.json",
