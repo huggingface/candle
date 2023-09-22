@@ -126,20 +126,32 @@ impl Module for CausalLMHead {
 struct MHA {
     wqkv: candle_nn::Linear,
     out_proj: candle_nn::Linear,
+    head_dim: usize,
 }
 
 impl MHA {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let head_dim = cfg.n_embd / cfg.n_head;
         let op_size = cfg.n_embd;
         let wqkv = candle_nn::linear(cfg.n_embd, 3 * op_size, vb.pp("Wqkv"))?;
         let out_proj = candle_nn::linear(op_size, cfg.n_embd, vb.pp("out_proj"))?;
-        Ok(Self { wqkv, out_proj })
+        Ok(Self {
+            wqkv,
+            out_proj,
+            head_dim,
+        })
     }
 }
 
 impl Module for MHA {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+        let (b_size, seq_len, n_embd) = xs.dims3()?;
+        let qkv = self
+            .wqkv
+            .forward(xs)?
+            .reshape((b_size, seq_len, 3, (), self.head_dim))?;
+        let context: Tensor = qkv; // TODO
+        context.flatten_from(D::Minus2)?.apply(&self.out_proj)
     }
 }
 
