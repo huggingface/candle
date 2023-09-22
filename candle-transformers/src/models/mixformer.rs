@@ -184,6 +184,10 @@ impl MixFormerSequentialForCausalLM {
 
 impl Module for MixFormerSequentialForCausalLM {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+        let mut xs = xs.apply(&self.embedding)?;
+        for block in self.blocks.iter() {
+            xs = block.forward(&xs)?
+        }
+        xs.apply(&self.head)
     }
 }
