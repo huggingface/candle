@@ -108,6 +108,7 @@ impl RotaryEmbedding {
             candle::bail!("unexpected shape for qkv {:?}", qkv.shape())
         }
         let (_rotary_seqlen, rotary_dim) = self.cos.dims2()?;
+        let rotary_dim = rotary_dim * 2;
         let q_rot = qkv.i((.., .., 0, .., ..rotary_dim))?;
         let q_pass = qkv.i((.., .., 0, .., rotary_dim..))?;
         let k_rot = qkv.i((.., .., 1, .., ..rotary_dim))?;
@@ -116,14 +117,20 @@ impl RotaryEmbedding {
         let k12 = k_rot.chunk(2, D::Minus1)?;
         let (q1, q2) = (&q12[0], &q12[1]);
         let (k1, k2) = (&k12[0], &k12[1]);
-        let c = self.cos.narrow(0, seqlen_offset, seqlen)?;
-        let s = self.sin.narrow(0, seqlen_offset, seqlen)?;
+        let c = self.cos.narrow(0, seqlen_offset, seqlen)?.unsqueeze(1)?;
+        let s = self.sin.narrow(0, seqlen_offset, seqlen)?.unsqueeze(1)?;
         let q_rot = Tensor::cat(
-            &[((q1 * &c)? - (q2 * &s)?)?, ((q1 * &s)? + (q2 * &c)?)?],
+            &[
+                (q1.broadcast_mul(&c)? - q2.broadcast_mul(&s)?)?,
+                (q1.broadcast_mul(&s)? + q2.broadcast_mul(&c)?)?,
+            ],
             D::Minus1,
         )?;
         let k_rot = Tensor::cat(
-            &[((k1 * &c)? - (k2 * &s)?)?, ((k1 * &s)? + (k2 * &c)?)?],
+            &[
+                (k1.broadcast_mul(&c)? - k2.broadcast_mul(&s)?)?,
+                (k1.broadcast_mul(&s)? + k2.broadcast_mul(&c)?)?,
+            ],
             D::Minus1,
         )?;
         let q = Tensor::cat(&[&q_rot, &q_pass], D::Minus1)?;
