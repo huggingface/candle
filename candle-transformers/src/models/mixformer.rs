@@ -7,7 +7,7 @@ use candle_nn::{Activation, VarBuilder};
 
 // https://huggingface.co/microsoft/phi-1_5/blob/main/configuration_mixformer_sequential.py
 #[derive(Debug, Clone, PartialEq)]
-struct Config {
+pub struct Config {
     vocab_size: usize,
     n_positions: usize,
     n_embd: usize,
@@ -128,6 +128,21 @@ struct MHA {
     out_proj: candle_nn::Linear,
 }
 
+impl MHA {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let op_size = cfg.n_embd;
+        let wqkv = candle_nn::linear(cfg.n_embd, 3 * op_size, vb.pp("Wqkv"))?;
+        let out_proj = candle_nn::linear(op_size, cfg.n_embd, vb.pp("out_proj"))?;
+        Ok(Self { wqkv, out_proj })
+    }
+}
+
+impl Module for MHA {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+}
+
 #[derive(Debug)]
 struct ParallelBlock {
     ln: candle_nn::LayerNorm,
@@ -135,9 +150,40 @@ struct ParallelBlock {
     mlp: MLP,
 }
 
+impl ParallelBlock {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let ln = candle_nn::layer_norm(cfg.n_embd, cfg.layer_norm_epsilon, vb.pp("ln"))?;
+        let mixer = MHA::new(cfg, vb.pp("mixer"))?;
+        let mlp = MLP::new(cfg, vb.pp("mlp"))?;
+        Ok(Self { ln, mixer, mlp })
+    }
+}
+
+impl Module for ParallelBlock {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let residual = xs;
+        let xs = xs.apply(&self.ln)?;
+        let attn_outputs = self.mixer.forward(&xs)?;
+        let feed_forward_hidden_states = self.mlp.forward(&xs)?;
+        attn_outputs + feed_forward_hidden_states + residual
+    }
+}
+
 #[derive(Debug)]
-struct MixFormerSequentialForCausalLM {
+pub struct MixFormerSequentialForCausalLM {
     embedding: Embedding,
     blocks: Vec<ParallelBlock>,
     head: CausalLMHead,
+}
+
+impl MixFormerSequentialForCausalLM {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        todo!()
+    }
+}
+
+impl Module for MixFormerSequentialForCausalLM {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
