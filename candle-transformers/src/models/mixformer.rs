@@ -178,7 +178,19 @@ pub struct MixFormerSequentialForCausalLM {
 
 impl MixFormerSequentialForCausalLM {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        todo!()
+        let vb = vb.pp("layers");
+        let embedding = Embedding::new(cfg, vb.pp(0))?;
+        let mut blocks = Vec::new();
+        for i in 0..cfg.n_layer {
+            let block = ParallelBlock::new(cfg, vb.pp(i + 1))?;
+            blocks.push(block)
+        }
+        let head = CausalLMHead::new(cfg, vb.pp(cfg.n_layer + 1))?;
+        Ok(Self {
+            embedding,
+            blocks,
+            head,
+        })
     }
 }
 
