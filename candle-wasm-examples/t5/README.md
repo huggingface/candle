@@ -16,6 +16,12 @@ This will bundle the library under `./build` and we can import it inside our Web
 import init, { ModelConditionalGeneration, ModelEncoder } from "./build/m.js";
 ```
 
+For the quantized version, we need to import the quantized module:
+
+```js
+import init, { ModelConditionalGeneration, ModelEncoder } from "./build/m-quantized.js";
+```
+
 The full example can be found under `./index.html`. All needed assets are fetched from the web, so no need to download anything.
 Finally, you can preview the example by running a local HTTP server. For example:
 
