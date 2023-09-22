@@ -1,4 +1,4 @@
-# candle-starcoder: code generation model
+# candle-phi: 1.3b LLM with state of the art performance for <10b models.
 
 [phi-1.5](https://huggingface.co/microsoft/phi-1_5).
 
