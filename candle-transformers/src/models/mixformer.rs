@@ -1,4 +1,3 @@
-#![allow(unused)]
 /// MixFormer model.
 /// https://huggingface.co/microsoft/phi-1_5
 /// https://arxiv.org/abs/2309.05463
@@ -23,8 +22,8 @@ pub struct Config {
     pad_vocab_size_multiple: usize,
 }
 
-impl Default for Config {
-    fn default() -> Self {
+impl Config {
+    pub fn v1() -> Self {
         Self {
             vocab_size: 50304,
             n_positions: 2048,
@@ -33,6 +32,22 @@ impl Default for Config {
             n_inner: None,
             n_head: 16,
             rotary_dim: usize::min(32, 1024 / 16),
+            activation_function: Activation::Gelu,
+            layer_norm_epsilon: 1e-5,
+            tie_word_embeddings: false,
+            pad_vocab_size_multiple: 64,
+        }
+    }
+
+    pub fn v1_5() -> Self {
+        Self {
+            vocab_size: 51200,
+            n_positions: 2048,
+            n_embd: 2048,
+            n_layer: 24,
+            n_inner: None,
+            n_head: 32,
+            rotary_dim: usize::min(32, 2048 / 32),
             activation_function: Activation::Gelu,
             layer_norm_epsilon: 1e-5,
             tie_word_embeddings: false,
@@ -175,7 +190,6 @@ struct MHA {
     rotary_emb: RotaryEmbedding,
     kv_cache: Option<(Tensor, Tensor)>,
     head_dim: usize,
-    n_head: usize,
     softmax_scale: f64,
 }
 
@@ -191,7 +205,6 @@ impl MHA {
             wqkv,
             out_proj,
             head_dim,
-            n_head: cfg.n_head,
             kv_cache: None,
             rotary_emb,
             softmax_scale,
@@ -199,7 +212,7 @@ impl MHA {
     }
 
     fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
-        let (b_size, seq_len, n_embd) = xs.dims3()?;
+        let (b_size, seq_len, _n_embd) = xs.dims3()?;
         let qkv = self
             .wqkv
             .forward(xs)?

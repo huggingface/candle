@@ -103,7 +103,7 @@ struct Args {
     #[arg(long, default_value_t = 100)]
     sample_len: usize,
 
-    #[arg(long, default_value = "microsoft/phi-1.5")]
+    #[arg(long, default_value = "microsoft/phi-1_5")]
     model_id: String,
 
     #[arg(long, default_value = "refs/pr/18")]
@@ -146,7 +146,7 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
     let vb = VarBuilder::from_safetensors(weights, DType::F32, &device);
-    let config = Config::default();
+    let config = Config::v1_5();
     let model = Model::new(&config, vb)?;
     println!("loaded the model in {:?}", start.elapsed());
 
