@@ -220,9 +220,9 @@ impl MHA {
         };
         self.kv_cache = Some((k.clone(), v.clone()));
         // scores = torch.einsum('bthd,bshd->bhts', q, k * softmax_scale)
-        let q = q.reshape((b_size, (), self.head_dim * self.n_head))?; // b, t, h*d
-        let k = k.reshape((b_size, (), self.head_dim * self.n_head))?; // b, s, h*d
-        let attn_weights = (q.matmul(&k.t()?)? * self.softmax_scale)?; // b, t, s
+        let q = q.transpose(1, 2)?.flatten_to(1)?; // b*h, t, d
+        let k = k.transpose(1, 2)?.flatten_to(1)?; // b*h, s, d
+        let attn_weights = (q.matmul(&k.t()?)? * self.softmax_scale)?; // b*h, t, s
 
         // causal_mask = torch.triu(torch.full((seqlen_q, seqlen_k), -10000.0, device=scores.device), 1)
         // scores = scores + causal_mask.to(dtype=scores.dtype)
