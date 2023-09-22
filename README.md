@@ -8,6 +8,7 @@ Candle is a minimalist ML framework for Rust with a focus on performance (includ
 and ease of use. Try our online demos: 
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
 [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2),
+[T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm),
 [yolo](https://huggingface.co/spaces/lmz/candle-yolo),
 [Segment
 Anything](https://huggingface.co/spaces/radames/candle-segment-anything-wasm).
@@ -52,6 +53,7 @@ These online demos run entirely in your browser:
   object recognition.
 - [whisper](https://huggingface.co/spaces/lmz/candle-whisper): text to speech.
 - [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
+- [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm): text generation.
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
 
 We also provide a some command line based examples using state of the art models:
@@ -105,6 +107,7 @@ There are also some wasm examples for whisper and
 `trunk` or try them online:
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
 [llama2](https://huggingface.co/spaces/lmz/candle-llama2),
+[T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm),
 [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm).
 
 For LLaMA2, run the following command to retrieve the weight files and start a
