@@ -133,6 +133,7 @@ pub enum Op {
     Copy(Tensor),
     Broadcast(Tensor),
     Narrow(Tensor, usize, usize, usize),
+    SliceScatter(Tensor, Tensor, usize, usize),
     Reshape(Tensor),
     ToDevice(Tensor),
     Transpose(Tensor, usize, usize),

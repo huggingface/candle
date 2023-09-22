@@ -1132,6 +1132,60 @@ impl Tensor {
         Ok(from_storage(storage, self.shape(), op, false))
     }
 
+    /// Embeds the values of the `src` tensor into the `self` tensor at the specified dimension.
+    pub fn slice_scatter<D: Dim>(&self, src: &Self, dim: D, start: usize) -> Result<Self> {
+        if self.dtype() != src.dtype() {
+            Err(Error::DTypeMismatchBinaryOp {
+                lhs: self.dtype(),
+                rhs: src.dtype(),
+                op: "slice-scatter",
+            }
+            .bt())?
+        }
+        if self.device().location() != src.device.location() {
+            Err(Error::DeviceMismatchBinaryOp {
+                lhs: self.device().location(),
+                rhs: src.device().location(),
+                op: "slice-scatter",
+            }
+            .bt())?
+        }
+        if self.rank() != src.rank() {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: self.rank(),
+                got: src.rank(),
+                shape: src.shape().clone(),
+            }
+            .bt())?
+        }
+        let dim = dim.to_index(self.shape(), "slice-scatter")?;
+        let shape_ok =
+            self.dims()
+                .iter()
+                .zip(src.dims().iter())
+                .enumerate()
+                .all(|(dim_idx, (&d1, &d2))| {
+                    if dim == dim_idx {
+                        d2 + start <= d1
+                    } else {
+                        d1 == d2
+                    }
+                });
+        if !shape_ok {
+            Err(Error::ShapeMismatchBinaryOp {
+                op: "slice-scatter (self, src)",
+                lhs: self.shape().clone(),
+                rhs: src.shape().clone(),
+            })?
+        }
+
+        let mut storage = self.device().zeros(self.shape(), self.dtype())?;
+        self.storage()
+            .copy_strided_src(&mut storage, 0, self.layout())?;
+        let op = BackpropOp::new2(self, src, |t1, t2| Op::SliceScatter(t1, t2, dim, start));
+        Ok(from_storage(storage, self.shape(), op, false))
+    }
+
     /// Accumulate element from `source` at indexes `indexes` and add them to `self`.
     pub fn index_add<D: Dim>(&self, indexes: &Self, source: &Self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "index-add")?;

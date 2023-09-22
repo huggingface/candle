@@ -69,7 +69,8 @@ impl Tensor {
                     | Op::Binary(lhs, rhs, _)
                     | Op::Gather(lhs, rhs, _)
                     | Op::IndexSelect(lhs, rhs, _)
-                    | Op::Matmul(lhs, rhs) => {
+                    | Op::Matmul(lhs, rhs)
+                    | Op::SliceScatter(lhs, rhs, _, _) => {
                         let (tg, nodes) = walk(lhs, nodes, already_seen);
                         track_grad |= tg;
                         let (tg, nodes) = walk(rhs, nodes, already_seen);
@@ -269,6 +270,9 @@ impl Tensor {
                     })?,
                     Op::UpsampleNearest2D { .. } => Err(Error::BackwardNotSupported {
                         op: "upsample-nearest2d",
+                    })?,
+                    Op::SliceScatter(..) => Err(Error::BackwardNotSupported {
+                        op: "slice-scatter",
                     })?,
                     Op::Gather(arg, indexes, dim) => {
                         let sum_grad = grads.or_insert(arg)?;
