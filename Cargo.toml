@@ -8,17 +8,16 @@ members = [
     "candle-pyo3",
     "candle-transformers",
     "candle-wasm-examples/llama2-c",
+    "candle-wasm-examples/segment-anything",
     "candle-wasm-examples/whisper",
     "candle-wasm-examples/yolo",
+    "candle-wasm-examples/bert",
 ]
-exclude = [
-    "candle-flash-attn",
-    "candle-kernels",
-]
+exclude = ["candle-flash-attn", "candle-kernels"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.3"
 edition = "2021"
 description = "Minimalist ML framework."
 repository = "https://github.com/huggingface/candle"
@@ -33,7 +32,7 @@ byteorder = "1.4.3"
 clap = { version = "4.2.4", features = ["derive"] }
 cudarc = { version = "0.9.14", features = ["f16"] }
 # TODO: Switch back to the official gemm implementation once it has caught up.
-gemm = { version = "0.15.6", package = "candle-gemm" }
+gemm = { version = "0.16.0", package = "candle-gemm" }
 hf-hub = "0.3.0"
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
 image = { version = "0.24.7", default-features = false, features = ["jpeg", "png"] }

@@ -1,8 +1,10 @@
+//! Tensors are N-dimenional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{
     BackpropOp, BinaryOp, CmpOp, CustomOp1, CustomOp2, CustomOp3, Op, ReduceOp, UnaryOp,
 };
+use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims};
 use crate::{storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
@@ -98,6 +100,28 @@ macro_rules! binary_op {
                 rhs.layout(),
             )?;
             let op = BackpropOp::new2(self, rhs, |t1, t2| Op::Binary(t1, t2, BinaryOp::$op_name));
+            Ok(from_storage(storage, shape.clone(), op, false))
+        }
+    };
+}
+
+macro_rules! binary_op_scalar {
+    ($fn_name:ident, $op_name:ident) => {
+        pub fn $fn_name<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
+            let rhs = match rhs.to_tensor_scalar()? {
+                crate::scalar::TensorScalar::Tensor(rhs) => rhs,
+                crate::scalar::TensorScalar::Scalar(rhs) => rhs
+                    .to_dtype(self.dtype())?
+                    .to_device(self.device())?
+                    .broadcast_as(self.shape())?,
+            };
+            let shape = self.same_shape_binary_op(&rhs, stringify!($fn_name))?;
+            let storage = self.storage().binary_impl::<crate::op::$op_name>(
+                &*rhs.storage(),
+                self.layout(),
+                rhs.layout(),
+            )?;
+            let op = BackpropOp::new2(self, &rhs, |t1, t2| Op::Binary(t1, t2, BinaryOp::$op_name));
             Ok(from_storage(storage, shape.clone(), op, false))
         }
     };
@@ -445,8 +469,8 @@ impl Tensor {
     binary_op!(mul, Mul);
     binary_op!(sub, Sub);
     binary_op!(div, Div);
-    binary_op!(maximum, Maximum);
-    binary_op!(minimum, Minimum);
+    binary_op_scalar!(maximum, Maximum);
+    binary_op_scalar!(minimum, Minimum);
     broadcast_binary_op!(broadcast_add, add);
     broadcast_binary_op!(broadcast_mul, mul);
     broadcast_binary_op!(broadcast_sub, sub);
@@ -465,6 +489,8 @@ impl Tensor {
     unary_op!(sqr, Sqr);
     unary_op!(sqrt, Sqrt);
     unary_op!(gelu, Gelu);
+    unary_op!(gelu_erf, GeluErf);
+    unary_op!(erf, Erf);
     unary_op!(relu, Relu);
 
     /// Retrieves the single scalar value hold in the tensor. If the tensor contains multiple
@@ -642,7 +668,12 @@ impl Tensor {
         let storage = self.storage().reduce_op(op, self.layout(), &[dim])?;
         let mut dims = self.dims().to_vec();
         dims[dim] = 1;
-        let op = BackpropOp::new1(self, |arg| Op::Reduce(arg, op, dims.to_vec()));
+        let op = match op {
+            ReduceOp::Sum | ReduceOp::Min | ReduceOp::Max => {
+                BackpropOp::new1(self, |arg| Op::Reduce(arg, op, dims.to_vec()))
+            }
+            ReduceOp::ArgMin | ReduceOp::ArgMax => BackpropOp::none(),
+        };
         let res = from_storage(storage, dims, op, false);
         if keepdim {
             Ok(res)
@@ -775,8 +806,15 @@ impl Tensor {
     /// comparison operation is specified by the `op` argument.
     ///
     /// The returned tensor has the same shape as the original tensors and uses `u8` elements.
-    pub fn cmp(&self, rhs: &Self, op: CmpOp) -> Result<Self> {
-        let shape = self.same_shape_binary_op(rhs, "cmp")?;
+    pub fn cmp<T: TensorOrScalar>(&self, rhs: T, op: CmpOp) -> Result<Self> {
+        let rhs = match rhs.to_tensor_scalar()? {
+            crate::scalar::TensorScalar::Tensor(rhs) => rhs,
+            crate::scalar::TensorScalar::Scalar(rhs) => rhs
+                .to_dtype(self.dtype())?
+                .to_device(self.device())?
+                .broadcast_as(self.shape())?,
+        };
+        let shape = self.same_shape_binary_op(&rhs, "cmp")?;
         let storage = self
             .storage()
             .cmp(op, &rhs.storage(), self.layout(), rhs.layout())?;
@@ -785,51 +823,79 @@ impl Tensor {
     }
 
     /// Element-wise equality.
-    pub fn eq(&self, rhs: &Self) -> Result<Self> {
+    pub fn eq<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Eq)
     }
 
     /// Element-wise non-equality.
-    pub fn ne(&self, rhs: &Self) -> Result<Self> {
+    pub fn ne<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Ne)
     }
 
     /// Element-wise comparison with lower-than, the returned tensor uses value 1 where `self <
     /// rhs` and 0 otherwise.
-    pub fn lt(&self, rhs: &Self) -> Result<Self> {
+    pub fn lt<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Lt)
     }
 
     /// Element-wise comparison with greater-than, the returned tensor uses value 1 where `self >
     /// rhs` and 0 otherwise.
-    pub fn gt(&self, rhs: &Self) -> Result<Self> {
+    pub fn gt<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Gt)
     }
 
     /// Element-wise comparison with greater-equal, the returned tensor uses value 1 where `self >=
     /// rhs` and 0 otherwise.
-    pub fn ge(&self, rhs: &Self) -> Result<Self> {
+    pub fn ge<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Ge)
     }
 
     /// Element-wise comparison with lower-equal, the returned tensor uses value 1 where `self <=
     /// rhs` and 0 otherwise.
-    pub fn le(&self, rhs: &Self) -> Result<Self> {
+    pub fn le<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Le)
     }
 
-    /// Upsample the input tensor to the `(target_h, target_w)` size, taking the value of the
+    /// Clamp the tensor values to be between `min` and `max`.
+    pub fn clamp<T1: TensorOrScalar, T2: TensorOrScalar>(&self, min: T1, max: T2) -> Result<Self> {
+        self.maximum(min)?.minimum(max)
+    }
+
+    /// Interpolate the input tensor to the `target_size` size, taking the value of the nearest element.
+    ///
+    /// The input tensor should have three dimensions, `(batch, channels, l)`, the returned
+    /// tensor also has three dimensions, `(batch, channels, target_size)`.
+    pub fn interpolate1d(&self, target_size: usize) -> Result<Self> {
+        let (n, c, _l) = self.dims3()?;
+        let op = BackpropOp::new1(self, Op::UpsampleNearest1D);
+        let storage = self
+            .storage()
+            .upsample_nearest1d(self.layout(), target_size)?;
+        Ok(from_storage(storage, (n, c, target_size), op, false))
+    }
+
+    /// Alias for `interpolate1d`.
+    pub fn upsample_nearest1d(&self, target_size: usize) -> Result<Self> {
+        self.interpolate1d(target_size)
+    }
+
+    /// Interpolate the input tensor to the `(target_h, target_w)` size, taking the value of the
     /// nearest element.
     ///
     /// The input tensor should have four dimensions, `(batch, channels, h, w)`, the returned
     /// tensor also has four dimensions, `(batch, channels, target_h, target_w)`.
-    pub fn upsample_nearest2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
+    pub fn interpolate2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
         let (n, c, _h, _w) = self.dims4()?;
         let op = BackpropOp::new1(self, Op::UpsampleNearest2D);
         let storage = self
             .storage()
             .upsample_nearest2d(self.layout(), target_h, target_w)?;
         Ok(from_storage(storage, (n, c, target_h, target_w), op, false))
+    }
+
+    /// Alias for `interpolate2d`.
+    pub fn upsample_nearest2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
+        self.interpolate2d(target_h, target_w)
     }
 
     /// 2D average pooling over an input tensor with multiple channels.
@@ -1684,11 +1750,14 @@ impl Tensor {
         Ok(from_storage(storage, shape, BackpropOp::none(), true))
     }
 
-    // TODO: Do we want to allow target shape using -1 on some dimensions?
     /// Reshape returns a tensor with the target shape provided that the number of elements of the
     /// original tensor is the same.
     /// If the input tensor is contiguous, this is a view on the original data. Otherwise this uses
     /// a new storage and copies the data over, the returned tensor is always contiguous.
+    ///
+    /// The shape can be specified using a tuple of `usize` and at most one `()` in which case
+    /// the behavior is the same as when using `-1` in PyTorch: this dimension size is adjusted so
+    /// as to match the number of elements in the tensor.
     ///
     /// ```rust
     /// # use candle_core::{Tensor, DType, Device, D};
@@ -1699,10 +1768,14 @@ impl Tensor {
     ///
     /// let c = a.reshape((3, 2))?;
     /// assert_eq!(c.shape().dims(), &[3, 2]);
+    ///
+    /// let c = a.reshape((2, (), 1))?;
+    /// assert_eq!(c.shape().dims(), &[2, 3, 1]);
+    ///
     /// # Ok::<(), candle_core::Error>(())
     /// ```
-    pub fn reshape<S: Into<Shape>>(&self, shape: S) -> Result<Tensor> {
-        let shape = shape.into();
+    pub fn reshape<S: crate::shape::ShapeWithOneHole>(&self, s: S) -> Result<Tensor> {
+        let shape = s.into_shape(self.elem_count())?;
         if shape.elem_count() != self.elem_count() {
             return Err(Error::ShapeMismatchBinaryOp {
                 lhs: self.shape().clone(),
@@ -1835,6 +1908,34 @@ impl Tensor {
         let dim = dim.to_index(arg0.shape(), "cat")?;
         for arg in args {
             arg.as_ref().check_dim(dim, "cat")?;
+        }
+        for (arg_idx, arg) in args.iter().enumerate() {
+            let arg = arg.as_ref();
+            if arg0.rank() != arg.rank() {
+                Err(Error::UnexpectedNumberOfDims {
+                    expected: arg0.rank(),
+                    got: arg.rank(),
+                    shape: arg.shape().clone(),
+                }
+                .bt())?
+            }
+            for (dim_idx, (v1, v2)) in arg0
+                .shape()
+                .dims()
+                .iter()
+                .zip(arg.shape().dims().iter())
+                .enumerate()
+            {
+                if dim_idx != dim && v1 != v2 {
+                    Err(Error::ShapeMismatchCat {
+                        dim: dim_idx,
+                        first_shape: arg0.shape().clone(),
+                        n: arg_idx + 1,
+                        nth_shape: arg.shape().clone(),
+                    }
+                    .bt())?
+                }
+            }
         }
         if dim == 0 {
             Self::cat0(args)

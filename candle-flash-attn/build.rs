@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-const KERNEL_FILES: [&str; 9] = [
+const KERNEL_FILES: [&str; 17] = [
     "flash_api.cu",
     "flash_fwd_hdim128_fp16_sm80.cu",
     "flash_fwd_hdim160_fp16_sm80.cu",
@@ -16,14 +16,14 @@ const KERNEL_FILES: [&str; 9] = [
     "flash_fwd_hdim32_fp16_sm80.cu",
     "flash_fwd_hdim64_fp16_sm80.cu",
     "flash_fwd_hdim96_fp16_sm80.cu",
-    // "flash_fwd_hdim128_bf16_sm80.cu",
-    // "flash_fwd_hdim160_bf16_sm80.cu",
-    // "flash_fwd_hdim192_bf16_sm80.cu",
-    // "flash_fwd_hdim224_bf16_sm80.cu",
-    // "flash_fwd_hdim256_bf16_sm80.cu",
-    // "flash_fwd_hdim32_bf16_sm80.cu",
-    // "flash_fwd_hdim64_bf16_sm80.cu",
-    // "flash_fwd_hdim96_bf16_sm80.cu",
+    "flash_fwd_hdim128_bf16_sm80.cu",
+    "flash_fwd_hdim160_bf16_sm80.cu",
+    "flash_fwd_hdim192_bf16_sm80.cu",
+    "flash_fwd_hdim224_bf16_sm80.cu",
+    "flash_fwd_hdim256_bf16_sm80.cu",
+    "flash_fwd_hdim32_bf16_sm80.cu",
+    "flash_fwd_hdim64_bf16_sm80.cu",
+    "flash_fwd_hdim96_bf16_sm80.cu",
 ];
 
 fn main() -> Result<()> {
@@ -57,9 +57,20 @@ fn main() -> Result<()> {
             #[allow(clippy::redundant_clone)]
             out_dir.clone()
         }
-        Ok(build_dir) => PathBuf::from(build_dir),
+        Ok(build_dir) => {
+            let path = PathBuf::from(build_dir);
+            path.canonicalize().expect(&format!(
+                "Directory doesn't exists: {} (the current directory is {})",
+                &path.display(),
+                std::env::current_dir()?.display()
+            ))
+        }
     };
     set_cuda_include_dir()?;
+
+    let ccbin_env = std::env::var("CANDLE_NVCC_CCBIN");
+    println!("cargo:rerun-if-env-changed=CANDLE_NVCC_CCBIN");
+
     let compute_cap = compute_cap()?;
 
     let out_file = build_dir.join("libflashattention.a");
@@ -95,14 +106,21 @@ fn main() -> Result<()> {
                     .args(["--default-stream", "per-thread"])
                     .arg("-Icutlass/include")
                     .arg("--expt-relaxed-constexpr")
-                    .arg(cu_file);
+                    .arg("--verbose");
+                if let Ok(ccbin_path) = &ccbin_env {
+                    command
+                        .arg("-allow-unsupported-compiler")
+                        .args(["-ccbin", ccbin_path]);
+                }
+                command.arg(cu_file);
                 let output = command
                     .spawn()
                     .context("failed spawning nvcc")?
                     .wait_with_output()?;
                 if !output.status.success() {
                     anyhow::bail!(
-                        "nvcc error while compiling:\n\n# stdout\n{:#}\n\n# stderr\n{:#}",
+                        "nvcc error while executing compiling: {:?}\n\n# stdout\n{:#}\n\n# stderr\n{:#}",
+                        &command,
                         String::from_utf8_lossy(&output.stdout),
                         String::from_utf8_lossy(&output.stderr)
                     )
@@ -122,7 +140,8 @@ fn main() -> Result<()> {
             .wait_with_output()?;
         if !output.status.success() {
             anyhow::bail!(
-                "nvcc error while linking:\n\n# stdout\n{:#}\n\n# stderr\n{:#}",
+                "nvcc error while linking: {:?}\n\n# stdout\n{:#}\n\n# stderr\n{:#}",
+                &command,
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             )

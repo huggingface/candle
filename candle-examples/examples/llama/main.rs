@@ -21,11 +21,10 @@ use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::io::Write;
 
-mod model;
+use candle_transformers::models::llama as model;
 use model::{Config, Llama, LlamaConfig};
 
 const EOS_TOKEN: &str = "</s>";
-const MAX_SEQ_LEN: usize = 4096;
 const DEFAULT_PROMPT: &str = "My favorite theorem is ";
 
 #[derive(Parser, Debug)]
@@ -42,6 +41,10 @@ struct Args {
     /// The temperature used to generate samples.
     #[arg(long)]
     temperature: Option<f64>,
+
+    /// Nucleus sampling probability cutoff.
+    #[arg(long)]
+    top_p: Option<f64>,
 
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
@@ -194,7 +197,7 @@ fn main() -> Result<()> {
 
     println!("starting the inference loop");
     print!("{prompt}");
-    let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature);
+    let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature, args.top_p);
     let start_gen = std::time::Instant::now();
     let mut index_pos = 0;
     let mut token_generated = 0;

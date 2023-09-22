@@ -59,8 +59,8 @@ fn batch_norm() -> Result<()> {
     );
     let bn2 = BatchNorm::new(
         5,
-        running_mean.clone(),
-        running_var.clone(),
+        running_mean,
+        running_var,
         Tensor::new(&[0.5f32], &Device::Cpu)?.broadcast_as(5)?,
         Tensor::new(&[-1.5f32], &Device::Cpu)?.broadcast_as(5)?,
         1e-8,

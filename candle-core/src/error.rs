@@ -30,7 +30,7 @@ pub enum Error {
     UnsupportedDTypeForOp(DType, &'static str),
 
     // === Dimension Index Errors ===
-    #[error("{op}: dimension index {dim} out of range for {shape:?}")]
+    #[error("{op}: dimension index {dim} out of range for shape {shape:?}")]
     DimOutOfRange {
         shape: Shape,
         dim: i32,
@@ -207,11 +207,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     pub fn wrap(err: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self::Wrapped(Box::new(err))
+        Self::Wrapped(Box::new(err)).bt()
     }
 
     pub fn msg(err: impl std::error::Error + Send + Sync + 'static) -> Self {
-        Self::Msg(err.to_string())
+        Self::Msg(err.to_string()).bt()
     }
 
     pub fn bt(self) -> Self {

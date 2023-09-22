@@ -1,7 +1,7 @@
 //! Embedding Layer.
 use candle::{Result, Tensor};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Embedding {
     embeddings: Tensor,
     hidden_size: usize,
@@ -17,6 +17,11 @@ impl Embedding {
 
     pub fn embeddings(&self) -> &Tensor {
         &self.embeddings
+    }
+
+    /// Get the hidden size of the embedding matrix
+    pub fn hidden_size(&self) -> usize {
+        self.hidden_size
     }
 }
 

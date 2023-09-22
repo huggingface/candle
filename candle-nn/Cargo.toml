@@ -11,13 +11,18 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { path = "../candle-core", version = "0.2.1", package = "candle-core" }
+candle = { path = "../candle-core", version = "0.2.3", package = "candle-core" }
+half = { workspace = true }
 thiserror = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
+num-traits = { workspace = true }
+rayon = { workspace = true }
 safetensors = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+clap = { workspace = true }
 
 [features]
 default = []

@@ -229,7 +229,7 @@ impl QTensor {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct QMatMul(std::sync::Arc<QTensor>);
 
 impl QMatMul {

@@ -59,6 +59,7 @@ mod op;
 pub mod pickle;
 pub mod quantized;
 pub mod safetensors;
+pub mod scalar;
 pub mod shape;
 mod storage;
 mod strided_index;
@@ -109,18 +110,18 @@ impl ToUsize2 for (usize, usize) {
 }
 
 // A simple trait defining a module with forward method using a single argument.
-pub trait Module: std::fmt::Debug {
+pub trait Module {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
-
-    /// Change the module to use training mode vs eval mode.
-    ///
-    /// The default implementation does nothing as this is only used for a couple modules such as
-    /// dropout or batch-normalization.
-    fn set_training(&mut self, _training: bool) {}
 }
 
 impl Module for quantized::QMatMul {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self.forward(xs)
+    }
+}
+
+impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        self(xs)
     }
 }

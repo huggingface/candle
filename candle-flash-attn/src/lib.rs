@@ -4,7 +4,7 @@ use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::cuda_backend::WrapErr;
 use candle::{CpuStorage, Layout, Result, Shape, Tensor};
-use half::f16;
+use half::{bf16, f16};
 
 pub struct FlashAttn {
     pub softmax_scale: f32,
@@ -15,24 +15,10 @@ fn round_multiple(x: usize, m: usize) -> usize {
     (x + m - 1) / m * m
 }
 
-impl candle::CustomOp3 for FlashAttn {
-    fn name(&self) -> &'static str {
-        "flash-attn"
-    }
-
-    fn cpu_fwd(
-        &self,
-        _: &CpuStorage,
-        _: &Layout,
-        _: &CpuStorage,
-        _: &Layout,
-        _: &CpuStorage,
-        _: &Layout,
-    ) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("no cpu support for flash-attn")
-    }
-
-    fn cuda_fwd(
+impl FlashAttn {
+    fn cuda_fwd_t<
+        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+    >(
         &self,
         q: &candle::CudaStorage,
         q_l: &Layout,
@@ -40,15 +26,16 @@ impl candle::CustomOp3 for FlashAttn {
         k_l: &Layout,
         v: &candle::CudaStorage,
         v_l: &Layout,
+        is_bf16: bool,
     ) -> Result<(candle::CudaStorage, Shape)> {
         // https://github.com/Dao-AILab/flash-attention/blob/b252072409e69c25f2b9d473cc534e49b24decd2/csrc/flash_attn/flash_api.cpp#L187
         let dev = q.device();
         let out_shape = q_l.shape().clone();
         let out_l = Layout::contiguous(&out_shape);
 
-        let q = q.as_cuda_slice::<f16>()?;
-        let k = k.as_cuda_slice::<f16>()?;
-        let v = v.as_cuda_slice::<f16>()?;
+        let q = q.as_cuda_slice::<T>()?;
+        let k = k.as_cuda_slice::<T>()?;
+        let v = v.as_cuda_slice::<T>()?;
         let q = q.slice(q_l.start_offset()..);
         let k = k.slice(k_l.start_offset()..);
         let v = v.slice(v_l.start_offset()..);
@@ -104,10 +91,11 @@ impl candle::CustomOp3 for FlashAttn {
         let seqlen_k_rounded = round_multiple(seqlen_k, 128);
 
         let elem_count = out_shape.elem_count();
-        let dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+        let dst = unsafe { dev.alloc::<T>(elem_count) }.w()?;
         let softmax_lse = dev.alloc_zeros::<f32>(b_sz * num_heads * seqlen_q).w()?;
 
         let causal = if self.causal { 1 } else { 0 };
+        let is_bf16 = if is_bf16 { 1 } else { 0 };
 
         unsafe {
             let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
@@ -146,11 +134,46 @@ impl candle::CustomOp3 for FlashAttn {
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
                 /* seqlen_k_rounded */ seqlen_k_rounded as u32,
                 /* is_causal */ causal,
+                /* is_bf16 */ is_bf16,
             )
         }
 
         let dst = candle::CudaStorage::wrap_cuda_slice(dst, dev.clone());
         Ok((dst, out_shape))
+    }
+}
+
+impl candle::CustomOp3 for FlashAttn {
+    fn name(&self) -> &'static str {
+        "flash-attn"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _: &CpuStorage,
+        _: &Layout,
+        _: &CpuStorage,
+        _: &Layout,
+        _: &CpuStorage,
+        _: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        candle::bail!("no cpu support for flash-attn")
+    }
+
+    fn cuda_fwd(
+        &self,
+        q: &candle::CudaStorage,
+        q_l: &Layout,
+        k: &candle::CudaStorage,
+        k_l: &Layout,
+        v: &candle::CudaStorage,
+        v_l: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        match q.dtype() {
+            candle::DType::F16 => self.cuda_fwd_t::<f16>(q, q_l, k, k_l, v, v_l, false),
+            candle::DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l, k, k_l, v, v_l, true),
+            dt => candle::bail!("flash-attn is only supported for f16/bf16 ({dt:?})"),
+        }
     }
 }
 
@@ -190,24 +213,10 @@ struct FlashAttnVarLen {
     seqlens_k: Tensor,
 }
 
-impl candle::CustomOp3 for FlashAttnVarLen {
-    fn name(&self) -> &'static str {
-        "flash-attn-varlen"
-    }
-
-    fn cpu_fwd(
-        &self,
-        _: &CpuStorage,
-        _: &Layout,
-        _: &CpuStorage,
-        _: &Layout,
-        _: &CpuStorage,
-        _: &Layout,
-    ) -> Result<(CpuStorage, Shape)> {
-        candle::bail!("no cpu support for flash-attn")
-    }
-
-    fn cuda_fwd(
+impl FlashAttnVarLen {
+    fn cuda_fwd_t<
+        T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+    >(
         &self,
         q: &candle::CudaStorage,
         q_l: &Layout,
@@ -215,6 +224,7 @@ impl candle::CustomOp3 for FlashAttnVarLen {
         k_l: &Layout,
         v: &candle::CudaStorage,
         v_l: &Layout,
+        is_bf16: bool,
     ) -> Result<(candle::CudaStorage, Shape)> {
         // https://github.com/Dao-AILab/flash-attention/blob/184b992dcb2a0890adaa19eb9b541c3e4f9d2a08/csrc/flash_attn/flash_api.cpp#L327
         let dev = q.device();
@@ -314,6 +324,7 @@ impl candle::CustomOp3 for FlashAttnVarLen {
             .w()?;
 
         let causal = if self.causal { 1 } else { 0 };
+        let is_bf16 = if is_bf16 { 1 } else { 0 };
 
         unsafe {
             let q_ptr = *q.device_ptr() as *const core::ffi::c_void;
@@ -354,11 +365,46 @@ impl candle::CustomOp3 for FlashAttnVarLen {
                 /* seqlen_q_rounded */ seqlen_q_rounded as u32,
                 /* seqlen_k_rounded */ seqlen_k_rounded as u32,
                 /* is_causal */ causal,
+                /* is_bf16 */ is_bf16,
             )
         }
 
         let dst = candle::CudaStorage::wrap_cuda_slice(dst, dev.clone());
         Ok((dst, out_shape))
+    }
+}
+
+impl candle::CustomOp3 for FlashAttnVarLen {
+    fn name(&self) -> &'static str {
+        "flash-attn-varlen"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _: &CpuStorage,
+        _: &Layout,
+        _: &CpuStorage,
+        _: &Layout,
+        _: &CpuStorage,
+        _: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        candle::bail!("no cpu support for flash-attn")
+    }
+
+    fn cuda_fwd(
+        &self,
+        q: &candle::CudaStorage,
+        q_l: &Layout,
+        k: &candle::CudaStorage,
+        k_l: &Layout,
+        v: &candle::CudaStorage,
+        v_l: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        match q.dtype() {
+            candle::DType::F16 => self.cuda_fwd_t::<f16>(q, q_l, k, k_l, v, v_l, false),
+            candle::DType::BF16 => self.cuda_fwd_t::<bf16>(q, q_l, k, k_l, v, v_l, true),
+            dt => candle::bail!("flash-attn is only supported for f16/bf16 ({dt:?})"),
+        }
     }
 }
 

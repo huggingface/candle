@@ -58,6 +58,8 @@ pub enum UnaryOp {
     Sqr,
     Sqrt,
     Gelu,
+    GeluErf,
+    Erf,
     Relu,
     Tanh,
 }
@@ -116,6 +118,7 @@ pub enum Op {
         stride: (usize, usize),
     },
 
+    UpsampleNearest1D(Tensor),
     UpsampleNearest2D(Tensor),
 
     Cat(Vec<Tensor>, usize),
@@ -324,6 +327,8 @@ pub(crate) struct Recip;
 pub(crate) struct Sqr;
 pub(crate) struct Sqrt;
 pub(crate) struct Gelu;
+pub(crate) struct GeluErf;
+pub(crate) struct Erf;
 pub(crate) struct Relu;
 pub(crate) struct Tanh;
 
@@ -599,6 +604,92 @@ impl UnaryOpT for Gelu {
     #[inline(always)]
     fn f64_vec(xs: &[f64], ys: &mut [f64]) {
         crate::mkl::vd_gelu(xs, ys)
+    }
+
+    #[cfg(feature = "accelerate")]
+    const F32_VEC: bool = true;
+
+    #[cfg(feature = "accelerate")]
+    #[inline(always)]
+    fn f32_vec(xs: &[f32], ys: &mut [f32]) {
+        crate::accelerate::vs_gelu(xs, ys)
+    }
+
+    #[cfg(feature = "accelerate")]
+    const F64_VEC: bool = true;
+
+    #[cfg(feature = "accelerate")]
+    #[inline(always)]
+    fn f64_vec(xs: &[f64], ys: &mut [f64]) {
+        crate::accelerate::vd_gelu(xs, ys)
+    }
+}
+
+impl UnaryOpT for Erf {
+    const NAME: &'static str = "erf";
+    const KERNEL: &'static str = "uerf";
+    const V: Self = Erf;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        bf16::from_f64(Self::f64(v.to_f64()))
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        f16::from_f64(Self::f64(v.to_f64()))
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        Self::f64(v as f64) as f32
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        crate::cpu::erf::erf(v)
+    }
+    #[inline(always)]
+    fn u8(_: u8) -> u8 {
+        0
+    }
+    #[inline(always)]
+    fn u32(_: u32) -> u32 {
+        0
+    }
+    #[inline(always)]
+    fn i64(_: i64) -> i64 {
+        0
+    }
+}
+
+impl UnaryOpT for GeluErf {
+    const NAME: &'static str = "gelu_erf";
+    const KERNEL: &'static str = "ugelu_erf";
+    const V: Self = GeluErf;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        bf16::from_f64(Self::f64(v.to_f64()))
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        f16::from_f64(Self::f64(v.to_f64()))
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        Self::f64(v as f64) as f32
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        (crate::cpu::erf::erf(v / 2f64.sqrt()) + 1.) * 0.5 * v
+    }
+    #[inline(always)]
+    fn u8(_: u8) -> u8 {
+        0
+    }
+    #[inline(always)]
+    fn u32(_: u32) -> u32 {
+        0
+    }
+    #[inline(always)]
+    fn i64(_: i64) -> i64 {
+        0
     }
 }
 

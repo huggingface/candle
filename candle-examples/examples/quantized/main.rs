@@ -12,7 +12,7 @@ use candle::quantized::{ggml_file, gguf_file};
 use candle::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 
-mod model;
+use candle_transformers::models::quantized_llama as model;
 use model::ModelWeights;
 
 const DEFAULT_PROMPT: &str = "My favorite theorem is ";
@@ -70,6 +70,10 @@ struct Args {
     /// The temperature used to generate samples, use 0 for greedy sampling.
     #[arg(long, default_value_t = 0.8)]
     temperature: f64,
+
+    /// Nucleus sampling probability cutoff.
+    #[arg(long)]
+    top_p: Option<f64>,
 
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
@@ -310,7 +314,7 @@ fn main() -> anyhow::Result<()> {
             prompt_tokens
         };
         let mut all_tokens = vec![];
-        let mut logits_processor = LogitsProcessor::new(args.seed, temperature);
+        let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
 
         let start_prompt_processing = std::time::Instant::now();
         let mut next_token = {

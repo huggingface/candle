@@ -11,19 +11,19 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { path = "../candle-core", version = "0.2.1", package = "candle-core" }
-candle-datasets = { path = "../candle-datasets", version = "0.2.1" }
-candle-nn = { path = "../candle-nn", version = "0.2.1" }
-candle-transformers = { path = "../candle-transformers", version = "0.2.1" }
-candle-flash-attn = { path = "../candle-flash-attn", version = "0.2.1", optional = true }
-safetensors = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-num-traits = { workspace = true }
-intel-mkl-src = { workspace = true, optional = true }
+candle = { path = "../candle-core", version = "0.2.3", package = "candle-core" }
+candle-datasets = { path = "../candle-datasets", version = "0.2.3" }
+candle-nn = { path = "../candle-nn", version = "0.2.3" }
+candle-transformers = { path = "../candle-transformers", version = "0.2.3" }
 cudarc = { workspace = true, optional = true }
 half = { workspace = true, optional = true }
 image = { workspace = true }
+intel-mkl-src = { workspace = true, optional = true }
+num-traits = { workspace = true }
+rayon = { workspace = true }
+safetensors = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -50,7 +50,7 @@ default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 cudnn = ["candle/cudnn"]
-flash-attn = ["cuda", "dep:candle-flash-attn"]
+flash-attn = ["cuda", "candle-transformers/flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
 nccl = ["cuda", "cudarc/nccl", "dep:half"]
 

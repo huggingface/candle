@@ -19,7 +19,7 @@
 //! ```
 use candle::{Result, Tensor};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Linear {
     weight: Tensor,
     bias: Option<Tensor>,
@@ -41,8 +41,9 @@ impl Linear {
 
 impl super::Module for Linear {
     fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
-        let w = match x.dims() {
-            &[bsize, _, _] => self.weight.broadcast_left(bsize)?.t()?,
+        let w = match *x.dims() {
+            [b1, b2, _, _] => self.weight.broadcast_left((b1, b2))?.t()?,
+            [bsize, _, _] => self.weight.broadcast_left(bsize)?.t()?,
             _ => self.weight.t()?,
         };
         let x = x.matmul(&w)?;

@@ -1,1 +1,13 @@
-
+pub mod bert;
+pub mod bigcode;
+pub mod dinov2;
+pub mod efficientnet;
+pub mod falcon;
+pub mod llama;
+pub mod quantized_llama;
+pub mod quantized_t5;
+pub mod segment_anything;
+pub mod stable_diffusion;
+pub mod t5;
+pub mod whisper;
+pub mod wuerstchen;

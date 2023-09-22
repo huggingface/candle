@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle_examples::object_detection::{non_maximum_suppression, Bbox};
+use candle_transformers::object_detection::{non_maximum_suppression, Bbox};
 mod darknet;
 
 use anyhow::Result;
@@ -46,7 +46,7 @@ pub fn report(
     let (npreds, pred_size) = pred.dims2()?;
     let nclasses = pred_size - 5;
     // The bounding boxes grouped by (maximum) class index.
-    let mut bboxes: Vec<Vec<Bbox>> = (0..nclasses).map(|_| vec![]).collect();
+    let mut bboxes: Vec<Vec<Bbox<()>>> = (0..nclasses).map(|_| vec![]).collect();
     // Extract the bounding boxes for which confidence is above the threshold.
     for index in 0..npreds {
         let pred = Vec::<f32>::try_from(pred.get(index)?)?;
@@ -65,7 +65,7 @@ pub fn report(
                     xmax: pred[0] + pred[2] / 2.,
                     ymax: pred[1] + pred[3] / 2.,
                     confidence,
-                    keypoints: vec![],
+                    data: (),
                 };
                 bboxes[class_index].push(bbox)
             }

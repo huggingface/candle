@@ -91,13 +91,14 @@ impl Tensor {
                         }
                     }
                     Op::Reshape(node)
+                    | Op::UpsampleNearest1D(node)
                     | Op::UpsampleNearest2D(node)
                     | Op::AvgPool2D { arg: node, .. }
                     | Op::MaxPool2D { arg: node, .. }
                     | Op::Copy(node)
                     | Op::Broadcast(node)
                     | Op::Cmp(node, _)
-                    | Op::Reduce(node, _, _)
+                    | Op::Reduce(node, ReduceOp::Min | ReduceOp::Sum | ReduceOp::Max, _)
                     | Op::ToDType(node)
                     | Op::ToDevice(node)
                     | Op::Transpose(node, _, _)
@@ -111,6 +112,7 @@ impl Tensor {
                         track_grad |= tg;
                         nodes
                     }
+                    Op::Reduce(_, ReduceOp::ArgMin | ReduceOp::ArgMax, _) => nodes,
                 }
             } else {
                 nodes
@@ -262,6 +264,9 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
                     }
+                    Op::UpsampleNearest1D { .. } => Err(Error::BackwardNotSupported {
+                        op: "upsample-nearest1d",
+                    })?,
                     Op::UpsampleNearest2D { .. } => Err(Error::BackwardNotSupported {
                         op: "upsample-nearest2d",
                     })?,
@@ -437,6 +442,10 @@ impl Tensor {
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
                     Op::Unary(_, UnaryOp::Gelu) => Err(Error::BackwardNotSupported { op: "gelu" })?,
+                    Op::Unary(_, UnaryOp::Erf) => Err(Error::BackwardNotSupported { op: "erf" })?,
+                    Op::Unary(_, UnaryOp::GeluErf) => {
+                        Err(Error::BackwardNotSupported { op: "gelu-erf" })?
+                    }
                     Op::Unary(arg, UnaryOp::Relu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let relu_grad = arg.ge(&arg.zeros_like()?)?.to_dtype(arg.dtype())?;
@@ -517,6 +526,7 @@ impl Tensor {
     }
 }
 
+#[derive(Debug)]
 pub struct GradStore(HashMap<TensorId, Tensor>);
 
 impl GradStore {

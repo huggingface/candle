@@ -13,7 +13,6 @@ extern crate accelerate_src;
 mod encodec_model;
 mod musicgen_model;
 mod nn;
-mod t5_model;
 
 use musicgen_model::{GenConfig, MusicgenForConditionalGeneration};
 
@@ -78,7 +77,7 @@ fn main() -> Result<()> {
     let model = model.deserialize()?;
     let vb = VarBuilder::from_safetensors(vec![model], DTYPE, &device);
     let config = GenConfig::small();
-    let model = MusicgenForConditionalGeneration::load(vb, config)?;
+    let mut model = MusicgenForConditionalGeneration::load(vb, config)?;
 
     let tokens = tokenizer
         .encode(args.prompt.as_str(), true)

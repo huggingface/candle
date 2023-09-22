@@ -6,7 +6,7 @@
   <body></body>
 </html>
 
-<!doctype html>
+<!DOCTYPE html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -145,6 +145,10 @@
         }
       });
 
+      document.querySelector("#clear-btn").addEventListener("click", () => {
+        drawImageCanvas();
+      });
+
       function drawImageCanvas(imgURL) {
         const canvas = document.querySelector("#canvas");
         const canvasResult = document.querySelector("#canvas-result");
@@ -153,21 +157,28 @@
           .clearRect(0, 0, canvas.width, canvas.height);
         const ctx = canvas.getContext("2d");
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        document.querySelector("#share-btn").hidden = true;
+        document.querySelector("#share-btn").classList.add("invisible");
+        document.querySelector("#clear-btn").classList.add("invisible");
+        document.querySelector("#detect").disabled = true;
+        hasImage = false;
+        canvas.parentElement.style.height = "auto";
 
-        const img = new Image();
-        img.crossOrigin = "anonymous";
+        if (imgURL && imgURL !== "") {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
 
-        img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
+          img.onload = () => {
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
 
-          canvas.parentElement.style.height = canvas.offsetHeight + "px";
-          hasImage = true;
-          document.querySelector("#detect").disabled = false;
-        };
-        img.src = imgURL;
+            canvas.parentElement.style.height = canvas.offsetHeight + "px";
+            hasImage = true;
+            document.querySelector("#detect").disabled = false;
+            document.querySelector("#clear-btn").classList.remove("invisible");
+          };
+          img.src = imgURL;
+        }
       }
 
       async function classifyImage(
@@ -188,17 +199,21 @@
             confidence,
             iou_threshold,
           });
-          yoloWorker.addEventListener("message", (event) => {
+          function handleMessage(event) {
+            console.log("message", event.data);
             if ("status" in event.data) {
               updateStatus(event.data.status);
             }
             if ("error" in event.data) {
+              yoloWorker.removeEventListener("message", handleMessage);
               reject(new Error(event.data.error));
             }
             if (event.data.status === "complete") {
+              yoloWorker.removeEventListener("message", handleMessage);
               resolve(event.data);
             }
-          });
+          }
+          yoloWorker.addEventListener("message", handleMessage);
         });
       }
       // add event listener to detect button
@@ -310,7 +325,7 @@
           button.classList.add("bg-blue-950");
           button.classList.remove("bg-blue-700");
           button.textContent = "Predict";
-          document.querySelector("#share-btn").hidden = false;
+          document.querySelector("#share-btn").classList.remove("invisible");
         }
       }
       document.querySelector("#share-btn").addEventListener("click", () => {
@@ -372,8 +387,37 @@
           <option value="yolov8x_pose">yolov8x_pose (139 MB)</option>
         </select>
       </div>
+      <div>
+        <button
+          id="detect"
+          disabled
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 px-4 rounded disabled:bg-gray-300 disabled:cursor-not-allowed"
+        >
+          Predict
+        </button>
+      </div>
       <!-- drag and drop area -->
-      <div class="relative">
+      <div class="relative max-w-lg">
+        <div class="py-1">
+          <button
+            id="clear-btn"
+            class="text-xs bg-white rounded-md disabled:opacity-50 flex gap-1 items-center ml-auto invisible"
+          >
+            <svg
+              class=""
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 13 12"
+              height="1em"
+            >
+              <path
+                d="M1.6.7 12 11.1M12 .7 1.6 11.1"
+                stroke="#2E3036"
+                stroke-width="2"
+              />
+            </svg>
+            Clear image
+          </button>
+        </div>
         <div
           id="drop-area"
           class="flex flex-col items-center justify-center border-2 border-gray-300 border-dashed rounded-xl relative aspect-video w-full overflow-hidden"
@@ -422,8 +466,7 @@
         <div class="text-right py-2">
           <button
             id="share-btn"
-            hidden
-            class="bg-white rounded-md hover:outline outline-orange-200 disabled:opacity-50"
+            class="bg-white rounded-md hover:outline outline-orange-200 disabled:opacity-50 invisible"
           >
             <img
               src="https://huggingface.co/datasets/huggingface/badges/raw/main/share-to-community-sm.svg"
@@ -432,7 +475,10 @@
         </div>
       </div>
       <div>
-        <div class="flex gap-3 items-center" id="image-select">
+        <div
+          class="flex gap-3 items-center overflow-x-scroll"
+          id="image-select"
+        >
           <h3 class="font-medium">Examples:</h3>
 
           <img
@@ -488,15 +534,6 @@
             >0.45</output
           >
         </div>
-      </div>
-      <div>
-        <button
-          id="detect"
-          disabled
-          class="bg-blue-950 hover:bg-blue-700 text-white font-normal py-2 px-4 rounded disabled:opacity-75 disabled:hover:bg-blue-950"
-        >
-          Predict
-        </button>
       </div>
     </main>
   </body>

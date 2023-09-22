@@ -8,7 +8,9 @@ Candle is a minimalist ML framework for Rust with a focus on performance (includ
 and ease of use. Try our online demos: 
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
 [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2),
-[yolo](https://huggingface.co/spaces/lmz/candle-yolo).
+[yolo](https://huggingface.co/spaces/lmz/candle-yolo),
+[Segment
+Anything](https://huggingface.co/spaces/radames/candle-segment-anything-wasm).
 
 ## Get started
 
@@ -45,37 +47,54 @@ For more advanced examples, please have a look at the following section.
 
 ## Check out our examples
 
-Check out our [examples](./candle-examples/examples/):
+These online demos run entirely in your browser:
+- [yolo](https://huggingface.co/spaces/lmz/candle-yolo): pose estimation and
+  object recognition.
+- [whisper](https://huggingface.co/spaces/lmz/candle-whisper): text to speech.
+- [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
+- [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
 
-- [Whisper](./candle-examples/examples/whisper/): speech recognition model.
+We also provide a some command line based examples using state of the art models:
+
 - [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
-- [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code
   generation.
-- [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
-  image generative model, support for the 1.5, 2.1, and SDXL 1.0 versions.
-- [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
-  using self-supervision (can be used for imagenet classification, depth
-  evaluation, segmentation).
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/quantized/assets/aoc.gif" width="600">
+  
+- [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
+  image generative model, support for the 1.5, 2.1, and SDXL 1.0 versions.
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/stable-diffusion/assets/stable-diffusion-xl.jpg" width="200">
+
+- [Wuerstchen](./candle-examples/examples/wuerstchen/): another text to
+  image generative model.
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/wuerstchen/assets/cat.jpg" width="200">
+
 - [yolo-v3](./candle-examples/examples/yolo-v3/) and
   [yolo-v8](./candle-examples/examples/yolo-v8/): object detection and pose
   estimation models.
-Run them using the following commands:
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.od.jpg" width="200"><img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/yolo-v8/assets/bike.pose.jpg" width="200">
+- [segment-anything](./candle-examples/examples/segment-anything/): image
+  segmentation model with prompt.
+
+<img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
+
+- [Whisper](./candle-examples/examples/whisper/): speech recognition model.
+- [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
+- [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
+  using self-supervision (can be used for imagenet classification, depth
+  evaluation, segmentation).
+
+Run them using commands like:
 ```
-cargo run --example whisper --release
-cargo run --example llama --release
-cargo run --example falcon --release
-cargo run --example bert --release
-cargo run --example bigcode --release
-cargo run --example stable-diffusion --release -- --prompt "a rusty robot holding a fire torch"
-cargo run --example dinov2 --release -- --image path/to/myinput.jpg
 cargo run --example quantized --release
-cargo run --example yolo-v3 --release -- myimage.jpg
-cargo run --example yolo-v8 --release -- myimage.jpg # for pose estimation, add --task pose 
 ```
 
 In order to use **CUDA** add `--features cuda` to the example command line. If
@@ -85,7 +104,8 @@ There are also some wasm examples for whisper and
 [llama2.c](https://github.com/karpathy/llama2.c). You can either build them with
 `trunk` or try them online:
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
-[llama2](https://huggingface.co/spaces/lmz/candle-llama2).
+[llama2](https://huggingface.co/spaces/lmz/candle-llama2),
+[Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm).
 
 For LLaMA2, run the following command to retrieve the weight files and start a
 test server:
@@ -97,6 +117,15 @@ trunk serve --release --port 8081
 ```
 And then head over to
 [http://localhost:8081/](http://localhost:8081/).
+
+<!--- ANCHOR: useful_libraries --->
+
+## Useful Libraries
+- [`candle-lora`](https://github.com/EricLBuehler/candle-lora) provides a LoRA implementation that conforms to the official `peft` implementation.
+
+If you have an addition to this list, please submit a pull request.
+
+<!--- ANCHOR_END: useful_libraries --->
 
 <!--- ANCHOR: features --->
 
@@ -110,10 +139,21 @@ And then head over to
     - CUDA backend for efficiently running on GPUs, multiple GPU distribution via NCCL.
     - WASM support, run your models in a browser.
 - Included models.
-    - LLMs: LLaMA v1 and v2, Falcon, StarCoder.
+    - Language Models.
+        - LLaMA v1 and v2.
+        - Falcon.
+        - StarCoder.
+        - T5.
+        - Bert.
     - Whisper (multi-lingual support).
-    - Stable Diffusion.
-    - Computer Vision: DINOv2, EfficientNet, yolo-v3, yolo-v8.
+    - Stable Diffusion v1.5, v2.1, XL v1.0.
+    - Wurstchen v2.
+    - Computer Vision Models.
+        - DINOv2.
+        - EfficientNet.
+        - yolo-v3.
+        - yolo-v8.
+        - Segment-Anything Model (SAM).
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.
 - Quantization support using the llama.cpp quantized types.
@@ -241,6 +281,35 @@ authentication token. See issue
 [cutlass](https://github.com/NVIDIA/cutlass) is provided as a git submodule so you may want to run the following command to check it in properly.
 ```bash
 git submodule update --init
+```
+
+#### Compiling with flash-attention fails
+
+```
+/usr/include/c++/11/bits/std_function.h:530:146: error: parameter packs not expanded with ‘...’:
+```
+
+This is a bug in gcc-11 triggered by the Cuda compiler. To fix this, install a different, supported gcc version - for example gcc-10, and specify the path to the compiler in the CANDLE_NVCC_CCBIN environment variable.
+```
+env CANDLE_NVCC_CCBIN=/usr/lib/gcc/x86_64-linux-gnu/10 cargo ...
+```
+
+#### Linking error on windows when running rustdoc or mdbook tests
+
+```
+Couldn't compile the test.
+---- .\candle-book\src\inference\hub.md - Using_the_hub::Using_in_a_real_model_ (line 50) stdout ----
+error: linking with `link.exe` failed: exit code: 1181
+//very long chain of linking
+ = note: LINK : fatal error LNK1181: cannot open input file 'windows.0.48.5.lib'
+```
+
+Make sure you link all native libraries that might be located outside a project target, e.g., to run mdbook tests, you should run:
+
+```
+mdbook test candle-book -L .\target\debug\deps\ `
+-L native=$env:USERPROFILE\.cargo\registry\src\index.crates.io-6f17d22bba15001f\windows_x86_64_msvc-0.42.2\lib `
+-L native=$env:USERPROFILE\.cargo\registry\src\index.crates.io-6f17d22bba15001f\windows_x86_64_msvc-0.48.5\lib
 ```
 
 #### Tracking down errors
