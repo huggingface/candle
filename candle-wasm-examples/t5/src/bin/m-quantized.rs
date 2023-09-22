@@ -1,10 +1,13 @@
-use candle::{DType, Device, Tensor};
-use candle_nn::VarBuilder;
+use candle::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
-pub use candle_transformers::models::t5::{Config, T5EncoderModel, T5ForConditionalGeneration};
+pub use candle_transformers::models::quantized_t5::{
+    Config, T5EncoderModel, T5ForConditionalGeneration, VarBuilder,
+};
+
 use candle_wasm_example_t5::console_log;
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
+
 #[wasm_bindgen]
 pub struct ModelEncoder {
     model: T5EncoderModel,
@@ -28,9 +31,7 @@ impl ModelConditionalGeneration {
     ) -> Result<ModelConditionalGeneration, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let device = &Device::Cpu;
-        let weights = safetensors::tensor::SafeTensors::deserialize(&weights)?;
-        let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, device);
+        let vb = VarBuilder::from_gguf_buffer(&weights)?;
         let mut config: Config = serde_json::from_slice(&config)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
@@ -127,9 +128,7 @@ impl ModelEncoder {
     ) -> Result<ModelEncoder, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let device = &Device::Cpu;
-        let weights = safetensors::tensor::SafeTensors::deserialize(&weights)?;
-        let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, device);
+        let vb = VarBuilder::from_gguf_buffer(&weights)?;
         let mut config: Config = serde_json::from_slice(&config)?;
         config.use_cache = false;
         let tokenizer =
