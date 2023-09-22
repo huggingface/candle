@@ -281,7 +281,7 @@ impl MixFormerSequentialForCausalLM {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
         let mut xs = xs.apply(&self.embedding)?;
         for block in self.blocks.iter_mut() {
             xs = block.forward(&xs)?
