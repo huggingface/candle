@@ -66,9 +66,34 @@ export async function generateText(
   });
 }
 export const MODELS = {
+  t5_small_quantized: {
+    size: "102 MB",
+    base_url: "https://huggingface.co/lmz/candle-quantized-t5/resolve/main/",
+    model: "model.gguf",
+    tokenizer: "tokenizer.json",
+    config: "config.json",
+    tasks: {
+      translation_en_to_de: {
+        prefix: "translate English to German: ",
+        max_length: 300,
+      },
+      translation_en_to_fr: {
+        prefix: "translate English to French: ",
+        max_length: 300,
+      },
+      translation_en_to_ro: {
+        prefix: "translate English to Romanian: ",
+        max_length: 300,
+      },
+      summarization: { prefix: "summarize: ", max_length: 200 },
+    },
+  },
   t5_small: {
     size: "242 MB",
     base_url: "https://huggingface.co/t5-small/resolve/main/",
+    model: "model.safetensors",
+    tokenizer: "tokenizer.json",
+    config: "config.json",
     tasks: {
       translation_en_to_de: {
         prefix: "translate English to German: ",
@@ -89,6 +114,32 @@ export const MODELS = {
     size: "308 MB",
     base_url:
       "https://huggingface.co/google/flan-t5-small/resolve/refs%2Fpr%2F14/",
+    model: "model.safetensors",
+    tokenizer: "tokenizer.json",
+    config: "config.json",
+    tasks: {
+      translation_en_to_de: {
+        prefix: "translate English to German: ",
+        max_length: 300,
+      },
+      translation_en_to_fr: {
+        prefix: "translate English to French: ",
+        max_length: 300,
+      },
+      translation_en_to_ro: {
+        prefix: "translate English to Romanian: ",
+        max_length: 300,
+      },
+      summarization: { prefix: "summarize: ", max_length: 200 },
+    },
+  },
+
+  flan_t5_base_quantized: {
+    size: "360 MB",
+    base_url: "https://huggingface.co/lmz/candle-quantized-t5/resolve/main/",
+    model: "model-flan-t5-base.gguf",
+    tokenizer: "tokenizer.json",
+    config: "config-flan-t5-base.json",
     tasks: {
       translation_en_to_de: {
         prefix: "translate English to German: ",
@@ -107,10 +158,11 @@ export const MODELS = {
   },
 };
 export function getModelInfo(id, taskID) {
+  const model = MODELS[id];
   return {
-    modelURL: MODELS[id].base_url + "model.safetensors",
-    configURL: MODELS[id].base_url + "config.json",
-    tokenizerURL: MODELS[id].base_url + "tokenizer.json",
-    maxLength: MODELS[id].tasks[taskID].max_length,
+    modelURL: model.base_url + model.model,
+    configURL: model.base_url + model.config,
+    tokenizerURL: model.base_url + model.tokenizer,
+    maxLength: model.tasks[taskID].max_length,
   };
 }

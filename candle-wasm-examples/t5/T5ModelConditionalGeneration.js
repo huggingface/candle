@@ -1,5 +1,5 @@
 //load Candle Bert Module wasm module
-import init, { ModelConditionalGeneration } from "./build/m.js";
+let init, ModelConditionalGeneration;
 
 async function fetchArrayBuffer(url) {
   const cacheName = "t5-candle-cache";
@@ -17,6 +17,15 @@ class ConditionalGeneration {
   static instance = {};
 
   static async getInstance(weightsURL, tokenizerURL, configURL, modelID) {
+    if (modelID.includes("quantized")) {
+      ({ default: init, ModelConditionalGeneration } = await import(
+        "./build/m-quantized.js"
+      ));
+    } else {
+      ({ default: init, ModelConditionalGeneration } = await import(
+        "./build/m.js"
+      ));
+    }
     if (!this.instance[modelID]) {
       await init();
 
