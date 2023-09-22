@@ -135,7 +135,7 @@ impl RotaryEmbedding {
         )?;
         let q = Tensor::cat(&[&q_rot, &q_pass], D::Minus1)?;
         let k = Tensor::cat(&[&k_rot, &k_pass], D::Minus1)?;
-        let v = qkv.i((.., .., 2..3))?;
+        let v = qkv.i((.., .., 2))?;
         Ok((q, k, v))
     }
 }
@@ -242,14 +242,23 @@ impl MHA {
         // scores = torch.einsum('bthd,bshd->bhts', q, k * softmax_scale)
         let q = q.transpose(1, 2)?.flatten_to(1)?; // b*h, t, d
         let k = k.transpose(1, 2)?.flatten_to(1)?; // b*h, s, d
+        let v = v.transpose(1, 2)?.flatten_to(1)?; // b*h, s, d
         let attn_weights = (q.matmul(&k.t()?)? * self.softmax_scale)?; // b*h, t, s
 
+        // TODO: Add the causal mask.
         // causal_mask = torch.triu(torch.full((seqlen_q, seqlen_k), -10000.0, device=scores.device), 1)
         // scores = scores + causal_mask.to(dtype=scores.dtype)
         let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
-        let attn_output = attn_weights.matmul(&v)?;
 
-        attn_output.flatten_from(D::Minus2)?.apply(&self.out_proj)
+        // output = torch.einsum('bhts,bshd->bthd', attention_drop, v)
+        // attn_weights: b*h,t,s, v: b*h,s,d
+        let attn_output = attn_weights.matmul(&v)?;
+        // b*h,t,d
+        let attn_output = attn_output
+            .reshape((b_size, (), seq_len, self.head_dim))?
+            .transpose(1, 2)?
+            .flatten_from(D::Minus2)?;
+        attn_output.apply(&self.out_proj)
     }
 }
 
@@ -302,10 +311,11 @@ impl MixFormerSequentialForCausalLM {
     }
 
     pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+        let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embedding)?;
         for block in self.blocks.iter_mut() {
             xs = block.forward(&xs)?
         }
-        xs.apply(&self.head)
+        xs.narrow(1, seq_len - 1, 1)?.apply(&self.head)?.squeeze(1)
     }
 }
