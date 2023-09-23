@@ -287,10 +287,10 @@ fn run(args: Args) -> Result<()> {
         )?;
 
         let prior = {
-            let prior_weights = ModelFile::Prior.get(prior_weights)?;
-            let weights = unsafe { candle::safetensors::MmapedFile::new(prior_weights)? };
-            let weights = weights.deserialize()?;
-            let vb = candle_nn::VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
+            let file = ModelFile::Prior.get(prior_weights)?;
+            let vb = unsafe {
+                candle_nn::VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device)?
+            };
             wuerstchen::prior::WPrior::new(
                 /* c_in */ PRIOR_CIN,
                 /* c */ 1536,
@@ -324,10 +324,10 @@ fn run(args: Args) -> Result<()> {
 
     println!("Building the vqgan.");
     let vqgan = {
-        let vqgan_weights = ModelFile::VqGan.get(vqgan_weights)?;
-        let weights = unsafe { candle::safetensors::MmapedFile::new(vqgan_weights)? };
-        let weights = weights.deserialize()?;
-        let vb = candle_nn::VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
+        let file = ModelFile::VqGan.get(vqgan_weights)?;
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device)?
+        };
         wuerstchen::paella_vq::PaellaVQ::new(vb)?
     };
 
@@ -335,10 +335,10 @@ fn run(args: Args) -> Result<()> {
 
     // https://huggingface.co/warp-ai/wuerstchen/blob/main/decoder/config.json
     let decoder = {
-        let decoder_weights = ModelFile::Decoder.get(decoder_weights)?;
-        let weights = unsafe { candle::safetensors::MmapedFile::new(decoder_weights)? };
-        let weights = weights.deserialize()?;
-        let vb = candle_nn::VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
+        let file = ModelFile::Decoder.get(decoder_weights)?;
+        let vb = unsafe {
+            candle_nn::VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device)?
+        };
         wuerstchen::diffnext::WDiffNeXt::new(
             /* c_in */ DECODER_CIN,
             /* c_out */ DECODER_CIN,
