@@ -70,7 +70,7 @@ impl TextGeneration {
         }
         let dt = start_gen.elapsed();
         println!(
-            "{sample_len} tokens generated ({:.3} token/s)",
+            "\n{sample_len} tokens generated ({:.2} token/s)",
             sample_len as f64 / dt.as_secs_f64(),
         );
         Ok(())
@@ -83,6 +83,10 @@ struct Args {
     /// Run on CPU rather than on GPU.
     #[arg(long)]
     cpu: bool,
+
+    /// Enable tracing (generates a trace-timestamp.json file).
+    #[arg(long)]
+    tracing: bool,
 
     #[arg(long)]
     prompt: String,
@@ -114,7 +118,18 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    use tracing_chrome::ChromeLayerBuilder;
+    use tracing_subscriber::prelude::*;
+
     let args = Args::parse();
+
+    let _guard = if args.tracing {
+        let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
+        tracing_subscriber::registry().with(chrome_layer).init();
+        Some(guard)
+    } else {
+        None
+    };
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
