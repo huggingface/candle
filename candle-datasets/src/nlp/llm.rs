@@ -5,12 +5,12 @@ use rand::seq::SliceRandom;
 use candle::{error, Device, Result, Tensor, WithDType};
 
 /// A general dataset for all LLMs that automates the task of shifting tokens.
-pub struct LLMDataset<T> {
+pub struct LLMDataset<T: WithDType> {
     data: Vec<Vec<T>>,
     device: Device,
 }
 
-impl<T> LLMDataset<T> {
+impl<T: WithDType> LLMDataset<T> {
     /// Creata a new LLM dataset from a set of (any) tokens.
     pub fn new(data: Vec<Vec<T>>, device: Device) -> Self {
         Self { data, device }
@@ -33,7 +33,7 @@ impl<T> LLMDataset<T> {
     /// Apply a given function over an entire dataset of tokens T which will create a new dataset of type N.
     /// The dataset is reconstructed, but will have the same number of elements. Therefore, it may be a costly
     /// operation.
-    pub fn copy<N>(&mut self, f: impl Fn(&T) -> N) -> LLMDataset<N> {
+    pub fn copy<N: WithDType>(&mut self, f: impl Fn(&T) -> N) -> LLMDataset<N> {
         let mut data = Vec::new();
 
         for line in self.data.iter() {
@@ -57,12 +57,12 @@ impl<T> LLMDataset<T> {
 
 /// A LLMDatasetIter is tied to the lifetime of the LLMDataset and has an immutable reference,
 /// so it is not possible to add rows while the LLMDatasetIter is in scope.
-pub struct LLMDatasetIter<'a, T> {
+pub struct LLMDatasetIter<'a, T: WithDType> {
     data: &'a LLMDataset<T>,
     indices: Box<dyn Iterator<Item = usize>>,
 }
 
-impl<'a, T> LLMDatasetIter<'a, T> {
+impl<'a, T: WithDType> LLMDatasetIter<'a, T> {
     /// Create a LLM dataset iterator, which will iterate in the exact order of it's internal data.
     ///
     /// A LLM dataset iter will return a 2-tuple of (input, target). They are automatically shifted.
