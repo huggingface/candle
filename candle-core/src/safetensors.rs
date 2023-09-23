@@ -349,6 +349,36 @@ impl MmapedSafetensors {
     }
 }
 
+pub struct BufferedSafetensors {
+    safetensors: yoke::Yoke<SafeTensors_<'static>, Vec<u8>>,
+}
+
+impl BufferedSafetensors {
+    /// Creates a wrapper around a binary buffer and deserialize the safetensors header.
+    pub fn new(buffer: Vec<u8>) -> Result<Self> {
+        let safetensors = yoke::Yoke::<SafeTensors_<'static>, Vec<u8>>::try_attach_to_cart(
+            buffer,
+            |data: &[u8]| {
+                let st = safetensors::SafeTensors::deserialize(data)?;
+                Ok::<_, Error>(SafeTensors_(st))
+            },
+        )?;
+        Ok(Self { safetensors })
+    }
+
+    pub fn load(&self, name: &str, dev: &Device) -> Result<Tensor> {
+        self.get(name)?.load(dev)
+    }
+
+    pub fn tensors(&self) -> Vec<(String, st::TensorView<'_>)> {
+        self.safetensors.get().0.tensors()
+    }
+
+    pub fn get(&self, name: &str) -> Result<st::TensorView<'_>> {
+        Ok(self.safetensors.get().0.tensor(name)?)
+    }
+}
+
 pub struct MmapedFile {
     path: std::path::PathBuf,
     inner: memmap2::Mmap,
