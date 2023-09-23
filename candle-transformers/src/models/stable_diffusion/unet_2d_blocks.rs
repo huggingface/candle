@@ -4,7 +4,7 @@ use super::attention::{
     AttentionBlock, AttentionBlockConfig, SpatialTransformer, SpatialTransformerConfig,
 };
 use super::resnet::{ResnetBlock2D, ResnetBlock2DConfig};
-use super::utils::{conv2d, Conv2d};
+use crate::models::with_tracing::{conv2d, Conv2d};
 use candle::{Module, Result, Tensor, D};
 use candle_nn as nn;
 

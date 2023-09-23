@@ -4,7 +4,7 @@
 //! timestep and return a denoised version of the input.
 use super::embeddings::{TimestepEmbedding, Timesteps};
 use super::unet_2d_blocks::*;
-use super::utils::{conv2d, Conv2d};
+use crate::models::with_tracing::{conv2d, Conv2d};
 use candle::{Result, Tensor};
 use candle_nn as nn;
 use candle_nn::Module;
