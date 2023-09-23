@@ -381,9 +381,7 @@ pub fn run<T: Task>(args: Args) -> anyhow::Result<()> {
         Which::X => Multiples::x(),
     };
     let model = args.model()?;
-    let weights = unsafe { candle::safetensors::MmapedFile::new(model)? };
-    let weights = weights.deserialize()?;
-    let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
     let model = T::load(vb, multiples)?;
     println!("model loaded");
     for image_name in args.images.iter() {

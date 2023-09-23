@@ -146,9 +146,7 @@ pub fn main() -> Result<()> {
 
     // Create the model and load the weights from the file.
     let model = args.model()?;
-    let weights = unsafe { candle::safetensors::MmapedFile::new(model)? };
-    let weights = weights.deserialize()?;
-    let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &Device::Cpu);
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &Device::Cpu)? };
     let config = args.config()?;
     let darknet = darknet::parse_config(config)?;
     let model = darknet.build_model(vb)?;
