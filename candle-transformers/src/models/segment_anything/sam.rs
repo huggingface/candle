@@ -130,7 +130,7 @@ impl Sam {
     pub fn forward(
         &self,
         img: &Tensor,
-        points: Vec<(f64, f64)>,
+        points: &[(f64, f64)],
         multimask_output: bool,
     ) -> Result<(Tensor, Tensor)> {
         let (_c, original_h, original_w) = img.dims3()?;
@@ -155,7 +155,7 @@ impl Sam {
         img_embeddings: &Tensor,
         original_h: usize,
         original_w: usize,
-        points: Vec<(f64, f64)>,
+        points: &[(f64, f64)],
         multimask_output: bool,
     ) -> Result<(Tensor, Tensor)> {
         let image_pe = self.prompt_encoder.get_dense_pe()?;
