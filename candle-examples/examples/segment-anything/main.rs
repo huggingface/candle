@@ -82,9 +82,7 @@ pub fn main() -> anyhow::Result<()> {
             api.get(filename)?
         }
     };
-    let weights = unsafe { candle::safetensors::MmapedFile::new(model)? };
-    let weights = weights.deserialize()?;
-    let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, &device);
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
     let sam = if args.use_tiny {
         sam::Sam::new_tiny(vb)? // tiny vit_t
     } else {

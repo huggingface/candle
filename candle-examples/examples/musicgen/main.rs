@@ -73,9 +73,7 @@ fn main() -> Result<()> {
             ))
             .get("model.safetensors")?,
     };
-    let model = unsafe { candle::safetensors::MmapedFile::new(model)? };
-    let model = model.deserialize()?;
-    let vb = VarBuilder::from_safetensors(vec![model], DTYPE, &device);
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DTYPE, &device)? };
     let config = GenConfig::small();
     let mut model = MusicgenForConditionalGeneration::load(vb, config)?;
 

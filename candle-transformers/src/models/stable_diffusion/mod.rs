@@ -255,9 +255,8 @@ impl StableDiffusionConfig {
         device: &Device,
         dtype: DType,
     ) -> Result<vae::AutoEncoderKL> {
-        let weights = unsafe { candle::safetensors::MmapedFile::new(vae_weights)? };
-        let weights = weights.deserialize()?;
-        let vs_ae = nn::VarBuilder::from_safetensors(vec![weights], dtype, device);
+        let vs_ae =
+            unsafe { nn::VarBuilder::from_mmaped_safetensors(&[vae_weights], dtype, device)? };
         // https://huggingface.co/runwayml/stable-diffusion-v1-5/blob/main/vae/config.json
         let autoencoder = vae::AutoEncoderKL::new(vs_ae, 3, 3, self.autoencoder.clone())?;
         Ok(autoencoder)
@@ -271,9 +270,8 @@ impl StableDiffusionConfig {
         use_flash_attn: bool,
         dtype: DType,
     ) -> Result<unet_2d::UNet2DConditionModel> {
-        let weights = unsafe { candle::safetensors::MmapedFile::new(unet_weights)? };
-        let weights = weights.deserialize()?;
-        let vs_unet = nn::VarBuilder::from_safetensors(vec![weights], dtype, device);
+        let vs_unet =
+            unsafe { nn::VarBuilder::from_mmaped_safetensors(&[unet_weights], dtype, device)? };
         let unet = unet_2d::UNet2DConditionModel::new(
             vs_unet,
             in_channels,
@@ -295,9 +293,7 @@ pub fn build_clip_transformer<P: AsRef<std::path::Path>>(
     device: &Device,
     dtype: DType,
 ) -> Result<clip::ClipTextTransformer> {
-    let weights = unsafe { candle::safetensors::MmapedFile::new(clip_weights)? };
-    let weights = weights.deserialize()?;
-    let vs = nn::VarBuilder::from_safetensors(vec![weights], dtype, device);
+    let vs = unsafe { nn::VarBuilder::from_mmaped_safetensors(&[clip_weights], dtype, device)? };
     let text_model = clip::ClipTextTransformer::new(vs, clip)?;
     Ok(text_model)
 }

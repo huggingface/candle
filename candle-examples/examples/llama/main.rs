@@ -172,17 +172,9 @@ fn main() -> Result<()> {
             }
 
             println!("building the model");
-            let handles = filenames
-                .iter()
-                .map(|f| Ok(unsafe { candle::safetensors::MmapedFile::new(f.as_path())? }))
-                .collect::<Result<Vec<_>>>()?;
-            let tensors: Vec<_> = handles
-                .iter()
-                .map(|h| Ok(h.deserialize()?))
-                .collect::<Result<Vec<_>>>()?;
             let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;
 
-            let vb = VarBuilder::from_safetensors(tensors, dtype, &device);
+            let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
             (Llama::load(vb, &cache, &config)?, tokenizer_filename, cache)
         }
     };
