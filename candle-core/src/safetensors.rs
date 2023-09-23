@@ -285,6 +285,41 @@ impl MmapedSafetensors {
         })
     }
 
+    /// Creates a wrapper around multiple memory mapped file and deserialize the safetensors headers.
+    ///
+    /// If a tensor name appears in multiple files, the last entry is returned.
+    ///
+    /// # Safety
+    ///
+    /// The unsafe is inherited from [`memmap2::MmapOptions`].
+    pub unsafe fn multi<P: AsRef<Path>>(paths: &[P]) -> Result<Self> {
+        let mut routing = HashMap::new();
+        let mut safetensors = vec![];
+        for (index, p) in paths.iter().enumerate() {
+            let p = p.as_ref();
+            let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
+            let file = memmap2::MmapOptions::new()
+                .map(&file)
+                .map_err(|e| Error::from(e).with_path(p))?;
+            let data = yoke::Yoke::<SafeTensors_<'static>, memmap2::Mmap>::try_attach_to_cart(
+                file,
+                |data: &[u8]| {
+                    let st = safetensors::SafeTensors::deserialize(data)
+                        .map_err(|e| Error::from(e).with_path(p))?;
+                    Ok::<_, Error>(SafeTensors_(st))
+                },
+            )?;
+            for k in data.get().0.names() {
+                routing.insert(k.to_string(), index);
+            }
+            safetensors.push(data)
+        }
+        Ok(Self {
+            safetensors,
+            routing: Some(routing),
+        })
+    }
+
     pub fn load(&self, name: &str, dev: &Device) -> Result<Tensor> {
         let index = match &self.routing {
             None => 0,
