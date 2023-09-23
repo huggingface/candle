@@ -26,6 +26,7 @@ rand_distr = { workspace = true }
 rayon = { workspace = true }
 safetensors = { workspace = true }
 thiserror = { workspace = true }
+yoke = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]

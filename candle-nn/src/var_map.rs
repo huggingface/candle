@@ -1,4 +1,4 @@
-use candle::{safetensors::Load, DType, Device, Result, Shape, Tensor, Var};
+use candle::{DType, Device, Result, Shape, Tensor, Var};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -40,18 +40,12 @@ impl VarMap {
     /// Note that values for variables that are currently not in the map are not kept.
     pub fn load<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<()> {
         let path = path.as_ref();
-        let data = unsafe { candle::safetensors::MmapedFile::new(path)? };
-        let data = data.deserialize()?;
+        let data = unsafe { candle::safetensors::MmapedSafetensors::new(path)? };
         let mut tensor_data = self.data.lock().unwrap();
         for (name, var) in tensor_data.iter_mut() {
-            match data.tensor(name) {
-                Ok(data) => {
-                    let data: Tensor = data.load(var.device())?;
-                    if let Err(err) = var.set(&data) {
-                        candle::bail!("error setting {name} using data from {path:?}: {err}",)
-                    }
-                }
-                Err(_) => candle::bail!("cannot find tensor for {name}"),
+            let data = data.load(name, var.device())?;
+            if let Err(err) = var.set(&data) {
+                candle::bail!("error setting {name} using data from {path:?}: {err}",)
             }
         }
         Ok(())
