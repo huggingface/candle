@@ -325,6 +325,32 @@ impl SimpleBackend for candle::npy::NpzTensors {
     }
 }
 
+impl SimpleBackend for candle::safetensors::MmapedSafetensors {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        _: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        let tensor = self.load(name, dev)?.to_dtype(dtype)?;
+        if tensor.shape() != &s {
+            Err(candle::Error::UnexpectedShape {
+                msg: format!("shape mismatch for {name}"),
+                expected: s,
+                got: tensor.shape().clone(),
+            }
+            .bt())?
+        }
+        Ok(tensor)
+    }
+
+    fn contains_tensor(&self, name: &str) -> bool {
+        self.get(name).is_ok()
+    }
+}
+
 impl<'a> VarBuilder<'a> {
     fn new(backend: Box<dyn SimpleBackend + 'a>, dtype: DType, device: Device) -> Self {
         let data = TensorData {
