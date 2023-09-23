@@ -1,4 +1,4 @@
-use super::with_tracing::{Embedding as E, Linear};
+use crate::models::with_tracing::{linear, Embedding as E, Linear};
 /// MixFormer model.
 /// https://huggingface.co/microsoft/phi-1_5
 /// https://arxiv.org/abs/2309.05463
@@ -152,8 +152,8 @@ struct MLP {
 impl MLP {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let n_inner = cfg.n_inner.unwrap_or(4 * cfg.n_embd);
-        let fc1 = Linear::new(cfg.n_embd, n_inner, vb.pp("fc1"))?;
-        let fc2 = Linear::new(n_inner, cfg.n_embd, vb.pp("fc2"))?;
+        let fc1 = linear(cfg.n_embd, n_inner, vb.pp("fc1"))?;
+        let fc2 = linear(n_inner, cfg.n_embd, vb.pp("fc2"))?;
         Ok(Self {
             fc1,
             fc2,
@@ -177,7 +177,7 @@ struct CausalLMHead {
 impl CausalLMHead {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let ln = candle_nn::layer_norm(cfg.n_embd, cfg.layer_norm_epsilon, vb.pp("ln"))?;
-        let linear = Linear::new(cfg.n_embd, cfg.vocab_size, vb.pp("linear"))?;
+        let linear = linear(cfg.n_embd, cfg.vocab_size, vb.pp("linear"))?;
         Ok(Self { ln, linear })
     }
 }
@@ -206,8 +206,8 @@ impl MHA {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let head_dim = cfg.n_embd / cfg.n_head;
         let op_size = cfg.n_embd;
-        let wqkv = Linear::new(cfg.n_embd, 3 * op_size, vb.pp("Wqkv"))?;
-        let out_proj = Linear::new(op_size, cfg.n_embd, vb.pp("out_proj"))?;
+        let wqkv = linear(cfg.n_embd, 3 * op_size, vb.pp("Wqkv"))?;
+        let out_proj = linear(op_size, cfg.n_embd, vb.pp("out_proj"))?;
         let rotary_emb = RotaryEmbedding::new(cfg.rotary_dim, MAX_SEQ_LEN, vb.device())?;
         let softmax_scale = 1f64 / (head_dim as f64).sqrt();
         Ok(Self {

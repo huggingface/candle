@@ -70,7 +70,7 @@ impl TextGeneration {
         }
         let dt = start_gen.elapsed();
         println!(
-            "{sample_len} tokens generated ({:.3} token/s)",
+            "\n{sample_len} tokens generated ({:.2} token/s)",
             sample_len as f64 / dt.as_secs_f64(),
         );
         Ok(())
