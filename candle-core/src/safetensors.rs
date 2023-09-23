@@ -254,13 +254,12 @@ pub fn save<K: AsRef<str> + Ord + std::fmt::Display, P: AsRef<Path>>(
 #[derive(yoke::Yokeable)]
 struct SafeTensors_<'a>(SafeTensors<'a>);
 
-pub struct MmapedFile {
+pub struct MmapedSafetensors {
     inner: yoke::Yoke<SafeTensors_<'static>, memmap2::Mmap>,
 }
 
-impl MmapedFile {
-    /// Creates a wrapper around a memory mapped file from which you can retrieve
-    /// tensors using [`MmapedFile::deserialize`]
+impl MmapedSafetensors {
+    /// Creates a wrapper around a memory mapped file and deserialize the safetensors header.
     ///
     /// # Safety
     ///
@@ -284,6 +283,37 @@ impl MmapedFile {
 
     pub fn get(&self) -> &SafeTensors {
         &self.inner.get().0
+    }
+}
+
+pub struct MmapedFile {
+    path: std::path::PathBuf,
+    inner: memmap2::Mmap,
+}
+
+impl MmapedFile {
+    /// Creates a wrapper around a memory mapped file from which you can retrieve
+    /// tensors using [`MmapedFile::deserialize`]
+    ///
+    /// # Safety
+    ///
+    /// The unsafe is inherited from [`memmap2::MmapOptions`].
+    pub unsafe fn new<P: AsRef<Path>>(p: P) -> Result<Self> {
+        let p = p.as_ref();
+        let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
+        let inner = memmap2::MmapOptions::new()
+            .map(&file)
+            .map_err(|e| Error::from(e).with_path(p))?;
+        Ok(Self {
+            inner,
+            path: p.to_path_buf(),
+        })
+    }
+
+    pub fn deserialize(&self) -> Result<SafeTensors<'_>> {
+        let st = safetensors::SafeTensors::deserialize(&self.inner)
+            .map_err(|e| Error::from(e).with_path(&self.path))?;
+        Ok(st)
     }
 }
 
