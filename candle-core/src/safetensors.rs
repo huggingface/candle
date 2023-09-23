@@ -255,7 +255,8 @@ pub fn save<K: AsRef<str> + Ord + std::fmt::Display, P: AsRef<Path>>(
 struct SafeTensors_<'a>(SafeTensors<'a>);
 
 pub struct MmapedSafetensors {
-    inner: yoke::Yoke<SafeTensors_<'static>, memmap2::Mmap>,
+    safetensors: Vec<yoke::Yoke<SafeTensors_<'static>, memmap2::Mmap>>,
+    routing: Option<HashMap<String, usize>>,
 }
 
 impl MmapedSafetensors {
@@ -267,22 +268,45 @@ impl MmapedSafetensors {
     pub unsafe fn new<P: AsRef<Path>>(p: P) -> Result<Self> {
         let p = p.as_ref();
         let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
-        let inner = memmap2::MmapOptions::new()
+        let file = memmap2::MmapOptions::new()
             .map(&file)
             .map_err(|e| Error::from(e).with_path(p))?;
-        let inner = yoke::Yoke::<SafeTensors_<'static>, memmap2::Mmap>::try_attach_to_cart(
-            inner,
+        let safetensors = yoke::Yoke::<SafeTensors_<'static>, memmap2::Mmap>::try_attach_to_cart(
+            file,
             |data: &[u8]| {
                 let st = safetensors::SafeTensors::deserialize(data)
                     .map_err(|e| Error::from(e).with_path(p))?;
                 Ok::<_, Error>(SafeTensors_(st))
             },
         )?;
-        Ok(Self { inner })
+        Ok(Self {
+            safetensors: vec![safetensors],
+            routing: None,
+        })
     }
 
-    pub fn get(&self) -> &SafeTensors {
-        &self.inner.get().0
+    pub fn load(&self, name: &str, dev: &Device) -> Result<Tensor> {
+        let index = match &self.routing {
+            None => 0,
+            Some(routing) => {
+                let index = routing.get(name).ok_or_else(|| {
+                    Error::CannotFindTensor {
+                        path: name.to_string(),
+                    }
+                    .bt()
+                })?;
+                *index
+            }
+        };
+        self.safetensors[index].get().0.tensor(name)?.load(dev)
+    }
+
+    pub fn tensors(&self) -> Vec<(String, st::TensorView<'_>)> {
+        let mut tensors = vec![];
+        for safetensors in self.safetensors.iter() {
+            tensors.push(safetensors.get().0.tensors())
+        }
+        tensors.into_iter().flatten().collect()
     }
 }
 
