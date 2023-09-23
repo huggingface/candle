@@ -251,9 +251,11 @@ pub fn save<K: AsRef<str> + Ord + std::fmt::Display, P: AsRef<Path>>(
     Ok(st::serialize_to_file(tensors, &None, filename.as_ref())?)
 }
 
+#[derive(yoke::Yokeable)]
+struct SafeTensors_<'a>(SafeTensors<'a>);
+
 pub struct MmapedFile {
-    path: std::path::PathBuf,
-    inner: memmap2::Mmap,
+    inner: yoke::Yoke<SafeTensors_<'static>, memmap2::Mmap>,
 }
 
 impl MmapedFile {
@@ -269,16 +271,19 @@ impl MmapedFile {
         let inner = memmap2::MmapOptions::new()
             .map(&file)
             .map_err(|e| Error::from(e).with_path(p))?;
-        Ok(Self {
+        let inner = yoke::Yoke::<SafeTensors_<'static>, memmap2::Mmap>::try_attach_to_cart(
             inner,
-            path: p.to_path_buf(),
-        })
+            |data: &[u8]| {
+                let st = safetensors::SafeTensors::deserialize(data)
+                    .map_err(|e| Error::from(e).with_path(p))?;
+                Ok::<_, Error>(SafeTensors_(st))
+            },
+        )?;
+        Ok(Self { inner })
     }
 
-    pub fn deserialize(&self) -> Result<SafeTensors<'_>> {
-        let st = safetensors::SafeTensors::deserialize(&self.inner)
-            .map_err(|e| Error::from(e).with_path(&self.path))?;
-        Ok(st)
+    pub fn get(&self) -> &SafeTensors {
+        &self.inner.get().0
     }
 }
 

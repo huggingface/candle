@@ -41,7 +41,7 @@ impl VarMap {
     pub fn load<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<()> {
         let path = path.as_ref();
         let data = unsafe { candle::safetensors::MmapedFile::new(path)? };
-        let data = data.deserialize()?;
+        let data = data.get();
         let mut tensor_data = self.data.lock().unwrap();
         for (name, var) in tensor_data.iter_mut() {
             match data.tensor(name) {
