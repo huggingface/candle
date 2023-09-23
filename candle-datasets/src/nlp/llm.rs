@@ -70,15 +70,16 @@ impl<'a, T: WithDType> LLMDatasetIter<'a, T> {
     /// The input and target Tensors are automatically created from each token sequence by
     /// truncating the rightmost token to create the input, and by truncating
     /// the tokens to remove the leftmost token to create the target.
-    pub fn new(dataset: &'a LLMDataset<T>) -> Self {
+    pub fn new(dataset: &'a LLMDataset<T>, batch_size: usize) -> Self {
+        let indices = (0..dataset.data.len()).collect::<Vec<_>>();
+
+        let indices = indices[..]
+            .chunks(batch_size)
+            .map(|x| x.to_vec())
+            .collect::<Vec<_>>();
         Self {
             data: dataset,
-            indices: Box::new(
-                (0..dataset.data.len())
-                    .map(|x| vec![x])
-                    .collect::<Vec<_>>()
-                    .into_iter(),
-            ),
+            indices: Box::new(indices.into_iter()),
         }
     }
 
@@ -113,6 +114,7 @@ impl<'a, T: WithDType> Iterator for LLMDatasetIter<'a, T> {
 
         for line in next {
             let toks = self.data.data.get(line)?;
+
             let len = toks.len() - 1;
             let input = Tensor::from_slice(&toks[..len], len, &self.data.device).ok()?;
             let target = Tensor::from_slice(&toks[1..], len, &self.data.device).ok()?;
