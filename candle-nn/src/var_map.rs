@@ -73,6 +73,9 @@ impl VarMap {
     }
 
     /// Set some named variables to some values.
+    ///
+    /// If an error is returned, some of the variables might have already been set to their new
+    /// values.
     pub fn set<I: Iterator<Item = (K, V)>, K: AsRef<String>, V: AsRef<Tensor>>(
         &mut self,
         iter: I,
