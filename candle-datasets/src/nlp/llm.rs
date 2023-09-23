@@ -114,7 +114,7 @@ impl<'a, T: WithDType> Iterator for LLMDatasetIter<'a, T> {
         for line in next {
             let toks = self.data.data.get(line)?;
             let len = toks.len() - 1;
-            let input = Tensor::from_slice(&toks[..len - 1], len, &self.data.device).ok()?;
+            let input = Tensor::from_slice(&toks[..len], len, &self.data.device).ok()?;
             let target = Tensor::from_slice(&toks[1..], len, &self.data.device).ok()?;
             inputs.push(input.unsqueeze(0).ok()?);
             targets.push(target.unsqueeze(0).ok()?);
