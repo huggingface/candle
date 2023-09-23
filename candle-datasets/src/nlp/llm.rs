@@ -33,7 +33,7 @@ impl<T: WithDType> LLMDataset<T> {
     /// Apply a given function over an entire dataset of tokens T which will create a new dataset of type N.
     /// The dataset is reconstructed, but will have the same number of elements. Therefore, it may be a costly
     /// operation.
-    pub fn copy<N: WithDType>(&mut self, f: impl Fn(&T) -> N) -> LLMDataset<N> {
+    pub fn copy_mapped<N: WithDType>(&mut self, f: impl Fn(&T) -> N) -> LLMDataset<N> {
         let mut data = Vec::new();
 
         for line in self.data.iter() {
