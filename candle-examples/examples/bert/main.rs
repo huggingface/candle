@@ -86,9 +86,8 @@ impl Args {
         let config: Config = serde_json::from_str(&config)?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
-        let weights = unsafe { candle::safetensors::MmapedFile::new(weights_filename)? };
-        let weights = weights.deserialize()?;
-        let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &device);
+        let vb =
+            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? };
         let model = BertModel::load(vb, &config)?;
         Ok((model, tokenizer))
     }

@@ -481,9 +481,8 @@ fn main() -> Result<()> {
     let mel = Tensor::from_vec(mel, (1, m::N_MELS, mel_len / m::N_MELS), &device)?;
     println!("loaded mel: {:?}", mel.dims());
 
-    let weights = unsafe { candle::safetensors::MmapedFile::new(weights_filename)? };
-    let weights = weights.deserialize()?;
-    let vb = VarBuilder::from_safetensors(vec![weights], m::DTYPE, &device);
+    let vb =
+        unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], m::DTYPE, &device)? };
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
     let mut model = Whisper::load(&vb, config)?;
 
