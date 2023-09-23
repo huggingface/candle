@@ -84,6 +84,10 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
+    /// Enable tracing (generates a trace-timestamp.json file).
+    #[arg(long)]
+    tracing: bool,
+
     #[arg(long)]
     prompt: String,
 
@@ -114,7 +118,18 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    use tracing_chrome::ChromeLayerBuilder;
+    use tracing_subscriber::prelude::*;
+
     let args = Args::parse();
+
+    let _guard = if args.tracing {
+        let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
+        tracing_subscriber::registry().with(chrome_layer).init();
+        Some(guard)
+    } else {
+        None
+    };
 
     let start = std::time::Instant::now();
     let api = Api::new()?;

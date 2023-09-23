@@ -1,56 +1,11 @@
 // T5 Text Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
+use super::with_tracing::{Embedding, Linear};
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
-
-#[derive(Debug)]
-struct Embedding {
-    inner: candle_nn::Embedding,
-    span: tracing::Span,
-}
-
-impl Embedding {
-    fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::embedding(d1, d2, vb)?;
-        let span = tracing::span!(tracing::Level::TRACE, "embedding");
-        Ok(Self { inner, span })
-    }
-
-    fn embeddings(&self) -> &Tensor {
-        self.inner.embeddings()
-    }
-}
-
-impl Module for Embedding {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(xs)
-    }
-}
-
-#[derive(Debug)]
-struct Linear {
-    inner: candle_nn::Linear,
-    span: tracing::Span,
-}
-
-impl Linear {
-    fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::linear_no_bias(d1, d2, vb)?;
-        let span = tracing::span!(tracing::Level::TRACE, "linear");
-        Ok(Self { inner, span })
-    }
-}
-
-impl Module for Linear {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(xs)
-    }
-}
 
 fn default_relative_attention_max_distance() -> usize {
     128

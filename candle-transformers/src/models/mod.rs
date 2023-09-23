@@ -11,4 +11,5 @@ pub mod segment_anything;
 pub mod stable_diffusion;
 pub mod t5;
 pub mod whisper;
+pub mod with_tracing;
 pub mod wuerstchen;
