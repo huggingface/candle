@@ -59,7 +59,7 @@ impl<T: WithDType> LLMDataset<T> {
 /// so it is not possible to add rows while the LLMDatasetIter is in scope.
 pub struct LLMDatasetIter<'a, T: WithDType> {
     data: &'a LLMDataset<T>,
-    indices: Box<dyn Iterator<Item = usize>>,
+    indices: Box<dyn Iterator<Item = Vec<usize>>>,
 }
 
 impl<'a, T: WithDType> LLMDatasetIter<'a, T> {
@@ -73,7 +73,12 @@ impl<'a, T: WithDType> LLMDatasetIter<'a, T> {
     pub fn new(dataset: &'a LLMDataset<T>) -> Self {
         Self {
             data: dataset,
-            indices: Box::new((0..dataset.data.len()).collect::<Vec<_>>().into_iter()),
+            indices: Box::new(
+                (0..dataset.data.len())
+                    .map(|x| vec![x])
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+            ),
         }
     }
 
@@ -84,9 +89,13 @@ impl<'a, T: WithDType> LLMDatasetIter<'a, T> {
     /// The input and target Tensors are automatically created from each token sequence by
     /// truncating the rightmost token to create the input, and by truncating
     /// the tokens to remove the leftmost token to create the target.
-    pub fn new_shuffled(dataset: &'a LLMDataset<T>) -> Self {
+    pub fn new_shuffled(dataset: &'a LLMDataset<T>, batch_size: usize) -> Self {
         let mut indices = (0..dataset.data.len()).collect::<Vec<_>>();
         indices.shuffle(&mut rand::thread_rng());
+        let indices = indices[..]
+            .chunks(batch_size)
+            .map(|x| x.to_vec())
+            .collect::<Vec<_>>();
         Self {
             data: dataset,
             indices: Box::new(indices.into_iter()),
@@ -99,10 +108,21 @@ impl<'a, T: WithDType> Iterator for LLMDatasetIter<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.indices.next()?;
-        let toks = self.data.data.get(next)?;
-        let len = toks.len();
-        let inputs = Tensor::from_slice(&toks[..len - 1], len, &self.data.device);
-        let targets = Tensor::from_slice(&toks[1..], len, &self.data.device);
-        Some(error::zip(inputs, targets))
+        let mut inputs = Vec::new();
+        let mut targets = Vec::new();
+
+        for line in next {
+            let toks = self.data.data.get(line)?;
+            let len = toks.len();
+            let input = Tensor::from_slice(&toks[..len - 1], len, &self.data.device).ok()?;
+            let target = Tensor::from_slice(&toks[1..], len, &self.data.device).ok()?;
+            inputs.push(input.unsqueeze(0).ok()?);
+            targets.push(target.unsqueeze(0).ok()?);
+        }
+
+        Some(error::zip(
+            Tensor::cat(&inputs[..], 0),
+            Tensor::cat(&targets[..], 0),
+        ))
     }
 }
