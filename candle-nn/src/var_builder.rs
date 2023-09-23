@@ -325,6 +325,32 @@ impl SimpleBackend for candle::npy::NpzTensors {
     }
 }
 
+impl SimpleBackend for candle::safetensors::MmapedSafetensors {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        _: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        let tensor = self.load(name, dev)?.to_dtype(dtype)?;
+        if tensor.shape() != &s {
+            Err(candle::Error::UnexpectedShape {
+                msg: format!("shape mismatch for {name}"),
+                expected: s,
+                got: tensor.shape().clone(),
+            }
+            .bt())?
+        }
+        Ok(tensor)
+    }
+
+    fn contains_tensor(&self, name: &str) -> bool {
+        self.get(name).is_ok()
+    }
+}
+
 impl<'a> VarBuilder<'a> {
     fn new(backend: Box<dyn SimpleBackend + 'a>, dtype: DType, device: Device) -> Self {
         let data = TensorData {
@@ -361,7 +387,7 @@ impl<'a> VarBuilder<'a> {
     }
 
     /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
-    /// files.
+    /// data.
     pub fn from_safetensors(safetensors: Vec<SafeTensors<'a>>, dtype: DType, dev: &Device) -> Self {
         let mut routing = HashMap::new();
         for (index, sf) in safetensors.iter().enumerate() {
@@ -374,6 +400,21 @@ impl<'a> VarBuilder<'a> {
             safetensors,
         };
         Self::new(Box::new(tensors), dtype, dev.clone())
+    }
+
+    /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
+    /// files.
+    ///
+    /// # Safety
+    ///
+    /// The unsafe is inherited from [`memmap2::MmapOptions`].
+    pub unsafe fn from_mmaped_safetensors<P: AsRef<std::path::Path>>(
+        paths: &[P],
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Self> {
+        let tensors = candle::safetensors::MmapedSafetensors::multi(paths)?;
+        Ok(Self::new(Box::new(tensors), dtype, dev.clone()))
     }
 
     /// Initializes a `VarBuilder` that retrieves tensors stored in a numpy npz file.
