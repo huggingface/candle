@@ -21,11 +21,10 @@ pub struct Model {
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn new(weights: &[u8], use_tiny: bool) -> Result<Model, JsError> {
+    pub fn new(weights: Vec<u8>, use_tiny: bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         let dev = &Device::Cpu;
-        let weights = safetensors::tensor::SafeTensors::deserialize(weights)?;
-        let vb = VarBuilder::from_safetensors(vec![weights], DType::F32, dev);
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, dev)?;
         let sam = if use_tiny {
             sam::Sam::new_tiny(vb)? // tiny vit_t
         } else {
