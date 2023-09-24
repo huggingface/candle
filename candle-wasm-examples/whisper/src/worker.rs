@@ -253,8 +253,7 @@ impl Decoder {
         let mel_filters = mel_filters.tensor("mel_80")?.load(&device)?;
         console_log!("loaded mel filters {:?}", mel_filters.shape());
         let mel_filters = mel_filters.flatten_all()?.to_vec1::<f32>()?;
-        let weights = safetensors::tensor::SafeTensors::deserialize(&md.weights)?;
-        let vb = VarBuilder::from_safetensors(vec![weights], DTYPE, &device);
+        let vb = VarBuilder::from_buffered_safetensors(md.weights, DTYPE, &device)?;
         let config = Config::tiny_en();
         let whisper = Whisper::load(&vb, config)?;
         console_log!("done loading model");

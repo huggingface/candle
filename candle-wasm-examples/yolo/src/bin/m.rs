@@ -13,7 +13,7 @@ pub struct Model {
 impl Model {
     #[wasm_bindgen(constructor)]
     pub fn new(data: Vec<u8>, model_size: &str) -> Result<Model, JsError> {
-        let inner = M::load_(&data, model_size)?;
+        let inner = M::load_(data, model_size)?;
         Ok(Self { inner })
     }
 
@@ -46,7 +46,7 @@ pub struct ModelPose {
 impl ModelPose {
     #[wasm_bindgen(constructor)]
     pub fn new(data: Vec<u8>, model_size: &str) -> Result<ModelPose, JsError> {
-        let inner = P::load_(&data, model_size)?;
+        let inner = P::load_(data, model_size)?;
         Ok(Self { inner })
     }
 
