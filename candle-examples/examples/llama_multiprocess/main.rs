@@ -205,16 +205,9 @@ fn main() -> Result<()> {
     let cache = model::Cache::new(dtype, &config, &device)?;
 
     println!("building the model");
-    let handles = filenames
-        .iter()
-        .map(|f| Ok(unsafe { candle::safetensors::MmapedFile::new(f.as_path())? }))
-        .collect::<Result<Vec<_>>>()?;
-    let tensors: Vec<_> = handles
-        .iter()
-        .map(|h| Ok(h.deserialize()?))
-        .collect::<Result<Vec<_>>>()?;
-
-    let vb = candle_nn::var_builder::ShardedSafeTensors::var_builder(tensors, dtype, &device);
+    let vb = unsafe {
+        candle_nn::var_builder::ShardedSafeTensors::var_builder(&filenames, dtype, &device)?
+    };
     let llama = Llama::load(vb, &cache, &config, comm)?;
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
