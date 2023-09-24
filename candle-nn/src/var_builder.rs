@@ -1,6 +1,6 @@
 //! A `VarBuilder` is used to retrieve variables used by a model. These variables can either come
-//! from a pre-trained checkpoint, e.g. using `VarBuilder::from_safetensors`, or initialized for
-//! training, e.g. using `VarBuilder::from_varmap`.
+//! from a pre-trained checkpoint, e.g. using `VarBuilder::from_mmaped_safetensors`, or initialized
+//! for training, e.g. using `VarBuilder::from_varmap`.
 use crate::VarMap;
 use candle::{safetensors::Load, DType, Device, Error, Result, Shape, Tensor};
 use safetensors::{slice::IndexOp, tensor::SafeTensors};
@@ -414,6 +414,10 @@ impl<'a> VarBuilder<'a> {
 
     /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
     /// data.
+    #[deprecated(
+        since = "0.2.3",
+        note = "use from_mmaped_safetensors or from_buffered_safetensors instead"
+    )]
     pub fn from_safetensors(safetensors: Vec<SafeTensors<'a>>, dtype: DType, dev: &Device) -> Self {
         let mut routing = HashMap::new();
         for (index, sf) in safetensors.iter().enumerate() {
