@@ -1,7 +1,7 @@
 // T5 Text Model, quantized version
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
-use crate::quantized_var_builder::VarBuilder;
+pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Activation;
 use serde::Deserialize;
