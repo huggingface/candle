@@ -1,70 +1,20 @@
-use crate::models::with_tracing::{linear, Embedding as E, Linear};
-/// MixFormer model.
-/// https://huggingface.co/microsoft/phi-1_5
-/// https://arxiv.org/abs/2309.05463
+use crate::models::with_tracing::QMatMul;
+pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, VarBuilder};
+use candle_nn::Activation;
+
+pub use crate::models::mixformer::Config;
 
 const MAX_SEQ_LEN: usize = 4096;
 
-// https://huggingface.co/microsoft/phi-1_5/blob/main/configuration_mixformer_sequential.py
-#[derive(Debug, Clone, PartialEq)]
-pub struct Config {
-    pub(crate) vocab_size: usize,
-    pub(crate) n_positions: usize,
-    pub(crate) n_embd: usize,
-    pub(crate) n_layer: usize,
-    pub(crate) n_inner: Option<usize>,
-    pub(crate) n_head: usize,
-    pub(crate) rotary_dim: usize,
-    pub(crate) activation_function: Activation,
-    pub(crate) layer_norm_epsilon: f64,
-    pub(crate) tie_word_embeddings: bool,
-    pub(crate) pad_vocab_size_multiple: usize,
-}
-
-impl Config {
-    pub fn v1() -> Self {
-        Self {
-            vocab_size: 50304,
-            n_positions: 2048,
-            n_embd: 1024,
-            n_layer: 20,
-            n_inner: None,
-            n_head: 16,
-            rotary_dim: usize::min(32, 1024 / 16),
-            activation_function: Activation::Gelu,
-            layer_norm_epsilon: 1e-5,
-            tie_word_embeddings: false,
-            pad_vocab_size_multiple: 64,
-        }
-    }
-
-    pub fn v1_5() -> Self {
-        Self {
-            vocab_size: 51200,
-            n_positions: 2048,
-            n_embd: 2048,
-            n_layer: 24,
-            n_inner: None,
-            n_head: 32,
-            rotary_dim: usize::min(32, 2048 / 32),
-            activation_function: Activation::Gelu,
-            layer_norm_epsilon: 1e-5,
-            tie_word_embeddings: false,
-            pad_vocab_size_multiple: 64,
-        }
-    }
-}
-
 #[derive(Debug)]
 struct Embedding {
-    wte: E,
+    wte: super::quantized_t5::Embedding,
 }
 
 impl Embedding {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let wte = E::new(cfg.vocab_size, cfg.n_embd, vb.pp("wte"))?;
+        let wte = super::quantized_t5::Embedding::new(cfg.vocab_size, cfg.n_embd, vb.pp("wte"))?;
         Ok(Self { wte })
     }
 }
@@ -73,6 +23,37 @@ impl Module for Embedding {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self.wte.forward(xs)
     }
+}
+
+#[derive(Debug)]
+struct Linear {
+    weight: QMatMul,
+    bias: Option<Tensor>,
+}
+
+impl Module for Linear {
+    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
+        let x = x.apply(&self.weight)?;
+        match &self.bias {
+            None => Ok(x),
+            Some(bias) => x.broadcast_add(bias),
+        }
+    }
+}
+
+fn linear(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
+    let bias = vb.get(out_dim, "bias")?.dequantize(vb.device())?;
+    let weight = QMatMul::new(in_dim, out_dim, vb)?;
+    Ok(Linear {
+        weight,
+        bias: Some(bias),
+    })
+}
+
+fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<candle_nn::LayerNorm> {
+    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
+    let bias = vb.get(size, "bias")?.dequantize(vb.device())?;
+    Ok(candle_nn::LayerNorm::new(weight, bias, eps))
 }
 
 fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
@@ -190,7 +171,7 @@ struct CausalLMHead {
 
 impl CausalLMHead {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let ln = candle_nn::layer_norm(cfg.n_embd, cfg.layer_norm_epsilon, vb.pp("ln"))?;
+        let ln = layer_norm(cfg.n_embd, cfg.layer_norm_epsilon, vb.pp("ln"))?;
         let linear = linear(cfg.n_embd, cfg.vocab_size, vb.pp("linear"))?;
         Ok(Self { ln, linear })
     }
@@ -299,7 +280,7 @@ struct ParallelBlock {
 
 impl ParallelBlock {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let ln = candle_nn::layer_norm(cfg.n_embd, cfg.layer_norm_epsilon, vb.pp("ln"))?;
+        let ln = layer_norm(cfg.n_embd, cfg.layer_norm_epsilon, vb.pp("ln"))?;
         let mixer = MHA::new(cfg, vb.pp("mixer"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         Ok(Self {

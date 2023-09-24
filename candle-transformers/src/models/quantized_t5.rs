@@ -1,6 +1,7 @@
 // T5 Text Model, quantized version
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
+use crate::models::with_tracing::QMatMul;
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Activation;
@@ -8,20 +9,20 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 #[derive(Debug)]
-struct Embedding {
+pub struct Embedding {
     inner: candle_nn::Embedding,
     span: tracing::Span,
 }
 
 impl Embedding {
-    fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
+    pub fn new(d1: usize, d2: usize, vb: VarBuilder) -> Result<Self> {
         let embeddings = vb.get((d1, d2), "weight")?.dequantize(vb.device())?;
         let inner = candle_nn::Embedding::new(embeddings, d2);
         let span = tracing::span!(tracing::Level::TRACE, "embedding");
         Ok(Self { inner, span })
     }
 
-    fn embeddings(&self) -> &Tensor {
+    pub fn embeddings(&self) -> &Tensor {
         self.inner.embeddings()
     }
 }
@@ -30,34 +31,6 @@ impl Module for Embedding {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         self.inner.forward(xs)
-    }
-}
-
-// QMatMul wrapper adding some tracing.
-struct QMatMul {
-    inner: candle::quantized::QMatMul,
-    span: tracing::Span,
-}
-
-impl QMatMul {
-    fn new(out_dim: usize, in_dim: usize, vb: VarBuilder) -> Result<Self> {
-        let ws = vb.get((in_dim, out_dim), "weight")?;
-        let inner = candle::quantized::QMatMul::from_arc(ws);
-        let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
-        Ok(Self { inner, span })
-    }
-}
-
-impl Module for QMatMul {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(xs)
-    }
-}
-
-impl std::fmt::Debug for QMatMul {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "QMatMul")
     }
 }
 
