@@ -126,6 +126,7 @@ UNARY_OP1(__half, upowf_f16, powg(x, param))
 
 UNARY_OP(uint8_t, ucopy_u8, x)
 UNARY_OP(uint32_t, ucopy_u32, x)
+UNARY_OP(int64_t, ucopy_i64, x)
 UNARY_OP(float, ucopy_f32, x)
 UNARY_OP(double, ucopy_f64, x)
 UNARY_OP(float, uneg_f32, -x)
