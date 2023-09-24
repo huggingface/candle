@@ -15,6 +15,7 @@ candle = { path = "../candle-core", version = "0.2.3", package = "candle-core" }
 candle-datasets = { path = "../candle-datasets", version = "0.2.3" }
 candle-nn = { path = "../candle-nn", version = "0.2.3" }
 candle-transformers = { path = "../candle-transformers", version = "0.2.3" }
+candle-flash-attn = { path = "../candle-flash-attn", version = "0.2.3", optional = true }
 cudarc = { workspace = true, optional = true }
 half = { workspace = true, optional = true }
 image = { workspace = true }
@@ -50,7 +51,7 @@ default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 cudnn = ["candle/cudnn"]
-flash-attn = ["cuda", "candle-transformers/flash-attn"]
+flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
 nccl = ["cuda", "cudarc/nccl", "dep:half"]
 
