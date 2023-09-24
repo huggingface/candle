@@ -18,8 +18,7 @@ impl Model {
         console_error_panic_hook::set_once();
         console_log!("loading model");
         let device = &Device::Cpu;
-        let weights = safetensors::tensor::SafeTensors::deserialize(&weights)?;
-        let vb = VarBuilder::from_safetensors(vec![weights], DType::F64, device);
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F64, device)?;
         let config: Config = serde_json::from_slice(&config)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
