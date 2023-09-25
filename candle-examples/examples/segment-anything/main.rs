@@ -120,11 +120,7 @@ pub fn main() -> anyhow::Result<()> {
                 args.point_y.len()
             );
         }
-        let points: Vec<(f64, f64)> = args
-            .point_x
-            .into_iter()
-            .zip(args.point_y.into_iter())
-            .collect();
+        let points: Vec<(f64, f64)> = args.point_x.into_iter().zip(args.point_y).collect();
         let start_time = std::time::Instant::now();
         let (mask, iou_predictions) = sam.forward(&image, &points, false)?;
         println!(
