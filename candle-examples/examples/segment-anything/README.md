@@ -16,25 +16,30 @@ based on [MobileSAM](https://github.com/ChaoningZhang/MobileSAM).
 cargo run --example segment-anything --release -- \
     --image candle-examples/examples/yolo-v8/assets/bike.jpg
     --use-tiny
-    --point-x 0.4
-    --point-y 0.3
+    --point-x 0.6,0.6
+    --point-y 0.6,0.55
 ```
 
 Running this command generates a `sam_merged.jpg` file containing the original
-image with a blue overlay of the selected mask. The red dot represents the prompt
-specified by `--point-x 0.4 --point-y 0.3`, this prompt is assumed to be part
+image with a blue overlay of the selected mask. The red dots represent the prompt
+specified by `--point-x 0.6,0.6 --point-y 0.6,0.55`, this prompt is assumed to be part
 of the target mask.
 
 The values used for `--point-x` and `--point-y` should be between 0 and 1 and
 are proportional to the image dimension, i.e. use 0.5 for the image center.
 
+Original image:
 ![Leading group, Giro d'Italia 2021](../yolo-v8/assets/bike.jpg)
 
-![Leading group, Giro d'Italia 2021](./assets/sam_merged.jpg)
+Segment results by prompting with a single point `--point-x 0.6 --point-y 0.55`:
+![Leading group, Giro d'Italia 2021](./assets/single_pt_prompt.jpg)
+
+Segment results by prompting with multiple points `--point-x 0.6,0.6 --point-y 0.6,0.55`:
+![Leading group, Giro d'Italia 2021](./assets/two_pt_prompt.jpg)
 
 ### Command-line flags
 - `--use-tiny`: use the TinyViT based MobileSAM backbone rather than the default
   one.
-- `--point-x`, `--point-y`: specifies the location of the target point.
+- `--point-x`, `--point-y`: specifies the location of the target points.
 - `--threshold`: sets the threshold value to be part of the mask, a negative
   value results in a larger mask and can be specified via `--threshold=-1.2`.
