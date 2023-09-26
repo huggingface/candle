@@ -1,12 +1,12 @@
 use candle::{DType, Device, Tensor};
+use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::mixformer::{Config, MixFormerSequentialForCausalLM as MixFormer};
 use candle_transformers::models::quantized_mixformer::MixFormerSequentialForCausalLM as QMixFormer;
-use candle_nn::VarBuilder;
 use candle_wasm_example_phi::console_log;
+use js_sys::Date;
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
-use js_sys::Date;
 
 enum SelectedModel {
     MixFormer(MixFormer),
@@ -26,11 +26,7 @@ pub struct Model {
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn load(
-        weights: Vec<u8>,
-        tokenizer: Vec<u8>,
-        quantized: bool,
-    ) -> Result<Model, JsError> {
+    pub fn load(weights: Vec<u8>, tokenizer: Vec<u8>, quantized: bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
         let config: Config = Config::v1_5();
@@ -38,17 +34,17 @@ impl Model {
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
         let start = Date::now();
         let model = if quantized {
-            let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(&weights)?;
+            let vb =
+                candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(&weights)?;
             let model = QMixFormer::new(&config, vb)?;
             SelectedModel::Quantized(model)
         } else {
             let device = &Device::Cpu;
-            let vb =
-                 VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
+            let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, device)?;
             let model = MixFormer::new(&config, vb)?;
             SelectedModel::MixFormer(model)
         };
-        console_log!("model loaded in {:?}s", (Date::now() - start)/1000.);
+        console_log!("model loaded in {:?}s", (Date::now() - start) / 1000.);
         let logits_processor = LogitsProcessor::new(299792458, None, None);
         Ok(Self {
             model,
@@ -69,13 +65,10 @@ impl Model {
         repeat_last_n: usize,
         seed: u64,
     ) -> Result<String, JsError> {
-        // // First reset the cache.
-        // {
-        //     let mut cache = self.model.cache.kvs.lock().unwrap();
-        //     for elem in cache.iter_mut() {
-        //         *elem = None
-        //     }
-        // }
+        match &mut self.model {
+            SelectedModel::MixFormer(m) => m.clear_kv_cache(),
+            SelectedModel::Quantized(m) => m.clear_kv_cache(),
+        };
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1. {
             None
@@ -114,7 +107,8 @@ impl Model {
         let logits = match &mut self.model {
             SelectedModel::MixFormer(m) => m.forward(&input)?,
             SelectedModel::Quantized(m) => m.forward(&input)?,
-        };        let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+        };
+        let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
         let logits = if self.repeat_penalty == 1. {
             logits
         } else {
@@ -128,13 +122,14 @@ impl Model {
 
         let next_token = self.logits_processor.sample(&logits)?;
         self.tokens.push(next_token);
-        let token = match self.tokenizer.decode(&[next_token], false){
+        let token = match self.tokenizer.decode(&[next_token], false) {
             Ok(token) => token,
             Err(e) => {
                 console_log!("error decoding token: {:?}", e);
                 "".to_string()
             }
         };
+        // console_log!("token: {:?}: {:?}", token, next_token);
         Ok(token)
     }
 }

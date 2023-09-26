@@ -88,9 +88,9 @@
               outStatus.hidden = true;
               outCounter.hidden = false;
               outGen.hidden = false;
-              const p =  prompt.replace(/\n|\\n/g, "\n\n");
-              const generated  = sentence.replace(/\n|\\n/g, "\n\n");
-            
+              const p = prompt.replace(/\n|\\n/g, "\n\n");
+              const generated = sentence.replace(/\n|\\n/g, "\n\n");
+
               outGen.innerHTML = snarkdown(p + generated);
               outCounter.innerHTML = `${(totalTime / 1000).toFixed(
                 2
@@ -225,7 +225,8 @@
           id="prompt"
           class="font-light w-full px-3 py-2 mx-1 resize-none outline-none"
           oninput="this.style.height = 0;this.style.height = this.scrollHeight + 'px'"
-          placeholder="Add your prompt here...">Write a detailed analogy between mathematics and a lighthouse.
+          placeholder="Add your prompt here...">
+Write a detailed analogy between mathematics and a lighthouse.
 Answer: 
         </textarea>
         <button id="clear-btn">

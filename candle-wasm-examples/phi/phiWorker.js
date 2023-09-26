@@ -27,7 +27,11 @@ class Phi {
         fetchArrayBuffer(tokenizerURL),
       ]);
 
-      this.instance[modelID] = new Model(weightsArrayU8, tokenizerArrayU8, quantized);
+      this.instance[modelID] = new Model(
+        weightsArrayU8,
+        tokenizerArrayU8,
+        quantized
+      );
     }
     return this.instance[modelID];
   }
@@ -58,10 +62,22 @@ async function generate(data) {
   } = data;
   try {
     self.postMessage({ status: "loading", message: "Starting Phi" });
-    const model = await Phi.getInstance(weightsURL, modelID, tokenizerURL, quantized);
+    const model = await Phi.getInstance(
+      weightsURL,
+      modelID,
+      tokenizerURL,
+      quantized
+    );
 
     self.postMessage({ status: "loading", message: "Initializing model" });
-    model.init_with_prompt(prompt, temp, top_p, repeatPenalty, 64, BigInt(seed));
+    model.init_with_prompt(
+      prompt,
+      temp,
+      top_p,
+      repeatPenalty,
+      64,
+      BigInt(seed)
+    );
     const seq_len = 4096;
 
     let sentence = "";
@@ -79,14 +95,14 @@ async function generate(data) {
           return;
         }
         const token = await model.next_token();
-        if(token === "<|endoftext|>"){
+        if (token === "<|endoftext|>") {
           self.postMessage({
             status: "complete",
             message: "complete",
             output: prompt + sentence,
           });
           return;
-        }       
+        }
         const tokensSec =
           ((tokensCount + 1) / (performance.now() - startTime)) * 1000;
 
