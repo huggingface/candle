@@ -54,6 +54,7 @@ These online demos run entirely in your browser:
 - [whisper](https://huggingface.co/spaces/lmz/candle-whisper): text to speech.
 - [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
 - [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm): text generation.
+- [Phi-v1.5](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm): text generation.
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
 
 We also provide a some command line based examples using state of the art models:
@@ -108,6 +109,7 @@ There are also some wasm examples for whisper and
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
 [llama2](https://huggingface.co/spaces/lmz/candle-llama2),
 [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm),
+[Phi-v1.5](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm),
 [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm).
 
 For LLaMA2, run the following command to retrieve the weight files and start a
