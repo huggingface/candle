@@ -128,7 +128,7 @@ impl Model {
 
         let next_token = self.logits_processor.sample(&logits)?;
         self.tokens.push(next_token);
-        let token = match self.tokenizer.decode(&[next_token], true){
+        let token = match self.tokenizer.decode(&[next_token], false){
             Ok(token) => token,
             Err(e) => {
                 console_log!("error decoding token: {:?}", e);

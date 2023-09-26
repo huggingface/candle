@@ -46,13 +46,13 @@
           quantized: true,
           seq_len: 4096,
         },
-        phi_1_5: {
-          base_url:
-            "https://huggingface.co/microsoft/phi-1_5/resolve/refs%2Fpr%2F18/",
-          model: "model.safetensors",
-          seq_len: 4096,
-          quantized: false,
-        },
+        // phi_1_5: {
+        //   base_url:
+        //     "https://huggingface.co/microsoft/phi-1_5/resolve/refs%2Fpr%2F18/",
+        //   model: "model.safetensors",
+        //   seq_len: 4096,
+        //   quantized: false,
+        // },
       };
 
       const phiWorker = new Worker("./phiWorker.js", {
@@ -213,7 +213,7 @@
           <option value="phi_1_5_quantized_2" selected>
             phi 1.5 quantized q80 (1.51 GB)
           </option>
-          <option value="phi_1_5">phi 1.5 (2.84 GB)</option>
+          <!-- <option value="phi_1_5">phi 1.5 (2.84 GB)</option> -->
         </select>
       </div>
       <form
