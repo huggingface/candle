@@ -66,7 +66,10 @@ impl TextGeneration {
             .to_vec();
 
         let mut new_tokens = vec![];
-        let eos_token = self.tokenizer.encode("<|endoftext|>", false).map_err(E::msg)?.get_ids()[0];
+        let eos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
+            Some(token) => *token,
+            None => anyhow::bail!("cannot find the endoftext token"),
+        };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
