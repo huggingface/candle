@@ -78,7 +78,7 @@ async function generate(data) {
       64,
       BigInt(seed)
     );
-    const seq_len = 4096;
+    const seq_len = 2048;
 
     let sentence = "";
     let maxTokens = maxSeqLen ? maxSeqLen : seq_len - prompt.length - 1;
