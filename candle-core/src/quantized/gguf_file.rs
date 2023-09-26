@@ -59,8 +59,13 @@ impl TensorInfo {
         tensor_data_offset: u64,
     ) -> Result<QTensor> {
         let tensor_elems = self.shape.elem_count();
-        let size_in_bytes =
-            tensor_elems * self.ggml_dtype.type_size() / self.ggml_dtype.blck_size();
+        let blck_size = self.ggml_dtype.blck_size();
+        if tensor_elems % blck_size != 0 {
+            crate::bail!(
+            "the number of elements {tensor_elems} is not divisible by the block size {blck_size}"
+        )
+        }
+        let size_in_bytes = tensor_elems / blck_size * self.ggml_dtype.type_size();
         let mut raw_data = vec![0u8; size_in_bytes];
         reader.seek(std::io::SeekFrom::Start(tensor_data_offset + self.offset))?;
         reader.read_exact(&mut raw_data)?;

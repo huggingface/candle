@@ -135,7 +135,13 @@ pub fn qtensor_from_ggml(
     dims: Vec<usize>,
 ) -> Result<super::QTensor> {
     let tensor_elems = dims.iter().product::<usize>();
-    let size_in_bytes = tensor_elems * ggml_dtype.type_size() / ggml_dtype.blck_size();
+    let blck_size = ggml_dtype.blck_size();
+    if tensor_elems % blck_size != 0 {
+        crate::bail!(
+            "the number of elements {tensor_elems} is not divisible by the block size {blck_size}"
+        )
+    }
+    let size_in_bytes = tensor_elems / blck_size * ggml_dtype.type_size();
 
     match ggml_dtype {
         GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims),
