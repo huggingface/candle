@@ -1,0 +1,341 @@
+<html>
+  <head>
+    <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+    <title>Candle Phi 1.5 Rust/WASM</title>
+  </head>
+  <body></body>
+</html>
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
+      html,
+      body {
+        font-family: "Source Sans 3", sans-serif;
+      }
+      code,
+      output,
+      select,
+      pre {
+        font-family: "Source Code Pro", monospace;
+      }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import snarkdown from "https://cdn.skypack.dev/snarkdown";
+
+      const TOKENIZER_URL =
+        "https://huggingface.co/microsoft/phi-1_5/raw/main/tokenizer.json";
+      // models base url
+      const MODELS = {
+        phi_1_5_quantized: {
+          base_url:
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
+          model: "model-q4k.gguf",
+          quantized: true,
+          seq_len: 4096,
+        },
+        phi_1_5_quantized_2: {
+          base_url:
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
+          model: "model-q80.gguf",
+          quantized: true,
+          seq_len: 4096,
+        },
+        phi_1_5: {
+          base_url:
+            "https://huggingface.co/microsoft/phi-1_5/resolve/refs%2Fpr%2F18/",
+          model: "model.safetensors",
+          seq_len: 4096,
+          quantized: false,
+        },
+      };
+
+      const phiWorker = new Worker("./phiWorker.js", {
+        type: "module",
+      });
+      async function generateSequence(controller) {
+        const getValue = (id) => document.querySelector(`#${id}`).value;
+        const modelID = getValue("model");
+        const model = MODELS[modelID];
+        const weightsURL = model.base_url + model.model;
+
+        const prompt = getValue("prompt");
+        const temperature = getValue("temperature");
+        const topP = getValue("top-p");
+        const repeatPenalty = getValue("repeat_penalty");
+        const seed = getValue("seed");
+        const maxSeqLen = getValue("max-seq");
+
+        function updateStatus(data) {
+          const outStatus = document.querySelector("#output-status");
+          const outGen = document.querySelector("#output-generation");
+          const outCounter = document.querySelector("#output-counter");
+
+          switch (data.status) {
+            case "loading":
+              outStatus.hidden = false;
+              outStatus.textContent = data.message;
+              outGen.hidden = true;
+              outCounter.hidden = true;
+              break;
+            case "generating":
+              const { message, prompt, sentence, tokensSec, totalTime } = data;
+              outStatus.hidden = true;
+              outCounter.hidden = false;
+              outGen.hidden = false;
+              let text = prompt + sentence;
+              text = text.replace(/\\n/g, "\n\n");
+              console.log(text);
+
+              outGen.innerHTML = snarkdown(text);
+              outCounter.innerHTML = `${(totalTime / 1000).toFixed(
+                2
+              )}s (${tokensSec.toFixed(2)} tok/s)`;
+              break;
+            case "complete":
+              outStatus.hidden = true;
+              outGen.hidden = false;
+              break;
+          }
+        }
+
+        return new Promise((resolve, reject) => {
+          phiWorker.postMessage({
+            weightsURL,
+            modelID,
+            tokenizerURL: TOKENIZER_URL,
+            quantized: model.quantized,
+            prompt,
+            temp: temperature,
+            top_p: topP,
+            repeatPenalty,
+            seed: seed,
+            maxSeqLen,
+            command: "start",
+          });
+
+          const handleAbort = () => {
+            phiWorker.postMessage({ command: "abort" });
+          };
+          const handleMessage = (event) => {
+            const { status, error, message, prompt, sentence } = event.data;
+            if (status) updateStatus(event.data);
+            if (error) {
+              phiWorker.removeEventListener("message", handleMessage);
+              reject(new Error(error));
+            }
+            if (status === "complete") {
+              phiWorker.removeEventListener("message", handleMessage);
+              resolve(event.data);
+            }
+          };
+
+          controller.signal.addEventListener("abort", handleAbort);
+          phiWorker.addEventListener("message", handleMessage);
+        });
+      }
+
+      const form = document.querySelector("#form");
+      const prompt = document.querySelector("#prompt");
+      const clearBtn = document.querySelector("#clear-btn");
+      const runBtn = document.querySelector("#run");
+      const modelSelect = document.querySelector("#model");
+      let runController = new AbortController();
+      let isRunning = false;
+
+      modelSelect.addEventListener("change", (e) => {
+        const model = MODELS[e.target.value];
+        document.querySelector("#max-seq").max = model.seq_len;
+        document.querySelector("#max-seq").nextElementSibling.value =
+          model.seq_len;
+      });
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (isRunning) {
+          stopRunning();
+        } else {
+          startRunning();
+          await generateSequence(runController);
+          stopRunning();
+        }
+      });
+
+      function startRunning() {
+        isRunning = true;
+        runBtn.textContent = "Stop";
+      }
+
+      function stopRunning() {
+        runController.abort();
+        runController = new AbortController();
+        runBtn.textContent = "Run";
+        isRunning = false;
+      }
+      clearBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        prompt.value = "";
+        clearBtn.classList.add("invisible");
+        runBtn.disabled = true;
+        stopRunning();
+      });
+      prompt.addEventListener("input", (e) => {
+        runBtn.disabled = false;
+        if (e.target.value.length > 0) {
+          clearBtn.classList.remove("invisible");
+        } else {
+          clearBtn.classList.add("invisible");
+        }
+      });
+    </script>
+  </head>
+  <body class="container max-w-4xl mx-auto p-4 text-gray-800">
+    <main class="grid grid-cols-1 gap-8 relative">
+      <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
+      <div>
+        <h1 class="text-5xl font-bold">Candle Phi 1.5</h1>
+        <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
+        <p class="max-w-lg"></p>
+      </div>
+
+      <div>
+        <label for="model" class="font-medium">Models Options: </label>
+        <select
+          id="model"
+          class="border-2 border-gray-500 rounded-md font-light">
+          <option value="phi_1_5_quantized">
+            phi 1.5 quantized q4k (800 MB)
+          </option>
+          <option value="phi_1_5_quantized_2" selected>
+            phi 1.5 quantized q80 (1.51 GB)
+          </option>
+          <option value="phi_1_5">phi 1.5 (2.84 GB)</option>
+        </select>
+      </div>
+      <form
+        id="form"
+        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md items-center">
+        <input type="submit" hidden />
+        <input
+          type="text"
+          id="prompt"
+          class="font-light w-full px-3 py-2 mx-1 resize-none outline-none"
+          placeholder="Add your prompt here..."
+          value="Once upon a time" />
+        <button id="clear-btn">
+          <svg
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            width="40"
+            viewBox="0 0 70 40">
+            <path opacity=".5" d="M39 .2v40.2" stroke="#1F2937" />
+            <path
+              d="M1.5 11.5 19 29.1m0-17.6L1.5 29.1"
+              opacity=".5"
+              stroke="#1F2937"
+              stroke-width="2" />
+          </svg>
+        </button>
+        <button
+          id="run"
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed">
+          Run
+        </button>
+      </form>
+      <div class="grid grid-cols-3 max-w-md items-center gap-3">
+        <label class="text-sm font-medium" for="max-seq">Maximum length </label>
+        <input
+          type="range"
+          id="max-seq"
+          name="max-seq"
+          min="1"
+          max="4096"
+          step="1"
+          value="200"
+          oninput="this.nextElementSibling.value = Number(this.value)" />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+          200</output
+        >
+        <label class="text-sm font-medium" for="temperature">Temperature</label>
+        <input
+          type="range"
+          id="temperature"
+          name="temperature"
+          min="0"
+          max="2"
+          step="0.01"
+          value="0.00"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+          0.00</output
+        >
+        <label class="text-sm font-medium" for="top-p">Top-p</label>
+        <input
+          type="range"
+          id="top-p"
+          name="top-p"
+          min="0"
+          max="1"
+          step="0.01"
+          value="1.00"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+          1.00</output
+        >
+
+        <label class="text-sm font-medium" for="repeat_penalty"
+          >Repeat Penalty</label
+        >
+
+        <input
+          type="range"
+          id="repeat_penalty"
+          name="repeat_penalty"
+          min="1"
+          max="2"
+          step="0.01"
+          value="1.10"
+          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+        <output
+          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+          >1.10</output
+        >
+        <label class="text-sm font-medium" for="seed">Seed</label>
+        <input
+          type="number"
+          id="seed"
+          name="seed"
+          value="299792458"
+          class="font-light border border-gray-700 text-right rounded-md p-2" />
+        <button
+          id="run"
+          onclick="document.querySelector('#seed').value = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)"
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm">
+          Rand
+        </button>
+      </div>
+      <div>
+        <h3 class="font-medium">Generation:</h3>
+        <div
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2">
+          <div
+            id="output-counter"
+            hidden
+            class="ml-auto font-semibold grid-rows-1 text-sm"></div>
+          <p hidden id="output-generation" class="grid-rows-2"></p>
+          <span id="output-status" class="m-auto font-light"
+            >No output yet</span
+          >
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
