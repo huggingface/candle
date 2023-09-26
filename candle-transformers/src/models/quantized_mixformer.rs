@@ -268,6 +268,10 @@ impl MHA {
             .flatten_from(D::Minus2)?;
         attn_output.apply(&self.out_proj)
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None
+    }
 }
 
 #[derive(Debug)]
@@ -298,6 +302,10 @@ impl ParallelBlock {
         let attn_outputs = self.mixer.forward(&xs, mask)?;
         let feed_forward_hidden_states = self.mlp.forward(&xs)?;
         attn_outputs + feed_forward_hidden_states + residual
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.mixer.clear_kv_cache()
     }
 }
 
@@ -340,5 +348,9 @@ impl MixFormerSequentialForCausalLM {
             xs = block.forward(&xs, mask.as_ref())?
         }
         xs.narrow(1, seq_len - 1, 1)?.apply(&self.head)?.squeeze(1)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.blocks.iter_mut().for_each(|b| b.clear_kv_cache())
     }
 }
