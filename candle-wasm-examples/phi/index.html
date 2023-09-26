@@ -280,81 +280,90 @@ Answer:</textarea
           Run
         </button>
       </form>
-      <div class="grid grid-cols-3 max-w-md items-center gap-3">
-        <label class="text-sm font-medium" for="max-seq">Maximum length </label>
-        <input
-          type="range"
-          id="max-seq"
-          name="max-seq"
-          min="1"
-          max="2048"
-          step="1"
-          value="200"
-          oninput="this.nextElementSibling.value = Number(this.value)" />
-        <output
-          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
-          200</output
-        >
-        <label class="text-sm font-medium" for="temperature">Temperature</label>
-        <input
-          type="range"
-          id="temperature"
-          name="temperature"
-          min="0"
-          max="2"
-          step="0.01"
-          value="0.00"
-          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
-        <output
-          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
-          0.00</output
-        >
-        <label class="text-sm font-medium" for="top-p">Top-p</label>
-        <input
-          type="range"
-          id="top-p"
-          name="top-p"
-          min="0"
-          max="1"
-          step="0.01"
-          value="1.00"
-          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
-        <output
-          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
-          1.00</output
-        >
+      <details>
+        <summary class="font-medium cursor-pointer">Advanced Options</summary>
 
-        <label class="text-sm font-medium" for="repeat_penalty"
-          >Repeat Penalty</label
-        >
+        <div class="grid grid-cols-3 max-w-md items-center gap-3 py-3">
+          <label class="text-sm font-medium" for="max-seq"
+            >Maximum length
+          </label>
+          <input
+            type="range"
+            id="max-seq"
+            name="max-seq"
+            min="1"
+            max="2048"
+            step="1"
+            value="200"
+            oninput="this.nextElementSibling.value = Number(this.value)" />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+            200</output
+          >
+          <label class="text-sm font-medium" for="temperature"
+            >Temperature</label
+          >
+          <input
+            type="range"
+            id="temperature"
+            name="temperature"
+            min="0"
+            max="2"
+            step="0.01"
+            value="0.00"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+            0.00</output
+          >
+          <label class="text-sm font-medium" for="top-p">Top-p</label>
+          <input
+            type="range"
+            id="top-p"
+            name="top-p"
+            min="0"
+            max="1"
+            step="0.01"
+            value="1.00"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+            1.00</output
+          >
 
-        <input
-          type="range"
-          id="repeat_penalty"
-          name="repeat_penalty"
-          min="1"
-          max="2"
-          step="0.01"
-          value="1.10"
-          oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
-        <output
-          class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
-          >1.10</output
-        >
-        <label class="text-sm font-medium" for="seed">Seed</label>
-        <input
-          type="number"
-          id="seed"
-          name="seed"
-          value="299792458"
-          class="font-light border border-gray-700 text-right rounded-md p-2" />
-        <button
-          id="run"
-          onclick="document.querySelector('#seed').value = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)"
-          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm">
-          Rand
-        </button>
-      </div>
+          <label class="text-sm font-medium" for="repeat_penalty"
+            >Repeat Penalty</label
+          >
+
+          <input
+            type="range"
+            id="repeat_penalty"
+            name="repeat_penalty"
+            min="1"
+            max="2"
+            step="0.01"
+            value="1.10"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+            >1.10</output
+          >
+          <label class="text-sm font-medium" for="seed">Seed</label>
+          <input
+            type="number"
+            id="seed"
+            name="seed"
+            value="299792458"
+            class="font-light border border-gray-700 text-right rounded-md p-2" />
+          <button
+            id="run"
+            onclick="document.querySelector('#seed').value = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)"
+            class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm">
+            Rand
+          </button>
+        </div>
+      </details>
+
       <div>
         <h3 class="font-medium">Generation:</h3>
         <div
