@@ -64,7 +64,7 @@
         const model = MODELS[modelID];
         const weightsURL = model.base_url + model.model;
 
-        const prompt = getValue("prompt");
+        const prompt = getValue("prompt").trim();
         const temperature = getValue("temperature");
         const topP = getValue("top-p");
         const repeatPenalty = getValue("repeat_penalty");
@@ -88,11 +88,10 @@
               outStatus.hidden = true;
               outCounter.hidden = false;
               outGen.hidden = false;
-              let text = prompt + sentence;
-              text = text.replace(/\\n/g, "\n\n");
-              console.log(text);
-
-              outGen.innerHTML = snarkdown(text);
+              const p =  prompt.replace(/\n|\\n/g, "\n\n");
+              const generated  = sentence.replace(/\n|\\n/g, "\n\n");
+            
+              outGen.innerHTML = snarkdown(p + generated);
               outCounter.innerHTML = `${(totalTime / 1000).toFixed(
                 2
               )}s (${tokensSec.toFixed(2)} tok/s)`;
