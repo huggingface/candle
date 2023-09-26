@@ -134,31 +134,6 @@ impl Model {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ConditionalGenerationOutput {
-    generation: String,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct DecoderOutput {
-    embeddings: Vec<Vec<f32>>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct DecoderParams {
-    sentences: Vec<String>,
-    normalize_embeddings: bool,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct ConditionalGenerationParams {
-    prompt: String,
-    temperature: f64,
-    seed: u64,
-    top_p: f64,
-    repeat_penalty: f32,
-    repeat_last_n: usize,
-    max_length: Option<usize>,
-}
 fn main() {
     console_error_panic_hook::set_once();
 }

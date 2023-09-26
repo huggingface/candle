@@ -1,7 +1,4 @@
-use candle_transformers::models::segment_anything::sam;
 use wasm_bindgen::prelude::*;
-
-pub use sam::{Sam, IMAGE_SIZE};
 
 #[wasm_bindgen]
 extern "C" {
