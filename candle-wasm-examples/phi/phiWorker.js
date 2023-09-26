@@ -70,7 +70,7 @@ async function generate(data) {
     );
 
     self.postMessage({ status: "loading", message: "Initializing model" });
-    model.init_with_prompt(
+    const firstToken = model.init_with_prompt(
       prompt,
       temp,
       top_p,
@@ -80,7 +80,7 @@ async function generate(data) {
     );
     const seq_len = 2048;
 
-    let sentence = "";
+    let sentence = firstToken;
     let maxTokens = maxSeqLen ? maxSeqLen : seq_len - prompt.length - 1;
     let startTime = performance.now();
     let tokensCount = 0;

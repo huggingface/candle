@@ -90,10 +90,7 @@
               outStatus.hidden = true;
               outCounter.hidden = false;
               outGen.hidden = false;
-
-              const p = prompt.replace(/\n|\\n/g, "  \n");
-              const generated = sentence.replace(/\n|\\n/g, "  \n");
-              outGen.innerHTML = snarkdown(p + generated);
+              outGen.innerHTML = snarkdown(prompt + sentence);
               outCounter.innerHTML = `${(totalTime / 1000).toFixed(
                 2
               )}s (${tokensSec.toFixed(2)} tok/s)`;
