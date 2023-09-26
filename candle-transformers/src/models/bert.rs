@@ -25,10 +25,8 @@ impl HiddenActLayer {
     fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
         let _enter = self.span.enter();
         match self.act {
-            // TODO: The all-MiniLM-L6-v2 model uses "gelu" whereas this is "gelu_new", this explains some
-            // small numerical difference.
             // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
-            HiddenAct::Gelu => xs.gelu(),
+            HiddenAct::Gelu => xs.gelu_erf(),
             HiddenAct::Relu => xs.relu(),
         }
     }

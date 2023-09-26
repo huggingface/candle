@@ -17,7 +17,7 @@ pub(super) fn group_for_quantization<'a, 'b, T: super::k_quants::GgmlType>(
     let expected_blocks = xs.len() / block_size;
     let actual_blocks = ys.len();
 
-    //validate that the input is the right size
+    // Validate that the input is the right size
     if expected_blocks != actual_blocks {
         crate::bail!("quantize {dtype:?}: expected {expected_blocks} blocks but only {actual_blocks} were provided!")
     }
@@ -37,12 +37,12 @@ pub(super) fn group_for_dequantization<'a, 'b, T: super::k_quants::GgmlType>(
 
     let actual_output_len = ys.len();
     let expected_output_len = xs.len() * block_size;
-    //validate that the output is the right size
+    // Validate that the output is the right size
     if expected_output_len != actual_output_len {
         crate::bail!("dequantize {dtype:?}: ys (len = {actual_output_len}) does not match the expected length of {expected_output_len}!")
     }
 
-    //zip the blocks and outputs together
+    // Zip the blocks and outputs together
     Ok(xs.iter().zip(ys.chunks_exact_mut(block_size)).collect())
 }
 
