@@ -1,5 +1,5 @@
 use candle::{
-    quantized::{self, k_quants, GgmlType},
+    quantized::{self, k_quants, GgmlDType, GgmlType},
     test_utils::to_vec2_round,
     Device, Result, Tensor,
 };
@@ -52,5 +52,89 @@ fn quantized_matmul_neg() -> Result<()> {
         ]
     );
 
+    Ok(())
+}
+
+/// Creates a vector simillarly to the one used in GGML unit tests: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L26-L30
+fn create_ggml_like_vector(offset: f32) -> Vec<f32> {
+    const GGML_TEST_SIZE: usize = 32 * 128;
+    (0..GGML_TEST_SIZE)
+        .map(|i| 0.1 + 2.0 * (i as f32 + offset).cos())
+        .collect()
+}
+
+/// Very simple dot product implementation
+fn vec_dot_reference(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(a, b)| a * b).sum()
+}
+
+/// Returns the error achieved by the GGML matmul unit test.
+fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
+    let err = match dtype {
+        GgmlDType::F16 => 0.000010,
+        GgmlDType::Q2K => 0.004086,
+        GgmlDType::Q3K => 0.016148,
+        GgmlDType::Q4K => 0.002425,
+        GgmlDType::Q5K => 0.000740,
+        GgmlDType::Q6K => 0.000952,
+        GgmlDType::Q4_0 => 0.001143,
+        GgmlDType::Q4_1 => 0.007784,
+        GgmlDType::Q5_0 => 0.001353,
+        GgmlDType::Q5_1 => 0.001363,
+        GgmlDType::Q8_0 => 0.000092,
+        _ => candle::bail!("No GGML results for quantization type {dtype:?}",),
+    };
+    Ok(err)
+}
+
+/// Mirrores the GGML matmul unit test: https://github.com/ggerganov/llama.cpp/blob/master/tests/test-quantize-fns.cpp#L76-L91
+fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
+    const GGML_MAX_DOT_PRODUCT_ERROR: f32 = 0.02;
+    let a = create_ggml_like_vector(0.0);
+    let b = create_ggml_like_vector(1.0);
+    let length = a.len();
+
+    let mut a_quant = vec![T::zeros(); length / T::BLCK_SIZE];
+    let mut b_quant = vec![T::VecDotType::zeros(); length / T::VecDotType::BLCK_SIZE];
+    T::from_float(&a, &mut a_quant)?;
+    T::VecDotType::from_float(&b, &mut b_quant)?;
+
+    let result = T::vec_dot(length, &a_quant, &b_quant)?;
+    let reference_result = vec_dot_reference(&a, &b);
+
+    let error = (result - reference_result).abs() / length as f32;
+
+    let ggml_error = ggml_reference_matmul_error(T::DTYPE)?;
+
+    if error > GGML_MAX_DOT_PRODUCT_ERROR {
+        candle::bail!(
+            "Dot product error {} exceeds max error {}",
+            error,
+            GGML_MAX_DOT_PRODUCT_ERROR
+        );
+    }
+
+    // We diverge slightly due to different rounding behavior / f16 to f32 conversions in GGML
+    // => we use a slightly higher error threshold
+    const ERROR_LENIENCY: f32 = 0.00001;
+    if error - ERROR_LENIENCY > ggml_error {
+        candle::bail!(
+            "Dot product error {} exceeds ggml reference error {}",
+            error,
+            ggml_error
+        );
+    }
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn quantized_matmul_q40() -> Result<()> {
+    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ4_0>()?;
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn quantized_matmul_q80() -> Result<()> {
+    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ8_0>()?;
     Ok(())
 }
