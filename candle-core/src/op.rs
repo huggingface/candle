@@ -587,7 +587,7 @@ impl UnaryOpT for Gelu {
     #[inline(always)]
     fn i64(v: i64) -> i64 {
         if v < 0 {
-            -1
+            0
         } else {
             v
         }
