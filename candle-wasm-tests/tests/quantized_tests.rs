@@ -134,6 +134,12 @@ fn quantized_matmul_q40() -> Result<()> {
 }
 
 #[wasm_bindgen_test]
+fn quantized_matmul_q4k() -> Result<()> {
+    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ4K>()?;
+    Ok(())
+}
+
+#[wasm_bindgen_test]
 fn quantized_matmul_q80() -> Result<()> {
     ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ8_0>()?;
     Ok(())
