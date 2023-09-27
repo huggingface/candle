@@ -19,9 +19,9 @@ pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) ->
         for (x, y) in xs.iter().zip(ys.iter()) {
             let x1234 = v128_load(x.qs.as_ptr() as *const v128);
             let x13 = v128_and(x1234, u8x16_splat(0x0F));
-            let x13 = i16x8_sub(x13, i16x8_splat(8));
+            let x13 = i8x16_sub(x13, i8x16_splat(8));
             let x24 = u8x16_shr(x1234, 4);
-            let x24 = i16x8_sub(x24, i16x8_splat(8));
+            let x24 = i8x16_sub(x24, i8x16_splat(8));
 
             let x1 = i16x8_extend_low_i8x16(x13);
             let y1 = i16x8_load_extend_i8x8(y.qs.as_ptr());
