@@ -113,7 +113,7 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
     let mut scales: [u8; 8] = [0; 8];
     let mut mins: [u8; 8] = [0; 8];
 
-    let mut aux8: [i8; QK_K] = [0; QK_K];
+    let mut aux8: [u8; QK_K] = [0; QK_K];
     let mut sums = f32x4_splat(0f32);
     let mut sumf = f32x4_splat(0f32);
     unsafe {
@@ -121,18 +121,25 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
             let q4 = &x.qs;
             let q8 = &y.qs;
 
-            let mut a = &mut aux8[..];
-            let mut q4 = &q4[..];
-            for _ in 0..QK_K / 64 {
-                for l in 0..32 {
-                    a[l] = (q4[l] & 0xF) as i8;
-                }
-                a = &mut a[32..];
-                for l in 0..32 {
-                    a[l] = (q4[l] >> 4) as i8;
-                }
-                a = &mut a[32..];
-                q4 = &q4[32..];
+            for j in 0..QK_K / 64 {
+                let q4_1 = v128_load(q4.as_ptr().add(32 * j) as *const v128);
+                let q4_2 = v128_load(q4.as_ptr().add(32 * j + 16) as *const v128);
+                v128_store(
+                    aux8.as_mut_ptr().add(64 * j) as *mut v128,
+                    v128_and(q4_1, u8x16_splat(0x0F)),
+                );
+                v128_store(
+                    aux8.as_mut_ptr().add(64 * j + 16) as *mut v128,
+                    v128_and(q4_2, u8x16_splat(0x0F)),
+                );
+                v128_store(
+                    aux8.as_mut_ptr().add(64 * j + 32) as *mut v128,
+                    u8x16_shr(q4_1, 4),
+                );
+                v128_store(
+                    aux8.as_mut_ptr().add(64 * j + 48) as *mut v128,
+                    u8x16_shr(q4_2, 4),
+                );
             }
 
             LittleEndian::read_u32_into(&x.scales, &mut utmp[0..3]);
@@ -160,9 +167,9 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
                 let scale = i32x4_splat(*scale as i32);
                 for j in 0..4 {
                     let i = 32 * scale_i + 8 * j;
-                    let v_q8 = i16x8_load_extend_i8x8(q8.as_ptr().add(i));
-                    let v_a = i16x8_load_extend_i8x8(aux8.as_ptr().add(i));
-                    let aux16 = i16x8_mul(v_q8, v_a);
+                    let q8 = i16x8_load_extend_i8x8(q8.as_ptr().add(i));
+                    let aux8 = i16x8_load_extend_u8x8(aux8.as_ptr().add(i));
+                    let aux16 = i16x8_mul(q8, aux8);
                     aux32 = i32x4_add(aux32, i32x4_mul(scale, i32x4_extend_low_i16x8(aux16)));
                     aux32 = i32x4_add(aux32, i32x4_mul(scale, i32x4_extend_high_i16x8(aux16)));
                 }
