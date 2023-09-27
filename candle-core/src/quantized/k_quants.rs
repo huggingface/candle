@@ -225,6 +225,9 @@ impl GgmlType for BlockQ4_0 {
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q4_0_q8_0(n, xs, ys);
 
+        #[cfg(target_feature = "simd128")]
+        return super::simd128::vec_dot_q4_0_q8_0(n, xs, ys);
+
         let qk = QK8_0;
         let nb = n / qk;
         if n % QK8_0 != 0 {
