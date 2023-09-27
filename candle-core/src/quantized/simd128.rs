@@ -153,20 +153,16 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
                 sumi += y.bsums[j] as i32 * mins[j / 2] as i32;
             }
 
-            let mut a = &mut aux8[..];
-            let mut q8 = &q8[..];
-
             let mut aux32 = i32x4_splat(0i32);
-            for scale in scales {
-                let scale = i32x4_splat(scale as i32);
-                for _ in 0..4 {
-                    let v_q8 = i16x8_load_extend_i8x8(q8.as_ptr());
-                    let v_a = i16x8_load_extend_i8x8(a.as_ptr());
+            for (scale_i, scale) in scales.iter().enumerate() {
+                let scale = i32x4_splat(*scale as i32);
+                for j in 0..4 {
+                    let i = 32 * scale_i + 8 * j;
+                    let v_q8 = i16x8_load_extend_i8x8(q8.as_ptr().add(i));
+                    let v_a = i16x8_load_extend_i8x8(aux8.as_ptr().add(i));
                     let aux16 = i16x8_mul(v_q8, v_a);
                     aux32 = i32x4_add(aux32, i32x4_mul(scale, i32x4_extend_low_i16x8(aux16)));
                     aux32 = i32x4_add(aux32, i32x4_mul(scale, i32x4_extend_high_i16x8(aux16)));
-                    q8 = &q8[8..];
-                    a = &mut a[8..];
                 }
             }
             let aux32 = f32x4_convert_i32x4(aux32);
