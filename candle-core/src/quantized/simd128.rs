@@ -114,69 +114,71 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
     let mut mins: [u8; 8] = [0; 8];
 
     let mut aux8: [i8; QK_K] = [0; QK_K];
-    let mut aux16: [i16; 8] = [0; 8];
-    let mut sums: [f32; 8] = [0.0; 8];
-    let mut aux32: [i32; 8] = [0; 8];
+    let mut sums = f32x4_splat(0f32);
 
     let mut sumf = 0.0;
-    for (y, x) in ys.iter().zip(xs.iter()) {
-        let q4 = &x.qs;
-        let q8 = &y.qs;
-        aux32.fill(0);
+    let sums = unsafe {
+        for (y, x) in ys.iter().zip(xs.iter()) {
+            let q4 = &x.qs;
+            let q8 = &y.qs;
 
-        let mut a = &mut aux8[..];
-        let mut q4 = &q4[..];
-        for _ in 0..QK_K / 64 {
-            for l in 0..32 {
-                a[l] = (q4[l] & 0xF) as i8;
-            }
-            a = &mut a[32..];
-            for l in 0..32 {
-                a[l] = (q4[l] >> 4) as i8;
-            }
-            a = &mut a[32..];
-            q4 = &q4[32..];
-        }
-
-        LittleEndian::read_u32_into(&x.scales, &mut utmp[0..3]);
-
-        utmp[3] = ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4);
-        let uaux = utmp[1] & KMASK1;
-        utmp[1] = (utmp[2] & KMASK2) | (((utmp[0] >> 6) & KMASK3) << 4);
-        utmp[2] = uaux;
-        utmp[0] &= KMASK1;
-
-        //extract scales and mins
-        LittleEndian::write_u32_into(&utmp[0..2], &mut scales);
-        LittleEndian::write_u32_into(&utmp[2..4], &mut mins);
-
-        let mut sumi = 0;
-        for j in 0..QK_K / 16 {
-            sumi += y.bsums[j] as i32 * mins[j / 2] as i32;
-        }
-
-        let mut a = &mut aux8[..];
-        let mut q8 = &q8[..];
-
-        for scale in scales {
-            let scale = scale as i32;
-            for _ in 0..4 {
-                for l in 0..8 {
-                    aux16[l] = q8[l] as i16 * a[l] as i16;
+            let mut a = &mut aux8[..];
+            let mut q4 = &q4[..];
+            for _ in 0..QK_K / 64 {
+                for l in 0..32 {
+                    a[l] = (q4[l] & 0xF) as i8;
                 }
-                for l in 0..8 {
-                    aux32[l] += scale * aux16[l] as i32;
+                a = &mut a[32..];
+                for l in 0..32 {
+                    a[l] = (q4[l] >> 4) as i8;
                 }
-                q8 = &q8[8..];
-                a = &mut a[8..];
+                a = &mut a[32..];
+                q4 = &q4[32..];
             }
+
+            LittleEndian::read_u32_into(&x.scales, &mut utmp[0..3]);
+
+            utmp[3] = ((utmp[2] >> 4) & KMASK2) | (((utmp[1] >> 6) & KMASK3) << 4);
+            let uaux = utmp[1] & KMASK1;
+            utmp[1] = (utmp[2] & KMASK2) | (((utmp[0] >> 6) & KMASK3) << 4);
+            utmp[2] = uaux;
+            utmp[0] &= KMASK1;
+
+            //extract scales and mins
+            LittleEndian::write_u32_into(&utmp[0..2], &mut scales);
+            LittleEndian::write_u32_into(&utmp[2..4], &mut mins);
+
+            let mut sumi = 0;
+            for j in 0..QK_K / 16 {
+                sumi += y.bsums[j] as i32 * mins[j / 2] as i32;
+            }
+
+            let mut a = &mut aux8[..];
+            let mut q8 = &q8[..];
+
+            let mut aux32 = i32x4_splat(0i32);
+            for scale in scales {
+                let scale = i32x4_splat(scale as i32);
+                for _ in 0..4 {
+                    let v_q8 = i16x8_load_extend_i8x8(q8.as_ptr());
+                    let v_a = i16x8_load_extend_i8x8(a.as_ptr());
+                    let aux16 = i16x8_mul(v_q8, v_a);
+                    aux32 = i32x4_add(aux32, i32x4_mul(scale, i32x4_extend_low_i16x8(aux16)));
+                    aux32 = i32x4_add(aux32, i32x4_mul(scale, i32x4_extend_high_i16x8(aux16)));
+                    q8 = &q8[8..];
+                    a = &mut a[8..];
+                }
+            }
+            let aux32 = f32x4_convert_i32x4(aux32);
+            let d = f32x4_splat(x.d.to_f32() * y.d);
+            sums = f32x4_add(sums, f32x4_mul(aux32, d));
+            let dmin = x.dmin.to_f32() * y.d;
+            sumf -= dmin * sumi as f32;
         }
-        let d = x.d.to_f32() * y.d;
-        for l in 0..8 {
-            sums[l] += d * aux32[l] as f32;
-        }
-        let dmin = x.dmin.to_f32() * y.d;
-        sumf -= dmin * sumi as f32;
-    }
-    Ok(sumf + sums.iter().sum::<f32>())
+        f32x4_extract_lane::<0>(sums)
+            + f32x4_extract_lane::<1>(sums)
+            + f32x4_extract_lane::<2>(sums)
+            + f32x4_extract_lane::<3>(sums)
+    };
+    Ok(sumf + sums)
 }
