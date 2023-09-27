@@ -12,8 +12,9 @@ members = [
     "candle-wasm-examples/whisper",
     "candle-wasm-examples/yolo",
     "candle-wasm-examples/bert",
-    "candle-wasm-examples/t5",
     "candle-wasm-examples/phi",
+    "candle-wasm-examples/t5",
+    "candle-wasm-tests",
 ]
 exclude = ["candle-flash-attn", "candle-kernels"]
 resolver = "2"
