@@ -115,9 +115,8 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
 
     let mut aux8: [i8; QK_K] = [0; QK_K];
     let mut sums = f32x4_splat(0f32);
-
-    let mut sumf = 0.0;
-    let sums = unsafe {
+    let mut sumf = f32x4_splat(0f32);
+    unsafe {
         for (y, x) in ys.iter().zip(xs.iter()) {
             let q4 = &x.qs;
             let q8 = &y.qs;
@@ -148,9 +147,12 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
             LittleEndian::write_u32_into(&utmp[0..2], &mut scales);
             LittleEndian::write_u32_into(&utmp[2..4], &mut mins);
 
-            let mut sumi = 0;
-            for j in 0..QK_K / 16 {
-                sumi += y.bsums[j] as i32 * mins[j / 2] as i32;
+            let mut sumi = i32x4_splat(0);
+            for j in (0..QK_K / 16).step_by(4) {
+                let bsums = i32x4_load_extend_i16x4(y.bsums.as_ptr().add(j));
+                let (m1, m2) = (mins[j / 2] as i32, mins[j / 2 + 1] as i32);
+                let mins = i32x4(m1, m1, m2, m2);
+                sumi = i32x4_add(sumi, i32x4_mul(bsums, mins));
             }
 
             let mut aux32 = i32x4_splat(0i32);
@@ -169,12 +171,15 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
             let d = f32x4_splat(x.d.to_f32() * y.d);
             sums = f32x4_add(sums, f32x4_mul(aux32, d));
             let dmin = x.dmin.to_f32() * y.d;
-            sumf -= dmin * sumi as f32;
+            let dmin = f32x4_splat(dmin);
+            let sumi = f32x4_convert_i32x4(sumi);
+            sumf = f32x4_add(sumf, f32x4_mul(sumi, dmin));
         }
-        f32x4_extract_lane::<0>(sums)
+        let sums = f32x4_sub(sums, sumf);
+        let sums = f32x4_extract_lane::<0>(sums)
             + f32x4_extract_lane::<1>(sums)
             + f32x4_extract_lane::<2>(sums)
-            + f32x4_extract_lane::<3>(sums)
-    };
-    Ok(sumf + sums)
+            + f32x4_extract_lane::<3>(sums);
+        Ok(sums)
+    }
 }
