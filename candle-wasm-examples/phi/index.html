@@ -128,7 +128,7 @@
               phiWorker.removeEventListener("message", handleMessage);
               reject(new Error(error));
             }
-            if (status === "abort") {
+            if (status === "aborted") {
               phiWorker.removeEventListener("message", handleMessage);
               resolve(event.data);
             }
