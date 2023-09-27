@@ -33,6 +33,8 @@ pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) ->
             let y4 = i16x8_load_extend_i8x8(y.qs.as_ptr().add(24));
             let sum_xy = i32x4_add(sum_xy, i32x4_dot_i16x8(x4, y4));
 
+            let sum_xy = f32x4_convert_i32x4(sum_xy);
+
             // f32x4_relaxed_madd is nightly only.
             let d = f32x4_splat(f16::to_f32(x.d) * f16::to_f32(y.d));
             let scaled = f32x4_mul(sum_xy, d);
