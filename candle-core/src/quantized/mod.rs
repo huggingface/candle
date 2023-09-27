@@ -7,6 +7,8 @@ pub mod gguf_file;
 pub mod k_quants;
 #[cfg(target_feature = "neon")]
 pub mod neon;
+#[cfg(target_feature = "simd128")]
+pub mod simd128;
 pub mod utils;
 
 pub use k_quants::GgmlType;
