@@ -884,8 +884,6 @@ impl<'a> Map1 for IndexSelect<'a> {
         };
         let ids_shape = ids_l.shape();
         let ids_dims = ids_shape.dims();
-        let ids_el = ids_shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(ids_el as u32);
         let ds = dev.htod_copy([ids_dims, ids_l.stride()].concat()).w()?;
         let src = match src_l.contiguous_offsets() {
             Some((o1, o2)) => src.slice(o1..o2),
@@ -894,11 +892,13 @@ impl<'a> Map1 for IndexSelect<'a> {
         let left_size: usize = src_l.dims()[..self.2].iter().product();
         let right_size: usize = src_l.dims()[self.2 + 1..].iter().product();
         let dim_size = src_l.dims()[self.2];
+        let dst_el = ids_shape.elem_count() * left_size * right_size;
+        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
-        let out = unsafe { dev.alloc::<T>(ids_el * left_size * right_size) }.w()?;
+        let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let params = (
-            ids_el,
+            dst_el,
             ids_dims.len(),
             &ds,
             ids,
