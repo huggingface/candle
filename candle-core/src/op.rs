@@ -575,17 +575,22 @@ impl UnaryOpT for Gelu {
             * (1.0
                 + f64::tanh((2.0f64 / std::f64::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)))
     }
+
     #[inline(always)]
-    fn u8(_: u8) -> u8 {
-        0
+    fn u8(v: u8) -> u8 {
+        v
     }
     #[inline(always)]
-    fn u32(_: u32) -> u32 {
-        0
+    fn u32(v: u32) -> u32 {
+        v
     }
     #[inline(always)]
-    fn i64(_: i64) -> i64 {
-        0
+    fn i64(v: i64) -> i64 {
+        if v < 0 {
+            -1
+        } else {
+            v
+        }
     }
     const KERNEL: &'static str = "ugelu";
 
