@@ -1,7 +1,6 @@
-#![allow(unused)]
-use crate::models::with_tracing::{linear_no_bias, Embedding as E, Linear};
+use crate::models::with_tracing::{linear_no_bias, Linear};
 /// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
@@ -99,7 +98,7 @@ impl RotaryEmbedding {
         k: &Tensor,
         seqlen_offset: usize,
     ) -> Result<(Tensor, Tensor)> {
-        let (b_sz, seq_len, h, n_embd) = q.dims4()?;
+        let (_b_sz, seq_len, _h, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
         let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
@@ -290,7 +289,7 @@ impl DecoderLayer {
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
-        Ok(xs)
+        residual + xs
     }
 }
 
@@ -300,6 +299,7 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Linear,
+    #[allow(unused)]
     sliding_window: usize,
     device: Device,
 }
