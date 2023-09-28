@@ -38,18 +38,21 @@ impl Config {
     }
 }
 
+#[derive(Debug)]
 struct RmsNorm {
     inner: candle_nn::RmsNorm,
     span: tracing::Span,
 }
 
 impl RmsNorm {
-    fn load(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
         let inner = candle_nn::rms_norm(size, eps, vb)?;
         Ok(Self { inner, span })
     }
+}
 
+impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         self.inner.forward(x)
@@ -231,5 +234,48 @@ impl Attention {
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.hidden_size))?
             .apply(&self.o_proj)
+    }
+}
+
+#[derive(Debug)]
+struct DecoderLayer {
+    self_attn: Attention,
+    mlp: MLP,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
+}
+
+impl DecoderLayer {
+    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
+        let mlp = MLP::new(cfg, vb.pp("mlp"))?;
+        let input_layernorm =
+            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb.pp("post_attention_layernorm"),
+        )?;
+        Ok(Self {
+            self_attn,
+            mlp,
+            input_layernorm,
+            post_attention_layernorm,
+        })
+    }
+
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        attention_mask: Option<&Tensor>,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        let residual = xs;
+        let xs = self.input_layernorm.forward(xs)?;
+        let xs = self.self_attn.forward(&xs, attention_mask, seqlen_offset)?;
+        let xs = (xs + residual)?;
+        let residual = &xs;
+        let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
+        Ok(xs)
     }
 }
