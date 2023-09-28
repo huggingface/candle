@@ -279,3 +279,47 @@ impl DecoderLayer {
         Ok(xs)
     }
 }
+
+#[derive(Debug)]
+pub struct Model {
+    embed_tokens: candle_nn::Embedding,
+    layers: Vec<DecoderLayer>,
+    norm: RmsNorm,
+    lm_head: Linear,
+}
+
+impl Model {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let embed_tokens =
+            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
+        let rotary_emb = Arc::new(RotaryEmbedding::new(cfg, vb.device())?);
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        let vb_l = vb.pp("layers");
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            layers.push(layer)
+        }
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("norm"))?;
+        let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        Ok(Self {
+            embed_tokens,
+            layers,
+            norm,
+            lm_head,
+        })
+    }
+
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        let (b_size, seq_len) = input_ids.dims2()?;
+        let mut xs = self.embed_tokens.forward(input_ids)?;
+        for layer in self.layers.iter_mut() {
+            xs = layer.forward(&xs, attention_mask, seqlen_offset)?
+        }
+        xs.apply(&self.norm)?.apply(&self.lm_head)
+    }
+}
