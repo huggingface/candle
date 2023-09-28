@@ -302,6 +302,7 @@ pub struct Model {
     #[allow(unused)]
     sliding_window: usize,
     device: Device,
+    dtype: DType,
 }
 
 impl Model {
@@ -325,6 +326,7 @@ impl Model {
             lm_head,
             sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
+            dtype: vb.dtype(),
         })
     }
 
@@ -345,7 +347,8 @@ impl Model {
         } else {
             mask
         };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))
+        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
+            .to_dtype(self.dtype)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
