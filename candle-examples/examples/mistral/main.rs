@@ -60,10 +60,6 @@ impl TextGeneration {
             .to_vec();
 
         let mut new_tokens = vec![];
-        let eos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
-            Some(token) => *token,
-            None => anyhow::bail!("cannot find the endoftext token"),
-        };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
@@ -85,9 +81,6 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             new_tokens.push(next_token);
-            if next_token == eos_token {
-                break;
-            }
             let token = self.tokenizer.decode(&[next_token], true).map_err(E::msg)?;
             print!("{token}");
             std::io::stdout().flush()?;
