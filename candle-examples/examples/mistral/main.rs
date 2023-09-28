@@ -208,7 +208,12 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let config = Config::config_7b_v0_1();
     let device = candle_examples::device(args.cpu)?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
+    let dtype = if device.is_cuda() {
+        DType::BF16
+    } else {
+        DType::F32
+    };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
     let model = Model::new(&config, vb)?;
     println!("loaded the model in {:?}", start.elapsed());
 
