@@ -134,13 +134,43 @@ fn quantized_matmul_q40() -> Result<()> {
 }
 
 #[wasm_bindgen_test]
-fn quantized_matmul_q4k() -> Result<()> {
-    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ4K>()?;
+fn quantized_matmul_q50() -> Result<()> {
+    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ5_0>()?;
     Ok(())
 }
 
 #[wasm_bindgen_test]
 fn quantized_matmul_q80() -> Result<()> {
     ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ8_0>()?;
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn quantized_matmul_q2k() -> Result<()> {
+    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ2K>()?;
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn quantized_matmul_q3k() -> Result<()> {
+    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ3K>()?;
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn quantized_matmul_q4k() -> Result<()> {
+    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ4K>()?;
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn quantized_matmul_q5k() -> Result<()> {
+    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ5K>()?;
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn quantized_matmul_q6k() -> Result<()> {
+    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ6K>()?;
     Ok(())
 }
