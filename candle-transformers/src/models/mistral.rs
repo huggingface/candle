@@ -300,6 +300,8 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Linear,
+    sliding_window: usize,
+    device: Device,
 }
 
 impl Model {
@@ -320,19 +322,42 @@ impl Model {
             layers,
             norm,
             lm_head,
+            sliding_window: cfg.sliding_window,
+            device: vb.device().clone(),
         })
     }
 
-    pub fn forward(
-        &mut self,
-        input_ids: &Tensor,
-        attention_mask: Option<&Tensor>,
+    fn prepare_decoder_attention_mask(
+        &self,
+        b_size: usize,
+        tgt_len: usize,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
+        // Sliding window mask?
+        let mask: Vec<_> = (0..tgt_len)
+            .flat_map(|i| (0..tgt_len).map(move |j| if j > i { f32::NEG_INFINITY } else { 0. }))
+            .collect();
+        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
+        let mask = if seqlen_offset > 0 {
+            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
+            Tensor::cat(&[&mask0, &mask], D::Minus1)?
+        } else {
+            mask
+        };
+        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))
+    }
+
+    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
         let (b_size, seq_len) = input_ids.dims2()?;
+        let attention_mask = if seq_len <= 1 {
+            None
+        } else {
+            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
+            Some(mask)
+        };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, attention_mask, seqlen_offset)?
+            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
         xs.apply(&self.norm)?.apply(&self.lm_head)
     }
