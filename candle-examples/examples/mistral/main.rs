@@ -141,7 +141,7 @@ struct Args {
     tokenizer_file: Option<String>,
 
     #[arg(long)]
-    weight_file: Option<String>,
+    weight_files: Option<String>,
 
     #[arg(long)]
     quantized: bool,
@@ -192,9 +192,15 @@ fn main() -> Result<()> {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,
     };
-    let filename = match args.weight_file {
-        Some(weight_file) => std::path::PathBuf::from(weight_file),
-        None => repo.get("model.safetensors")?,
+    let filenames = match args.weight_files {
+        Some(files) => files
+            .split(',')
+            .map(std::path::PathBuf::from)
+            .collect::<Vec<_>>(),
+        None => vec![
+            repo.get("pytorch_model-00001-of-00002.safetensors")?,
+            repo.get("pytorch_model-00002-of-00002.safetensors")?,
+        ],
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
@@ -202,7 +208,7 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let config = Config::config_7b_v0_1();
     let device = candle_examples::device(args.cpu)?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[filename], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
     let model = Model::new(&config, vb)?;
     println!("loaded the model in {:?}", start.elapsed());
 
