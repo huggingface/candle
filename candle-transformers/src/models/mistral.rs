@@ -65,6 +65,13 @@ struct RotaryEmbedding {
     cos: Tensor,
 }
 
+fn rotate_half(xs: &Tensor) -> Result<Tensor> {
+    let last_dim = xs.dim(D::Minus1)?;
+    let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
+    let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
+    Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
+}
+
 impl RotaryEmbedding {
     fn new(cfg: &Config, dev: &Device) -> Result<Self> {
         let dim = cfg.hidden_size / cfg.num_attention_heads;
@@ -92,7 +99,14 @@ impl RotaryEmbedding {
         k: &Tensor,
         seqlen_offset: usize,
     ) -> Result<(Tensor, Tensor)> {
-        todo!()
+        let (b_sz, seq_len, h, n_embd) = q.dims4()?;
+        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
+        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
+        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
+        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
+        let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
+        let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
+        Ok((q_embed, k_embed))
     }
 }
 
