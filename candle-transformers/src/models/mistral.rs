@@ -28,7 +28,7 @@ impl Config {
             num_hidden_layers: 32,
             num_attention_heads: 32,
             num_key_value_heads: 8,
-            hidden_act: Activation::Gelu, // TODO: silu
+            hidden_act: Activation::Silu,
             max_position_embeddings: 32768,
             rms_norm_eps: 1e-5,
             rope_theta: 10_000.,
