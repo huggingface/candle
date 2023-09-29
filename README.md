@@ -62,6 +62,8 @@ We also provide a some command line based examples using state of the art models
 - [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
 - [Phi-v1.5](./candle-examples/examples/phi/): a 1.3b general LLM with performance on par with LLaMA-v2 7b.
+- [Mistral7b-v0.1](./candle-examples/examples/mistral/): a 7b general LLM with
+  performance larger than all publicly available 13b models as of 2023-09-28.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
@@ -149,6 +151,7 @@ If you have an addition to this list, please submit a pull request.
         - Falcon.
         - StarCoder.
         - Phi v1.5.
+        - Mistral 7b v0.1.
         - T5.
         - Bert.
     - Whisper (multi-lingual support).
