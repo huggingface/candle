@@ -101,8 +101,9 @@ impl TextGeneration {
             }
         }
         let dt = start_gen.elapsed();
-        let generated_text = self.tokenizer.decode_all().map_err(E::msg)?;
-        println!("Generated text:\n{generated_text}");
+        let rest = self.tokenizer.decode_rest().map_err(E::msg)?;
+        print!("{rest}");
+        std::io::stdout().flush()?;
         println!(
             "\n{generated_tokens} tokens generated ({:.2} token/s)",
             generated_tokens as f64 / dt.as_secs_f64(),

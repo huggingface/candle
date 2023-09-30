@@ -50,6 +50,10 @@ impl TokenOutputStream {
         }
     }
 
+    pub fn decode_rest(&self) -> Result<String> {
+        self.decode(&self.tokens[self.prev_index..])
+    }
+
     pub fn decode_all(&self) -> Result<String> {
         self.decode(&self.tokens)
     }
