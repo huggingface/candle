@@ -27,9 +27,15 @@ struct Args {
     #[arg(long)]
     generate_masks: bool,
 
-    /// List of x,y coordinates, between 0 and 1 (0.5 is at the middle of the image).
+    /// List of x,y coordinates, between 0 and 1 (0.5 is at the middle of the image). These points
+    /// should be part of the generated mask.
     #[arg(long)]
     point: Vec<String>,
+
+    /// List of x,y coordinates, between 0 and 1 (0.5 is at the middle of the image). These points
+    /// should not be part of the generated mask and should be part of the background instead.
+    #[arg(long)]
+    neg_point: Vec<String>,
 
     /// The detection threshold for the mask, 0 is the default value, negative values mean a larger
     /// mask, positive makes the mask more selective.
@@ -107,16 +113,17 @@ pub fn main() -> anyhow::Result<()> {
             )?;
         }
     } else {
-        let points = args
-            .point
-            .iter()
-            .map(|point| {
+        let iter_points = args.point.iter().map(|p| (p, true));
+        let iter_neg_points = args.neg_point.iter().map(|p| (p, false));
+        let points = iter_points
+            .chain(iter_neg_points)
+            .map(|(point, b)| {
                 use std::str::FromStr;
                 let xy = point.split(',').collect::<Vec<_>>();
                 if xy.len() != 2 {
                     anyhow::bail!("expected format for points is 0.4,0.2")
                 }
-                Ok((f64::from_str(xy[0])?, f64::from_str(xy[1])?))
+                Ok((f64::from_str(xy[0])?, f64::from_str(xy[1])?, b))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         let start_time = std::time::Instant::now();
@@ -158,15 +165,15 @@ pub fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        for (x, y) in points {
+        for (x, y, b) in points {
             let x = (x * img.width() as f64) as i32;
             let y = (y * img.height() as f64) as i32;
-            imageproc::drawing::draw_filled_circle_mut(
-                &mut img,
-                (x, y),
-                3,
-                image::Rgba([255, 0, 0, 200]),
-            );
+            let color = if b {
+                image::Rgba([255, 0, 0, 200])
+            } else {
+                image::Rgba([0, 255, 0, 200])
+            };
+            imageproc::drawing::draw_filled_circle_mut(&mut img, (x, y), 3, color);
         }
         img.save("sam_merged.jpg")?
     }

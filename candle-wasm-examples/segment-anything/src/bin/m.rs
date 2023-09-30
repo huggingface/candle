@@ -94,7 +94,7 @@ impl Model {
             &embeddings.data,
             embeddings.height as usize,
             embeddings.width as usize,
-            &[(x, y)],
+            &[(x, y, true)],
             false,
         )?;
         let iou = iou_predictions.flatten(0, 1)?.to_vec1::<f32>()?[0];
