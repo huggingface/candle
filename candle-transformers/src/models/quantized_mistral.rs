@@ -68,7 +68,9 @@ impl RotaryEmbedding {
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
-        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?.reshape((max_seq_len, 1))?;
+        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
         let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
         Ok(Self {
