@@ -710,18 +710,17 @@ impl GgmlType for BlockQ2K {
 
             let mut isum = 0;
             let mut is = 0;
-            let mut d;
             for _ in 0..(QK_K / 128) {
                 let mut shift = 0;
                 for _ in 0..4 {
-                    d = (sc[is] & 0xF) as i32;
+                    let d = (sc[is] & 0xF) as i32;
                     is += 1;
                     let mut isuml = 0;
                     for l in 0..16 {
                         isuml += q8[l] as i32 * (((q2[l] >> shift) & 3) as i32);
                     }
                     isum += d * isuml;
-                    d = (sc[is] & 0xF) as i32;
+                    let d = (sc[is] & 0xF) as i32;
                     is += 1;
                     isuml = 0;
                     for l in 16..32 {

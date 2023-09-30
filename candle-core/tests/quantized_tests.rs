@@ -514,7 +514,7 @@ fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
 
     let ggml_error = ggml_reference_matmul_error(T::DTYPE)?;
 
-    if error > GGML_MAX_DOT_PRODUCT_ERROR {
+    if !error.is_finite() || error > GGML_MAX_DOT_PRODUCT_ERROR {
         candle_core::bail!(
             "Dot product error {} exceeds max error {}",
             error,
