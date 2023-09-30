@@ -114,6 +114,9 @@ struct Args {
     tracing: bool,
 
     #[arg(long)]
+    use_flash_attn: bool,
+
+    #[arg(long)]
     prompt: String,
 
     /// The temperature used to generate samples.
@@ -207,7 +210,7 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = Config::config_7b_v0_1();
+    let config = Config::config_7b_v0_1(args.use_flash_attn);
     let device = candle_examples::device(args.cpu)?;
     let dtype = if device.is_cuda() {
         DType::BF16
