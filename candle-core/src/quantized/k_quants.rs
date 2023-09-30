@@ -1085,7 +1085,6 @@ impl GgmlType for BlockQ3K {
             let d_all = block.d.to_f32();
             let mut m = 1;
             let mut is = 0;
-            let mut dl;
 
             // Dequantize both 128 long blocks
             // 32 qs values per 128 long block
@@ -1096,7 +1095,7 @@ impl GgmlType for BlockQ3K {
                     for (scale_index, scale_scoped_y) in
                         shift_scoped_y.chunks_exact_mut(16).enumerate()
                     {
-                        dl = d_all * (scales[is] as f32 - 32.0);
+                        let dl = d_all * (scales[is] as f32 - 32.0);
                         for (i, inner_y) in scale_scoped_y.iter_mut().enumerate() {
                             let new_y = dl
                                 * (((qs[i + 16 * scale_index] >> shift) & 3) as i8
