@@ -59,6 +59,10 @@ impl TextGeneration {
             .to_vec();
 
         let mut new_tokens = vec![];
+        let eos_token = match self.tokenizer.get_vocab(true).get("</s>") {
+            Some(token) => *token,
+            None => anyhow::bail!("cannot find the </s> token"),
+        };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
@@ -81,6 +85,9 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             new_tokens.push(next_token);
+            if next_token == eos_token {
+                break;
+            }
             // TODO: print the generated tokens in a streaming way. Using `self.tokenizer.decode`
             // on each token seems to swallow the whitespaces.
         }
