@@ -220,10 +220,16 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => vec![
-            repo.get("pytorch_model-00001-of-00002.safetensors")?,
-            repo.get("pytorch_model-00002-of-00002.safetensors")?,
-        ],
+        None => {
+            if args.quantized {
+                vec![repo.get("model-q4k.gguf")?]
+            } else {
+                vec![
+                    repo.get("pytorch_model-00001-of-00002.safetensors")?,
+                    repo.get("pytorch_model-00002-of-00002.safetensors")?,
+                ]
+            }
+        }
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
