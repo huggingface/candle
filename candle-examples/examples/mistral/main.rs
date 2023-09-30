@@ -7,24 +7,25 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle_transformers::models::mixformer::{Config, MixFormerSequentialForCausalLM as MixFormer};
-use candle_transformers::models::quantized_mixformer::MixFormerSequentialForCausalLM as QMixFormer;
+use candle_transformers::models::mistral::{Config, Model as Mistral};
+use candle_transformers::models::quantized_mistral::Model as QMistral;
 
 use candle::{DType, Device, Tensor};
+use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 enum Model {
-    MixFormer(MixFormer),
-    Quantized(QMixFormer),
+    Mistral(Mistral),
+    Quantized(QMistral),
 }
 
 struct TextGeneration {
     model: Model,
     device: Device,
-    tokenizer: Tokenizer,
+    tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
@@ -45,7 +46,7 @@ impl TextGeneration {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
             model,
-            tokenizer,
+            tokenizer: TokenOutputStream::new(tokenizer),
             logits_processor,
             repeat_penalty,
             repeat_last_n,
@@ -55,31 +56,37 @@ impl TextGeneration {
 
     fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
         use std::io::Write;
-        println!("starting the inference loop");
-        print!("{prompt}");
-        std::io::stdout().flush()?;
+        self.tokenizer.clear();
         let mut tokens = self
             .tokenizer
+            .tokenizer()
             .encode(prompt, true)
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
+        for &t in tokens.iter() {
+            if let Some(t) = self.tokenizer.next_token(t)? {
+                print!("{t}")
+            }
+        }
+        std::io::stdout().flush()?;
 
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
-            Some(token) => *token,
-            None => anyhow::bail!("cannot find the endoftext token"),
+        let eos_token = match self.tokenizer.get_token("</s>") {
+            Some(token) => token,
+            None => anyhow::bail!("cannot find the </s> token"),
         };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
             let context_size = if index > 0 { 1 } else { tokens.len() };
-            let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
+            let start_pos = tokens.len().saturating_sub(context_size);
+            let ctxt = &tokens[start_pos..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
             let logits = match &mut self.model {
-                Model::MixFormer(m) => m.forward(&input)?,
-                Model::Quantized(m) => m.forward(&input)?,
+                Model::Mistral(m) => m.forward(&input, start_pos)?,
+                Model::Quantized(m) => m.forward(&input, start_pos)?,
             };
-            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+            let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
             } else {
@@ -97,11 +104,16 @@ impl TextGeneration {
             if next_token == eos_token {
                 break;
             }
-            let token = self.tokenizer.decode(&[next_token], true).map_err(E::msg)?;
-            print!("{token}");
-            std::io::stdout().flush()?;
+            if let Some(t) = self.tokenizer.next_token(next_token)? {
+                print!("{t}");
+                std::io::stdout().flush()?;
+            }
         }
         let dt = start_gen.elapsed();
+        if let Some(rest) = self.tokenizer.decode_rest().map_err(E::msg)? {
+            print!("{rest}");
+        }
+        std::io::stdout().flush()?;
         println!(
             "\n{generated_tokens} tokens generated ({:.2} token/s)",
             generated_tokens as f64 / dt.as_secs_f64(),
@@ -122,6 +134,9 @@ struct Args {
     tracing: bool,
 
     #[arg(long)]
+    use_flash_attn: bool,
+
+    #[arg(long)]
     prompt: String,
 
     /// The temperature used to generate samples.
@@ -140,14 +155,17 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 100)]
     sample_len: usize,
 
-    #[arg(long, default_value = "microsoft/phi-1_5")]
+    #[arg(long, default_value = "lmz/candle-mistral")]
     model_id: String,
 
-    #[arg(long, default_value = "refs/pr/18")]
+    #[arg(long, default_value = "main")]
     revision: String,
 
     #[arg(long)]
-    weight_file: Option<String>,
+    tokenizer_file: Option<String>,
+
+    #[arg(long)]
+    weight_files: Option<String>,
 
     #[arg(long)]
     quantized: bool,
@@ -194,15 +212,23 @@ fn main() -> Result<()> {
         RepoType::Model,
         args.revision,
     ));
-    let tokenizer_filename = repo.get("tokenizer.json")?;
-    let filename = match args.weight_file {
-        Some(weight_file) => std::path::PathBuf::from(weight_file),
+    let tokenizer_filename = match args.tokenizer_file {
+        Some(file) => std::path::PathBuf::from(file),
+        None => repo.get("tokenizer.json")?,
+    };
+    let filenames = match args.weight_files {
+        Some(files) => files
+            .split(',')
+            .map(std::path::PathBuf::from)
+            .collect::<Vec<_>>(),
         None => {
             if args.quantized {
-                api.model("lmz/candle-quantized-phi".to_string())
-                    .get("model-q4k.gguf")?
+                vec![repo.get("model-q4k.gguf")?]
             } else {
-                repo.get("model.safetensors")?
+                vec![
+                    repo.get("pytorch_model-00001-of-00002.safetensors")?,
+                    repo.get("pytorch_model-00002-of-00002.safetensors")?,
+                ]
             }
         }
     };
@@ -210,17 +236,24 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = Config::v1_5();
+    let config = Config::config_7b_v0_1(args.use_flash_attn);
     let (model, device) = if args.quantized {
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename)?;
-        let model = QMixFormer::new(&config, vb)?;
+        let filename = &filenames[0];
+        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename)?;
+        let model = QMistral::new(&config, vb)?;
         (Model::Quantized(model), Device::Cpu)
     } else {
         let device = candle_examples::device(args.cpu)?;
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[filename], DType::F32, &device)? };
-        let model = MixFormer::new(&config, vb)?;
-        (Model::MixFormer(model), device)
+        let dtype = if device.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let model = Mistral::new(&config, vb)?;
+        (Model::Mistral(model), device)
     };
+
     println!("loaded the model in {:?}", start.elapsed());
 
     let mut pipeline = TextGeneration::new(
