@@ -126,7 +126,7 @@ pub fn main() -> anyhow::Result<()> {
             start_time.elapsed().as_secs_f32()
         );
         println!("mask:\n{mask}");
-        println!("iou_predictions: {iou_predictions:?}");
+        println!("iou_predictions: {iou_predictions}");
 
         let mask = (mask.ge(args.threshold)? * 255.)?;
         let (_one, h, w) = mask.dims3()?;
