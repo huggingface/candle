@@ -103,8 +103,10 @@ enum Command {
 
     Quantize {
         /// The input file, in gguf format.
-        in_file: std::path::PathBuf,
+        in_file: Vec<std::path::PathBuf>,
+
         /// The output file, in gguf format.
+        #[arg(long)]
         out_file: std::path::PathBuf,
 
         /// The quantization schema to apply.
@@ -218,12 +220,16 @@ fn run_ls(file: &std::path::PathBuf, format: Option<Format>, verbose: bool) -> R
 }
 
 fn run_quantize_safetensors(
-    in_file: std::path::PathBuf,
+    in_files: &[std::path::PathBuf],
     out_file: std::path::PathBuf,
     q: Quantization,
 ) -> Result<()> {
     let mut out_file = std::fs::File::create(out_file)?;
-    let tensors = candle_core::safetensors::load(in_file, &Device::Cpu)?;
+    let mut tensors = std::collections::HashMap::new();
+    for in_file in in_files.iter() {
+        let in_tensors = candle_core::safetensors::load(in_file, &Device::Cpu)?;
+        tensors.extend(in_tensors)
+    }
     println!("tensors: {}", tensors.len());
 
     let quantize_fn = match q {
@@ -280,20 +286,32 @@ fn run_quantize_safetensors(
 }
 
 fn run_quantize(
-    in_file: std::path::PathBuf,
+    in_files: &[std::path::PathBuf],
     out_file: std::path::PathBuf,
     q: Quantization,
     qmode: QuantizationMode,
 ) -> Result<()> {
-    if let Some(extension) = in_file.extension() {
+    if in_files.is_empty() {
+        candle_core::bail!("no specified input files")
+    }
+    if let Some(extension) = out_file.extension() {
         if extension == "safetensors" {
-            return run_quantize_safetensors(in_file, out_file, q);
+            candle_core::bail!("the generated file cannot use the safetensors extension")
         }
+    }
+    if let Some(extension) = in_files[0].extension() {
+        if extension == "safetensors" {
+            return run_quantize_safetensors(in_files, out_file, q);
+        }
+    }
+
+    if in_files.len() != 1 {
+        candle_core::bail!("only a single in-file can be used when quantizing gguf files")
     }
 
     // Open the out file early so as to fail directly on missing directories etc.
     let mut out_file = std::fs::File::create(out_file)?;
-    let mut in_ = std::fs::File::open(&in_file)?;
+    let mut in_ = std::fs::File::open(&in_files[0])?;
     let content = gguf_file::Content::read(&mut in_)?;
     println!("tensors: {}", content.tensor_infos.len());
 
@@ -319,7 +337,7 @@ fn run_quantize(
         .par_iter()
         .map(|(name, _)| {
             println!("  quantizing {name}");
-            let mut in_file = std::fs::File::open(&in_file)?;
+            let mut in_file = std::fs::File::open(&in_files[0])?;
             let tensor = content.tensor(&mut in_file, name)?;
             let tensor = qmode.quantize(name, tensor, quantize_fn)?;
             Ok((name, tensor))
@@ -360,7 +378,7 @@ fn main() -> anyhow::Result<()> {
             out_file,
             quantization,
             mode,
-        } => run_quantize(in_file, out_file, quantization, mode)?,
+        } => run_quantize(&in_file, out_file, quantization, mode)?,
     }
     Ok(())
 }

@@ -7,7 +7,8 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle_transformers::models::mistral::{Config, Model};
+use candle_transformers::models::mistral::{Config, Model as Mistral};
+use candle_transformers::models::quantized_mistral::Model as QMistral;
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -15,6 +16,11 @@ use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
+
+enum Model {
+    Mistral(Mistral),
+    Quantized(QMistral),
+}
 
 struct TextGeneration {
     model: Model,
@@ -76,7 +82,10 @@ impl TextGeneration {
             let start_pos = tokens.len().saturating_sub(context_size);
             let ctxt = &tokens[start_pos..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, start_pos)?;
+            let logits = match &mut self.model {
+                Model::Mistral(m) => m.forward(&input, start_pos)?,
+                Model::Quantized(m) => m.forward(&input, start_pos)?,
+            };
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
@@ -101,8 +110,9 @@ impl TextGeneration {
             }
         }
         let dt = start_gen.elapsed();
-        let rest = self.tokenizer.decode_rest().map_err(E::msg)?;
-        print!("{rest}");
+        if let Some(rest) = self.tokenizer.decode_rest().map_err(E::msg)? {
+            print!("{rest}");
+        }
         std::io::stdout().flush()?;
         println!(
             "\n{generated_tokens} tokens generated ({:.2} token/s)",
@@ -211,24 +221,39 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => vec![
-            repo.get("pytorch_model-00001-of-00002.safetensors")?,
-            repo.get("pytorch_model-00002-of-00002.safetensors")?,
-        ],
+        None => {
+            if args.quantized {
+                vec![repo.get("model-q4k.gguf")?]
+            } else {
+                vec![
+                    repo.get("pytorch_model-00001-of-00002.safetensors")?,
+                    repo.get("pytorch_model-00002-of-00002.safetensors")?,
+                ]
+            }
+        }
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
     let config = Config::config_7b_v0_1(args.use_flash_attn);
-    let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
-        DType::BF16
+    let (model, device) = if args.quantized {
+        let filename = &filenames[0];
+        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename)?;
+        let model = QMistral::new(&config, vb)?;
+        (Model::Quantized(model), Device::Cpu)
     } else {
-        DType::F32
+        let device = candle_examples::device(args.cpu)?;
+        let dtype = if device.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let model = Mistral::new(&config, vb)?;
+        (Model::Mistral(model), device)
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = Model::new(&config, vb)?;
+
     println!("loaded the model in {:?}", start.elapsed());
 
     let mut pipeline = TextGeneration::new(

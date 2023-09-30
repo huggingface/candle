@@ -50,8 +50,20 @@ impl TokenOutputStream {
         }
     }
 
-    pub fn decode_rest(&self) -> Result<String> {
-        self.decode(&self.tokens[self.prev_index..])
+    pub fn decode_rest(&self) -> Result<Option<String>> {
+        let prev_text = if self.tokens.is_empty() {
+            String::new()
+        } else {
+            let tokens = &self.tokens[self.prev_index..self.current_index];
+            self.decode(tokens)?
+        };
+        let text = self.decode(&self.tokens[self.prev_index..])?;
+        if text.len() > prev_text.len() {
+            let text = text.split_at(prev_text.len());
+            Ok(Some(text.1.to_string()))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn decode_all(&self) -> Result<String> {
