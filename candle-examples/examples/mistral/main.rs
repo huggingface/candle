@@ -50,7 +50,6 @@ impl TextGeneration {
 
     fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
         use std::io::Write;
-        std::io::stdout().flush()?;
         self.tokenizer.clear();
         let mut tokens = self
             .tokenizer
@@ -64,6 +63,7 @@ impl TextGeneration {
                 print!("{t}")
             }
         }
+        std::io::stdout().flush()?;
 
         let mut generated_tokens = 0usize;
         let eos_token = match self.tokenizer.get_token("</s>") {
@@ -96,7 +96,8 @@ impl TextGeneration {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
-                print!("{t}")
+                print!("{t}");
+                std::io::stdout().flush()?;
             }
         }
         let dt = start_gen.elapsed();
