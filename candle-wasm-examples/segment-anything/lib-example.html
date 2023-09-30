@@ -33,6 +33,7 @@
           url: "sam_vit_b_01ec64.safetensors",
         },
       };
+      let pointArr = []
       const samWorker = new Worker("./samWorker.js", { type: "module" });
 
       async function segmentPoints(
@@ -145,6 +146,7 @@
       //add event listener to clear button
       clearBtn.addEventListener("click", () => {
         cleanImageCanvas();
+        pointArr = []
       });
       //add click event to canvas
       canvas.addEventListener("click", async (event) => {
@@ -155,7 +157,8 @@
         const x = (event.clientX - targetBox.left) / targetBox.width;
         const y = (event.clientY - targetBox.top) / targetBox.height;
         isSegmenting = true;
-        const { maskURL } = await getSegmentationMask({ x, y });
+        pointArr = [...pointArr, [ x, y ]]
+        const { maskURL } = await getSegmentationMask(pointArr);
         isSegmenting = false;
         drawMask(maskURL);
       });

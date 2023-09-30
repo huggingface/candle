@@ -13,6 +13,7 @@ candle = { path = "../../candle-core", version = "0.2.3", package = "candle-core
 candle-nn = { path = "../../candle-nn", version = "0.2.3" }
 candle-transformers = { path = "../../candle-transformers", version = "0.2.3" }
 num-traits = { workspace = true }
+js-sys = "0.3"
 
 # App crates.
 anyhow = { workspace = true }

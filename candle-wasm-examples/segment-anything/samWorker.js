@@ -141,7 +141,7 @@ self.addEventListener("message", async (event) => {
     }
 
     self.postMessage({ status: "segmenting", message: "Segmenting" });
-    const { mask, image } = sam.mask_for_point(points.x, points.y);
+    const { mask, image } = sam.mask_for_point(points);
     const maskDataURL = await createImageCanvas(mask, image);
     // Send the segment back to the main thread as JSON
     self.postMessage({
