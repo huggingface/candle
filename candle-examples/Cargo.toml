@@ -25,6 +25,7 @@ rayon = { workspace = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokenizers = { workspace = true, features = ["onig"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -35,7 +36,6 @@ imageproc = { workspace = true }
 memmap2 = { workspace = true }
 rand = { workspace = true }
 rusttype = { workspace = true }
-tokenizers = { workspace = true, features = ["onig"] }
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }
