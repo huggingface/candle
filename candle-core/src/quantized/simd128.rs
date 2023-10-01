@@ -280,52 +280,54 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
     }
 
     let mut aux8 = [0i8; QK_K];
-    let mut aux16 = [0i16; 8];
-    let mut sums = [0f32; 8];
-    let mut aux32 = [0f32; 8];
+    unsafe {
+        let mut sums = f32x4_splat(0f32);
 
-    for (x, y) in xs.iter().zip(ys.iter()) {
-        let q4 = &x.ql;
-        let qh = &x.qh;
-        let q8 = &y.qs;
-        aux32.fill(0f32);
+        for (x, y) in xs.iter().zip(ys.iter()) {
+            let q4 = &x.ql;
+            let qh = &x.qh;
+            let q8 = &y.qs;
+            let mut aux32 = f32x4_splat(0f32);
 
-        for j in (0..QK_K).step_by(128) {
-            let aux8 = &mut aux8[j..];
-            let q4 = &q4[j / 2..];
-            let qh = &qh[j / 4..];
-            for l in 0..32 {
-                aux8[l] = (((q4[l] & 0xF) | ((qh[l] & 3) << 4)) as i32 - 32) as i8;
-                aux8[l + 32] = (((q4[l + 32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) as i32 - 32) as i8;
-                aux8[l + 64] = (((q4[l] >> 4) | (((qh[l] >> 4) & 3) << 4)) as i32 - 32) as i8;
-                aux8[l + 96] = (((q4[l + 32] >> 4) | (((qh[l] >> 6) & 3) << 4)) as i32 - 32) as i8;
+            for j in (0..QK_K).step_by(128) {
+                let aux8 = &mut aux8[j..];
+                let q4 = &q4[j / 2..];
+                let qh = &qh[j / 4..];
+                for l in 0..32 {
+                    aux8[l] = (((q4[l] & 0xF) | ((qh[l] & 3) << 4)) as i32 - 32) as i8;
+                    aux8[l + 32] =
+                        (((q4[l + 32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) as i32 - 32) as i8;
+                    aux8[l + 64] = (((q4[l] >> 4) | (((qh[l] >> 4) & 3) << 4)) as i32 - 32) as i8;
+                    aux8[l + 96] =
+                        (((q4[l + 32] >> 4) | (((qh[l] >> 6) & 3) << 4)) as i32 - 32) as i8;
+                }
             }
+
+            for (j, &scale) in x.scales.iter().enumerate() {
+                let scale = f32x4_splat(scale as f32);
+                for offset in [0, 8] {
+                    let aux16 = i16x8_mul(
+                        i16x8_load_extend_i8x8(q8.as_ptr().add(16 * j + offset)),
+                        i16x8_load_extend_i8x8(aux8.as_ptr().add(16 * j + offset)),
+                    );
+                    aux32 = f32x4_add(
+                        aux32,
+                        f32x4_mul(f32x4_convert_i32x4(i32x4_extend_low_i16x8(aux16)), scale),
+                    );
+                    aux32 = f32x4_add(
+                        aux32,
+                        f32x4_mul(f32x4_convert_i32x4(i32x4_extend_high_i16x8(aux16)), scale),
+                    );
+                }
+            }
+
+            let d = f32x4_splat(x.d.to_f32() * y.d);
+            sums = f32x4_add(sums, f32x4_mul(aux32, d));
         }
-
-        for (j, &scale) in x.scales.iter().enumerate() {
-            let scale = scale as f32;
-            let q8 = &q8[16 * j..];
-            let aux8 = &aux8[16 * j..];
-            for l in 0..8 {
-                aux16[l] = q8[l] as i16 * aux8[l] as i16;
-            }
-            for l in 0..8 {
-                aux32[l] += scale * aux16[l] as f32
-            }
-            let q8 = &q8[8..];
-            let aux8 = &aux8[8..];
-            for l in 0..8 {
-                aux16[l] = q8[l] as i16 * aux8[l] as i16;
-            }
-            for l in 0..8 {
-                aux32[l] += scale * aux16[l] as f32
-            }
-        }
-
-        let d = x.d.to_f32() * y.d;
-        for (sum, &a) in sums.iter_mut().zip(aux32.iter()) {
-            *sum += a * d;
-        }
+        let sums = f32x4_extract_lane::<0>(sums)
+            + f32x4_extract_lane::<1>(sums)
+            + f32x4_extract_lane::<2>(sums)
+            + f32x4_extract_lane::<3>(sums);
+        Ok(sums)
     }
-    Ok(sums.iter().sum())
 }
