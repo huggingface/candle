@@ -49,6 +49,8 @@ class QuantizedLayer(Module):
         self.kv_cache = None
         self.cos = cos_sin[0]
         self.sin = cos_sin[1]
+        self._non_persistent_buffers_set.add("cos")
+        self._non_persistent_buffers_set.add("sin")
 
     def forward(self, x:Tensor, mask:Tensor, index_pos:int) -> Tensor:
         residual = x

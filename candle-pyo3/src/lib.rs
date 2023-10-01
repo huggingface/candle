@@ -697,7 +697,7 @@ impl PyTensor {
     /// &RETURNS&: QTensor
     fn quantize(&self, quantized_dtype: &str) -> PyResult<PyQTensor> {
         use ::candle::quantized;
-        let res = match quantized_dtype {
+        let res = match quantized_dtype.to_lowercase().as_str() {
             "q2k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ2K>(self),
             "q3k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ3K>(self),
             "q4_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4_0>(self),
