@@ -1,11 +1,37 @@
 # Changelog
 This documents the main changes to the `candle` crate.
 
-## v0.2.3 - Unreleased
+## v0.3.1 - Unreleased
 
 ### Added
 
 ### Modified
+
+## v0.3.0 - 2023-10-01
+
+### Added
+
+- Added the Mistral 7b v0.1 model
+  [983](https://github.com/huggingface/candle/pull/983).
+- Quantized version of the Mistral model
+  [1009](https://github.com/huggingface/candle/pull/1009).
+- Add the gelu-erf op and activation function
+  [969](https://github.com/huggingface/candle/pull/969).
+- Add the mixformer/phi-v1.5 model
+  [930](https://github.com/huggingface/candle/pull/930).
+- Add the sclice-scatter op
+  [927](https://github.com/huggingface/candle/pull/927).
+- Add the Wuerstchen diffusion model
+  [911](https://github.com/huggingface/candle/pull/911).
+
+### Modified
+
+- Support for simd128 intrinsics in some quantized vecdots
+  [982](https://github.com/huggingface/candle/pull/982).
+- Optimize the index-select cuda kernel
+  [976](https://github.com/huggingface/candle/pull/976).
+- Self-contained safetensor wrappers
+  [946](https://github.com/huggingface/candle/pull/946).
 
 ## v0.2.2 - 2023-09-18
 
