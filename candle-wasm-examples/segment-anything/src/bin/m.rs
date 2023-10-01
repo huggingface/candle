@@ -2,7 +2,6 @@ use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_wasm_example_sam as sam;
 use wasm_bindgen::prelude::*;
-use js_sys;
 
 #[allow(unused)]
 struct Embeddings {
@@ -75,19 +74,12 @@ impl Model {
         Ok(())
     }
 
-    pub fn mask_for_point(&self, points: js_sys::Array) -> Result<JsValue, JsError> {
-        let transformed_points: Vec<(f64, f64, bool)> = points
-            .values()
-            .into_iter()
-            .map(|val| {
-                let point_array: js_sys::Array = val.unwrap().into();
-                let x: f64 = point_array.get(0).as_f64().unwrap();
-                let y: f64 = point_array.get(1).as_f64().unwrap();
-                (x, y, true)
-            })
-            .collect::<Vec<_>>();
-        
-        for &(x, y, bool) in &transformed_points {
+    pub fn mask_for_point(&self, input: JsValue) -> Result<JsValue, JsError> {
+        let input: PointsInput =
+            serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
+        let transformed_points = input.points;
+
+        for &(x, y, _bool) in &transformed_points {
             if !(0.0..=1.0).contains(&x) {
                 return Err(JsError::new(&format!(
                     "x has to be between 0 and 1, got {}",
@@ -147,6 +139,11 @@ struct Image {
 struct MaskImage {
     mask: Mask,
     image: Image,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PointsInput {
+    points: Vec<(f64, f64, bool)>,
 }
 
 fn main() {

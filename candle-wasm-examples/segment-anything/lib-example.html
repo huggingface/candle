@@ -157,7 +157,7 @@
         const x = (event.clientX - targetBox.left) / targetBox.width;
         const y = (event.clientY - targetBox.top) / targetBox.height;
         isSegmenting = true;
-        pointArr = [...pointArr, [ x, y ]]
+        pointArr = [...pointArr, [ x, y , true ]]
         const { maskURL } = await getSegmentationMask(pointArr);
         isSegmenting = false;
         drawMask(maskURL);
