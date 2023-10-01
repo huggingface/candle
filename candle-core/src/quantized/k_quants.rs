@@ -1539,6 +1539,9 @@ impl GgmlType for BlockQ6K {
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q6k_q8k(n, xs, ys);
 
+        #[cfg(target_feature = "simd128")]
+        return super::simd128::vec_dot_q6k_q8k(n, xs, ys);
+
         if n % QK_K != 0 {
             crate::bail!("vec_dot_q6k_q8k: {n} is not divisible by {QK_K}")
         }
