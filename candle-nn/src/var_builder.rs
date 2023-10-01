@@ -413,26 +413,6 @@ impl<'a> VarBuilder<'a> {
     }
 
     /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
-    /// data.
-    #[deprecated(
-        since = "0.2.3",
-        note = "use from_mmaped_safetensors or from_buffered_safetensors instead"
-    )]
-    pub fn from_safetensors(safetensors: Vec<SafeTensors<'a>>, dtype: DType, dev: &Device) -> Self {
-        let mut routing = HashMap::new();
-        for (index, sf) in safetensors.iter().enumerate() {
-            for k in sf.names() {
-                routing.insert(k.to_string(), index);
-            }
-        }
-        let tensors = SafeTensorWithRouting {
-            routing,
-            safetensors,
-        };
-        Self::new(Box::new(tensors), dtype, dev.clone())
-    }
-
-    /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
     /// files.
     ///
     /// # Safety

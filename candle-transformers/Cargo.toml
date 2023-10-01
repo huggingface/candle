@@ -11,9 +11,9 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { path = "../candle-core", version = "0.2.3", package = "candle-core" }
-candle-flash-attn = { path = "../candle-flash-attn", version = "0.2.3", optional = true }
-candle-nn = { path = "../candle-nn", version = "0.2.3" }
+candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
+candle-flash-attn = { path = "../candle-flash-attn", version = "0.3.0", optional = true }
+candle-nn = { path = "../candle-nn", version = "0.3.0" }
 intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
 rand = { workspace = true }
