@@ -867,7 +867,7 @@ impl PyQTensor {
     /// Performs a quantized matrix multiplication, with the quantized tensor as the right hand side.
     /// &RETURNS&: Tensor
     fn matmul_t(&self, lhs: &PyTensor) -> PyResult<PyTensor> {
-        let qmatmul = ::candle::quantized::QMatMul::from_arc(self.0.clone());
+        let qmatmul = ::candle::quantized::QMatMul::from_arc(self.0.clone()).map_err(wrap_err)?;
         let res = qmatmul.forward(lhs).map_err(wrap_err)?;
         Ok(PyTensor(res))
     }

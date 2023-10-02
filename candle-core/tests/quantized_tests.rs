@@ -43,7 +43,7 @@ fn quantized_matmul() -> Result<()> {
     );
 
     let qtensor = quantized::QTensor::new(rhs_t, (4, 64))?;
-    let matmul = quantized::QMatMul::from_qtensor(qtensor);
+    let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&tensor_lhs)?;
     assert_eq!(
         to_vec2_round(&res, 0)?,
@@ -91,7 +91,7 @@ fn quantized_matmul_neg() -> Result<()> {
     );
 
     let qtensor = quantized::QTensor::new(rhs_t, (4, 64))?;
-    let matmul = quantized::QMatMul::from_qtensor(qtensor);
+    let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&tensor_lhs)?;
     assert_eq!(
         to_vec2_round(&res, 0)?,
@@ -576,7 +576,7 @@ fn quantized_matmul_q2k() -> Result<()> {
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
     let rhs = quantized::QTensor::quantize::<BlockQ2K>(&rhs)?;
-    let rhs = quantized::QMatMul::from_qtensor(rhs);
+    let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 
     assert_eq!(mm.dims(), [m, n]);
@@ -602,7 +602,7 @@ fn quantized_matmul_q3k() -> Result<()> {
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
     let rhs = quantized::QTensor::quantize::<BlockQ3K>(&rhs)?;
-    let rhs = quantized::QMatMul::from_qtensor(rhs);
+    let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 
     assert_eq!(mm.dims(), [m, n]);
@@ -628,7 +628,7 @@ fn quantized_matmul_q4k() -> Result<()> {
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
     let rhs = quantized::QTensor::quantize::<BlockQ4K>(&rhs)?;
-    let rhs = quantized::QMatMul::from_qtensor(rhs);
+    let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 
     assert_eq!(mm.dims(), [m, n]);
@@ -654,7 +654,7 @@ fn quantized_matmul_q5k() -> Result<()> {
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
     let rhs = quantized::QTensor::quantize::<BlockQ5K>(&rhs)?;
-    let rhs = quantized::QMatMul::from_qtensor(rhs);
+    let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 
     assert_eq!(mm.dims(), [m, n]);
@@ -681,7 +681,7 @@ fn quantized_matmul_q6k() -> Result<()> {
     assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
 
     let rhs = quantized::QTensor::quantize::<BlockQ6K>(&rhs)?;
-    let rhs = quantized::QMatMul::from_qtensor(rhs);
+    let rhs = quantized::QMatMul::from_qtensor(rhs)?;
     let mm = rhs.forward(&lhs)?;
 
     assert_eq!(mm.dims(), [m, n]);
