@@ -1,3 +1,4 @@
+from torch.nn import Module
 from candle.utils import load_safetensors, save_gguf, load_gguf
 from candle.models.bert import BertModel, Config
 import json
@@ -5,6 +6,7 @@ from dataclasses import fields
 from transformers import BertTokenizer
 from candle import Tensor
 from tqdm import tqdm
+import candle   
 
 if __name__ == "__main__":
     model_name = "intfloat/e5-small-v2"
@@ -19,15 +21,19 @@ if __name__ == "__main__":
             if field.name in raw_config:
                 setattr(config, field.name, raw_config[field.name])
 
-    # Quantize all attention 'weights'
-    for name, tensor in tqdm(tensors.items(), desc="Quantizing tensors"):
-        if name.endswith("weight") and "attention" in name and len(tensor.shape) >= 2:
-            new_tensor = tensor.quantize("q4_0")
-            tensors[name] = new_tensor
+    # # Quantize all attention 'weights'
+    # for name, tensor in tqdm(tensors.items(), desc="Quantizing tensors"):
+    #     if name.endswith("weight") and "attention" in name and len(tensor.shape) >= 2:
+    #         new_tensor = tensor.quantize("q4_0")
+    #         tensors[name] = new_tensor
 
     # Load the model
     model = BertModel(config)
     model.load_state_dict(tensors)
+    model.to("cuda",candle.f16)
+    model.cpu()
+    model.type(candle.f32)
+
 
     sentences = [
         "The cat sits outside",
@@ -42,9 +48,9 @@ if __name__ == "__main__":
 
     tokenizer = BertTokenizer.from_pretrained(model_name)
     tokenized = tokenizer(sentences, padding=True)
-    tokens = Tensor(tokenized["input_ids"])
-    token_type_ids = Tensor(tokenized["token_type_ids"])
-    embeddings = model.forward(tokens, token_type_ids)
+    tokens = Tensor(tokenized["input_ids"]).to_device(model.device())
+    token_type_ids = Tensor(tokenized["token_type_ids"]).to_device(model.device())
+    embeddings = model.forward(tokens, token_type_ids).to_device("cpu")
     # Apply average pooling
     (_n_sentence, n_tokens, _hidden_size) = embeddings.shape
     embeddings = embeddings.sum_keepdim(1) / float(n_tokens)

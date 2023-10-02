@@ -1,4 +1,4 @@
-from candle import Tensor, QTensor
+from candle import Tensor, QTensor, DType
 from typing import (
     Dict,
     Tuple,
@@ -15,6 +15,7 @@ from typing import (
 from collections import OrderedDict, namedtuple
 
 TensorLike = Union[Tensor, QTensor]
+T = TypeVar("T", bound="Module")
 
 
 class _IncompatibleKeys(
@@ -529,6 +530,179 @@ class Module:
 
     def _get_name(self):
         return self.__class__.__name__
+
+    def _apply(self, fn):
+        for module in self.children():
+            module._apply(fn)
+
+        for key, buf in self._buffers.items():
+            if buf is not None:
+                self._buffers[key] = fn(buf)
+
+        return self
+
+    def __move_tensor_to_device(self, tensor: TensorLike, device: str):
+        if isinstance(tensor, Tensor):
+            return tensor.to_device(device)
+        else:
+            raise NotImplementedError("Cannot offload QTensor to cuda, yet!")
+
+    def device(self) -> str:
+        """
+        Gets the device of the module, by inspecting its tensors.
+        """
+        tensor = next(self.buffers())
+        if isinstance(tensor, Tensor):
+            return tensor.device
+        else:
+            # QTensors can only be on the CPU
+            return "cpu"
+
+    def cuda(self: T) -> T:
+        r"""Moves all model parameters and buffers to the GPU.
+
+        This also makes associated parameters and buffers different objects. So
+        it should be called before constructing optimizer if the module will
+        live on GPU while being optimized.
+
+        .. note::
+            This method modifies the module in-place.
+
+        Returns:
+            Module: self
+        """
+
+        def to_cuda(t: TensorLike):
+            return self.__move_tensor_to_device(t, "cuda")
+
+        return self._apply(to_cuda)
+
+    def cpu(self: T) -> T:
+        r"""Moves all model parameters and buffers to the CPU.
+
+        .. note::
+            This method modifies the module in-place.
+
+        Returns:
+            Module: self
+        """
+
+        def to_cpu(t: TensorLike):
+            return self.__move_tensor_to_device(t, "cpu")
+
+        return self._apply(to_cpu)
+
+    def __cast_tensor(self, tensor: TensorLike, dtype: Union[DType, str]):
+        if isinstance(tensor, Tensor):
+            return tensor.to_dtype(dtype)
+        else:
+            raise TypeError(
+                "candle.Module.to only accepts Tensor dtypes, but got desired dtype={}".format(
+                    dtype
+                )
+            )
+
+    def type(self: T, dst_type: Union[DType, str]) -> T:
+        r"""Casts all parameters and buffers to :attr:`dst_type`.
+
+        .. note::
+            This method modifies the module in-place.
+
+        Args:
+            dst_type (type or string): the desired type
+
+        Returns:
+            Module: self
+        """
+
+        def cast(t: TensorLike):
+            return self.__cast_tensor(t, dst_type)
+
+        return self._apply(cast)
+
+    @overload
+    def to(
+        self: T,
+        device: str = ...,
+        dtype: Optional[Union[DType, str]] = ...,
+    ) -> T:
+        ...
+
+    @overload
+    def to(self: T, dtype: Union[DType, str]) -> T:
+        ...
+
+    def to(self, *args, **kwargs):
+        r"""Moves and/or casts the parameters and buffers.
+
+        This can be called as
+
+        .. function:: to(device=None, dtype=None)
+           :noindex:
+
+        .. function:: to(dtype)
+           :noindex:
+
+        See below for examples.
+
+        .. note::
+            This method modifies the module in-place.
+
+        Args:
+            device (:class:`torch.device`): the desired device of the parameters
+                and buffers in this module
+            dtype (:class:`torch.dtype`): the desired floating point or complex dtype of
+                the parameters and buffers in this module
+
+        Returns:
+            Module: self
+        """
+
+        device = None
+        dtype = None
+
+        if args:
+            for arg in args:
+                # Assuming arg can be a string representing a device or a dtype
+
+                if isinstance(arg, str):
+                    lower_arg = str(arg).lower()
+                    if lower_arg.startswith("cuda") or lower_arg == "cpu":
+                        device = lower_arg
+                    else:
+                        dtype = arg
+                elif isinstance(arg, DType):
+                    dtype = str(arg)
+                else:
+                    raise TypeError(
+                        "Module.to() received an invalid combination of arguments. Got: {}".format(
+                            args
+                        )
+                    )
+
+        if kwargs:
+            device = kwargs.get("device", device)
+            dtype = str(kwargs.get("dtype", dtype))
+
+        if device:
+            device = device.lower()
+
+        if dtype:
+            dtype = dtype.lower()
+            if dtype not in ["f32", "f16", "f64"]:
+                raise TypeError(
+                    "candle.Module.to only accepts floating point"
+                    "dtypes, but got desired dtype={}".format(dtype)
+                )
+
+        def convert(t):
+            if dtype:
+                t = self.__cast_tensor(t, dtype)
+            if device:
+                t = self.__move_tensor_to_device(t, device)
+            return t
+
+        return self._apply(convert)
 
     def __setattr__(self, __name: str, __value: Any) -> None:
         if isinstance(__value, Module):
