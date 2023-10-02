@@ -1,37 +1,37 @@
 use super::Config;
+use crate::models::{quantized_t5::Embedding, with_tracing::QMatMul};
+pub use crate::quantized_var_builder::VarBuilder;
 use candle::{Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Conv1d, Conv1dConfig, Embedding, LayerNorm, Module, VarBuilder};
+use candle_nn::{Conv1d, Conv1dConfig, LayerNorm, Module};
 
-fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
-    Ok(Embedding::new(embeddings, hidden_size))
-}
-//
-// We wrap the `Linear` layer here to add some tracing so that it's easier to profile the resulting
-// model.
 #[derive(Debug)]
-pub struct Linear {
-    inner: candle_nn::Linear,
-    span: tracing::Span,
+struct Linear {
+    weight: QMatMul,
+    bias: Option<Tensor>,
 }
 
-impl Linear {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
+impl Module for Linear {
+    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
+        let x = x.apply(&self.weight)?;
+        match &self.bias {
+            None => Ok(x),
+            Some(bias) => x.broadcast_add(bias),
+        }
     }
 }
 
-fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let span = tracing::span!(tracing::Level::TRACE, "linear");
-    let inner = candle_nn::linear(size1, size2, vb)?;
-    Ok(Linear { inner, span })
+fn linear(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
+    let bias = vb.get(out_dim, "bias")?.dequantize(vb.device())?;
+    let weight = QMatMul::new(in_dim, out_dim, vb)?;
+    Ok(Linear {
+        weight,
+        bias: Some(bias),
+    })
 }
 
-fn linear_no_bias(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let span = tracing::span!(tracing::Level::TRACE, "linear");
-    let inner = candle_nn::linear_no_bias(size1, size2, vb)?;
-    Ok(Linear { inner, span })
+fn linear_no_bias(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
+    let weight = QMatMul::new(in_dim, out_dim, vb)?;
+    Ok(Linear { weight, bias: None })
 }
 
 fn conv1d(
@@ -41,15 +41,17 @@ fn conv1d(
     config: Conv1dConfig,
     vb: VarBuilder,
 ) -> Result<Conv1d> {
-    let weight = vb.get((out_channels, in_channels, kernel_size), "weight")?;
-    let bias = vb.get(out_channels, "bias")?;
+    let weight = vb
+        .get((out_channels, in_channels, kernel_size), "weight")?
+        .dequantize(vb.device())?;
+    let bias = vb.get(out_channels, "bias")?.dequantize(vb.device())?;
     Ok(Conv1d::new(weight, Some(bias), config))
 }
 
-fn layer_norm(size: usize, vb: VarBuilder) -> Result<LayerNorm> {
-    let weight = vb.get(size, "weight")?;
-    let bias = vb.get(size, "bias")?;
-    Ok(LayerNorm::new(weight, bias, 1e-5))
+fn layer_norm(size: usize, vb: VarBuilder) -> Result<candle_nn::LayerNorm> {
+    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
+    let bias = vb.get(size, "bias")?.dequantize(vb.device())?;
+    Ok(candle_nn::LayerNorm::new(weight, bias, 1e-5))
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L62
@@ -277,7 +279,7 @@ impl AudioEncoder {
         let positional_embedding = sinusoids(n_ctx, n_state)?.to_device(vb.device())?;
         let blocks = (0..cfg.encoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, false, vb.pp(&format!("layers.{i}")))
+                ResidualAttentionBlock::load(n_state, n_head, false, vb.pp(format!("layers.{i}")))
             })
             .collect::<Result<Vec<_>>>()?;
         let ln_post = layer_norm(n_state, vb.pp("layer_norm"))?;
@@ -333,11 +335,13 @@ impl TextDecoder {
         let n_state = cfg.d_model;
         let n_head = cfg.decoder_attention_heads;
         let n_ctx = cfg.max_target_positions;
-        let token_embedding = embedding(cfg.vocab_size, n_state, vb.pp("embed_tokens"))?;
-        let positional_embedding = vb.get((n_ctx, n_state), "embed_positions.weight")?;
+        let token_embedding = Embedding::new(cfg.vocab_size, n_state, vb.pp("embed_tokens"))?;
+        let positional_embedding = vb
+            .get((n_ctx, n_state), "embed_positions.weight")?
+            .dequantize(vb.device())?;
         let blocks = (0..cfg.decoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, true, vb.pp(&format!("layers.{i}")))
+                ResidualAttentionBlock::load(n_state, n_head, true, vb.pp(format!("layers.{i}")))
             })
             .collect::<Result<Vec<_>>>()?;
         let ln = layer_norm(n_state, vb.pp("layer_norm"))?;
