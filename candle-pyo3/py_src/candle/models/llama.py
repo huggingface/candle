@@ -1,7 +1,7 @@
 import candle
 from typing import Dict, Tuple, Any
 from candle import Tensor, QTensor, utils, nn
-from .base import Module, ModuleList
+from candle.nn import Module, ModuleList
 
 def masked_fill(on_false:Tensor, mask:Tensor, on_true:Tensor):
     shape = mask.shape
