@@ -155,16 +155,24 @@ pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> Res
         crate::bail!("vec_dot_q8k_q8k: {n} is not divisible by {qk}")
     }
 
-    // Generic implementation.
     let mut sumf = 0f32;
     for (xs, ys) in xs.iter().zip(ys.iter()) {
-        let sum_i = xs
-            .qs
-            .iter()
-            .zip(ys.qs.iter())
-            .map(|(&x, &y)| x as i32 * y as i32)
-            .sum::<i32>();
-        sumf += sum_i as f32 * xs.d * ys.d
+        unsafe {
+            let mut sum_i = vdupq_n_s32(0);
+            let scale = xs.d * ys.d;
+            let xs = xs.qs.as_ptr();
+            let ys = ys.qs.as_ptr();
+            for i in (0..QK_K).step_by(16) {
+                let xs = vld1q_s8(xs.add(i));
+                let ys = vld1q_s8(ys.add(i));
+                let xy_lo = vmull_s8(vget_low_s8(xs), vget_low_s8(ys));
+                let xy_up = vmull_s8(vget_high_s8(xs), vget_high_s8(ys));
+
+                let xy = vaddq_s32(vpaddlq_s16(xy_lo), vpaddlq_s16(xy_up));
+                sum_i = vaddq_s32(sum_i, xy)
+            }
+            sumf += vaddvq_s32(sum_i) as f32 * scale
+        }
     }
     Ok(sumf)
 }
