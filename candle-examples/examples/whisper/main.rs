@@ -484,15 +484,20 @@ fn main() -> Result<()> {
             println!("No audio file submitted: Downloading https://huggingface.co/datasets/Narsil/candle_demo/blob/main/samples_jfk.wav");
             dataset.get("samples_jfk.wav")?
         };
-        let config = if args.quantized {
-            repo.get("config-tiny.json")?
+        let (config, model) = if args.quantized {
+            match args.model {
+                WhichModel::TinyEn => (
+                    repo.get("config-tiny-en.json")?,
+                    repo.get("model-tiny-en-q40.gguf")?,
+                ),
+                WhichModel::Tiny => (
+                    repo.get("config-tiny.json")?,
+                    repo.get("model-tiny-q40.gguf")?,
+                ),
+                _ => unimplemented!("no quantized support for {:?}", args.model),
+            }
         } else {
-            repo.get("config.json")?
-        };
-        let model = if args.quantized {
-            repo.get("model-tiny-q40.gguf")?
-        } else {
-            repo.get("model.safetensors")?
+            (repo.get("config.json")?, repo.get("model.safetensors")?)
         };
         (config, repo.get("tokenizer.json")?, model, sample)
     };
