@@ -168,6 +168,7 @@
         if (!hasImage || isEmbedding || isSegmenting) {
           return;
         }
+        const backgroundMode = event.shiftKey ? bgPointMode^event.shiftKey : bgPointMode;
         const targetBox = event.target.getBoundingClientRect();
         const x = (event.clientX - targetBox.left) / targetBox.width;
         const y = (event.clientY - targetBox.top) / targetBox.height;
@@ -181,7 +182,7 @@
         if (ptsToRemove.length > 0) {
           pointArr = pointArr.filter((_, idx) => !ptsToRemove.includes(idx));
         } else {
-          pointArr = [...pointArr, [x, y, !bgPointMode]];
+          pointArr = [...pointArr, [x, y, !backgroundMode]];
         }
         undoBtn.disabled = false;
         if (pointArr.length == 0) {
