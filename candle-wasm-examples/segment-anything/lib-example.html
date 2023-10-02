@@ -92,7 +92,7 @@
         const target = e.target;
         if (target.files.length > 0) {
           const href = URL.createObjectURL(target.files[0]);
-          cleanImageCanvas();
+          clearImageCanvas();
           drawImageCanvas(href);
           setImageEmbeddings(href);
           togglePointMode(false);
@@ -118,12 +118,12 @@
 
         if (files.length > 0) {
           const href = URL.createObjectURL(files[0]);
-          cleanImageCanvas();
+          clearImageCanvas();
           drawImageCanvas(href);
           setImageEmbeddings(href);
           togglePointMode(false);
         } else if (url) {
-          cleanImageCanvas();
+          clearImageCanvas();
           drawImageCanvas(url);
           setImageEmbeddings(url);
           togglePointMode(false);
@@ -144,7 +144,7 @@
         const target = e.target;
         if (target.nodeName === "IMG") {
           const href = target.src;
-          cleanImageCanvas();
+          clearImageCanvas();
           drawImageCanvas(href);
           setImageEmbeddings(href);
         }
@@ -155,7 +155,7 @@
       });
       //add event listener to clear button
       clearBtn.addEventListener("click", () => {
-        cleanImageCanvas();
+        clearImageCanvas();
         togglePointMode(false);
         pointArr = [];
       });
@@ -259,13 +259,14 @@
         currentImageURL = imageURL;
       }
 
-      function cleanImageCanvas() {
+      function clearImageCanvas() {
         ctxCanvas.clearRect(0, 0, canvas.width, canvas.height);
         ctxMask.clearRect(0, 0, canvas.width, canvas.height);
         hasImage = false;
         isEmbedding = false;
         isSegmenting = false;
         currentImageURL = "";
+        pointArr = [];
         clearBtn.disabled = true;
         canvas.parentElement.style.height = "auto";
         dropButtons.classList.remove("invisible");
