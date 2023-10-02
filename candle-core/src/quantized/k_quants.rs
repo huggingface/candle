@@ -34,6 +34,9 @@ pub trait GgmlType: Sized + Clone + Send + Sync {
     /// Dot product used as a building block for quantized mat-mul.
     /// n is the number of elements to be considered.
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32>;
+
+    /// Generic implementation of the dot product without simd optimizations.
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -228,6 +231,10 @@ impl GgmlType for BlockQ4_0 {
         #[cfg(target_feature = "simd128")]
         return super::simd128::vec_dot_q4_0_q8_0(n, xs, ys);
 
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         let qk = QK8_0;
         let nb = n / qk;
         if n % QK8_0 != 0 {
@@ -258,6 +265,10 @@ impl GgmlType for BlockQ4_1 {
     type VecDotType = BlockQ8_1;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         // ggml_vec_dot_q4_1_q8_1
         let qk = QK8_1;
         if n % qk != 0 {
@@ -357,7 +368,10 @@ impl GgmlType for BlockQ5_0 {
         if nb % 2 != 0 {
             crate::bail!("vec_dot_q5_0_q8_0: {n}, nb is not divisible by 2")
         }
+        Self::vec_dot_unopt(n, xs, ys)
+    }
 
+    fn vec_dot_unopt(_n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         // Generic implementation.
         let mut sumf = 0f32;
 
@@ -448,6 +462,10 @@ impl GgmlType for BlockQ5_1 {
     type VecDotType = BlockQ8_1;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         let qk = Self::BLCK_SIZE;
         if n % Self::BLCK_SIZE != 0 {
             crate::bail!("vec_dot_q5_1_q8_1: {n} is not divisible by {qk}")
@@ -612,6 +630,10 @@ impl GgmlType for BlockQ8_0 {
         #[cfg(target_feature = "simd128")]
         return super::simd128::vec_dot_q8_0_q8_0(n, xs, ys);
 
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         let qk = QK8_0;
         if n % QK8_0 != 0 {
             crate::bail!("vec_dot_q8_0_q8_0: {n} is not divisible by {qk}")
@@ -637,7 +659,11 @@ impl GgmlType for BlockQ8_1 {
     const BLCK_SIZE: usize = QK8_1;
     type VecDotType = BlockQ8_1;
 
-    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
         unimplemented!("no support for vec-dot on Q8_1")
     }
 
@@ -690,6 +716,10 @@ impl GgmlType for BlockQ2K {
         #[cfg(target_feature = "simd128")]
         return super::simd128::vec_dot_q2k_q8k(n, xs, ys);
 
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         if n % QK_K != 0 {
             crate::bail!("vec_dot_q2k_q8k: {n} is not divisible by {QK_K}")
         }
@@ -859,6 +889,10 @@ impl GgmlType for BlockQ3K {
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q3k_q8k(n, xs, ys);
 
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         if n % QK_K != 0 {
             crate::bail!("vec_dot_q3k_q8k: {n} is not divisible by {QK_K}")
         }
@@ -1136,6 +1170,10 @@ impl GgmlType for BlockQ4K {
         #[cfg(target_feature = "simd128")]
         return super::simd128::vec_dot_q4k_q8k(n, xs, ys);
 
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         if n % QK_K != 0 {
             crate::bail!("vec_dot_q4k_q8k: {n} is not divisible by {QK_K}")
         }
@@ -1322,6 +1360,10 @@ impl GgmlType for BlockQ5K {
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q5k_q8k(n, xs, ys);
 
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         if n % QK_K != 0 {
             crate::bail!("vec_dot_q5k_q8k: {n} is not divisible by {QK_K}")
         }
@@ -1542,6 +1584,10 @@ impl GgmlType for BlockQ6K {
         #[cfg(target_feature = "simd128")]
         return super::simd128::vec_dot_q6k_q8k(n, xs, ys);
 
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         if n % QK_K != 0 {
             crate::bail!("vec_dot_q6k_q8k: {n} is not divisible by {QK_K}")
         }
@@ -1710,7 +1756,11 @@ impl GgmlType for BlockQ8K {
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
 
-    fn vec_dot(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
+    fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
         unreachable!()
     }
 
@@ -1817,6 +1867,10 @@ impl GgmlType for f32 {
     type VecDotType = f32;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         if xs.len() < n {
             crate::bail!("size mismatch {} < {n}", xs.len())
         }
@@ -1851,6 +1905,10 @@ impl GgmlType for f16 {
     type VecDotType = f16;
 
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        Self::vec_dot_unopt(n, xs, ys)
+    }
+
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         if xs.len() < n {
             crate::bail!("size mismatch {} < {n}", xs.len())
         }
