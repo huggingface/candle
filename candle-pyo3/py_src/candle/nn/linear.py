@@ -80,13 +80,36 @@ class Linear(Module):
         # TODO: Do actual initialization here: e.g. kaiming_uniform or xavier_uniform
         self.weight = candle.ones((out_features, in_features), **factory_kwargs)
         if bias:
-            self.bias = candle.zeros(out_features, **factory_kwargs)
-
-    def forward(self, input: Tensor) -> Tensor:
-        if isinstance(self.weight, candle.QTensor):
-            return self.weight.matmul_t(input) + self.bias
+            self.bias = candle.zeros((out_features,), **factory_kwargs)
         else:
-            return input.matmul(self.weight.t()) + self.bias
+            self.bias = None
+
+    def forward(self, x: Tensor) -> Tensor:
+        if isinstance(self.weight, candle.QTensor):
+            dims = x.shape
+            # TODO: actually check if we are batched here
+            if len(dims) == 1:
+                return self.weight.matmul_t(x) + self.bias
+            else:
+                # Well this sucks => somehow batch it?
+                results = []
+                for i in range(dims[0]):
+                    results.append(self.weight.matmul_t(x.get(i)) + self.bias)
+
+                return candle.stack(results)
+        else:
+            dims = x.shape
+            # TODO: actually check if we are batched here
+            if len(dims) == 1:
+                w = self.weight.t()
+            else:
+                batch_size = dims[0]
+                w = self.weight.broadcast_left((batch_size,)).t()
+
+            x = x.matmul(w)
+            if self.bias is not None:
+                x = x.broadcast_add(self.bias)
+            return x
 
     def extra_repr(self) -> str:
         return f"in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}"

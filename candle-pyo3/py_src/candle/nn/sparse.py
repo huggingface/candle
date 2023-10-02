@@ -25,9 +25,9 @@ class Embedding(Module):
     """
 
     def __init__(
-        self, num_embeddings: int, embedding_dim: int, device=None, dtype=None
+        self, num_embeddings: int, embedding_dim: int, device=None
     ) -> None:
-        factory_kwargs = {"device": device, "dtype": dtype}
+        factory_kwargs = {"device": device}
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim

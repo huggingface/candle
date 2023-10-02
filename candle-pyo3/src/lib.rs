@@ -1137,9 +1137,40 @@ fn silu(tensor: PyTensor) -> PyResult<PyTensor> {
     Ok(PyTensor(s))
 }
 
+#[pyfunction]
+#[pyo3(text_signature = "(tensor:Tensor)")]
+/// Applies the Gaussian Error Linear Unit (GELU) function to a given tensor.
+/// &RETURNS&: Tensor
+fn gelu(tensor: PyTensor) -> PyResult<PyTensor> {
+    let s = tensor.0.gelu_erf().map_err(wrap_err)?;
+    Ok(PyTensor(s))
+}
+
+#[pyfunction]
+#[pyo3(text_signature = "(tensor:Tensor)")]
+/// Applies the Rectified Linear Unit (ReLU) function to a given tensor.
+/// &RETURNS&: Tensor
+fn relu(tensor: PyTensor) -> PyResult<PyTensor> {
+    let s = tensor.0.relu().map_err(wrap_err)?;
+    Ok(PyTensor(s))
+}
+
+#[pyfunction]
+#[pyo3(text_signature = "(tensor:Tensor)")]
+/// Applies the tanh function to a given tensor.
+/// &RETURNS&: Tensor
+fn tanh(tensor: PyTensor) -> PyResult<PyTensor> {
+    let s = tensor.0.tanh().map_err(wrap_err)?;
+    Ok(PyTensor(s))
+}
+
+
 fn candle_functional_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(silu, m)?)?;
     m.add_function(wrap_pyfunction!(softmax, m)?)?;
+    m.add_function(wrap_pyfunction!(gelu, m)?)?;
+    m.add_function(wrap_pyfunction!(relu, m)?)?;
+    m.add_function(wrap_pyfunction!(tanh, m)?)?;
     Ok(())
 }
 
