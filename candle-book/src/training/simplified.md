@@ -33,8 +33,7 @@ Thus, this neural network learns to find hidden relationships between the result
 
 ## Example output
 
-```
-
+```bash
 Trying to train neural network.
 Epoch:   1 Train loss:  4.42555 Test accuracy:  0.00%
 Epoch:   2 Train loss:  0.84677 Test accuracy: 33.33%
@@ -43,5 +42,4 @@ Epoch:   4 Train loss:  0.37806 Test accuracy: 33.33%
 Epoch:   5 Train loss:  0.36647 Test accuracy: 100.00%
 real_life_votes: [13, 22]
 neural_network_prediction_result: 0.0
-
 ```
