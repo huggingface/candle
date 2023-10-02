@@ -1,4 +1,6 @@
-mod simplified;
+#[cfg(test)]
+pub mod simplified;
+
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
