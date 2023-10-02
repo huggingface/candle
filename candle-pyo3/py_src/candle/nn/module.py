@@ -41,6 +41,7 @@ class Module:
     _modules: Dict[str, Optional["Module"]]
     _buffers: Dict[str, Optional[TensorLike]]
     _non_persistent_buffers_set: Set[str]
+    _quantizable_buffers: Set[str]
     _version: int = 1
 
     def __init__(self, *args, **kwargs) -> None:
@@ -50,6 +51,7 @@ class Module:
         super().__setattr__("_modules", OrderedDict())
         super().__setattr__("_buffers", OrderedDict())
         super().__setattr__("_non_persistent_buffers_set", set())
+        super().__setattr__("_quantizable_buffers", set())
 
     def __call__(self, *input):
         """
@@ -531,7 +533,21 @@ class Module:
     def __setattr__(self, __name: str, __value: Any) -> None:
         if isinstance(__value, Module):
             self._modules[__name] = __value
-        elif isinstance(__value, (Tensor, QTensor)):
+        elif isinstance(__value, QTensor):
+            if __name in self._quantizable_buffers:
+                type = __value.ggml_dtype.lower()
+                if type in ["f32", "f16"]:
+                    # It is faster to just dequantize the tensor here and use the normal tensor operations
+                    dequant = __value.dequantize()
+                    if type == "f16":
+                        dequant = dequant.to_dtype("f16")
+                    self._buffers[__name] = dequant
+                else:
+                    self._buffers[__name] = __value
+            else:
+                # We expect a normal tensor here => dequantize it
+                self._buffers[__name] = __value.dequantize()
+        elif isinstance(__value, Tensor):
             self._buffers[__name] = __value
         else:
             super().__setattr__(__name, __value)

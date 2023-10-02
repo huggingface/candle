@@ -75,6 +75,9 @@ class Linear(Module):
     ) -> None:
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
+        # Allow 'weight' to be quantized
+        self._quantizable_buffers.add("weight")
+        
         self.in_features = in_features
         self.out_features = out_features
         # TODO: Do actual initialization here: e.g. kaiming_uniform or xavier_uniform
