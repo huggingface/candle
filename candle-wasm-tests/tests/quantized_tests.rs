@@ -100,7 +100,14 @@ fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
     T::VecDotType::from_float(&b, &mut b_quant)?;
 
     let result = T::vec_dot(length, &a_quant, &b_quant)?;
+    let result_unopt = T::vec_dot_unopt(length, &a_quant, &b_quant)?;
     let reference_result = vec_dot_reference(&a, &b);
+
+    if (result - result_unopt).abs() / length as f32 > 1e-6 {
+        candle::bail!(
+            "the opt and unopt vec-dot returned different values, opt {result}, unopt {result_unopt}"
+        )
+    }
 
     let error = (result - reference_result).abs() / length as f32;
 
