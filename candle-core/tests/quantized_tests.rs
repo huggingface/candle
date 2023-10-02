@@ -491,6 +491,9 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
         GgmlDType::Q5_0 => 0.001353,
         GgmlDType::Q5_1 => 0.001363,
         GgmlDType::Q8_0 => 0.000092,
+
+        // Not from the ggml repo.
+        GgmlDType::Q8K => 0.00065,
         _ => candle_core::bail!("No GGML results for quantization type {dtype:?}",),
     };
     Ok(err)
@@ -690,5 +693,30 @@ fn quantized_matmul_q6k() -> Result<()> {
     assert_eq!(dst, [1.324, 1.49, -0.164, 1.741]);
 
     ggml_matmul_error_test::<BlockQ6K>()?;
+    Ok(())
+}
+
+#[test]
+fn quantized_matmul_q8k() -> Result<()> {
+    use k_quants::BlockQ8K;
+
+    let cpu = &Device::Cpu;
+    let (m, k, n) = (11, 512, 21);
+    let (lhs, rhs, mm) = get_random_tensors(m, k, n, cpu)?;
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.262, 1.513, -0.208, 1.702]);
+
+    let rhs = quantized::QTensor::quantize::<BlockQ8K>(&rhs)?;
+    let rhs = quantized::QMatMul::from_qtensor(rhs)?;
+    let mm = rhs.forward(&lhs)?;
+
+    assert_eq!(mm.dims(), [m, n]);
+    let dst = mm.flatten_all()?.to_vec1::<f32>()?;
+    let dst = round_vector(&[dst[0], dst[m * n / 3], dst[m * n * 2 / 3], dst[m * n - 1]]);
+    assert_eq!(dst, [1.266, 1.504, -0.204, 1.7]);
+
+    ggml_matmul_error_test::<BlockQ8K>()?;
     Ok(())
 }
