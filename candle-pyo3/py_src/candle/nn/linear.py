@@ -88,15 +88,15 @@ class Linear(Module):
         if isinstance(self.weight, candle.QTensor):
             dims = x.shape
             # TODO: actually check if we are batched here
-            if len(dims) == 1:
-                return self.weight.matmul_t(x) + self.bias
+            if len(dims) < 3:
+                return self.weight.matmul_t(x).broadcast_add(self.bias)
+            elif len(dims) == 3:
+                b, n, m = dims
+                re = x.reshape((b * n, m))
+                result = self.weight.matmul_t(re).reshape((b,n,m))
+                return result.broadcast_add(self.bias)
             else:
-                # Well this sucks => somehow batch it?
-                results = []
-                for i in range(dims[0]):
-                    results.append(self.weight.matmul_t(x.get(i)) + self.bias)
-
-                return candle.stack(results)
+                raise NotImplementedError("'QTensor.matmul_t' is not implemented for more than 3 dimensions")
         else:
             dims = x.shape
             # TODO: actually check if we are batched here

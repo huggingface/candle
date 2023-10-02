@@ -17,8 +17,13 @@ if __name__ == "__main__":
         for field in fields(config):
             if field.name in raw_config:
                 setattr(config, field.name, raw_config[field.name])
-        
 
+    # Quantize a single tensor    
+    weight:Tensor = tensors['encoder.layer.0.attention.self.query.weight']
+    new_weight = weight.quantize("q4_0")
+    tensors['encoder.layer.0.attention.self.query.weight'] = new_weight
+
+    # Load the model
     model = BertModel(config)
     model.load_state_dict(tensors)
 
