@@ -18,8 +18,7 @@ use rand::{distributions::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
 
 mod multilingual;
-use candle_transformers::models::whisper::{self as m, audio, model};
-use model::{Config, Whisper};
+use candle_transformers::models::whisper::{self as m, audio, model::Whisper, Config};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
