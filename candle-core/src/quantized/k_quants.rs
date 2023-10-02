@@ -1756,14 +1756,18 @@ impl GgmlType for BlockQ8K {
     const BLCK_SIZE: usize = QK_K;
     type VecDotType = BlockQ8K;
 
+    #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        #[cfg(target_feature = "neon")]
+        return super::neon::vec_dot_q8k_q8k(n, xs, ys);
+
         Self::vec_dot_unopt(n, xs, ys)
     }
 
     fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
-        let qk = QK8_0;
-        if n % QK8_0 != 0 {
-            crate::bail!("vec_dot_q8_0_q8_0: {n} is not divisible by {qk}")
+        let qk = QK_K;
+        if n % QK_K != 0 {
+            crate::bail!("vec_dot_q8k_q8k: {n} is not divisible by {qk}")
         }
 
         // Generic implementation.
