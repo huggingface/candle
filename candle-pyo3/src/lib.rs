@@ -1137,7 +1137,7 @@ fn silu(tensor: PyTensor) -> PyResult<PyTensor> {
     Ok(PyTensor(s))
 }
 
-fn candle_nn_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn candle_functional_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(silu, m)?)?;
     m.add_function(wrap_pyfunction!(softmax, m)?)?;
     Ok(())
@@ -1148,8 +1148,8 @@ fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     let utils = PyModule::new(py, "utils")?;
     candle_utils(py, utils)?;
     m.add_submodule(utils)?;
-    let nn = PyModule::new(py, "nn")?;
-    candle_nn_m(py, nn)?;
+    let nn = PyModule::new(py, "functional")?;
+    candle_functional_m(py, nn)?;
     m.add_submodule(nn)?;
     m.add_class::<PyTensor>()?;
     m.add_class::<PyQTensor>()?;

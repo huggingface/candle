@@ -2,7 +2,7 @@
 import sys
 from typing import Dict, Tuple, Any
 import candle
-from candle.modeling.llama import QuantizedLlama
+from candle.models.llama import QuantizedLlama
 from candle import utils
 
 MAX_SEQ_LEN = 4096
