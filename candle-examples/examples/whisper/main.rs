@@ -372,6 +372,7 @@ impl WhichModel {
             Self::TinyEn | Self::BaseEn | Self::SmallEn | Self::MediumEn => false,
         }
     }
+
     fn model_and_revision(&self) -> (&'static str, &'static str) {
         match self {
             Self::Tiny => ("openai/whisper-tiny", "main"),
@@ -455,10 +456,13 @@ fn main() -> Result<()> {
         None
     };
     let device = candle_examples::device(args.cpu)?;
-    let (default_model, default_revision) = args.model.model_and_revision();
+    let (default_model, default_revision) = if args.quantized {
+        ("lmz/candle-whisper", "main")
+    } else {
+        args.model.model_and_revision()
+    };
     let default_model = default_model.to_string();
     let default_revision = default_revision.to_string();
-    let path = std::path::PathBuf::from(default_model.clone());
     let (model_id, revision) = match (args.model_id, args.revision) {
         (Some(model_id), Some(revision)) => (model_id, revision),
         (Some(model_id), None) => (model_id, "main".to_string()),
@@ -466,20 +470,7 @@ fn main() -> Result<()> {
         (None, None) => (default_model, default_revision),
     };
 
-    let (config_filename, tokenizer_filename, weights_filename, input) = if path.exists() {
-        let mut config_filename = path.clone();
-        config_filename.push("config.json");
-        let mut tokenizer_filename = path.clone();
-        tokenizer_filename.push("tokenizer.json");
-        let mut model_filename = path;
-        model_filename.push("model.safetensors");
-        (
-            config_filename,
-            tokenizer_filename,
-            model_filename,
-            std::path::PathBuf::from(args.input.expect("You didn't specify a file to read from yet, are using a local model, please add `--input example.wav` to read some audio file")),
-        )
-    } else {
+    let (config_filename, tokenizer_filename, weights_filename, input) = {
         let api = Api::new()?;
         let dataset = api.dataset("Narsil/candle-examples".to_string());
         let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
@@ -493,12 +484,17 @@ fn main() -> Result<()> {
             println!("No audio file submitted: Downloading https://huggingface.co/datasets/Narsil/candle_demo/blob/main/samples_jfk.wav");
             dataset.get("samples_jfk.wav")?
         };
-        (
-            repo.get("config.json")?,
-            repo.get("tokenizer.json")?,
-            repo.get("model.safetensors")?,
-            sample,
-        )
+        let config = if args.quantized {
+            repo.get("config-tiny.json")?
+        } else {
+            repo.get("config.json")?
+        };
+        let model = if args.quantized {
+            repo.get("model-tiny-q40.gguf")?
+        } else {
+            repo.get("model.safetensors")?
+        };
+        (config, repo.get("tokenizer.json")?, model, sample)
     };
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
