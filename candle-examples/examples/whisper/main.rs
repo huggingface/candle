@@ -18,7 +18,48 @@ use rand::{distributions::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
 
 mod multilingual;
-use candle_transformers::models::whisper::{self as m, audio, model::Whisper, Config};
+use candle_transformers::models::whisper::{self as m, audio, Config};
+
+pub enum Model {
+    Normal(m::model::Whisper),
+    Quantized(m::quantized_model::Whisper),
+}
+
+// Maybe we should use some traits rather than doing the dispatch for all these.
+impl Model {
+    pub fn config(&self) -> &Config {
+        match self {
+            Self::Normal(m) => &m.config,
+            Self::Quantized(m) => &m.config,
+        }
+    }
+
+    pub fn encoder_forward(&mut self, x: &Tensor, flush: bool) -> candle::Result<Tensor> {
+        match self {
+            Self::Normal(m) => m.encoder.forward(x, flush),
+            Self::Quantized(m) => m.encoder.forward(x, flush),
+        }
+    }
+
+    pub fn decoder_forward(
+        &mut self,
+        x: &Tensor,
+        xa: &Tensor,
+        flush: bool,
+    ) -> candle::Result<Tensor> {
+        match self {
+            Self::Normal(m) => m.decoder.forward(x, xa, flush),
+            Self::Quantized(m) => m.decoder.forward(x, xa, flush),
+        }
+    }
+
+    pub fn decoder_final_linear(&self, x: &Tensor) -> candle::Result<Tensor> {
+        match self {
+            Self::Normal(m) => m.decoder.final_linear(x),
+            Self::Quantized(m) => m.decoder.final_linear(x),
+        }
+    }
+}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -40,7 +81,7 @@ struct Segment {
 }
 
 struct Decoder {
-    model: Whisper,
+    model: Model,
     rng: rand::rngs::StdRng,
     task: Option<Task>,
     timestamps: bool,
@@ -59,7 +100,7 @@ struct Decoder {
 impl Decoder {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: Whisper,
+        model: Model,
         tokenizer: Tokenizer,
         seed: u64,
         device: &Device,
@@ -71,9 +112,9 @@ impl Decoder {
         let no_timestamps_token = token_id(&tokenizer, m::NO_TIMESTAMPS_TOKEN)?;
         // Suppress the notimestamps token when in timestamps mode.
         // https://github.com/openai/whisper/blob/e8622f9afc4eba139bf796c210f5c01081000472/whisper/decoding.py#L452
-        let suppress_tokens: Vec<f32> = (0..model.config.vocab_size as u32)
+        let suppress_tokens: Vec<f32> = (0..model.config().vocab_size as u32)
             .map(|i| {
-                if model.config.suppress_tokens.contains(&i)
+                if model.config().suppress_tokens.contains(&i)
                     || timestamps && i == no_timestamps_token
                 {
                     f32::NEG_INFINITY
@@ -108,11 +149,11 @@ impl Decoder {
 
     fn decode(&mut self, mel: &Tensor, t: f64) -> Result<DecodingResult> {
         let model = &mut self.model;
-        let audio_features = model.encoder.forward(mel, true)?;
+        let audio_features = model.encoder_forward(mel, true)?;
         if self.verbose {
             println!("audio features: {:?}", audio_features.dims());
         }
-        let sample_len = model.config.max_target_positions / 2;
+        let sample_len = model.config().max_target_positions / 2;
         let mut sum_logprob = 0f64;
         let mut no_speech_prob = f64::NAN;
         let mut tokens = vec![self.sot_token];
@@ -132,12 +173,12 @@ impl Decoder {
             // The model expects a batch dim but this inference loop does not handle
             // it so we add it at this point.
             let tokens_t = tokens_t.unsqueeze(0)?;
-            let ys = model.decoder.forward(&tokens_t, &audio_features, i == 0)?;
+            let ys = model.decoder_forward(&tokens_t, &audio_features, i == 0)?;
 
             // Extract the no speech probability on the first iteration by looking at the first
             // token logits and the probability for the according token.
             if i == 0 {
-                let logits = model.decoder.final_linear(&ys.i(..1)?)?.i(0)?.i(0)?;
+                let logits = model.decoder_final_linear(&ys.i(..1)?)?.i(0)?.i(0)?;
                 no_speech_prob = softmax(&logits, 0)?
                     .i(self.no_speech_token as usize)?
                     .to_scalar::<f32>()? as f64;
@@ -145,8 +186,7 @@ impl Decoder {
 
             let (_, seq_len, _) = ys.dims3()?;
             let logits = model
-                .decoder
-                .final_linear(&ys.i((..1, seq_len - 1..))?)?
+                .decoder_final_linear(&ys.i((..1, seq_len - 1..))?)?
                 .i(0)?
                 .i(0)?;
             // TODO: Besides suppress tokens, we should apply the heuristics from
@@ -175,7 +215,7 @@ impl Decoder {
             let prob = softmax(&logits, candle::D::Minus1)?
                 .i(next_token as usize)?
                 .to_scalar::<f32>()? as f64;
-            if next_token == self.eot_token || tokens.len() > model.config.max_target_positions {
+            if next_token == self.eot_token || tokens.len() > model.config().max_target_positions {
                 break;
             }
             sum_logprob += prob.ln();
@@ -483,7 +523,7 @@ fn main() -> Result<()> {
     let vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], m::DTYPE, &device)? };
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
-    let mut model = Whisper::load(&vb, config)?;
+    let mut model = Model::Normal(m::model::Whisper::load(&vb, config)?);
 
     let language_token = match (args.model.is_multilingual(), args.language) {
         (true, None) => Some(multilingual::detect_language(&mut model, &tokenizer, &mel)?),
