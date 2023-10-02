@@ -171,13 +171,30 @@
         const targetBox = event.target.getBoundingClientRect();
         const x = (event.clientX - targetBox.left) / targetBox.width;
         const y = (event.clientY - targetBox.top) / targetBox.height;
-        isSegmenting = true;
-        pointArr = [...pointArr, [x, y, !bgPointMode]];
+        const ptsToRemove = [];
+        for (const [idx, pts] of pointArr.entries()) {
+          const d = Math.sqrt((pts[0] - x) ** 2 + (pts[1] - y) ** 2);
+          if (d < 6 / targetBox.width) {
+            ptsToRemove.push(idx);
+          }
+        }
+        if (ptsToRemove.length > 0) {
+          pointArr = pointArr.filter((_, idx) => !ptsToRemove.includes(idx));
+        } else {
+          pointArr = [...pointArr, [x, y, !bgPointMode]];
+        }
         undoBtn.disabled = false;
+        if (pointArr.length == 0) {
+          ctxMask.clearRect(0, 0, canvas.width, canvas.height);
+          undoBtn.disabled = true;
+          return;
+        }
+        isSegmenting = true;
         const { maskURL } = await getSegmentationMask(pointArr);
         isSegmenting = false;
         drawMask(maskURL, pointArr);
       });
+
       async function undoPoint() {
         if (!hasImage || isEmbedding || isSegmenting) {
           return;
@@ -271,15 +288,23 @@
           ctxMask.globalCompositeOperation = "destination-in";
           ctxMask.drawImage(img, 0, 0);
           ctxMask.globalCompositeOperation = "source-over";
-          ctxMask.fillStyle = "rgba(0, 255, 255, 1)";
-          for(const pt of points) {
+          for (const pt of points) {
+            if (pt[2]) {
+              ctxMask.fillStyle = "rgba(0, 255, 255, 1)";
+            } else {
+              ctxMask.fillStyle = "rgba(255, 255, 0, 1)";
+            }
             ctxMask.beginPath();
-            ctxMask.arc(pt[0] * canvas.width, pt[1] * canvas.height, 3, 0, 2 * Math.PI);
+            ctxMask.arc(
+              pt[0] * canvas.width,
+              pt[1] * canvas.height,
+              3,
+              0,
+              2 * Math.PI
+            );
             ctxMask.fill();
           }
           ctxMask.restore();
-          
-          
         };
         img.src = maskURL;
       }
