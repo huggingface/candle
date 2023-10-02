@@ -232,19 +232,25 @@ impl QTensor {
 }
 
 #[derive(Clone, Debug)]
-pub struct QMatMul(std::sync::Arc<QTensor>);
+pub enum QMatMul {
+    QTensor(std::sync::Arc<QTensor>),
+    Tensor(Tensor),
+}
 
 impl QMatMul {
-    pub fn from_arc(qtensor: std::sync::Arc<QTensor>) -> Self {
-        Self(qtensor)
+    pub fn from_arc(qtensor: std::sync::Arc<QTensor>) -> Result<Self> {
+        let t = match qtensor.dtype() {
+            GgmlDType::F32 | GgmlDType::F16 => {
+                let tensor = qtensor.dequantize(&Device::Cpu)?;
+                Self::Tensor(tensor)
+            }
+            _ => Self::QTensor(qtensor),
+        };
+        Ok(t)
     }
 
-    pub fn from_qtensor(qtensor: QTensor) -> Self {
-        Self(std::sync::Arc::new(qtensor))
-    }
-
-    pub fn inner(&self) -> &std::sync::Arc<QTensor> {
-        &self.0
+    pub fn from_qtensor(qtensor: QTensor) -> Result<Self> {
+        Self::from_arc(std::sync::Arc::new(qtensor))
     }
 }
 
@@ -289,6 +295,9 @@ impl crate::CustomOp1 for QTensor {
 
 impl QMatMul {
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply_op1_no_bwd(self.0.as_ref())
+        match self {
+            Self::QTensor(t) => xs.apply_op1_no_bwd(t.as_ref()),
+            Self::Tensor(t) => xs.matmul(&t.t()?),
+        }
     }
 }
