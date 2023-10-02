@@ -150,8 +150,8 @@ pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) ->
 
 #[inline(always)]
 pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> Result<f32> {
-    let qk = QK8_0;
-    if n % QK8_0 != 0 {
+    let qk = QK_K;
+    if n % QK_K != 0 {
         crate::bail!("vec_dot_q8k_q8k: {n} is not divisible by {qk}")
     }
 
