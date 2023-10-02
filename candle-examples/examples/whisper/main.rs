@@ -421,6 +421,9 @@ struct Args {
     #[arg(long)]
     tracing: bool,
 
+    #[arg(long)]
+    quantized: bool,
+
     /// Language.
     #[arg(long)]
     language: Option<String>,
@@ -520,10 +523,16 @@ fn main() -> Result<()> {
     let mel = Tensor::from_vec(mel, (1, m::N_MELS, mel_len / m::N_MELS), &device)?;
     println!("loaded mel: {:?}", mel.dims());
 
-    let vb =
-        unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], m::DTYPE, &device)? };
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
-    let mut model = Model::Normal(m::model::Whisper::load(&vb, config)?);
+    let mut model = if args.quantized {
+        let vb =
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&weights_filename)?;
+        Model::Quantized(m::quantized_model::Whisper::load(&vb, config)?)
+    } else {
+        let vb =
+            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], m::DTYPE, &device)? };
+        Model::Normal(m::model::Whisper::load(&vb, config)?)
+    };
 
     let language_token = match (args.model.is_multilingual(), args.language) {
         (true, None) => Some(multilingual::detect_language(&mut model, &tokenizer, &mel)?),
