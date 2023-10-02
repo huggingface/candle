@@ -1760,8 +1760,24 @@ impl GgmlType for BlockQ8K {
         Self::vec_dot_unopt(n, xs, ys)
     }
 
-    fn vec_dot_unopt(_n: usize, _xs: &[Self], _ys: &[Self::VecDotType]) -> Result<f32> {
-        unreachable!()
+    fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        let qk = QK8_0;
+        if n % QK8_0 != 0 {
+            crate::bail!("vec_dot_q8_0_q8_0: {n} is not divisible by {qk}")
+        }
+
+        // Generic implementation.
+        let mut sumf = 0f32;
+        for (xs, ys) in xs.iter().zip(ys.iter()) {
+            let sum_i = xs
+                .qs
+                .iter()
+                .zip(ys.qs.iter())
+                .map(|(&x, &y)| x as i32 * y as i32)
+                .sum::<i32>();
+            sumf += sum_i as f32 * xs.d * ys.d
+        }
+        Ok(sumf)
     }
 
     fn from_float(xs: &[f32], ys: &mut [Self]) -> Result<()> {
