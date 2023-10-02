@@ -508,7 +508,14 @@ fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
     T::VecDotType::from_float(&b, &mut b_quant)?;
 
     let result = T::vec_dot(length, &a_quant, &b_quant)?;
+    let result_unopt = T::vec_dot_unopt(length, &a_quant, &b_quant)?;
     let reference_result = vec_dot_reference(&a, &b);
+
+    if (result - result_unopt).abs() / length as f32 > 1e-6 {
+        candle_core::bail!(
+            "the opt and unopt vec-dot returned different values, opt {result}, unopt {result_unopt}"
+        )
+    }
 
     let error = (result - reference_result).abs() / length as f32;
 
@@ -516,9 +523,7 @@ fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
 
     if !error.is_finite() || error > GGML_MAX_DOT_PRODUCT_ERROR {
         candle_core::bail!(
-            "Dot product error {} exceeds max error {}",
-            error,
-            GGML_MAX_DOT_PRODUCT_ERROR
+            "Dot product error {error} exceeds max error {GGML_MAX_DOT_PRODUCT_ERROR}",
         );
     }
 
