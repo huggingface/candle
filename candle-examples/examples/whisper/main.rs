@@ -484,22 +484,25 @@ fn main() -> Result<()> {
             println!("No audio file submitted: Downloading https://huggingface.co/datasets/Narsil/candle_demo/blob/main/samples_jfk.wav");
             dataset.get("samples_jfk.wav")?
         };
-        let (config, model) = if args.quantized {
-            match args.model {
-                WhichModel::TinyEn => (
-                    repo.get("config-tiny-en.json")?,
-                    repo.get("model-tiny-en-q40.gguf")?,
-                ),
-                WhichModel::Tiny => (
-                    repo.get("config-tiny.json")?,
-                    repo.get("model-tiny-q40.gguf")?,
-                ),
+        let (config, tokenizer, model) = if args.quantized {
+            let ext = match args.model {
+                WhichModel::TinyEn => "tiny-en",
+                WhichModel::Tiny => "tiny",
                 _ => unimplemented!("no quantized support for {:?}", args.model),
-            }
+            };
+            (
+                repo.get(&format!("config-{ext}.json"))?,
+                repo.get(&format!("tokenizer-{ext}.json"))?,
+                repo.get(&format!("model-{ext}-q40.gguf"))?,
+            )
         } else {
-            (repo.get("config.json")?, repo.get("model.safetensors")?)
+            (
+                repo.get("config.json")?,
+                repo.get("tokenizer.json")?,
+                repo.get("model.safetensors")?,
+            )
         };
-        (config, repo.get("tokenizer.json")?, model, sample)
+        (config, tokenizer, model, sample)
     };
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
