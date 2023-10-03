@@ -28,3 +28,7 @@ features = ["pyo3/extension-module"]
 [tool.black]
 line-length = 119
 target-version = ['py35']
+
+[project.optional-dependencies]
+testing = ["pytest", "black==22.3"]
+
