@@ -493,7 +493,7 @@ fn main() -> Result<()> {
             (
                 repo.get(&format!("config-{ext}.json"))?,
                 repo.get(&format!("tokenizer-{ext}.json"))?,
-                repo.get(&format!("model-{ext}-q40.gguf"))?,
+                repo.get(&format!("model-{ext}-q80.gguf"))?,
             )
         } else {
             (

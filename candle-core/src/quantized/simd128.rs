@@ -395,3 +395,33 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
         Ok(sums)
     }
 }
+
+#[inline(always)]
+pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> Result<f32> {
+    let qk = QK_K;
+    if n % QK_K != 0 {
+        crate::bail!("vec_dot_q8k_q8k: {n} is not divisible by {qk}")
+    }
+
+    unsafe {
+        let mut acc = f32x4_splat(0.0f32);
+        for (xs, ys) in xs.iter().zip(ys.iter()) {
+            let x_qs = xs.qs.as_ptr();
+            let y_qs = ys.qs.as_ptr();
+            let mut sumi = i32x4_splat(0);
+            for j in (0..QK_K).step_by(8) {
+                let xs = i16x8_load_extend_i8x8(x_qs.add(j));
+                let ys = i16x8_load_extend_i8x8(y_qs.add(j));
+                let sum_xy = i32x4_dot_i16x8(xs, ys);
+                sumi = i32x4_add(sumi, sum_xy)
+            }
+            let d = f32x4_splat(xs.d * ys.d);
+            acc = f32x4_add(acc, f32x4_mul(f32x4_convert_i32x4(sumi), d))
+        }
+        let res = f32x4_extract_lane::<0>(acc)
+            + f32x4_extract_lane::<1>(acc)
+            + f32x4_extract_lane::<2>(acc)
+            + f32x4_extract_lane::<3>(acc);
+        Ok(res)
+    }
+}
