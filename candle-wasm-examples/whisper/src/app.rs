@@ -54,14 +54,27 @@ pub struct App {
 }
 
 async fn model_data_load() -> Result<ModelData, JsValue> {
-    let tokenizer = fetch_url("tokenizer.en.json").await?;
+    let tokenizer = fetch_url("tokenizer.json").await?;
     let mel_filters = fetch_url("mel_filters.safetensors").await?;
-    let weights = fetch_url("tiny.en.safetensors").await?;
+    let weights = fetch_url("model.safetensors").await?;
+    let config = fetch_url("config.json").await?;
+    let timestamps = false;
+    let quantized = false;
+    let is_multilingual = false;
+    let task = Some("transcribe".to_string());
+    let verbose = true;
     console_log!("{}", weights.len());
     Ok(ModelData {
         tokenizer,
         mel_filters,
         weights,
+        config,
+        quantized,
+        timestamps,
+        task,
+        is_multilingual,
+        language: None,
+        verbose,
     })
 }
 
