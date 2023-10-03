@@ -36,13 +36,18 @@ class LayerNorm(Module):
         self.weight = candle.ones(normalized_shape, **factory_kwargs)
         if bias:
             self.bias = candle.zeros(normalized_shape, **factory_kwargs)
+        else:
+            self.bias = None
 
     def forward(self, input: Tensor) -> Tensor:
         mean_x = input.sum_keepdim(2) / float(self.normalized_shape[-1])
         x = input.broadcast_sub(mean_x)
         norm_x = x.sqr().sum_keepdim(2) / float(self.normalized_shape[-1])
         x_normed = x.broadcast_div((norm_x + self.eps).sqrt())
-        x = x_normed.broadcast_mul(self.weight).broadcast_add(self.bias)
+        x = x_normed.broadcast_mul(self.weight)
+
+        if self.bias:
+            x = x.broadcast_add(self.bias)
         return x
 
     def extra_repr(self) -> str:

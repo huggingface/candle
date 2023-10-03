@@ -4,6 +4,7 @@ from candle.nn import Module, Embedding, LayerNorm, Linear, ModuleList
 from candle import Tensor
 import candle
 import candle.functional as F
+from typing import Tuple, Optional
 
 
 @dataclass
@@ -150,7 +151,9 @@ class BertEmbeddings(Module):
             config.type_vocab_size, config.hidden_size
         )
         self.LayerNorm = LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.position_ids = candle.Tensor(list(range(config.max_position_embeddings))).reshape((1, config.max_position_embeddings))
+        self.position_ids = candle.Tensor(
+            list(range(config.max_position_embeddings))
+        ).reshape((1, config.max_position_embeddings))
 
     def forward(self, input_ids: Tensor, token_type_ids: Tensor) -> Tensor:
         (_batch_size, seq_len) = input_ids.shape
@@ -159,9 +162,9 @@ class BertEmbeddings(Module):
         embeddings: Tensor = input_embeddings + token_type_embeddings
 
         position_ids = list(range(seq_len))
-        position_ids = Tensor(
-            position_ids
-        ).to_dtype(input_ids.dtype).to_device(input_ids.device)
+        position_ids = (
+            Tensor(position_ids).to_dtype(input_ids.dtype).to_device(input_ids.device)
+        )
 
         embeddings = embeddings.broadcast_add(
             self.position_embeddings.forward(position_ids)
@@ -177,11 +180,10 @@ class BertPooler(Module):
         self.activation = F.tanh
 
     def forward(self, hidden_states: Tensor) -> Tensor:
-        #TODO
-        # first_token_tensor = hidden_states[:,0]
-        # pooled_output = self.dense.forward(first_token_tensor)
-        # pooled_output = self.activation(pooled_output)
-        return hidden_states
+        first_token_tensor = hidden_states[:, 0]
+        pooled_output = self.dense.forward(first_token_tensor)
+        pooled_output = self.activation(pooled_output)
+        return pooled_output
 
 
 # https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L874
@@ -193,8 +195,10 @@ class BertModel(Module):
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config) if add_pooling_layer else None
 
-    def forward(self, input_ids: Tensor, token_type_ids: Tensor) -> Tensor:
+    def forward(
+        self, input_ids: Tensor, token_type_ids: Tensor
+    ) -> Tuple[Tensor, Optional[Tensor]]:
         embeddings = self.embeddings.forward(input_ids, token_type_ids)
         encoder_out = self.encoder.forward(embeddings)
         pooled_output = self.pooler(encoder_out) if self.pooler is not None else None
-        return encoder_out
+        return encoder_out, pooled_output

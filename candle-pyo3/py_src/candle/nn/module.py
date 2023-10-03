@@ -289,7 +289,7 @@ class Module:
     def _save_to_state_dict(self, destination, prefix, keep_vars):
         r"""Saves module state to `destination` dictionary, containing a state
         of the module, but not its descendants. This is called on every
-        submodule in :meth:`~torch.nn.Module.state_dict`.
+        submodule in :meth:`~candle.nn.Module.state_dict`.
 
         In rare cases, subclasses can achieve class-specific behavior by
         overriding this method with custom logic.
@@ -312,7 +312,7 @@ class Module:
         r"""Copies parameters and buffers from :attr:`state_dict` into
         this module and its descendants. If :attr:`strict` is ``True``, then
         the keys of :attr:`state_dict` must exactly match the keys returned
-        by this module's :meth:`~torch.nn.Module.state_dict` function.
+        by this module's :meth:`~candle.nn.Module.state_dict` function.
 
         .. warning::
             If :attr:`assign` is ``True`` the optimizer must be created after
@@ -323,7 +323,7 @@ class Module:
                 persistent buffers.
             strict (bool, optional): whether to strictly enforce that the keys
                 in :attr:`state_dict` match the keys returned by this module's
-                :meth:`~torch.nn.Module.state_dict` function. Default: ``True``
+                :meth:`~candle.nn.Module.state_dict` function. Default: ``True``
             assign (bool, optional): whether to assign items in the state
                 dictionary to their corresponding keys in the module instead
                 of copying them inplace into the module's current parameters and buffers.
@@ -420,7 +420,7 @@ class Module:
     ):
         r"""Copies parameters and buffers from :attr:`state_dict` into only
         this module, but not its descendants. This is called on every submodule
-        in :meth:`~torch.nn.Module.load_state_dict`. Metadata saved for this
+        in :meth:`~candle.nn.Module.load_state_dict`. Metadata saved for this
         module in input :attr:`state_dict` is provided as :attr:`local_metadata`.
         For state dicts without metadata, :attr:`local_metadata` is empty.
         Subclasses can achieve class-specific backward compatible loading using
@@ -431,7 +431,7 @@ class Module:
 
         .. note::
             :attr:`state_dict` is not the same object as the input
-            :attr:`state_dict` to :meth:`~torch.nn.Module.load_state_dict`. So
+            :attr:`state_dict` to :meth:`~candle.nn.Module.load_state_dict`. So
             it can be modified.
 
         Args:
@@ -450,7 +450,7 @@ class Module:
                 keys to this list
             error_msgs (list of str): error messages should be added to this
                 list, and will be reported together in
-                :meth:`~torch.nn.Module.load_state_dict`
+                :meth:`~candle.nn.Module.load_state_dict`
         """
         persistent_buffers = {
             k: v
@@ -649,9 +649,9 @@ class Module:
             This method modifies the module in-place.
 
         Args:
-            device (:class:`torch.device`): the desired device of the parameters
+            device (:class:`candle.device`): the desired device of the parameters
                 and buffers in this module
-            dtype (:class:`torch.dtype`): the desired floating point or complex dtype of
+            dtype (:class:`candle.dtype`): the desired floating point dtype of
                 the parameters and buffers in this module
 
         Returns:

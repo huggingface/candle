@@ -24,8 +24,7 @@ class Identity(Module):
         >>> m = nn.Identity(54, unused_argument1=0.1, unused_argument2=False)
         >>> input = candle.randn(128, 20)
         >>> output = m(input)
-        >>> print(output.size())
-        torch.Size([128, 20])
+        >>> print(output.shape)
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -77,7 +76,7 @@ class Linear(Module):
         super().__init__()
         # Allow 'weight' to be quantized
         self._quantizable_buffers.add("weight")
-        
+
         self.in_features = in_features
         self.out_features = out_features
         # TODO: Do actual initialization here: e.g. kaiming_uniform or xavier_uniform
@@ -88,22 +87,25 @@ class Linear(Module):
             self.bias = None
 
     def forward(self, x: Tensor) -> Tensor:
+        dims = x.shape
+        last_dim = dims[-1]
+
         if isinstance(self.weight, candle.QTensor):
-            dims = x.shape
-            # TODO: actually check if we are batched here
             if len(dims) < 3:
-                return self.weight.matmul_t(x).broadcast_add(self.bias)
+                matmul_result = self.weight.matmul_t(x).broadcast_add(self.bias)
             elif len(dims) == 3:
                 b, n, m = dims
                 re = x.reshape((b * n, m))
-                result = self.weight.matmul_t(re).reshape((b,n,m))
-                return result.broadcast_add(self.bias)
+                matmul_result = self.weight.matmul_t(re).reshape((b, n, m))
             else:
-                raise NotImplementedError("'QTensor.matmul_t' is not implemented for more than 3 dimensions")
+                raise NotImplementedError(
+                    "'QTensor.matmul_t' is not implemented for more than 3 dimensions"
+                )
+
+            if self.bias:
+                return matmul_result.broadcast_add(self.bias)
         else:
-            dims = x.shape
-            # TODO: actually check if we are batched here
-            if len(dims) == 1:
+            if self.weight.shape[0] == last_dim:
                 w = self.weight.t()
             else:
                 batch_size = dims[0]
