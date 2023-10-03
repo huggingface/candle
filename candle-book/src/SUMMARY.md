@@ -14,6 +14,7 @@
     - [Using the hub](inference/hub.md)
 - [Error management](error_manage.md)
 - [Training](training/training.md)
+    - [Simplified](training/simplified.md)
     - [MNIST](training/mnist.md)
     - [Fine-tuning]()
     - [Serialization]()

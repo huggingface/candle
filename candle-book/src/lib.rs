@@ -1,4 +1,7 @@
 #[cfg(test)]
+pub mod simplified;
+
+#[cfg(test)]
 mod tests {
     use anyhow::Result;
     use candle::{DType, Device, Tensor};
