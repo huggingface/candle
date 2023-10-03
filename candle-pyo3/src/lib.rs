@@ -1,8 +1,11 @@
 #![allow(clippy::redundant_closure_call)]
+use ::candle::IndexOp;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict, PyTuple};
 use pyo3::ToPyObject;
+use std::ops::Range;
+use std::os::raw::c_long;
 use std::sync::Arc;
 
 use half::{bf16, f16};
@@ -434,6 +437,126 @@ impl PyTensor {
         Ok(PyTensor(
             self.0.where_cond(on_true, on_false).map_err(wrap_err)?,
         ))
+    }
+
+    #[getter]
+    /// Index a tensor.
+    /// &RETURNS&: Tensor
+    fn __getitem__(&self, py: Python, idx: PyObject) -> PyResult<Self> {
+        if let Ok(index) = idx.extract(py) {
+            // Handle a single index e.g. tensor[0] or tensor[-1]
+            self.get(index)
+        } else if let Ok(slice) = idx.downcast::<pyo3::types::PySlice>(py) {
+            // Handle a single slice e.g. tensor[0:1] or tensor[0:-1]
+            let shape = self.0.shape().dims();
+            let index = slice.indices(shape[0] as c_long)?;
+            let indexer = Range {
+                start: index.start as usize,
+                end: index.stop as usize,
+            };
+            Ok(Self(self.0.i(indexer).map_err(wrap_err)?))
+        } else if let Ok(tuple) = idx.downcast::<pyo3::types::PyTuple>(py) {
+            let mut ranges = vec![];
+            let mut to_squeeze = vec![];
+            let shape = self.0.shape().dims();
+
+            if tuple.len() > shape.len() {
+                return Err(PyTypeError::new_err("provided too many indices"));
+            }
+
+            for (i, item) in tuple.iter().enumerate() {
+                if let Ok(slice) = item.downcast::<pyo3::types::PySlice>() {
+                    // Handle slice
+                    let index = slice.indices(shape[i] as c_long)?;
+                    let indexer = Range {
+                        start: index.start as usize,
+                        end: index.stop as usize,
+                    };
+                    ranges.push(indexer);
+                } else if let Ok(index) = item.extract::<isize>() {
+                    // Check if the index is negative
+                    let actual_index = if index < 0 {
+                        shape[i] as isize + index
+                    } else {
+                        index
+                    };
+
+                    if actual_index < 0 || actual_index >= shape[i] as isize {
+                        return Err(PyTypeError::new_err(format!(
+                            "index out of range for dimension at index {i} with indexer '{value}'",
+                            i = i,
+                            value = index
+                        )));
+                    }
+
+                    let indexer = Range {
+                        start: actual_index as usize,
+                        end: (actual_index as usize) + 1,
+                    };
+                    ranges.push(indexer);
+                    // We need to sqeeze all dimensions that are indexed directly
+                    to_squeeze.push(i);
+                } else {
+                    return Err(PyTypeError::new_err("unsupported index"));
+                }
+            }
+
+            // we need to transform the ranges into a tuple of indexers and apply them
+            let mut sliced_tensor = match ranges.as_slice() {
+                [a] => self.0.i((a.to_owned(),)).map_err(wrap_err)?,
+                [a, b] => self.0.i((a.to_owned(), b.to_owned())).map_err(wrap_err)?,
+                [a, b, c] => self
+                    .0
+                    .i((a.to_owned(), b.to_owned(), c.to_owned()))
+                    .map_err(wrap_err)?,
+                [a, b, c, d] => self
+                    .0
+                    .i((a.to_owned(), b.to_owned(), c.to_owned(), d.to_owned()))
+                    .map_err(wrap_err)?,
+                [a, b, c, d, e] => self
+                    .0
+                    .i((
+                        a.to_owned(),
+                        b.to_owned(),
+                        c.to_owned(),
+                        d.to_owned(),
+                        e.to_owned(),
+                    ))
+                    .map_err(wrap_err)?,
+                [a, b, c, d, e, f] => self
+                    .0
+                    .i((
+                        a.to_owned(),
+                        b.to_owned(),
+                        c.to_owned(),
+                        d.to_owned(),
+                        e.to_owned(),
+                        f.to_owned(),
+                    ))
+                    .map_err(wrap_err)?,
+                [a, b, c, d, e, f, g] => self
+                    .0
+                    .i((
+                        a.to_owned(),
+                        b.to_owned(),
+                        c.to_owned(),
+                        d.to_owned(),
+                        e.to_owned(),
+                        f.to_owned(),
+                        g.to_owned(),
+                    ))
+                    .map_err(wrap_err)?,
+                _ => return Err(PyTypeError::new_err("Only 7 dimensions are supported")),
+            };
+
+            // Squeeze all dimensions that are indexed directly
+            for dim in to_squeeze.iter().rev() {
+                sliced_tensor = sliced_tensor.squeeze(*dim).map_err(wrap_err)?;
+            }
+            Ok(Self(sliced_tensor))
+        } else {
+            Err(PyTypeError::new_err("unsupported index"))
+        }
     }
 
     /// Add two tensors.
