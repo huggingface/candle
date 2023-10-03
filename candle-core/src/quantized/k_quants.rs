@@ -1758,6 +1758,9 @@ impl GgmlType for BlockQ8K {
 
     #[allow(unreachable_code)]
     fn vec_dot(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
+        #[cfg(target_feature = "avx")]
+        return super::avx::vec_dot_q8k_q8k(n, xs, ys);
+
         #[cfg(target_feature = "neon")]
         return super::neon::vec_dot_q8k_q8k(n, xs, ys);
 
