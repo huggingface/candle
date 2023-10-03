@@ -891,7 +891,7 @@ impl<'a> Map1 for IndexSelect<'a> {
         };
         let left_size: usize = src_l.dims()[..self.2].iter().product();
         let right_size: usize = src_l.dims()[self.2 + 1..].iter().product();
-        let dim_size = ids_l.dims()[self.2];
+        let dim_size = ids_shape.elem_count();
         let dst_el = ids_shape.elem_count() * left_size * right_size;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;

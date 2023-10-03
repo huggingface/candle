@@ -653,6 +653,21 @@ fn index_select(device: &Device) -> Result<()> {
         hs.to_vec2::<f32>()?,
         &[[0.0, 1.0, 2.0], [6.0, 7.0, 8.0], [3.0, 4.0, 5.0]]
     );
+    // Prior to https://github.com/huggingface/candle/pull/1022
+    // There would be a bug where the last values in the result tensor would be set to 0.
+    let ids = Tensor::new(&[0u32, 2u32, 1u32, 0u32, 2u32, 1u32], device)?;
+    let hs = t.index_select(&ids, 0)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [6.0, 7.0, 8.0],
+            [3.0, 4.0, 5.0],
+            [0.0, 1.0, 2.0],
+            [6.0, 7.0, 8.0],
+            [3.0, 4.0, 5.0],
+        ]
+    );
     Ok(())
 }
 
