@@ -63,8 +63,8 @@ impl MultiLevelPerceptron {
 
 
 
-#[tokio::test]
 // ANCHOR: book_training_simplified3
+#[tokio::test]
 async fn simplified() -> anyhow::Result<()> {
 
     let dev = Device::cuda_if_available(0)?;
@@ -148,7 +148,7 @@ async fn simplified() -> anyhow::Result<()> {
     Ok(())
 
 }
-// ANCHOR_3: book_training_simplified3
+// ANCHOR_END: book_training_simplified3
 
 // ANCHOR: book_training_simplified2
 fn train(m: Dataset, dev: &Device) -> anyhow::Result<MultiLevelPerceptron> {
