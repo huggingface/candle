@@ -82,6 +82,9 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
         GgmlDType::Q5_0 => 0.001353,
         GgmlDType::Q5_1 => 0.001363,
         GgmlDType::Q8_0 => 0.000092,
+
+        // Not from the ggml repo.
+        GgmlDType::Q8K => 0.00065,
         _ => candle::bail!("No GGML results for quantization type {dtype:?}",),
     };
     Ok(err)
@@ -179,5 +182,11 @@ fn quantized_matmul_q5k() -> Result<()> {
 #[wasm_bindgen_test]
 fn quantized_matmul_q6k() -> Result<()> {
     ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ6K>()?;
+    Ok(())
+}
+
+#[wasm_bindgen_test]
+fn quantized_matmul_q8k() -> Result<()> {
+    ggml_matmul_error_test::<candle::quantized::k_quants::BlockQ8K>()?;
     Ok(())
 }
