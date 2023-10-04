@@ -26,9 +26,30 @@
 
       // models base url
       const MODELS = {
+        tiny_multilingual: {
+          base_url: "https://huggingface.co/openai/whisper-tiny/resolve/main/",
+          model: "model.safetensors",
+          tokenizer: "tokenizer.json",
+          config: "config.json",
+        },
         tiny_en: {
           base_url:
-            "https://huggingface.co/openai/whisper-tiny.en/resolve/refs%2Fpr%2F17/",
+            "https://huggingface.co/openai/whisper-tiny.en/resolve/main/",
+          model: "model.safetensors",
+          tokenizer: "tokenizer.json",
+          config: "config.json",
+        },
+        tiny_quantized_multilingual_q80: {
+          base_url: "https://huggingface.co/lmz/candle-whisper/resolve/main/",
+          model: "model-tiny-q80.gguf",
+          tokenizer: "tokenizer-tiny.json",
+          config: "config-tiny.json",
+        },
+        tiny_en_quantized_q80: {
+          base_url: "https://huggingface.co/lmz/candle-whisper/resolve/main/",
+          model: "model-tiny-q80.gguf",
+          tokenizer: "tokenizer-tiny-en.json",
+          config: "config-tiny-en.json",
         },
       };
       const whisperWorker = new Worker("./whisperWorker.js", {
@@ -39,6 +60,7 @@
         weightsURL, // URL to the weights file
         modelID, // model ID
         tokenizerURL, // URL to the tokenizer file
+        configURL, // model config URL
         mel_filtersURL, // URL to the mel filters file
         audioURL, // URL to the audio file
         updateStatus // function to update the status
@@ -48,6 +70,7 @@
             weightsURL,
             modelID,
             tokenizerURL,
+            configURL,
             mel_filtersURL,
             audioURL,
           });
@@ -128,13 +151,16 @@
           return;
         }
         const modelID = document.querySelector("#model").value;
-        const modelURL = MODELS[modelID].base_url + "model.safetensors";
-        const tokenizerURL = MODELS[modelID].base_url + "tokenizer.json";
+        const model = MODELS[modelID];
+        const modelURL = model.base_url + model.model;
+        const tokenizerURL = model.base_url + model.tokenizer;
+        const configURL = model.base_url + model.config;
 
         classifyAudio(
           modelURL,
           modelID,
           tokenizerURL,
+          configURL,
           "mel_filters.safetensors",
           audioURL,
           updateStatus
@@ -178,8 +204,7 @@
           <a
             href="https://huggingface.co/openai/"
             target="_blank"
-            class="underline hover:text-blue-500 hover:no-underline"
-          >
+            class="underline hover:text-blue-500 hover:no-underline">
             OpenAI Whisper models
           </a>
           and WASM runtime built with
@@ -196,37 +221,38 @@
         <label for="model" class="font-medium">Models Options: </label>
         <select
           id="model"
-          class="border-2 border-gray-500 rounded-md font-light"
-        >
+          class="border-2 border-gray-500 rounded-md font-light">
+          <option value="tiny_multilingual" selected>tiny.en (151 MB)</option>
           <option value="tiny_en" selected>tiny.en (151 MB)</option>
+          <option value="tiny_quantized_multilingual_q80">
+            tiny quantized q80 (41.5 MB)
+          </option>
+          <option value="tiny_en_quantized_q80">
+            tiny.en quantized q80 (41.8 MB)
+          </option>
         </select>
       </div>
       <!-- drag and drop area -->
       <div class="relative">
         <div
           id="drop-area"
-          class="flex flex-col items-center justify-center border-2 border-gray-300 border-dashed rounded-xl relative h-48 w-full overflow-hidden"
-        >
+          class="flex flex-col items-center justify-center border-2 border-gray-300 border-dashed rounded-xl relative h-48 w-full overflow-hidden">
           <div
-            class="flex flex-col items-center justify-center space-y-1 text-center"
-          >
+            class="flex flex-col items-center justify-center space-y-1 text-center">
             <svg
               width="25"
               height="25"
               viewBox="0 0 25 25"
               fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
+              xmlns="http://www.w3.org/2000/svg">
               <path
                 d="M3.5 24.3a3 3 0 0 1-1.9-.8c-.5-.5-.8-1.2-.8-1.9V2.9c0-.7.3-1.3.8-1.9.6-.5 1.2-.7 2-.7h18.6c.7 0 1.3.2 1.9.7.5.6.7 1.2.7 2v18.6c0 .7-.2 1.4-.7 1.9a3 3 0 0 1-2 .8H3.6Zm0-2.7h18.7V2.9H3.5v18.7Zm2.7-2.7h13.3c.3 0 .5 0 .6-.3v-.7l-3.7-5a.6.6 0 0 0-.6-.2c-.2 0-.4 0-.5.3l-3.5 4.6-2.4-3.3a.6.6 0 0 0-.6-.3c-.2 0-.4.1-.5.3l-2.7 3.6c-.1.2-.2.4 0 .7.1.2.3.3.6.3Z"
-                fill="#000"
-              />
+                fill="#000" />
             </svg>
             <div class="flex text-sm text-gray-600">
               <label
                 for="file-upload"
-                class="relative cursor-pointer bg-white rounded-md font-medium text-blue-950 hover:text-blue-700"
-              >
+                class="relative cursor-pointer bg-white rounded-md font-medium text-blue-950 hover:text-blue-700">
                 <span>Drag and drop your audio here</span>
                 <span class="block text-xs">or</span>
                 <span class="block text-xs">Click to upload</span>
@@ -237,15 +263,13 @@
               name="file-upload"
               type="file"
               accept="audio/*"
-              class="sr-only"
-            />
+              class="sr-only" />
           </div>
           <audio
             id="audio"
             hidden
             controls
-            class="w-full p-2 select-none"
-          ></audio>
+            class="w-full p-2 select-none"></audio>
         </div>
       </div>
       <div>
@@ -253,43 +277,37 @@
           <h3 class="font-medium">Examples:</h3>
           <button
             data-value="samples_jfk.wav"
-            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline"
-          >
+            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline">
             <span>jfk.wav</span>
             <span class="text-xs block"> (352 kB)</span>
           </button>
           <button
             data-value="samples_a13.wav"
-            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline"
-          >
+            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline">
             <span>a13.wav</span>
             <span class="text-xs block"> (960 kB)</span>
           </button>
           <button
             data-value="samples_mm0.wav"
-            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline"
-          >
+            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline">
             <span>mm0.wav</span>
             <span class="text-xs block new"> (957 kB)</span>
           </button>
           <button
             data-value="samples_gb0.wav"
-            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline"
-          >
+            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline">
             <span>gb0.wav </span>
             <span class="text-xs block">(4.08 MB)</span>
           </button>
           <button
             data-value="samples_gb1.wav"
-            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline"
-          >
+            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline">
             <span>gb1.wav </span>
             <span class="text-xs block">(6.36 MB)</span>
           </button>
           <button
             data-value="samples_hp0.wav"
-            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline"
-          >
+            class="text-gray-500 border border-gray-500 rounded-md p-2 underline hover:no-underline">
             <span>hp0.wav </span>
             <span class="text-xs block">(8.75 MB)</span>
           </button>
@@ -300,16 +318,14 @@
         <button
           id="detect"
           disabled
-          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 px-4 rounded disabled:bg-gray-300 disabled:cursor-not-allowed"
-        >
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 px-4 rounded disabled:bg-gray-300 disabled:cursor-not-allowed">
           Transcribe Audio
         </button>
       </div>
       <div>
         <h3 class="font-medium">Transcription:</h3>
         <div
-          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2"
-        >
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2">
           <p hidden id="output-generation" class="grid-rows-2"></p>
           <span id="output-status" class="m-auto font-light"
             >No transcription results yet</span

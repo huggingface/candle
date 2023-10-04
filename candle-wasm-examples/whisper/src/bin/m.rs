@@ -20,7 +20,6 @@ impl Decoder {
         timestamps: bool,
         task: Option<String>,
         language: Option<String>,
-        verbose: bool,
     ) -> Result<Decoder, JsError> {
         let decoder = D::load(ModelData {
             tokenizer,
@@ -32,7 +31,6 @@ impl Decoder {
             timestamps,
             task,
             language,
-            verbose,
         });
 
         match decoder {
@@ -47,7 +45,6 @@ impl Decoder {
             .decoder
             .convert_and_run(&wav_input)
             .map_err(|e| JsError::new(&e.to_string()))?;
-
         let json = serde_json::to_string(&segments)?;
         Ok(json)
     }
