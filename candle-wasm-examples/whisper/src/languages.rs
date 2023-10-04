@@ -99,4 +99,3 @@ pub const LANGUAGES: [(&str, &str); 99] = [
     ("jw", "javanese"),
     ("su", "sundanese"),
 ];
-
