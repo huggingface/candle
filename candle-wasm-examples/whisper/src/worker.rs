@@ -318,16 +318,11 @@ impl Decoder {
         };
         console_log!("done loading model");
 
-        let task = match md.task {
-            Some(task_str) => {
-                let task_string = task_str.to_owned();
-                match task_string.as_str() {
-                    "translate" => Some(Task::Translate),
-                    _ => Some(Task::Transcribe),
-                }
-            }
+        let task = match md.task.as_deref() {
+            Some("translate") => Some(Task::Translate),
             _ => Some(Task::Transcribe),
         };
+
         let decoder = Self::new(
             model,
             tokenizer,
