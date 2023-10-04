@@ -65,6 +65,7 @@ export async function generateText(
     worker.addEventListener("message", messageHandler);
   });
 }
+
 export const MODELS = {
   t5_small_quantized: {
     size: "64.4 MB",
@@ -133,7 +134,6 @@ export const MODELS = {
       summarization: { prefix: "summarize: ", max_length: 200 },
     },
   },
-
   flan_t5_base_quantized: {
     size: "263 MB",
     base_url: "https://huggingface.co/lmz/candle-quantized-t5/resolve/main/",
@@ -156,7 +156,41 @@ export const MODELS = {
       summarization: { prefix: "summarize: ", max_length: 200 },
     },
   },
+  coedit_large_quantized: {
+    size: "643 MB",
+    base_url: "https://huggingface.co/jbochi/candle-coedit-quantized/resolve/main/",
+    model: "model.gguf",
+    tokenizer: "tokenizer.json",
+    config: "config.json",
+    tasks: {
+      fluency: {
+        prefix: "Fix the grammar: ",
+        max_length: 300,
+      },
+      coherence: {
+        prefix: "Rewrite to make this easier to understand: ",
+        max_length: 300,
+      },
+      simplification: {
+        prefix: "translate English to Romanian: ",
+        max_length: 300,
+      },
+      simplification: {
+        prefix: "Paraphrase this: ",
+        max_length: 300,
+      },
+      formalization: {
+        prefix: "Write this more formally: ",
+        max_length: 300,
+      },
+      neutralize: {
+        prefix: "Write in a more neutral way: ",
+        max_length: 300,
+      },
+    },
+  },
 };
+
 export function getModelInfo(id, taskID) {
   const model = MODELS[id];
   return {
