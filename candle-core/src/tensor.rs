@@ -492,6 +492,9 @@ impl Tensor {
     unary_op!(gelu_erf, GeluErf);
     unary_op!(erf, Erf);
     unary_op!(relu, Relu);
+    unary_op!(ceil, Ceil);
+    unary_op!(floor, Floor);
+    unary_op!(round, Round);
 
     /// Retrieves the single scalar value hold in the tensor. If the tensor contains multiple
     /// dimensions, an error is returned instead.

@@ -451,6 +451,13 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
+                    Op::Unary(_, UnaryOp::Ceil) => Err(Error::BackwardNotSupported { op: "ceil" })?,
+                    Op::Unary(_, UnaryOp::Floor) => {
+                        Err(Error::BackwardNotSupported { op: "floor" })?
+                    }
+                    Op::Unary(_, UnaryOp::Round) => {
+                        Err(Error::BackwardNotSupported { op: "round" })?
+                    }
                     Op::Unary(_, UnaryOp::Gelu) => Err(Error::BackwardNotSupported { op: "gelu" })?,
                     Op::Unary(_, UnaryOp::Erf) => Err(Error::BackwardNotSupported { op: "erf" })?,
                     Op::Unary(_, UnaryOp::GeluErf) => {
