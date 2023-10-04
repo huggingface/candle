@@ -91,6 +91,9 @@ impl Tensor {
                             nodes
                         }
                     }
+                    Op::Unary(_node, UnaryOp::Ceil)
+                    | Op::Unary(_node, UnaryOp::Floor)
+                    | Op::Unary(_node, UnaryOp::Round) => nodes,
                     Op::Reshape(node)
                     | Op::UpsampleNearest1D(node)
                     | Op::UpsampleNearest2D(node)
