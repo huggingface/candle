@@ -93,6 +93,18 @@ fn unary_op(device: &Device) -> Result<()> {
             [0.9999, -0.9891, -0.3079, 0.9891, 0.9999]
         ]
     );
+    assert_eq!(
+        test_utils::to_vec2_round(&tensor.ceil()?, 4)?,
+        [[-3.0, 1.0, 4.0, -0.0, 1.0], [3.0, -1.0, -0.0, 2.0, 3.0]]
+    );
+    assert_eq!(
+        test_utils::to_vec2_round(&tensor.floor()?, 4)?,
+        [[-3.0, 1.0, 4.0, -1.0, 0.0], [2.0, -2.0, -1.0, 1.0, 2.0]]
+    );
+    assert_eq!(
+        test_utils::to_vec2_round(&tensor.round()?, 4)?,
+        [[-3.0, 1.0, 4.0, -0.0, 1.0], [3.0, -2.0, -0.0, 2.0, 3.0]]
+    );
     Ok(())
 }
 
