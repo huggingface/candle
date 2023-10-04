@@ -29,9 +29,10 @@ trace-*.json
 candle-wasm-examples/*/build
 candle-wasm-examples/*/*.bin
 candle-wasm-examples/*/*.jpeg
-candle-wasm-examples/*/*.wav
-candle-wasm-examples/*/*.safetensors
+candle-wasm-examples/*/audios/*.wav
+candle-wasm-examples/**/*.safetensors
+candle-wasm-examples/**/*.gguf
 candle-wasm-examples/*/package-lock.json
-
+candle-wasm-examples/**/config*.json
 .DS_Store
 .idea/*

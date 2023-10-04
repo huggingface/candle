@@ -9,15 +9,28 @@ pub struct Decoder {
 #[wasm_bindgen]
 impl Decoder {
     #[wasm_bindgen(constructor)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,
         mel_filters: Vec<u8>,
+        config: Vec<u8>,
+        quantized: bool,
+        is_multilingual: bool,
+        timestamps: bool,
+        task: Option<String>,
+        language: Option<String>,
     ) -> Result<Decoder, JsError> {
         let decoder = D::load(ModelData {
             tokenizer,
             mel_filters,
+            config,
+            quantized,
             weights,
+            is_multilingual,
+            timestamps,
+            task,
+            language,
         });
 
         match decoder {
@@ -32,7 +45,6 @@ impl Decoder {
             .decoder
             .convert_and_run(&wav_input)
             .map_err(|e| JsError::new(&e.to_string()))?;
-
         let json = serde_json::to_string(&segments)?;
         Ok(json)
     }
