@@ -31,7 +31,8 @@ candle-wasm-examples/*/*.bin
 candle-wasm-examples/*/*.jpeg
 candle-wasm-examples/*/*.wav
 candle-wasm-examples/*/*.safetensors
+candle-wasm-examples/*/*.gguf
 candle-wasm-examples/*/package-lock.json
-candel-wasm-examples/*/config.json
+candel-wasm-examples/**/config.json
 .DS_Store
 .idea/*

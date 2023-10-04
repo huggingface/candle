@@ -1,5 +1,6 @@
+use crate::languages::LANGUAGES;
 use anyhow::Error as E;
-use candle::{safetensors::Load, DType, Device, IndexOp, Tensor};
+use candle::{safetensors::Load, DType, Device, IndexOp, Tensor, D};
 use candle_nn::{ops::softmax, VarBuilder};
 pub use candle_transformers::models::whisper::{self as m, Config};
 use rand::{distributions::Distribution, rngs::StdRng, SeedableRng};
@@ -88,9 +89,10 @@ pub struct Decoder {
     model: Model,
     rng: rand::rngs::StdRng,
     task: Option<Task>,
+    language: Option<String>,
+    is_multilingual: bool,
     mel_filters: Vec<f32>,
     timestamps: bool,
-    verbose: bool,
     tokenizer: Tokenizer,
     suppress_tokens: Tensor,
     sot_token: u32,
@@ -99,7 +101,6 @@ pub struct Decoder {
     eot_token: u32,
     no_speech_token: u32,
     no_timestamps_token: u32,
-    language_token: Option<u32>,
 }
 
 impl Decoder {
@@ -109,10 +110,10 @@ impl Decoder {
         tokenizer: Tokenizer,
         mel_filters: Vec<f32>,
         device: &Device,
-        language_token: Option<u32>,
         task: Option<Task>,
+        language: Option<String>,
+        is_multilingual: bool,
         timestamps: bool,
-        verbose: bool,
     ) -> anyhow::Result<Self> {
         let suppress_tokens: Vec<f32> = (0..model.config().vocab_size as u32)
             .map(|i| {
@@ -138,29 +139,41 @@ impl Decoder {
             mel_filters,
             task,
             timestamps,
-            verbose,
+            language,
+            is_multilingual,
             suppress_tokens,
             sot_token,
             transcribe_token,
             translate_token,
             eot_token,
             no_speech_token,
-            language_token,
             no_timestamps_token,
         })
     }
 
     fn decode(&mut self, mel: &Tensor, t: f64) -> anyhow::Result<DecodingResult> {
         let model = &mut self.model;
+        let language_token = match (self.is_multilingual, &self.language) {
+            (true, None) => Some(detect_language(model, &self.tokenizer, mel)?),
+            (false, None) => None,
+            (true, Some(language)) => {
+                match token_id(&self.tokenizer, &format!("<|{:?}|>", self.language)) {
+                    Ok(token_id) => Some(token_id),
+                    Err(_) => anyhow::bail!("language {language} is not supported"),
+                }
+            }
+            (false, Some(_)) => {
+                anyhow::bail!("a language cannot be set for non-multilingual models")
+            }
+        };
+
         let audio_features = model.encoder_forward(mel, true)?;
-        if self.verbose {
-            println!("audio features: {:?}", audio_features.dims());
-        }
+        println!("audio features: {:?}", audio_features.dims());
         let sample_len = model.config().max_target_positions / 2;
         let mut sum_logprob = 0f64;
         let mut no_speech_prob = f64::NAN;
         let mut tokens = vec![self.sot_token];
-        if let Some(language_token) = self.language_token {
+        if let Some(language_token) = language_token {
             tokens.push(language_token);
         }
         match self.task {
@@ -287,7 +300,7 @@ impl Decoder {
 
     pub fn load(md: ModelData) -> anyhow::Result<Self> {
         let device = Device::Cpu;
-        let tokenizer = Tokenizer::from_bytes(&md.tokenizer).map_err(anyhow::Error::msg)?;
+        let tokenizer = Tokenizer::from_bytes(&md.tokenizer).map_err(E::msg)?;
 
         let mel_filters = safetensors::tensor::SafeTensors::deserialize(&md.mel_filters)?;
         let mel_filters = mel_filters.tensor("mel_80")?.load(&device)?;
@@ -305,20 +318,6 @@ impl Decoder {
         };
         console_log!("done loading model");
 
-        let language_token = match (md.is_multilingual, md.language) {
-            (true, None) => {
-                anyhow::bail!("not implemented: multilingual models without a language")
-            }
-            (false, None) => None,
-            (true, Some(language)) => match token_id(&tokenizer, &format!("<|{language}|>")) {
-                Ok(token_id) => Some(token_id),
-                Err(_) => anyhow::bail!("language {language} is not supported"),
-            },
-            (false, Some(_)) => {
-                anyhow::bail!("a language cannot be set for non-multilingual models")
-            }
-        };
-      
         let task = match md.task {
             Some(task_str) => {
                 let task_string = task_str.to_owned();
@@ -326,7 +325,7 @@ impl Decoder {
                     "translate" => Some(Task::Translate),
                     _ => Some(Task::Transcribe),
                 }
-            },
+            }
             _ => Some(Task::Transcribe),
         };
         let decoder = Self::new(
@@ -334,10 +333,10 @@ impl Decoder {
             tokenizer,
             mel_filters,
             &device,
-            language_token,
             task,
+            md.language,
+            md.is_multilingual,
             md.timestamps,
-            md.verbose,
         )?;
         Ok(decoder)
     }
@@ -365,6 +364,42 @@ impl Decoder {
     }
 }
 
+/// Returns the token id for the selected language.
+pub fn detect_language(model: &mut Model, tokenizer: &Tokenizer, mel: &Tensor) -> Result<u32, E> {
+    console_log!("detecting language");
+    let (_bsize, _, seq_len) = mel.dims3()?;
+    let mel = mel.narrow(
+        2,
+        0,
+        usize::min(seq_len, model.config().max_source_positions),
+    )?;
+    let device = mel.device();
+
+    let language_token_ids = LANGUAGES
+        .iter()
+        .map(|(t, _)| token_id(tokenizer, &format!("<|{t}|>")))
+        .map(|e| e.map_err(E::msg))
+        .collect::<Result<Vec<_>, E>>()?;
+
+    let sot_token = token_id(tokenizer, m::SOT_TOKEN)?;
+    let audio_features = model.encoder_forward(&mel, true)?;
+    let tokens = Tensor::new(&[[sot_token]], device)?;
+    let language_token_ids = Tensor::new(language_token_ids.as_slice(), device)?;
+    let ys = model.decoder_forward(&tokens, &audio_features, true)?;
+    let logits = model.decoder_final_linear(&ys.i(..1)?)?.i(0)?.i(0)?;
+    let logits = logits.index_select(&language_token_ids, 0)?;
+    let probs = candle_nn::ops::softmax(&logits, D::Minus1)?;
+    let probs = probs.to_vec1::<f32>()?;
+    let mut probs = LANGUAGES.iter().zip(probs.iter()).collect::<Vec<_>>();
+    probs.sort_by(|(_, p1), (_, p2)| p2.total_cmp(p1));
+    for ((_, language), p) in probs.iter().take(5) {
+        println!("{language}: {p}")
+    }
+    let token = &format!("<|{}|>", probs[0].0 .0);
+    let language = token_id(tokenizer, token)?;
+    console_log!("detected language: {language} {token}");
+    Ok(language)
+}
 pub fn token_id(tokenizer: &Tokenizer, token: &str) -> candle::Result<u32> {
     match tokenizer.token_to_id(token) {
         None => candle::bail!("no token-id for {token}"),
@@ -388,7 +423,6 @@ pub struct ModelData {
     pub quantized: bool,
     pub timestamps: bool,
     pub is_multilingual: bool,
-    pub verbose: bool,
     pub language: Option<String>,
     pub task: Option<String>,
 }

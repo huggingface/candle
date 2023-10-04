@@ -7,7 +7,12 @@ use yew::{html, Component, Context, Html};
 use yew_agent::{Bridge, Bridged};
 
 const SAMPLE_NAMES: [&str; 6] = [
-    "jfk.wav", "a13.wav", "gb0.wav", "gb1.wav", "hp0.wav", "mm0.wav",
+    "audios/samples_jfk.wav",
+    "audios/samples_a13.wav",
+    "audios/samples_gb0.wav",
+    "audios/samples_gb1.wav",
+    "audios/samples_hp0.wav",
+    "audios/samples_mm0.wav",
 ];
 
 async fn fetch_url(url: &str) -> Result<Vec<u8>, JsValue> {
@@ -54,15 +59,35 @@ pub struct App {
 }
 
 async fn model_data_load() -> Result<ModelData, JsValue> {
-    let tokenizer = fetch_url("tokenizer.json").await?;
-    let mel_filters = fetch_url("mel_filters.safetensors").await?;
-    let weights = fetch_url("model.safetensors").await?;
-    let config = fetch_url("config.json").await?;
-    let timestamps = false;
     let quantized = false;
     let is_multilingual = false;
-    let task = Some("transcribe".to_string());
-    let verbose = true;
+
+    let (tokenizer, mel_filters, weights, config) = if quantized {
+        console_log!("loading quantized weights");
+        let tokenizer = fetch_url("quantized/tokenizer-tiny-en.json").await?;
+        let mel_filters = fetch_url("mel_filters.safetensors").await?;
+        let weights = fetch_url("quantized/model-tiny-en-q80.gguf").await?;
+        let config = fetch_url("quantized/config-tiny-en.json").await?;
+        (tokenizer, mel_filters, weights, config)
+    } else {
+        console_log!("loading float weights");
+        if is_multilingual {
+            let mel_filters = fetch_url("mel_filters.safetensors").await?;
+            let tokenizer = fetch_url("whisper-tiny/tokenizer.json").await?;
+            let weights = fetch_url("whisper-tiny/model.safetensors").await?;
+            let config = fetch_url("whisper-tiny/config.json").await?;
+            (tokenizer, mel_filters, weights, config)
+        } else {
+            let mel_filters = fetch_url("mel_filters.safetensors").await?;
+            let tokenizer = fetch_url("whisper-tiny.en/tokenizer.json").await?;
+            let weights = fetch_url("whisper-tiny.en/model.safetensors").await?;
+            let config = fetch_url("whisper-tiny.en/config.json").await?;
+            (tokenizer, mel_filters, weights, config)
+        }
+    };
+
+    let timestamps = true;
+    let _task = Some("transcribe".to_string());
     console_log!("{}", weights.len());
     Ok(ModelData {
         tokenizer,
@@ -71,10 +96,9 @@ async fn model_data_load() -> Result<ModelData, JsValue> {
         config,
         quantized,
         timestamps,
-        task,
+        task: None,
         is_multilingual,
         language: None,
-        verbose,
     })
 }
 
