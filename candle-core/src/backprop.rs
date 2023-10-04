@@ -91,6 +91,9 @@ impl Tensor {
                             nodes
                         }
                     }
+                    Op::Unary(_node, UnaryOp::Ceil)
+                    | Op::Unary(_node, UnaryOp::Floor)
+                    | Op::Unary(_node, UnaryOp::Round) => nodes,
                     Op::Reshape(node)
                     | Op::UpsampleNearest1D(node)
                     | Op::UpsampleNearest2D(node)
@@ -450,6 +453,13 @@ impl Tensor {
                         let arg_grad = grad.reshape(arg.dims())?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
+                    }
+                    Op::Unary(_, UnaryOp::Ceil) => Err(Error::BackwardNotSupported { op: "ceil" })?,
+                    Op::Unary(_, UnaryOp::Floor) => {
+                        Err(Error::BackwardNotSupported { op: "floor" })?
+                    }
+                    Op::Unary(_, UnaryOp::Round) => {
+                        Err(Error::BackwardNotSupported { op: "round" })?
                     }
                     Op::Unary(_, UnaryOp::Gelu) => Err(Error::BackwardNotSupported { op: "gelu" })?,
                     Op::Unary(_, UnaryOp::Erf) => Err(Error::BackwardNotSupported { op: "erf" })?,

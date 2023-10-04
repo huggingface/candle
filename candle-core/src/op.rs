@@ -62,6 +62,9 @@ pub enum UnaryOp {
     Erf,
     Relu,
     Tanh,
+    Floor,
+    Ceil,
+    Round,
 }
 
 #[derive(Clone)]
@@ -332,6 +335,9 @@ pub(crate) struct GeluErf;
 pub(crate) struct Erf;
 pub(crate) struct Relu;
 pub(crate) struct Tanh;
+pub(crate) struct Floor;
+pub(crate) struct Ceil;
+pub(crate) struct Round;
 
 macro_rules! bin_op {
     ($op:ident, $name: literal, $e: expr, $f32_vec: ident, $f64_vec: ident) => {
@@ -657,6 +663,108 @@ impl UnaryOpT for Erf {
     #[inline(always)]
     fn i64(_: i64) -> i64 {
         0
+    }
+}
+
+impl UnaryOpT for Ceil {
+    const NAME: &'static str = "ceil";
+    const KERNEL: &'static str = "uceil";
+    const V: Self = Ceil;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        v.ceil()
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        v.ceil()
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        v.ceil()
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        v.ceil()
+    }
+    #[inline(always)]
+    fn u8(v: u8) -> u8 {
+        v
+    }
+    #[inline(always)]
+    fn u32(v: u32) -> u32 {
+        v
+    }
+    #[inline(always)]
+    fn i64(v: i64) -> i64 {
+        v
+    }
+}
+
+impl UnaryOpT for Floor {
+    const NAME: &'static str = "floor";
+    const KERNEL: &'static str = "ufloor";
+    const V: Self = Floor;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        v.floor()
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        v.floor()
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        v.floor()
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        v.floor()
+    }
+    #[inline(always)]
+    fn u8(v: u8) -> u8 {
+        v
+    }
+    #[inline(always)]
+    fn u32(v: u32) -> u32 {
+        v
+    }
+    #[inline(always)]
+    fn i64(v: i64) -> i64 {
+        v
+    }
+}
+
+impl UnaryOpT for Round {
+    const NAME: &'static str = "round";
+    const KERNEL: &'static str = "uround";
+    const V: Self = Round;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        v.round()
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        v.round()
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        v.round()
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        v.round()
+    }
+    #[inline(always)]
+    fn u8(v: u8) -> u8 {
+        v
+    }
+    #[inline(always)]
+    fn u32(v: u32) -> u32 {
+        v
+    }
+    #[inline(always)]
+    fn i64(v: i64) -> i64 {
+        v
     }
 }
 
