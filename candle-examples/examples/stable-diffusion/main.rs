@@ -484,9 +484,8 @@ fn run(args: Args) -> Result<()> {
             num_samples
         );
         let image = vae.decode(&(&latents / 0.18215)?)?;
-        // TODO: Add the clamping between 0 and 1.
         let image = ((image / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
-        let image = (image * 255.)?.to_dtype(DType::U8)?.i(0)?;
+        let image = (image.clamp(0f32, 1.)? * 255.)?.to_dtype(DType::U8)?.i(0)?;
         let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
         candle_examples::save_image(&image, image_filename)?
     }
