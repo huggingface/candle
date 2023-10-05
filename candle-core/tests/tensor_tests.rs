@@ -685,21 +685,9 @@ fn index_select(device: &Device) -> Result<()> {
     // target dim in source/input.
     let ids = Tensor::new(&[1u32, 0u32, 1u32], device)?;
     let t = Tensor::arange(1f32, 5f32, device)?.reshape((2, 2))?;
-    assert_eq!(
-        t.to_vec2::<f32>()?,
-        &[
-            [1.0, 2.0],
-            [3.0, 4.0]
-        ]
-    );
+    assert_eq!(t.to_vec2::<f32>()?, &[[1.0, 2.0], [3.0, 4.0]]);
     let hs = t.index_select(&ids, 1)?;
-    assert_eq!(
-        hs.to_vec2::<f32>()?,
-        &[
-            [2.0, 1.0, 2.0],
-            [4.0, 3.0, 4.0]
-        ]
-    );
+    assert_eq!(hs.to_vec2::<f32>()?, &[[2.0, 1.0, 2.0], [4.0, 3.0, 4.0]]);
 
     Ok(())
 }
