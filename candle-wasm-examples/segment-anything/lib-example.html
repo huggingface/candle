@@ -151,6 +151,7 @@
         if (target.nodeName === "IMG") {
           const href = target.src;
           clearImageCanvas();
+          copyImageURL = href;
           drawImageCanvas(href);
           setImageEmbeddings(href);
         }
@@ -178,6 +179,7 @@
             img.onload = () => {
               resolve(img);
             };
+            img.crossOrigin = "anonymous";
             img.src = imageURL;
           });
         };
@@ -546,7 +548,7 @@
             disabled
             class="p-1 px-2 text-xs font-medium bg-white rounded-2xl outline outline-gray-200 hover:outline-orange-200 disabled:opacity-50"
           >
-            Download the result (png file)
+            Download Cut-Out
           </button>
         </div>
       </div>
