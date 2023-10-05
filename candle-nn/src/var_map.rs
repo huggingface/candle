@@ -52,7 +52,7 @@ impl VarMap {
     }
 
     /// Set a named variable to some value.
-    pub fn set_one<K: AsRef<String>, V: AsRef<Tensor>>(&mut self, name: K, value: V) -> Result<()> {
+    pub fn set_one<K: AsRef<str>, V: AsRef<Tensor>>(&mut self, name: K, value: V) -> Result<()> {
         let tensor_data = self.data.lock().unwrap();
         let name = name.as_ref();
         match tensor_data.get(name) {
