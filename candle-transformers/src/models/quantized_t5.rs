@@ -775,8 +775,6 @@ impl T5ForConditionalGeneration {
                 Some(ref lm_head) => lm_head.forward(&sequence_output)?,
             }
         };
-
-        // TODO: Rescale output before projecting on vocab? * (self.model_dim**-0.5)
         Ok(output)
     }
 
