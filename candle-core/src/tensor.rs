@@ -496,6 +496,15 @@ impl Tensor {
     unary_op!(floor, Floor);
     unary_op!(round, Round);
 
+    /// Round element of the input tensor to the nearest integer.
+    ///
+    /// If the number of decimals is negative, it specifies the number of positions to the left of
+    /// the decimal point.
+    pub fn round_to(&self, decimals: i32) -> Result<Self> {
+        let mult = 10f64.powi(decimals);
+        (self * mult)?.round()? * (1f64 / mult)
+    }
+
     /// Retrieves the single scalar value hold in the tensor. If the tensor contains multiple
     /// dimensions, an error is returned instead.
     pub fn to_scalar<S: crate::WithDType>(&self) -> Result<S> {
