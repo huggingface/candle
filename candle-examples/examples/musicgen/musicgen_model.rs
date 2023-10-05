@@ -40,7 +40,7 @@ impl Default for Config {
             num_attention_heads: 16,
             layerdrop: 0.0,
             use_cache: true,
-            activation_function: Activation::Gelu, // TODO: Handle old style gelu.
+            activation_function: Activation::Gelu,
             hidden_size: 1024,
             dropout: 0.1,
             attention_dropout: 0.0,
@@ -66,7 +66,7 @@ impl Config {
             num_attention_heads: 16,
             layerdrop: 0.0,
             use_cache: true,
-            activation_function: Activation::Gelu, // TODO: Handle old style gelu.
+            activation_function: Activation::Gelu,
             hidden_size: 1024,
             dropout: 0.1,
             attention_dropout: 0.0,
