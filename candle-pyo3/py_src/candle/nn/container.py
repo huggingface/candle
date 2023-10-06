@@ -116,8 +116,7 @@ class Sequential(Module):
             return ret
         else:
             raise ValueError(
-                "add operator supports only objects "
-                "of Sequential class, but {} is given.".format(str(type(other)))
+                "add operator supports only objects " "of Sequential class, but {} is given.".format(str(type(other)))
             )
 
     def pop(self, key: Union[int, slice]) -> Module:
@@ -133,19 +132,14 @@ class Sequential(Module):
             return self
         else:
             raise ValueError(
-                "add operator supports only objects "
-                "of Sequential class, but {} is given.".format(str(type(other)))
+                "add operator supports only objects " "of Sequential class, but {} is given.".format(str(type(other)))
             )
 
     def __mul__(self, other: int) -> "Sequential":
         if not isinstance(other, int):
-            raise TypeError(
-                f"unsupported operand type(s) for *: {type(self)} and {type(other)}"
-            )
+            raise TypeError(f"unsupported operand type(s) for *: {type(self)} and {type(other)}")
         elif other <= 0:
-            raise ValueError(
-                f"Non-positive multiplication factor {other} for {type(self)}"
-            )
+            raise ValueError(f"Non-positive multiplication factor {other} for {type(self)}")
         else:
             combined = Sequential()
             offset = 0
@@ -160,13 +154,9 @@ class Sequential(Module):
 
     def __imul__(self, other: int) -> "Sequential":
         if not isinstance(other, int):
-            raise TypeError(
-                f"unsupported operand type(s) for *: {type(self)} and {type(other)}"
-            )
+            raise TypeError(f"unsupported operand type(s) for *: {type(self)} and {type(other)}")
         elif other <= 0:
-            raise ValueError(
-                f"Non-positive multiplication factor {other} for {type(self)}"
-            )
+            raise ValueError(f"Non-positive multiplication factor {other} for {type(self)}")
         else:
             len_original = len(self)
             offset = len(self)
@@ -366,8 +356,7 @@ class ModuleList(Module):
         """
         if not isinstance(modules, container_abcs.Iterable):
             raise TypeError(
-                "ModuleList.extend should be called with an "
-                "iterable, but got " + type(modules).__name__
+                "ModuleList.extend should be called with an " "iterable, but got " + type(modules).__name__
             )
         offset = len(self)
         for i, module in enumerate(modules):

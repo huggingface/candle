@@ -18,9 +18,7 @@ TensorLike = Union[Tensor, QTensor]
 T = TypeVar("T", bound="Module")
 
 
-class _IncompatibleKeys(
-    namedtuple("IncompatibleKeys", ["missing_keys", "unexpected_keys"])
-):
+class _IncompatibleKeys(namedtuple("IncompatibleKeys", ["missing_keys", "unexpected_keys"])):
     def __repr__(self):
         if not self.missing_keys and not self.unexpected_keys:
             return "<All keys matched successfully>"
@@ -206,9 +204,7 @@ class Module:
     T_destination = TypeVar("T_destination", bound=Dict[str, Any])
 
     @overload
-    def state_dict(
-        self, *, destination: T_destination, prefix: str = ..., keep_vars: bool = ...
-    ) -> T_destination:
+    def state_dict(self, *, destination: T_destination, prefix: str = ..., keep_vars: bool = ...) -> T_destination:
         ...
 
     @overload
@@ -306,9 +302,7 @@ class Module:
                 else:
                     destination[prefix + name] = buf
 
-    def load_state_dict(
-        self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False
-    ):
+    def load_state_dict(self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False):
         r"""Copies parameters and buffers from :attr:`state_dict` into
         this module and its descendants. If :attr:`strict` is ``True``, then
         the keys of :attr:`state_dict` must exactly match the keys returned
@@ -343,9 +337,7 @@ class Module:
             ``RuntimeError``.
         """
         if not isinstance(state_dict, Mapping):
-            raise TypeError(
-                f"Expected state_dict to be dict-like, got {type(state_dict)}."
-            )
+            raise TypeError(f"Expected state_dict to be dict-like, got {type(state_dict)}.")
 
         missing_keys: List[str] = []
         unexpected_keys: List[str] = []
@@ -374,11 +366,7 @@ class Module:
             for name, child in module._modules.items():
                 if child is not None:
                     child_prefix = prefix + name + "."
-                    child_state_dict = {
-                        k: v
-                        for k, v in local_state_dict.items()
-                        if k.startswith(child_prefix)
-                    }
+                    child_state_dict = {k: v for k, v in local_state_dict.items() if k.startswith(child_prefix)}
                     load(child, child_state_dict, child_prefix)
 
         load(self, state_dict)
@@ -388,23 +376,17 @@ class Module:
             if len(unexpected_keys) > 0:
                 error_msgs.insert(
                     0,
-                    "Unexpected key(s) in state_dict: {}. ".format(
-                        ", ".join(f'"{k}"' for k in unexpected_keys)
-                    ),
+                    "Unexpected key(s) in state_dict: {}. ".format(", ".join(f'"{k}"' for k in unexpected_keys)),
                 )
             if len(missing_keys) > 0:
                 error_msgs.insert(
                     0,
-                    "Missing key(s) in state_dict: {}. ".format(
-                        ", ".join(f'"{k}"' for k in missing_keys)
-                    ),
+                    "Missing key(s) in state_dict: {}. ".format(", ".join(f'"{k}"' for k in missing_keys)),
                 )
 
         if len(error_msgs) > 0:
             raise RuntimeError(
-                "Error(s) in loading state_dict for {}:\n\t{}".format(
-                    self.__class__.__name__, "\n\t".join(error_msgs)
-                )
+                "Error(s) in loading state_dict for {}:\n\t{}".format(self.__class__.__name__, "\n\t".join(error_msgs))
             )
         return _IncompatibleKeys(missing_keys, unexpected_keys)
 
@@ -452,11 +434,7 @@ class Module:
                 list, and will be reported together in
                 :meth:`~candle.nn.Module.load_state_dict`
         """
-        persistent_buffers = {
-            k: v
-            for k, v in self._buffers.items()
-            if k not in self._non_persistent_buffers_set
-        }
+        persistent_buffers = {k: v for k, v in self._buffers.items() if k not in self._non_persistent_buffers_set}
         local_name_params = persistent_buffers.items()
         local_state = {k: v for k, v in local_name_params if v is not None}
 
@@ -476,9 +454,7 @@ class Module:
                     # local shape should match the one in checkpoint
                     error_msgs.append(
                         "size mismatch for {}: copying a param with shape {} from checkpoint, "
-                        "the shape in current model is {}.".format(
-                            key, input_param.shape, param.shape
-                        )
+                        "the shape in current model is {}.".format(key, input_param.shape, param.shape)
                     )
                     continue
 
@@ -499,25 +475,14 @@ class Module:
             for key in state_dict.keys():
                 if key.startswith(prefix):
                     input_name = key[len(prefix) :]
-                    input_name = input_name.split(".", 1)[
-                        0
-                    ]  # get the name of param/buffer/child
-                    if (
-                        input_name not in self._modules
-                        and input_name not in local_state
-                    ):
+                    input_name = input_name.split(".", 1)[0]  # get the name of param/buffer/child
+                    if input_name not in self._modules and input_name not in local_state:
                         unexpected_keys.append(key)
 
-    def _named_members(
-        self, get_members_fn, prefix="", recurse=True, remove_duplicate: bool = True
-    ):
+    def _named_members(self, get_members_fn, prefix="", recurse=True, remove_duplicate: bool = True):
         r"""Helper method for yielding various names + members of modules."""
         memo = set()
-        modules = (
-            self.named_modules(prefix=prefix, remove_duplicate=remove_duplicate)
-            if recurse
-            else [(prefix, self)]
-        )
+        modules = self.named_modules(prefix=prefix, remove_duplicate=remove_duplicate) if recurse else [(prefix, self)]
         for module_prefix, module in modules:
             members = get_members_fn(module)
             for k, v in members:
@@ -596,11 +561,7 @@ class Module:
         if isinstance(tensor, Tensor):
             return tensor.to_dtype(dtype)
         else:
-            raise TypeError(
-                "candle.Module.to only accepts Tensor dtypes, but got desired dtype={}".format(
-                    dtype
-                )
-            )
+            raise TypeError("candle.Module.to only accepts Tensor dtypes, but got desired dtype={}".format(dtype))
 
     def type(self: T, dst_type: Union[DType, str]) -> T:
         r"""Casts all parameters and buffers to :attr:`dst_type`.
@@ -674,11 +635,7 @@ class Module:
                 elif isinstance(arg, DType):
                     dtype = str(arg)
                 else:
-                    raise TypeError(
-                        "Module.to() received an invalid combination of arguments. Got: {}".format(
-                            args
-                        )
-                    )
+                    raise TypeError("Module.to() received an invalid combination of arguments. Got: {}".format(args))
 
         if kwargs:
             device = kwargs.get("device", device)
@@ -691,8 +648,7 @@ class Module:
             dtype = dtype.lower()
             if dtype not in ["f32", "f16", "f64"]:
                 raise TypeError(
-                    "candle.Module.to only accepts floating point"
-                    "dtypes, but got desired dtype={}".format(dtype)
+                    "candle.Module.to only accepts floating point" "dtypes, but got desired dtype={}".format(dtype)
                 )
 
         def convert(t):

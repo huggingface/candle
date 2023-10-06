@@ -95,17 +95,16 @@ class Linear(Module):
                 matmul_result = self.weight.matmul_t(x).broadcast_add(self.bias)
             elif len(dims) == 3:
                 b, n, m = dims
+                output_shape = (b, n, self.out_features)
                 re = x.reshape((b * n, m))
-                matmul_result = self.weight.matmul_t(re).reshape((b, n, m))
+                matmul_result = self.weight.matmul_t(re).reshape((output_shape))
             else:
-                raise NotImplementedError(
-                    "'QTensor.matmul_t' is not implemented for more than 3 dimensions"
-                )
+                raise NotImplementedError("'QTensor.matmul_t' is not implemented for more than 3 dimensions")
 
             if self.bias:
                 return matmul_result.broadcast_add(self.bias)
         else:
-            if self.weight.shape[0] == last_dim:
+            if self.weight.shape[-1] == last_dim and len(dims) < 3:
                 w = self.weight.t()
             else:
                 batch_size = dims[0]

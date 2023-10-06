@@ -3,12 +3,14 @@ from typing import Dict, Tuple, Any
 from candle import Tensor, QTensor, utils, nn
 from candle.nn import Module, ModuleList
 
-def masked_fill(on_false:Tensor, mask:Tensor, on_true:Tensor):
+
+def masked_fill(on_false: Tensor, mask: Tensor, on_true: Tensor):
     shape = mask.shape
     on_true = candle.tensor(on_true).broadcast_as(shape)
     return mask.where_cond(on_true, on_false)
 
-def precompute_freqs_cis(hparams:Dict[str,Any], freq_base:float, max_seq_len:int):
+
+def precompute_freqs_cis(hparams: Dict[str, Any], freq_base: float, max_seq_len: int):
     head_dim = hparams["n_embd"] // hparams["n_head"]
     theta = [1.0 / freq_base ** (i / head_dim) for i in range(0, head_dim, 2)]
     theta = candle.tensor(theta)
@@ -17,19 +19,27 @@ def precompute_freqs_cis(hparams:Dict[str,Any], freq_base:float, max_seq_len:int
     m = idx_theta.matmul(theta.unsqueeze(0))
     return (m.cos(), m.sin())
 
+
 class RmsNorm(Module):
-    def __init__(self, qtensor:QTensor):
+    def __init__(self, qtensor: QTensor):
         super().__init__()
         self.weight = qtensor.dequantize()
 
-    def forward(self, x:Tensor) -> Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         b_size, seq_len, hidden_size = x.shape
         norm_x = x.sqr().sum_keepdim(2) / hidden_size
         x_normed = x.broadcast_div((norm_x + 1e-5).sqrt())
         return x_normed.broadcast_mul(self.weight)
-    
+
+
 class QuantizedLayer(Module):
-    def __init__(self, layer_idx:int, hparams:Dict[str,Any], all_tensors:Dict[str,QTensor], cos_sin:Tuple[Tensor,Tensor]):
+    def __init__(
+        self,
+        layer_idx: int,
+        hparams: Dict[str, Any],
+        all_tensors: Dict[str, QTensor],
+        cos_sin: Tuple[Tensor, Tensor],
+    ):
         super().__init__()
         p = f"layers.{layer_idx}"
         self.attention_wq = all_tensors[f"{p}.attention.wq.weight"]
@@ -52,10 +62,10 @@ class QuantizedLayer(Module):
         self._non_persistent_buffers_set.add("cos")
         self._non_persistent_buffers_set.add("sin")
 
-    def forward(self, x:Tensor, mask:Tensor, index_pos:int) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor, index_pos: int) -> Tensor:
         residual = x
         x = self.attn_norm(x)
-        attn = self.forward_attn(x, mask, index_pos) 
+        attn = self.forward_attn(x, mask, index_pos)
         x = attn + residual
 
         residual = x
@@ -66,7 +76,7 @@ class QuantizedLayer(Module):
 
         return mlp + residual
 
-    def forward_attn(self, x:Tensor, mask:Tensor, index_pos:int):
+    def forward_attn(self, x: Tensor, mask: Tensor, index_pos: int):
         b_size, seq_len, n_embd = x.shape
         q = self.attention_wq.matmul_t(x)
         k = self.attention_wk.matmul_t(x)
@@ -96,11 +106,11 @@ class QuantizedLayer(Module):
         y = y.transpose(1, 2).reshape((b_size, seq_len, n_embd))
         return self.attention_wo.matmul_t(y)
 
-    def apply_rotary_emb(self, x:Tensor, index_pos:int):
-        (b_size, n_head, seq_len, n_embd) = x.shape
-        cos = self.cos.narrow(0, index_pos, seq_len).reshape((seq_len, n_embd//2, 1))
-        sin = self.sin.narrow(0, index_pos, seq_len).reshape((seq_len, n_embd//2, 1))
-        x = x.reshape((b_size, n_head, seq_len, n_embd//2, 2))
+    def apply_rotary_emb(self, x: Tensor, index_pos: int):
+        b_size, n_head, seq_len, n_embd = x.shape
+        cos = self.cos.narrow(0, index_pos, seq_len).reshape((seq_len, n_embd // 2, 1))
+        sin = self.sin.narrow(0, index_pos, seq_len).reshape((seq_len, n_embd // 2, 1))
+        x = x.reshape((b_size, n_head, seq_len, n_embd // 2, 2))
         x0 = x.narrow(-1, 0, 1)
         x1 = x.narrow(-1, 1, 1)
         y0 = x0.broadcast_mul(cos) - x1.broadcast_mul(sin)
@@ -110,19 +120,19 @@ class QuantizedLayer(Module):
 
 
 class QuantizedLlama(Module):
-    def __init__(self, hparams:Dict[str,Any], all_tensors:Dict[str,QTensor]):
+    def __init__(self, hparams: Dict[str, Any], all_tensors: Dict[str, QTensor]):
         super().__init__()
         self.tok_embeddings = all_tensors["tok_embeddings.weight"].dequantize()
         self.norm = RmsNorm(all_tensors["norm.weight"])
         self.output = all_tensors["output.weight"]
         self.layers = ModuleList()
-        rope_freq = hparams.get("rope_freq", 10000.)
-        cos_sin = precompute_freqs_cis(hparams, rope_freq, hparams['context_length'])
+        rope_freq = hparams.get("rope_freq", 10000.0)
+        cos_sin = precompute_freqs_cis(hparams, rope_freq, hparams["context_length"])
         for layer_idx in range(hparams["n_layer"]):
             layer = QuantizedLayer(layer_idx, hparams, all_tensors, cos_sin)
             self.layers.append(layer)
 
-    def forward(self, token:Tensor, index_pos:int) -> Tensor:
+    def forward(self, token: Tensor, index_pos: int) -> Tensor:
         b_size, seq_len = token.shape
         vocab_size, hidden_size = self.tok_embeddings.shape
         token = token.reshape((b_size * seq_len,))
@@ -138,4 +148,3 @@ class QuantizedLlama(Module):
         x = x.narrow(1, -1, 1).squeeze(1)
         x = self.output.matmul_t(x)
         return x
-        

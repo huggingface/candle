@@ -7,7 +7,7 @@ print(t + t)
 
 t = candle.Tensor([3.0, 1, 4, 1, 5, 9, 2, 6])
 print(t)
-print(t+t)
+print(t + t)
 
 t = t.reshape([2, 4])
 print(t.matmul(t.t()))

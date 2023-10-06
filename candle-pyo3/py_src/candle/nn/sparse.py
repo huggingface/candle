@@ -24,9 +24,7 @@ class Embedding(Module):
         - Output: :math:`(*, H)`, where `*` is the input shape and :math:`H=\text{embedding\_dim}`
     """
 
-    def __init__(
-        self, num_embeddings: int, embedding_dim: int, device=None
-    ) -> None:
+    def __init__(self, num_embeddings: int, embedding_dim: int, device=None) -> None:
         factory_kwargs = {"device": device}
         super().__init__()
         self.num_embeddings = num_embeddings

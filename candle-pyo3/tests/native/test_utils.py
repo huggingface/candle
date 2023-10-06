@@ -18,13 +18,9 @@ def test_can_roundtrip_safetensors():
     loaded_tensors = load_safetensors(file)
     assert set(tensors.keys()) == set(loaded_tensors.keys())
     for key in tensors.keys():
-        assert (
-            tensors[key].values() == loaded_tensors[key].values()
-        ), "Values are not equal"
+        assert tensors[key].values() == loaded_tensors[key].values(), "Values are not equal"
         assert tensors[key].shape == loaded_tensors[key].shape, "Shapes are not equal"
-        assert str(tensors[key].dtype) == str(
-            loaded_tensors[key].dtype
-        ), "Dtypes are not equal"
+        assert str(tensors[key].dtype) == str(loaded_tensors[key].dtype), "Dtypes are not equal"
 
 
 def test_can_roundtrip_gguf():
@@ -50,11 +46,6 @@ def test_can_roundtrip_gguf():
 
     assert set(tensors.keys()) == set(loaded_tensors.keys())
     for key in tensors.keys():
-        assert (
-            tensors[key].dequantize().values()
-            == loaded_tensors[key].dequantize().values()
-        ), "Values are not equal"
+        assert tensors[key].dequantize().values() == loaded_tensors[key].dequantize().values(), "Values are not equal"
         assert tensors[key].shape == loaded_tensors[key].shape, "Shapes are not equal"
-        assert str(tensors[key].ggml_dtype) == str(
-            loaded_tensors[key].ggml_dtype
-        ), "Dtypes are not equal"
+        assert str(tensors[key].ggml_dtype) == str(loaded_tensors[key].ggml_dtype), "Dtypes are not equal"
