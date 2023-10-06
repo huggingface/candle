@@ -12,6 +12,7 @@ pub mod quantized_mixformer;
 pub mod quantized_t5;
 pub mod segment_anything;
 pub mod stable_diffusion;
+pub mod stable_lm;
 pub mod t5;
 pub mod whisper;
 pub mod with_tracing;
