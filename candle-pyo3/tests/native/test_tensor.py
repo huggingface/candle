@@ -62,6 +62,7 @@ def test_tensor_can_be_sliced_2d():
     assert t[0, 0].values() == 3.0
     assert t[:, -1].values() == [1.0, 6.0]
     assert t[:, -4].values() == [3.0, 5]
+    assert t[..., 0].values() == [3.0, 5]
 
 
 def test_tensor_can_be_scliced_3d():
@@ -69,3 +70,5 @@ def test_tensor_can_be_scliced_3d():
     assert t[:, :, 0].values() == [[1, 5], [9, 13]]
     assert t[:, :, 0:2].values() == [[[1, 2], [5, 6]], [[9, 10], [13, 14]]]
     assert t[:, 0, 0].values() == [1, 9]
+    assert t[..., 0].values() == [[1, 5], [9, 13]]
+    assert t[..., 0:2].values() == [[[1, 2], [5, 6]], [[9, 10], [13, 14]]]
