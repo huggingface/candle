@@ -22,6 +22,7 @@ def test_can_roundtrip_safetensors():
         assert tensors[key].shape == loaded_tensors[key].shape, "Shapes are not equal"
         assert str(tensors[key].dtype) == str(loaded_tensors[key].dtype), "Dtypes are not equal"
 
+
 def test_can_roundtrip_multiple_safetensor_files():
     tensors_1 = {
         "a": candle.randn((16, 256)),
@@ -44,8 +45,6 @@ def test_can_roundtrip_multiple_safetensor_files():
     assert set(list(tensors_1.keys()) + list(tensors_2.keys())) == set(loaded_tensors.keys())
     loaded_tensors_from_files = load_safetensors([file_1, file_2])
     assert set(list(tensors_1.keys()) + list(tensors_2.keys())) == set(loaded_tensors_from_files.keys())
-
-
 
 
 def test_can_roundtrip_gguf():

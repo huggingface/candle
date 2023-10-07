@@ -196,6 +196,11 @@ class Tensor:
         Performs the `exp` operation on the tensor.
         """
         pass
+    def expand(self, shape: Sequence[int]) -> Tensor:
+        """
+        Returns a new view of the self tensor with singleton dimensions expanded to a larger size. An alias for broadcast_as.
+        """
+        pass
     def flatten_all(self) -> Tensor:
         """
         Flattens the tensor into a 1D tensor.
@@ -252,6 +257,11 @@ class Tensor:
         Gathers the maximum value across the selected dimension.
         """
         pass
+    def mean(self, dim: int, keepdim: Optional[bool] = None) -> Tensor:
+        """
+        Returns the mean value of each row of the input tensor in the given dimension `dim`.
+        """
+        pass
     def mean_all(self) -> Tensor:
         """
         Returns the mean of the tensor.
@@ -266,6 +276,11 @@ class Tensor:
         """
         Returns a new tensor that is a narrowed version of the input, the dimension `dim`
         ranges from `start` to `start + len`.
+        """
+        pass
+    def pow(self, p: float) -> Tensor:
+        """
+        Performs the `pow` operation on the tensor with the given exponent.
         """
         pass
     def powf(self, p: float) -> Tensor:
@@ -305,6 +320,11 @@ class Tensor:
         Performs the `sin` operation on the tensor.
         """
         pass
+    def size(self) -> Tuple[int]:
+        """
+        Gets the tensor's size.
+        """
+        pass
     def sqr(self) -> Tensor:
         """
         Squares the tensor.
@@ -341,12 +361,17 @@ class Tensor:
         Transposes the tensor.
         """
         pass
-    def to_device(self, device: Union[str, Device]) -> Tensor:
+    def to(self, *args, **kwargs) -> Tensor:
+        """
+        Performs Tensor dtype and/or device conversion.
+        """
+        pass
+    def to_device(self, device: Optional[Union[str, Device]] = None) -> Tensor:
         """
         Move the tensor to a new device.
         """
         pass
-    def to_dtype(self, dtype: Union[str, DType]) -> Tensor:
+    def to_dtype(self, dtype: Optional[Union[str, DType]] = None) -> Tensor:
         """
         Convert the tensor to a new dtype.
         """
@@ -364,6 +389,11 @@ class Tensor:
     def values(self) -> _ArrayLike:
         """
         Gets the tensor's data as a Python scalar or array-like object.
+        """
+        pass
+    def view(self, shape: Sequence[int]) -> Tensor:
+        """
+        Create a view of the tensor in the given shape.
         """
         pass
     def where_cond(self, on_true: Tensor, on_false: Tensor) -> Tensor:
