@@ -1,6 +1,6 @@
 use crate::nn::conv1d_weight_norm;
-use candle::{DType, IndexOp, Result, Tensor};
-use candle_nn::{conv1d, Conv1d, Conv1dConfig, Module, VarBuilder};
+use candle::{DType, IndexOp, Module, Result, Tensor};
+use candle_nn::{conv1d, Conv1d, Conv1dConfig, VarBuilder};
 
 // Encodec Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py
@@ -216,7 +216,9 @@ impl EncodecLSTM {
         }
         Ok(Self { layers })
     }
+}
 
+impl Module for EncodecLSTM {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         use candle_nn::RNN;
         let mut xs = xs.clone();
@@ -254,7 +256,9 @@ impl EncodecConvTranspose1d {
             bias,
         })
     }
+}
 
+impl Module for EncodecConvTranspose1d {
     fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
         todo!()
     }
@@ -306,7 +310,9 @@ impl EncodecConv1d {
             conv,
         })
     }
+}
 
+impl Module for EncodecConv1d {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         // TODO: padding, depending on causal.
         let xs = self.conv.forward(xs)?;
@@ -347,7 +353,9 @@ impl EncodecResnetBlock {
             shortcut,
         })
     }
+}
 
+impl Module for EncodecResnetBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let residual = xs.clone();
         let xs = xs.elu(1.)?;
@@ -446,8 +454,17 @@ impl EncodecEncoder {
         })
     }
 
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut xs = xs.apply(&self.init_conv)?;
+        for (resnets, conv) in self.sampling_layers.iter() {
+            for resnet in resnets.iter() {
+                xs = xs.apply(resnet)?;
+            }
+            xs = xs.elu(1.0)?.apply(conv)?;
+        }
+        xs.apply(&self.final_lstm)?
+            .elu(1.0)?
+            .apply(&self.final_conv)
     }
 }
 
