@@ -239,12 +239,15 @@ pub enum QMatMul {
 
 impl QMatMul {
     pub fn from_arc(qtensor: std::sync::Arc<QTensor>) -> Result<Self> {
-        let t = match qtensor.dtype() {
-            GgmlDType::F32 | GgmlDType::F16 => {
-                let tensor = qtensor.dequantize(&Device::Cpu)?;
-                Self::Tensor(tensor)
-            }
-            _ => Self::QTensor(qtensor),
+        let dequantize = match qtensor.dtype() {
+            GgmlDType::F32 | GgmlDType::F16 => true,
+            _ => false,
+        };
+        let t = if dequantize {
+            let tensor = qtensor.dequantize(&Device::Cpu)?;
+            Self::Tensor(tensor)
+        } else {
+            Self::QTensor(qtensor)
         };
         Ok(t)
     }
@@ -297,7 +300,14 @@ impl QMatMul {
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::QTensor(t) => xs.apply_op1_no_bwd(t.as_ref()),
-            Self::Tensor(t) => xs.matmul(&t.t()?),
+            Self::Tensor(w) => {
+                let w = match *xs.dims() {
+                    [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
+                    [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
+                    _ => w.t()?,
+                };
+                xs.matmul(&w)
+            }
         }
     }
 }
