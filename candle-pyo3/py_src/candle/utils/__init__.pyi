@@ -49,9 +49,9 @@ def load_gguf(path: Union[str, PathLike]) -> Tuple[Dict[str, QTensor], Dict[str,
     pass
 
 @staticmethod
-def load_safetensors(path: Union[str, PathLike]) -> Dict[str, Tensor]:
+def load_safetensors(path: Union[str, PathLike, List[Union[str, PathLike]]]) -> Dict[str, Tensor]:
     """
-    Loads a safetensors file. Returns a dictionary mapping tensor names to tensors.
+    Loads safetensors from a file or directory. Alternatively accepts multiple file paths. Returns a dictionary mapping tensor names to tensors.
     """
     pass
 

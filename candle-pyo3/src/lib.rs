@@ -3,6 +3,8 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict, PyTuple};
 use pyo3::ToPyObject;
+use std::collections::HashMap;
+use std::fs;
 use std::os::raw::c_long;
 use std::sync::Arc;
 
@@ -970,11 +972,56 @@ impl PyQTensor {
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike])")]
-/// Loads a safetensors file. Returns a dictionary mapping tensor names to tensors.
+#[pyo3(text_signature = "(path:Union[str,PathLike, List[Union[str,PathLike]]])")]
+/// Loads safetensors from a file or directory. Alternatively accepts multiple file paths. Returns a dictionary mapping tensor names to tensors.
 /// &RETURNS&: Dict[str,Tensor]
-fn load_safetensors(path: &str, py: Python<'_>) -> PyResult<PyObject> {
-    let res = ::candle::safetensors::load(path, &Device::Cpu).map_err(wrap_err)?;
+fn load_safetensors(path: &PyAny, py: Python<'_>) -> PyResult<PyObject> {
+    let mut res: HashMap<String, Tensor> = HashMap::new();
+
+    let load_tensors = |path: &str, res: &mut HashMap<String, Tensor>| {
+        ::candle::safetensors::load(path, &Device::Cpu)
+            .map_err(wrap_err)
+            .map(|tensors| {
+                for (key, value) in tensors {
+                    res.insert(key, value);
+                }
+            })
+    };
+
+    let handle_file = |path: &str, res: &mut HashMap<String, Tensor>| -> PyResult<()> {
+        if fs::metadata(path)?.is_file() {
+            load_tensors(path, res)?
+        }
+        Ok(())
+    };
+
+    let handle_dir = |path: &str, res: &mut HashMap<String, Tensor>| -> PyResult<()> {
+        for entry in fs::read_dir(path)? {
+            let child_path = entry?.path();
+            if child_path.extension().and_then(|s| s.to_str()) == Some("safetensors") {
+                load_tensors(child_path.to_str().unwrap(), res)?
+            }
+        }
+        Ok(())
+    };
+
+    if let Ok(path) = path.extract::<String>() {
+        let metadata = fs::metadata(&path)?;
+        if metadata.is_file() {
+            handle_file(&path, &mut res)?;
+        } else if metadata.is_dir() {
+            handle_dir(&path, &mut res)?;
+        } else {
+            return Err(PyErr::new::<PyValueError, _>("unsupported path type"));
+        }
+    } else if let Ok(paths) = path.extract::<Vec<String>>() {
+        for path in paths {
+            handle_file(&path, &mut res)?;
+        }
+    } else {
+        return Err(PyErr::new::<PyValueError, _>("unsupported path type"));
+    }
+
     let res = res
         .into_iter()
         .map(|(key, value)| (key, PyTensor(value).into_py(py)))
