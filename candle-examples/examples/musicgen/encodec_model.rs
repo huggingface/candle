@@ -531,8 +531,15 @@ impl EncodecDecoder {
         })
     }
 
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut xs = xs.apply(&self.init_conv)?.apply(&self.init_lstm)?;
+        for (conv, resnets) in self.sampling_layers.iter() {
+            xs = xs.elu(1.)?.apply(conv)?;
+            for resnet in resnets.iter() {
+                xs = xs.apply(resnet)?
+            }
+        }
+        xs.elu(1.)?.apply(&self.final_conv)
     }
 }
 
