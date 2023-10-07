@@ -220,7 +220,7 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = Config::stablelm_3b_4e1t();
+    let config = Config::stablelm_3b_4e1t(args.use_flash_attn);
     let (model, device) = {
         let device = candle_examples::device(args.cpu)?;
         let dtype = if device.is_cuda() {
