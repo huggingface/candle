@@ -237,11 +237,22 @@ pub enum QMatMul {
     Tensor(Tensor),
 }
 
+thread_local! {
+    static DEQUANTIZE_ALL: bool = {
+        match std::env::var("CANDLE_DEQUANTIZE_ALL") {
+            Ok(s) => {
+                !s.is_empty() && s != "0"
+            },
+            Err(_) => false,
+        }
+    }
+}
+
 impl QMatMul {
     pub fn from_arc(qtensor: std::sync::Arc<QTensor>) -> Result<Self> {
         let dequantize = match qtensor.dtype() {
             GgmlDType::F32 | GgmlDType::F16 => true,
-            _ => false,
+            _ => DEQUANTIZE_ALL.with(|b| *b),
         };
         let t = if dequantize {
             let tensor = qtensor.dequantize(&Device::Cpu)?;
