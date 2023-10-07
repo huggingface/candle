@@ -199,25 +199,32 @@ impl EncodecResidualVectorQuantizer {
 // https://github.com/huggingface/transformers/blob/abaca9f9432a84cfaa95531de4c72334f38a42f2/src/transformers/models/encodec/modeling_encodec.py#L226
 #[derive(Debug)]
 struct EncodecLSTM {
-    layers: Vec<(Tensor, Tensor, Tensor, Tensor)>,
+    layers: Vec<candle_nn::LSTM>,
 }
 
 impl EncodecLSTM {
     fn load(dim: usize, vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let vb = &vb.pp("lstm");
         let mut layers = vec![];
-        for i in 0..cfg.num_lstm_layers {
-            let w_hh = vb.get((4 * dim, dim), &format!("weight_hh_l{i}"))?;
-            let w_ih = vb.get((4 * dim, dim), &format!("weight_ih_l{i}"))?;
-            let b_hh = vb.get(4 * dim, &format!("bias_hh_l{i}"))?;
-            let b_ih = vb.get(4 * dim, &format!("bias_ih_l{i}"))?;
-            layers.push((w_hh, w_ih, b_hh, b_ih))
+        for layer_idx in 0..cfg.num_lstm_layers {
+            let config = candle_nn::LSTMConfig {
+                layer_idx,
+                ..Default::default()
+            };
+            let lstm = candle_nn::lstm(dim, dim, config, vb.clone())?;
+            layers.push(lstm)
         }
         Ok(Self { layers })
     }
 
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        use candle_nn::RNN;
+        let mut xs = xs.clone();
+        for layer in self.layers.iter() {
+            let states = layer.seq(&xs)?;
+            xs = layer.states_to_tensor(&states)?;
+        }
+        Ok(xs)
     }
 }
 
