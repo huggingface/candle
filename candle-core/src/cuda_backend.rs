@@ -223,6 +223,12 @@ impl BackendDevice for CudaDevice {
         })
     }
 
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        let mut curand = self.curand.lock().unwrap();
+        curand.0.set_seed(seed).w()?;
+        Ok(())
+    }
+
     fn location(&self) -> crate::DeviceLocation {
         crate::DeviceLocation::Cuda {
             gpu_id: self.device.ordinal(),
