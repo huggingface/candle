@@ -2603,6 +2603,10 @@ impl BackendDevice for CpuDevice {
         Ok(Self)
     }
 
+    fn set_seed(&self, _seed: u64) -> Result<()> {
+        crate::bail!("cannot seed the CPU rng with set_seed")
+    }
+
     fn rand_uniform(&self, shape: &Shape, dtype: DType, min: f64, max: f64) -> Result<CpuStorage> {
         use rand::prelude::*;
 
