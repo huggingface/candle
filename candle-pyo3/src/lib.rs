@@ -1,6 +1,7 @@
 #![allow(clippy::redundant_closure_call)]
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::pyclass::CompareOp;
 use pyo3::types::{IntoPyDict, PyDict, PyTuple};
 use pyo3::ToPyObject;
 use std::collections::HashMap;
@@ -58,6 +59,51 @@ impl PyDType {
 
     fn __str__(&self) -> String {
         self.__repr__()
+    }
+
+    #[getter]
+    /// Gets the bits used by this dtype.
+    /// &RETURNS&: int
+    fn bits(&self) -> usize {
+        match self.0 {
+            DType::U8 => 8,
+            DType::U32 => 32,
+            DType::I64 => 64,
+            DType::BF16 => 16,
+            DType::F16 => 16,
+            DType::F32 => 32,
+            DType::F64 => 64,
+        }
+    }
+
+    #[getter]
+    /// Gets the maximum value representable by this dtype.
+    /// &RETURNS&: float
+    fn max(&self, py: Python<'_>) -> PyObject {
+        match self.0 {
+            DType::U8 => u8::MAX.to_object(py),
+            DType::U32 => u32::MAX.to_object(py),
+            DType::I64 => i64::MAX.to_object(py),
+            DType::BF16 => f32::from(bf16::MAX).to_object(py),
+            DType::F16 => f32::from(f16::MAX).to_object(py),
+            DType::F32 => f32::MAX.to_object(py),
+            DType::F64 => f64::MAX.to_object(py),
+        }
+    }
+
+    #[getter]
+    /// Gets the minimum value representable by this dtype.
+    /// &RETURNS&: float
+    fn min(&self, py: Python<'_>) -> PyObject {
+        match self.0 {
+            DType::U8 => u8::MIN.to_object(py),
+            DType::U32 => u32::MIN.to_object(py),
+            DType::I64 => i64::MIN.to_object(py),
+            DType::BF16 => f32::from(bf16::MIN).to_object(py),
+            DType::F16 => f32::from(f16::MIN).to_object(py),
+            DType::F32 => f32::MIN.to_object(py),
+            DType::F64 => f64::MIN.to_object(py),
+        }
     }
 }
 
@@ -301,9 +347,15 @@ impl PyTensor {
         PyTuple::new(py, self.0.dims()).to_object(py)
     }
 
-    /// Gets the tensor's size.
-    /// &RETURNS&: Tuple[int]
-    fn size(&self, py: Python<'_>) -> PyObject {
+    #[pyo3(signature=(dim=None), text_signature = "(self, dim:Optional[int]=None)")]
+    /// Returns the size of the `self` tensor. If dim is not specified, the returned value is a torch.Size, a subclass of tuple. If dim is specified, returns an int holding the size of that dimension.
+    /// &RETURNS&: Union[int,Tuple[int]]
+    fn size(&self, dim: Option<isize>, py: Python<'_>) -> PyObject {
+        if let Some(dim) = dim {
+            if let Ok(dim) = actual_dim(self, dim as i64) {
+                return self.0.dim(dim).unwrap().to_object(py);
+            }
+        }
         self.shape(py)
     }
 
@@ -623,6 +675,26 @@ impl PyTensor {
         Ok(Self(tensor))
     }
 
+    /// Rich-compare two tensors.
+    /// &RETURNS&: Tensor
+    fn __richcmp__(&self, rhs: PyTensor, op: CompareOp) -> PyResult<Self> {
+        let rhs = if self.0.shape() != rhs.0.shape() {
+            rhs.0.broadcast_as(self.0.shape()).map_err(wrap_err)?
+        } else {
+            rhs.0
+        };
+
+        let t = match op {
+            CompareOp::Eq => self.0.eq(&rhs),
+            CompareOp::Ne => self.0.ne(&rhs),
+            CompareOp::Lt => self.0.lt(&rhs),
+            CompareOp::Le => self.0.le(&rhs),
+            CompareOp::Gt => self.0.gt(&rhs),
+            CompareOp::Ge => self.0.ge(&rhs),
+        };
+        Ok(PyTensor(t.map_err(wrap_err)?))
+    }
+
     #[pyo3(text_signature = "(self, shape:Sequence[int])")]
     /// Reshapes the tensor to the given shape.
     /// &RETURNS&: Tensor
@@ -919,6 +991,19 @@ impl PyTensor {
         };
         Ok(PyQTensor(Arc::new(res.map_err(wrap_err)?)))
     }
+
+    #[pyo3(text_signature = "(self, mask:Tensor, value:float)")]
+    /// Fills elements of `self` tensor with `value` where `mask` is True. The shape of `mask` must be broadcastable with the shape of the underlying tensor.
+    /// &RETURNS&: Tensor
+    fn masked_fill(&self, mask: &PyTensor, value: f32) -> PyResult<Self> {
+        let shape = mask.0.shape();
+        let on_true = Tensor::new(value, self.0.device())
+            .map_err(wrap_err)?
+            .broadcast_as(shape.dims())
+            .map_err(wrap_err)?;
+        let m = mask.0.where_cond(&on_true, &self.0).map_err(wrap_err)?;
+        Ok(PyTensor(m))
+    }
 }
 
 #[pyfunction]
@@ -1009,6 +1094,30 @@ fn zeros(
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
     let tensor = Tensor::zeros(shape.0, dtype, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
+}
+
+#[pyfunction]
+#[pyo3(signature = (shape, fill_value, dtype=None, device=None), text_signature = "(shape:Sequence[int], fill_value:float,dtype:Optional[DType]=None, device:Optional[Device]=None)")]
+/// Creates a tensor of size `size` filled with `fill_value`.
+/// &RETURNS&: Tensor
+fn full(
+    py: Python<'_>,
+    shape: PyShape,
+    fill_value: f64,
+    dtype: Option<PyObject>,
+    device: Option<PyDevice>,
+) -> PyResult<PyTensor> {
+    let dtype = match dtype {
+        None => DType::F32,
+        Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
+    };
+    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
+    let ones_tensor = Tensor::ones(shape.0, dtype, &device).map_err(wrap_err)?;
+    let value_tensor = (ones_tensor * fill_value)
+        .map_err(wrap_err)?
+        .to_dtype(dtype)
+        .map_err(wrap_err)?;
+    Ok(PyTensor(value_tensor))
 }
 
 #[derive(Debug, Clone)]
@@ -1481,5 +1590,6 @@ fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tensor, m)?)?;
     m.add_function(wrap_pyfunction!(stack, m)?)?;
     m.add_function(wrap_pyfunction!(zeros, m)?)?;
+    m.add_function(wrap_pyfunction!(full, m)?)?;
     Ok(())
 }

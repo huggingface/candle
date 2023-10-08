@@ -22,6 +22,15 @@ class f32(DType):
 class f64(DType):
     pass
 
+@staticmethod
+def full(
+    shape: Sequence[int], fill_value: float, dtype: Optional[DType] = None, device: Optional[Device] = None
+) -> Tensor:
+    """
+    Creates a tensor of size `size` filled with `fill_value`.
+    """
+    pass
+
 class i64(DType):
     pass
 
@@ -77,6 +86,25 @@ class DType:
     """
     A `candle` dtype.
     """
+
+    @property
+    def bits(self) -> int:
+        """
+        Gets the bits used by this dtype.
+        """
+        pass
+    @property
+    def max(self) -> float:
+        """
+        Gets the maximum value representable by this dtype.
+        """
+        pass
+    @property
+    def min(self) -> float:
+        """
+        Gets the minimum value representable by this dtype.
+        """
+        pass
 
 class QTensor:
     """
@@ -247,6 +275,11 @@ class Tensor:
         Performs the `log` operation on the tensor.
         """
         pass
+    def masked_fill(self, mask: Tensor, value: float) -> Tensor:
+        """
+        Fills elements of `self` tensor with `value` where `mask` is True. The shape of `mask` must be broadcastable with the shape of the underlying tensor.
+        """
+        pass
     def matmul(self, rhs: Tensor) -> Tensor:
         """
         Performs a matrix multiplication between the two tensors.
@@ -320,9 +353,9 @@ class Tensor:
         Performs the `sin` operation on the tensor.
         """
         pass
-    def size(self) -> Tuple[int]:
+    def size(self, dim: Optional[int] = None) -> Union[int, Tuple[int]]:
         """
-        Gets the tensor's size.
+        Returns the size of the `self` tensor. If dim is not specified, the returned value is a torch.Size, a subclass of tuple. If dim is specified, returns an int holding the size of that dimension.
         """
         pass
     def sqr(self) -> Tensor:
