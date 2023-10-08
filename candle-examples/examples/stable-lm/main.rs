@@ -155,7 +155,7 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 100)]
     sample_len: usize,
 
-    #[arg(long, default_value = "stabilityai/stablelm-3b-4e1t")]
+    #[arg(long, default_value = "lmz/stablelm-3b-4e1t")]
     model_id: String,
 
     #[arg(long, default_value = "main")]
