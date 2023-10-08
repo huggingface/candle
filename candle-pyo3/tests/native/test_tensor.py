@@ -156,6 +156,8 @@ def test_tensor_can_be_scliced_3d():
 
 
 def test_tensor_can_be_expanded_with_none():
-    t = Tensor([[1, 2], [3, 4]])
-
-    assert t[None, :].values() == [[[1, 2], [3, 4]]]
+    t = candle.rand((12, 12))
+    a = t[None, None]
+    b = t[None, :]
+    c = t[:, None, None, :]
+    assert c.shape == (12, 1, 1, 12)

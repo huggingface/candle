@@ -4,8 +4,10 @@ use pyo3::prelude::*;
 use pyo3::pyclass::CompareOp;
 use pyo3::types::{IntoPyDict, PyDict, PyTuple};
 use pyo3::ToPyObject;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::os::raw::c_long;
 use std::sync::Arc;
 
@@ -250,6 +252,7 @@ enum Indexer {
     Slice(usize, usize),
     Elipsis,
     Expand,
+    IndexSelect(Tensor),
 }
 
 #[pymethods]
@@ -330,6 +333,24 @@ impl PyTensor {
                             .collect::<Vec<Vec<Vec<_>>>>();
                         Ok(v.to_object(self.0))
                     }
+                    4 => {
+                        let mut vectors = vec![];
+                        for i in 0..t.dims()[0] {
+                            let item = t.get(i).map_err(wrap_err)?;
+                            let v = item.to_vec3::<T>().map_err(wrap_err)?;
+                            let v = v
+                                .iter()
+                                .map(|v| {
+                                    v.iter()
+                                        .map(|v| v.iter().map(|v| v.to_py(self.0)).collect())
+                                        .collect()
+                                })
+                                .collect::<Vec<Vec<Vec<_>>>>();
+                            vectors.push(v);
+                        }
+                        Ok(vectors.to_object(self.0))
+                    }
+
                     n => Err(PyTypeError::new_err(format!(
                         "TODO: conversion to PyObject is not handled for rank {n}"
                     )))?,
@@ -543,6 +564,15 @@ impl PyTensor {
             // Handle a single slice e.g. tensor[0:1] or tensor[0:-1]
             let index = slice.indices(dims[0] as c_long)?;
             indexers.push(Indexer::Slice(index.start as usize, index.stop as usize));
+        } else if let Ok(tensor) = idx.extract::<PyTensor>(py) {
+            // Handle a tensor as indices e.g. tensor[tensor([0,1])]
+            let t = tensor.0;
+            if t.rank() != 1 {
+                return Err(PyTypeError::new_err(
+                    "multi-dimensional tensor indexing is not supported",
+                ));
+            }
+            indexers.push(Indexer::IndexSelect(t));
         } else if let Ok(tuple) = idx.downcast::<pyo3::types::PyTuple>(py) {
             // Handle multiple indices e.g. tensor[0,0] or tensor[0:1,0:1]
 
@@ -556,6 +586,7 @@ impl PyTensor {
                 return Err(PyTypeError::new_err("provided too many indices"));
             }
 
+            let mut current_dim = 0;
             for (i, item) in tuple.iter().enumerate() {
                 if item.is_ellipsis() {
                     // Handle '...' e.g. tensor[..., 0]
@@ -564,15 +595,18 @@ impl PyTensor {
                         return Err(PyTypeError::new_err("Ellipsis ('...') can only be used at the start of an indexing operation"));
                     }
                     indexers.push(Indexer::Elipsis);
+                    current_dim = dims.len() - (tuple.len() - 1);
                 } else if item.is_none() {
                     // Handle None e.g. tensor[None, 0]
                     indexers.push(Indexer::Expand);
                 } else if let Ok(slice) = item.downcast::<pyo3::types::PySlice>() {
                     // Handle slice
-                    let index = slice.indices(dims[i] as c_long)?;
+                    let index = slice.indices(dims[current_dim] as c_long)?;
                     indexers.push(Indexer::Slice(index.start as usize, index.stop as usize));
+                    current_dim += 1;
                 } else if let Ok(index) = item.extract::<isize>() {
-                    indexers.push(Indexer::Index(to_absolute_index(index, i)?));
+                    indexers.push(Indexer::Index(to_absolute_index(index, current_dim)?));
+                    current_dim += 1;
                 } else {
                     return Err(PyTypeError::new_err("unsupported index"));
                 }
@@ -606,6 +640,16 @@ impl PyTensor {
                 Indexer::Expand => {
                     // Expand is a special case, it means that a new dimension should be added => unsqueeze and advance the current_dim
                     let out = x.unsqueeze(current_dim).map_err(wrap_err)?;
+                    current_dim += 1;
+                    out
+                }
+                Indexer::IndexSelect(indexes) => {
+                    let out = x
+                        .index_select(
+                            &indexes.to_device(x.device()).map_err(wrap_err)?,
+                            current_dim,
+                        )
+                        .map_err(wrap_err)?;
                     current_dim += 1;
                     out
                 }
@@ -693,6 +737,14 @@ impl PyTensor {
             CompareOp::Ge => self.0.ge(&rhs),
         };
         Ok(PyTensor(t.map_err(wrap_err)?))
+    }
+
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        let pointer = &self.0 as *const Tensor;
+        let address = pointer as usize;
+        address.hash(&mut hasher);
+        hasher.finish()
     }
 
     #[pyo3(text_signature = "(self, shape:Sequence[int])")]

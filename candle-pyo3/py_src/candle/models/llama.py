@@ -103,23 +103,23 @@ class LlamaRMSNorm(nn.Module):
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(candle.f32)
         variance = hidden_states.pow(2.0).mean(-1, keepdim=True)
-        hidden_states = hidden_states * F.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        hidden_states = hidden_states.broadcast_mul(F.rsqrt(variance + self.variance_epsilon))
+        return self.weight.broadcast_mul(hidden_states.to(input_dtype))
 
 
 def rotate_half(x: Tensor):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
-    return candle.cat((-x2, x1), dim=-1)
+    return candle.cat((x2 * -1, x1), dim=-1)
 
 
 # Copied from transformers.models.gpt_neox.modeling_gpt_neox.apply_rotary_pos_emb
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
-    cos = cos[position_ids].unsqueeze(1)  # [seq_len, dim] -> [batch_size, 1, seq_len, head_dim]
-    sin = sin[position_ids].unsqueeze(1)
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+def apply_rotary_pos_emb(q: Tensor, k: Tensor, cos: Tensor, sin: Tensor, position_ids: Tensor):
+    cos = cos[position_ids.squeeze(0)].unsqueeze(0)  # [seq_len, dim] -> [1, seq_len, head_dim]
+    sin = sin[position_ids.squeeze(0)].unsqueeze(0)
+    q_embed = q.broadcast_mul(cos) + rotate_half(q).broadcast_mul(sin)
+    k_embed = k.broadcast_mul(cos) + rotate_half(k).broadcast_mul(sin)
     return q_embed, k_embed
 
 
@@ -221,7 +221,7 @@ class LlamaAttention(nn.Module):
             kv_seq_len = key_states.shape[-2]
             if past_key_value is not None:
                 kv_seq_len += past_key_value[0].shape[-2]
-            cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+            cos, sin = self.rotary_emb.forward(value_states, seq_len=kv_seq_len)
             query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
             if past_key_value is not None:
@@ -234,7 +234,7 @@ class LlamaAttention(nn.Module):
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-            attn_weights = F.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+            attn_weights: Tensor = F.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
             if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
                 raise ValueError(
@@ -247,7 +247,7 @@ class LlamaAttention(nn.Module):
                     raise ValueError(
                         f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
                     )
-                attn_weights = attn_weights + attention_mask
+                attn_weights = attn_weights.broadcast_add(attention_mask)
 
             # upcast attention to fp32
             attn_weights = F.softmax(attn_weights, dim=-1).to(query_states.dtype)
@@ -348,14 +348,14 @@ def _make_causal_mask(input_ids_shape: Tuple[int], dtype: candle.DType, device: 
     bsz, tgt_len = input_ids_shape
     mask = candle.full((tgt_len, tgt_len), dtype.min, device=device)
     mask_cond = F.arange(0, mask.size(-1)).to(device)
-    mask.masked_fill(
+    mask = mask.masked_fill(
         mask_cond.broadcast_as(mask.shape) < (mask_cond + 1).view((mask.size(-1), 1)).broadcast_as(mask.shape), 0
     )
     mask = mask.to(dtype)
 
     if past_key_values_length > 0:
         mask = candle.cat([candle.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
-    return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
+    return mask[None, None, :, :].expand((bsz, 1, tgt_len, tgt_len + past_key_values_length))
 
 
 # Copied from transformers.models.bart.modeling_bart._expand_mask
@@ -366,11 +366,11 @@ def _expand_mask(mask: candle.Tensor, dtype: candle.DType, tgt_len: Optional[int
     bsz, src_len = mask.size()
     tgt_len = tgt_len if tgt_len is not None else src_len
 
-    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+    expanded_mask = mask[:, None, None, :].expand((bsz, 1, tgt_len, src_len)).to(dtype)
 
-    inverted_mask: Tensor = 1.0 - expanded_mask
+    inverted_mask: Tensor = candle.ones(expanded_mask.shape) - expanded_mask
 
-    return inverted_mask.masked_fill(inverted_mask.to(candle.i64), dtype.min)
+    return inverted_mask.masked_fill(inverted_mask.to(candle.u32), dtype.min)
 
 
 # See https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py
@@ -483,7 +483,7 @@ class LlamaModel(nn.Module):
 
             past_key_value = past_key_values[idx] if past_key_values is not None else None
 
-            layer_outputs = decoder_layer(
+            layer_outputs = decoder_layer.forward(
                 hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
