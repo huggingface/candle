@@ -182,7 +182,7 @@ impl Attention {
         let mask_value =
             Tensor::new(f32::NEG_INFINITY, query.device())?.broadcast_as(attn_shape)?;
         let attn_weights = attention_mask.where_cond(&attn_weights, &mask_value)?;
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let value = value.contiguous()?;
         let attn_output = if self.multi_query {
             attn_weights

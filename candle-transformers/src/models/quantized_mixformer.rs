@@ -256,7 +256,7 @@ impl MHA {
                 f32::NEG_INFINITY,
             )?,
         };
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
 
         // output = torch.einsum('bhts,bshd->bthd', attention_drop, v)
         // attn_weights: b*h,t,s, v: b*h,s,d
