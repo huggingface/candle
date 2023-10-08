@@ -1,105 +1,33 @@
-use crate::models::with_tracing::{linear_no_bias, Linear};
+use crate::models::quantized_t5::Embedding;
+use crate::models::with_tracing::QMatMul;
+pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Activation, LayerNorm, VarBuilder};
+use candle_nn::{Activation, LayerNorm};
 use std::sync::Arc;
 
-// https://huggingface.co/stabilityai/stablelm-3b-4e1t/blob/main/configuration_stablelm_epoch.py
-#[derive(Debug, Clone, PartialEq)]
-pub struct Config {
-    pub(crate) vocab_size: usize,
-    pub(crate) intermediate_size: usize,
-    pub(crate) hidden_size: usize,
-    pub(crate) num_hidden_layers: usize,
-    pub(crate) num_attention_heads: usize,
-    pub(crate) num_key_value_heads: usize,
-    pub(crate) hidden_act: Activation,
-    pub(crate) rope_pct: f64,
-    pub(crate) rope_theta: f64,
-    pub(crate) max_position_embeddings: usize,
-    pub(crate) norm_eps: f64,
-    pub(crate) use_cache: bool,
-    pub(crate) use_flash_attn: bool,
-}
-
-impl Config {
-    pub fn stablelm_3b_4e1t(use_flash_attn: bool) -> Self {
-        Self {
-            vocab_size: 50304,
-            intermediate_size: 6912,
-            hidden_size: 2560,
-            num_hidden_layers: 32,
-            num_attention_heads: 32,
-            num_key_value_heads: 32,
-            hidden_act: Activation::Silu,
-            rope_pct: 0.25,
-            rope_theta: 10_000.,
-            max_position_embeddings: 4096,
-            norm_eps: 1e-5,
-            use_cache: true,
-            use_flash_attn,
-        }
-    }
-
-    pub fn head_dim(&self) -> usize {
-        self.hidden_size / self.num_attention_heads
-    }
-
-    pub fn rotary_ndims(&self) -> usize {
-        (self.head_dim() as f64 * self.rope_pct) as usize
-    }
-
-    pub fn num_kv_groups(&self) -> usize {
-        self.num_attention_heads / self.num_key_value_heads
-    }
-}
+pub use crate::models::stable_lm::Config;
+use crate::models::stable_lm::RotaryEmbedding;
 
 #[derive(Debug)]
-pub(crate) struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+struct Linear {
+    weight: QMatMul,
 }
 
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let xs = xs.chunk(2, D::Minus1)?;
-    Tensor::cat(&[&xs[1].neg()?, &xs[0]], D::Minus1)
+impl Module for Linear {
+    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
+        x.apply(&self.weight)
+    }
 }
 
-impl RotaryEmbedding {
-    pub(crate) fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
-        let dim = cfg.rotary_ndims();
-        let max_seq_len = cfg.max_position_embeddings;
-        let inv_freq: Vec<_> = (0..dim)
-            .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
-        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
-            .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
-        Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
-        })
-    }
+fn linear_no_bias(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
+    let weight = QMatMul::new(in_dim, out_dim, vb)?;
+    Ok(Linear { weight })
+}
 
-    pub(crate) fn apply_rotary_emb_qkv(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
-        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
-        let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
-        Ok((q_embed, k_embed))
-    }
+fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<candle_nn::LayerNorm> {
+    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
+    let bias = vb.get(size, "bias")?.dequantize(vb.device())?;
+    Ok(candle_nn::LayerNorm::new(weight, bias, eps))
 }
 
 #[derive(Debug)]
@@ -135,22 +63,6 @@ impl Module for MLP {
     }
 }
 
-#[cfg(feature = "flash-attn")]
-fn flash_attn(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    softmax_scale: f32,
-    causal: bool,
-) -> Result<Tensor> {
-    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
-}
-
-#[cfg(not(feature = "flash-attn"))]
-fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
-    unimplemented!("compile with '--features flash-attn'")
-}
-
 #[derive(Debug)]
 struct Attention {
     q_proj: Linear,
@@ -166,7 +78,6 @@ struct Attention {
     kv_cache: Option<(Tensor, Tensor)>,
     use_cache: bool,
     rotary_ndims: usize,
-    use_flash_attn: bool,
 }
 
 impl Attention {
@@ -193,7 +104,6 @@ impl Attention {
             kv_cache: None,
             use_cache: cfg.use_cache,
             rotary_ndims: cfg.rotary_ndims(),
-            use_flash_attn: cfg.use_flash_attn,
         })
     }
 
@@ -257,14 +167,7 @@ impl Attention {
         let key_states = self.repeat_kv(key_states)?.contiguous()?;
         let value_states = self.repeat_kv(value_states)?.contiguous()?;
 
-        let attn_output = if self.use_flash_attn {
-            // flash-attn expects (b_sz, seq_len, nheads, head_dim)
-            let q = query_states.transpose(1, 2)?;
-            let k = key_states.transpose(1, 2)?;
-            let v = value_states.transpose(1, 2)?;
-            let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
-            flash_attn(&q, &k, &v, softmax_scale, q_len > 1)?.transpose(1, 2)?
-        } else {
+        let attn_output = {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
             let attn_weights = (query_states.matmul(&key_states.transpose(2, 3)?)? * scale)?;
 
@@ -294,9 +197,8 @@ impl DecoderLayer {
     fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
-        let input_layernorm =
-            candle_nn::layer_norm(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = candle_nn::layer_norm(
+        let input_layernorm = layer_norm(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -327,27 +229,26 @@ impl DecoderLayer {
 
 #[derive(Debug)]
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     norm: LayerNorm,
     lm_head: Linear,
     device: Device,
-    dtype: DType,
 }
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb_m = vb.pp("model");
         let embed_tokens =
-            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
+            Embedding::new(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let rotary_emb = Arc::new(RotaryEmbedding::new(DType::F32, cfg, vb_m.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm = candle_nn::layer_norm(cfg.hidden_size, cfg.norm_eps, vb_m.pp("norm"))?;
+        let norm = layer_norm(cfg.hidden_size, cfg.norm_eps, vb_m.pp("norm"))?;
         let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         Ok(Self {
             embed_tokens,
@@ -355,7 +256,6 @@ impl Model {
             norm,
             lm_head,
             device: vb.device().clone(),
-            dtype: vb.dtype(),
         })
     }
 
@@ -377,7 +277,7 @@ impl Model {
             mask
         };
         mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
-            .to_dtype(self.dtype)
+            .to_dtype(DType::F32)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
