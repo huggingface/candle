@@ -9,6 +9,7 @@ pub mod mixformer;
 pub mod quantized_llama;
 pub mod quantized_mistral;
 pub mod quantized_mixformer;
+pub mod quantized_stable_lm;
 pub mod quantized_t5;
 pub mod segment_anything;
 pub mod stable_diffusion;
