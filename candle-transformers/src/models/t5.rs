@@ -441,7 +441,7 @@ impl T5Attention {
 
         let attn_weights = {
             let _enter = self.span_sm.enter();
-            candle_nn::ops::softmax(&scores, D::Minus1)?
+            candle_nn::ops::softmax_last_dim(&scores)?
         };
         let attn_output = attn_weights.matmul(&v)?;
         let attn_output = attn_output
