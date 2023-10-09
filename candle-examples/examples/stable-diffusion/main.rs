@@ -138,16 +138,9 @@ impl StableDiffusionVersion {
 
     fn vae_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V2_1 => {
+            Self::V1_5 | Self::V2_1 | Self::Xl => {
                 if use_f16 {
                     "vae/diffusion_pytorch_model.fp16.safetensors"
-                } else {
-                    "vae/diffusion_pytorch_model.safetensors"
-                }
-            }
-            Self::Xl => {
-                if use_f16 {
-                    "diffusion_pytorch_model.safetensors"
                 } else {
                     "vae/diffusion_pytorch_model.safetensors"
                 }
@@ -214,12 +207,14 @@ impl ModelFile {
                     Self::Vae => {
                         // Override for SDXL when using f16 weights.
                         // See https://github.com/huggingface/candle/issues/1060
-                        let repo = if version == StableDiffusionVersion::Xl && use_f16 {
-                            "madebyollin/sdxl-vae-fp16-fix"
+                        if version == StableDiffusionVersion::Xl && use_f16 {
+                            (
+                                "madebyollin/sdxl-vae-fp16-fix",
+                                "diffusion_pytorch_model.safetensors",
+                            )
                         } else {
-                            version.repo()
-                        };
-                        (repo, version.vae_file(use_f16))
+                            (version.repo(), version.vae_file(use_f16))
+                        }
                     }
                 };
                 let filename = Api::new()?.model(repo.to_string()).get(path)?;
