@@ -140,7 +140,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         use candle::cuda_backend::cudarc::driver::{
             CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
         };
-        use candle::cuda_backend::{kernel_name, kernels, Map1, WrapErr};
+        use candle::cuda_backend::{kernel_name, Map1, WrapErr};
         use candle::{CudaDevice, WithDType};
 
         struct S;
@@ -166,7 +166,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
                     shared_mem_bytes: 0,
                 };
                 let src = &src.slice(layout.start_offset()..);
-                let func = dev.get_or_load_func(&kernel_name::<T>("softmax"), kernels::REDUCE)?;
+                let func = dev.get_or_load_func(&kernel_name::<T>("softmax"), "REDUCE")?;
                 // SAFETY: Set later by running the kernel.
                 let dst = unsafe { dev.alloc::<T>(el) }.w()?;
                 let params = (src, &dst, n_cols as i32);
