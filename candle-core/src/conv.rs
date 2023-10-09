@@ -25,7 +25,6 @@ impl ParamsConv1D {
     }
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CudnnFwdAlgo {
     ImplicitGemm,
@@ -51,7 +50,7 @@ pub struct ParamsConv2D {
     pub(crate) padding: usize,
     pub(crate) stride: usize,
     pub(crate) dilation: usize,
-    pub(crate) cudnn_fwd_algo: Option<CudnnFwdAlgo>,
+    pub cudnn_fwd_algo: Option<CudnnFwdAlgo>,
 }
 
 impl ParamsConv2D {

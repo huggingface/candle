@@ -3,7 +3,6 @@ use candle_nn::VarBuilder;
 use candle_wasm_example_sam as sam;
 use wasm_bindgen::prelude::*;
 
-#[allow(unused)]
 struct Embeddings {
     original_width: u32,
     original_height: u32,

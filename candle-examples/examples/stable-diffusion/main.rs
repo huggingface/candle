@@ -104,7 +104,6 @@ enum StableDiffusionVersion {
     Xl,
 }
 
-#[allow(unused)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ModelFile {
     Tokenizer,
