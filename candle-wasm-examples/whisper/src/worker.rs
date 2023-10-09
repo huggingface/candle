@@ -84,7 +84,6 @@ pub struct Segment {
     pub dr: DecodingResult,
 }
 
-#[allow(unused)]
 pub struct Decoder {
     model: Model,
     rng: rand::rngs::StdRng,

@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
@@ -10,7 +8,7 @@ use candle_transformers::models::stable_diffusion;
 use candle_transformers::models::wuerstchen;
 
 use anyhow::{Error as E, Result};
-use candle::{DType, Device, IndexOp, Module, Tensor, D};
+use candle::{DType, Device, IndexOp, Tensor};
 use clap::Parser;
 use tokenizers::Tokenizer;
 
@@ -79,14 +77,6 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     /// The file specifying the tokenizer to used for prior tokenization.
     prior_tokenizer: Option<String>,
-
-    /// The size of the sliced attention or 0 for automatic slicing (disabled by default)
-    #[arg(long)]
-    sliced_attention_size: Option<usize>,
-
-    /// The number of steps to run the diffusion for.
-    #[arg(long, default_value_t = 30)]
-    n_steps: usize,
 
     /// The number of samples to generate.
     #[arg(long, default_value_t = 1)]
@@ -220,10 +210,8 @@ fn run(args: Args) -> Result<()> {
         cpu,
         height,
         width,
-        n_steps,
         tokenizer,
         final_image,
-        sliced_attention_size,
         num_samples,
         clip_weights,
         prior_weights,
