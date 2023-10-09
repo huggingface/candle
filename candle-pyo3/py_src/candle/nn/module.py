@@ -1,17 +1,5 @@
 from candle import Tensor, QTensor, DType
-from typing import (
-    Dict,
-    Tuple,
-    Any,
-    Optional,
-    Union,
-    Iterator,
-    Set,
-    overload,
-    Mapping,
-    TypeVar,
-    List,
-)
+from typing import Dict, Tuple, Any, Optional, Union, Iterator, Set, overload, Mapping, TypeVar, List, Callable
 from collections import OrderedDict, namedtuple
 
 TensorLike = Union[Tensor, QTensor]
@@ -41,6 +29,8 @@ class Module:
     _buffers: Dict[str, Optional[TensorLike]]
     _non_persistent_buffers_set: Set[str]
     _quantizable_buffers: Set[str]
+    _load_state_dict_hooks: List[Callable[[str, TensorLike], Tuple[str, TensorLike]]]
+    _export_gguf_hooks: List[Callable[[str, TensorLike], Tuple[str, TensorLike]]]
     _version: int = 1
 
     def __init__(self, *args, **kwargs) -> None:
@@ -51,6 +41,8 @@ class Module:
         super().__setattr__("_buffers", OrderedDict())
         super().__setattr__("_non_persistent_buffers_set", set())
         super().__setattr__("_quantizable_buffers", set())
+        super().__setattr__("_load_state_dict_hooks", list())
+        super().__setattr__("_export_gguf_hooks", list())
 
     def __call__(self, *input):
         """
@@ -211,7 +203,14 @@ class Module:
     def state_dict(self, *, prefix: str = ..., keep_vars: bool = ...) -> Dict[str, Any]:
         ...
 
-    def state_dict(self, *args, destination=None, prefix="", keep_vars=False):
+    def state_dict(
+        self,
+        *args,
+        destination=None,
+        prefix="",
+        keep_vars=False,
+        hooks: Optional[List[Callable[[str, TensorLike], Tuple[str, TensorLike]]]] = None
+    ):
         r"""Returns a dictionary containing references to the whole state of the module.
 
         Both parameters and persistent buffers (e.g. running averages) are
@@ -280,6 +279,15 @@ class Module:
                     prefix=prefix + name + ".",
                     keep_vars=keep_vars,
                 )
+
+        if hooks:
+            for hook in hooks:
+                mapped_state_dict = {}
+                for key in destination:
+                    new_key, t = hook(key, destination[key])
+                    mapped_state_dict[new_key] = t
+                destination = mapped_state_dict
+
         return destination
 
     def _save_to_state_dict(self, destination, prefix, keep_vars):
@@ -301,6 +309,26 @@ class Module:
                     destination[prefix + name] = buf if keep_vars else buf.detach()
                 else:
                     destination[prefix + name] = buf
+
+    def gguf(self, default: str = "f32") -> Dict[str, QTensor]:
+        """
+        Get's the state_dict of the module and quantizes all normal tensors to the given default type.
+        """
+        state_dict = self.state_dict(hooks=self._export_gguf_hooks)
+        for key, t in state_dict.items():
+            if isinstance(t, Tensor):
+                state_dict[key] = t.quantize(default)
+        return state_dict
+
+    def safetenors(self) -> Dict[str, Tensor]:
+        """
+        Get's the state_dict of the module and dequantizes all QTensor tensors.
+        """
+        state_dict = self.state_dict()
+        for key, t in state_dict.items():
+            if isinstance(t, QTensor):
+                state_dict[key] = t.dequantize()
+        return state_dict
 
     def load_state_dict(self, state_dict: Mapping[str, Any], strict: bool = True, assign: bool = False):
         r"""Copies parameters and buffers from :attr:`state_dict` into
@@ -342,6 +370,14 @@ class Module:
         missing_keys: List[str] = []
         unexpected_keys: List[str] = []
         error_msgs: List[str] = []
+
+        # apply the hooks
+        for hook in self._load_state_dict_hooks:
+            mapped_state_dict = {}
+            for key in state_dict:
+                new_key, t = hook(key, state_dict[key])
+                mapped_state_dict[new_key] = t
+            state_dict = mapped_state_dict
 
         # copy state_dict so _load_from_state_dict can modify it
         metadata = getattr(state_dict, "_metadata", None)

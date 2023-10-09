@@ -5,12 +5,14 @@ from candle import utils
 import json
 
 
-config = Config.from_dict(json.load(open(r"C:\Users\luk\Downloads\config.json")))
+config = Config()
 model = LlamaForCausalLM(config)
 state_dict = model.state_dict()
 
 tensors = utils.load_safetensors(r"C:\Users\luk\Downloads\open_llama.safetensors")
-model.load_state_dict(tensors, strict=False)
+qtensors, _ = utils.load_gguf(r"C:\Users\luk\Downloads\yarn-llama-2-7b-64k.Q3_K_S.gguf")
+model.load_state_dict(qtensors)
+exported = model.gguf()
 
 toknizer = AutoTokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
 prompt = ["The quick brown fox jumps over the lazy dog"]

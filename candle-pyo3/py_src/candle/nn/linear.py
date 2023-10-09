@@ -102,7 +102,8 @@ class Linear(Module):
                 raise NotImplementedError("'QTensor.matmul_t' is not implemented for more than 3 dimensions")
 
             if self.bias:
-                return matmul_result.broadcast_add(self.bias)
+                matmul_result = matmul_result.broadcast_add(self.bias)
+            return matmul_result
         else:
             if self.weight.shape[-1] == last_dim and len(dims) < 3:
                 w = self.weight.t()

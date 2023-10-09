@@ -2,10 +2,90 @@ from dataclasses import dataclass
 from typing import Tuple, Optional, List, Dict, Union
 import candle
 from candle import nn
-from candle import Tensor
+from candle import Tensor, QTensor
 import candle.functional as F
 import math
 from candle.configuration_utils import PretrainedConfig
+import re
+
+attention_pattern = re.compile(r"attn_(q|k|v|output)")
+projection_pattern = re.compile(r"ffn_(gate|up|down)")
+
+
+def load_gguf_rename_hook(name: str, tensor: Union[Tensor, QTensor]) -> Tuple[str, Union[Tensor, QTensor]]:
+    """
+    Rename the keys in the gguf to match the pytorch convention
+    """
+    if name == "output.weight":
+        name = "lm_head.weight"
+
+    if name == "token_embd.weight":
+        name = "model.embed_tokens.weight"
+
+    if name == "output_norm.weight":
+        name = "model.norm.weight"
+
+    if "blk" in name:
+        name = name.replace("blk", "model.layers")
+
+    if "attn_norm" in name:
+        name = name.replace("attn_norm", "post_attention_layernorm")
+
+    if "ffn_norm" in name:
+        name = name.replace("ffn_norm", "input_layernorm")
+
+    match = projection_pattern.search(name)
+    if match:
+        key = match.group(1)
+        name = name.replace(f"ffn_{key}", f"mlp.{key}_proj")
+
+    match = attention_pattern.search(name)
+    if match:
+        key = match.group(1)
+        if key == "output":
+            name = name.replace(f"attn_{key}", f"self_attn.o_proj")
+        else:
+            name = name.replace(f"attn_{key}", f"self_attn.{key}_proj")
+
+    return name, tensor
+
+
+def apply_gguf_name_hook(name: str, tensor: Union[Tensor, QTensor]) -> Tuple[str, Union[Tensor, QTensor]]:
+    """
+    Reverse the renaming process to match the gguf convention
+    """
+    if name == "lm_head.weight":
+        name = "output.weight"
+
+    if name == "model.embed_tokens.weight":
+        name = "token_embd.weight"
+
+    if name == "model.norm.weight":
+        name = "output_norm.weight"
+
+    if "model.layers" in name:
+        name = name.replace("model.layers", "blk")
+
+    if "post_attention_layernorm" in name:
+        name = name.replace("post_attention_layernorm", "attn_norm")
+
+    if "input_layernorm" in name:
+        name = name.replace("input_layernorm", "ffn_norm")
+
+    match = re.search(r"mlp\.(gate|up|down)_proj", name)
+    if match:
+        key = match.group(1)
+        name = name.replace(f"mlp.{key}_proj", f"ffn_{key}")
+
+    match = re.search(r"self_attn\.(q|k|v|o)_proj", name)
+    if match:
+        key = match.group(1)
+        if key == "o":
+            name = name.replace(f"self_attn.{key}_proj", f"attn_output")
+        else:
+            name = name.replace(f"self_attn.{key}_proj", f"attn_{key}")
+
+    return name, tensor
 
 
 # see https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/configuration_llama.py
@@ -535,6 +615,8 @@ class LlamaForCausalLM(nn.Module):
         self.model = LlamaModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self._load_state_dict_hooks.append(load_gguf_rename_hook)
+        self._export_gguf_hooks.append(apply_gguf_name_hook)
 
     def forward(
         self,
