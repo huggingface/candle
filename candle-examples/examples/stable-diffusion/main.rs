@@ -97,7 +97,7 @@ struct Args {
     img2img_strength: f64,
 }
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
 enum StableDiffusionVersion {
     V1_5,
     V2_1,
@@ -138,9 +138,16 @@ impl StableDiffusionVersion {
 
     fn vae_file(&self, use_f16: bool) -> &'static str {
         match self {
-            Self::V1_5 | Self::V2_1 | Self::Xl => {
+            Self::V1_5 | Self::V2_1 => {
                 if use_f16 {
                     "vae/diffusion_pytorch_model.fp16.safetensors"
+                } else {
+                    "vae/diffusion_pytorch_model.safetensors"
+                }
+            }
+            Self::Xl => {
+                if use_f16 {
+                    "diffusion_pytorch_model.safetensors"
                 } else {
                     "vae/diffusion_pytorch_model.safetensors"
                 }
@@ -204,7 +211,16 @@ impl ModelFile {
                     Self::Clip => (version.repo(), version.clip_file(use_f16)),
                     Self::Clip2 => (version.repo(), version.clip2_file(use_f16)),
                     Self::Unet => (version.repo(), version.unet_file(use_f16)),
-                    Self::Vae => (version.repo(), version.vae_file(use_f16)),
+                    Self::Vae => {
+                        // Override for SDXL when using f16 weights.
+                        // See https://github.com/huggingface/candle/issues/1060
+                        let repo = if version == StableDiffusionVersion::Xl && use_f16 {
+                            "madebyollin/sdxl-vae-fp16-fix"
+                        } else {
+                            version.repo()
+                        };
+                        (repo, version.vae_file(use_f16))
+                    }
                 };
                 let filename = Api::new()?.model(repo.to_string()).get(path)?;
                 Ok(filename)
