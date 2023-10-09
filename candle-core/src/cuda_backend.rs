@@ -1,7 +1,7 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape, WithDType};
-pub use candle_kernels::KERNELS;
+pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
 use cudarc::driver::{
@@ -10,7 +10,6 @@ use cudarc::driver::{
 };
 use half::{bf16, f16};
 use std::sync::{Arc, Mutex};
-use cudarc::driver::sys::CUdevice_attribute::{CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR};
 
 /// cudarc related errors
 #[derive(thiserror::Error, Debug)]
@@ -77,7 +76,6 @@ impl DeviceId {
 }
 
 struct CudaRng(cudarc::curand::CudaRng);
-
 unsafe impl Send for CudaRng {}
 
 #[derive(Clone)]
@@ -86,7 +84,6 @@ pub struct CudaDevice {
     device: Arc<cudarc::driver::CudaDevice>,
     blas: Arc<cudarc::cublas::CudaBlas>,
     curand: Arc<Mutex<CudaRng>>,
-    compute_cap: usize,
 }
 
 impl std::fmt::Debug for CudaDevice {
@@ -122,10 +119,6 @@ impl CudaDevice {
         self.id
     }
 
-    pub fn compute_cap(&self) -> usize {
-        self.compute_cap
-    }
-
     fn const_impl(&self, v: f64, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
@@ -133,7 +126,7 @@ impl CudaDevice {
             DType::U8 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<u8>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_u8", "FILL")?;
+                let func = self.get_or_load_func("fill_u8", kernels::FILL)?;
                 let params = (&data, v as u8, elem_count);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::U8(data)
@@ -141,7 +134,7 @@ impl CudaDevice {
             DType::U32 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<u32>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_u32", "FILL")?;
+                let func = self.get_or_load_func("fill_u32", kernels::FILL)?;
                 let params = (&data, v as u32, elem_count);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::U32(data)
@@ -149,7 +142,7 @@ impl CudaDevice {
             DType::I64 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<i64>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_i64", "FILL")?;
+                let func = self.get_or_load_func("fill_i64", kernels::FILL)?;
                 let params = (&data, v as i64, elem_count);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::I64(data)
@@ -157,7 +150,7 @@ impl CudaDevice {
             DType::BF16 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<bf16>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_bf16", "FILL")?;
+                let func = self.get_or_load_func("fill_bf16", kernels::FILL)?;
                 let params = (&data, bf16::from_f64(v), elem_count);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::BF16(data)
@@ -165,7 +158,7 @@ impl CudaDevice {
             DType::F16 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f16>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_f16", "FILL")?;
+                let func = self.get_or_load_func("fill_f16", kernels::FILL)?;
                 let params = (&data, f16::from_f64(v), elem_count);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::F16(data)
@@ -173,7 +166,7 @@ impl CudaDevice {
             DType::F32 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f32>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_f32", "FILL")?;
+                let func = self.get_or_load_func("fill_f32", kernels::FILL)?;
                 let params = (&data, v as f32, elem_count);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::F32(data)
@@ -181,7 +174,7 @@ impl CudaDevice {
             DType::F64 => {
                 // SAFETY: Set later by running the fill kernel.
                 let data = unsafe { self.alloc::<f64>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_f64", "FILL")?;
+                let func = self.get_or_load_func("fill_f64", kernels::FILL)?;
                 let params = (&data, v, elem_count);
                 unsafe { func.launch(cfg, params) }.w()?;
                 CudaStorageSlice::F64(data)
@@ -193,18 +186,11 @@ impl CudaDevice {
         })
     }
 
-    pub fn get_or_load_func(&self, module_name: &str, ptx_name: &'static str) -> Result<CudaFunction> {
+    pub fn get_or_load_func(&self, module_name: &str, ptx: &'static str) -> Result<CudaFunction> {
         if !self.has_func(module_name, module_name) {
             // Leaking the string here is a bit sad but we need a &'static str and this is only
             // done once per kernel name.
             let static_module_name = Box::leak(module_name.to_string().into_boxed_str());
-            let static_ptx_name = Box::leak(format!("{ptx_name}_{}", self.compute_cap).into_boxed_str());
-
-            let ptx = KERNELS.get(static_ptx_name).ok_or(CudaError::MissingKernel {
-                module_name: module_name.to_string(),
-            })
-            .w()?.clone();
-
             self.load_ptx(ptx.into(), module_name, &[static_module_name])
                 .map_err(|cuda| CudaError::Load {
                     cuda,
@@ -229,17 +215,11 @@ impl BackendDevice for CudaDevice {
         let device = cudarc::driver::CudaDevice::new(ordinal).w()?;
         let blas = cudarc::cublas::CudaBlas::new(device.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, device.clone()).w()?;
-
-        let compute_cap_major = device.attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR).w()?;
-        let compute_cap_minor = device.attribute(CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR).w()?;
-        let compute_cap = compute_cap_major * 10 + compute_cap_minor;
-
         Ok(Self {
             id: DeviceId::new(),
             device,
             blas: Arc::new(blas),
             curand: Arc::new(Mutex::new(CudaRng(curand))),
-            compute_cap: compute_cap as usize,
         })
     }
 
@@ -310,7 +290,7 @@ impl BackendDevice for CudaDevice {
                     dtype,
                     op: "rand_uniform",
                 })
-                    .w()?
+                .w()?
             }
             DType::F32 => {
                 let mut data = unsafe { self.alloc::<f32>(elem_count) }.w()?;
@@ -353,7 +333,7 @@ impl BackendDevice for CudaDevice {
                     dtype,
                     op: "rand_normal",
                 })
-                    .w()?
+                .w()?
             }
             DType::F32 => {
                 let mut data = unsafe { self.alloc::<f32>(elem_count_round) }.w()?;
@@ -427,7 +407,6 @@ pub enum CudaStorageSlice {
     F32(CudaSlice<f32>),
     F64(CudaSlice<f64>),
 }
-
 type S = CudaStorageSlice;
 
 pub trait Map1 {
@@ -557,7 +536,6 @@ pub trait Map2Any {
 }
 
 struct Clone;
-
 impl Map1 for Clone {
     fn f<T: DeviceRepr>(
         &self,
@@ -575,7 +553,6 @@ pub fn kernel_name<T: WithDType>(root: &str) -> String {
 }
 
 struct Affine(f64, f64);
-
 impl Map1 for Affine {
     fn f<T: DeviceRepr + WithDType>(
         &self,
@@ -589,7 +566,7 @@ impl Map1 for Affine {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("affine"), "AFFINE")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("affine"), kernels::AFFINE)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (
@@ -608,7 +585,6 @@ impl Map1 for Affine {
 }
 
 struct Elu(f64);
-
 impl Map1 for Elu {
     fn f<T: DeviceRepr + WithDType>(
         &self,
@@ -622,7 +598,7 @@ impl Map1 for Elu {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("uelu"), "UNARY")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("uelu"), kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (el, dims.len(), &ds, T::from_f64(self.0), src, &out);
@@ -659,7 +635,7 @@ impl Map1 for Im2Col1D {
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), "CONV")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("im2col1d"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let params = (
@@ -709,7 +685,7 @@ impl Map1 for Im2Col {
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
         let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), "CONV")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("im2col"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let params = (
@@ -732,7 +708,6 @@ impl Map1 for Im2Col {
 }
 
 struct Powf(f64);
-
 impl Map1 for Powf {
     fn f<T: DeviceRepr + WithDType>(
         &self,
@@ -746,7 +721,7 @@ impl Map1 for Powf {
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), "UNARY")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (el, dims.len(), &ds, T::from_f64(self.0), src, &out);
@@ -757,7 +732,6 @@ impl Map1 for Powf {
 }
 
 struct Sum<'a>(&'a [usize]);
-
 impl<'a> Map1 for Sum<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -786,7 +760,7 @@ impl<'a> Map1 for Sum<'a> {
             .htod_copy([src_dims, layout.stride(), &sum_dims_l, &sum_dims_s].concat())
             .w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>("sum"), "REDUCE")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("sum"), kernels::REDUCE)?;
         let out = dev.alloc_zeros::<T>(dst_el).w()?;
         let params = (el, src_dims.len(), sum_dims.len(), &ds, src, &out);
         // SAFETY: ffi.
@@ -796,7 +770,6 @@ impl<'a> Map1 for Sum<'a> {
 }
 
 struct FastReduce<'a>(&'a [usize], ReduceOp);
-
 impl<'a> Map1Any for FastReduce<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits, W: Fn(CudaSlice<T>) -> S>(
         &self,
@@ -849,7 +822,7 @@ impl<'a> Map1Any for FastReduce<'a> {
         if check_empty && layout.shape().elem_count() == 0 {
             Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
         }
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), "REDUCE")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::REDUCE)?;
         if return_index {
             // SAFETY: filled in by the follow up kernel.
             let out = unsafe { dev.alloc::<u32>(dst_el) }.w()?;
@@ -881,7 +854,7 @@ impl<U: UnaryOpT> Map1 for U {
         let cfg = LaunchConfig::for_num_elems(el_count as u32);
         let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
         let src = &src.slice(layout.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), "UNARY")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el_count) }.w()?;
         let params = (el_count, dims.len(), &ds, src, &out);
@@ -892,7 +865,6 @@ impl<U: UnaryOpT> Map1 for U {
 }
 
 struct IndexSelect<'a>(&'a CudaStorage, &'a Layout, usize);
-
 impl<'a> Map1 for IndexSelect<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -916,7 +888,7 @@ impl<'a> Map1 for IndexSelect<'a> {
                 expected: DType::U32,
                 got: self.0.dtype(),
             })
-                .w()?,
+            .w()?,
         };
         let ids_shape = ids_l.shape();
         let ids_dims = ids_shape.dims();
@@ -931,7 +903,7 @@ impl<'a> Map1 for IndexSelect<'a> {
         let ids_dim_size = ids_shape.elem_count();
         let dst_el = ids_shape.elem_count() * left_size * right_size;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), "INDEXING")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let params = (
@@ -953,7 +925,6 @@ impl<'a> Map1 for IndexSelect<'a> {
 }
 
 struct Gather<'a>(&'a CudaStorage, &'a Layout, usize);
-
 impl<'a> Map1 for Gather<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -992,7 +963,7 @@ impl<'a> Map1 for Gather<'a> {
         let right_sz: usize = src_l.dims()[dim + 1..].iter().product();
         let src_dim_sz = src_l.dims()[dim];
         let ids_dim_sz = ids_l.dims()[dim];
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), "INDEXING")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (
@@ -1005,7 +976,6 @@ impl<'a> Map1 for Gather<'a> {
 }
 
 struct IndexAdd<'a>(&'a CudaStorage, &'a Layout, usize);
-
 impl<'a> Map2InPlace for IndexAdd<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -1042,7 +1012,7 @@ impl<'a> Map2InPlace for IndexAdd<'a> {
         let dst_dim_sz = dst_shape.dims()[dim];
         let ids_dim_sz = ids_l.dims()[0];
         let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), "INDEXING")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let params = (
             ids, ids_dim_sz, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz,
@@ -1054,7 +1024,6 @@ impl<'a> Map2InPlace for IndexAdd<'a> {
 }
 
 struct ScatterAdd<'a>(&'a CudaStorage, &'a Layout, usize);
-
 impl<'a> Map2InPlace for ScatterAdd<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -1090,7 +1059,7 @@ impl<'a> Map2InPlace for ScatterAdd<'a> {
         let src_dim_sz = src_l.dims()[dim];
         let dst_dim_sz = dst_shape.dims()[dim];
         let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), "INDEXING")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
         // SAFETY: Set later by running the kernel.
         let params = (ids, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz);
         // SAFETY: ffi.
@@ -1100,7 +1069,6 @@ impl<'a> Map2InPlace for ScatterAdd<'a> {
 }
 
 struct Conv1D<'a>(&'a crate::conv::ParamsConv1D);
-
 impl<'a> Map2 for Conv1D<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -1121,7 +1089,7 @@ impl<'a> Map2 for Conv1D<'a> {
         let l_out = p.l_out();
         let dst_el = p.c_out * l_out * p.b_size;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), "CONV")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv1d"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let ds = if dims.len() == 3 {
@@ -1142,7 +1110,6 @@ impl<'a> Map2 for Conv1D<'a> {
 }
 
 struct Conv2D<'a>(&'a crate::conv::ParamsConv2D);
-
 impl<'a> Map2 for Conv2D<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -1166,7 +1133,7 @@ impl<'a> Map2 for Conv2D<'a> {
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), "CONV")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv2d"), kernels::CONV)?;
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {
@@ -1183,7 +1150,6 @@ impl<'a> Map2 for Conv2D<'a> {
 }
 
 struct ConvTranspose2D<'a>(&'a crate::conv::ParamsConvTranspose2D);
-
 impl<'a> Map2 for ConvTranspose2D<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -1207,7 +1173,7 @@ impl<'a> Map2 for ConvTranspose2D<'a> {
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose2d"), "CONV")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("conv_transpose2d"), kernels::CONV)?;
         let ds = if dims.len() == 4 {
             [dims, inp_l.stride(), k_l.dims(), k_l.stride()].concat()
         } else {
@@ -1271,7 +1237,7 @@ impl Map1 for Pool2D {
             PoolOp::Max => "max_pool2d",
             PoolOp::Avg => "avg_pool2d",
         };
-        let func = dev.get_or_load_func(&kernel_name::<T>(kname), "CONV")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(kname), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let ds = dev.htod_copy(ds).w()?;
@@ -1292,7 +1258,6 @@ impl Map1 for Pool2D {
 }
 
 struct UpsampleNearest2D(usize, usize);
-
 impl Map1 for UpsampleNearest2D {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -1312,7 +1277,7 @@ impl Map1 for UpsampleNearest2D {
         let (out_w, out_h) = (self.0, self.1);
         let dst_el = out_w * out_h * dims[0] * dims[1];
         let cfg = LaunchConfig::for_num_elems(dst_el as u32);
-        let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), "CONV")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>("upsample_nearest2d"), kernels::CONV)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
         let ds = dev.htod_copy(ds).w()?;
@@ -1326,7 +1291,6 @@ impl Map1 for UpsampleNearest2D {
 }
 
 struct WhereCond<'a>(&'a CudaStorage, &'a Layout);
-
 impl<'a> Map2 for WhereCond<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -1355,7 +1319,7 @@ impl<'a> Map2 for WhereCond<'a> {
                 expected: DType::U32,
                 got: self.0.dtype(),
             })
-                .w()?,
+            .w()?,
         };
         let shape = ids_l.shape();
         let dims = shape.dims();
@@ -1366,7 +1330,7 @@ impl<'a> Map2 for WhereCond<'a> {
             .w()?;
         let t = &t.slice(layout_t.start_offset()..);
         let f = &f.slice(layout_f.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), "TERNARY")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::TERNARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(el) }.w()?;
         let params = (el, dims.len(), &ds, ids, t, f, &out);
@@ -1394,7 +1358,7 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
             .w()?;
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
-        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), "BINARY")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
         let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
@@ -1405,7 +1369,6 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
 }
 
 struct Cmp(CmpOp);
-
 impl Map2Any for Cmp {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
         &self,
@@ -1432,7 +1395,7 @@ impl Map2Any for Cmp {
             CmpOp::Gt => "gt",
             CmpOp::Ge => "ge",
         };
-        let func = dev.get_or_load_func(&kernel_name::<T>(name), "BINARY")?;
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::BINARY)?;
         // SAFETY: Set later by running the kernel.
         let out = unsafe { dev.alloc::<u8>(elem_count) }.w()?;
         let params = (elem_count, dims.len(), &dims_and_strides, lhs, rhs, &out);
@@ -1645,7 +1608,7 @@ impl BackendStorage for CudaStorage {
         let inp = &inp;
 
         let kernel_name = format!("cast_{}_{}", self.dtype().as_str(), dtype.as_str());
-        let func = dev.get_or_load_func(&kernel_name, "CAST")?;
+        let func = dev.get_or_load_func(&kernel_name, kernels::CAST)?;
         let slice = match dtype {
             DType::U8 => {
                 let out = unsafe { dev.alloc::<u8>(el) }.w()?;
@@ -1817,7 +1780,7 @@ impl BackendStorage for CudaStorage {
             dilation: params.dilation,
             padding: params.padding,
         }
-            .map(&self.slice, &device, l)?;
+        .map(&self.slice, &device, l)?;
         let col = Self { slice: col, device };
         let l_out = params.l_out();
         let b = params.b_size;
@@ -1868,7 +1831,7 @@ impl BackendStorage for CudaStorage {
             dilation: params.dilation,
             padding: params.padding,
         }
-            .map(&self.slice, &device, l)?;
+        .map(&self.slice, &device, l)?;
         let col = Self { slice: col, device };
         let h_out = params.out_h();
         let w_out = params.out_w();
@@ -1984,7 +1947,7 @@ impl BackendStorage for CudaStorage {
             h_stride: stride.1,
             op: PoolOp::Avg,
         }
-            .map(&self.slice, &device, l)?;
+        .map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
 
@@ -1997,7 +1960,7 @@ impl BackendStorage for CudaStorage {
             h_stride: stride.1,
             op: PoolOp::Max,
         }
-            .map(&self.slice, &device, l)?;
+        .map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
 
@@ -2072,7 +2035,7 @@ impl BackendStorage for CudaStorage {
                         .blas
                         .gemm_strided_batched(cfg, rhs, lhs, &mut out)
                 }
-                    .w()?;
+                .w()?;
                 CudaStorageSlice::BF16(out)
             }
             (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs)) => {
@@ -2085,7 +2048,7 @@ impl BackendStorage for CudaStorage {
                         .blas
                         .gemm_strided_batched(cfg, rhs, lhs, &mut out)
                 }
-                    .w()?;
+                .w()?;
                 CudaStorageSlice::F16(out)
             }
             (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs)) => {
@@ -2098,7 +2061,7 @@ impl BackendStorage for CudaStorage {
                         .blas
                         .gemm_strided_batched(cfg, rhs, lhs, &mut out)
                 }
-                    .w()?;
+                .w()?;
                 CudaStorageSlice::F32(out)
             }
             (CudaStorageSlice::F64(lhs), CudaStorageSlice::F64(rhs)) => {
@@ -2111,7 +2074,7 @@ impl BackendStorage for CudaStorage {
                         .blas
                         .gemm_strided_batched(cfg, rhs, lhs, &mut out)
                 }
-                    .w()?;
+                .w()?;
                 CudaStorageSlice::F64(out)
             }
             _ => Err(CudaError::InternalError("dtype mismatch in matmul op"))?,
@@ -2136,7 +2099,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_bf16", "UNARY")?;
+                    let func = dev.get_or_load_func("ucopy_bf16", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -2148,7 +2111,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_f16", "UNARY")?;
+                    let func = dev.get_or_load_func("ucopy_f16", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -2160,7 +2123,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_f32", "UNARY")?;
+                    let func = dev.get_or_load_func("ucopy_f32", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -2172,7 +2135,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_u8", "UNARY")?;
+                    let func = dev.get_or_load_func("ucopy_u8", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -2184,7 +2147,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_u32", "UNARY")?;
+                    let func = dev.get_or_load_func("ucopy_u32", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -2196,7 +2159,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_i64", "UNARY")?;
+                    let func = dev.get_or_load_func("ucopy_i64", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
@@ -2208,7 +2171,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_64", "UNARY")?;
+                    let func = dev.get_or_load_func("ucopy_64", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
