@@ -5,11 +5,11 @@ from candle import nn
 from candle import Tensor
 import candle.functional as F
 import math
+from candle.configuration_utils import PretrainedConfig
 
 
 # see https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/configuration_llama.py
-@dataclass
-class Config:
+class Config(PretrainedConfig):
     vocab_size = 32000
     hidden_size = 4096
     intermediate_size = 11008
@@ -152,7 +152,7 @@ def repeat_kv(hidden_states: candle.Tensor, n_rep: int) -> candle.Tensor:
     if n_rep == 1:
         return hidden_states
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+    return hidden_states.reshape((batch, num_key_value_heads * n_rep, slen, head_dim)).contiguous()
 
 
 class LlamaAttention(nn.Module):
@@ -218,11 +218,16 @@ class LlamaAttention(nn.Module):
             key_states = key_states.view((bsz, q_len, self.num_key_value_heads, self.head_dim)).transpose(1, 2)
             value_states = value_states.view((bsz, q_len, self.num_key_value_heads, self.head_dim)).transpose(1, 2)
 
+            # [1, 32, 12, 100]
+
             kv_seq_len = key_states.shape[-2]
             if past_key_value is not None:
                 kv_seq_len += past_key_value[0].shape[-2]
             cos, sin = self.rotary_emb.forward(value_states, seq_len=kv_seq_len)
+            # cos = [1, 1, 12, 100]
+
             query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+            # query_states = [1, 32, 12, 100]
 
             if past_key_value is not None:
                 # reuse k, v, self_attention
@@ -231,8 +236,8 @@ class LlamaAttention(nn.Module):
 
             past_key_value = (key_states, value_states) if use_cache else None
 
-            key_states = repeat_kv(key_states, self.num_key_value_groups)
-            value_states = repeat_kv(value_states, self.num_key_value_groups)
+            key_states = repeat_kv(key_states, self.num_key_value_groups).contiguous()
+            value_states = repeat_kv(value_states, self.num_key_value_groups).contiguous()
 
             attn_weights: Tensor = F.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
@@ -250,8 +255,10 @@ class LlamaAttention(nn.Module):
                 attn_weights = attn_weights.broadcast_add(attention_mask)
 
             # upcast attention to fp32
+            # [1, 32, 12, 12]
             attn_weights = F.softmax(attn_weights, dim=-1).to(query_states.dtype)
-            attn_output = F.matmul(attn_weights, value_states)
+            # attn_weights = [1, 32, 12, 12] value_states = [1, 32, 12, 100]
+            attn_output = F.matmul(attn_weights, value_states.contiguous())
 
             if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
                 raise ValueError(
@@ -261,7 +268,7 @@ class LlamaAttention(nn.Module):
 
             attn_output = attn_output.transpose(1, 2).contiguous()
 
-            attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+            attn_output = attn_output.reshape((bsz, q_len, self.hidden_size))
 
             if self.config.pretraining_tp > 1:
                 raise NotImplementedError("Pretraining TP > 1 not implemented yet")
@@ -354,7 +361,7 @@ def _make_causal_mask(input_ids_shape: Tuple[int], dtype: candle.DType, device: 
     mask = mask.to(dtype)
 
     if past_key_values_length > 0:
-        mask = candle.cat([candle.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
+        mask = candle.cat([candle.zeros((tgt_len, past_key_values_length), dtype=dtype, device=device), mask], dim=-1)
     return mask[None, None, :, :].expand((bsz, 1, tgt_len, tgt_len + past_key_values_length))
 
 
@@ -368,7 +375,9 @@ def _expand_mask(mask: candle.Tensor, dtype: candle.DType, tgt_len: Optional[int
 
     expanded_mask = mask[:, None, None, :].expand((bsz, 1, tgt_len, src_len)).to(dtype)
 
-    inverted_mask: Tensor = candle.ones(expanded_mask.shape) - expanded_mask
+    inverted_mask: Tensor = (
+        candle.ones(expanded_mask.shape, dtype=expanded_mask.dtype, device=expanded_mask.device) - expanded_mask
+    )
 
     return inverted_mask.masked_fill(inverted_mask.to(candle.u32), dtype.min)
 
@@ -381,7 +390,7 @@ class LlamaModel(nn.Module):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -519,9 +528,11 @@ class LlamaModel(nn.Module):
             }
 
 
-class LlamaForCausalLM(LlamaModel):
-    def __init__(self, config):
+class LlamaForCausalLM(nn.Module):
+    def __init__(self, config: Config):
         super().__init__(config)
+        self.config = config
+        self.model = LlamaModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -568,7 +579,7 @@ class LlamaForCausalLM(LlamaModel):
         return_dict = return_dict if return_dict is not None else False
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        outputs = super().forward(
+        outputs = self.model.forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -580,7 +591,7 @@ class LlamaForCausalLM(LlamaModel):
             return_dict=return_dict,
         )
 
-        hidden_states = outputs[0]
+        hidden_states = outputs[0] if not return_dict else outputs["last_hidden_state"]
         if self.config.pretraining_tp > 1:
             raise NotImplementedError("Pretraining TP > 1 not implemented yet")
         else:
@@ -593,7 +604,7 @@ class LlamaForCausalLM(LlamaModel):
 
         return {
             "logits": logits,
-            "past_key_values": outputs.past_key_values,
-            "hidden_states": outputs.hidden_states,
-            "attentions": outputs.attentions,
+            "past_key_values": outputs["past_key_values"],
+            "hidden_states": outputs["hidden_states"],
+            "attentions": outputs["attentions"],
         }

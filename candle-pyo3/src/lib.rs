@@ -1051,6 +1051,8 @@ impl PyTensor {
         let shape = mask.0.shape();
         let on_true = Tensor::new(value, self.0.device())
             .map_err(wrap_err)?
+            .to_dtype(self.0.dtype())
+            .map_err(wrap_err)?
             .broadcast_as(shape.dims())
             .map_err(wrap_err)?;
         let m = mask.0.where_cond(&on_true, &self.0).map_err(wrap_err)?;
