@@ -53,10 +53,10 @@ fn main() -> Result<()> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").context("OUT_DIR not set")?);
     let build_dir = match std::env::var("CANDLE_FLASH_ATTN_BUILD_DIR") {
         Err(_) =>
-            {
-                #[allow(clippy::redundant_clone)]
-                out_dir.clone()
-            }
+        {
+            #[allow(clippy::redundant_clone)]
+            out_dir.clone()
+        }
         Ok(build_dir) => {
             let path = PathBuf::from(build_dir);
             path.canonicalize().expect(&format!(
@@ -210,7 +210,9 @@ fn compute_cap() -> Result<usize> {
     // Try to parse compute caps from env
     let mut compute_cap = if let Ok(compute_cap_str) = std::env::var("CUDA_COMPUTE_CAP") {
         println!("cargo:rustc-env=CUDA_COMPUTE_CAP={compute_cap_str}");
-        compute_cap_str.parse::<usize>().context("Could not parse code")?
+        compute_cap_str
+            .parse::<usize>()
+            .context("Could not parse code")?
     } else {
         // Use nvidia-smi to get the current compute cap
         let out = std::process::Command::new("nvidia-smi")

@@ -15,9 +15,9 @@ fn main() {
                     name.to_uppercase().replace('.', "_"),
                     name
                 )
-                    .as_bytes(),
+                .as_bytes(),
             )
-                .unwrap();
+            .unwrap();
             file.write_all(&[b'\n']).unwrap();
         }
     }
@@ -41,7 +41,7 @@ mod cuda {
             "CUDNN_LIB",
         ];
         #[allow(unused)]
-            let env_vars = env_vars
+        let env_vars = env_vars
             .into_iter()
             .map(std::env::var)
             .filter_map(Result::ok)
@@ -56,13 +56,13 @@ mod cuda {
             "C:/CUDA",
         ];
         #[allow(unused)]
-            let roots = roots.into_iter().map(Into::<PathBuf>::into);
+        let roots = roots.into_iter().map(Into::<PathBuf>::into);
 
         #[cfg(feature = "ci-check")]
-            let root: PathBuf = "ci".into();
+        let root: PathBuf = "ci".into();
 
         #[cfg(not(feature = "ci-check"))]
-            let root = env_vars
+        let root = env_vars
             .chain(roots)
             .find(|path| path.join("include").join("cuda.h").is_file())
             .unwrap();
@@ -106,7 +106,7 @@ mod cuda {
         let compute_cap = compute_cap().expect("Could not get Cuda compute cap");
 
         #[allow(unused)]
-            let include_options: Vec<String> = include_directories
+        let include_options: Vec<String> = include_directories
             .into_iter()
             .map(|s| "-I".to_string() + &s.into_os_string().into_string().unwrap())
             .collect::<Vec<_>>();
@@ -176,7 +176,9 @@ mod cuda {
         // Try to parse compute caps from env
         let mut compute_cap = if let Ok(compute_cap_str) = std::env::var("CUDA_COMPUTE_CAP") {
             println!("cargo:rustc-env=CUDA_COMPUTE_CAP={compute_cap_str}");
-            compute_cap_str.parse::<usize>().context("Could not parse code")?
+            compute_cap_str
+                .parse::<usize>()
+                .context("Could not parse code")?
         } else {
             // Use nvidia-smi to get the current compute cap
             let out = std::process::Command::new("nvidia-smi")
