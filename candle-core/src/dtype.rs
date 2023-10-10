@@ -67,6 +67,20 @@ impl DType {
             Self::F64 => 8,
         }
     }
+
+    pub fn is_int(&self) -> bool {
+        match self {
+            Self::U8 | Self::U32 | Self::I64 => true,
+            Self::BF16 | Self::F16 | Self::F32 | Self::F64 => false,
+        }
+    }
+
+    pub fn is_float(&self) -> bool {
+        match self {
+            Self::U8 | Self::U32 | Self::I64 => false,
+            Self::BF16 | Self::F16 | Self::F32 | Self::F64 => true,
+        }
+    }
 }
 
 pub trait WithDType:
