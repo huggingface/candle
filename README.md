@@ -162,6 +162,7 @@ If you have an addition to this list, please submit a pull request.
     - Wurstchen v2.
     - Computer Vision Models.
         - DINOv2.
+        - ConvMixer.
         - EfficientNet.
         - yolo-v3.
         - yolo-v8.
