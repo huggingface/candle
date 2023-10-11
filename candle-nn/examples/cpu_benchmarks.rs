@@ -185,8 +185,8 @@ impl Benchmark for Matmul {
     type PreProcessData = (Tensor, Tensor);
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
-        let lhs = Tensor::randn(0f32, 1., (1024, 1024), &Device::Cpu)?;
-        let rhs = Tensor::randn(0f32, 1., (1024, 1024), &Device::Cpu)?;
+        let lhs = Tensor::randn(0f32, 1., (1024 * 4, 1024 * 4), &Device::Cpu)?;
+        let rhs = Tensor::randn(0f32, 1., (1024 * 4, 1), &Device::Cpu)?;
         Ok((lhs, rhs))
     }
 

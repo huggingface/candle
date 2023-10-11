@@ -1,5 +1,6 @@
 pub mod bert;
 pub mod bigcode;
+pub mod convmixer;
 pub mod dinov2;
 pub mod efficientnet;
 pub mod falcon;
