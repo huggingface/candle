@@ -64,13 +64,12 @@ fn convmixer(
         .collect::<Result<Vec<_>>>()?;
     let fc = candle_nn::linear(dim, nclasses, vb.pp(25))?;
     Ok(candle_nn::func(move |xs| {
-        let b_size = xs.dim(0)?;
         let mut xs = xs.apply(&conv1)?.gelu_erf()?.apply(&bn1)?;
         for block in blocks.iter() {
             xs = xs.apply(block)?
         }
-        // TODO: Adaptive average pooling.
-        xs.avg_pool2d(1)?.reshape((b_size, ()))?.apply(&fc)
+        // This performs the adaptive average pooling with a target size of (1, 1).
+        xs.mean(3)?.mean(2)?.apply(&fc)
     }))
 }
 
