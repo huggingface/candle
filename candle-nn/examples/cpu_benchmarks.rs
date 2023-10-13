@@ -180,13 +180,30 @@ impl Benchmark for Conv2dIm2Col {
     const ITERS: usize = 5;
 }
 
-struct Matmul;
-impl Benchmark for Matmul {
+struct MatMul;
+impl Benchmark for MatMul {
     type PreProcessData = (Tensor, Tensor);
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
         let lhs = Tensor::randn(0f32, 1., (1024, 1024), &Device::Cpu)?;
         let rhs = Tensor::randn(0f32, 1., (1024, 1024), &Device::Cpu)?;
+        Ok((lhs, rhs))
+    }
+
+    fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
+        d.0.matmul(&d.1)
+    }
+
+    const ITERS: usize = 100;
+}
+
+struct MatVec;
+impl Benchmark for MatVec {
+    type PreProcessData = (Tensor, Tensor);
+    type RunResult = Tensor;
+    fn preprocess() -> Result<Self::PreProcessData> {
+        let lhs = Tensor::randn(0f32, 1., (1024 * 4, 1024 * 4), &Device::Cpu)?;
+        let rhs = Tensor::randn(0f32, 1., (1024 * 4, 1), &Device::Cpu)?;
         Ok((lhs, rhs))
     }
 
@@ -271,6 +288,7 @@ enum Task {
     Conv2d,
     Conv2dIm2Col,
     Matmul,
+    Matvec,
     Qmatmul,
     Softmax,
     SoftmaxLastDim,
@@ -293,7 +311,8 @@ fn main() -> Result<()> {
         Task::Conv1d => run::<Conv1d>(args.iters)?,
         Task::Conv2d => run::<Conv2d>(args.iters)?,
         Task::Conv2dIm2Col => run::<Conv2dIm2Col>(args.iters)?,
-        Task::Matmul => run::<Matmul>(args.iters)?,
+        Task::Matmul => run::<MatMul>(args.iters)?,
+        Task::Matvec => run::<MatVec>(args.iters)?,
         Task::Softmax => run::<Softmax>(args.iters)?,
         Task::SoftmaxLastDim => run::<SoftmaxLastDim>(args.iters)?,
         Task::Qmatmul => run::<QMatMul>(args.iters)?,

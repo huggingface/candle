@@ -1,61 +1,11 @@
-use crate::quantized_nn::{linear_no_bias, Embedding, Linear, RmsNorm};
+use crate::quantized_nn::{layer_norm, linear_no_bias, Embedding, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::Activation;
+use candle_nn::{Activation, LayerNorm};
 use std::sync::Arc;
 
-pub use crate::models::mistral::Config;
-
-#[derive(Debug)]
-struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
-}
-
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let last_dim = xs.dim(D::Minus1)?;
-    let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
-    let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
-    Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
-}
-
-impl RotaryEmbedding {
-    fn new(cfg: &Config, dev: &Device) -> Result<Self> {
-        let dim = cfg.hidden_size / cfg.num_attention_heads;
-        let max_seq_len = cfg.max_position_embeddings;
-        let inv_freq: Vec<_> = (0..dim)
-            .step_by(2)
-            .map(|i| 1f32 / 10000f32.powf(i as f32 / dim as f32))
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
-        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(DType::F32)?
-            .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
-        Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
-        })
-    }
-
-    fn apply_rotary_emb_qkv(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
-        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
-        let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
-        Ok((q_embed, k_embed))
-    }
-}
+pub use crate::models::stable_lm::Config;
+use crate::models::stable_lm::RotaryEmbedding;
 
 #[derive(Debug)]
 #[allow(clippy::upper_case_acronyms)]
@@ -64,6 +14,7 @@ struct MLP {
     up_proj: Linear,
     down_proj: Linear,
     act_fn: Activation,
+    span: tracing::Span,
 }
 
 impl MLP {
@@ -78,12 +29,14 @@ impl MLP {
             up_proj,
             down_proj,
             act_fn: cfg.hidden_act,
+            span: tracing::span!(tracing::Level::TRACE, "mlp"),
         })
     }
 }
 
 impl Module for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let lhs = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
         let rhs = xs.apply(&self.up_proj)?;
         (lhs * rhs)?.apply(&self.down_proj)
@@ -103,15 +56,17 @@ struct Attention {
     hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     kv_cache: Option<(Tensor, Tensor)>,
+    use_cache: bool,
+    rotary_ndims: usize,
+    span: tracing::Span,
 }
 
 impl Attention {
     fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
+        let head_dim = cfg.head_dim();
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
-        let num_kv_groups = num_heads / num_kv_heads;
-        let head_dim = hidden_sz / num_heads;
         let q_proj = linear_no_bias(hidden_sz, num_heads * head_dim, vb.pp("q_proj"))?;
         let k_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("k_proj"))?;
         let v_proj = linear_no_bias(hidden_sz, num_kv_heads * head_dim, vb.pp("v_proj"))?;
@@ -123,11 +78,14 @@ impl Attention {
             o_proj,
             num_heads,
             num_kv_heads,
-            num_kv_groups,
+            num_kv_groups: cfg.num_kv_groups(),
             head_dim,
             hidden_size: hidden_sz,
             rotary_emb,
             kv_cache: None,
+            use_cache: cfg.use_cache,
+            rotary_ndims: cfg.rotary_ndims(),
+            span: tracing::span!(tracing::Level::TRACE, "attn"),
         })
     }
 
@@ -149,6 +107,7 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let query_states = self.q_proj.forward(xs)?;
@@ -165,9 +124,16 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let (query_states, key_states) =
+        let (rot_ndims, pass_ndims) = (self.rotary_ndims, self.head_dim - self.rotary_ndims);
+        let query_rot = query_states.narrow(D::Minus1, 0, rot_ndims)?;
+        let query_pass = query_states.narrow(D::Minus1, rot_ndims, pass_ndims)?;
+        let key_rot = key_states.narrow(D::Minus1, 0, rot_ndims)?;
+        let key_pass = key_states.narrow(D::Minus1, rot_ndims, pass_ndims)?;
+        let (query_rot, key_rot) =
             self.rotary_emb
-                .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
+                .apply_rotary_emb_qkv(&query_rot, &key_rot, seqlen_offset)?;
+        let query_states = Tensor::cat(&[query_rot, query_pass], D::Minus1)?.contiguous()?;
+        let key_states = Tensor::cat(&[key_rot, key_pass], D::Minus1)?.contiguous()?;
 
         let (key_states, value_states) = match &self.kv_cache {
             None => (key_states, value_states),
@@ -177,10 +143,12 @@ impl Attention {
                 (key_states, value_states)
             }
         };
-        self.kv_cache = Some((key_states.clone(), value_states.clone()));
+        if self.use_cache {
+            self.kv_cache = Some((key_states.clone(), value_states.clone()));
+        }
 
-        let key_states = self.repeat_kv(key_states)?;
-        let value_states = self.repeat_kv(value_states)?;
+        let key_states = self.repeat_kv(key_states)?.contiguous()?;
+        let value_states = self.repeat_kv(value_states)?.contiguous()?;
 
         let attn_output = {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
@@ -204,19 +172,19 @@ impl Attention {
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: LayerNorm,
+    post_attention_layernorm: LayerNorm,
+    span: tracing::Span,
 }
 
 impl DecoderLayer {
     fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
-        let input_layernorm =
-            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let post_attention_layernorm = RmsNorm::new(
+        let input_layernorm = layer_norm(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
-            cfg.rms_norm_eps,
+            cfg.norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
         Ok(Self {
@@ -224,6 +192,7 @@ impl DecoderLayer {
             mlp,
             input_layernorm,
             post_attention_layernorm,
+            span: tracing::span!(tracing::Level::TRACE, "layer"),
         })
     }
 
@@ -233,6 +202,7 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self.self_attn.forward(&xs, attention_mask, seqlen_offset)?;
@@ -247,10 +217,10 @@ impl DecoderLayer {
 pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
-    norm: RmsNorm,
+    norm: LayerNorm,
     lm_head: Linear,
-    sliding_window: usize,
     device: Device,
+    span: tracing::Span,
 }
 
 impl Model {
@@ -258,22 +228,22 @@ impl Model {
         let vb_m = vb.pp("model");
         let embed_tokens =
             Embedding::new(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(cfg, vb_m.device())?);
+        let rotary_emb = Arc::new(RotaryEmbedding::new(DType::F32, cfg, vb_m.device())?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = layer_norm(cfg.hidden_size, cfg.norm_eps, vb_m.pp("norm"))?;
         let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         Ok(Self {
             embed_tokens,
             layers,
             norm,
             lm_head,
-            sliding_window: cfg.sliding_window,
             device: vb.device().clone(),
+            span: tracing::span!(tracing::Level::TRACE, "model"),
         })
     }
 
@@ -285,15 +255,7 @@ impl Model {
     ) -> Result<Tensor> {
         // Sliding window mask?
         let mask: Vec<_> = (0..tgt_len)
-            .flat_map(|i| {
-                (0..tgt_len).map(move |j| {
-                    if i < j || j + self.sliding_window < i {
-                        f32::NEG_INFINITY
-                    } else {
-                        0.
-                    }
-                })
-            })
+            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
             .collect();
         let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
         let mask = if seqlen_offset > 0 {
@@ -307,6 +269,7 @@ impl Model {
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        let _enter = self.span.enter();
         let (b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None

@@ -250,8 +250,6 @@ impl Tensor {
         if header.fortran_order {
             return Err(Error::Npy("fortran order not supported".to_string()));
         }
-        let mut data: Vec<u8> = vec![];
-        reader.read_to_end(&mut data)?;
         Self::from_reader(header.shape(), header.descr, &mut reader)
     }
 
