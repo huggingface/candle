@@ -5,9 +5,23 @@ from candle.typing import _ArrayLike, Device
 from candle import Tensor, DType, QTensor
 
 @staticmethod
+def avg_pool2d(tensor: Tensor, ksize: int, stride: int = 1) -> Tensor:
+    """
+    Applies the 2d avg-pool function to a given tensor.#
+    """
+    pass
+
+@staticmethod
 def gelu(tensor: Tensor) -> Tensor:
     """
     Applies the Gaussian Error Linear Unit (GELU) function to a given tensor.
+    """
+    pass
+
+@staticmethod
+def max_pool2d(tensor: Tensor, ksize: int, stride: int = 1) -> Tensor:
+    """
+    Applies the 2d max-pool function to a given tensor.#
     """
     pass
 
