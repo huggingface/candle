@@ -153,7 +153,6 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let _guard = if args.tracing {
-        println!("tracing...");
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
         Some(guard)

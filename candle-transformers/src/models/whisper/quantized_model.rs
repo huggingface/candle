@@ -216,12 +216,11 @@ impl ResidualAttentionBlock {
         if let Some((attn, ln)) = &mut self.cross_attn {
             x = (&x + attn.forward(&ln.forward(&x)?, xa, None, flush_kv_cache)?)?;
         }
-        let mlp = self.mlp_linear2.forward(
-            &self
-                .mlp_linear1
-                .forward(&self.mlp_ln.forward(&x)?)?
-                .gelu()?,
-        )?;
+        let mlp = x
+            .apply(&self.mlp_ln)?
+            .apply(&self.mlp_linear1)?
+            .gelu()?
+            .apply(&self.mlp_linear2)?;
         x + mlp
     }
 }
