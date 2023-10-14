@@ -700,10 +700,14 @@ class Module:
         if isinstance(__value, Module):
             self._modules[__name] = __value
         elif isinstance(__value, QTensor):
+            # The first time we see a QTensor we assume the user wanted the tensor to be quantizable
+            # => add it to the quantizable buffers
+            if __name not in self._buffers and __name not in self._quantizable_buffers:
+                self._quantizable_buffers.add(__name)
             if __name in self._quantizable_buffers:
                 type = __value.ggml_dtype.lower()
                 if type in ["f32", "f16"]:
-                    # It is faster to just dequantize the tensor here and use the normal tensor operations
+                    # It is faster to just "dequantize" the tensor here and use the normal tensor operations
                     dequant = __value.dequantize()
                     if type == "f16":
                         dequant = dequant.to_dtype("f16")

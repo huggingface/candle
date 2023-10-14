@@ -2,6 +2,7 @@ import candle
 from typing import Dict, Tuple, Any
 from candle import Tensor, QTensor, utils, nn
 from candle.nn import Module, ModuleList
+from candle import functional as F
 
 
 def masked_fill(on_false: Tensor, mask: Tensor, on_true: Tensor):
@@ -72,7 +73,7 @@ class QuantizedLayer(Module):
         x = self.ffn_norm(x)
         w1 = self.ffw1.matmul_t(x)
         w3 = self.ffw3.matmul_t(x)
-        mlp = self.ffw2.matmul_t(nn.silu(w1) * w3)
+        mlp = self.ffw2.matmul_t(F.silu(w1) * w3)
 
         return mlp + residual
 
@@ -101,7 +102,7 @@ class QuantizedLayer(Module):
         att = q.matmul(k.t()) / self.head_dim**0.5
         mask = mask.broadcast_as(att.shape)
         att = masked_fill(att, mask, float("-inf"))
-        att = nn.softmax(att, -1)
+        att = F.softmax(att, -1)
         y = att.matmul(v.contiguous())
         y = y.transpose(1, 2).reshape((b_size, seq_len, n_embd))
         return self.attention_wo.matmul_t(y)
