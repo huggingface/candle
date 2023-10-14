@@ -36,4 +36,4 @@ class Embedding(Module):
         final_dims.append(self.embedding_dim)
         indexes = indexes.flatten_all()
         values = self.weight.index_select(indexes, 0)
-        return values.reshape(final_dims)
+        return values.reshape(*final_dims)
