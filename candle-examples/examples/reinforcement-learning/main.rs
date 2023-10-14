@@ -6,6 +6,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
+mod ddpg;
 mod gym_env;
 mod vec_gym_env;
 
