@@ -224,8 +224,10 @@ impl BackendDevice for CudaDevice {
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {
+        // We do not call set_seed but instead create a new curand object. This ensures that the
+        // state will be identical and the same random numbers will be generated.
         let mut curand = self.curand.lock().unwrap();
-        curand.0.set_seed(seed).w()?;
+        curand.0 = cudarc::curand::CudaRng::new(seed, self.device.clone()).w()?;
         Ok(())
     }
 
