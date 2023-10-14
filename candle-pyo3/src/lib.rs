@@ -17,7 +17,7 @@ use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
 
 mod utils;
 
-use utils::{can_broadcast, must_broadcast, wrap_err};
+use utils::{can_broadcast, must_broadcast, parse_shape, wrap_err};
 
 #[derive(Clone, Debug)]
 struct PyShape(Vec<usize>);
@@ -781,11 +781,12 @@ impl PyTensor {
         hasher.finish()
     }
 
-    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+    #[pyo3(signature = (*shape), text_signature = "(self,*shape:Union[int, Sequence[int]])")]
     /// Reshapes the tensor to the given shape.
     /// &RETURNS&: Tensor
-    fn reshape(&self, shape: PyShape) -> PyResult<Self> {
-        Ok(PyTensor(self.0.reshape(shape).map_err(wrap_err)?))
+    fn reshape(&self, shape: &PyTuple) -> PyResult<Self> {
+        let parsed_shape = parse_shape(shape, self.0.elem_count())?;
+        Ok(PyTensor(self.0.reshape(parsed_shape).map_err(wrap_err)?))
     }
 
     #[pyo3(text_signature = "(self, rhs:Tensor)")]
@@ -809,32 +810,40 @@ impl PyTensor {
             == self.0.elem_count() as i64)
     }
 
-    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+    #[pyo3(signature = (*shape),text_signature = "(self,*shape:Union[int, Sequence[int]])")]
     /// Create a view of the tensor in the given shape.
     /// &RETURNS&: Tensor
-    fn view(&self, shape: PyShape) -> PyResult<Self> {
-        Ok(PyTensor(self.0.reshape(shape).map_err(wrap_err)?))
+    fn view(&self, shape: &PyTuple) -> PyResult<Self> {
+        let parsed_shape = parse_shape(shape, self.0.elem_count())?;
+        Ok(PyTensor(self.0.reshape(parsed_shape).map_err(wrap_err)?))
     }
 
-    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+    #[pyo3(signature = (*shape),text_signature = "(self,*shape:Union[int, Sequence[int]])")]
     /// Broadcasts the tensor to the given shape.
     /// &RETURNS&: Tensor
-    fn broadcast_as(&self, shape: PyShape) -> PyResult<Self> {
-        Ok(PyTensor(self.0.broadcast_as(shape).map_err(wrap_err)?))
+    fn broadcast_as(&self, shape: &PyTuple) -> PyResult<Self> {
+        let parsed_shape = parse_shape(shape, self.0.elem_count())?;
+        Ok(PyTensor(
+            self.0.broadcast_as(parsed_shape).map_err(wrap_err)?,
+        ))
     }
 
-    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+    #[pyo3(signature = (*shape),text_signature = "(self,*shape:Union[int, Sequence[int]])")]
     /// Returns a new view of the self tensor with singleton dimensions expanded to a larger size. An alias for broadcast_as.
     /// &RETURNS&: Tensor
-    fn expand(&self, shape: PyShape) -> PyResult<Self> {
-        Ok(PyTensor(self.0.expand(shape).map_err(wrap_err)?))
+    fn expand(&self, shape: &PyTuple) -> PyResult<Self> {
+        let parsed_shape = parse_shape(shape, self.0.elem_count())?;
+        Ok(PyTensor(self.0.expand(parsed_shape).map_err(wrap_err)?))
     }
 
-    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+    #[pyo3(signature = (*shape),text_signature = "(self,*shape:Union[int, Sequence[int]])")]
     /// Broadcasts the tensor to the given shape, adding new dimensions on the left.
     /// &RETURNS&: Tensor
-    fn broadcast_left(&self, shape: PyShape) -> PyResult<Self> {
-        Ok(PyTensor(self.0.broadcast_left(shape).map_err(wrap_err)?))
+    fn broadcast_left(&self, shape: &PyTuple) -> PyResult<Self> {
+        let parsed_shape = parse_shape(shape, self.0.elem_count())?;
+        Ok(PyTensor(
+            self.0.broadcast_left(parsed_shape).map_err(wrap_err)?,
+        ))
     }
 
     #[pyo3(text_signature = "(self, dim:int)")]
@@ -1148,60 +1157,64 @@ fn tensor(py: Python<'_>, data: PyObject) -> PyResult<PyTensor> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (shape, *, device=None), text_signature = "(shape:Sequence[int], device:Optional[Device]=None)")]
+#[pyo3(signature = (*shape, device=None), text_signature = "(*shape:Union[int, Sequence[int]], device:Optional[Device]=None)")]
 /// Creates a new tensor with random values.
 /// &RETURNS&: Tensor
-fn rand(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<PyTensor> {
+fn rand(_py: Python<'_>, shape: &PyTuple, device: Option<PyDevice>) -> PyResult<PyTensor> {
+    let parsed_shape = parse_shape(shape, 1)?;
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::rand(0f32, 1f32, shape.0, &device).map_err(wrap_err)?;
+    let tensor = Tensor::rand(0f32, 1f32, parsed_shape, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
 #[pyfunction]
-#[pyo3(signature = (shape, *, device=None), text_signature = "(shape:Sequence[int], device:Optional[Device]=None)")]
+#[pyo3(signature = (*shape, device=None), text_signature = "(*shape:Union[int, Sequence[int]], device:Optional[Device]=None)")]
 /// Creates a new tensor with random values from a normal distribution.
 /// &RETURNS&: Tensor
-fn randn(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<PyTensor> {
+fn randn(_py: Python<'_>, shape: &PyTuple, device: Option<PyDevice>) -> PyResult<PyTensor> {
+    let parsed_shape = parse_shape(shape, 1)?;
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::randn(0f32, 1f32, shape.0, &device).map_err(wrap_err)?;
+    let tensor = Tensor::randn(0f32, 1f32, parsed_shape, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
 #[pyfunction]
-#[pyo3(signature = (shape, *, dtype=None, device=None),text_signature = "(shape:Sequence[int], dtype:Optional[DType]=None, device:Optional[Device]=None)")]
+#[pyo3(signature = (*shape, dtype=None, device=None),text_signature = "(*shape:Sequence[int], dtype:Optional[DType]=None, device:Optional[Device]=None)")]
 /// Creates a new tensor filled with ones.
 /// &RETURNS&: Tensor
 fn ones(
     py: Python<'_>,
-    shape: PyShape,
+    shape: &PyTuple,
     dtype: Option<PyObject>,
     device: Option<PyDevice>,
 ) -> PyResult<PyTensor> {
+    let parsed_shape = parse_shape(shape, 1)?;
     let dtype = match dtype {
         None => DType::F32,
         Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
     };
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::ones(shape.0, dtype, &device).map_err(wrap_err)?;
+    let tensor = Tensor::ones(parsed_shape, dtype, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
 #[pyfunction]
-#[pyo3(signature = (shape, *, dtype=None, device=None), text_signature = "(shape:Sequence[int], dtype:Optional[DType]=None, device:Optional[Device]=None)")]
+#[pyo3(signature = (*shape, dtype=None, device=None), text_signature = "(*shape:Sequence[int], dtype:Optional[DType]=None, device:Optional[Device]=None)")]
 /// Creates a new tensor filled with zeros.
 /// &RETURNS&: Tensor
 fn zeros(
     py: Python<'_>,
-    shape: PyShape,
+    shape: &PyTuple,
     dtype: Option<PyObject>,
     device: Option<PyDevice>,
 ) -> PyResult<PyTensor> {
+    let parsed_shape = parse_shape(shape, 1)?;
     let dtype = match dtype {
         None => DType::F32,
         Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
     };
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::zeros(shape.0, dtype, &device).map_err(wrap_err)?;
+    let tensor = Tensor::zeros(parsed_shape, dtype, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
@@ -1211,17 +1224,18 @@ fn zeros(
 /// &RETURNS&: Tensor
 fn full(
     py: Python<'_>,
-    shape: PyShape,
+    shape: &PyTuple,
     fill_value: f64,
     dtype: Option<PyObject>,
     device: Option<PyDevice>,
 ) -> PyResult<PyTensor> {
+    let parsed_shape = parse_shape(shape, 1)?;
     let dtype = match dtype {
         None => DType::F32,
         Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
     };
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let ones_tensor = Tensor::ones(shape.0, dtype, &device).map_err(wrap_err)?;
+    let ones_tensor = Tensor::ones(parsed_shape, dtype, &device).map_err(wrap_err)?;
     let value_tensor = (ones_tensor * fill_value)
         .map_err(wrap_err)?
         .to_dtype(dtype)
@@ -1567,6 +1581,14 @@ fn get_num_threads() -> usize {
     ::candle::utils::get_num_threads()
 }
 
+#[pyfunction]
+#[pyo3(signature = (*shape, element_count=0),text_signature = "(*shape:Union[int, Sequence[int]],element_count:int=0)")]
+/// Parses a shape from a Python tuple. If the shape is incomplete, the missing dimensions are inferred from the element count.
+/// &RETURNS&: List[int]
+fn parse_absolute_shape(shape: &PyTuple, element_count: usize) -> PyResult<Vec<usize>> {
+    parse_shape(shape, element_count)
+}
+
 fn candle_utils(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cuda_is_available, m)?)?;
     m.add_function(wrap_pyfunction!(get_num_threads, m)?)?;
@@ -1577,6 +1599,7 @@ fn candle_utils(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(save_gguf, m)?)?;
     m.add_function(wrap_pyfunction!(load_safetensors, m)?)?;
     m.add_function(wrap_pyfunction!(save_safetensors, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_absolute_shape, m)?)?;
     Ok(())
 }
 

@@ -35,21 +35,21 @@ class i64(DType):
     pass
 
 @staticmethod
-def ones(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+def ones(*shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor filled with ones.
     """
     pass
 
 @staticmethod
-def rand(shape: Sequence[int], device: Optional[Device] = None) -> Tensor:
+def rand(*shape: Union[int, Sequence[int]], device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor with random values.
     """
     pass
 
 @staticmethod
-def randn(shape: Sequence[int], device: Optional[Device] = None) -> Tensor:
+def randn(*shape: Union[int, Sequence[int]], device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor with random values from a normal distribution.
     """
@@ -76,7 +76,7 @@ class u8(DType):
     pass
 
 @staticmethod
-def zeros(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+def zeros(*shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor filled with zeros.
     """
@@ -162,7 +162,7 @@ class Tensor:
         Adds the two tensors, while broadcasting the right-hand-side tensor to match the shape of the left-hand-side tensor.
         """
         pass
-    def broadcast_as(self, shape: Sequence[int]) -> Tensor:
+    def broadcast_as(self, *shape: Union[int, Sequence[int]]) -> Tensor:
         """
         Broadcasts the tensor to the given shape.
         """
@@ -172,7 +172,7 @@ class Tensor:
         Divides the two tensors, while broadcasting the right-hand-side tensor to match the shape of the left-hand-side tensor.
         """
         pass
-    def broadcast_left(self, shape: Sequence[int]) -> Tensor:
+    def broadcast_left(self, *shape: Union[int, Sequence[int]]) -> Tensor:
         """
         Broadcasts the tensor to the given shape, adding new dimensions on the left.
         """
@@ -229,7 +229,7 @@ class Tensor:
         Performs the `exp` operation on the tensor.
         """
         pass
-    def expand(self, shape: Sequence[int]) -> Tensor:
+    def expand(self, *shape: Union[int, Sequence[int]]) -> Tensor:
         """
         Returns a new view of the self tensor with singleton dimensions expanded to a larger size. An alias for broadcast_as.
         """
@@ -342,7 +342,7 @@ class Tensor:
         Get the `recip` of the tensor.
         """
         pass
-    def reshape(self, shape: Sequence[int]) -> Tensor:
+    def reshape(self, *shape: Union[int, Sequence[int]]) -> Tensor:
         """
         Reshapes the tensor to the given shape.
         """
@@ -429,7 +429,7 @@ class Tensor:
         Gets the tensor's data as a Python scalar or array-like object.
         """
         pass
-    def view(self, shape: Sequence[int]) -> Tensor:
+    def view(self, *shape: Union[int, Sequence[int]]) -> Tensor:
         """
         Create a view of the tensor in the given shape.
         """

@@ -8,5 +8,6 @@ has_mkl = utils.has_mkl
 load_ggml = utils.load_ggml
 load_gguf = utils.load_gguf
 load_safetensors = utils.load_safetensors
+parse_absolute_shape = utils.parse_absolute_shape
 save_gguf = utils.save_gguf
 save_safetensors = utils.save_safetensors

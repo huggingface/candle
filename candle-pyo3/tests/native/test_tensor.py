@@ -250,6 +250,6 @@ def test_tensor_equality_opperations_can_broadcast():
     #  [1,1,0]
     #  [1,1,1]]
     mask_cond = arange(0, 3)
-    mask = mask_cond < (mask_cond + 1).view((mask_cond.size(-1), 1))
+    mask = mask_cond < (mask_cond + 1).view(-1, 1)
     assert mask.shape == (3, 3)
     assert mask.equal(Tensor([[1, 0, 0], [1, 1, 0], [1, 1, 1]]).to(candle.u8))

@@ -56,6 +56,13 @@ def load_safetensors(path: Union[str, PathLike, List[Union[str, PathLike]]]) -> 
     pass
 
 @staticmethod
+def parse_absolute_shape(*shape: Union[int, Sequence[int]], element_count: int = 0) -> List[int]:
+    """
+    Parses a shape from a Python tuple. If the shape is incomplete, the missing dimensions are inferred from the element count.
+    """
+    pass
+
+@staticmethod
 def save_gguf(path: Union[str, PathLike], tensors: Dict[str, QTensor], metadata: Dict[str, Any]):
     """
     Save quanitzed tensors and metadata to a GGUF file.
