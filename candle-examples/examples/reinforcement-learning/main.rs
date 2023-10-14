@@ -5,6 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 mod gym_env;
+mod vec_gym_env;
 
 use candle::Result;
 use clap::Parser;
