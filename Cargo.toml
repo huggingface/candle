@@ -34,7 +34,7 @@ anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
 clap = { version = "4.2.4", features = ["derive"] }
 cudarc = { version = "0.9.14", features = ["f16"] }
-gemm = { version = "0.16.1", features = ["wasm-simd128-enable"] }
+gemm = { version = "0.16.6", features = ["wasm-simd128-enable"] }
 hf-hub = "0.3.0"
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
 image = { version = "0.24.7", default-features = false, features = ["jpeg", "png"] }
