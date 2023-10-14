@@ -17,7 +17,7 @@ use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
 
 mod utils;
 
-use utils::{must_broadcast, wrap_err};
+use utils::{can_broadcast, must_broadcast, wrap_err};
 
 #[derive(Clone, Debug)]
 struct PyShape(Vec<usize>);
@@ -737,22 +737,40 @@ impl PyTensor {
 
     /// Rich-compare two tensors.
     /// &RETURNS&: Tensor
-    fn __richcmp__(&self, rhs: PyTensor, op: CompareOp) -> PyResult<Self> {
-        let rhs = if self.0.shape() != rhs.0.shape() {
-            rhs.0.broadcast_as(self.0.shape()).map_err(wrap_err)?
-        } else {
-            rhs.0
+    fn __richcmp__(&self, rhs: &PyAny, op: CompareOp) -> PyResult<Self> {
+        let compare = |lhs: &Tensor, rhs: &Tensor| {
+            let t = match op {
+                CompareOp::Eq => lhs.eq(rhs),
+                CompareOp::Ne => lhs.ne(rhs),
+                CompareOp::Lt => lhs.lt(rhs),
+                CompareOp::Le => lhs.le(rhs),
+                CompareOp::Gt => lhs.gt(rhs),
+                CompareOp::Ge => lhs.ge(rhs),
+            };
+            Ok(PyTensor(t.map_err(wrap_err)?))
         };
+        if let Ok(rhs) = rhs.extract::<PyTensor>() {
+            if self.0.shape() == rhs.0.shape() {
+                compare(&self.0, &rhs.0)
+            } else {
+                let broadcast_shape = can_broadcast(&self.0, &rhs.0).map_err(wrap_err)?;
+                let broadcasted_lhs = self.0.broadcast_as(&broadcast_shape).map_err(wrap_err)?;
+                let broadcasted_rhs = rhs.0.broadcast_as(&broadcast_shape).map_err(wrap_err)?;
 
-        let t = match op {
-            CompareOp::Eq => self.0.eq(&rhs),
-            CompareOp::Ne => self.0.ne(&rhs),
-            CompareOp::Lt => self.0.lt(&rhs),
-            CompareOp::Le => self.0.le(&rhs),
-            CompareOp::Gt => self.0.gt(&rhs),
-            CompareOp::Ge => self.0.ge(&rhs),
-        };
-        Ok(PyTensor(t.map_err(wrap_err)?))
+                compare(&broadcasted_lhs, &broadcasted_rhs)
+            }
+        } else if let Ok(rhs) = rhs.extract::<f64>() {
+            let scalar_tensor = Tensor::new(rhs, self.0.device())
+                .map_err(wrap_err)?
+                .to_dtype(self.0.dtype())
+                .map_err(wrap_err)?
+                .broadcast_as(self.0.shape())
+                .map_err(wrap_err)?;
+
+            compare(&self.0, &scalar_tensor)
+        } else {
+            return Err(PyTypeError::new_err("unsupported rhs for richcmp"));
+        }
     }
 
     fn __hash__(&self) -> u64 {
@@ -768,6 +786,27 @@ impl PyTensor {
     /// &RETURNS&: Tensor
     fn reshape(&self, shape: PyShape) -> PyResult<Self> {
         Ok(PyTensor(self.0.reshape(shape).map_err(wrap_err)?))
+    }
+
+    #[pyo3(text_signature = "(self, rhs:Tensor)")]
+    /// True if two tensors have the same size and elements, False otherwise.
+    /// &RETURNS&: bool
+    fn equal(&self, rhs: &Self) -> PyResult<bool> {
+        if self.0.shape() != rhs.0.shape() {
+            return Ok(false);
+        }
+        let result = self
+            .0
+            .eq(&rhs.0)
+            .map_err(wrap_err)?
+            .to_dtype(DType::I64)
+            .map_err(wrap_err)?;
+        Ok(result
+            .sum_all()
+            .map_err(wrap_err)?
+            .to_scalar::<i64>()
+            .map_err(wrap_err)?
+            == self.0.elem_count() as i64)
     }
 
     #[pyo3(text_signature = "(self, shape:Sequence[int])")]

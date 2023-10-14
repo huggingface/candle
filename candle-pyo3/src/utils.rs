@@ -1,4 +1,5 @@
 use ::candle::{Error, Result};
+use candle::Shape;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -7,7 +8,7 @@ pub fn wrap_err(err: ::candle::Error) -> PyErr {
 }
 
 /// Checks if the given shape is compatible with the given layout and returns an error if not.
-pub fn can_broadcast(lhs: &::candle::Tensor, rhs: &::candle::Tensor) -> Result<()> {
+pub fn can_broadcast(lhs: &::candle::Tensor, rhs: &::candle::Tensor) -> Result<Shape> {
     // see `Shape.broadcast_shape_binary_op`
     let lhs_dims = lhs.dims();
     let rhs_dims = rhs.dims();
@@ -41,7 +42,7 @@ pub fn can_broadcast(lhs: &::candle::Tensor, rhs: &::candle::Tensor) -> Result<(
             .bt());
         }
     }
-    Ok(())
+    Ok(Shape::from(bcast_dims))
 }
 
 /// Check if we need to broadcast the lhs tensor into the rhs tensor

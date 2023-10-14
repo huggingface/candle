@@ -1,6 +1,7 @@
 import candle
 from candle import Tensor
 from candle.utils import cuda_is_available
+from candle.functional import arange
 import pytest
 
 
@@ -20,7 +21,7 @@ def test_tensor_can_be_added():
     c_native = a.broadcast_add(b)
     c = a + b
     assert c.shape == (3, 2, 4)
-    assert c == c_native
+    assert c.equal(c_native)
     with pytest.raises(ValueError):
         d = candle.rand((3, 4, 5))
         e = candle.rand((4, 6))
@@ -38,7 +39,7 @@ def test_tensor_can_be_subtracted():
     c_native = a.broadcast_sub(b)
     c = a - b
     assert c.shape == (3, 2, 4)
-    assert c == c_native
+    assert c.equal(c_native)
     with pytest.raises(ValueError):
         d = candle.rand((3, 4, 5))
         e = candle.rand((4, 6))
@@ -56,7 +57,7 @@ def test_tensor_can_be_multiplied():
     c_native = a.broadcast_mul(b)
     c = a * b
     assert c.shape == (3, 2, 4)
-    assert c == c_native
+    assert c.equal(c_native)
     with pytest.raises(ValueError):
         d = candle.rand((3, 4, 5))
         e = candle.rand((4, 6))
@@ -74,7 +75,7 @@ def test_tensor_can_be_divided():
     c_native = a.broadcast_div(b)
     c = a / b
     assert c.shape == (3, 2, 4)
-    assert c == c_native
+    assert c.equal(c_native)
     with pytest.raises(ValueError):
         d = candle.rand((3, 4, 5))
         e = candle.rand((4, 6))
@@ -181,13 +182,74 @@ def test_tensor_can_be_scliced_3d():
 
 def test_tensor_can_be_expanded_with_none():
     t = candle.rand((12, 12))
-    a = t[None, None]
-    b = t[None, :]
     c = t[:, None, None, :]
     assert c.shape == (12, 1, 1, 12)
 
 
-def test_tensors_can_be_compared():
+def test_tensors_can_be_compared_with_equal():
     t = Tensor(42.0)
     other = Tensor(42.0)
-    assert t == other
+    assert t.equal(other)
+    t = Tensor([42.0, 42.1])
+    other = Tensor([42.0, 42.0])
+    assert not t.equal(other)
+    t = Tensor(42.0)
+    other = Tensor([42.0, 42.0])
+    assert not t.equal(other)
+
+
+def test_tensor_supports_equality_opperations_with_scalars():
+    t = Tensor(42.0)
+    assert (t == 42.0).equal(Tensor(1).to(candle.u8))
+    assert (t == 43.0).equal(Tensor(0).to(candle.u8))
+
+    assert (t != 42.0).equal(Tensor(0).to(candle.u8))
+    assert (t != 43.0).equal(Tensor(1).to(candle.u8))
+
+    assert (t > 41.0).equal(Tensor(1).to(candle.u8))
+    assert (t > 42.0).equal(Tensor(0).to(candle.u8))
+
+    assert (t >= 42.0).equal(Tensor(1).to(candle.u8))
+    assert (t >= 43.0).equal(Tensor(0).to(candle.u8))
+
+    assert (t < 43.0).equal(Tensor(1).to(candle.u8))
+    assert (t < 42.0).equal(Tensor(0).to(candle.u8))
+
+    assert (t <= 42.0).equal(Tensor(1).to(candle.u8))
+    assert (t <= 41.0).equal(Tensor(0).to(candle.u8))
+
+
+def test_tensor_supports_equality_opperations_with_tensors():
+    t = Tensor(42.0)
+    same = Tensor(42.0)
+    other = Tensor(43.0)
+
+    assert (t == same).equal(Tensor(1).to(candle.u8))
+    assert (t == other).equal(Tensor(0).to(candle.u8))
+
+    assert (t != same).equal(Tensor(0).to(candle.u8))
+    assert (t != other).equal(Tensor(1).to(candle.u8))
+
+    assert (t > same).equal(Tensor(0).to(candle.u8))
+    assert (t > other).equal(Tensor(0).to(candle.u8))
+
+    assert (t >= same).equal(Tensor(1).to(candle.u8))
+    assert (t >= other).equal(Tensor(0).to(candle.u8))
+
+    assert (t < same).equal(Tensor(0).to(candle.u8))
+    assert (t < other).equal(Tensor(1).to(candle.u8))
+
+    assert (t <= same).equal(Tensor(1).to(candle.u8))
+    assert (t <= other).equal(Tensor(1).to(candle.u8))
+
+
+def test_tensor_equality_opperations_can_broadcast():
+    # Create a decoder attention mask as a test case
+    # e.g.
+    # [[1,0,0]
+    #  [1,1,0]
+    #  [1,1,1]]
+    mask_cond = arange(0, 3)
+    mask = mask_cond < (mask_cond + 1).view((mask_cond.size(-1), 1))
+    assert mask.shape == (3, 3)
+    assert mask.equal(Tensor([[1, 0, 0], [1, 1, 0], [1, 1, 1]]).to(candle.u8))
