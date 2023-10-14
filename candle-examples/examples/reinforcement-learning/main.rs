@@ -34,5 +34,13 @@ fn main() -> Result<()> {
     } else {
         None
     };
+
+    let env = gym_env::GymEnv::new("Pendulum-v1")?;
+    println!("action space: {}", env.action_space());
+    println!("observation space: {:?}", env.observation_space());
+
+    let _num_obs = env.observation_space().iter().product::<usize>();
+    let _num_actions = env.action_space();
+
     Ok(())
 }
