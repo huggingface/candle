@@ -13,48 +13,72 @@ def test_tensor_can_be_added():
     t = Tensor(42.0)
     result = t + t
     assert result.values() == 84.0
+    result = t + 2.0
+    assert result.values() == 44.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_add(b)
+    c = a + b
+    assert c.shape == (3, 2, 4)
+    assert c == c_native
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d + e
 
 
 def test_tensor_can_be_subtracted():
     t = Tensor(42.0)
     result = t - t
     assert result.values() == 0
+    result = t - 2.0
+    assert result.values() == 40.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_sub(b)
+    c = a - b
+    assert c.shape == (3, 2, 4)
+    assert c == c_native
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d - e
 
 
 def test_tensor_can_be_multiplied():
     t = Tensor(42.0)
     result = t * t
     assert result.values() == 1764.0
+    result = t * 2.0
+    assert result.values() == 84.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_mul(b)
+    c = a * b
+    assert c.shape == (3, 2, 4)
+    assert c == c_native
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d * e
 
 
 def test_tensor_can_be_divided():
     t = Tensor(42.0)
     result = t / t
     assert result.values() == 1.0
-
-
-def test_scalar_can_be_added_to_tensor():
-    t = Tensor(42.0)
-    result = t + 2.0
-    assert result.values() == 44.0
-
-
-def test_scalar_can_be_subtracted_from_tensor():
-    t = Tensor(42.0)
-    result = t - 2.0
-    assert result.values() == 40.0
-
-
-def test_scalar_can_be_multiplied_by_tensor():
-    t = Tensor(42.0)
-    result = t * 2.0
-    assert result.values() == 84.0
-
-
-def test_scalar_can_be_divided_by_tensor():
-    t = Tensor(42.0)
     result = t / 2.0
     assert result.values() == 21.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_div(b)
+    c = a / b
+    assert c.shape == (3, 2, 4)
+    assert c == c_native
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d / e
 
 
 def test_tensor_can_be_constructed_from_list():
@@ -161,3 +185,9 @@ def test_tensor_can_be_expanded_with_none():
     b = t[None, :]
     c = t[:, None, None, :]
     assert c.shape == (12, 1, 1, 12)
+
+
+def test_tensors_can_be_compared():
+    t = Tensor(42.0)
+    other = Tensor(42.0)
+    assert t == other

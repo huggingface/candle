@@ -15,9 +15,9 @@ use half::{bf16, f16};
 
 use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
 
-pub fn wrap_err(err: ::candle::Error) -> PyErr {
-    PyErr::new::<PyValueError, _>(format!("{err:?}"))
-}
+mod utils;
+
+use utils::{must_broadcast, wrap_err};
 
 #[derive(Clone, Debug)]
 struct PyShape(Vec<usize>);
@@ -659,11 +659,15 @@ impl PyTensor {
         Ok(Self(x))
     }
 
-    /// Add two tensors.
+    /// Add a scalar to a tensor or two tensors.
     /// &RETURNS&: Tensor
     fn __add__(&self, rhs: &PyAny) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
-            (&self.0 + &rhs.0).map_err(wrap_err)?
+            if must_broadcast(&self.0, &rhs.0).map_err(wrap_err)? {
+                self.0.broadcast_add(&rhs.0).map_err(wrap_err)?
+            } else {
+                (&self.0 + &rhs.0).map_err(wrap_err)?
+            }
         } else if let Ok(rhs) = rhs.extract::<f64>() {
             (&self.0 + rhs).map_err(wrap_err)?
         } else {
@@ -680,7 +684,11 @@ impl PyTensor {
     /// &RETURNS&: Tensor
     fn __mul__(&self, rhs: &PyAny) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
-            (&self.0 * &rhs.0).map_err(wrap_err)?
+            if must_broadcast(&self.0, &rhs.0).map_err(wrap_err)? {
+                self.0.broadcast_mul(&rhs.0).map_err(wrap_err)?
+            } else {
+                (&self.0 * &rhs.0).map_err(wrap_err)?
+            }
         } else if let Ok(rhs) = rhs.extract::<f64>() {
             (&self.0 * rhs).map_err(wrap_err)?
         } else {
@@ -697,7 +705,11 @@ impl PyTensor {
     /// &RETURNS&: Tensor
     fn __sub__(&self, rhs: &PyAny) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
-            (&self.0 - &rhs.0).map_err(wrap_err)?
+            if must_broadcast(&self.0, &rhs.0).map_err(wrap_err)? {
+                self.0.broadcast_sub(&rhs.0).map_err(wrap_err)?
+            } else {
+                (&self.0 - &rhs.0).map_err(wrap_err)?
+            }
         } else if let Ok(rhs) = rhs.extract::<f64>() {
             (&self.0 - rhs).map_err(wrap_err)?
         } else {
@@ -710,7 +722,11 @@ impl PyTensor {
     /// &RETURNS&: Tensor
     fn __truediv__(&self, rhs: &PyAny) -> PyResult<Self> {
         let tensor = if let Ok(rhs) = rhs.extract::<Self>() {
-            (&self.0 / &rhs.0).map_err(wrap_err)?
+            if must_broadcast(&self.0, &rhs.0).map_err(wrap_err)? {
+                self.0.broadcast_div(&rhs.0).map_err(wrap_err)?
+            } else {
+                (&self.0 / &rhs.0).map_err(wrap_err)?
+            }
         } else if let Ok(rhs) = rhs.extract::<f64>() {
             (&self.0 / rhs).map_err(wrap_err)?
         } else {
