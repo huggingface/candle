@@ -67,19 +67,19 @@ impl GymEnv {
             let kwargs = PyDict::new(py);
             kwargs.set_item("seed", seed)?;
             let obs = self.env.call_method(py, "reset", (), Some(kwargs))?;
-            obs.extract(py)
+            obs.as_ref(py).get_item(0)?.extract()
         })
         .map_err(w)?;
         Tensor::new(obs, &Device::Cpu)
     }
 
     /// Applies an environment step using the specified action.
-    pub fn step<A: pyo3::IntoPy<pyo3::Py<pyo3::PyAny>> + Copy>(
+    pub fn step<A: pyo3::IntoPy<pyo3::Py<pyo3::PyAny>> + Clone>(
         &self,
         action: A,
     ) -> Result<Step<A>> {
         let (obs, reward, is_done) = Python::with_gil(|py| {
-            let step = self.env.call_method(py, "step", (action,), None)?;
+            let step = self.env.call_method(py, "step", (action.clone(),), None)?;
             let step = step.as_ref(py);
             let obs: Vec<f32> = step.get_item(0)?.extract()?;
             let reward: f64 = step.get_item(1)?.extract()?;

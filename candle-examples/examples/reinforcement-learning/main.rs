@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
@@ -9,6 +11,12 @@ mod vec_gym_env;
 
 use candle::Result;
 use clap::Parser;
+use rand::Rng;
+
+// The total number of episodes.
+const MAX_EPISODES: usize = 100;
+// The maximum length of an episode.
+const EPISODE_LENGTH: usize = 200;
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -43,5 +51,25 @@ fn main() -> Result<()> {
     let _num_obs = env.observation_space().iter().product::<usize>();
     let _num_actions = env.action_space();
 
+    let mut rng = rand::thread_rng();
+
+    for episode in 0..MAX_EPISODES {
+        let mut obs = env.reset(episode as u64)?;
+
+        let mut total_reward = 0.0;
+        for _ in 0..EPISODE_LENGTH {
+            let actions = rng.gen_range(-2.0..2.0);
+
+            let step = env.step(vec![actions])?;
+            total_reward += step.reward;
+
+            if step.is_done {
+                break;
+            }
+            obs = step.obs;
+        }
+
+        println!("episode {episode} with total reward of {total_reward}");
+    }
     Ok(())
 }
