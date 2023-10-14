@@ -128,6 +128,13 @@ impl Device {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))
     }
 
+    pub fn set_seed(&self, seed: u64) -> Result<()> {
+        match self {
+            Self::Cpu => crate::cpu_backend::CpuDevice.set_seed(seed),
+            Self::Cuda(c) => c.set_seed(seed),
+        }
+    }
+
     pub fn same_device(&self, rhs: &Self) -> bool {
         match (self, rhs) {
             (Self::Cpu, Self::Cpu) => true,
