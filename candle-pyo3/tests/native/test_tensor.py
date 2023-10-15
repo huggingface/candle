@@ -72,3 +72,15 @@ def test_tensor_can_be_scliced_3d():
     assert t[:, 0, 0].values() == [1, 9]
     assert t[..., 0].values() == [[1, 5], [9, 13]]
     assert t[..., 0:2].values() == [[[1, 2], [5, 6]], [[9, 10], [13, 14]]]
+
+
+def test_tensors_can_be_compared_with_equal():
+    t = Tensor(42.0)
+    other = Tensor(42.0)
+    assert t.equal(other)
+    t = Tensor([42.0, 42.1])
+    other = Tensor([42.0, 42.0])
+    assert not t.equal(other)
+    t = Tensor(42.0)
+    other = Tensor([42.0, 42.0])
+    assert not t.equal(other)

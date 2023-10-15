@@ -592,6 +592,27 @@ impl PyTensor {
         Ok(Self(tensor))
     }
 
+    #[pyo3(text_signature = "(self, rhs:Tensor)")]
+    /// True if two tensors have the same size and elements, False otherwise.
+    /// &RETURNS&: bool
+    fn equal(&self, rhs: &Self) -> PyResult<bool> {
+        if self.0.shape() != rhs.0.shape() {
+            return Ok(false);
+        }
+        let result = self
+            .0
+            .eq(&rhs.0)
+            .map_err(wrap_err)?
+            .to_dtype(DType::I64)
+            .map_err(wrap_err)?;
+        Ok(result
+            .sum_all()
+            .map_err(wrap_err)?
+            .to_scalar::<i64>()
+            .map_err(wrap_err)?
+            == self.0.elem_count() as i64)
+    }
+
     #[pyo3(text_signature = "(self, shape:Sequence[int])")]
     /// Reshapes the tensor to the given shape.
     /// &RETURNS&: Tensor

@@ -191,6 +191,11 @@ class Tensor:
         Gets the tensor's dtype.
         """
         pass
+    def equal(self, rhs: Tensor) -> bool:
+        """
+        True if two tensors have the same size and elements, False otherwise.
+        """
+        pass
     def exp(self) -> Tensor:
         """
         Performs the `exp` operation on the tensor.
