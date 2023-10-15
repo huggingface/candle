@@ -84,3 +84,68 @@ def test_tensors_can_be_compared_with_equal():
     t = Tensor(42.0)
     other = Tensor([42.0, 42.0])
     assert not t.equal(other)
+
+
+def test_tensor_supports_equality_opperations_with_scalars():
+    t = Tensor(42.0)
+    assert (t == 42.0).equal(Tensor(1).to_dtype(candle.u8))
+    assert (t == 43.0).equal(Tensor(0).to_dtype(candle.u8))
+
+    assert (t != 42.0).equal(Tensor(0).to_dtype(candle.u8))
+    assert (t != 43.0).equal(Tensor(1).to_dtype(candle.u8))
+
+    assert (t > 41.0).equal(Tensor(1).to_dtype(candle.u8))
+    assert (t > 42.0).equal(Tensor(0).to_dtype(candle.u8))
+
+    assert (t >= 42.0).equal(Tensor(1).to_dtype(candle.u8))
+    assert (t >= 43.0).equal(Tensor(0).to_dtype(candle.u8))
+
+    assert (t < 43.0).equal(Tensor(1).to_dtype(candle.u8))
+    assert (t < 42.0).equal(Tensor(0).to_dtype(candle.u8))
+
+    assert (t <= 42.0).equal(Tensor(1).to_dtype(candle.u8))
+    assert (t <= 41.0).equal(Tensor(0).to_dtype(candle.u8))
+
+
+def test_tensor_supports_equality_opperations_with_tensors():
+    t = Tensor(42.0)
+    same = Tensor(42.0)
+    other = Tensor(43.0)
+
+    assert (t == same).equal(Tensor(1).to_dtype(candle.u8))
+    assert (t == other).equal(Tensor(0).to_dtype(candle.u8))
+
+    assert (t != same).equal(Tensor(0).to_dtype(candle.u8))
+    assert (t != other).equal(Tensor(1).to_dtype(candle.u8))
+
+    assert (t > same).equal(Tensor(0).to_dtype(candle.u8))
+    assert (t > other).equal(Tensor(0).to_dtype(candle.u8))
+
+    assert (t >= same).equal(Tensor(1).to_dtype(candle.u8))
+    assert (t >= other).equal(Tensor(0).to_dtype(candle.u8))
+
+    assert (t < same).equal(Tensor(0).to_dtype(candle.u8))
+    assert (t < other).equal(Tensor(1).to_dtype(candle.u8))
+
+    assert (t <= same).equal(Tensor(1).to_dtype(candle.u8))
+    assert (t <= other).equal(Tensor(1).to_dtype(candle.u8))
+
+
+def test_tensor_equality_opperations_can_broadcast():
+    # Create a decoder attention mask as a test case
+    # e.g.
+    # [[1,0,0]
+    #  [1,1,0]
+    #  [1,1,1]]
+    mask_cond = candle.Tensor([0, 1, 2])
+    mask = mask_cond < (mask_cond + 1).reshape((3, 1))
+    assert mask.shape == (3, 3)
+    assert mask.equal(Tensor([[1, 0, 0], [1, 1, 0], [1, 1, 1]]).to_dtype(candle.u8))
+
+
+def test_tensor_can_be_hashed():
+    t = Tensor(42.0)
+    other = Tensor(42.0)
+    # Hash should represent the a unique tensor
+    assert hash(t) != hash(other)
+    assert hash(t) == hash(t)

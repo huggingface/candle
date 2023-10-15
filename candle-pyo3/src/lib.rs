@@ -1,14 +1,21 @@
 #![allow(clippy::redundant_closure_call)]
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::pyclass::CompareOp;
 use pyo3::types::{IntoPyDict, PyDict, PyTuple};
 use pyo3::ToPyObject;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::os::raw::c_long;
 use std::sync::Arc;
 
 use half::{bf16, f16};
 
 use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
+
+mod utils;
+
+use utils::broadcast_shapes;
 
 pub fn wrap_err(err: ::candle::Error) -> PyErr {
     PyErr::new::<PyValueError, _>(format!("{err:?}"))
@@ -590,6 +597,54 @@ impl PyTensor {
             Err(PyTypeError::new_err("unsupported rhs for div"))?
         };
         Ok(Self(tensor))
+    }
+    /// Rich-compare two tensors.
+    /// &RETURNS&: Tensor
+    fn __richcmp__(&self, rhs: &PyAny, op: CompareOp) -> PyResult<Self> {
+        let compare = |lhs: &Tensor, rhs: &Tensor| {
+            let t = match op {
+                CompareOp::Eq => lhs.eq(rhs),
+                CompareOp::Ne => lhs.ne(rhs),
+                CompareOp::Lt => lhs.lt(rhs),
+                CompareOp::Le => lhs.le(rhs),
+                CompareOp::Gt => lhs.gt(rhs),
+                CompareOp::Ge => lhs.ge(rhs),
+            };
+            Ok(PyTensor(t.map_err(wrap_err)?))
+        };
+        if let Ok(rhs) = rhs.extract::<PyTensor>() {
+            if self.0.shape() == rhs.0.shape() {
+                compare(&self.0, &rhs.0)
+            } else {
+                // We broadcast manually here because as candle.cmp does not support broadcasting
+                let broadcast_shape = broadcast_shapes(&self.0, &rhs.0).map_err(wrap_err)?;
+                let broadcasted_lhs = self.0.broadcast_as(&broadcast_shape).map_err(wrap_err)?;
+                let broadcasted_rhs = rhs.0.broadcast_as(&broadcast_shape).map_err(wrap_err)?;
+
+                compare(&broadcasted_lhs, &broadcasted_rhs)
+            }
+        } else if let Ok(rhs) = rhs.extract::<f64>() {
+            let scalar_tensor = Tensor::new(rhs, self.0.device())
+                .map_err(wrap_err)?
+                .to_dtype(self.0.dtype())
+                .map_err(wrap_err)?
+                .broadcast_as(self.0.shape())
+                .map_err(wrap_err)?;
+
+            compare(&self.0, &scalar_tensor)
+        } else {
+            return Err(PyTypeError::new_err("unsupported rhs for __richcmp__"));
+        }
+    }
+
+    fn __hash__(&self) -> u64 {
+        // we havbe overridden __richcmp__ => py03 wants us to also override __hash__
+        // we simply hash the address of the tensor
+        let mut hasher = DefaultHasher::new();
+        let pointer = &self.0 as *const Tensor;
+        let address = pointer as usize;
+        address.hash(&mut hasher);
+        hasher.finish()
     }
 
     #[pyo3(text_signature = "(self, rhs:Tensor)")]
