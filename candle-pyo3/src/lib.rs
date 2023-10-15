@@ -201,6 +201,8 @@ enum Indexer {
     Index(usize),
     Slice(usize, usize),
     Elipsis,
+    Expand,
+    IndexSelect(Tensor),
 }
 
 #[pymethods]
@@ -475,27 +477,48 @@ impl PyTensor {
             // Handle a single slice e.g. tensor[0:1] or tensor[0:-1]
             let index = slice.indices(dims[0] as c_long)?;
             indexers.push(Indexer::Slice(index.start as usize, index.stop as usize));
+        } else if let Ok(tensor) = idx.extract::<PyTensor>(py) {
+            // Handle a tensor as indices e.g. tensor[tensor([0,1])]
+            let t = tensor.0;
+            if t.rank() != 1 {
+                return Err(PyTypeError::new_err(
+                    "multi-dimensional tensor indexing is not supported",
+                ));
+            }
+            indexers.push(Indexer::IndexSelect(t));
         } else if let Ok(tuple) = idx.downcast::<pyo3::types::PyTuple>(py) {
             // Handle multiple indices e.g. tensor[0,0] or tensor[0:1,0:1]
 
-            if tuple.len() > dims.len() {
+            let mut not_none_count = 0;
+            for item in tuple.iter() {
+                if !item.is_none() {
+                    not_none_count += 1;
+                }
+            }
+            if not_none_count > dims.len() {
                 return Err(PyTypeError::new_err("provided too many indices"));
             }
 
+            let mut current_dim = 0;
             for (i, item) in tuple.iter().enumerate() {
                 if item.is_ellipsis() {
                     // Handle '...' e.g. tensor[..., 0]
-
                     if i > 0 {
                         return Err(PyTypeError::new_err("Ellipsis ('...') can only be used at the start of an indexing operation"));
                     }
                     indexers.push(Indexer::Elipsis);
+                    current_dim = dims.len() - (tuple.len() - 1);
+                } else if item.is_none() {
+                    // Handle None e.g. tensor[None, 0]
+                    indexers.push(Indexer::Expand);
                 } else if let Ok(slice) = item.downcast::<pyo3::types::PySlice>() {
                     // Handle slice
-                    let index = slice.indices(dims[i] as c_long)?;
+                    let index = slice.indices(dims[current_dim] as c_long)?;
                     indexers.push(Indexer::Slice(index.start as usize, index.stop as usize));
+                    current_dim += 1;
                 } else if let Ok(index) = item.extract::<isize>() {
-                    indexers.push(Indexer::Index(to_absolute_index(index, i)?));
+                    indexers.push(Indexer::Index(to_absolute_index(index, current_dim)?));
+                    current_dim += 1;
                 } else {
                     return Err(PyTypeError::new_err("unsupported index"));
                 }
@@ -525,6 +548,22 @@ impl PyTensor {
                     // Elipsis is a special case, it means that all remaining dimensions should be selected => advance the current_dim to the last dimension we have indexers for
                     current_dim += dims.len() - (indexers.len() - 1);
                     x
+                }
+                Indexer::Expand => {
+                    // Expand is a special case, it means that a new dimension should be added => unsqueeze and advance the current_dim
+                    let out = x.unsqueeze(current_dim).map_err(wrap_err)?;
+                    current_dim += 1;
+                    out
+                }
+                Indexer::IndexSelect(indexes) => {
+                    let out = x
+                        .index_select(
+                            &indexes.to_device(x.device()).map_err(wrap_err)?,
+                            current_dim,
+                        )
+                        .map_err(wrap_err)?;
+                    current_dim += 1;
+                    out
                 }
             }
         }

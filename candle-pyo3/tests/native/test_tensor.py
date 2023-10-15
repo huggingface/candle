@@ -72,3 +72,22 @@ def test_tensor_can_be_scliced_3d():
     assert t[:, 0, 0].values() == [1, 9]
     assert t[..., 0].values() == [[1, 5], [9, 13]]
     assert t[..., 0:2].values() == [[[1, 2], [5, 6]], [[9, 10], [13, 14]]]
+
+
+def test_tensor_can_be_expanded_with_none():
+    t = candle.rand((12, 12))
+    c = t[:, None, None, :]
+    assert c.shape == (12, 1, 1, 12)
+    d = t[None, :, None, :]
+    assert d.shape == (1, 12, 1, 12)
+    e = t[None, None, :, :]
+    assert e.shape == (1, 1, 12, 12)
+    f = t[:, :, None]
+    assert f.shape == (12, 12, 1)
+
+
+def test_tensor_can_be_index_via_tensor():
+    t = candle.Tensor([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]])
+    c = t[candle.Tensor([0, 2])]
+    assert c.shape == (2, 4)
+    assert c.values() == [[1, 2, 3, 4], [9, 10, 11, 12]]
