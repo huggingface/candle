@@ -146,6 +146,6 @@ def test_tensor_equality_opperations_can_broadcast():
 def test_tensor_can_be_hashed():
     t = Tensor(42.0)
     other = Tensor(42.0)
-    # Hash should represent the a unique tensor
+    # Hash should represent a unique tensor
     assert hash(t) != hash(other)
     assert hash(t) == hash(t)
