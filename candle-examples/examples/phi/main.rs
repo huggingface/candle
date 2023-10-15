@@ -5,7 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use candle_transformers::models::mixformer::{Config, MixFormerSequentialForCausalLM as MixFormer};
 use candle_transformers::models::quantized_mixformer::MixFormerSequentialForCausalLM as QMixFormer;
@@ -28,6 +28,7 @@ struct TextGeneration {
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
+    verbose_prompt: bool,
 }
 
 impl TextGeneration {
@@ -40,6 +41,7 @@ impl TextGeneration {
         top_p: Option<f64>,
         repeat_penalty: f32,
         repeat_last_n: usize,
+        verbose_prompt: bool,
         device: &Device,
     ) -> Self {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
@@ -49,6 +51,7 @@ impl TextGeneration {
             logits_processor,
             repeat_penalty,
             repeat_last_n,
+            verbose_prompt,
             device: device.clone(),
         }
     }
@@ -58,13 +61,14 @@ impl TextGeneration {
         println!("starting the inference loop");
         print!("{prompt}");
         std::io::stdout().flush()?;
-        let mut tokens = self
-            .tokenizer
-            .encode(prompt, true)
-            .map_err(E::msg)?
-            .get_ids()
-            .to_vec();
-
+        let tokens = self.tokenizer.encode(prompt, true).map_err(E::msg)?;
+        if self.verbose_prompt {
+            for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
+                let token = token.replace('▁', " ").replace("<0x0A>", "\n");
+                println!("{id:7} -> '{token}'");
+            }
+        }
+        let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = 0usize;
         let eos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
             Some(token) => *token,
@@ -110,6 +114,14 @@ impl TextGeneration {
     }
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum WhichModel {
+    #[value(name = "1")]
+    V1,
+    #[value(name = "1.5")]
+    V1_5,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -120,6 +132,10 @@ struct Args {
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
+
+    /// Display the token for the specified prompt.
+    #[arg(long)]
+    verbose_prompt: bool,
 
     #[arg(long)]
     prompt: String,
@@ -140,11 +156,14 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 100)]
     sample_len: usize,
 
-    #[arg(long, default_value = "microsoft/phi-1_5")]
-    model_id: String,
+    #[arg(long)]
+    model_id: Option<String>,
 
-    #[arg(long, default_value = "refs/pr/18")]
-    revision: String,
+    #[arg(long, default_value = "1.5")]
+    model: WhichModel,
+
+    #[arg(long)]
+    revision: Option<String>,
 
     #[arg(long)]
     weight_file: Option<String>,
@@ -189,18 +208,42 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let repo = api.repo(Repo::with_revision(
-        args.model_id,
-        RepoType::Model,
-        args.revision,
-    ));
+    let model_id = match args.model_id {
+        Some(model_id) => model_id.to_string(),
+        None => {
+            if args.quantized {
+                "lmz/candle-quantized-phi".to_string()
+            } else {
+                match args.model {
+                    WhichModel::V1 => "microsoft/phi-1".to_string(),
+                    WhichModel::V1_5 => "microsoft/phi-1_5".to_string(),
+                }
+            }
+        }
+    };
+    let revision = match args.revision {
+        Some(rev) => rev.to_string(),
+        None => {
+            if args.quantized {
+                "main".to_string()
+            } else {
+                match args.model {
+                    WhichModel::V1 => "refs/pr/2".to_string(),
+                    WhichModel::V1_5 => "refs/pr/18".to_string(),
+                }
+            }
+        }
+    };
+    let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
     let tokenizer_filename = repo.get("tokenizer.json")?;
     let filename = match args.weight_file {
         Some(weight_file) => std::path::PathBuf::from(weight_file),
         None => {
             if args.quantized {
-                api.model("lmz/candle-quantized-phi".to_string())
-                    .get("model-q4k.gguf")?
+                match args.model {
+                    WhichModel::V1 => repo.get("model-v1-q4k.gguf")?,
+                    WhichModel::V1_5 => repo.get("model-q4k.gguf")?,
+                }
             } else {
                 repo.get("model.safetensors")?
             }
@@ -231,6 +274,7 @@ fn main() -> Result<()> {
         args.top_p,
         args.repeat_penalty,
         args.repeat_last_n,
+        args.verbose_prompt,
         &device,
     );
     pipeline.run(&args.prompt, args.sample_len)?;

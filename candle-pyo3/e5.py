@@ -50,7 +50,8 @@ if __name__ == "__main__":
     tokenized = tokenizer(sentences, padding=True)
     tokens = Tensor(tokenized["input_ids"])
     token_type_ids = Tensor(tokenized["token_type_ids"])
-    encoder_out, _ = model.forward(tokens, token_type_ids)
+    attention_mask = Tensor(tokenized["attention_mask"])
+    encoder_out, _ = model.forward(tokens, token_type_ids, attention_mask=attention_mask)
 
     hf_tokenized = tokenizer(sentences, padding=True, return_tensors="pt")
     hf_result = hf_model(**hf_tokenized)["last_hidden_state"]
@@ -60,7 +61,7 @@ if __name__ == "__main__":
 
     loss = torch.nn.L1Loss()
     error = loss(hf_pooled, candle_pooled).mean().item()
-    print(f"Mean error between torch-referenze and candle: {error}")
+    print(f"Mean error between torch-reference and candle: {error}")
 
     # Quantize all attention 'weights'
     quantized_tensors = {}
@@ -101,4 +102,4 @@ if __name__ == "__main__":
 
     candle_pooled_2 = average_pool(torch.tensor(encoder_out_2.values()), hf_tokenized["attention_mask"])
     error = loss(hf_pooled, candle_pooled_2).mean().item()
-    print(f"Mean error between torch-referenze and quantized-candle: {error}")
+    print(f"Mean error between torch-reference and quantized-candle: {error}")

@@ -9,6 +9,12 @@ def arange(start: float, end: float, step: Optional[float] = 1.0) -> Tensor:
     """
     Returns a 1-D tensor with values from the interval `[start, end)` taken with common difference `step` beginning from start.
     """
+
+@staticmethod
+def avg_pool2d(tensor: Tensor, ksize: int, stride: int = 1) -> Tensor:
+    """
+    Applies the 2d avg-pool function to a given tensor.#
+    """
     pass
 
 @staticmethod
@@ -22,6 +28,12 @@ def gelu(tensor: Tensor) -> Tensor:
 def matmul(lhs: Tensor, rhs: Tensor) -> Tensor:
     """
     Performs a matrix multiplication.
+    """
+
+@staticmethod   
+def max_pool2d(tensor: Tensor, ksize: int, stride: int = 1) -> Tensor:
+    """
+    Applies the 2d max-pool function to a given tensor.#
     """
     pass
 
