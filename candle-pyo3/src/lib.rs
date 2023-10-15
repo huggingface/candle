@@ -772,6 +772,39 @@ impl PyTensor {
         Ok(PyTensor(self.0.copy().map_err(wrap_err)?))
     }
 
+    #[pyo3(signature = (*args, **kwargs), text_signature = "(self, *args, **kwargs)")]
+    /// Performs Tensor dtype and/or device conversion.
+    /// &RETURNS&: Tensor
+    fn to(&self, args: &PyTuple, kwargs: Option<&PyDict>) -> PyResult<Self> {
+        let mut t = self.0.clone();
+        //handle args
+        if !args.is_empty() {
+            for arg in args.iter() {
+                if let Ok(device) = arg.extract::<PyDevice>() {
+                    t = t.to_device(&device.as_device()?).map_err(wrap_err)?;
+                } else if let Ok(dtype) = arg.extract::<PyDType>() {
+                    t = t.to_dtype(dtype.0).map_err(wrap_err)?;
+                } else {
+                    return Err(PyTypeError::new_err("unsupported argument type"));
+                }
+            }
+        }
+        //handle kwargs
+        if let Some(kwargs) = kwargs {
+            if let Some(dtype) = kwargs.get_item("dtype") {
+                let dtype = dtype.extract::<PyDType>()?;
+                t = t.to_dtype(dtype.0).map_err(wrap_err)?;
+            }
+
+            if let Some(device) = kwargs.get_item("device") {
+                let device = device.extract::<PyDevice>()?;
+                t = t.to_device(&device.as_device()?).map_err(wrap_err)?;
+            }
+        }
+
+        Ok(PyTensor(t))
+    }
+
     #[pyo3(text_signature = "(self, dtype:Union[str,DType])")]
     /// Convert the tensor to a new dtype.
     /// &RETURNS&: Tensor
