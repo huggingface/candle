@@ -511,154 +511,119 @@ impl ShapeWithOneHole for ((),) {
     }
 }
 
+fn hole_size(el_count: usize, prod_d: usize, s: &dyn std::fmt::Debug) -> Result<usize> {
+    if prod_d == 0 {
+        crate::bail!("cannot reshape tensor of {el_count} elements to {s:?}")
+    }
+    if el_count % prod_d != 0 {
+        crate::bail!("cannot reshape tensor with {el_count} elements to {s:?}")
+    }
+    Ok(el_count / prod_d)
+}
+
 impl ShapeWithOneHole for ((), usize) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let ((), d1) = self;
-        if el_count % d1 != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d1}")
-        }
-        Ok((el_count / d1, d1).into())
+        Ok((hole_size(el_count, d1, &self)?, d1).into())
     }
 }
 
 impl ShapeWithOneHole for (usize, ()) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let (d1, ()) = self;
-        if el_count % d1 != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d1}")
-        }
-        Ok((d1, el_count / d1).into())
+        Ok((d1, hole_size(el_count, d1, &self)?).into())
     }
 }
 
 impl ShapeWithOneHole for ((), usize, usize) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let ((), d1, d2) = self;
-        let d = d1 * d2;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((el_count / d, d1, d2).into())
+        Ok((hole_size(el_count, d1 * d2, &self)?, d1, d2).into())
     }
 }
 
 impl ShapeWithOneHole for (usize, (), usize) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let (d1, (), d2) = self;
-        let d = d1 * d2;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((d1, el_count / d, d2).into())
+        Ok((d1, hole_size(el_count, d1 * d2, &self)?, d2).into())
     }
 }
 
 impl ShapeWithOneHole for (usize, usize, ()) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let (d1, d2, ()) = self;
-        let d = d1 * d2;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((d1, d2, el_count / d).into())
+        Ok((d1, d2, hole_size(el_count, d1 * d2, &self)?).into())
     }
 }
 
 impl ShapeWithOneHole for ((), usize, usize, usize) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let ((), d1, d2, d3) = self;
-        let d = d1 * d2 * d3;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((el_count / d, d1, d2, d3).into())
+        let d = hole_size(el_count, d1 * d2 * d3, &self)?;
+        Ok((d, d1, d2, d3).into())
     }
 }
 
 impl ShapeWithOneHole for (usize, (), usize, usize) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let (d1, (), d2, d3) = self;
-        let d = d1 * d2 * d3;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((d1, el_count / d, d2, d3).into())
+        let d = hole_size(el_count, d1 * d2 * d3, &self)?;
+        Ok((d1, d, d2, d3).into())
     }
 }
 
 impl ShapeWithOneHole for (usize, usize, (), usize) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let (d1, d2, (), d3) = self;
-        let d = d1 * d2 * d3;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((d1, d2, el_count / d, d3).into())
+        let d = hole_size(el_count, d1 * d2 * d3, &self)?;
+        Ok((d1, d2, d, d3).into())
     }
 }
 
 impl ShapeWithOneHole for (usize, usize, usize, ()) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let (d1, d2, d3, ()) = self;
-        let d = d1 * d2 * d3;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((d1, d2, d3, el_count / d).into())
+        let d = hole_size(el_count, d1 * d2 * d3, &self)?;
+        Ok((d1, d2, d3, d).into())
     }
 }
 
 impl ShapeWithOneHole for ((), usize, usize, usize, usize) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let ((), d1, d2, d3, d4) = self;
-        let d = d1 * d2 * d3 * d4;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((el_count / d, d1, d2, d3, d4).into())
+        let d = hole_size(el_count, d1 * d2 * d3 * d4, &self)?;
+        Ok((d, d1, d2, d3, d4).into())
     }
 }
 
 impl ShapeWithOneHole for (usize, (), usize, usize, usize) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let (d1, (), d2, d3, d4) = self;
-        let d = d1 * d2 * d3 * d4;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((d1, el_count / d, d2, d3, d4).into())
+        let d = hole_size(el_count, d1 * d2 * d3 * d4, &self)?;
+        Ok((d1, d, d2, d3, d4).into())
     }
 }
 
 impl ShapeWithOneHole for (usize, usize, (), usize, usize) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let (d1, d2, (), d3, d4) = self;
-        let d = d1 * d2 * d3 * d4;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((d1, d2, el_count / d, d3, d4).into())
+        let d = hole_size(el_count, d1 * d2 * d3 * d4, &self)?;
+        Ok((d1, d2, d, d3, d4).into())
     }
 }
 
 impl ShapeWithOneHole for (usize, usize, usize, (), usize) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let (d1, d2, d3, (), d4) = self;
-        let d = d1 * d2 * d3 * d4;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((d1, d2, d3, el_count / d, d4).into())
+        let d = hole_size(el_count, d1 * d2 * d3 * d4, &self)?;
+        Ok((d1, d2, d3, d, d4).into())
     }
 }
 
 impl ShapeWithOneHole for (usize, usize, usize, usize, ()) {
     fn into_shape(self, el_count: usize) -> Result<Shape> {
         let (d1, d2, d3, d4, ()) = self;
-        let d = d1 * d2 * d3 * d4;
-        if el_count % d != 0 {
-            crate::bail!("tensor number of elements {el_count} is not divisible by {d}")
-        }
-        Ok((d1, d2, d3, d4, el_count / d).into())
+        let d = hole_size(el_count, d1 * d2 * d3 * d4, &self)?;
+        Ok((d1, d2, d3, d4, d).into())
     }
 }
