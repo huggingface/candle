@@ -258,7 +258,7 @@ fn main() -> Result<()> {
                 match args.model {
                     WhichModel::V1 => repo.get("model-v1-q4k.gguf")?,
                     WhichModel::V1_5 => repo.get("model-q4k.gguf")?,
-                    WhichModel::PuffinPhiV2 => repo.get("model-q4k-puffin-phi-v2.gguf")?,
+                    WhichModel::PuffinPhiV2 => repo.get("model-puffin-phi-v2-q4k.gguf")?,
                 }
             } else {
                 match args.model {
