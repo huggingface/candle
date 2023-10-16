@@ -272,7 +272,11 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = Config::v1_5();
+    let config = match args.model {
+        WhichModel::V1 => Config::v1(),
+        WhichModel::V1_5 => Config::v1_5(),
+        WhichModel::PuffinPhiV2 => Config::puffin_phi_v2(),
+    };
     let (model, device) = if args.quantized {
         let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename)?;
         let model = QMixFormer::new(&config, vb)?;
