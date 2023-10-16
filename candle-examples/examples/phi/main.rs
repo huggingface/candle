@@ -123,6 +123,7 @@ enum WhichModel {
     V1,
     #[value(name = "1.5")]
     V1_5,
+    PuffinPhiV2,
 }
 
 #[derive(Parser, Debug)]
@@ -170,6 +171,9 @@ struct Args {
 
     #[arg(long)]
     weight_file: Option<String>,
+
+    #[arg(long)]
+    tokenizer: Option<String>,
 
     #[arg(long)]
     quantized: bool,
@@ -220,6 +224,7 @@ fn main() -> Result<()> {
                 match args.model {
                     WhichModel::V1 => "microsoft/phi-1".to_string(),
                     WhichModel::V1_5 => "microsoft/phi-1_5".to_string(),
+                    WhichModel::PuffinPhiV2 => "lmz/candle-quantized-phi".to_string(),
                 }
             }
         }
@@ -233,12 +238,19 @@ fn main() -> Result<()> {
                 match args.model {
                     WhichModel::V1 => "refs/pr/2".to_string(),
                     WhichModel::V1_5 => "refs/pr/18".to_string(),
+                    WhichModel::PuffinPhiV2 => "main".to_string(),
                 }
             }
         }
     };
     let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
-    let tokenizer_filename = repo.get("tokenizer.json")?;
+    let tokenizer_filename = match args.tokenizer {
+        Some(file) => std::path::PathBuf::from(file),
+        None => match args.model {
+            WhichModel::V1 | WhichModel::V1_5 => repo.get("tokenizer.json")?,
+            WhichModel::PuffinPhiV2 => repo.get("tokenizer-puffin-phi-v2.json")?,
+        },
+    };
     let filename = match args.weight_file {
         Some(weight_file) => std::path::PathBuf::from(weight_file),
         None => {
@@ -246,9 +258,13 @@ fn main() -> Result<()> {
                 match args.model {
                     WhichModel::V1 => repo.get("model-v1-q4k.gguf")?,
                     WhichModel::V1_5 => repo.get("model-q4k.gguf")?,
+                    WhichModel::PuffinPhiV2 => repo.get("model-puffin-phi-v2-q4k.gguf")?,
                 }
             } else {
-                repo.get("model.safetensors")?
+                match args.model {
+                    WhichModel::V1 | WhichModel::V1_5 => repo.get("model.safetensors")?,
+                    WhichModel::PuffinPhiV2 => repo.get("model-puffin-phi-v2.safetensors")?,
+                }
             }
         }
     };
@@ -256,7 +272,11 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = Config::v1_5();
+    let config = match args.model {
+        WhichModel::V1 => Config::v1(),
+        WhichModel::V1_5 => Config::v1_5(),
+        WhichModel::PuffinPhiV2 => Config::puffin_phi_v2(),
+    };
     let (model, device) = if args.quantized {
         let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename)?;
         let model = QMixFormer::new(&config, vb)?;
