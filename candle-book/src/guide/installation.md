@@ -12,6 +12,9 @@ compute_cap
 8.9
 ```
 
+You can also compile the Cuda kernels for a specific compute cap using the 
+`CUDA_COMPUTE_CAP=<compute cap>` environment variable.
+
 If any of the above commands errors out, please make sure to update your Cuda version.
 
 2. Create a new app and add [`candle-core`](https://github.com/huggingface/candle/tree/main/candle-core) with Cuda support.
