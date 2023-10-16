@@ -166,6 +166,18 @@ fn main() -> Result<()> {
     println!("cargo:rustc-link-lib=dylib=cudart");
     println!("cargo:rustc-link-lib=dylib=stdc++");
 
+    /* laurent: I tried using the cc cuda integration as below but this lead to ptaxs never
+       finishing to run for some reason. Calling nvcc manually worked fine.
+    cc::Build::new()
+        .cuda(true)
+        .include("cutlass/include")
+        .flag("--expt-relaxed-constexpr")
+        .flag("--default-stream")
+        .flag("per-thread")
+        .flag(&format!("--gpu-architecture=sm_{compute_cap}"))
+        .file("kernels/flash_fwd_hdim32_fp16_sm80.cu")
+        .compile("flashattn");
+    */
     Ok(())
 }
 
@@ -212,7 +224,7 @@ fn compute_cap() -> Result<usize> {
         println!("cargo:rustc-env=CUDA_COMPUTE_CAP={compute_cap_str}");
         compute_cap_str
             .parse::<usize>()
-            .context("Could not parse code")?
+            .context("Could not parse compute cap")?
     } else {
         // Use nvidia-smi to get the current compute cap
         let out = std::process::Command::new("nvidia-smi")
@@ -256,7 +268,7 @@ fn compute_cap() -> Result<usize> {
             }
         }
         codes.sort();
-        let max_nvcc_code = *codes.last().unwrap();
+        let max_nvcc_code = *codes.last().context("no gpu codes parsed from nvcc")?;
         (codes, max_nvcc_code)
     };
 

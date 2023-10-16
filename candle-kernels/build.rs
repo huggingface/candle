@@ -222,7 +222,7 @@ mod cuda {
                 }
             }
             codes.sort();
-            let max_nvcc_code = *codes.last().unwrap();
+            let max_nvcc_code = *codes.last().context("no gpu codes parsed from nvcc")?;
             (codes, max_nvcc_code)
         };
 

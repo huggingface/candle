@@ -13,7 +13,7 @@ compute_cap
 ```
 
 You can also compile the Cuda kernels for a specific compute cap using the 
-`CUDA_COMPUTE_CAP=<comute cap>` environment variable.
+`CUDA_COMPUTE_CAP=<compute cap>` environment variable.
 
 If any of the above commands errors out, please make sure to update your Cuda version.
 
