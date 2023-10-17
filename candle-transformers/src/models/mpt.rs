@@ -3,7 +3,7 @@ use crate::models::with_tracing::{linear, Embedding as E, Linear};
 /// MPT model used by replit-code-v1_5-3b
 /// https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/modeling_mpt.py
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, LayerNorm, VarBuilder};
+use candle_nn::{layer_norm, Activation, LayerNorm, VarBuilder};
 
 // https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/configuration_mpt.py
 #[derive(Debug, Clone, PartialEq)]
@@ -118,4 +118,29 @@ struct MPTBlock {
     attn: GroupedQueryAttention,
     norm2: LayerNorm,
     ffn: Ffn,
+}
+
+impl MPTBlock {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let norm1 = layer_norm(cfg.d_model, 1e-5, vb.pp("norm_1"))?;
+        let norm2 = layer_norm(cfg.d_model, 1e-5, vb.pp("norm_2"))?;
+        let attn = GroupedQueryAttention::new(cfg, vb.pp("attn"))?;
+        let ffn = Ffn::new(cfg, vb.pp("ffn"))?;
+        Ok(Self {
+            norm1,
+            attn,
+            norm2,
+            ffn,
+        })
+    }
+
+    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+        let residual = xs;
+        let xs = xs.apply(&self.norm1)?;
+        let xs = self.attn.forward(&xs, mask)?;
+        let xs = (xs + residual)?;
+        let residual = &xs;
+        let xs = xs.apply(&self.norm2)?.apply(&self.ffn);
+        xs + residual
+    }
 }
