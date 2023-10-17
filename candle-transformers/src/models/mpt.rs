@@ -155,8 +155,8 @@ struct Ffn {
 impl Ffn {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden = cfg.d_model * cfg.expansion_ratio;
-        let down_proj = linear_no_bias(cfg.d_model, hidden, vb.pp("down_proj"))?;
-        let up_proj = linear_no_bias(hidden, cfg.d_model, vb.pp("up_proj"))?;
+        let up_proj = linear_no_bias(cfg.d_model, hidden, vb.pp("up_proj"))?;
+        let down_proj = linear_no_bias(hidden, cfg.d_model, vb.pp("down_proj"))?;
         Ok(Self { up_proj, down_proj })
     }
 }
@@ -216,7 +216,7 @@ fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
         alibi_bias.reshape((1, 1, 1, seq_len))?
     };
     let mut n_heads2 = 1;
-    while 2 * n_heads2 <= cfg.n_heads {
+    while n_heads2 < cfg.n_heads {
         n_heads2 *= 2
     }
     let slopes = (1..=n_heads2)
@@ -234,8 +234,8 @@ fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
             .cloned()
             .collect::<Vec<f32>>()
     };
-    let slopes = Tensor::new(slopes, &Device::Cpu)?;
-    alibi_bias.broadcast_mul(&slopes)
+    let slopes = Tensor::new(slopes, &Device::Cpu)?.reshape((1, (), 1, 1))?;
+    alibi_bias.to_dtype(DType::F32)?.broadcast_mul(&slopes)
 }
 
 #[derive(Debug)]
