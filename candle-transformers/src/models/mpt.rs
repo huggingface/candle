@@ -51,6 +51,7 @@ struct GroupedQueryAttention {
     d_model: usize,
     n_heads: usize,
     kv_n_heads: usize,
+    attn_bias: Tensor,
     span: tracing::Span,
 }
 
@@ -61,6 +62,7 @@ impl GroupedQueryAttention {
         let head_dim = cfg.d_model / cfg.n_heads;
         let softmax_scale = 1f64 / (head_dim as f64).sqrt();
         let out_proj = linear(cfg.d_model, cfg.d_model, vb.pp("out_proj"))?;
+        let attn_bias = build_alibi_bias(cfg)?.to_device(vb.device())?;
         Ok(Self {
             wqkv,
             out_proj,
@@ -70,6 +72,7 @@ impl GroupedQueryAttention {
             d_model: cfg.d_model,
             n_heads: cfg.n_heads,
             kv_n_heads: cfg.kv_n_heads,
+            attn_bias,
             span: tracing::span!(tracing::Level::TRACE, "gqa"),
         })
     }
@@ -103,7 +106,15 @@ impl GroupedQueryAttention {
         let key = repeat_kv(key, self.n_heads / self.kv_n_heads)?;
         let value = repeat_kv(value, self.n_heads / self.kv_n_heads)?;
         let attn_weights = (query.matmul(&key)? * self.softmax_scale)?;
-        // TODO: attn_bias, alibi
+        let attn_bias = {
+            let s_q = query.dim(D::Minus2)?;
+            let s_k = key.dim(D::Minus1)?;
+            let (_, _, a_q, a_k) = self.attn_bias.dims4()?;
+            self.attn_bias
+                .narrow(2, a_q - s_q, s_q)?
+                .narrow(3, a_k - s_k, s_k)?
+        };
+        let attn_weights = (attn_weights + attn_bias)?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let attn_output = attn_weights
             .matmul(&value)?
