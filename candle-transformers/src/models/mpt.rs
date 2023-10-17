@@ -3,7 +3,7 @@ use crate::models::with_tracing::{linear, Embedding as E, Linear};
 /// MPT model used by replit-code-v1_5-3b
 /// https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/modeling_mpt.py
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{Activation, VarBuilder};
+use candle_nn::{Activation, LayerNorm, VarBuilder};
 
 // https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/configuration_mpt.py
 #[derive(Debug, Clone, PartialEq)]
@@ -89,4 +89,33 @@ impl GroupedQueryAttention {
             .flatten_from(D::Minus2)?;
         attn_output.apply(&self.out_proj)
     }
+}
+
+#[derive(Debug)]
+struct Ffn {
+    up_proj: Linear,
+    down_proj: Linear,
+}
+
+impl Ffn {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let hidden = cfg.d_model * cfg.expansion_ratio;
+        let down_proj = linear(cfg.d_model, hidden, vb.pp("down_proj"))?;
+        let up_proj = linear(hidden, cfg.d_model, vb.pp("up_proj"))?;
+        Ok(Self { up_proj, down_proj })
+    }
+}
+
+impl Module for Ffn {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.up_proj)?.gelu_erf()?.apply(&self.down_proj)
+    }
+}
+
+#[derive(Debug)]
+struct MPTBlock {
+    norm1: LayerNorm, // Do we need the low-precision variant?
+    attn: GroupedQueryAttention,
+    norm2: LayerNorm,
+    ffn: Ffn,
 }
