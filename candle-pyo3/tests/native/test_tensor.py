@@ -1,5 +1,6 @@
 import candle
 from candle import Tensor
+import pytest
 
 
 def test_tensor_can_be_constructed():
@@ -72,3 +73,75 @@ def test_tensor_can_be_scliced_3d():
     assert t[:, 0, 0].values() == [1, 9]
     assert t[..., 0].values() == [[1, 5], [9, 13]]
     assert t[..., 0:2].values() == [[[1, 2], [5, 6]], [[9, 10], [13, 14]]]
+
+
+def test_tensor_can_be_added():
+    t = Tensor(42.0)
+    result = t + t
+    assert result.values() == 84.0
+    result = t + 2.0
+    assert result.values() == 44.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_add(b)
+    c = a + b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d + e
+
+
+def test_tensor_can_be_subtracted():
+    t = Tensor(42.0)
+    result = t - t
+    assert result.values() == 0
+    result = t - 2.0
+    assert result.values() == 40.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_sub(b)
+    c = a - b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d - e
+
+
+def test_tensor_can_be_multiplied():
+    t = Tensor(42.0)
+    result = t * t
+    assert result.values() == 1764.0
+    result = t * 2.0
+    assert result.values() == 84.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_mul(b)
+    c = a * b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d * e
+
+
+def test_tensor_can_be_divided():
+    t = Tensor(42.0)
+    result = t / t
+    assert result.values() == 1.0
+    result = t / 2.0
+    assert result.values() == 21.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_div(b)
+    c = a / b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d / e
