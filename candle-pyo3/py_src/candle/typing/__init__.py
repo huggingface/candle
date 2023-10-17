@@ -14,3 +14,7 @@ CPU: str = "cpu"
 CUDA: str = "cuda"
 
 Device = TypeVar("Device", CPU, CUDA)
+
+Scalar = Union[int, float]
+
+Index = Union[int, slice, None, "Ellipsis"]
