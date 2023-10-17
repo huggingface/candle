@@ -215,7 +215,7 @@ fn main() -> Result<()> {
     let config = Config::replit_code_v1_5_3b();
     let device = candle_examples::device(args.cpu)?;
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[filename], DType::F32, &device)? };
-    let model = Model::new(&config, vb)?;
+    let model = Model::new(&config, vb.pp("transformer"))?;
     println!("loaded the model in {:?}", start.elapsed());
 
     let mut pipeline = TextGeneration::new(
