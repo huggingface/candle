@@ -278,6 +278,7 @@ impl Model {
             xs = block.forward(&xs, mask.as_ref())?
         }
         xs.narrow(1, seq_len - 1, 1)?
+            .squeeze(1)?
             .matmul(&self.wte.embeddings().t()?)?
             .squeeze(1)
     }
