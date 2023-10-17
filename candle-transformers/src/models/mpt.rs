@@ -115,6 +115,14 @@ impl GroupedQueryAttention {
                 .narrow(3, a_k - s_k, s_k)?
         };
         let attn_weights = (attn_weights + attn_bias)?;
+        let attn_weights = match mask {
+            None => attn_weights,
+            Some(mask) => masked_fill(
+                &attn_weights,
+                &mask.broadcast_left(b_size * self.n_heads)?,
+                f32::NEG_INFINITY,
+            )?,
+        };
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let attn_output = attn_weights
             .matmul(&value)?
@@ -227,14 +235,14 @@ fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
 }
 
 #[derive(Debug)]
-struct Model {
+pub struct Model {
     wte: candle_nn::Embedding,
     blocks: Vec<MPTBlock>,
     norm_f: LayerNorm,
 }
 
 impl Model {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let wte = candle_nn::embedding(cfg.vocab_size, cfg.d_model, vb.pp("wte"))?;
         let vb_b = vb.pp("blocks");
         let mut blocks = Vec::with_capacity(cfg.n_layers);
@@ -250,7 +258,33 @@ impl Model {
         })
     }
 
-    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
-        todo!()
+    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+        let (_b_size, seq_len) = xs.dims2()?;
+        let mut xs = xs.apply(&self.wte)?;
+        let mask = if seq_len <= 1 {
+            None
+        } else {
+            Some(get_mask(seq_len, xs.device())?)
+        };
+        for block in self.blocks.iter_mut() {
+            xs = block.forward(&xs, mask.as_ref())?
+        }
+        xs.narrow(1, seq_len - 1, 1)?
+            .matmul(&self.wte.embeddings().t()?)?
+            .squeeze(1)
     }
+}
+
+fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+    let mask: Vec<_> = (0..size)
+        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
+        .collect();
+    Tensor::from_slice(&mask, (size, size), device)
+}
+
+fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+    let shape = mask.shape();
+    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
+    let m = mask.where_cond(&on_true, on_false)?;
+    Ok(m)
 }
