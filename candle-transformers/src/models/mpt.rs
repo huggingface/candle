@@ -15,7 +15,9 @@ pub struct Config {
     pub(crate) max_seq_len: usize,
     pub(crate) vocab_size: usize,
     pub(crate) kv_n_heads: usize,
-    // pub(crate) attn_config: AttnConfig,
+    pub(crate) attn_prefix_lm: bool,
+    pub(crate) attn_alibi: bool,
+    pub(crate) attn_alibi_bias_max: usize,
 }
 
 impl Config {
@@ -28,7 +30,14 @@ impl Config {
             max_seq_len: 4096,
             vocab_size: 32768,
             kv_n_heads: 8,
+            attn_prefix_lm: false,
+            attn_alibi: true,
+            attn_alibi_bias_max: 8,
         }
+    }
+
+    pub fn is_causal(&self) -> bool {
+        !self.attn_prefix_lm
     }
 }
 
@@ -170,6 +179,40 @@ impl MPTBlock {
         let xs = xs.apply(&self.norm2)?.apply(&self.ffn);
         xs + residual
     }
+}
+
+fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
+    let full = !cfg.is_causal();
+    let seq_len = cfg.max_seq_len;
+    let alibi_bias = Tensor::arange(1 - seq_len as i64, 1, &Device::Cpu)?;
+    let alibi_bias = if full {
+        let a1 = alibi_bias.reshape((1, 1, 1, seq_len))?;
+        let a2 = alibi_bias.reshape((1, 1, seq_len, 1))?;
+        a1.broadcast_sub(&a2)?.abs()?.neg()?
+    } else {
+        alibi_bias.reshape((1, 1, 1, seq_len))?
+    };
+    let mut n_heads2 = 1;
+    while 2 * n_heads2 <= cfg.n_heads {
+        n_heads2 *= 2
+    }
+    let slopes = (1..=n_heads2)
+        .map(|v| 1f32 / 2f32.powf((v * cfg.attn_alibi_bias_max) as f32 / n_heads2 as f32))
+        .collect::<Vec<_>>();
+    let slopes = if n_heads2 == cfg.n_heads {
+        slopes
+    } else {
+        slopes
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .chain(slopes.iter().step_by(2))
+            .take(cfg.n_heads)
+            .cloned()
+            .collect::<Vec<f32>>()
+    };
+    let slopes = Tensor::new(slopes, &Device::Cpu)?;
+    alibi_bias.broadcast_mul(&slopes)
 }
 
 #[derive(Debug)]
