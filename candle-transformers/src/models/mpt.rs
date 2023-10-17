@@ -18,6 +18,20 @@ pub struct Config {
     // pub(crate) attn_config: AttnConfig,
 }
 
+impl Config {
+    pub fn replit_code_v1_5_3b() -> Self {
+        Self {
+            d_model: 3072,
+            n_heads: 24,
+            n_layers: 32,
+            expansion_ratio: 4,
+            max_seq_len: 4096,
+            vocab_size: 32768,
+            kv_n_heads: 8,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct GroupedQueryAttention {
     wqkv: Linear,
@@ -62,13 +76,13 @@ impl GroupedQueryAttention {
         // scaled_multihead_dot_product_attention
         let query = query
             .reshape((b_size, seq_len, self.n_heads, ()))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?; // b,h,s,d
         let key = key
             .reshape((b_size, seq_len, self.kv_n_heads, ()))?
-            .permute((0, 2, 3, 1))?;
+            .permute((0, 2, 3, 1))?; // b,h,d,s
         let value = value
             .reshape((b_size, seq_len, self.kv_n_heads, ()))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?; // b,h,s,d
         let (key, value) = match &self.kv_cache {
             None => (key, value),
             Some((prev_k, prev_v)) => {
@@ -77,9 +91,8 @@ impl GroupedQueryAttention {
                 (k, v)
             }
         };
-        // TODO:
-        // k = k.repeat_interleave(n_heads // kv_n_heads, dim=1)
-        // v = v.repeat_interleave(n_heads // kv_n_heads, dim=1)
+        let key = repeat_kv(key, self.n_heads / self.kv_n_heads)?;
+        let value = repeat_kv(value, self.n_heads / self.kv_n_heads)?;
         let attn_weights = (query.matmul(&key)? * self.softmax_scale)?;
         // TODO: attn_bias, alibi
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
@@ -88,6 +101,20 @@ impl GroupedQueryAttention {
             .transpose(1, 2)?
             .flatten_from(D::Minus2)?;
         attn_output.apply(&self.out_proj)
+    }
+}
+
+// This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep).
+// The hidden states go from (batch, num_key_value_heads, seqlen, head_dim) to
+// (batch, num_attention_heads, seqlen, head_dim)
+fn repeat_kv(xs: Tensor, n_rep: usize) -> Result<Tensor> {
+    if n_rep == 1 {
+        Ok(xs)
+    } else {
+        let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
+        xs.unsqueeze(2)?
+            .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
+            .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
     }
 }
 
@@ -142,5 +169,34 @@ impl MPTBlock {
         let residual = &xs;
         let xs = xs.apply(&self.norm2)?.apply(&self.ffn);
         xs + residual
+    }
+}
+
+#[derive(Debug)]
+struct Model {
+    wte: candle_nn::Embedding,
+    blocks: Vec<MPTBlock>,
+    norm_f: LayerNorm,
+}
+
+impl Model {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let wte = candle_nn::embedding(cfg.vocab_size, cfg.d_model, vb.pp("wte"))?;
+        let vb_b = vb.pp("blocks");
+        let mut blocks = Vec::with_capacity(cfg.n_layers);
+        for i in 0..cfg.n_layers {
+            let block = MPTBlock::new(cfg, vb_b.pp(i))?;
+            blocks.push(block)
+        }
+        let norm_f = candle_nn::layer_norm(cfg.d_model, 1e-5, vb.pp("norm_f"))?;
+        Ok(Self {
+            wte,
+            blocks,
+            norm_f,
+        })
+    }
+
+    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+        todo!()
     }
 }
