@@ -59,6 +59,11 @@ pub fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<candle_nn::La
     Ok(candle_nn::LayerNorm::new(weight, bias, eps))
 }
 
+pub fn layer_norm_no_bias(size: usize, eps: f64, vb: VarBuilder) -> Result<candle_nn::LayerNorm> {
+    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
+    Ok(candle_nn::LayerNorm::new_no_bias(weight, eps))
+}
+
 pub fn linear_no_bias(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
     let weight = QMatMul::new(in_dim, out_dim, vb)?;
     Ok(Linear { weight, bias: None })

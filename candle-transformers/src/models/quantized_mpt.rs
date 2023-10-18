@@ -1,44 +1,11 @@
-use crate::models::with_tracing::{linear_no_bias, Embedding, Linear};
+use crate::quantized_nn::{layer_norm_no_bias, linear_no_bias, Embedding, Linear};
+pub use crate::quantized_var_builder::VarBuilder;
 /// MPT model used by replit-code-v1_5-3b
 /// https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/modeling_mpt.py
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{layer_norm, LayerNorm, VarBuilder};
+use candle::{IndexOp, Module, Result, Tensor, D};
+use candle_nn::LayerNorm;
 
-// https://huggingface.co/replit/replit-code-v1_5-3b/blob/main/configuration_mpt.py
-#[derive(Debug, Clone, PartialEq)]
-pub struct Config {
-    pub(crate) d_model: usize,
-    pub(crate) n_heads: usize,
-    pub(crate) n_layers: usize,
-    pub(crate) expansion_ratio: usize,
-    pub(crate) max_seq_len: usize,
-    pub(crate) vocab_size: usize,
-    pub(crate) kv_n_heads: usize,
-    pub(crate) attn_prefix_lm: bool,
-    pub(crate) attn_alibi: bool,
-    pub(crate) attn_alibi_bias_max: usize,
-}
-
-impl Config {
-    pub fn replit_code_v1_5_3b() -> Self {
-        Self {
-            d_model: 3072,
-            n_heads: 24,
-            n_layers: 32,
-            expansion_ratio: 4,
-            max_seq_len: 4096,
-            vocab_size: 32768,
-            kv_n_heads: 8,
-            attn_prefix_lm: false,
-            attn_alibi: true,
-            attn_alibi_bias_max: 8,
-        }
-    }
-
-    pub fn is_causal(&self) -> bool {
-        !self.attn_prefix_lm
-    }
-}
+pub use super::mpt::Config;
 
 #[derive(Debug)]
 struct GroupedQueryAttention {
@@ -61,7 +28,7 @@ impl GroupedQueryAttention {
         let wqkv = linear_no_bias(cfg.d_model, wqkv_size, vb.pp("Wqkv"))?;
         let softmax_scale = 1f64 / (head_dim as f64).sqrt();
         let out_proj = linear_no_bias(cfg.d_model, cfg.d_model, vb.pp("out_proj"))?;
-        let attn_bias = build_alibi_bias(cfg)?.to_device(vb.device())?;
+        let attn_bias = super::mpt::build_alibi_bias(cfg)?.to_device(vb.device())?;
         Ok(Self {
             wqkv,
             out_proj,
@@ -104,8 +71,8 @@ impl GroupedQueryAttention {
         };
         self.kv_cache = Some((key.clone(), value.clone()));
         let query = query.contiguous()?;
-        let key = repeat_kv(key, self.n_heads / self.kv_n_heads)?.contiguous()?;
-        let value = repeat_kv(value, self.n_heads / self.kv_n_heads)?.contiguous()?;
+        let key = super::mpt::repeat_kv(key, self.n_heads / self.kv_n_heads)?.contiguous()?;
+        let value = super::mpt::repeat_kv(value, self.n_heads / self.kv_n_heads)?.contiguous()?;
         let attn_weights = (query.matmul(&key)? * self.softmax_scale)?;
         let attn_bias = {
             let s_q = query.dim(D::Minus2)?;
@@ -118,7 +85,7 @@ impl GroupedQueryAttention {
         let attn_weights = attn_weights.broadcast_add(&attn_bias)?;
         let attn_weights = match mask {
             None => attn_weights,
-            Some(mask) => masked_fill(
+            Some(mask) => super::mpt::masked_fill(
                 &attn_weights,
                 &mask.broadcast_as(attn_weights.shape())?,
                 f32::NEG_INFINITY,
@@ -131,20 +98,6 @@ impl GroupedQueryAttention {
             .flatten_from(D::Minus2)?;
         let out = attn_output.apply(&self.out_proj)?;
         Ok(out)
-    }
-}
-
-// This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep).
-// The hidden states go from (batch, num_key_value_heads, seqlen, head_dim) to
-// (batch, num_attention_heads, seqlen, head_dim)
-pub(crate) fn repeat_kv(xs: Tensor, n_rep: usize) -> Result<Tensor> {
-    if n_rep == 1 {
-        Ok(xs)
-    } else {
-        let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-        xs.unsqueeze(2)?
-            .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-            .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
     }
 }
 
@@ -179,12 +132,8 @@ struct MPTBlock {
 
 impl MPTBlock {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let ln_cfg = candle_nn::LayerNormConfig {
-            affine: false,
-            ..Default::default()
-        };
-        let norm1 = layer_norm(cfg.d_model, ln_cfg, vb.pp("norm_1"))?;
-        let norm2 = layer_norm(cfg.d_model, ln_cfg, vb.pp("norm_2"))?;
+        let norm1 = layer_norm_no_bias(cfg.d_model, 1e-5, vb.pp("norm_1"))?;
+        let norm2 = layer_norm_no_bias(cfg.d_model, 1e-5, vb.pp("norm_2"))?;
         let attn = GroupedQueryAttention::new(cfg, vb.pp("attn"))?;
         let ffn = Ffn::new(cfg, vb.pp("ffn"))?;
         Ok(Self {
@@ -206,40 +155,6 @@ impl MPTBlock {
     }
 }
 
-pub(crate) fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
-    let full = !cfg.is_causal();
-    let seq_len = cfg.max_seq_len;
-    let alibi_bias = Tensor::arange(1 - seq_len as i64, 1, &Device::Cpu)?;
-    let alibi_bias = if full {
-        let a1 = alibi_bias.reshape((1, 1, 1, seq_len))?;
-        let a2 = alibi_bias.reshape((1, 1, seq_len, 1))?;
-        a1.broadcast_sub(&a2)?.abs()?.neg()?
-    } else {
-        alibi_bias.reshape((1, 1, 1, seq_len))?
-    };
-    let mut n_heads2 = 1;
-    while n_heads2 < cfg.n_heads {
-        n_heads2 *= 2
-    }
-    let slopes = (1..=n_heads2)
-        .map(|v| 1f32 / 2f32.powf((v * cfg.attn_alibi_bias_max) as f32 / n_heads2 as f32))
-        .collect::<Vec<_>>();
-    let slopes = if n_heads2 == cfg.n_heads {
-        slopes
-    } else {
-        slopes
-            .iter()
-            .skip(1)
-            .step_by(2)
-            .chain(slopes.iter().step_by(2))
-            .take(cfg.n_heads)
-            .cloned()
-            .collect::<Vec<f32>>()
-    };
-    let slopes = Tensor::new(slopes, &Device::Cpu)?.reshape((1, (), 1, 1))?;
-    alibi_bias.to_dtype(DType::F32)?.broadcast_mul(&slopes)
-}
-
 #[derive(Debug)]
 pub struct Model {
     wte: Embedding,
@@ -256,11 +171,7 @@ impl Model {
             let block = MPTBlock::new(cfg, vb_b.pp(i))?;
             blocks.push(block)
         }
-        let ln_cfg = candle_nn::LayerNormConfig {
-            affine: false,
-            ..Default::default()
-        };
-        let norm_f = candle_nn::layer_norm(cfg.d_model, ln_cfg, vb.pp("norm_f"))?;
+        let norm_f = layer_norm_no_bias(cfg.d_model, 1e-5, vb.pp("norm_f"))?;
         Ok(Self {
             wte,
             blocks,
@@ -274,7 +185,7 @@ impl Model {
         let mask = if seq_len <= 1 {
             None
         } else {
-            Some(get_mask(seq_len, xs.device())?)
+            Some(super::mpt::get_mask(seq_len, xs.device())?)
         };
         for block in self.blocks.iter_mut() {
             xs = block.forward(&xs, mask.as_ref())?;
@@ -287,18 +198,4 @@ impl Model {
             .squeeze(1)?;
         Ok(logits)
     }
-}
-
-pub(crate) fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
-    let mask: Vec<_> = (0..size)
-        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
-        .collect();
-    Tensor::from_slice(&mask, (size, size), device)
-}
-
-pub(crate) fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
-    let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
-    let m = mask.where_cond(&on_true, on_false)?;
-    Ok(m)
 }
