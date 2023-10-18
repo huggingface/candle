@@ -129,7 +129,8 @@ impl GroupedQueryAttention {
             .matmul(&value)?
             .transpose(1, 2)?
             .flatten_from(D::Minus2)?;
-        attn_output.apply(&self.out_proj)
+        let out = attn_output.apply(&self.out_proj)?;
+        Ok(out)
     }
 }
 
@@ -200,7 +201,7 @@ impl MPTBlock {
         let xs = self.attn.forward(&xs, mask)?;
         let xs = (xs + residual)?;
         let residual = &xs;
-        let xs = xs.apply(&self.norm2)?.apply(&self.ffn);
+        let xs = xs.apply(&self.norm2)?.apply(&self.ffn)?;
         xs + residual
     }
 }
@@ -276,8 +277,9 @@ impl Model {
             Some(get_mask(seq_len, xs.device())?)
         };
         for block in self.blocks.iter_mut() {
-            xs = block.forward(&xs, mask.as_ref())?
+            xs = block.forward(&xs, mask.as_ref())?;
         }
+        let xs = xs.apply(&self.norm_f)?;
         xs.narrow(1, seq_len - 1, 1)?
             .squeeze(1)?
             .matmul(&self.wte.embeddings().t()?)?
