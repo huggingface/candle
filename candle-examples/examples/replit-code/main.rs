@@ -155,7 +155,7 @@ struct Args {
     tokenizer: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
-    #[arg(long, default_value_t = 1.1)]
+    #[arg(long, default_value_t = 1.)]
     repeat_penalty: f32,
 
     /// The context size to consider for the repeat penalty.

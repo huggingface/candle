@@ -67,6 +67,7 @@ We also provide a some command line based examples using state of the art models
 - [Mistral7b-v0.1](./candle-examples/examples/mistral/): a 7b general LLM with
   performance larger than all publicly available 13b models as of 2023-09-28.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
+- [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
@@ -155,6 +156,7 @@ If you have an addition to this list, please submit a pull request.
         - Phi v1.5.
         - Mistral 7b v0.1.
         - StableLM-3B-4E1T.
+        - Replit-code-v1.5-3B.
         - T5.
         - Bert.
     - Whisper (multi-lingual support).
