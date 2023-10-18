@@ -110,3 +110,75 @@ def test_tensor_can_be_moved_and_cast_via_to():
     t_new_kwargs = t.to(device="cuda", dtype=candle.f64)
     assert t_new_kwargs.device == "cuda"
     assert str(t_new_kwargs.dtype) == str(candle.f64)
+
+
+def test_tensor_can_be_added():
+    t = Tensor(42.0)
+    result = t + t
+    assert result.values() == 84.0
+    result = t + 2.0
+    assert result.values() == 44.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_add(b)
+    c = a + b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d + e
+
+
+def test_tensor_can_be_subtracted():
+    t = Tensor(42.0)
+    result = t - t
+    assert result.values() == 0
+    result = t - 2.0
+    assert result.values() == 40.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_sub(b)
+    c = a - b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d - e
+
+
+def test_tensor_can_be_multiplied():
+    t = Tensor(42.0)
+    result = t * t
+    assert result.values() == 1764.0
+    result = t * 2.0
+    assert result.values() == 84.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_mul(b)
+    c = a * b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d * e
+
+
+def test_tensor_can_be_divided():
+    t = Tensor(42.0)
+    result = t / t
+    assert result.values() == 1.0
+    result = t / 2.0
+    assert result.values() == 21.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_div(b)
+    c = a / b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d / e
