@@ -7,7 +7,7 @@ use candle_nn::LayerNorm;
 
 pub use super::mpt::Config;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct GroupedQueryAttention {
     wqkv: Linear,
     out_proj: Linear,
@@ -101,7 +101,7 @@ impl GroupedQueryAttention {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Ffn {
     up_proj: Linear,
     down_proj: Linear,
@@ -122,7 +122,7 @@ impl Module for Ffn {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct MPTBlock {
     norm1: LayerNorm, // Do we need the low-precision variant?
     attn: GroupedQueryAttention,
@@ -155,7 +155,7 @@ impl MPTBlock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Model {
     wte: Embedding,
     blocks: Vec<MPTBlock>,

@@ -7,7 +7,7 @@ pub use crate::models::mixformer::Config;
 
 const MAX_SEQ_LEN: usize = 4096;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Embedding {
     wte: crate::quantized_nn::Embedding,
 }
@@ -39,7 +39,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
     Ok(m)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
@@ -105,7 +105,7 @@ impl RotaryEmbedding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     fc1: Linear,
@@ -132,7 +132,7 @@ impl Module for MLP {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CausalLMHead {
     ln: candle_nn::LayerNorm,
     linear: Linear,
@@ -154,7 +154,7 @@ impl Module for CausalLMHead {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MHA {
     wqkv: Linear,
@@ -243,7 +243,7 @@ impl MHA {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ParallelBlock {
     ln: candle_nn::LayerNorm,
     mixer: MHA,
@@ -278,7 +278,7 @@ impl ParallelBlock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MixFormerSequentialForCausalLM {
     embedding: Embedding,
     blocks: Vec<ParallelBlock>,
