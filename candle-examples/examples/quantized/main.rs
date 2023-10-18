@@ -48,6 +48,8 @@ enum Which {
     Mistral7b,
     #[value(name = "7b-mistral-instruct")]
     Mistral7bInstruct,
+    #[value(name = "7b-zephyr")]
+    Zephyr7b,
 }
 
 impl Which {
@@ -62,7 +64,7 @@ impl Which {
             | Self::L7bCode
             | Self::L13bCode
             | Self::L34bCode => false,
-            Self::Mistral7b | Self::Mistral7bInstruct => true,
+            Self::Mistral7b | Self::Mistral7bInstruct | Self::Zephyr7b => true,
         }
     }
 }
@@ -173,6 +175,10 @@ impl Args {
                     Which::Mistral7bInstruct => (
                         "TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
                         "mistral-7b-instruct-v0.1.Q4_K_S.gguf",
+                    ),
+                    Which::Zephyr7b => (
+                        "TheBloke/zephyr-7B-alpha-GGUF",
+                        "zephyr-7b-alpha.Q4_K_M.gguf",
                     ),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
@@ -295,7 +301,11 @@ fn main() -> anyhow::Result<()> {
                 | Which::L7bCode
                 | Which::L13bCode
                 | Which::L34bCode => 1,
-                Which::Mistral7b | Which::Mistral7bInstruct | Which::L70b | Which::L70bChat => 8,
+                Which::Mistral7b
+                | Which::Mistral7bInstruct
+                | Which::Zephyr7b
+                | Which::L70b
+                | Which::L70bChat => 8,
             };
             ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa))?
         }
