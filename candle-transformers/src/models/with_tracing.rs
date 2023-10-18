@@ -1,7 +1,7 @@
 use candle::{Module, Result, Tensor};
 use candle_nn::VarBuilder;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Embedding {
     inner: candle_nn::Embedding,
     span: tracing::Span,
@@ -26,7 +26,7 @@ impl Module for Embedding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Linear {
     inner: candle_nn::Linear,
     span: tracing::Span,
@@ -52,7 +52,7 @@ impl Module for Linear {
 }
 
 // Wrap the conv2d op to provide some tracing.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Conv2d {
     inner: candle_nn::Conv2d,
     span: tracing::Span,
@@ -78,6 +78,7 @@ pub fn conv2d(
 }
 
 // QMatMul wrapper adding some tracing.
+#[derive(Clone)]
 pub struct QMatMul {
     inner: candle::quantized::QMatMul,
     span: tracing::Span,
