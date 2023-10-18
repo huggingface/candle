@@ -103,6 +103,7 @@ impl GroupedQueryAttention {
                 (k, v)
             }
         };
+        self.kv_cache = Some((key.clone(), value.clone()));
         let query = query.contiguous()?;
         let key = repeat_kv(key, self.n_heads / self.kv_n_heads)?.contiguous()?;
         let value = repeat_kv(value, self.n_heads / self.kv_n_heads)?.contiguous()?;
@@ -280,10 +281,12 @@ impl Model {
             xs = block.forward(&xs, mask.as_ref())?;
         }
         let xs = xs.apply(&self.norm_f)?;
-        xs.narrow(1, seq_len - 1, 1)?
+        let logits = xs
+            .narrow(1, seq_len - 1, 1)?
             .squeeze(1)?
             .matmul(&self.wte.embeddings().t()?)?
-            .squeeze(1)
+            .squeeze(1)?;
+        Ok(logits)
     }
 }
 
