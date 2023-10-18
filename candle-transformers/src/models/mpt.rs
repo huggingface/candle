@@ -103,23 +103,24 @@ impl GroupedQueryAttention {
                 (k, v)
             }
         };
-        let key = repeat_kv(key, self.n_heads / self.kv_n_heads)?;
-        let value = repeat_kv(value, self.n_heads / self.kv_n_heads)?;
+        let query = query.contiguous()?;
+        let key = repeat_kv(key, self.n_heads / self.kv_n_heads)?.contiguous()?;
+        let value = repeat_kv(value, self.n_heads / self.kv_n_heads)?.contiguous()?;
         let attn_weights = (query.matmul(&key)? * self.softmax_scale)?;
         let attn_bias = {
             let s_q = query.dim(D::Minus2)?;
             let s_k = key.dim(D::Minus1)?;
             let (_, _, a_q, a_k) = self.attn_bias.dims4()?;
-            self.attn_bias
-                .narrow(2, a_q - s_q, s_q)?
-                .narrow(3, a_k - s_k, s_k)?
+            let start_q = a_q.saturating_sub(s_q);
+            let start_k = a_k.saturating_sub(s_k);
+            self.attn_bias.i((.., .., start_q.., start_k..))?
         };
-        let attn_weights = (attn_weights + attn_bias)?;
+        let attn_weights = attn_weights.broadcast_add(&attn_bias)?;
         let attn_weights = match mask {
             None => attn_weights,
             Some(mask) => masked_fill(
                 &attn_weights,
-                &mask.broadcast_left(b_size * self.n_heads)?,
+                &mask.broadcast_as(attn_weights.shape())?,
                 f32::NEG_INFINITY,
             )?,
         };
