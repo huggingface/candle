@@ -139,7 +139,7 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 100)]
+    #[arg(long, short = 'n', default_value_t = 1000)]
     sample_len: usize,
 
     #[arg(long)]
