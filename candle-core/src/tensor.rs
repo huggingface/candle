@@ -2135,6 +2135,46 @@ impl Tensor {
         }
     }
 
+    /// Pad the input tensor using same values along dimension `dim`. This adds `left` elements before the
+    /// input tensor values and `right` elements after.
+    pub fn pad_with_same<D: Dim>(&self, dim: D, left: usize, right: usize) -> Result<Self> {
+        if left == 0 && right == 0 {
+            Ok(self.clone())
+        } else if self.elem_count() == 0 {
+            crate::bail!("cannot use pad_with_same on an empty tensor")
+        } else if left == 0 {
+            let dim = dim.to_index(self.shape(), "pad_with_same")?;
+            let r = self.narrow(dim, self.dim(dim)? - 1, 1)?;
+            let mut v = vec![self];
+            for _ in 0..right {
+                v.push(&r)
+            }
+            Tensor::cat(&v, dim)
+        } else if right == 0 {
+            let dim = dim.to_index(self.shape(), "pad_with_same")?;
+            let l = self.narrow(dim, 0, 1)?;
+            let mut v = vec![];
+            for _ in 0..left {
+                v.push(&l)
+            }
+            v.push(self);
+            Tensor::cat(&v, dim)
+        } else {
+            let dim = dim.to_index(self.shape(), "pad_with_same")?;
+            let l = self.narrow(dim, 0, 1)?;
+            let r = self.narrow(dim, self.dim(dim)? - 1, 1)?;
+            let mut v = vec![];
+            for _ in 0..left {
+                v.push(&l)
+            }
+            v.push(self);
+            for _ in 0..right {
+                v.push(&r)
+            }
+            Tensor::cat(&v, dim)
+        }
+    }
+
     /// Run the `forward` method of `m` on `self`.
     pub fn apply<M: crate::Module>(&self, m: &M) -> Result<Self> {
         m.forward(self)
