@@ -776,33 +776,106 @@ impl PyTensor {
     /// Performs Tensor dtype and/or device conversion.
     /// &RETURNS&: Tensor
     fn to(&self, args: &PyTuple, kwargs: Option<&PyDict>) -> PyResult<Self> {
-        let mut t = self.0.clone();
-        //handle args
-        if !args.is_empty() {
-            for arg in args.iter() {
-                if let Ok(device) = arg.extract::<PyDevice>() {
-                    t = t.to_device(&device.as_device()?).map_err(wrap_err)?;
-                } else if let Ok(dtype) = arg.extract::<PyDType>() {
-                    t = t.to_dtype(dtype.0).map_err(wrap_err)?;
-                } else {
-                    return Err(PyTypeError::new_err("unsupported argument type"));
+        let mut device: Option<PyDevice> = None;
+        let mut dtype: Option<PyDType> = None;
+        let mut other: Option<PyTensor> = None;
+
+        fn handle_duplicates<T>(
+            opt: &mut Option<T>,
+            extraction_result: PyResult<T>,
+            err_msg: &'static str,
+        ) -> PyResult<()> {
+            if let Ok(sucessfull_extraction) = extraction_result {
+                if opt.is_some() {
+                    return Err(PyValueError::new_err(err_msg));
                 }
+                *opt = Some(sucessfull_extraction);
+            }
+            Ok(())
+        }
+
+        //handle args
+        for arg in args.iter() {
+            if arg.extract::<PyDevice>().is_ok() {
+                handle_duplicates(
+                    &mut device,
+                    arg.extract::<PyDevice>(),
+                    "cannot specify multiple devices",
+                )?;
+            } else if arg.extract::<PyDType>().is_ok() {
+                handle_duplicates(
+                    &mut dtype,
+                    arg.extract::<PyDType>(),
+                    "cannot specify multiple dtypes",
+                )?;
+            } else if arg.extract::<PyTensor>().is_ok() {
+                handle_duplicates(
+                    &mut other,
+                    arg.extract::<PyTensor>(),
+                    "cannot specify multiple output tensors",
+                )?;
+            } else {
+                return Err(PyTypeError::new_err(format!(
+                    "unsupported argument type `{:#?}`",
+                    arg.get_type().name()
+                )));
             }
         }
-        //handle kwargs
+
         if let Some(kwargs) = kwargs {
-            if let Some(dtype) = kwargs.get_item("dtype") {
-                let dtype = dtype.extract::<PyDType>()?;
-                t = t.to_dtype(dtype.0).map_err(wrap_err)?;
+            if let Some(any) = kwargs.get_item("dtype") {
+                handle_duplicates(
+                    &mut dtype,
+                    any.extract::<PyDType>(),
+                    "cannot specify multiple dtypes",
+                )?;
             }
-
-            if let Some(device) = kwargs.get_item("device") {
-                let device = device.extract::<PyDevice>()?;
-                t = t.to_device(&device.as_device()?).map_err(wrap_err)?;
+            if let Some(any) = kwargs.get_item("device") {
+                handle_duplicates(
+                    &mut device,
+                    any.extract::<PyDevice>(),
+                    "cannot specify multiple devices",
+                )?;
+            }
+            if let Some(any) = kwargs.get_item("other") {
+                handle_duplicates(
+                    &mut other,
+                    any.extract::<PyTensor>(),
+                    "cannot specify multiple output tensors",
+                )?;
             }
         }
 
-        Ok(PyTensor(t))
+        if let Some(other) = other {
+            if device.is_some() {
+                return Err(PyValueError::new_err(
+                    "cannot specify both an output tensor and a device",
+                ));
+            }
+            if dtype.is_some() {
+                return Err(PyValueError::new_err(
+                    "cannot specify both an output tensor and a dtype",
+                ));
+            }
+            dtype = Some(other.dtype());
+            device = Some(PyDevice::from_device(other.0.device()));
+        }
+
+        let result = match (device, dtype) {
+            (Some(device), Some(dtype)) => self
+                .0
+                .to_device(&device.as_device()?)
+                .map_err(wrap_err)?
+                .to_dtype(dtype.0)
+                .map_err(wrap_err)?,
+            (Some(device), None) => self.0.to_device(&device.as_device()?).map_err(wrap_err)?,
+            (None, Some(dtype)) => self.0.to_dtype(dtype.0).map_err(wrap_err)?,
+            (None, None) => {
+                return Err(PyTypeError::new_err("No valide dtype or device specified"))
+            }
+        };
+
+        Ok(PyTensor(result))
     }
 
     #[pyo3(text_signature = "(self, dtype:Union[str,DType])")]
