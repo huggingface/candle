@@ -166,7 +166,7 @@ If you have an addition to this list, please submit a pull request.
         - DINOv2.
         - ConvMixer.
         - EfficientNet.
-        - ResNet-18/34.
+        - ResNet-18/34/50/101/152.
         - yolo-v3.
         - yolo-v8.
         - Segment-Anything Model (SAM).
