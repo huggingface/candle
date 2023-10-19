@@ -381,6 +381,11 @@ class Tensor:
         Transposes the tensor.
         """
         pass
+    def to(self, *args, **kwargs) -> Tensor:
+        """
+        Performs Tensor dtype and/or device conversion.
+        """
+        pass
     def to_device(self, device: Union[str, Device]) -> Tensor:
         """
         Move the tensor to a new device.
