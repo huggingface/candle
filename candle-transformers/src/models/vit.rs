@@ -322,3 +322,50 @@ impl Module for Layer {
         self.output.forward(&ys, &xs)
     }
 }
+
+#[derive(Debug, Clone)]
+struct Encoder {
+    layers: Vec<Layer>,
+}
+
+impl Encoder {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        for i in 0..cfg.num_hidden_layers {
+            let layer = Layer::new(cfg, vb.pp(i))?;
+            layers.push(layer)
+        }
+        Ok(Self { layers })
+    }
+}
+
+impl Module for Encoder {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut xs = xs.clone();
+        for layer in self.layers.iter() {
+            xs = xs.apply(layer)?
+        }
+        Ok(xs)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Model {
+    embeddings: Embeddings,
+    encoder: Encoder,
+    layernorm: LayerNorm,
+    // no need for pooling layer for image classification
+}
+
+impl Model {
+    fn new(cfg: &Config, use_mask_token: bool, vb: VarBuilder) -> Result<Self> {
+        let embeddings = Embeddings::new(cfg, use_mask_token, vb.pp("embeddings"))?;
+        let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
+        let layernorm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("layernorm"))?;
+        Ok(Self {
+            embeddings,
+            encoder,
+            layernorm,
+        })
+    }
+}
