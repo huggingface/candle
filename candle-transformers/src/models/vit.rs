@@ -1,6 +1,6 @@
 #![allow(unused)]
 use crate::models::with_tracing::{conv2d, linear, linear_no_bias, Conv2d, Linear};
-use candle::{Module, Result, Tensor, D};
+use candle::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/vit/configuration_vit.py
@@ -197,9 +197,9 @@ impl Module for SelfAttention {
         let key = self.key.forward(xs)?;
         let value = self.value.forward(xs)?;
 
-        let query = self.transpose_for_scores(&query)?;
-        let key = self.transpose_for_scores(&key)?;
-        let value = self.transpose_for_scores(&value)?;
+        let query = self.transpose_for_scores(&query)?.contiguous()?;
+        let key = self.transpose_for_scores(&key)?.contiguous()?;
+        let value = self.transpose_for_scores(&value)?.contiguous()?;
 
         let attention_scores =
             (query.matmul(&key.t()?)? / f64::sqrt(self.attention_head_size as f64))?;
@@ -330,6 +330,7 @@ struct Encoder {
 
 impl Encoder {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let vb = vb.pp("layer");
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
             let layer = Layer::new(cfg, vb.pp(i))?;
@@ -350,7 +351,7 @@ impl Module for Encoder {
 }
 
 #[derive(Debug, Clone)]
-struct Model {
+pub struct Model {
     embeddings: Embeddings,
     encoder: Encoder,
     layernorm: LayerNorm,
@@ -359,7 +360,7 @@ struct Model {
 }
 
 impl Model {
-    fn new(cfg: &Config, num_labels: usize, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, num_labels: usize, vb: VarBuilder) -> Result<Self> {
         let vb_v = vb.pp("vit");
         let embeddings = Embeddings::new(cfg, false, vb_v.pp("embeddings"))?;
         let encoder = Encoder::new(cfg, vb_v.pp("encoder"))?;
@@ -373,9 +374,9 @@ impl Model {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let embedding_output = self.embeddings.forward(xs, None, false)?;
         let encoder_outputs = self.encoder.forward(&embedding_output)?;
-        encoder_outputs.apply(&self.classifier)
+        encoder_outputs.i((.., 0, ..))?.apply(&self.classifier)
     }
 }
