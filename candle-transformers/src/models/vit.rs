@@ -355,17 +355,27 @@ struct Model {
     encoder: Encoder,
     layernorm: LayerNorm,
     // no need for pooling layer for image classification
+    classifier: Linear,
 }
 
 impl Model {
-    fn new(cfg: &Config, use_mask_token: bool, vb: VarBuilder) -> Result<Self> {
-        let embeddings = Embeddings::new(cfg, use_mask_token, vb.pp("embeddings"))?;
-        let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
-        let layernorm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("layernorm"))?;
+    fn new(cfg: &Config, num_labels: usize, vb: VarBuilder) -> Result<Self> {
+        let vb_v = vb.pp("vit");
+        let embeddings = Embeddings::new(cfg, false, vb_v.pp("embeddings"))?;
+        let encoder = Encoder::new(cfg, vb_v.pp("encoder"))?;
+        let layernorm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb_v.pp("layernorm"))?;
+        let classifier = linear(cfg.hidden_size, num_labels, vb.pp("classifier"))?;
         Ok(Self {
             embeddings,
             encoder,
             layernorm,
+            classifier,
         })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let embedding_output = self.embeddings.forward(xs, None, false)?;
+        let encoder_outputs = self.encoder.forward(&embedding_output)?;
+        encoder_outputs.apply(&self.classifier)
     }
 }
