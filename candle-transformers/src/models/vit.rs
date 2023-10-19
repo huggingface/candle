@@ -1,9 +1,10 @@
 #![allow(unused)]
 use crate::models::with_tracing::{conv2d, linear, linear_no_bias, Conv2d, Linear};
 use candle::{Module, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/vit/configuration_vit.py
+#[derive(Debug, Clone)]
 pub struct Config {
     hidden_size: usize,
     num_hidden_layers: usize,
@@ -35,6 +36,7 @@ impl Config {
     }
 }
 
+#[derive(Debug, Clone)]
 struct PatchEmbeddings {
     num_patches: usize,
     projection: Conv2d,
@@ -61,8 +63,10 @@ impl PatchEmbeddings {
             projection,
         })
     }
+}
 
-    fn forward(&self, pixel_values: &Tensor, interpolate_pos_encoding: bool) -> Result<Tensor> {
+impl Module for PatchEmbeddings {
+    fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
         let (b_size, num_channels, height, width) = pixel_values.dims4()?;
         self.projection
             .forward(pixel_values)?
@@ -71,6 +75,7 @@ impl PatchEmbeddings {
     }
 }
 
+#[derive(Debug, Clone)]
 struct Embeddings {
     cls_token: Tensor,
     mask_token: Option<Tensor>,
@@ -117,9 +122,7 @@ impl Embeddings {
         interpolate_pos_encoding: bool,
     ) -> Result<Tensor> {
         let (b_size, num_channels, height, width) = pixel_values.dims4()?;
-        let embeddings = self
-            .patch_embeddings
-            .forward(pixel_values, interpolate_pos_encoding)?;
+        let embeddings = self.patch_embeddings.forward(pixel_values)?;
         let embeddings = match (bool_masked_pos, &self.mask_token) {
             (None, _) => embeddings,
             (Some(_), None) => candle::bail!("bool_masked_pos set without mask_token"),
@@ -143,6 +146,7 @@ impl Embeddings {
     }
 }
 
+#[derive(Debug, Clone)]
 struct SelfAttention {
     query: Linear,
     key: Linear,
@@ -185,13 +189,10 @@ impl SelfAttention {
         ))?
         .permute((0, 2, 1, 3))
     }
+}
 
-    fn forward(
-        &self,
-        xs: &Tensor,
-        bool_masked_pos: Option<&Tensor>,
-        interpolate_pos_encoding: bool,
-    ) -> Result<Tensor> {
+impl Module for SelfAttention {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let query = self.query.forward(xs)?;
         let key = self.key.forward(xs)?;
         let value = self.value.forward(xs)?;
@@ -208,5 +209,116 @@ impl SelfAttention {
             .permute((0, 2, 1, 3))?
             .contiguous()?
             .flatten_from(D::Minus2)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SelfOutput {
+    dense: Linear,
+}
+
+impl SelfOutput {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
+        Ok(Self { dense })
+    }
+}
+
+impl Module for SelfOutput {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.dense)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Attention {
+    attention: SelfAttention,
+    output: SelfOutput,
+}
+
+impl Attention {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let attention = SelfAttention::new(cfg, vb.pp("attention"))?;
+        let output = SelfOutput::new(cfg, vb.pp("output"))?;
+        Ok(Self { attention, output })
+    }
+}
+
+impl Module for Attention {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.attention)?.apply(&self.output)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Intermediate {
+    dense: Linear,
+    intermediate_act_fn: candle_nn::Activation,
+}
+
+impl Intermediate {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let dense = linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("dense"))?;
+        Ok(Self {
+            dense,
+            intermediate_act_fn: cfg.hidden_act,
+        })
+    }
+}
+
+impl Module for Intermediate {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.dense)?.apply(&self.intermediate_act_fn)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Output {
+    dense: Linear,
+}
+
+impl Output {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let dense = linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("dense"))?;
+        Ok(Self { dense })
+    }
+
+    fn forward(&self, xs: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.dense)? + input_tensor
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Layer {
+    attention: Attention,
+    intermediate: Intermediate,
+    output: Output,
+    layernorm_before: LayerNorm,
+    layernorm_after: LayerNorm,
+}
+
+impl Layer {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let attention = Attention::new(cfg, vb.pp("attention"))?;
+        let intermediate = Intermediate::new(cfg, vb.pp("intermediate"))?;
+        let output = Output::new(cfg, vb.pp("output"))?;
+        let h_sz = cfg.hidden_size;
+        let layernorm_before = layer_norm(h_sz, cfg.layer_norm_eps, vb.pp("layernorm_before"))?;
+        let layernorm_after = layer_norm(h_sz, cfg.layer_norm_eps, vb.pp("layernorm_after"))?;
+        Ok(Self {
+            attention,
+            intermediate,
+            output,
+            layernorm_after,
+            layernorm_before,
+        })
+    }
+}
+
+impl Module for Layer {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let xs = (xs.apply(&self.layernorm_before)?.apply(&self.attention)? + xs)?;
+        let ys = xs.apply(&self.layernorm_after)?.apply(&self.intermediate)?;
+        self.output.forward(&ys, &xs)
     }
 }
