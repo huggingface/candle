@@ -180,10 +180,10 @@ impl EncoderLayer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let residual = xs;
         let xs = xs.apply(&self.layer_norm1)?;
-        let xs = self.self_attn.forward(&xs, Some(attention_mask))?;
+        let xs = self.self_attn.forward(&xs, attention_mask)?;
         let xs = (xs + residual)?;
 
         let residual = &xs;
@@ -207,7 +207,7 @@ impl Encoder {
         Ok(Self { layers })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, attention_mask)?
@@ -237,6 +237,19 @@ impl VisionModel {
     }
 }
 
+impl Module for VisionModel {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let xs = xs.apply(&self.embeddings)?;
+        let encoder_outputs = self.encoder.forward(&xs, None)?;
+        let last_hidden_state = encoder_outputs.get(0)?;
+        last_hidden_state
+            .apply(&self.post_layernorm)?
+            .narrow(1, 0, 1)?
+            .squeeze(1)?
+            .apply(&self.post_layernorm)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct BlipForConditionalGeneration {
     vision_model: VisionModel,
@@ -252,5 +265,14 @@ impl BlipForConditionalGeneration {
             vision_model,
             text_decoder,
         })
+    }
+
+    fn forward(
+        &self,
+        pixel_values: &Tensor,
+        input_ids: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        todo!()
     }
 }
