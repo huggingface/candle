@@ -1,7 +1,7 @@
 #![allow(unused)]
 use super::blip_text;
 use super::with_tracing::{conv2d, linear, Conv2d, Linear};
-use candle::{Module, Result, Tensor};
+use candle::{Module, Result, Tensor, D};
 use candle_nn::{Conv2dConfig, LayerNorm, VarBuilder};
 
 #[derive(Debug, Clone)]
@@ -61,6 +61,22 @@ impl VisionEmbeddings {
     }
 }
 
+impl Module for VisionEmbeddings {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let target_dtype = xs.dtype();
+        let b_size = xs.dim(0)?;
+        let patch_embeds = xs.apply(&self.patch_embedding)?.flatten_from(2)?.t()?;
+        let d = self.class_embedding.dim(D::Minus1)?;
+        let class_embeds = self
+            .class_embedding
+            .broadcast_as((b_size, 1, d))?
+            .to_dtype(target_dtype)?;
+        let embeddings = Tensor::cat(&[&class_embeds, &patch_embeds], 1)?;
+        let position_embedding = self.position_embedding.narrow(1, 0, embeddings.dim(1)?)?;
+        embeddings.broadcast_add(&position_embedding)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Attention {
     qkv: Linear,
@@ -74,6 +90,26 @@ struct MLP {
     activation_fn: candle_nn::Activation,
     fc1: Linear,
     fc2: Linear,
+}
+
+impl MLP {
+    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+        let fc1 = linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("fc1"))?;
+        let fc2 = linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("fc2"))?;
+        Ok(Self {
+            activation_fn: cfg.hidden_act,
+            fc1,
+            fc2,
+        })
+    }
+}
+
+impl Module for MLP {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.fc1)?
+            .apply(&self.activation_fn)?
+            .apply(&self.fc2)
+    }
 }
 
 #[derive(Debug, Clone)]
