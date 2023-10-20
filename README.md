@@ -67,6 +67,7 @@ We also provide a some command line based examples using state of the art models
 - [Mistral7b-v0.1](./candle-examples/examples/mistral/): a 7b general LLM with
   performance larger than all publicly available 13b models as of 2023-09-28.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
+- [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
@@ -129,8 +130,11 @@ And then head over to
 
 <!--- ANCHOR: useful_libraries --->
 
-## Useful Libraries
-- [`candle-lora`](https://github.com/EricLBuehler/candle-lora) provides a LoRA implementation that conforms to the official `peft` implementation.
+## Useful External Resources
+- [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): a
+  very detailed tutorial showing how to convert a PyTorch model to Candle.
+- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): a LoRA implementation
+  that conforms to the official `peft` implementation.
 
 If you have an addition to this list, please submit a pull request.
 
@@ -155,17 +159,15 @@ If you have an addition to this list, please submit a pull request.
         - Phi v1.5.
         - Mistral 7b v0.1.
         - StableLM-3B-4E1T.
+        - Replit-code-v1.5-3B.
         - T5.
         - Bert.
     - Whisper (multi-lingual support).
     - Stable Diffusion v1.5, v2.1, XL v1.0.
     - Wurstchen v2.
     - Computer Vision Models.
-        - DINOv2.
-        - ConvMixer.
-        - EfficientNet.
-        - yolo-v3.
-        - yolo-v8.
+        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT.
+        - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.

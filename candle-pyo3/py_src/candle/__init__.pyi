@@ -1,7 +1,7 @@
 # Generated content DO NOT EDIT
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Sequence
 from os import PathLike
-from candle.typing import _ArrayLike, Device
+from candle.typing import _ArrayLike, Device, Scalar, Index
 
 class bf16(DType):
     pass
@@ -118,6 +118,46 @@ class Tensor:
     """
 
     def __init__(self, data: _ArrayLike):
+        pass
+    def __add__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Add a scalar to a tensor or two tensors together.
+        """
+        pass
+    def __getitem__(self, index: Union[Index, Tensor, Sequence[Index]]) -> "Tensor":
+        """
+        Return a slice of a tensor.
+        """
+        pass
+    def __mul__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Multiply a tensor by a scalar or one tensor by another.
+        """
+        pass
+    def __radd__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Add a scalar to a tensor or two tensors together.
+        """
+        pass
+    def __richcmp__(self, rhs: Union[Tensor, Scalar], op) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+    def __rmul__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Multiply a tensor by a scalar or one tensor by another.
+        """
+        pass
+    def __sub__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Subtract a scalar from a tensor or one tensor from another.
+        """
+        pass
+    def __truediv__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Divide a tensor by a scalar or one tensor by another.
+        """
         pass
     def argmax_keepdim(self, dim: int) -> Tensor:
         """
@@ -344,6 +384,11 @@ class Tensor:
     def t(self) -> Tensor:
         """
         Transposes the tensor.
+        """
+        pass
+    def to(self, *args, **kwargs) -> Tensor:
+        """
+        Performs Tensor dtype and/or device conversion.
         """
         pass
     def to_device(self, device: Union[str, Device]) -> Tensor:

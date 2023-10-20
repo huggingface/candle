@@ -1073,3 +1073,19 @@ fn randn_hasneg() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn pad_with_same() -> Result<()> {
+    let t = Tensor::arange(1f32, 5f32, &Device::Cpu)?.reshape((2, 2))?;
+    let t0 = t.pad_with_same(0, 1, 2)?;
+    assert_eq!(
+        t0.to_vec2::<f32>()?,
+        [[1.0, 2.0], [1.0, 2.0], [3.0, 4.0], [3.0, 4.0], [3.0, 4.0]]
+    );
+    let t1 = t.pad_with_same(1, 1, 2)?;
+    assert_eq!(
+        t1.to_vec2::<f32>()?,
+        [[1.0, 1.0, 2.0, 2.0, 2.0], [3.0, 3.0, 4.0, 4.0, 4.0]]
+    );
+    Ok(())
+}

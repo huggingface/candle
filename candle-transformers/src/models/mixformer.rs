@@ -55,9 +55,26 @@ impl Config {
             pad_vocab_size_multiple: 64,
         }
     }
+
+    // https://huggingface.co/teknium/Puffin-Phi-v2/blob/main/config.json
+    pub fn puffin_phi_v2() -> Self {
+        Self {
+            vocab_size: 50304,
+            n_positions: 2048,
+            n_embd: 2048,
+            n_layer: 24,
+            n_inner: None,
+            n_head: 32,
+            rotary_dim: usize::min(32, 2048 / 32),
+            activation_function: Activation::Gelu,
+            layer_norm_epsilon: 1e-5,
+            tie_word_embeddings: false,
+            pad_vocab_size_multiple: 64,
+        }
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Embedding {
     wte: E,
 }
@@ -89,7 +106,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
     Ok(m)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
@@ -155,7 +172,7 @@ impl RotaryEmbedding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     fc1: Linear,
@@ -182,7 +199,7 @@ impl Module for MLP {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CausalLMHead {
     ln: candle_nn::LayerNorm,
     linear: Linear,
@@ -204,7 +221,7 @@ impl Module for CausalLMHead {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MHA {
     wqkv: Linear,
@@ -293,7 +310,7 @@ impl MHA {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ParallelBlock {
     ln: candle_nn::LayerNorm,
     mixer: MHA,
@@ -328,7 +345,7 @@ impl ParallelBlock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MixFormerSequentialForCausalLM {
     embedding: Embedding,
     blocks: Vec<ParallelBlock>,
