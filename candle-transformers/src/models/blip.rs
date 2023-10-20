@@ -2,7 +2,7 @@
 use super::blip_text;
 use super::with_tracing::{conv2d, linear, Conv2d, Linear};
 use candle::{Module, Result, Tensor, D};
-use candle_nn::{Conv2dConfig, LayerNorm, VarBuilder};
+use candle_nn::{layer_norm, Conv2dConfig, LayerNorm, VarBuilder};
 
 #[derive(Debug, Clone)]
 struct VisionConfig {
@@ -82,6 +82,49 @@ struct Attention {
     qkv: Linear,
     projection: Linear,
     scale: f64,
+    embed_dim: usize,
+    head_dim: usize,
+    num_heads: usize,
+}
+
+impl Attention {
+    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+        let embed_dim = cfg.hidden_size;
+        let num_heads = cfg.num_attention_heads;
+        let head_dim = embed_dim / num_heads;
+        let scale = 1f64 / (head_dim as f64).sqrt();
+        let qkv = linear(embed_dim, 3 * embed_dim, vb.pp("qkv"))?;
+        let projection = linear(embed_dim, embed_dim, vb.pp("projection"))?;
+        Ok(Self {
+            qkv,
+            projection,
+            scale,
+            embed_dim,
+            head_dim,
+            num_heads,
+        })
+    }
+}
+
+impl Module for Attention {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (b_sz, tgt_len, embed_dim) = xs.dims3()?;
+        let mixed_qkv = xs
+            .apply(&self.qkv)?
+            .reshape((b_sz, tgt_len, 3, self.num_heads, embed_dim / self.num_heads))?
+            .permute((2, 0, 3, 1, 4))?;
+        let query = mixed_qkv.get(0)?;
+        let key = mixed_qkv.get(1)?;
+        let value = mixed_qkv.get(2)?;
+        let attention_scores = query.matmul(&key.t()?)?;
+        let attention_scores = (attention_scores * self.scale)?;
+        let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+        attention_probs
+            .matmul(&value)?
+            .permute((0, 2, 1, 3))?
+            .flatten_from(D::Minus2)?
+            .apply(&self.projection)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -120,9 +163,42 @@ struct EncoderLayer {
     layer_norm2: LayerNorm,
 }
 
+impl EncoderLayer {
+    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+        let embed_dim = cfg.hidden_size;
+        let self_attn = Attention::new(cfg, vb.pp("self_attn"))?;
+        let layer_norm1 = layer_norm(embed_dim, cfg.layer_norm_eps, vb.pp("layer_norm1"))?;
+        let layer_norm2 = layer_norm(embed_dim, cfg.layer_norm_eps, vb.pp("layer_norm2"))?;
+        let mlp = MLP::new(cfg, vb.pp("mlp"))?;
+        Ok(Self {
+            self_attn,
+            layer_norm1,
+            mlp,
+            layer_norm2,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor, attention_mask: Tensor) -> Result<Tensor> {
+        let residual = xs;
+        let xs = xs.apply(&self.layer_norm1)?;
+        todo!()
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Encoder {
     layers: Vec<EncoderLayer>,
+}
+
+impl Encoder {
+    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        for i in 0..cfg.num_hidden_layers {
+            let layer = EncoderLayer::new(cfg, vb.pp(i))?;
+            layers.push(layer)
+        }
+        Ok(Self { layers })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -132,8 +208,34 @@ struct VisionModel {
     post_layernorm: LayerNorm,
 }
 
+impl VisionModel {
+    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+        let embeddings = VisionEmbeddings::new(cfg, vb.pp("embeddings"))?;
+        let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
+        let post_layernorm =
+            layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("post_layernorm"))?;
+        Ok(Self {
+            embeddings,
+            encoder,
+            post_layernorm,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 struct BlipForConditionalGeneration {
     vision_model: VisionModel,
     text_decoder: blip_text::TextLMHeadModel,
+}
+
+impl BlipForConditionalGeneration {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let vision_model = VisionModel::new(&cfg.vision_config, vb.pp("vision_model"))?;
+        let text_decoder =
+            blip_text::TextLMHeadModel::new(&cfg.text_config, vb.pp("text_decoder"))?;
+        Ok(Self {
+            vision_model,
+            text_decoder,
+        })
+    }
 }

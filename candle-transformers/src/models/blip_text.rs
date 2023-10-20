@@ -323,8 +323,28 @@ struct TextModel {
     pooler: Option<TextPooler>,
 }
 
+impl TextModel {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let embeddings = TextEmbeddings::new(cfg, vb.pp("embeddings"))?;
+        let encoder = TextEncoder::new(cfg, vb.pp("encoder"))?;
+        Ok(Self {
+            embeddings,
+            encoder,
+            pooler: None,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TextLMHeadModel {
     bert: TextModel,
     cls: TextOnlyMLMHead,
+}
+
+impl TextLMHeadModel {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let bert = TextModel::new(cfg, vb.pp("bert"))?;
+        let cls = TextOnlyMLMHead::new(cfg, vb.pp("cls"))?;
+        Ok(Self { bert, cls })
+    }
 }
