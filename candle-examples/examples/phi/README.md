@@ -41,3 +41,16 @@ def median(arr):
     else:
         return arr[n//2]
 ```
+
+This also supports the [Puffin Phi v2
+model](https://huggingface.co/teknium/Puffin-Phi-v2) for human interaction.
+```
+$ cargo run --example phi --release  -- \
+    --prompt "USER: What would you do on a sunny day in Paris?\nASSISTANT:" \
+    --sample-len 200 --model puffin-phi-v2 --quantized 
+USER: What would you do on a sunny day in Paris?
+ASSISTANT: On a sunny day in Paris, you could visit the Musée du Louvre to admire the famous
+painting "Mona Lisa" by Leonardo da Vinci. You might also want to stroll along the Champs-Élysées
+and enjoy the beautiful architecture of the buildings around you. Don't forget to stop by a café
+for a cup of coffee and to soak up the sun!"
+```

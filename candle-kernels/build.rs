@@ -1,4 +1,5 @@
 use std::io::Write;
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -23,6 +24,8 @@ fn main() {
 }
 
 mod cuda {
+    use anyhow::{Context, Result};
+
     pub fn set_include_dir() {
         use std::path::PathBuf;
         // NOTE: copied from cudarc build.rs.
@@ -100,107 +103,52 @@ mod cuda {
         include_directories.sort();
         include_directories.dedup();
 
+        let compute_cap = compute_cap().expect("Could not get Cuda compute cap");
+
         #[allow(unused)]
         let include_options: Vec<String> = include_directories
             .into_iter()
             .map(|s| "-I".to_string() + &s.into_os_string().into_string().unwrap())
             .collect::<Vec<_>>();
 
-        // let start = std::time::Instant::now();
-
-        // Grab compute code from nvidia-smi
-        let mut compute_cap = {
-            let out = std::process::Command::new("nvidia-smi")
-                    .arg("--query-gpu=compute_cap")
-                    .arg("--format=csv")
-                    .output()
-                    .expect("`nvidia-smi` failed. Ensure that you have CUDA installed and that `nvidia-smi` is in your PATH.");
-            let out = std::str::from_utf8(&out.stdout).unwrap();
-            let mut lines = out.lines();
-            assert_eq!(lines.next().unwrap(), "compute_cap");
-            let cap = lines.next().unwrap().replace('.', "");
-            cap.parse::<usize>().unwrap()
-        };
-
-        // Grab available GPU codes from nvcc and select the highest one
-        let max_nvcc_code = {
-            let out = std::process::Command::new("nvcc")
-                    .arg("--list-gpu-code")
-                    .output()
-                    .expect("`nvcc` failed. Ensure that you have CUDA installed and that `nvcc` is in your PATH.");
-            let out = std::str::from_utf8(&out.stdout).unwrap();
-
-            let out = out.lines().collect::<Vec<&str>>();
-            let mut codes = Vec::with_capacity(out.len());
-            for code in out {
-                let code = code.split('_').collect::<Vec<&str>>();
-                if !code.is_empty() && code.contains(&"sm") {
-                    if let Ok(num) = code[1].parse::<usize>() {
-                        codes.push(num);
-                    }
-                }
-            }
-            codes.sort();
-            if !codes.contains(&compute_cap) {
-                panic!("nvcc cannot target gpu arch {compute_cap}. Available nvcc targets are {codes:?}.");
-            }
-            *codes.last().unwrap()
-        };
-
-        // If nvidia-smi compute_cap is higher than the highest gpu code from nvcc,
-        // then choose the highest gpu code in nvcc
-        if compute_cap > max_nvcc_code {
-            println!(
-                "cargo:warning=Lowering gpu arch {compute_cap} to max nvcc target {max_nvcc_code}."
-            );
-            compute_cap = max_nvcc_code;
-        }
-
-        println!("cargo:rerun-if-env-changed=CUDA_COMPUTE_CAP");
-        if let Ok(compute_cap_str) = std::env::var("CUDA_COMPUTE_CAP") {
-            compute_cap = compute_cap_str.parse::<usize>().unwrap();
-            println!("cargo:warning=Using gpu arch {compute_cap} from $CUDA_COMPUTE_CAP");
-        }
-
-        println!("cargo:rustc-env=CUDA_COMPUTE_CAP=sm_{compute_cap}");
-
         let ccbin_env = std::env::var("CANDLE_NVCC_CCBIN");
         println!("cargo:rerun-if-env-changed=CANDLE_NVCC_CCBIN");
         let children = kernel_paths
-                .par_iter()
-                .flat_map(|p| {
-                    let mut output = p.clone();
-                    output.set_extension("ptx");
-                    let output_filename = std::path::Path::new(&out_dir).to_path_buf().join("out").with_file_name(output.file_name().unwrap());
+            .par_iter()
+            .flat_map(|p| {
+                let mut output = p.clone();
+                output.set_extension("ptx");
+                let output_filename = std::path::Path::new(&out_dir).to_path_buf().join("out").with_file_name(output.file_name().unwrap());
 
-                    let ignore = if output_filename.exists() {
-                        let out_modified = output_filename.metadata().unwrap().modified().unwrap();
-                        let in_modified = p.metadata().unwrap().modified().unwrap();
-                        out_modified.duration_since(in_modified).is_ok()
-                    }else{
-                        false
-                    };
-                    if ignore{
-                        None
-                    }else{
-                        let mut command = std::process::Command::new("nvcc");
-                            command.arg(format!("--gpu-architecture=sm_{compute_cap}"))
-                            .arg("--ptx")
-                            .args(["--default-stream", "per-thread"])
-                            .args(["--output-directory", &out_dir])
-                            // Flash attention only
-                            // .arg("--expt-relaxed-constexpr")
-                            .args(&include_options);
-                        if let Ok(ccbin_path) = &ccbin_env {
-                            command
-                                .arg("-allow-unsupported-compiler")
-                                .args(["-ccbin", ccbin_path]);
-                        }
-                        command.arg(p);
-                        Some((p,  command.spawn()
+                let ignore = if output_filename.exists() {
+                    let out_modified = output_filename.metadata().unwrap().modified().unwrap();
+                    let in_modified = p.metadata().unwrap().modified().unwrap();
+                    out_modified.duration_since(in_modified).is_ok()
+                } else {
+                    false
+                };
+                if ignore {
+                    None
+                } else {
+                    let mut command = std::process::Command::new("nvcc");
+                    command.arg(format!("--gpu-architecture=sm_{compute_cap}"))
+                        .arg("--ptx")
+                        .args(["--default-stream", "per-thread"])
+                        .args(["--output-directory", &out_dir])
+                        // Flash attention only
+                        // .arg("--expt-relaxed-constexpr")
+                        .args(&include_options);
+                    if let Ok(ccbin_path) = &ccbin_env {
+                        command
+                            .arg("-allow-unsupported-compiler")
+                            .args(["-ccbin", ccbin_path]);
+                    }
+                    command.arg(p);
+                    Some((p, command.spawn()
                         .expect("nvcc failed to start. Ensure that you have CUDA installed and that `nvcc` is in your PATH.").wait_with_output()))
-                    }})
-                .collect::<Vec<_>>();
+                }
+            })
+            .collect::<Vec<_>>();
 
         let ptx_paths: Vec<PathBuf> = glob::glob(&format!("{out_dir}/**/*.ptx"))
             .unwrap()
@@ -219,5 +167,77 @@ mod cuda {
             );
         }
         (write, kernel_paths)
+    }
+
+    #[allow(unused)]
+    fn compute_cap() -> Result<usize> {
+        println!("cargo:rerun-if-env-changed=CUDA_COMPUTE_CAP");
+
+        // Try to parse compute caps from env
+        let mut compute_cap = if let Ok(compute_cap_str) = std::env::var("CUDA_COMPUTE_CAP") {
+            println!("cargo:rustc-env=CUDA_COMPUTE_CAP={compute_cap_str}");
+            compute_cap_str
+                .parse::<usize>()
+                .context("Could not parse code")?
+        } else {
+            // Use nvidia-smi to get the current compute cap
+            let out = std::process::Command::new("nvidia-smi")
+                .arg("--query-gpu=compute_cap")
+                .arg("--format=csv")
+                .output()
+                .context("`nvidia-smi` failed. Ensure that you have CUDA installed and that `nvidia-smi` is in your PATH.")?;
+            let out = std::str::from_utf8(&out.stdout).context("stdout is not a utf8 string")?;
+            let mut lines = out.lines();
+            assert_eq!(
+                lines.next().context("missing line in stdout")?,
+                "compute_cap"
+            );
+            let cap = lines
+                .next()
+                .context("missing line in stdout")?
+                .replace('.', "");
+            let cap = cap
+                .parse::<usize>()
+                .with_context(|| format!("cannot parse as int {cap}"))?;
+            println!("cargo:rustc-env=CUDA_COMPUTE_CAP={cap}");
+            cap
+        };
+
+        // Grab available GPU codes from nvcc and select the highest one
+        let (supported_nvcc_codes, max_nvcc_code) = {
+            let out = std::process::Command::new("nvcc")
+                .arg("--list-gpu-code")
+                .output()
+                .expect("`nvcc` failed. Ensure that you have CUDA installed and that `nvcc` is in your PATH.");
+            let out = std::str::from_utf8(&out.stdout).unwrap();
+
+            let out = out.lines().collect::<Vec<&str>>();
+            let mut codes = Vec::with_capacity(out.len());
+            for code in out {
+                let code = code.split('_').collect::<Vec<&str>>();
+                if !code.is_empty() && code.contains(&"sm") {
+                    if let Ok(num) = code[1].parse::<usize>() {
+                        codes.push(num);
+                    }
+                }
+            }
+            codes.sort();
+            let max_nvcc_code = *codes.last().context("no gpu codes parsed from nvcc")?;
+            (codes, max_nvcc_code)
+        };
+
+        // Check that nvcc supports the asked compute caps
+        if !supported_nvcc_codes.contains(&compute_cap) {
+            anyhow::bail!(
+            "nvcc cannot target gpu arch {compute_cap}. Available nvcc targets are {supported_nvcc_codes:?}."
+        );
+        }
+        if compute_cap > max_nvcc_code {
+            anyhow::bail!(
+            "CUDA compute cap {compute_cap} is higher than the highest gpu code from nvcc {max_nvcc_code}"
+        );
+        }
+
+        Ok(compute_cap)
     }
 }

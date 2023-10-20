@@ -25,3 +25,12 @@ impl<'a> super::Module for Func<'a> {
         (*self.f)(xs)
     }
 }
+
+impl<'a> Func<'a> {
+    pub fn new<F>(f: F) -> Self
+    where
+        F: 'a + Fn(&Tensor) -> Result<Tensor> + Send,
+    {
+        Self { f: Box::new(f) }
+    }
+}

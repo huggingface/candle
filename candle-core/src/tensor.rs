@@ -615,15 +615,23 @@ impl Tensor {
     pub fn narrow<D: Dim>(&self, dim: D, start: usize, len: usize) -> Result<Self> {
         let dims = self.dims();
         let dim = dim.to_index(self.shape(), "narrow")?;
-        if start + len > dims[dim] {
-            Err(Error::NarrowInvalidArgs {
-                shape: self.shape().clone(),
-                dim,
-                start,
-                len,
-                msg: "start + len > dim_len",
-            }
-            .bt())?
+        let err = |msg| {
+            Err::<(), _>(
+                Error::NarrowInvalidArgs {
+                    shape: self.shape().clone(),
+                    dim,
+                    start,
+                    len,
+                    msg,
+                }
+                .bt(),
+            )
+        };
+        if start > dims[dim] {
+            err("start > dim_len")?
+        }
+        if start.saturating_add(len) > dims[dim] {
+            err("start + len > dim_len")?
         }
         if start == 0 && dims[dim] == len {
             Ok(self.clone())
@@ -2124,6 +2132,46 @@ impl Tensor {
             dims[dim] = right;
             let right = Tensor::zeros(dims.as_slice(), self.dtype, self.device())?;
             Tensor::cat(&[&left, self, &right], dim)
+        }
+    }
+
+    /// Pad the input tensor using same values along dimension `dim`. This adds `left` elements before the
+    /// input tensor values and `right` elements after.
+    pub fn pad_with_same<D: Dim>(&self, dim: D, left: usize, right: usize) -> Result<Self> {
+        if left == 0 && right == 0 {
+            Ok(self.clone())
+        } else if self.elem_count() == 0 {
+            crate::bail!("cannot use pad_with_same on an empty tensor")
+        } else if left == 0 {
+            let dim = dim.to_index(self.shape(), "pad_with_same")?;
+            let r = self.narrow(dim, self.dim(dim)? - 1, 1)?;
+            let mut v = vec![self];
+            for _ in 0..right {
+                v.push(&r)
+            }
+            Tensor::cat(&v, dim)
+        } else if right == 0 {
+            let dim = dim.to_index(self.shape(), "pad_with_same")?;
+            let l = self.narrow(dim, 0, 1)?;
+            let mut v = vec![];
+            for _ in 0..left {
+                v.push(&l)
+            }
+            v.push(self);
+            Tensor::cat(&v, dim)
+        } else {
+            let dim = dim.to_index(self.shape(), "pad_with_same")?;
+            let l = self.narrow(dim, 0, 1)?;
+            let r = self.narrow(dim, self.dim(dim)? - 1, 1)?;
+            let mut v = vec![];
+            for _ in 0..left {
+                v.push(&l)
+            }
+            v.push(self);
+            for _ in 0..right {
+                v.push(&r)
+            }
+            Tensor::cat(&v, dim)
         }
     }
 
