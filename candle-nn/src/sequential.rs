@@ -44,7 +44,7 @@ impl Sequential {
     /// Appends a closure after all the current layers.
     pub fn add_fn<F>(self, f: F) -> Self
     where
-        F: 'static + Fn(&Tensor) -> Result<Tensor> + Send,
+        F: 'static + Fn(&Tensor) -> Result<Tensor> + Send + Sync,
     {
         self.add(super::func(f))
     }

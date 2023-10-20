@@ -108,7 +108,7 @@ pub fn parse_config<T: AsRef<Path>>(path: T) -> Result<Darknet> {
 }
 
 enum Bl {
-    Layer(Box<dyn candle_nn::Module + Send>),
+    Layer(Box<dyn candle_nn::Module + Send + Sync>),
     Route(Vec<usize>),
     Shortcut(usize),
     Yolo(usize, Vec<(usize, usize)>),
