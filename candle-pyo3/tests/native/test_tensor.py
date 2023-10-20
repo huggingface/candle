@@ -152,6 +152,8 @@ def test_tensor_can_be_hashed():
     # Hash should represent a unique tensor
     assert hash(t) != hash(other)
     assert hash(t) == hash(t)
+
+
 def test_tensor_can_be_expanded_with_none():
     t = candle.rand((12, 12))
 

@@ -678,7 +678,7 @@ impl PyTensor {
             if self.0.shape() == rhs.0.shape() {
                 compare(&self.0, &rhs.0)
             } else {
-                // We broadcast manually here because as candle.cmp does not support broadcasting
+                // We broadcast manually here because `candle.cmp` does not support automatic broadcasting
                 let broadcast_shape = broadcast_shapes(&self.0, &rhs.0).map_err(wrap_err)?;
                 let broadcasted_lhs = self.0.broadcast_as(&broadcast_shape).map_err(wrap_err)?;
                 let broadcasted_rhs = rhs.0.broadcast_as(&broadcast_shape).map_err(wrap_err)?;
@@ -700,7 +700,7 @@ impl PyTensor {
     }
 
     fn __hash__(&self) -> u64 {
-        // we havbe overridden __richcmp__ => py03 wants us to also override __hash__
+        // we have overridden __richcmp__ => py03 wants us to also override __hash__
         // we simply hash the address of the tensor
         let mut hasher = DefaultHasher::new();
         let pointer = &self.0 as *const Tensor;
