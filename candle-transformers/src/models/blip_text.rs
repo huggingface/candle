@@ -324,7 +324,7 @@ struct TextModel {
 }
 
 #[derive(Debug, Clone)]
-struct TextLMHeadModel {
+pub struct TextLMHeadModel {
     bert: TextModel,
     cls: TextOnlyMLMHead,
 }
