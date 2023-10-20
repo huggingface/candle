@@ -130,8 +130,11 @@ And then head over to
 
 <!--- ANCHOR: useful_libraries --->
 
-## Useful Libraries
-- [`candle-lora`](https://github.com/EricLBuehler/candle-lora) provides a LoRA implementation that conforms to the official `peft` implementation.
+## Useful External Resources
+- [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): a
+  very detailed tutorial showing how to convert a PyTorch model to Candle.
+- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): a LoRA implementation
+  that conforms to the official `peft` implementation.
 
 If you have an addition to this list, please submit a pull request.
 
@@ -163,12 +166,8 @@ If you have an addition to this list, please submit a pull request.
     - Stable Diffusion v1.5, v2.1, XL v1.0.
     - Wurstchen v2.
     - Computer Vision Models.
-        - DINOv2.
-        - ConvMixer.
-        - EfficientNet.
-        - ResNet-18/34/50/101/152.
-        - yolo-v3.
-        - yolo-v8.
+        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT.
+        - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.
