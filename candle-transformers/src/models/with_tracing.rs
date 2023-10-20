@@ -58,8 +58,8 @@ pub struct Conv2d {
     span: tracing::Span,
 }
 
-impl Conv2d {
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl Module for Conv2d {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         self.inner.forward(x)
     }
