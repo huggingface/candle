@@ -121,7 +121,9 @@ impl TextSelfAttention {
                 (key, value)
             }
         };
-        let attention_scores = query.matmul(&value.contiguous()?.t()?)?;
+        let key = key.contiguous()?;
+        let value = value.contiguous()?;
+        let attention_scores = query.matmul(&key.t()?)?;
         let attention_scores = (attention_scores * self.attention_scale)?;
         let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
         attention_probs
@@ -235,9 +237,9 @@ impl TextLayer {
     }
 
     fn forward(&self, xs: &Tensor, encoder_hidden_states: &Tensor) -> Result<Tensor> {
-        let self_attention_outputs = self.attention.forward(xs, None)?;
+        let attention_output = self.attention.forward(xs, None)?;
         let attention_output = match &self.cross_attention {
-            Some(ca) => ca.forward(xs, Some(encoder_hidden_states))?,
+            Some(ca) => ca.forward(&attention_output, Some(encoder_hidden_states))?,
             None => candle::bail!("expected some cross-attn"),
         };
         let intermediate_output = self.intermediate.forward(&attention_output)?;

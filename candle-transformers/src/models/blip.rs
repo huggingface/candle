@@ -277,10 +277,8 @@ impl Module for VisionModel {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs.apply(&self.embeddings)?;
         let encoder_outputs = self.encoder.forward(&xs, None)?;
-        encoder_outputs
-            .apply(&self.post_layernorm)?
-            .get_on_dim(1, 0)?
-            .apply(&self.post_layernorm)
+        // Return the last hidden state rather than pooled outputs.
+        encoder_outputs.apply(&self.post_layernorm)
     }
 }
 
@@ -308,6 +306,14 @@ impl BlipForConditionalGeneration {
         attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let image_embeds = pixel_values.apply(&self.vision_model)?;
+        let b_size = image_embeds.dim(0)?;
+        let token_ids = vec![30522u32];
+        let token_ids =
+            Tensor::new(token_ids.as_slice(), pixel_values.device())?.broadcast_left(b_size)?;
+        for i in 0..1000 {
+            let logits = self.text_decoder.forward(&token_ids, &image_embeds)?;
+            println!("{logits}");
+        }
         todo!()
     }
 }
