@@ -253,7 +253,7 @@ impl Encoder {
 }
 
 #[derive(Debug, Clone)]
-struct VisionModel {
+pub struct VisionModel {
     embeddings: VisionEmbeddings,
     encoder: Encoder,
     post_layernorm: LayerNorm,
@@ -299,6 +299,14 @@ impl BlipForConditionalGeneration {
         })
     }
 
+    pub fn vision_model(&self) -> &VisionModel {
+        &self.vision_model
+    }
+
+    pub fn text_decoder(&self) -> &blip_text::TextLMHeadModel {
+        &self.text_decoder
+    }
+
     pub fn generate(
         &self,
         pixel_values: &Tensor,
@@ -307,12 +315,21 @@ impl BlipForConditionalGeneration {
     ) -> Result<Tensor> {
         let image_embeds = pixel_values.apply(&self.vision_model)?;
         let b_size = image_embeds.dim(0)?;
-        let token_ids = vec![30522u32];
-        let token_ids =
-            Tensor::new(token_ids.as_slice(), pixel_values.device())?.broadcast_left(b_size)?;
+        if b_size > 1 {
+            candle::bail!("only a batch size of 1 is supported")
+        }
+        let mut logits_processor = crate::generation::LogitsProcessor::new(1337, None, None);
+        let mut token_ids = vec![30522u32];
         for i in 0..1000 {
-            let logits = self.text_decoder.forward(&token_ids, &image_embeds)?;
-            println!("{logits}");
+            let input_ids =
+                Tensor::new(token_ids.as_slice(), pixel_values.device())?.broadcast_left(b_size)?;
+            let logits = self.text_decoder.forward(&input_ids, &image_embeds)?;
+            println!("{logits:?}");
+            let logits = logits.squeeze(0)?;
+            let logits = logits.get(logits.dim(0)? - 1)?;
+            let token = logits_processor.sample(&logits)?;
+            println!("{token}");
+            token_ids.push(token)
         }
         todo!()
     }

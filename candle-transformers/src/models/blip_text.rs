@@ -106,7 +106,9 @@ impl TextSelfAttention {
     }
 
     fn forward(&self, xs: &Tensor, encoder_hidden_states: Option<&Tensor>) -> Result<Tensor> {
-        let query = self.transpose_for_scores(&self.query.forward(xs)?)?;
+        let query = self
+            .transpose_for_scores(&self.query.forward(xs)?)?
+            .contiguous()?;
         let (key, value) = match encoder_hidden_states {
             None => {
                 let key = self.transpose_for_scores(&self.key.forward(xs)?)?;
