@@ -47,7 +47,8 @@ pub fn main() -> anyhow::Result<()> {
     let config = blip::Config::image_captioning_large();
     let model = blip::BlipForConditionalGeneration::new(&config, vb)?;
     println!("model built");
-    let out = model.forward(&image.unsqueeze(0)?, None, None)?;
+    // TODO: Maybe add support for the conditional prompt.
+    let out = model.generate(&image.unsqueeze(0)?, None, None)?;
     println!(">>>\n{out}");
     Ok(())
 }

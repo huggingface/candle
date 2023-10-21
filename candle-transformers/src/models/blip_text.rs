@@ -47,6 +47,17 @@ impl TextEmbeddings {
     }
 }
 
+impl Module for TextEmbeddings {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let seq_len = xs.dim(1)?;
+        // Use past_key_values_length if we add a kv cache.
+        let position_ids = self.position_ids.narrow(1, 0, seq_len)?;
+        let embeddings = self.word_embedddings.forward(xs)?;
+        let position_embeddings = self.position_embeddings.forward(&position_ids)?;
+        (embeddings + position_embeddings)?.apply(&self.layer_norm)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct TextSelfAttention {
     query: Linear,
@@ -55,6 +66,7 @@ struct TextSelfAttention {
     all_head_size: usize,
     attention_head_size: usize,
     num_attention_heads: usize,
+    attention_scale: f64,
 }
 
 impl TextSelfAttention {
@@ -70,6 +82,7 @@ impl TextSelfAttention {
         };
         let key = linear(in_size, all_head_size, vb.pp("key"))?;
         let value = linear(in_size, all_head_size, vb.pp("value"))?;
+        let attention_scale = 1f64 / (attention_head_size as f64).sqrt();
         Ok(Self {
             query,
             key,
@@ -77,6 +90,7 @@ impl TextSelfAttention {
             all_head_size,
             attention_head_size,
             num_attention_heads,
+            attention_scale,
         })
     }
 
@@ -89,6 +103,31 @@ impl TextSelfAttention {
             self.attention_head_size,
         ))?
         .permute((0, 2, 1, 3))
+    }
+
+    fn forward(&self, xs: &Tensor, encoder_hidden_states: Option<&Tensor>) -> Result<Tensor> {
+        let query = self.transpose_for_scores(&self.query.forward(xs)?)?;
+        let (key, value) = match encoder_hidden_states {
+            None => {
+                let key = self.transpose_for_scores(&self.key.forward(xs)?)?;
+                let value = self.transpose_for_scores(&self.value.forward(xs)?)?;
+                // TODO: kv cache
+                (key, value)
+            }
+            Some(xs) => {
+                let key = self.transpose_for_scores(&self.key.forward(xs)?)?;
+                let value = self.transpose_for_scores(&self.value.forward(xs)?)?;
+                // no kv-cache in this case, but the results could probably be memoized.
+                (key, value)
+            }
+        };
+        let attention_scores = query.matmul(&value.contiguous()?.t()?)?;
+        let attention_scores = (attention_scores * self.attention_scale)?;
+        let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+        attention_probs
+            .matmul(&value)?
+            .permute((0, 2, 1, 3))?
+            .flatten_from(D::Minus2)
     }
 }
 
@@ -121,6 +160,11 @@ impl TextAttention {
         let self_ = TextSelfAttention::new(cfg, is_cross_attention, vb.pp("self"))?;
         let output = TextSelfOutput::new(cfg, vb.pp("output"))?;
         Ok(Self { self_, output })
+    }
+
+    fn forward(&self, xs: &Tensor, encoder_hidden_states: Option<&Tensor>) -> Result<Tensor> {
+        let self_outputs = self.self_.forward(xs, encoder_hidden_states)?;
+        self.output.forward(&self_outputs, xs)
     }
 }
 
@@ -189,11 +233,15 @@ impl TextLayer {
             output,
         })
     }
-}
 
-impl Module for TextLayer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor, encoder_hidden_states: &Tensor) -> Result<Tensor> {
+        let self_attention_outputs = self.attention.forward(xs, None)?;
+        let attention_output = match &self.cross_attention {
+            Some(ca) => ca.forward(xs, Some(encoder_hidden_states))?,
+            None => candle::bail!("expected some cross-attn"),
+        };
+        let intermediate_output = self.intermediate.forward(&attention_output)?;
+        self.output.forward(&intermediate_output, &attention_output)
     }
 }
 
@@ -212,13 +260,11 @@ impl TextEncoder {
         }
         Ok(Self { layers })
     }
-}
 
-impl Module for TextEncoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, encoder_hidden_states: &Tensor) -> Result<Tensor> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
-            xs = xs.apply(layer)?
+            xs = layer.forward(&xs, encoder_hidden_states)?
         }
         Ok(xs)
     }
@@ -333,6 +379,15 @@ impl TextModel {
             pooler: None,
         })
     }
+
+    fn forward(&self, input_ids: &Tensor, encoder_hidden_states: &Tensor) -> Result<Tensor> {
+        let embedding_output = self.embeddings.forward(input_ids)?;
+        let sequence_output = self
+            .encoder
+            .forward(&embedding_output, encoder_hidden_states)?;
+        // We're interested in the sequence-output rather than the pooled-output.
+        Ok(sequence_output)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -346,5 +401,11 @@ impl TextLMHeadModel {
         let bert = TextModel::new(cfg, vb.pp("bert"))?;
         let cls = TextOnlyMLMHead::new(cfg, vb.pp("cls"))?;
         Ok(Self { bert, cls })
+    }
+
+    pub fn forward(&self, input_ids: &Tensor, encoder_hidden_states: &Tensor) -> Result<Tensor> {
+        let sequence_output = self.bert.forward(input_ids, encoder_hidden_states)?;
+        let prediction_scores = self.cls.forward(&sequence_output)?;
+        prediction_scores.narrow(1, 0, prediction_scores.dim(1)? - 1)
     }
 }
