@@ -1,6 +1,3 @@
-//! DINOv2: Learning Robust Visual Features without Supervision
-//! https://github.com/facebookresearch/dinov2
-
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
@@ -9,7 +6,7 @@ extern crate accelerate_src;
 
 use clap::Parser;
 
-use candle::{DType, IndexOp, D};
+use candle::DType;
 use candle_nn::VarBuilder;
 use candle_transformers::models::blip;
 
@@ -50,18 +47,7 @@ pub fn main() -> anyhow::Result<()> {
     let config = blip::Config::image_captioning_large();
     let model = blip::BlipForConditionalGeneration::new(&config, vb)?;
     println!("model built");
-    let logits = model.forward(&image.unsqueeze(0)?, None, None)?;
-    let prs = candle_nn::ops::softmax(&logits, D::Minus1)?
-        .i(0)?
-        .to_vec1::<f32>()?;
-    let mut prs = prs.iter().enumerate().collect::<Vec<_>>();
-    prs.sort_by(|(_, p1), (_, p2)| p2.total_cmp(p1));
-    for &(category_idx, pr) in prs.iter().take(5) {
-        println!(
-            "{:24}: {:.2}%",
-            candle_examples::imagenet::CLASSES[category_idx],
-            100. * pr
-        );
-    }
+    let out = model.forward(&image.unsqueeze(0)?, None, None)?;
+    println!(">>>\n{out}");
     Ok(())
 }
