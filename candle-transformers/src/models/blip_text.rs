@@ -408,6 +408,7 @@ impl TextLMHeadModel {
     pub fn forward(&self, input_ids: &Tensor, encoder_hidden_states: &Tensor) -> Result<Tensor> {
         let sequence_output = self.bert.forward(input_ids, encoder_hidden_states)?;
         let prediction_scores = self.cls.forward(&sequence_output)?;
-        prediction_scores.narrow(1, 0, prediction_scores.dim(1)? - 1)
+        // return_logits is false so we don't discard the last sequence element.
+        Ok(prediction_scores)
     }
 }
