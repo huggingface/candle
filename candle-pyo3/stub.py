@@ -13,7 +13,7 @@ GENERATED_COMMENT = "# Generated content DO NOT EDIT\n"
 TYPING = """from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Sequence
 from os import PathLike
 """
-CANDLE_SPECIFIC_TYPING = "from candle.typing import _ArrayLike, Device, Scalar, Index\n"
+CANDLE_SPECIFIC_TYPING = "from candle.typing import _ArrayLike, Device, Scalar, Index, Shape\n"
 CANDLE_TENSOR_IMPORTS = "from candle import Tensor,DType,QTensor\n"
 RETURN_TYPE_MARKER = "&RETURNS&: "
 ADDITIONAL_TYPEHINTS = {}

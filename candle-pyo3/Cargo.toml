@@ -17,10 +17,10 @@ crate-type = ["cdylib"]
 candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
 candle-nn = { path = "../candle-nn", version = "0.3.0" }
 half = { workspace = true }
-pyo3 = { version = "0.19.0", features = ["extension-module"] }
+pyo3 = { version = "0.20.0", features = ["extension-module"] }
 
 [build-dependencies]
-pyo3-build-config = "0.19"
+pyo3-build-config = "0.20"
 
 [features]
 default = []
