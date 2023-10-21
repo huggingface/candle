@@ -30,6 +30,8 @@ struct Args {
     cpu: bool,
 }
 
+const SEP_TOKEN_ID: u32 = 102;
+
 /// Loads an image from disk using the image crate, this returns a tensor with shape
 /// (3, 384, 384). OpenAI normalization is applied.
 pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
@@ -98,6 +100,9 @@ pub fn main() -> anyhow::Result<()> {
         let logits = logits.squeeze(0)?;
         let logits = logits.get(logits.dim(0)? - 1)?;
         let token = logits_processor.sample(&logits)?;
+        if token == SEP_TOKEN_ID {
+            break;
+        }
         token_ids.push(token);
         if let Some(t) = tokenizer.next_token(token)? {
             use std::io::Write;
