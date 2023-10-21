@@ -5,17 +5,17 @@ use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    vocab_size: usize,
-    hidden_size: usize,
-    encoder_hidden_size: usize,
-    intermediate_size: usize,
-    projection_dim: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    max_position_embeddings: usize,
-    hidden_act: candle_nn::Activation,
-    layer_norm_eps: f64,
-    is_decoder: bool,
+    pub vocab_size: usize,
+    pub hidden_size: usize,
+    pub encoder_hidden_size: usize,
+    pub intermediate_size: usize,
+    pub projection_dim: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub max_position_embeddings: usize,
+    pub hidden_act: candle_nn::Activation,
+    pub layer_norm_eps: f64,
+    pub is_decoder: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -176,7 +176,7 @@ impl TextLayer {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let attention = TextAttention::new(cfg, false, vb.pp("attention"))?;
         let cross_attention = if cfg.is_decoder {
-            Some(TextAttention::new(cfg, true, vb.pp("attention"))?)
+            Some(TextAttention::new(cfg, true, vb.pp("crossattention"))?)
         } else {
             None
         };
