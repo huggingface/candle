@@ -1,4 +1,3 @@
-#![allow(unused)]
 use super::blip_text;
 use super::with_tracing::{conv2d, linear, Conv2d, Linear};
 use candle::{Module, Result, Tensor, D};
@@ -65,7 +64,6 @@ struct VisionEmbeddings {
     class_embedding: Tensor,
     patch_embedding: Conv2d,
     position_embedding: Tensor,
-    num_positions: usize,
 }
 
 impl VisionEmbeddings {
@@ -91,7 +89,6 @@ impl VisionEmbeddings {
             class_embedding,
             patch_embedding,
             position_embedding,
-            num_positions,
         })
     }
 }
@@ -117,8 +114,6 @@ struct Attention {
     qkv: Linear,
     projection: Linear,
     scale: f64,
-    embed_dim: usize,
-    head_dim: usize,
     num_heads: usize,
 }
 
@@ -134,8 +129,6 @@ impl Attention {
             qkv,
             projection,
             scale,
-            embed_dim,
-            head_dim,
             num_heads,
         })
     }
