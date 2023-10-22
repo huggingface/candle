@@ -449,7 +449,7 @@ impl Tensor {
 
     /// Returns true if the computation graph should track this op, that is if it is
     /// a variable or if it has some variable as dependencies.
-    pub(crate) fn track_op(&self) -> bool {
+    pub fn track_op(&self) -> bool {
         self.is_variable || self.op.is_some()
     }
 
