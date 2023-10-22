@@ -369,7 +369,7 @@ struct TextLMPredictionHead {
 impl TextLMPredictionHead {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let transform = TextPredictionHeadTransform::new(cfg, vb.pp("transform"))?;
-        let weight = QMatMul::new(cfg.vocab_size, cfg.hidden_size, vb.pp("decoder"))?;
+        let weight = QMatMul::new(cfg.hidden_size, cfg.vocab_size, vb.pp("decoder"))?;
         let bias = vb.get(cfg.vocab_size, "bias")?.dequantize(vb.device())?;
         let decoder = Linear::from_weights(weight, Some(bias));
         Ok(Self { transform, decoder })
