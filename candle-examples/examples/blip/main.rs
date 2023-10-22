@@ -11,9 +11,25 @@ use candle::{DType, Device, Result, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::models::blip;
+use candle_transformers::models::quantized_blip;
 
 use tokenizers::Tokenizer;
 
+enum Model {
+    M(blip::BlipForConditionalGeneration),
+    Q(quantized_blip::BlipForConditionalGeneration),
+}
+
+impl Model {
+    fn text_decoder_forward(&mut self, xs: &Tensor, img_xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::M(m) => m.text_decoder().forward(xs, img_xs),
+            Self::Q(m) => m.text_decoder().forward(xs, img_xs),
+        }
+    }
+}
+
+// TODO: Maybe add support for the conditional prompt.
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
@@ -28,6 +44,10 @@ struct Args {
     /// Run on CPU rather than on GPU.
     #[arg(long)]
     cpu: bool,
+
+    /// Use the quantized version of the model.
+    #[arg(long)]
+    quantized: bool,
 }
 
 const SEP_TOKEN_ID: u32 = 102;
@@ -54,20 +74,20 @@ pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let device = candle_examples::device(args.cpu)?;
-
-    let image = load_image(args.image)?.to_device(&device)?;
-    println!("loaded image {image:?}");
-
     let model_file = match args.model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
-            let api = api.repo(hf_hub::Repo::with_revision(
-                "Salesforce/blip-image-captioning-large".to_string(),
-                hf_hub::RepoType::Model,
-                "refs/pr/18".to_string(),
-            ));
-            api.get("model.safetensors")?
+            if args.quantized {
+                let api = api.model("lmz/candle-blip".to_string());
+                api.get("blip-image-captioning-large-q4k.gguf")?
+            } else {
+                let api = api.repo(hf_hub::Repo::with_revision(
+                    "Salesforce/blip-image-captioning-large".to_string(),
+                    hf_hub::RepoType::Model,
+                    "refs/pr/18".to_string(),
+                ));
+                api.get("model.safetensors")?
+            }
         }
         Some(model) => model.into(),
     };
@@ -84,19 +104,35 @@ pub fn main() -> anyhow::Result<()> {
     let mut logits_processor =
         candle_transformers::generation::LogitsProcessor::new(1337, None, None);
 
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
     let config = blip::Config::image_captioning_large();
-    let mut model = blip::BlipForConditionalGeneration::new(&config, vb)?;
-    println!("model built");
-    // TODO: Maybe add support for the conditional prompt.
-    let image_embeds = image.unsqueeze(0)?.apply(model.vision_model())?;
+
+    let (image_embeds, device, mut model) = if args.quantized {
+        let device = Device::Cpu;
+        let image = load_image(args.image)?.to_device(&device)?;
+        println!("loaded image {image:?}");
+
+        let vb = quantized_blip::VarBuilder::from_gguf(model_file)?;
+        let model = quantized_blip::BlipForConditionalGeneration::new(&config, vb)?;
+        let image_embeds = image.unsqueeze(0)?.apply(model.vision_model())?;
+        (image_embeds, device, Model::Q(model))
+    } else {
+        let device = candle_examples::device(args.cpu)?;
+        let image = load_image(args.image)?.to_device(&device)?;
+        println!("loaded image {image:?}");
+
+        let vb =
+            unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+        let model = blip::BlipForConditionalGeneration::new(&config, vb)?;
+        let image_embeds = image.unsqueeze(0)?.apply(model.vision_model())?;
+        (image_embeds, device, Model::M(model))
+    };
 
     let mut token_ids = vec![30522u32];
     for index in 0..1000 {
         let context_size = if index > 0 { 1 } else { token_ids.len() };
         let start_pos = token_ids.len().saturating_sub(context_size);
         let input_ids = Tensor::new(&token_ids[start_pos..], &device)?.unsqueeze(0)?;
-        let logits = model.text_decoder().forward(&input_ids, &image_embeds)?;
+        let logits = model.text_decoder_forward(&input_ids, &image_embeds)?;
         let logits = logits.squeeze(0)?;
         let logits = logits.get(logits.dim(0)? - 1)?;
         let token = logits_processor.sample(&logits)?;
