@@ -99,6 +99,8 @@ We also provide a some command line based examples using state of the art models
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
   using self-supervision (can be used for imagenet classification, depth
   evaluation, segmentation).
+- [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
+  generate captions for an image.
 
 Run them using commands like:
 ```
@@ -163,8 +165,11 @@ If you have an addition to this list, please submit a pull request.
         - T5.
         - Bert.
     - Whisper (multi-lingual support).
-    - Stable Diffusion v1.5, v2.1, XL v1.0.
-    - Wurstchen v2.
+    - Text to image.
+        - Stable Diffusion v1.5, v2.1, XL v1.0.
+        - Wurstchen v2.
+    - Image to text.
+        - BLIP.
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT.
         - yolo-v3, yolo-v8.
