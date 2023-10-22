@@ -86,17 +86,17 @@ pub fn main() -> anyhow::Result<()> {
 
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
     let config = blip::Config::image_captioning_large();
-    let model = blip::BlipForConditionalGeneration::new(&config, vb)?;
-    let vision_model = model.vision_model();
-    let text_decoder = model.text_decoder();
+    let mut model = blip::BlipForConditionalGeneration::new(&config, vb)?;
     println!("model built");
     // TODO: Maybe add support for the conditional prompt.
-    let image_embeds = image.unsqueeze(0)?.apply(vision_model)?;
+    let image_embeds = image.unsqueeze(0)?.apply(model.vision_model())?;
 
     let mut token_ids = vec![30522u32];
-    for _index in 0..1000 {
-        let input_ids = Tensor::new(token_ids.as_slice(), &device)?.broadcast_left(1)?;
-        let logits = text_decoder.forward(&input_ids, &image_embeds)?;
+    for index in 0..1000 {
+        let context_size = if index > 0 { 1 } else { token_ids.len() };
+        let start_pos = token_ids.len().saturating_sub(context_size);
+        let input_ids = Tensor::new(&token_ids[start_pos..], &device)?.unsqueeze(0)?;
+        let logits = model.text_decoder().forward(&input_ids, &image_embeds)?;
         let logits = logits.squeeze(0)?;
         let logits = logits.get(logits.dim(0)? - 1)?;
         let token = logits_processor.sample(&logits)?;

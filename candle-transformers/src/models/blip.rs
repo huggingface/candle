@@ -296,7 +296,7 @@ impl BlipForConditionalGeneration {
         &self.vision_model
     }
 
-    pub fn text_decoder(&self) -> &blip_text::TextLMHeadModel {
-        &self.text_decoder
+    pub fn text_decoder(&mut self) -> &mut blip_text::TextLMHeadModel {
+        &mut self.text_decoder
     }
 }
