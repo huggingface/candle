@@ -32,6 +32,14 @@ pub struct Linear {
     span: tracing::Span,
 }
 
+impl Linear {
+    pub fn from_weights(weights: Tensor, bias: Option<Tensor>) -> Self {
+        let inner = candle_nn::Linear::new(weights, bias);
+        let span = tracing::span!(tracing::Level::TRACE, "linear");
+        Self { inner, span }
+    }
+}
+
 pub fn linear(d1: usize, d2: usize, vb: VarBuilder) -> Result<Linear> {
     let inner = candle_nn::linear(d1, d2, vb)?;
     let span = tracing::span!(tracing::Level::TRACE, "linear");

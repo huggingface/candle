@@ -1,5 +1,4 @@
-#![allow(unused)]
-use super::with_tracing::{linear, linear_no_bias, Embedding, Linear};
+use super::with_tracing::{linear, Embedding, Linear};
 use candle::{Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 
@@ -63,7 +62,6 @@ struct TextSelfAttention {
     query: Linear,
     key: Linear,
     value: Linear,
-    all_head_size: usize,
     attention_head_size: usize,
     num_attention_heads: usize,
     attention_scale: f64,
@@ -87,7 +85,6 @@ impl TextSelfAttention {
             query,
             key,
             value,
-            all_head_size,
             attention_head_size,
             num_attention_heads,
             attention_scale,
@@ -301,12 +298,12 @@ impl TextEncoder {
 }
 
 #[derive(Debug, Clone)]
-struct TextPooler {
+pub struct TextPooler {
     dense: Linear,
 }
 
 impl TextPooler {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
         Ok(Self { dense })
     }
@@ -352,19 +349,15 @@ impl Module for TextPredictionHeadTransform {
 struct TextLMPredictionHead {
     transform: TextPredictionHeadTransform,
     decoder: Linear,
-    bias: Tensor,
 }
 
 impl TextLMPredictionHead {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let transform = TextPredictionHeadTransform::new(cfg, vb.pp("transform"))?;
-        let decoder = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("decoder"))?;
+        let weight = vb.get((cfg.vocab_size, cfg.hidden_size), "decoder.weight")?;
         let bias = vb.get(cfg.vocab_size, "bias")?;
-        Ok(Self {
-            transform,
-            decoder,
-            bias,
-        })
+        let decoder = Linear::from_weights(weight, Some(bias));
+        Ok(Self { transform, decoder })
     }
 }
 
@@ -396,7 +389,7 @@ impl Module for TextOnlyMLMHead {
 struct TextModel {
     embeddings: TextEmbeddings,
     encoder: TextEncoder,
-    pooler: Option<TextPooler>,
+    // We do not need the pooler for caption generation
 }
 
 impl TextModel {
@@ -406,7 +399,6 @@ impl TextModel {
         Ok(Self {
             embeddings,
             encoder,
-            pooler: None,
         })
     }
 
