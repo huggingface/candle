@@ -10,6 +10,8 @@ pub mod llama;
 pub mod mistral;
 pub mod mixformer;
 pub mod mpt;
+pub mod quantized_blip;
+pub mod quantized_blip_text;
 pub mod quantized_llama;
 pub mod quantized_mistral;
 pub mod quantized_mixformer;
