@@ -46,7 +46,7 @@ impl DecoderLayer {
             ..Default::default()
         };
         let output_attention = config.output_attentions.unwrap_or(false);
-        let self_attention = BartAttention::load(vb.pp("self-attn"), config)?;
+        let self_attention = BartAttention::load(vb.pp("self_attn"), config)?;
         let encoder_attention = BartAttention::load(vb.pp("encoder_attn"), config)?;
 
         let self_attention_layer_norm = nn::layer_norm(
@@ -200,7 +200,10 @@ impl BartDecoder {
         let mut layers: Vec<DecoderLayer> = vec![];
         let p_layers = vb.pp("layers");
         for layer_index in 0..config.encoder_layers {
-            layers.push(DecoderLayer::load(vb.pp(layer_index), config)?);
+            layers.push(DecoderLayer::load(
+                vb.pp(format!("layers.{layer_index}")),
+                config,
+            )?);
         }
 
         Ok(BartDecoder {

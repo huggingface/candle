@@ -39,9 +39,9 @@ impl BartAttention {
         let hidden_size = config.num_hidden_layers;
         let embed_dim = config.d_model;
 
-        let query = linear(embed_dim, embed_dim, vb.pp("query"))?;
-        let value = linear(embed_dim, embed_dim, vb.pp("value"))?;
-        let key = linear(embed_dim, embed_dim, vb.pp("key"))?;
+        let query = linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
+        let value = linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
+        let key = linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
         let out_proj = linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
 
         let head_dim = embed_dim / config.encoder_attention_heads;

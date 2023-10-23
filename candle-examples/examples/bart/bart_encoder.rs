@@ -54,7 +54,7 @@ impl EncoderLayer {
         };
         let output_attention = config.output_attentions.unwrap_or(false);
 
-        let self_attention = BartAttention::load(vb.pp("self-attn"), config)?;
+        let self_attention = BartAttention::load(vb.pp("self_attn"), config)?;
 
         let self_attention_layer_norm = nn::layer_norm(
             config.d_model,
@@ -174,7 +174,10 @@ impl BartEncoder {
         let mut layers: Vec<EncoderLayer> = vec![];
         let p_layers = vb.pp("layers");
         for layer_index in 0..config.encoder_layers {
-            layers.push(EncoderLayer::load(vb.pp(layer_index), config)?);
+            layers.push(EncoderLayer::load(
+                vb.pp(format!("layers.{layer_index}")),
+                config,
+            )?);
         }
 
         Ok(BartEncoder {
@@ -284,11 +287,7 @@ impl LearnedPositionalEmbedding {
 
         let num_embeddings = config.max_position_embeddings + offset;
 
-        let embedding = embedding(
-            config.max_position_embeddings,
-            config.max_position_embeddings,
-            vb,
-        )?;
+        let embedding = embedding(num_embeddings, config.max_position_embeddings, vb)?;
 
         Ok(LearnedPositionalEmbedding { embedding, offset })
     }
