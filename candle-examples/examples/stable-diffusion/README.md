@@ -50,6 +50,9 @@ cached.
 Enabling flash-attention requires both a feature flag, `--feature flash-attn`
 and using the command line flag `--use-flash-attn`.
 
+Note that flash-attention-v2 is only compatible with Ampere, Ada, or Hopper GPUs
+(e.g., A100/H100, RTX 3090/4090).
+
 ## Image to Image Pipeline
 ...
 
