@@ -473,10 +473,10 @@ impl Tensor {
                     }
                     Op::Unary(arg, UnaryOp::Gelu) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        let tanh = (0.0356774 * arg.powf(3.)? + (0.797885 * arg)?)?.tanh()?;
+                        let cube = arg.powf(3.)?;
+                        let tanh = (0.0356774 * &cube + (0.797885 * arg)?)?.tanh()?;
                         let gelu_grad = (((0.5 * &tanh)?
-                            + (0.0535161 * arg.powf(3.)? + (0.398942 * arg)?)?
-                                * (1. - tanh.powf(2.)?))?
+                            + (0.0535161 * cube + (0.398942 * arg)?)? * (1. - tanh.powf(2.)?))?
                             + 0.5)?;
                         *sum_grad = sum_grad.add(&(&grad * gelu_grad)?)?
                     }
