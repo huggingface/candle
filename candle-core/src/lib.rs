@@ -72,7 +72,7 @@ pub use cpu_backend::CpuStorage;
 pub use device::{Device, DeviceLocation};
 pub use dtype::{DType, FloatDType, IntDType, WithDType};
 pub use error::{Error, Result};
-pub use indexer::IndexOp;
+pub use indexer::{IndexOp, StepRange};
 pub use layout::Layout;
 pub use op::{CustomOp1, CustomOp2, CustomOp3};
 pub use shape::{Shape, D};

@@ -46,6 +46,40 @@ impl Tensor {
                     current_dim += 1;
                     out
                 }
+                TensorIndexer::Step(left_bound, right_bound, step) => {
+                    let start = match left_bound {
+                        Bound::Included(n) => *n,
+                        Bound::Excluded(n) => *n + 1,
+                        Bound::Unbounded => 0,
+                    } as i64;
+                    let stop = match right_bound {
+                        Bound::Included(n) => *n + 1,
+                        Bound::Excluded(n) => *n,
+                        Bound::Unbounded => dims[i],
+                    } as i64;
+
+                    let step = *step as i64;
+                    let device = x.device();
+                    let indices = match step {
+                        1.. => Tensor::arange_step(start as i64, stop as i64, step, device)?,
+                        ..=-1 => {
+                            let mut data = vec![];
+                            let mut current = stop - 1;
+                            while current >= start {
+                                data.push(current);
+                                current += step;
+                            }
+                            let len = data.len();
+
+                            Tensor::from_vec_impl(data, len, device, false)?
+                        }
+                        0 => panic!("step size cannot be zero"),
+                    };
+
+                    let out = x.index_select(&indices, current_dim)?;
+                    current_dim += 1;
+                    out
+                }
                 TensorIndexer::IndexSelect(indexes) => {
                     if indexes.rank() != 1 {
                         crate::bail!("multi-dimensional tensor indexing is not supported")
@@ -61,6 +95,22 @@ impl Tensor {
     }
 }
 
+pub struct StepRange(Bound<usize>, Bound<usize>, isize);
+
+impl StepRange {
+    pub fn new<T: RangeBounds<usize>>(range: T, step: isize) -> Self {
+        if step == 0 {
+            panic!("step size cannot be zero");
+        }
+
+        Self(
+            range.start_bound().cloned(),
+            range.end_bound().cloned(),
+            step,
+        )
+    }
+}
+
 #[derive(Debug)]
 /// Generic structure used to index a slice of the tensor
 pub enum TensorIndexer {
@@ -68,9 +118,18 @@ pub enum TensorIndexer {
     Select(usize),
     /// This is a regular slice, purely indexing a chunk of the tensor
     Narrow(Bound<usize>, Bound<usize>),
+    /// This is a slice with a step size greater than 1 (ex.: every 2nd
+    /// element). A negative step will count backwards from the end
+    Step(Bound<usize>, Bound<usize>, isize),
     /// Indexing via a 1d tensor
     IndexSelect(Tensor),
     Err(Error),
+}
+
+impl From<StepRange> for TensorIndexer {
+    fn from(value: StepRange) -> Self {
+        TensorIndexer::Step(value.0, value.1, value.2)
+    }
 }
 
 impl From<usize> for TensorIndexer {
