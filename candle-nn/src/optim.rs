@@ -1,5 +1,7 @@
 //! Various optimization algorithms.
-use candle::{Result, Tensor, Var};
+use std::collections::HashMap;
+
+use candle::{Result, Tensor, TensorId, Var};
 
 /// The interface optimizers should implement.
 pub trait Optimizer: Sized {
@@ -70,6 +72,80 @@ impl Optimizer for SGD {
 }
 
 impl SGD {
+    pub fn into_inner(self) -> Vec<Var> {
+        self.vars
+    }
+
+    pub fn push(&mut self, var: &Var) {
+        self.vars.push(var.clone())
+    }
+}
+
+/// Optimizer for Stochastic Gradient Descent with Nesterov momentum.
+///
+/// Similar to PyTorch SGD but without weight decay.
+
+pub struct NesterovSGD {
+    vars: Vec<Var>,
+    params: ParamsNesterovSGD,
+    prev_step: HashMap<TensorId, Tensor>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ParamsNesterovSGD {
+    pub learning_rate: f64,
+    pub momentum: f64,
+}
+
+impl Optimizer for NesterovSGD {
+    type Config = ParamsNesterovSGD;
+
+    fn new(vars: Vec<Var>, params: ParamsNesterovSGD) -> Result<Self> {
+        let vars = vars
+            .into_iter()
+            .filter(|var| var.dtype().is_float())
+            .collect();
+        Ok(Self {
+            vars,
+            params,
+            prev_step: HashMap::new(),
+        })
+    }
+
+    fn learning_rate(&self) -> f64 {
+        self.params.learning_rate
+    }
+
+    fn step(&mut self, grads: &candle::backprop::GradStore) -> Result<()> {
+        for var in self.vars.iter() {
+            if let Some(grad) = grads.get(var) {
+                let gt;
+                let bt;
+                if let Some(prev_step) = self.prev_step.get(&var.id()) {
+                    // println!("Exists");
+                    // bt​←μbt−1​+(1−τ)gt
+                    bt = ((prev_step * self.params.momentum)? + grad)?;
+                    gt = (grad + (self.params.momentum * &bt)?)?;
+                } else {
+                    // println!("Doesn't Exist");
+                    // bt​←μbt−1​+(1−τ)gt
+                    bt = (1. * grad)?;
+                    gt = (grad + (self.params.momentum * &bt)?)?;
+                }
+                // println!("Momentum {}", bt);
+                self.prev_step.insert(var.id(), bt);
+                var.set(&var.sub(&(gt * self.params.learning_rate)?)?)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn set_learning_rate(&mut self, lr: f64) {
+        self.params.learning_rate = lr
+    }
+}
+
+impl NesterovSGD {
     pub fn into_inner(self) -> Vec<Var> {
         self.vars
     }
