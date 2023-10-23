@@ -1,4 +1,5 @@
 import candle
+import torch
 
 print(f"mkl:         {candle.utils.has_mkl()}")
 print(f"accelerate:  {candle.utils.has_accelerate()}")
@@ -29,3 +30,15 @@ quant_t = t.quantize("q6k")
 dequant_t = quant_t.dequantize()
 diff2 = (t - dequant_t).sqr()
 print(diff2.mean_all())
+
+# convert from candle tensor to torch tensor
+t = candle.randn((3, 512, 512))
+torch_tensor = t.to_torch()
+print(torch_tensor)
+print(type(torch_tensor))
+
+# convert from torch tensor to candle tensor
+t = torch.randn((3, 512, 512))
+candle_tensor = candle.Tensor(t)
+print(candle_tensor)
+print(type(candle_tensor))
