@@ -39,3 +39,50 @@ fn nll_and_cross_entropy() -> Result<()> {
     assert_eq!(to_vec0_round(&loss, 4)?, 1.1312);
     Ok(())
 }
+
+/* Equivalent python code:
+import torch
+import torch.nn.functional as F
+
+inp = torch.Tensor([[ 2.3611, -0.8813, -0.5006, -0.2178],
+        [ 0.0419,  0.0763, -1.0457, -1.6692],
+        [-1.0494,  0.8111,  1.5723,  1.2315],
+        [ 1.3081,  0.6641,  1.1802, -0.2547],
+        [ 0.5292,  0.7636,  0.3692, -0.8318]])
+
+target = torch.Tensor([[0., 1., 0., 0.],
+        [0., 1., 0., 0.],
+        [0., 0., 0., 1.],
+        [1., 0., 0., 0.],
+        [0., 0., 1., 0.]])
+
+print(F.binary_cross_entropy_with_logits(inp, target))
+*/
+#[test]
+fn binary_cross_entropy_with_logit() -> Result<()> {
+    let cpu = Device::Cpu;
+
+    let inp = [
+        [2.3611f32, -0.8813, -0.5006, -0.2178],
+        [0.0419, 0.0763, -1.0457, -1.6692],
+        [-1.0494, 0.8111, 1.5723, 1.2315],
+        [1.3081, 0.6641, 1.1802, -0.2547],
+        [0.5292, 0.7636, 0.3692, -0.8318],
+    ];
+
+    let target = [
+        [0.0f32, 1., 0., 0.],
+        [0., 1., 0., 0.],
+        [0., 0., 0., 1.],
+        [1., 0., 0., 0.],
+        [0., 0., 1., 0.],
+    ];
+
+    let inp = Tensor::new(&inp, &cpu)?;
+    let target = Tensor::new(&target, &cpu)?;
+
+    let loss = candle_nn::loss::binary_cross_entropy_with_logit(&inp, &target)?;
+
+    assert_eq!(to_vec0_round(&loss, 4)?, 0.8224);
+    Ok(())
+}
