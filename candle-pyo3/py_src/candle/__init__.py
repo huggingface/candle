@@ -34,8 +34,7 @@ except ImportError as e:
                     oneapi_root, "compiler", "latest", "windows", "redist", "intel64_win", "compiler"
                 )
             else:
-                # Unsure of this is correct
-                mkl_path = os.path.join(oneapi_root, "mkl", "latest", "lib")
+                mkl_path = os.path.join(oneapi_root, "mkl", "latest", "lib", "intel64")
 
             logging.warning(f"Adding {mkl_path} to DLL search path...")
             os.add_dll_directory(mkl_path)
