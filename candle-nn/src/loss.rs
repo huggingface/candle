@@ -1,4 +1,4 @@
-use candle::{Result, Tensor, Device};
+use candle::{Result, Tensor};
 
 /// The negative log likelihood loss.
 ///
