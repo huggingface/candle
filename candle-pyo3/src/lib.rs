@@ -8,6 +8,9 @@ use std::sync::Arc;
 
 use half::{bf16, f16};
 
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
+
 use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
 
 pub fn wrap_err(err: ::candle::Error) -> PyErr {
