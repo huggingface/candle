@@ -21,11 +21,6 @@ pub struct BartModel {
 impl BartModel {
     pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let pad_token_id = config.pad_token_id.unwrap_or(1);
-        // let embedding_config = EmbeddingConfig {
-        //     padding_idx: pad_token_id,
-        //     ..Default::default()
-        // };
-        // let embeddings = embedding(config.vocab_size, config.d_model, vb.pp("embeddings"))?;
 
         let embeddings = embedding(config.vocab_size, config.d_model, vb.pp("model.shared"))?;
 

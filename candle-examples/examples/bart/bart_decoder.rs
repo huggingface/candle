@@ -1,19 +1,11 @@
-use candle::Var;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
-
+use candle::Device;
 use candle::Tensor;
-use candle_nn as nn;
-use candle_nn::{linear, Dropout, Linear};
-use std::borrow::Borrow;
-use std::ops::Div;
-
 use candle::{DType, Result};
+use candle_nn as nn;
 use candle_nn::activation::Activation;
-use candle_nn::embedding;
-use candle_nn::{Embedding, Module, VarBuilder};
-use serde::{Deserialize, Serialize};
+use candle_nn::LayerNorm;
+use candle_nn::{Dropout, Linear};
+use candle_nn::{Module, VarBuilder};
 
 use crate::bart_attention::BartAttention;
 use crate::bart_encoder::EmbeddingOption;
@@ -21,8 +13,6 @@ use crate::bart_encoder::_expand_mask;
 use crate::bart_encoder::{LearnedPositionalEmbedding, SinusoidalPositionalEmbedding};
 use crate::layer_state::LayerState;
 use crate::{Config, DEVICE};
-use candle::Device;
-use candle_nn::LayerNorm;
 
 pub struct DecoderLayer {
     self_attention: BartAttention,
@@ -383,25 +373,14 @@ pub(crate) fn _make_causal_mask(
     let target_length = input_ids_shape[1];
 
     let mut mask = Tensor::zeros((target_length, target_length), dtype, DEVICE)?;
-    // let mut mask = Tensor::full(
-    //     [target_length, target_length],
-    //     get_min(dtype).unwrap(),
-    //     (dtype, device),
-    // );
 
     let mask_cond = Tensor::arange(0i64, target_length as i64, DEVICE)?;
-    // let mask_cond = Tensor::arange(target_length, (dtype, device));
 
     mask = masked_fill(
         &mask_cond.lt(&(&mask_cond + 1f64)?.reshape((target_length, 1))?)?,
         &mask,
         &mask,
     )?;
-
-    // let _ = mask.masked_fill_(
-    //     &mask_cond.lt_tensor(&(&mask_cond + 1).view([target_length, 1])),
-    //     0,
-    // );
 
     if past_key_values_length > 0 {
         mask = Tensor::cat(
@@ -412,15 +391,6 @@ pub(crate) fn _make_causal_mask(
             3,
         )?;
     }
-    // if past_key_values_length > 0 {
-    //     mask = Tensor::cat(
-    //         &[
-    //             Tensor::zeros([target_length, past_key_values_length], (dtype, device)),
-    //             mask,
-    //         ],
-    //         -1,
-    //     );
-    // }
 
     mask.unsqueeze(0)?.unsqueeze(0)?.expand((
         batch_size,
@@ -428,16 +398,6 @@ pub(crate) fn _make_causal_mask(
         target_length,
         target_length + past_key_values_length,
     ))
-
-    // mask.unsqueeze(0).unsqueeze(0).expand(
-    //     [
-    //         batch_size,
-    //         1,
-    //         target_length,
-    //         target_length + past_key_values_length,
-    //     ],
-    //     true,
-    // )
 }
 
 pub fn masked_fill(in_tensor: &Tensor, mask: &Tensor, value: &Tensor) -> Result<Tensor> {

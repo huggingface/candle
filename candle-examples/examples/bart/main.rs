@@ -11,10 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_imports)]
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_mut)]
 use anyhow::{Error, Result};
 use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
@@ -45,6 +41,31 @@ fn main() -> Result<(), Error> {
     let config: Config = serde_json::from_str(&config)?;
 
     let model = BartModel::load(vb, &config)?;
+
+    let mut tokenizer = Tokenizer::from_file("models/bart/tokenizer.json").map_err(Error::msg)?;
+
+    let tokenizer = tokenizer
+        .with_padding(None)
+        .with_truncation(None)
+        .map_err(Error::msg)?;
+
+    let tokens = tokenizer
+        .encode("hello testing", true)
+        .map_err(Error::msg)?
+        .get_ids()
+        .to_vec();
+
+    let token_ids = Tensor::new(&tokens[..], DEVICE)?.unsqueeze(0)?;
+    let token_type_ids = token_ids.zeros_like()?;
+
+    println!("Loaded and encoded {:?}", start.elapsed());
+
+    let start = std::time::Instant::now();
+
+    let ys = model.forward(&token_ids, &token_type_ids)?;
+
+    println!("{ys}");
+    println!("Took {:?}", start.elapsed());
 
     Ok(())
 }

@@ -209,7 +209,7 @@ impl BartEncoder {
         let attention_mask = attention_mask
             .map(|mask| _expand_mask(mask, None, mask.dtype()))
             .unwrap()?;
-        // let attention_mask = attention_mask.map(|mask| _expand_mask(mask, None, x.kind()));
+
         let mut hidden_state = self.dropout.forward(&x, train)?;
 
         let mut all_hidden_states: Option<Vec<Tensor>> = if self.output_hidden_states {
