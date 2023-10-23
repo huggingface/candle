@@ -72,6 +72,5 @@ fn binary_cross_entropy_with_logit() -> Result<()> {
     let loss = candle_nn::loss::binary_cross_entropy_with_logit(&inp, &target)?;
 
     assert_eq!(to_vec0_round(&loss, 4)?, 0.7739);
-
-
+    Ok(())
 }
