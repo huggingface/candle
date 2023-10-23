@@ -49,7 +49,6 @@ pub fn mse(inp: &Tensor, target: &Tensor) -> Result<Tensor> {
     (inp - target)?.sqr()?.mean_all()
 }
 
-
 /// The binary cross-entropy with logit loss.
 ///
 /// Arguments
@@ -68,6 +67,6 @@ pub fn binary_cross_entropy_with_logit(inp: &Tensor, target: &Tensor) -> Result<
 
     let loss = left_side? + right_side?;
     let loss = loss?.neg()?.mean_all()?;
-    
+
     Ok(loss)
 }
