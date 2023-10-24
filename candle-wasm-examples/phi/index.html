@@ -41,42 +41,106 @@
       const MODELS = {
         phi_1_5_quantized: {
           base_url:
-            "https://huggingface.co/lmz/candle-quantized-phi/resolve/refs%2Fpr%2F4/",
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
           model: "model-q4k.gguf",
           tokenizer: "tokenizer.json",
           config: "phi-1_5.json",
           quantized: true,
           seq_len: 2048,
+          size: "800 MB",
         },
         phi_1_5_quantized_2: {
           base_url:
-            "https://huggingface.co/lmz/candle-quantized-phi/resolve/refs%2Fpr%2F4/",
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
           model: "model-q80.gguf",
           tokenizer: "tokenizer.json",
           config: "phi-1_5.json",
           quantized: true,
           seq_len: 2048,
+          size: "1.51 GB",
         },
         puffin_phi_v2_quantized: {
           base_url:
-            "https://huggingface.co/lmz/candle-quantized-phi/resolve/refs%2Fpr%2F4/",
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
           model: "model-puffin-phi-v2-q4k.gguf",
           tokenizer: "tokenizer-puffin-phi-v2.json",
           config: "puffin-phi-v2.json",
           quantized: true,
           seq_len: 2048,
+          size: "798 MB",
         },
         puffin_phi_v2_quantized_2: {
           base_url:
-            "https://huggingface.co/lmz/candle-quantized-phi/resolve/refs%2Fpr%2F4/",
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
           model: "model-puffin-phi-v2-q80.gguf",
           tokenizer: "tokenizer-puffin-phi-v2.json",
           config: "puffin-phi-v2.json",
           quantized: true,
           seq_len: 2048,
+          size: "1.50 GB",
         },
       };
 
+      const TEMPLATES = [
+        {
+          title: "Simple prompt",
+          prompt: `Sebastien is in London today, it’s the middle of July yet it’s raining, so Sebastien is feeling gloomy. He`,
+        },
+        {
+          title: "Think step by step",
+          prompt: `Suppose Alice originally had 3 apples, then Bob gave Alice 7 apples, then Alice gave Cook 5 apples, and then Tim gave Alice 3x the amount of apples Alice had. How many apples does Alice have now?  
+Let’s think step by step.`,
+        },
+        {
+          title: "Explaing a code snippet",
+          prompt: `What does this script do?  
+\`\`\`python
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.bind(('', 0))
+s.listen(1)
+conn, addr = s.accept()
+print('Connected by', addr)
+return conn.getsockname()[1]
+\`\`\`
+Let’s think step by step.`,
+        },
+        {
+          title: "Question answering",
+          prompt: `What is the capital of France?  
+Answer:`,
+        },
+        {
+          title: "Chat mode",
+          prompt: `Alice: Can you tell me how to create a python application to go through all the files
+in one directory where the file’s name DOES NOT end with '.json'?  
+Bob:`,
+        },
+        {
+          title: "Python code completion",
+          prompt: `"""write a python function called batch(function, list) which call function(x) for x in
+list in parallel"""  
+Solution:`,
+        },
+        {
+          title: "Python Sample",
+          prompt: `"""Can you make sure those histograms appear side by side on the same plot:  
+\`\`\`python
+plt.hist(intreps_retrained[0][1].view(64,-1).norm(dim=1).detach().cpu().numpy(), bins = 20)
+plt.hist(intreps_pretrained[0][1].view(64,-1).norm(dim=1).detach().cpu().numpy(), bins = 20)
+\`\`\`  
+"""`,
+        },
+        {
+          title: "Write a Twitter post",
+          prompt: `Write a twitter post for the discovery of gravitational wave.  
+Twitter Post:`,
+        },
+        {
+          title: "Write a review",
+          prompt: `Write a polite review complaining that the video game 'Random Game' was too badly optimized and it burned my laptop.  
+Very polite review:`,
+        },
+      ];
       const phiWorker = new Worker("./phiWorker.js", {
         type: "module",
       });
@@ -171,9 +235,42 @@
       const clearBtn = document.querySelector("#clear-btn");
       const runBtn = document.querySelector("#run");
       const modelSelect = document.querySelector("#model");
+      const promptTemplates = document.querySelector("#prompt-templates");
       let runController = new AbortController();
       let isRunning = false;
 
+      document.addEventListener("DOMContentLoaded", () => {
+        for (const [id, model] of Object.entries(MODELS)) {
+          const option = document.createElement("option");
+          option.value = id;
+          option.innerText = `${id} (${model.size})`;
+          modelSelect.appendChild(option);
+        }
+
+        for (const [i, { title, prompt }] of TEMPLATES.entries()) {
+          const div = document.createElement("div");
+          const input = document.createElement("input");
+          input.type = "radio";
+          input.name = "task";
+          input.id = `templates-${i}`;
+          input.classList.add("font-light", "cursor-pointer");
+          input.value = prompt;
+          const label = document.createElement("label");
+          label.htmlFor = `templates-${i}`;
+          label.classList.add("cursor-pointer");
+          label.innerText = title;
+          div.appendChild(input);
+          div.appendChild(label);
+          promptTemplates.appendChild(div);
+        }
+      });
+
+      promptTemplates.addEventListener("change", (e) => {
+        const template = e.target.value;
+        prompt.value = template;
+        prompt.style.height = "auto";
+        prompt.style.height = prompt.scrollHeight + "px";
+      });
       modelSelect.addEventListener("change", (e) => {
         const model = MODELS[e.target.value];
         document.querySelector("#max-seq").max = model.seq_len;
@@ -275,20 +372,11 @@
         <select
           id="model"
           class="border-2 border-gray-500 rounded-md font-light"
-        >
-          <option value="phi_1_5_quantized" selected>
-            phi 1.5 quantized q4k (800 MB)
-          </option>
-          <option value="phi_1_5_quantized_2">
-            phi 1.5 quantized q80 (1.51 GB)
-          </option>
-          <option value="puffin_phi_v2_quantized">
-            Puffin-Phi V2 quantized q4k (798 MB)
-          </option>
-          <option value="puffin_phi_v2_quantized_2">
-            Puffin-Phi V2 quantized q80 (1.50 GB)
-          </option>
-        </select>
+        ></select>
+      </div>
+      <div>
+        <h3 class="font-medium">Prompt Templates</h3>
+        <form id="prompt-templates" class="flex flex-col gap-1 my-2"></form>
       </div>
       <form
         id="form"
