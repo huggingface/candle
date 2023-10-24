@@ -1,0 +1,26 @@
+[package]
+name = "candle-optim"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
+candle-nn = { path = "../candle-nn", version = "0.3.0" }
+intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"], optional = true }
+
+
+[dev-dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+
+[features]
+default = []
+cuda = ["candle/cuda", "candle-nn/cuda"]
+mkl = ["dep:intel-mkl-src", "candle/mkl"]
