@@ -14,16 +14,18 @@ name = "candle"
 crate-type = ["cdylib"]
 
 [dependencies]
+accelerate-src = { workspace = true, optional = true }
 candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
 candle-nn = { path = "../candle-nn", version = "0.3.0" }
 half = { workspace = true }
-pyo3 = { version = "0.19.0", features = ["extension-module"] }
 intel-mkl-src = { workspace = true, optional = true }
+pyo3 = { version = "0.19.0", features = ["extension-module"] }
 
 [build-dependencies]
 pyo3-build-config = "0.19"
 
 [features]
 default = []
+accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
 mkl = ["dep:intel-mkl-src","candle/mkl"]
