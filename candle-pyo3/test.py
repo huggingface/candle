@@ -1,5 +1,10 @@
 import candle
 
+print(f"mkl:         {candle.utils.has_mkl()}")
+print(f"accelerate:  {candle.utils.has_accelerate()}")
+print(f"num-threads: {candle.utils.get_num_threads()}")
+print(f"cuda:        {candle.utils.cuda_is_available()}")
+
 t = candle.Tensor(42.0)
 print(t)
 print(t.shape, t.rank, t.device)
