@@ -13,7 +13,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.8.0/build/styles/default.min.css" />
+      href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.8.0/build/styles/default.min.css"
+    />
     <style>
       @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
       html,
@@ -36,22 +37,41 @@
     <script type="module">
       import snarkdown from "https://cdn.skypack.dev/snarkdown";
       import hljs from "https://cdn.skypack.dev/highlight.js";
-
-      const TOKENIZER_URL =
-        "https://huggingface.co/microsoft/phi-1_5/raw/main/tokenizer.json";
       // models base url
       const MODELS = {
         phi_1_5_quantized: {
           base_url:
-            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/refs%2Fpr%2F4/",
           model: "model-q4k.gguf",
+          tokenizer: "tokenizer.json",
+          config: "phi-1_5.json",
           quantized: true,
           seq_len: 2048,
         },
         phi_1_5_quantized_2: {
           base_url:
-            "https://huggingface.co/lmz/candle-quantized-phi/resolve/main/",
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/refs%2Fpr%2F4/",
           model: "model-q80.gguf",
+          tokenizer: "tokenizer.json",
+          config: "phi-1_5.json",
+          quantized: true,
+          seq_len: 2048,
+        },
+        puffin_phi_v2_quantized: {
+          base_url:
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/refs%2Fpr%2F4/",
+          model: "model-puffin-phi-v2-q4k.gguf",
+          tokenizer: "tokenizer-puffin-phi-v2.json",
+          config: "puffin-phi-v2.json",
+          quantized: true,
+          seq_len: 2048,
+        },
+        puffin_phi_v2_quantized_2: {
+          base_url:
+            "https://huggingface.co/lmz/candle-quantized-phi/resolve/refs%2Fpr%2F4/",
+          model: "model-puffin-phi-v2-q80.gguf",
+          tokenizer: "tokenizer-puffin-phi-v2.json",
+          config: "puffin-phi-v2.json",
           quantized: true,
           seq_len: 2048,
         },
@@ -65,6 +85,8 @@
         const modelID = getValue("model");
         const model = MODELS[modelID];
         const weightsURL = model.base_url + model.model;
+        const tokenizerURL = model.base_url + model.tokenizer;
+        const configURL = model.base_url + model.config;
 
         const prompt = getValue("prompt").trim();
         const temperature = getValue("temperature");
@@ -107,7 +129,8 @@
           phiWorker.postMessage({
             weightsURL,
             modelID,
-            tokenizerURL: TOKENIZER_URL,
+            tokenizerURL,
+            configURL,
             quantized: model.quantized,
             prompt,
             temp: temperature,
@@ -217,9 +240,26 @@
           <a
             href="https://arxiv.org/pdf/2309.05463.pdf#page=8"
             class="link"
-            target="_blank">
+            target="_blank"
+          >
             technical report </a
           >.
+        </p>
+        <p class="max-w-lg">
+          You can also try
+          <a
+            href="https://huggingface.co/teknium/Puffin-Phi-v2"
+            class="link"
+            target="_blank"
+            >Puffin-Phi V2
+          </a>
+          quantized version model, a fine-tuned version of Phi-1.5 on the
+          <a
+            href="https://huggingface.co/datasets/LDJnr/Puffin"
+            class="link"
+            target="_blank"
+            >Puffin dataset
+          </a>
         </p>
       </div>
       <div>
@@ -234,26 +274,34 @@
         <label for="model" class="font-medium">Models Options: </label>
         <select
           id="model"
-          class="border-2 border-gray-500 rounded-md font-light">
+          class="border-2 border-gray-500 rounded-md font-light"
+        >
           <option value="phi_1_5_quantized" selected>
             phi 1.5 quantized q4k (800 MB)
           </option>
           <option value="phi_1_5_quantized_2">
             phi 1.5 quantized q80 (1.51 GB)
           </option>
-          <!-- <option value="phi_1_5">phi 1.5 (2.84 GB)</option> -->
+          <option value="puffin_phi_v2_quantized">
+            Puffin-Phi V2 quantized q4k (798 MB)
+          </option>
+          <option value="puffin_phi_v2_quantized_2">
+            Puffin-Phi V2 quantized q80 (1.50 GB)
+          </option>
         </select>
       </div>
       <form
         id="form"
-        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md items-center">
+        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md items-center"
+      >
         <input type="submit" hidden />
         <textarea
           type="text"
           id="prompt"
           class="font-light w-full px-3 py-2 mx-1 resize-none outline-none"
           oninput="this.style.height = 0;this.style.height = this.scrollHeight + 'px'"
-          placeholder="Add your prompt here...">
+          placeholder="Add your prompt here..."
+        >
 Write a detailed analogy between mathematics and a lighthouse.  
 Answer:</textarea
         >
@@ -262,18 +310,21 @@ Answer:</textarea
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
             width="40"
-            viewBox="0 0 70 40">
+            viewBox="0 0 70 40"
+          >
             <path opacity=".5" d="M39 .2v40.2" stroke="#1F2937" />
             <path
               d="M1.5 11.5 19 29.1m0-17.6L1.5 29.1"
               opacity=".5"
               stroke="#1F2937"
-              stroke-width="2" />
+              stroke-width="2"
+            />
           </svg>
         </button>
         <button
           id="run"
-          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed">
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed"
+        >
           Run
         </button>
       </form>
@@ -292,9 +343,11 @@ Answer:</textarea
             max="2048"
             step="1"
             value="200"
-            oninput="this.nextElementSibling.value = Number(this.value)" />
+            oninput="this.nextElementSibling.value = Number(this.value)"
+          />
           <output
-            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+          >
             200</output
           >
           <label class="text-sm font-medium" for="temperature"
@@ -308,9 +361,11 @@ Answer:</textarea
             max="2"
             step="0.01"
             value="0.00"
-            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)"
+          />
           <output
-            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+          >
             0.00</output
           >
           <label class="text-sm font-medium" for="top-p">Top-p</label>
@@ -322,9 +377,11 @@ Answer:</textarea
             max="1"
             step="0.01"
             value="1.00"
-            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)"
+          />
           <output
-            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+          >
             1.00</output
           >
 
@@ -340,7 +397,8 @@ Answer:</textarea
             max="2"
             step="0.01"
             value="1.10"
-            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)"
+          />
           <output
             class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
             >1.10</output
@@ -351,11 +409,13 @@ Answer:</textarea
             id="seed"
             name="seed"
             value="299792458"
-            class="font-light border border-gray-700 text-right rounded-md p-2" />
+            class="font-light border border-gray-700 text-right rounded-md p-2"
+          />
           <button
             id="run"
             onclick="document.querySelector('#seed').value = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)"
-            class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm">
+            class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
+          >
             Rand
           </button>
         </div>
@@ -364,11 +424,13 @@ Answer:</textarea
       <div>
         <h3 class="font-medium">Generation:</h3>
         <div
-          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2">
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2"
+        >
           <div
             id="output-counter"
             hidden
-            class="ml-auto font-semibold grid-rows-1 text-sm"></div>
+            class="ml-auto font-semibold grid-rows-1 text-sm"
+          ></div>
           <p hidden id="output-generation" class="grid-rows-2"></p>
           <span id="output-status" class="m-auto font-light"
             >No output yet</span
