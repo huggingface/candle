@@ -4,8 +4,8 @@
 [![Documentation](https://docs.rs/candle-core/badge.svg)](https://docs.rs/candle-core)
 ![License](https://img.shields.io/crates/l/candle-core.svg)
 
-Candle is a minimalist ML framework for Rust with a focus on performance (including GPU support) 
-and ease of use. Try our online demos: 
+Candle is a minimalist ML framework for Rust with a focus on performance (including GPU support)
+and ease of use. Try our online demos:
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
 [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2),
 [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm),
@@ -73,7 +73,7 @@ We also provide a some command line based examples using state of the art models
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/quantized/assets/aoc.gif" width="600">
-  
+
 - [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
   image generative model, support for the 1.5, 2.1, and SDXL 1.0 versions.
 
@@ -210,6 +210,7 @@ Cheatsheet:
 - [candle-datasets](./candle-datasets/): Datasets and data loaders.
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
+- [candle-optim](./candle-optim): Optimizers (momentum SGD, AdaGrad ...).
 
 ## FAQ
 
@@ -237,7 +238,7 @@ Finally, Rust is cool! A lot of the HF ecosystem already has Rust crates, like [
 - [burn](https://github.com/burn-rs/burn) is a general crate that can leverage multiple backends so you can choose the best
   engine for your workload.
 
-- [tch-rs](https://github.com/LaurentMazare/tch-rs.git) Bindings to the torch library in Rust. Extremely versatile, but they 
+- [tch-rs](https://github.com/LaurentMazare/tch-rs.git) Bindings to the torch library in Rust. Extremely versatile, but they
   bring in the entire torch library into the runtime. The main contributor of `tch-rs` is also involved in the development
   of `candle`.
 
