@@ -1,6 +1,8 @@
-use candle_nn::Activation;
-use serde::Deserialize;
 use std::collections::HashMap;
+
+use serde::Deserialize;
+
+use candle_nn::Activation;
 
 #[derive(Debug, Deserialize, Clone)]
 /// # BART model configuration

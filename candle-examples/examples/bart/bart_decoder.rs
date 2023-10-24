@@ -1,18 +1,18 @@
+use candle::{DType, Result};
 use candle::Device;
 use candle::Tensor;
-use candle::{DType, Result};
 use candle_nn as nn;
-use candle_nn::activation::Activation;
-use candle_nn::LayerNorm;
 use candle_nn::{Dropout, Linear};
 use candle_nn::{Module, VarBuilder};
+use candle_nn::activation::Activation;
+use candle_nn::LayerNorm;
 
-use crate::bart_attention::BartAttention;
-use crate::bart_encoder::EmbeddingOption;
-use crate::bart_encoder::_expand_mask;
-use crate::bart_encoder::{LearnedPositionalEmbedding, SinusoidalPositionalEmbedding};
-use crate::layer_state::LayerState;
 use crate::{Config, DEVICE};
+use crate::bart_attention::BartAttention;
+use crate::bart_encoder::{LearnedPositionalEmbedding, SinusoidalPositionalEmbedding};
+use crate::bart_encoder::_expand_mask;
+use crate::bart_encoder::EmbeddingOption;
+use crate::layer_state::LayerState;
 
 pub struct DecoderLayer {
     self_attention: BartAttention,
@@ -373,8 +373,14 @@ pub(crate) fn _make_causal_mask(
     let target_length = input_ids_shape[1];
 
     let mut mask = Tensor::zeros((target_length, target_length), dtype, DEVICE)?;
+    // let mut mask = Tensor::full(
+    //     [target_length, target_length],
+    //     get_min(dtype).unwrap(),
+    //     (dtype, device),
+    // );
 
     let mask_cond = Tensor::arange(0i64, target_length as i64, DEVICE)?;
+    // let mask_cond = Tensor::arange(target_length, (dtype, device));
 
     mask = masked_fill(
         &mask_cond.lt(&(&mask_cond + 1f64)?.reshape((target_length, 1))?)?,

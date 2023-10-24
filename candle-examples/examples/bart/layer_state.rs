@@ -1,20 +1,4 @@
-use candle::Var;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
-
 use candle::Tensor;
-use candle_nn as nn;
-use candle_nn::{linear, Dropout, Linear};
-use std::borrow::Borrow;
-use std::ops::Div;
-
-use candle::{DType, Device, Result};
-use candle_nn::activation::Activation;
-use candle_nn::{Embedding, Module, VarBuilder};
-use serde::{Deserialize, Serialize};
-
-use crate::Config;
 
 #[derive(Debug)]
 /// # Cache for BART attention layers

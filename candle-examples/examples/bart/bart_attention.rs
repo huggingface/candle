@@ -1,9 +1,9 @@
 use candle::{Result, Tensor};
+use candle_nn::{Dropout, linear, Linear};
 use candle_nn::VarBuilder;
-use candle_nn::{linear, Dropout, Linear};
 
-use crate::layer_state::LayerState;
 use crate::Config;
+use crate::layer_state::LayerState;
 
 #[derive(Debug)]
 pub struct BartAttention {

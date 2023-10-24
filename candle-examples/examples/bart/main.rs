@@ -11,15 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bart::BartModel;
+use crate::bart_config::Config;
 use anyhow::{Error, Result};
+use candle::DType;
 use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
 use tokenizers::Tokenizer;
-
-use crate::bart::BartModel;
-use crate::bart_config::Config;
-
-pub const DTYPE: DType = DType::F32;
 
 mod bart;
 mod bart_attention;
@@ -27,20 +25,24 @@ mod bart_config;
 mod bart_decoder;
 mod bart_embedding;
 mod bart_encoder;
+mod bart_sequence_classification;
 mod layer_state;
+pub const DTYPE: DType = DType::F32;
 
 const DEVICE: &Device = &Device::Cpu;
 
 fn main() -> Result<(), Error> {
+    let start = std::time::Instant::now();
+
     let vb = unsafe {
         VarBuilder::from_mmaped_safetensors(&["models/bart/model.safetensors"], DTYPE, DEVICE)
             .unwrap()
     };
 
-    let config: String = std::fs::read_to_string("models/bart/config.json")?;
-    let config: Config = serde_json::from_str(&config)?;
+    let config_str: String = std::fs::read_to_string("models/bart/config.json")?;
+    let config: Config = serde_json::from_str(&config_str)?;
 
-    let model = BartModel::load(vb, &config)?;
+    let model = BartModel::load(vb.pp("model"), &config)?;
 
     let mut tokenizer = Tokenizer::from_file("models/bart/tokenizer.json").map_err(Error::msg)?;
 
@@ -61,11 +63,10 @@ fn main() -> Result<(), Error> {
     println!("Loaded and encoded {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
+    // let ys = model.forward_t(Some(&token_ids), Some(&token_type_ids))?;
 
-    let ys = model.forward(&token_ids, &token_type_ids)?;
-
-    println!("{ys}");
-    println!("Took {:?}", start.elapsed());
+    // println!("{ys}");
+    // println!("Took {:?}", start.elapsed());
 
     Ok(())
 }

@@ -1,25 +1,15 @@
-use crate::bart_decoder::masked_fill;
-use crate::layer_state::LayerState;
-use candle::Error;
-use candle::Tensor;
-use candle::Var;
 use candle::{DType, Result};
+use candle::Tensor;
 use candle_nn as nn;
+use candle_nn::{Dropout, Linear};
+use candle_nn::{Module, VarBuilder};
 use candle_nn::activation::Activation;
 use candle_nn::embedding;
-use candle_nn::{linear, Dropout, Linear};
-use candle_nn::{Embedding, Module, VarBuilder};
-use serde::{Deserialize, Serialize};
-use std::borrow::Borrow;
-use std::collections::HashMap;
-use std::ops::Div;
-use std::sync::Arc;
-use std::sync::Mutex;
-
-use crate::bart_attention::BartAttention;
-// use crate::bart_encoder::nn::LayerNorm;
-use crate::{Config, DEVICE};
 use candle_nn::LayerNorm;
+
+use crate::{Config, DEVICE};
+use crate::bart_attention::BartAttention;
+use crate::bart_decoder::masked_fill;
 
 pub struct EncoderLayer {
     self_attention: BartAttention,
@@ -29,7 +19,7 @@ pub struct EncoderLayer {
     activation: Activation,
     fc1: Linear,
     fc2: Linear,
-    final_layer_norm: nn::LayerNorm,
+    final_layer_norm: LayerNorm,
 }
 
 fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
@@ -61,6 +51,7 @@ impl EncoderLayer {
             layer_norm_config,
             vb.pp("self_attn_layer_norm"),
         )?;
+
         let dropout = Dropout::new(config.dropout);
         let activation_dropout = Dropout::new(config.activation_dropout);
         let activation = match &config.activation_function {
@@ -209,7 +200,7 @@ impl BartEncoder {
         let attention_mask = attention_mask
             .map(|mask| _expand_mask(mask, None, mask.dtype()))
             .unwrap()?;
-
+        // let attention_mask = attention_mask.map(|mask| _expand_mask(mask, None, x.kind()));
         let mut hidden_state = self.dropout.forward(&x, train)?;
 
         let mut all_hidden_states: Option<Vec<Tensor>> = if self.output_hidden_states {
@@ -295,7 +286,7 @@ impl LearnedPositionalEmbedding {
     pub fn forward(&self, input: &Tensor, past_key_values_length: usize) -> Result<Tensor> {
         let (_, sequence_length) = input.dims2()?;
         let end = past_key_values_length + sequence_length;
-        let positions = Tensor::arange(sequence_length as i64, end as i64, &DEVICE)?;
+        let positions = Tensor::arange(sequence_length as i64, end as i64, DEVICE)?;
         positions.apply(&self.embedding)
     }
 }

@@ -1,17 +1,20 @@
-use candle::{DType, Device, Result, Tensor};
+use candle::{Device, DType, Result, Tensor};
+use candle::IndexOp;
+use candle::Shape;
 use candle_nn as nn;
-use candle_nn::{Embedding, Module, VarBuilder};
-use serde::Deserialize;
+use candle_nn::embedding;
+use candle_nn::VarBuilder;
 
 use crate::bart_config::Config;
-use crate::bart_decoder::BartDecoder;
-use crate::bart_embedding::EmbeddingConfig;
+use crate::bart_decoder::{BartDecoder, masked_fill};
 use crate::bart_encoder::BartEncoder;
-use candle_nn::embedding;
+use crate::DEVICE;
+use crate::layer_state::LayerState;
+
 pub const DTYPE: DType = DType::F32;
 
 pub struct BartModel {
-    config: Config,
+    pub config: Config,
     pub(crate) encoder: BartEncoder,
     decoder: BartDecoder,
     pub(crate) embeddings: nn::Embedding,
@@ -22,11 +25,11 @@ impl BartModel {
     pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let pad_token_id = config.pad_token_id.unwrap_or(1);
 
-        let embeddings = embedding(config.vocab_size, config.d_model, vb.pp("model.shared"))?;
+        let embeddings = embedding(config.vocab_size, config.d_model, vb.pp("shared"))?;
 
-        let encoder = BartEncoder::load(vb.pp("model.encoder"), config)?;
+        let encoder = BartEncoder::load(vb.pp("encoder"), config)?;
 
-        let decoder = BartDecoder::load(vb.pp("model.decoder"), config)?;
+        let decoder = BartDecoder::load(vb.pp("decoder"), config)?;
 
         Ok(BartModel {
             config: config.clone(),
@@ -146,6 +149,8 @@ fn _shift_tokens_right(
     )?;
 
     let shifted_input_ids = masked_fill(&shifted_input_ids, &mask, &fill)?;
+    // shifted_input_ids[:, 0] = decoder_start_token_id
+    // shifted_input_ids[:, 1:] = input_ids[:, :-1].clone()
 
     Ok(shifted_input_ids)
 }
@@ -158,8 +163,6 @@ pub fn tensor_n<S: Into<Shape>>(shape: S, n: f64, dtype: DType, device: &Device)
 
 #[cfg(test)]
 mod tests {
-    use serde::de::Expected;
-
     use super::*;
 
     #[test]
