@@ -540,6 +540,64 @@ impl Tensor {
         Ok(inp)
     }
 
+    /// Creates grids of coordinates specified by the 1D inputs.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - A slice of 1D tensors.
+    /// * `indexing` - An optional indexing mode. Either 'xy' or 'ij'. If not specified, 'xy' is
+    ///  used.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use candle_core::{Tensor, Device, Shape};
+    /// # fn dummy() -> Result<(), Box<dyn std::error::Error>> {
+    /// let x = Tensor::new(&[1f32, 2., 3.], &Device::Cpu)?;
+    /// let y = Tensor::new(&[4f32, 5., 6.], &Device::Cpu)?;
+    ///
+    /// let grids = Tensor::meshgrid(&[&x, &y], None)?;
+    ///
+    /// assert_eq!(2, grids.len());
+    /// assert_eq!(Vec::from([3]), grids[0].shape().clone().into_dims());
+    /// assert_eq!(Vec::from([3]), grids[0].shape().clone().into_dims());
+    ///
+    /// assert_eq!(grids[0].to_vec1::<f32>()?, &[1., 1., 1., 2., 2., 2., 3., 3., 3.]);
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// * Will return `Err` if `args` contains less than 2 tensors.
+    /// * Will return `Err` if an unrecognized indexing mode is specified.
+    ///
+    pub fn meshgrid<A: AsRef<Tensor>>(args: &[A], indexing: Option<&str>) -> Result<Vec<Self>> {
+        if args.is_empty() || args.len() == 1 {
+            Err(Error::OpRequiresAtLeastOneTensor { op: "meshgrid" }.bt())?
+        }
+
+        let mut grids = Vec::with_capacity(args.len());
+        for idx in 0..args.len() {
+            // Repeat the tensor across the given dimensions to infiltrate it in the resulting grid
+            let repeats: Vec<_> = (0..args.len()).map(|i| if i == idx {1} else {args[i].as_ref().shape().dims()[0]}).collect();
+            let repeated_tensor = args[idx].as_ref().clone().repeat(repeats.clone())?;
+
+            // Reshape the tensor to match the dimensions of the grid
+            let reshaped_tensor = repeated_tensor.reshape(repeats)?;
+
+            grids.push(reshaped_tensor);
+        }
+
+        match indexing {
+            Some("xy") | None => Ok(grids),
+            Some("ij") => Ok(grids.into_iter().rev().collect()),
+            _ => Err(Error::InvalidGridIndexingMode {
+                op: "meshgrid",
+                mode: indexing.unwrap().to_string(),
+            }),
+        }
+    }
+
     /// This operation multiplies the input tensor by `mul` then adds `add` and return the result.
     /// The input values `mul` and `add` are casted to the appropriate type so some rounding might
     /// be performed.

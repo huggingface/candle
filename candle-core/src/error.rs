@@ -126,6 +126,12 @@ pub enum Error {
         size: usize,
     },
 
+    #[error("{op} invalid grid indexing mode {mode}, expected either 'xy' or 'ij'")]
+    InvalidGridIndexingMode {
+        op: &'static str,
+        mode: String,
+    },
+
     #[error("cannot broadcast {src_shape:?} to {dst_shape:?}")]
     BroadcastIncompatibleShapes { src_shape: Shape, dst_shape: Shape },
 
