@@ -255,4 +255,7 @@ impl BlipForConditionalGeneration {
     pub fn text_decoder(&mut self) -> &mut blip_text::TextLMHeadModel {
         &mut self.text_decoder
     }
+    pub fn reset_kv_cache(&mut self) {
+        self.text_decoder.reset_kv_cache();
+    }
 }

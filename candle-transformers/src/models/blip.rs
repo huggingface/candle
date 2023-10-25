@@ -2,8 +2,9 @@ use super::blip_text;
 use super::with_tracing::{conv2d, linear, Conv2d, Linear};
 use candle::{Module, Result, Tensor, D};
 use candle_nn::{layer_norm, Conv2dConfig, LayerNorm, VarBuilder};
+use serde::Deserialize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct VisionConfig {
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -16,7 +17,7 @@ pub struct VisionConfig {
     pub layer_norm_eps: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub text_config: blip_text::Config,
     pub vision_config: VisionConfig,
@@ -298,5 +299,9 @@ impl BlipForConditionalGeneration {
 
     pub fn text_decoder(&mut self) -> &mut blip_text::TextLMHeadModel {
         &mut self.text_decoder
+    }
+
+    pub fn reset_kv_cache(&mut self) {
+        self.text_decoder.reset_kv_cache();
     }
 }

@@ -7,13 +7,7 @@ members = [
     "candle-nn",
     "candle-pyo3",
     "candle-transformers",
-    "candle-wasm-examples/llama2-c",
-    "candle-wasm-examples/segment-anything",
-    "candle-wasm-examples/whisper",
-    "candle-wasm-examples/yolo",
-    "candle-wasm-examples/bert",
-    "candle-wasm-examples/phi",
-    "candle-wasm-examples/t5",
+    "candle-wasm-examples/*",
     "candle-wasm-tests",
 ]
 exclude = ["candle-flash-attn", "candle-kernels"]
