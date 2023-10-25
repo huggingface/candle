@@ -135,6 +135,8 @@ And then head over to
 ## Useful External Resources
 - [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): a
   very detailed tutorial showing how to convert a PyTorch model to Candle.
+- [`optimisers`](https://github.com/KGrewal1/optimisers): a collection of optimisers
+  including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
 - [`candle-lora`](https://github.com/EricLBuehler/candle-lora): a LoRA implementation
   that conforms to the official `peft` implementation.
 
