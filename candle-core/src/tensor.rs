@@ -575,7 +575,6 @@ impl Tensor {
     /// # Errors
     ///
     /// * Will return `Err` if `args` contains less than 2 tensors.
-    /// * Will return `Err` if an unrecognized indexing mode is specified.
     ///
     pub fn meshgrid<A: AsRef<Tensor>>(args: &[A], xy_indexing: bool) -> Result<Vec<Self>> {
         if args.is_empty() || args.len() <= 1 {
