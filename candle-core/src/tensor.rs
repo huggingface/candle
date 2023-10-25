@@ -583,7 +583,10 @@ impl Tensor {
         let mut grids = Vec::with_capacity(args.len());
         for idx in 0..args.len() {
             // Repeat the tensor across the given dimensions to infiltrate it in the resulting grid
-            let repeats: Vec<_> = args.iter().map(|t| t.as_ref().dim(0)).collect::<Result<_>>()?;
+            let repeats: Vec<_> = args
+                .iter()
+                .map(|t| t.as_ref().dim(0))
+                .collect::<Result<_>>()?;
             let repeated_tensor = args[idx].as_ref().clone().repeat(repeats.clone())?;
 
             // Reshape the tensor to match the dimensions of the grid
