@@ -1,4 +1,5 @@
 use wasm_bindgen::prelude::*;
+pub mod token_output_stream;
 
 #[wasm_bindgen]
 extern "C" {
