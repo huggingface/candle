@@ -70,6 +70,9 @@ struct EvaluationCmd {
     /// https://huggingface.co/karpathy/tinyllamas/tree/main
     #[arg(long, default_value = "stories15M.bin")]
     which_model: String,
+
+    #[arg(long, default_value = "TinyStories-valid.txt")]
+    dataset_name: String,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -178,10 +181,9 @@ fn run_eval(args: &EvaluationCmd, common_args: &Args) -> Result<()> {
     let tokens = match &args.pretokenized_dir {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
-            let model_id = "roneneldan/TinyStories"; // TODO: Make this configurable.
-            println!("loading the evaluation dataset from {}", model_id);
-            let api = api.dataset(model_id.to_string());
-            let dataset_path = api.get("TinyStories-valid.txt")?;
+            println!("loading the evaluation dataset from {}", args.model_id);
+            let api = api.dataset(args.model_id.to_string());
+            let dataset_path = api.get(&args.dataset_name)?;
             let file = std::fs::File::open(dataset_path)?;
             let file = std::io::BufReader::new(file);
             let mut tokens = vec![];
