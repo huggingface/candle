@@ -271,7 +271,7 @@ impl BertLayer {
 fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
     let n_heads = cfg.num_attention_heads;
     let seq_len = cfg.max_position_embeddings;
-    let alibi_bias = Tensor::arange(0, seq_len as i64, &Device::Cpu)?;
+    let alibi_bias = Tensor::arange(0, seq_len as i64, &Device::Cpu)?.to_dtype(DType::F32)?;
     let alibi_bias = {
         let a1 = alibi_bias.reshape((1, seq_len))?;
         let a2 = alibi_bias.reshape((seq_len, 1))?;
