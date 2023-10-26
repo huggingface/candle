@@ -1,8 +1,9 @@
 use super::with_tracing::{linear, Embedding, Linear};
 use candle::{Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
+use serde::Deserialize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
     pub hidden_size: usize,
