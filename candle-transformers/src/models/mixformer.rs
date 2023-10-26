@@ -4,11 +4,12 @@ use crate::models::with_tracing::{linear, Embedding as E, Linear};
 /// https://arxiv.org/abs/2309.05463
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
+use serde::Deserialize;
 
 const MAX_SEQ_LEN: usize = 4096;
 
 // https://huggingface.co/microsoft/phi-1_5/blob/main/configuration_mixformer_sequential.py
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) n_positions: usize,

@@ -34,6 +34,12 @@ pub struct Linear {
     bias: Option<Tensor>,
 }
 
+impl Linear {
+    pub fn from_weights(weight: QMatMul, bias: Option<Tensor>) -> Self {
+        Self { weight, bias }
+    }
+}
+
 impl Module for Linear {
     fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
         let x = x.apply(&self.weight)?;

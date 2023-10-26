@@ -401,6 +401,11 @@ class Tensor:
         Convert the tensor to a new dtype.
         """
         pass
+    def to_torch(self) -> torch.Tensor:
+        """
+        Converts candle's tensor to pytorch's tensor
+        """
+        pass
     def transpose(self, dim1: int, dim2: int) -> Tensor:
         """
         Returns a tensor that is a transposed version of the input, the given dimensions are swapped.

@@ -100,9 +100,19 @@ impl BatchNorm {
             num_features,
         })
     }
-}
 
-impl BatchNorm {
+    pub fn running_mean(&self) -> &Tensor {
+        &self.running_mean
+    }
+
+    pub fn running_var(&self) -> &Tensor {
+        &self.running_var
+    }
+
+    pub fn weight_and_bias(&self) -> Option<(&Tensor, &Tensor)> {
+        self.weight_and_bias.as_ref().map(|v| (&v.0, &v.1))
+    }
+
     pub fn forward_learning(&self, x: &Tensor) -> Result<Tensor> {
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {

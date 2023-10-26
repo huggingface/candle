@@ -449,7 +449,7 @@ impl Tensor {
 
     /// Returns true if the computation graph should track this op, that is if it is
     /// a variable or if it has some variable as dependencies.
-    pub(crate) fn track_op(&self) -> bool {
+    pub fn track_op(&self) -> bool {
         self.is_variable || self.op.is_some()
     }
 
@@ -538,6 +538,73 @@ impl Tensor {
             }
         }
         Ok(inp)
+    }
+
+    /// Creates grids of coordinates specified by the 1D inputs.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - A slice of 1D tensors.
+    /// * `xy_indexing` - Whether to use xy indexing or ij indexing. If xy is selected, the
+    /// first dimension corresponds to the cardinality of the second input and the second
+    /// dimension corresponds to the cardinality of the first input. If ij is selected, the
+    /// dimensions are in the same order as the cardinality of the inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device, Shape};
+    /// let x = Tensor::new(&[1f32, 2., 3.], &Device::Cpu)?;
+    /// let y = Tensor::new(&[4f32, 5., 6.], &Device::Cpu)?;
+    ///
+    /// let grids_xy = Tensor::meshgrid(&[&x, &y], true)?;
+    ///
+    /// assert_eq!(grids_xy.len(), 2);
+    /// assert_eq!(grids_xy[0].dims(), &[3, 3]);
+    ///
+    /// assert_eq!(grids_xy[0].to_vec2::<f32>()?, &[[1., 2., 3.], [1., 2., 3.], [1., 2., 3.]]);
+    /// assert_eq!(grids_xy[1].to_vec2::<f32>()?, &[[4., 4., 4.], [5., 5., 5.], [6., 6., 6.]]);
+    ///
+    /// let grids_ij = Tensor::meshgrid(&[&x, &y], false)?;
+    ///
+    /// assert_eq!(grids_ij[0].to_vec2::<f32>()?, &[[1., 1., 1.], [2., 2., 2.], [3., 3., 3.]]);
+    /// assert_eq!(grids_ij[1].to_vec2::<f32>()?, &[[4., 5., 6.], [4., 5., 6.], [4., 5., 6.]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// * Will return `Err` if `args` contains less than 2 tensors.
+    ///
+    pub fn meshgrid<A: AsRef<Tensor>>(args: &[A], xy_indexing: bool) -> Result<Vec<Self>> {
+        if args.len() <= 1 {
+            Err(Error::OpRequiresAtLeastTwoTensors { op: "meshgrid" }.bt())?
+        }
+        let args: Vec<_> = if xy_indexing {
+            args.iter().rev().collect()
+        } else {
+            args.iter().collect()
+        };
+
+        let mut shape = Vec::with_capacity(args.len());
+        for arg in args.iter() {
+            shape.push(arg.as_ref().dims1()?)
+        }
+
+        let mut grids = Vec::with_capacity(args.len());
+        for idx in 0..args.len() {
+            let mut ones = vec![1usize; args.len()];
+            ones[idx] = shape[idx];
+            let arg = args[idx].as_ref().reshape(ones)?;
+            let mut repeats = shape.clone();
+            repeats[idx] = 1;
+            let repeated_tensor = arg.repeat(repeats)?;
+            grids.push(repeated_tensor);
+        }
+        if xy_indexing {
+            grids.reverse();
+        }
+        Ok(grids)
     }
 
     /// This operation multiplies the input tensor by `mul` then adds `add` and return the result.
@@ -1596,6 +1663,24 @@ impl Tensor {
         } else {
             self.narrow(0, i, 1)?.reshape(&dims[1..])
         }
+    }
+
+    /// Returns the sub-tensor fixing the index at `index` on the dimension `dim`.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let t = tensor.get_on_dim(1, 0)?;
+    /// assert_eq!(t.to_vec1::<f32>()?, &[0., 2., 4.]);
+    /// let t = tensor.get_on_dim(1, 1)?;
+    /// assert_eq!(t.to_vec1::<f32>()?, &[1., 3., 5.]);
+    /// let t = tensor.get_on_dim(0, 1)?;
+    /// assert_eq!(t.to_vec1::<f32>()?, &[2., 3.]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn get_on_dim<D: Dim>(&self, dim: D, index: usize) -> Result<Tensor> {
+        let dim = dim.to_index(self.shape(), "get_on_dim")?;
+        self.narrow(dim, index, 1)?.squeeze(dim)
     }
 
     /// Returns a tensor that is a transposed version of the input, the two last dimensions of the

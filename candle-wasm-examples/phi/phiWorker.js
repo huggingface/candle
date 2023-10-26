@@ -15,21 +15,30 @@ async function fetchArrayBuffer(url) {
 class Phi {
   static instance = {};
 
-  static async getInstance(weightsURL, modelID, tokenizerURL, quantized) {
+  static async getInstance(
+    weightsURL,
+    modelID,
+    tokenizerURL,
+    configURL,
+    quantized
+  ) {
     // load individual modelID only once
     if (!this.instance[modelID]) {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
 
-      const [weightsArrayU8, tokenizerArrayU8] = await Promise.all([
-        fetchArrayBuffer(weightsURL),
-        fetchArrayBuffer(tokenizerURL),
-      ]);
+      const [weightsArrayU8, tokenizerArrayU8, configArrayU8] =
+        await Promise.all([
+          fetchArrayBuffer(weightsURL),
+          fetchArrayBuffer(tokenizerURL),
+          fetchArrayBuffer(configURL),
+        ]);
 
       this.instance[modelID] = new Model(
         weightsArrayU8,
         tokenizerArrayU8,
+        configArrayU8,
         quantized
       );
     }
@@ -52,6 +61,7 @@ async function generate(data) {
     weightsURL,
     modelID,
     tokenizerURL,
+    configURL,
     quantized,
     prompt,
     temp,
@@ -66,6 +76,7 @@ async function generate(data) {
       weightsURL,
       modelID,
       tokenizerURL,
+      configURL,
       quantized
     );
 

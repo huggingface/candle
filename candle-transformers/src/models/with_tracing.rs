@@ -32,6 +32,14 @@ pub struct Linear {
     span: tracing::Span,
 }
 
+impl Linear {
+    pub fn from_weights(weights: Tensor, bias: Option<Tensor>) -> Self {
+        let inner = candle_nn::Linear::new(weights, bias);
+        let span = tracing::span!(tracing::Level::TRACE, "linear");
+        Self { inner, span }
+    }
+}
+
 pub fn linear(d1: usize, d2: usize, vb: VarBuilder) -> Result<Linear> {
     let inner = candle_nn::linear(d1, d2, vb)?;
     let span = tracing::span!(tracing::Level::TRACE, "linear");
@@ -58,8 +66,8 @@ pub struct Conv2d {
     span: tracing::Span,
 }
 
-impl Conv2d {
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl Module for Conv2d {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         self.inner.forward(x)
     }
