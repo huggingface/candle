@@ -39,7 +39,7 @@ impl Config {
             num_attention_heads: 12,
             intermediate_size: 3072,
             hidden_act: candle_nn::Activation::Gelu,
-            max_position_embeddings: 512,
+            max_position_embeddings: 8192,
             type_vocab_size: 2,
             initializer_range: 0.02,
             layer_norm_eps: 1e-12,
@@ -282,7 +282,7 @@ fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
         n_heads2 *= 2
     }
     let slopes = (1..=n_heads2)
-        .map(|v| 1f32 / 2f32.powf(8f32 / v as f32))
+        .map(|v| -1f32 / 2f32.powf((v * 8) as f32 / n_heads2 as f32))
         .collect::<Vec<_>>();
     let slopes = if n_heads2 == n_heads {
         slopes
