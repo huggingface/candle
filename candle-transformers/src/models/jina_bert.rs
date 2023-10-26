@@ -1,4 +1,3 @@
-#![allow(unused)]
 use super::with_tracing::{linear, linear_no_bias, Embedding, Linear};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Module, VarBuilder};
@@ -207,56 +206,6 @@ impl BertAttention {
         let self_outputs = self.self_attention.forward(xs, bias)?;
         let attention_output = self.self_output.forward(&self_outputs, xs)?;
         Ok(attention_output)
-    }
-}
-
-#[derive(Clone, Debug)]
-struct BertIntermediate {
-    dense: Linear,
-    intermediate_act: candle_nn::Activation,
-    span: tracing::Span,
-}
-
-impl BertIntermediate {
-    fn new(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let dense = linear(cfg.hidden_size, cfg.intermediate_size, vb.pp("dense"))?;
-        Ok(Self {
-            dense,
-            intermediate_act: cfg.hidden_act,
-            span: tracing::span!(tracing::Level::TRACE, "inter"),
-        })
-    }
-}
-
-impl Module for BertIntermediate {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        xs.apply(&self.dense)?.apply(&self.intermediate_act)
-    }
-}
-
-#[derive(Clone, Debug)]
-struct BertOutput {
-    dense: Linear,
-    layer_norm: LayerNorm,
-    span: tracing::Span,
-}
-
-impl BertOutput {
-    fn new(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let dense = linear(cfg.intermediate_size, cfg.hidden_size, vb.pp("dense"))?;
-        let layer_norm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("LayerNorm"))?;
-        Ok(Self {
-            dense,
-            layer_norm,
-            span: tracing::span!(tracing::Level::TRACE, "out"),
-        })
-    }
-
-    fn forward(&self, xs: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        let xs = self.dense.forward(xs)?;
-        self.layer_norm.forward(&(xs + input_tensor)?)
     }
 }
 
