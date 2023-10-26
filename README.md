@@ -56,6 +56,7 @@ These online demos run entirely in your browser:
 - [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm): text generation.
 - [Phi-v1.5](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm): text generation.
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
+- [Blip](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning): image captioning.
 
 We also provide a some command line based examples using state of the art models:
 
