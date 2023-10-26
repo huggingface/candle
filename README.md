@@ -56,7 +56,7 @@ These online demos run entirely in your browser:
 - [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm): text generation.
 - [Phi-v1.5](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm): text generation.
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
-- [Blip](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning): image captioning.
+- [BLIP](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning): image captioning.
 
 We also provide a some command line based examples using state of the art models:
 
@@ -96,7 +96,8 @@ We also provide a some command line based examples using state of the art models
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
 
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
-- [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
+- [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/),
+  [JinaBert](./candle-examples/examples/jina-bert/) : useful for sentence embeddings.
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
   using self-supervision (can be used for imagenet classification, depth
   evaluation, segmentation).
