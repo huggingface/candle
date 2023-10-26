@@ -55,7 +55,6 @@ struct BertEmbeddings {
     // no position_embeddings as we only support alibi.
     token_type_embeddings: Embedding,
     layer_norm: LayerNorm,
-    token_type_ids: Tensor,
     span: tracing::Span,
 }
 
@@ -69,12 +68,10 @@ impl BertEmbeddings {
             vb.pp("token_type_embeddings"),
         )?;
         let layer_norm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb.pp("LayerNorm"))?;
-        let token_type_ids = vb.get(cfg.max_position_embeddings, "token_type_ids")?;
         Ok(Self {
             word_embeddings,
             token_type_embeddings,
             layer_norm,
-            token_type_ids,
             span: tracing::span!(tracing::Level::TRACE, "embeddings"),
         })
     }
@@ -85,9 +82,7 @@ impl Module for BertEmbeddings {
         let _enter = self.span.enter();
         let (b_size, seq_len) = input_ids.dims2()?;
         let input_embeddings = self.word_embeddings.forward(input_ids)?;
-        let token_type_embeddings = self
-            .token_type_ids
-            .i((..seq_len,))?
+        let token_type_embeddings = Tensor::zeros(seq_len, DType::F32, input_ids.device())?
             .broadcast_left(b_size)?
             .apply(&self.token_type_embeddings)?;
         let embeddings = (&input_embeddings + token_type_embeddings)?;
