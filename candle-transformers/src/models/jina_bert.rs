@@ -273,6 +273,38 @@ impl BertLayer {
     }
 }
 
+fn build_alibi_bias(cfg: &Config) -> Result<Tensor> {
+    let n_heads = cfg.num_attention_heads;
+    let seq_len = cfg.max_position_embeddings;
+    let alibi_bias = Tensor::arange(0, seq_len as i64, &Device::Cpu)?;
+    let alibi_bias = {
+        let a1 = alibi_bias.reshape((1, seq_len))?;
+        let a2 = alibi_bias.reshape((seq_len, 1))?;
+        a1.broadcast_sub(&a2)?.abs()?.broadcast_left(n_heads)?
+    };
+    let mut n_heads2 = 1;
+    while n_heads2 < n_heads {
+        n_heads2 *= 2
+    }
+    let slopes = (1..=n_heads2)
+        .map(|v| 1f32 / 2f32.powf(8f32 / v as f32))
+        .collect::<Vec<_>>();
+    let slopes = if n_heads2 == n_heads {
+        slopes
+    } else {
+        slopes
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .chain(slopes.iter().step_by(2))
+            .take(n_heads)
+            .cloned()
+            .collect::<Vec<f32>>()
+    };
+    let slopes = Tensor::new(slopes, &Device::Cpu)?.reshape((1, (), 1, 1))?;
+    alibi_bias.to_dtype(DType::F32)?.broadcast_mul(&slopes)
+}
+
 #[derive(Clone, Debug)]
 struct BertEncoder {
     alibi: Tensor,
@@ -289,8 +321,7 @@ impl BertEncoder {
             .map(|index| BertLayer::new(vb.pp(&format!("layer.{index}")), cfg))
             .collect::<Result<Vec<_>>>()?;
         let span = tracing::span!(tracing::Level::TRACE, "encoder");
-        let sz = cfg.max_position_embeddings;
-        let alibi = vb.get((1, cfg.num_attention_heads, sz, sz), "alibi")?;
+        let alibi = build_alibi_bias(cfg)?.to_device(vb.device())?;
         Ok(Self {
             alibi,
             layers,
