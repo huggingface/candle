@@ -6,6 +6,7 @@ pub mod convmixer;
 pub mod dinov2;
 pub mod efficientnet;
 pub mod falcon;
+pub mod jina_bert;
 pub mod llama;
 pub mod mistral;
 pub mod mixformer;
