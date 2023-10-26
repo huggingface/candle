@@ -82,7 +82,7 @@ impl Module for BertEmbeddings {
         let _enter = self.span.enter();
         let (b_size, seq_len) = input_ids.dims2()?;
         let input_embeddings = self.word_embeddings.forward(input_ids)?;
-        let token_type_embeddings = Tensor::zeros(seq_len, DType::F32, input_ids.device())?
+        let token_type_embeddings = Tensor::zeros(seq_len, DType::U32, input_ids.device())?
             .broadcast_left(b_size)?
             .apply(&self.token_type_embeddings)?;
         let embeddings = (&input_embeddings + token_type_embeddings)?;
@@ -141,7 +141,7 @@ impl BertSelfAttention {
 
         let attention_scores = query_layer.matmul(&key_layer.t()?)?;
         let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
-        let attention_scores = (attention_scores + bias)?;
+        let attention_scores = attention_scores.broadcast_add(bias)?;
         let attention_probs = {
             let _enter_sm = self.span_softmax.enter();
             candle_nn::ops::softmax_last_dim(&attention_scores)?
