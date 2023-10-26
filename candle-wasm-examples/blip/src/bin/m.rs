@@ -74,18 +74,25 @@ impl Model {
         Ok(Self { model, tokenizer })
     }
     #[wasm_bindgen]
-    pub fn init_with_image(&mut self, image: Vec<u8>) -> Result<String, JsError> {
+    pub fn generate_caption_from_image(&mut self, image: Vec<u8>) -> Result<String, JsError> {
         self.model.reset_kv_cache();
 
         let device = Device::Cpu;
+        console_log!("loading image as tensor");
+        let start = Date::now();
         let image: Tensor = self.load_image(image)?.to_device(&device)?;
+        console_log!("image loaded in {:?}s", (Date::now() - start) / 1000.);
+        let start = Date::now();
         let image_embeds: Tensor = match &mut self.model {
             SelectedModel::M(m) => image.unsqueeze(0)?.apply(m.vision_model())?,
             SelectedModel::Q(m) => image.unsqueeze(0)?.apply(m.vision_model())?,
         };
+        console_log!("image embedded in {:?}s", (Date::now() - start) / 1000.);
         let mut logits_processor = LogitsProcessor::new(299792458, None, None);
         let mut token_ids = vec![30522u32];
         let mut text: String = "".to_string();
+
+        let start = Date::now();
         for index in 0..1000 {
             let context_size = if index > 0 { 1 } else { token_ids.len() };
             let start_pos = token_ids.len().saturating_sub(context_size);
@@ -109,23 +116,26 @@ impl Model {
         {
             text.push_str(&rest);
         }
+        console_log!("caption generated in {:?}s", (Date::now() - start) / 1000.);
         Ok(text)
     }
 }
 
 impl Model {
     fn load_image(&self, image: Vec<u8>) -> Result<Tensor, JsError> {
+        let device = &Device::Cpu;
         let img = image::io::Reader::new(std::io::Cursor::new(image))
+            .with_guessed_format()?
             .decode()
             .map_err(|e| JsError::new(&e.to_string()))?
             .resize_to_fill(384, 384, image::imageops::FilterType::Triangle);
         let img = img.to_rgb8();
         let data = img.into_raw();
-        let data = Tensor::from_vec(data, (384, 384, 3), &Device::Cpu)?.permute((2, 0, 1))?;
-        let mean = Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], &Device::Cpu)?
-            .reshape((3, 1, 1))?;
-        let std = Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1], &Device::Cpu)?
-            .reshape((3, 1, 1))?;
+        let data = Tensor::from_vec(data, (384, 384, 3), device)?.permute((2, 0, 1))?;
+        let mean =
+            Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], device)?.reshape((3, 1, 1))?;
+        let std =
+            Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1], device)?.reshape((3, 1, 1))?;
         (data.to_dtype(candle::DType::F32)? / 255.)?
             .broadcast_sub(&mean)?
             .broadcast_div(&std)
