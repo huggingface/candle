@@ -134,14 +134,12 @@ impl BertSelfAttention {
         x_shape.push(self.attention_head_size);
         xs.reshape(x_shape)?.transpose(1, 2)?.contiguous()
     }
-}
 
-impl Module for BertSelfAttention {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, bias: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let query_layer = self.query.forward(hidden_states)?;
-        let key_layer = self.key.forward(hidden_states)?;
-        let value_layer = self.value.forward(hidden_states)?;
+        let query_layer = self.query.forward(xs)?;
+        let key_layer = self.key.forward(xs)?;
+        let value_layer = self.value.forward(xs)?;
 
         let query_layer = self.transpose_for_scores(&query_layer)?;
         let key_layer = self.transpose_for_scores(&key_layer)?;
@@ -149,9 +147,10 @@ impl Module for BertSelfAttention {
 
         let attention_scores = query_layer.matmul(&key_layer.t()?)?;
         let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
+        let attention_scores = (attention_scores + bias)?;
         let attention_probs = {
             let _enter_sm = self.span_softmax.enter();
-            candle_nn::ops::softmax(&attention_scores, D::Minus1)?
+            candle_nn::ops::softmax_last_dim(&attention_scores)?
         };
         let context_layer = attention_probs.matmul(&value_layer)?;
         let context_layer = context_layer.transpose(1, 2)?.contiguous()?;
@@ -178,10 +177,10 @@ impl BertSelfOutput {
         })
     }
 
-    fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let hidden_states = self.dense.forward(hidden_states)?;
-        self.layer_norm.forward(&(hidden_states + input_tensor)?)
+        let xs = self.dense.forward(xs)?;
+        self.layer_norm.forward(&(xs + input_tensor)?)
     }
 }
 
@@ -202,13 +201,11 @@ impl BertAttention {
             span: tracing::span!(tracing::Level::TRACE, "attn"),
         })
     }
-}
 
-impl Module for BertAttention {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, bias: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let self_outputs = self.self_attention.forward(hidden_states)?;
-        let attention_output = self.self_output.forward(&self_outputs, hidden_states)?;
+        let self_outputs = self.self_attention.forward(xs, bias)?;
+        let attention_output = self.self_output.forward(&self_outputs, xs)?;
         Ok(attention_output)
     }
 }
@@ -256,10 +253,10 @@ impl BertOutput {
         })
     }
 
-    fn forward(&self, hidden_states: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, input_tensor: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let hidden_states = self.dense.forward(hidden_states)?;
-        self.layer_norm.forward(&(hidden_states + input_tensor)?)
+        let xs = self.dense.forward(xs)?;
+        self.layer_norm.forward(&(xs + input_tensor)?)
     }
 }
 
@@ -320,12 +317,10 @@ impl BertLayer {
             span: tracing::span!(tracing::Level::TRACE, "layer"),
         })
     }
-}
 
-impl Module for BertLayer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, bias: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        xs.apply(&self.attention)?.apply(&self.mlp)
+        self.attention.forward(xs, bias)?.apply(&self.mlp)
     }
 }
 
@@ -358,9 +353,11 @@ impl BertEncoder {
 impl Module for BertEncoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
+        let seq_len = xs.dim(1)?;
+        let alibi_bias = self.alibi.i((.., .., ..seq_len, ..seq_len))?;
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
-            xs = layer.forward(&xs)?
+            xs = layer.forward(&xs, &alibi_bias)?
         }
         Ok(xs)
     }
