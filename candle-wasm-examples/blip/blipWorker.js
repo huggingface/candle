@@ -1,4 +1,3 @@
-//load Candle Bert Module wasm module
 import init, { Model } from "./build/m.js";
 
 async function fetchArrayBuffer(url, cacheFile = true) {
