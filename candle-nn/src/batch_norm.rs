@@ -111,7 +111,7 @@ impl BatchNorm {
 
     pub fn eps(&self) -> f64 {
         self.eps
-    }    
+    }
 
     pub fn weight_and_bias(&self) -> Option<(&Tensor, &Tensor)> {
         self.weight_and_bias.as_ref().map(|v| (&v.0, &v.1))

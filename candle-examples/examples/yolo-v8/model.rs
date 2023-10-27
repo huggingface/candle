@@ -1,7 +1,5 @@
 use candle::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    batch_norm, conv2d, conv2d_no_bias, Conv2d, Conv2dConfig, Module, VarBuilder,
-};
+use candle_nn::{batch_norm, conv2d, conv2d_no_bias, Conv2d, Conv2dConfig, Module, VarBuilder};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Multiples {
