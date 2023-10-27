@@ -61,10 +61,6 @@ pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) ->
     if n % QK8_0 != 0 {
         crate::bail!("vec_dot_q8_0_q8_0: {n} is not divisible by {qk}")
     }
-    let nb = n / QK8_0;
-    if nb % 2 != 0 {
-        crate::bail!("vec_dot_q8_0_q8_0: {nb} is not even")
-    }
     unsafe {
         let mut acc = f32x4_splat(0.0f32);
         for (x, y) in xs.iter().zip(ys.iter()) {
