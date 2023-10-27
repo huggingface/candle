@@ -214,7 +214,7 @@ impl QLlama {
         let lm_head = linear(cfg.dim, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::new(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.n_layers)
-            .map(|i| Block::load(vb.pp(&format!("model.layers.{i}")), cache, &cfg).unwrap())
+            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cache, &cfg).unwrap())
             .collect();
         Ok(Self {
             wte,
