@@ -338,6 +338,13 @@ impl PyTensor {
     }
 
     #[getter]
+    /// Gets the tensor's element count.
+    /// &RETURNS&: int
+    fn nelements(&self) -> usize {
+        self.0.elem_count()
+    }
+
+    #[getter]
     /// Gets the tensor's strides.
     /// &RETURNS&: Tuple[int]
     fn stride(&self, py: Python<'_>) -> PyObject {
@@ -371,6 +378,16 @@ impl PyTensor {
 
     fn __str__(&self) -> String {
         self.__repr__()
+    }
+
+    /// Performs the `abs` operation on the tensor.
+    /// &RETURNS&: Tensor
+    fn abs(&self) -> PyResult<Self> {
+        match self.0.dtype() {
+            DType::U8 => Ok(PyTensor(self.0.clone())),
+            DType::U32 => Ok(PyTensor(self.0.clone())),
+            _ => Ok(PyTensor(self.0.abs().map_err(wrap_err)?)),
+        }
     }
 
     /// Performs the `sin` operation on the tensor.
@@ -737,27 +754,6 @@ impl PyTensor {
         let address = pointer as usize;
         address.hash(&mut hasher);
         hasher.finish()
-    }
-
-    #[pyo3(text_signature = "(self, rhs:Tensor)")]
-    /// True if two tensors have the same size and elements, False otherwise.
-    /// &RETURNS&: bool
-    fn equal(&self, rhs: &Self) -> PyResult<bool> {
-        if self.0.shape() != rhs.0.shape() {
-            return Ok(false);
-        }
-        let result = self
-            .0
-            .eq(&rhs.0)
-            .map_err(wrap_err)?
-            .to_dtype(DType::I64)
-            .map_err(wrap_err)?;
-        Ok(result
-            .sum_all()
-            .map_err(wrap_err)?
-            .to_scalar::<i64>()
-            .map_err(wrap_err)?
-            == self.0.elem_count() as i64)
     }
 
     #[pyo3(text_signature = "(self, shape:Sequence[int])")]

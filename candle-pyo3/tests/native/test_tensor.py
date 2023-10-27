@@ -1,6 +1,7 @@
 import candle
 from candle import Tensor
 from candle.utils import cuda_is_available
+from candle.testing import assert_equal
 import pytest
 
 
@@ -77,37 +78,32 @@ def test_tensor_can_be_scliced_3d():
     assert t[..., 0:2].values() == [[[1, 2], [5, 6]], [[9, 10], [13, 14]]]
 
 
-def test_tensors_can_be_compared_with_equal():
-    t = Tensor(42.0)
-    other = Tensor(42.0)
-    assert t.equal(other)
-    t = Tensor([42.0, 42.1])
-    other = Tensor([42.0, 42.0])
-    assert not t.equal(other)
-    t = Tensor(42.0)
-    other = Tensor([42.0, 42.0])
-    assert not t.equal(other)
+def assert_bool(t: Tensor, expected: bool):
+    assert t.shape == ()
+    assert str(t.dtype) == str(candle.u8)
+    assert bool(t.values()) == expected
 
 
 def test_tensor_supports_equality_opperations_with_scalars():
     t = Tensor(42.0)
-    assert (t == 42.0).equal(Tensor(1).to_dtype(candle.u8))
-    assert (t == 43.0).equal(Tensor(0).to_dtype(candle.u8))
 
-    assert (t != 42.0).equal(Tensor(0).to_dtype(candle.u8))
-    assert (t != 43.0).equal(Tensor(1).to_dtype(candle.u8))
+    assert_bool(t == 42.0, True)
+    assert_bool(t == 43.0, False)
 
-    assert (t > 41.0).equal(Tensor(1).to_dtype(candle.u8))
-    assert (t > 42.0).equal(Tensor(0).to_dtype(candle.u8))
+    assert_bool(t != 42.0, False)
+    assert_bool(t != 43.0, True)
 
-    assert (t >= 42.0).equal(Tensor(1).to_dtype(candle.u8))
-    assert (t >= 43.0).equal(Tensor(0).to_dtype(candle.u8))
+    assert_bool(t > 41.0, True)
+    assert_bool(t > 42.0, False)
 
-    assert (t < 43.0).equal(Tensor(1).to_dtype(candle.u8))
-    assert (t < 42.0).equal(Tensor(0).to_dtype(candle.u8))
+    assert_bool(t >= 41.0, True)
+    assert_bool(t >= 42.0, True)
 
-    assert (t <= 42.0).equal(Tensor(1).to_dtype(candle.u8))
-    assert (t <= 41.0).equal(Tensor(0).to_dtype(candle.u8))
+    assert_bool(t < 43.0, True)
+    assert_bool(t < 42.0, False)
+
+    assert_bool(t <= 43.0, True)
+    assert_bool(t <= 42.0, True)
 
 
 def test_tensor_supports_equality_opperations_with_tensors():
@@ -115,23 +111,23 @@ def test_tensor_supports_equality_opperations_with_tensors():
     same = Tensor(42.0)
     other = Tensor(43.0)
 
-    assert (t == same).equal(Tensor(1).to_dtype(candle.u8))
-    assert (t == other).equal(Tensor(0).to_dtype(candle.u8))
+    assert_bool(t == same, True)
+    assert_bool(t == other, False)
 
-    assert (t != same).equal(Tensor(0).to_dtype(candle.u8))
-    assert (t != other).equal(Tensor(1).to_dtype(candle.u8))
+    assert_bool(t != same, False)
+    assert_bool(t != other, True)
 
-    assert (t > same).equal(Tensor(0).to_dtype(candle.u8))
-    assert (t > other).equal(Tensor(0).to_dtype(candle.u8))
+    assert_bool(t > same, False)
+    assert_bool(t > other, False)
 
-    assert (t >= same).equal(Tensor(1).to_dtype(candle.u8))
-    assert (t >= other).equal(Tensor(0).to_dtype(candle.u8))
+    assert_bool(t >= same, True)
+    assert_bool(t >= other, False)
 
-    assert (t < same).equal(Tensor(0).to_dtype(candle.u8))
-    assert (t < other).equal(Tensor(1).to_dtype(candle.u8))
+    assert_bool(t < same, False)
+    assert_bool(t < other, True)
 
-    assert (t <= same).equal(Tensor(1).to_dtype(candle.u8))
-    assert (t <= other).equal(Tensor(1).to_dtype(candle.u8))
+    assert_bool(t <= same, True)
+    assert_bool(t <= other, True)
 
 
 def test_tensor_equality_opperations_can_broadcast():
@@ -143,7 +139,7 @@ def test_tensor_equality_opperations_can_broadcast():
     mask_cond = candle.Tensor([0, 1, 2])
     mask = mask_cond < (mask_cond + 1).reshape((3, 1))
     assert mask.shape == (3, 3)
-    assert mask.equal(Tensor([[1, 0, 0], [1, 1, 0], [1, 1, 1]]).to_dtype(candle.u8))
+    assert_equal(mask, Tensor([[1, 0, 0], [1, 1, 0], [1, 1, 1]]).to_dtype(candle.u8))
 
 
 def test_tensor_can_be_hashed():
