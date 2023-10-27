@@ -1186,14 +1186,16 @@ impl Tensor {
                 op: "scatter-add (self, src)",
                 lhs: self.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         if indexes.dims() != source.dims() {
             Err(Error::ShapeMismatchBinaryOp {
                 op: "scatter-add (indexes, src)",
                 lhs: indexes.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let storage = self.storage().scatter_add(
             self.layout(),
@@ -1265,7 +1267,8 @@ impl Tensor {
                 op: "slice-scatter (self, src)",
                 lhs: self.shape().clone(),
                 rhs: src.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let mut storage = self.device().zeros(self.shape(), self.dtype())?;
         self.storage()
@@ -1299,7 +1302,8 @@ impl Tensor {
                 op: "index-add (self, source)",
                 lhs: self.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         // The number of element in indexes must match the dimension on which the add is
         // performed on the source tensor (and the index values from `indexes` are taken from
@@ -1310,7 +1314,8 @@ impl Tensor {
                 op: "index-add (ids, source))",
                 lhs: indexes.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let storage = self.storage().index_add(
             self.layout(),
@@ -1358,7 +1363,8 @@ impl Tensor {
                 op: "gather",
                 lhs: self.shape().clone(),
                 rhs: indexes.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let storage =
             self.storage()
