@@ -99,50 +99,50 @@ impl ReplayBuffer {
     pub fn random_batch(
         &self,
         batch_size: usize,
-    ) -> Option<(Tensor, Tensor, Tensor, Tensor, Vec<bool>, Vec<bool>)> {
+    ) -> Result<Option<(Tensor, Tensor, Tensor, Tensor, Vec<bool>, Vec<bool>)>> {
         if self.size < batch_size {
-            None
+            Ok(None)
         } else {
-            let transitions: Vec<Transition> = thread_rng()
+            let transitions: Vec<&Transition> = thread_rng()
                 .sample_iter(Uniform::from(0..self.size))
                 .take(batch_size)
-                .map(|i| self.buffer.get(i).unwrap().clone())
+                .map(|i| self.buffer.get(i).unwrap())
                 .collect();
 
-            let states: Vec<Tensor> = transitions
+            let states: Result<Vec<Tensor>> = transitions
                 .iter()
-                .map(|t| t.state.clone().unsqueeze(0).unwrap())
+                .map(|t| t.state.clone().unsqueeze(0))
                 .collect();
-            let actions: Vec<Tensor> = transitions
+            let actions: Result<Vec<Tensor>> = transitions
                 .iter()
-                .map(|t| t.action.clone().unsqueeze(0).unwrap())
+                .map(|t| t.action.clone().unsqueeze(0))
                 .collect();
-            let rewards: Vec<Tensor> = transitions
+            let rewards: Result<Vec<Tensor>> = transitions
                 .iter()
-                .map(|t| t.reward.clone().unsqueeze(0).unwrap())
+                .map(|t| t.reward.clone().unsqueeze(0))
                 .collect();
-            let next_states: Vec<Tensor> = transitions
+            let next_states: Result<Vec<Tensor>> = transitions
                 .iter()
-                .map(|t| t.next_state.clone().unsqueeze(0).unwrap())
+                .map(|t| t.next_state.clone().unsqueeze(0))
                 .collect();
             let terminateds: Vec<bool> = transitions.iter().map(|t| t.terminated).collect();
             let truncateds: Vec<bool> = transitions.iter().map(|t| t.truncated).collect();
 
-            Some((
-                Tensor::cat(&states, 0).unwrap(),
-                Tensor::cat(&actions, 0).unwrap(),
-                Tensor::cat(&rewards, 0).unwrap(),
-                Tensor::cat(&next_states, 0).unwrap(),
+            Ok(Some((
+                Tensor::cat(&states?, 0)?,
+                Tensor::cat(&actions?, 0)?,
+                Tensor::cat(&rewards?, 0)?,
+                Tensor::cat(&next_states?, 0)?,
                 terminateds,
                 truncateds,
-            ))
+            )))
         }
     }
 }
 
 fn track(
-    mut varmap: VarMap,
-    vb: VarBuilder,
+    varmap: &mut VarMap,
+    vb: &VarBuilder,
     target_prefix: &str,
     network_prefix: &str,
     dims: &[(usize, usize)],
@@ -177,7 +177,7 @@ struct Actor<'a> {
 }
 impl Actor<'_> {
     fn new(device: &Device, dtype: DType, size_state: usize, size_action: usize) -> Result<Self> {
-        let varmap = VarMap::new();
+        let mut varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, dtype, device);
 
         let dims: Vec<(usize, usize)> = vec![(size_state, 400), (400, 300), (300, size_action)];
@@ -211,8 +211,8 @@ impl Actor<'_> {
 
         // this sets the two networks to be equal to each other using TAU = 1.0
         track(
-            varmap.clone(),
-            vb.clone(),
+            &mut varmap,
+            &vb,
             "target-actor",
             "actor",
             &dims,
@@ -238,10 +238,10 @@ impl Actor<'_> {
         self.target_network.forward(state)
     }
 
-    fn track(&self, tau: f64) -> Result<()> {
+    fn track(&mut self, tau: f64) -> Result<()> {
         track(
-            self.varmap.clone(),
-            self.vb.clone(),
+            &mut self.varmap,
+            &self.vb,
             "target-actor",
             "actor",
             &self.dims,
@@ -261,7 +261,7 @@ struct Critic<'a> {
 }
 impl Critic<'_> {
     fn new(device: &Device, dtype: DType, size_state: usize, size_action: usize) -> Result<Self> {
-        let varmap = VarMap::new();
+        let mut varmap = VarMap::new();
         let vb = VarBuilder::from_varmap(&varmap, dtype, device);
 
         let dims: Vec<(usize, usize)> = vec![(size_state + size_action, 400), (400, 300), (300, 1)];
@@ -294,8 +294,8 @@ impl Critic<'_> {
 
         // this sets the two networks to be equal to each other using TAU = 1.0
         track(
-            varmap.clone(),
-            vb.clone(),
+            &mut varmap,
+            &vb,
             "target-critic",
             "critic",
             &dims,
@@ -314,19 +314,19 @@ impl Critic<'_> {
     }
 
     fn forward(&self, state: &Tensor, action: &Tensor) -> Result<Tensor> {
-        let xs = Tensor::cat(&[action.clone(), state.clone()], 1)?;
+        let xs = Tensor::cat(&[action, state], 1)?;
         self.network.forward(&xs)
     }
 
     fn target_forward(&self, state: &Tensor, action: &Tensor) -> Result<Tensor> {
-        let xs = Tensor::cat(&[action.clone(), state.clone()], 1)?;
+        let xs = Tensor::cat(&[action, state], 1)?;
         self.target_network.forward(&xs)
     }
 
-    fn track(&self, tau: f64) -> Result<()> {
+    fn track(&mut self, tau: f64) -> Result<()> {
         track(
-            self.varmap.clone(),
-            self.vb.clone(),
+            &mut self.varmap,
+            &self.vb,
             "target-critic",
             "critic",
             &self.dims,
@@ -431,7 +431,7 @@ impl DDPG<'_> {
 
     pub fn train(&mut self, batch_size: usize) -> Result<()> {
         let (states, actions, rewards, next_states, _, _) =
-            match self.replay_buffer.random_batch(batch_size) {
+            match self.replay_buffer.random_batch(batch_size)? {
                 Some(v) => v,
                 _ => return Ok(()),
             };
