@@ -9,7 +9,7 @@ fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Em
 //
 // We wrap the `Linear` layer here to add some tracing so that it's easier to profile the resulting
 // model.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Linear {
     inner: candle_nn::Linear,
     span: tracing::Span,
@@ -53,6 +53,7 @@ fn layer_norm(size: usize, vb: VarBuilder) -> Result<LayerNorm> {
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L62
+#[derive(Debug, Clone)]
 struct MultiHeadAttention {
     query: Linear,
     key: Linear,
@@ -162,6 +163,7 @@ impl MultiHeadAttention {
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L111
+#[derive(Debug, Clone)]
 struct ResidualAttentionBlock {
     attn: MultiHeadAttention,
     attn_ln: LayerNorm,
@@ -241,6 +243,7 @@ fn sinusoids(length: usize, channels: usize) -> Result<Tensor> {
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L143
+#[derive(Debug, Clone)]
 pub struct AudioEncoder {
     conv1: Conv1d,
     conv2: Conv1d,
@@ -316,6 +319,7 @@ impl AudioEncoder {
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L176
+#[derive(Debug, Clone)]
 pub struct TextDecoder {
     token_embedding: Embedding,
     positional_embedding: Tensor,
@@ -380,6 +384,7 @@ impl TextDecoder {
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L221
+#[derive(Debug, Clone)]
 pub struct Whisper {
     pub encoder: AudioEncoder,
     pub decoder: TextDecoder,

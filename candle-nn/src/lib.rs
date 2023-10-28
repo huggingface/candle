@@ -11,6 +11,7 @@ pub mod loss;
 pub mod ops;
 pub mod optim;
 pub mod rnn;
+pub mod sequential;
 pub mod var_builder;
 pub mod var_map;
 
@@ -29,6 +30,7 @@ pub use linear::{linear, linear_no_bias, Linear};
 pub use ops::Dropout;
 pub use optim::{AdamW, Optimizer, ParamsAdamW, SGD};
 pub use rnn::{gru, lstm, GRUConfig, LSTMConfig, GRU, LSTM, RNN};
+pub use sequential::{seq, Sequential};
 pub use var_builder::VarBuilder;
 pub use var_map::VarMap;
 

@@ -26,10 +26,15 @@ pub struct Model {
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn load(weights: Vec<u8>, tokenizer: Vec<u8>, quantized: bool) -> Result<Model, JsError> {
+    pub fn load(
+        weights: Vec<u8>,
+        tokenizer: Vec<u8>,
+        config: Vec<u8>,
+        quantized: bool,
+    ) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let config: Config = Config::v1_5();
+        let config: Config = serde_json::from_slice(&config)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
         let start = Date::now();

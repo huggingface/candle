@@ -12,5 +12,6 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 
 [build-dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
 glob = "0.3.1"
 rayon = "1.7.0"

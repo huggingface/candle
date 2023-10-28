@@ -2,7 +2,7 @@ use crate::models::with_tracing::QMatMul;
 use crate::quantized_var_builder::VarBuilder;
 use candle::{Module, Result, Tensor};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Embedding {
     inner: candle_nn::Embedding,
     span: tracing::Span,
@@ -28,10 +28,16 @@ impl Module for Embedding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Linear {
     weight: QMatMul,
     bias: Option<Tensor>,
+}
+
+impl Linear {
+    pub fn from_weights(weight: QMatMul, bias: Option<Tensor>) -> Self {
+        Self { weight, bias }
+    }
 }
 
 impl Module for Linear {
@@ -59,12 +65,17 @@ pub fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<candle_nn::La
     Ok(candle_nn::LayerNorm::new(weight, bias, eps))
 }
 
+pub fn layer_norm_no_bias(size: usize, eps: f64, vb: VarBuilder) -> Result<candle_nn::LayerNorm> {
+    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
+    Ok(candle_nn::LayerNorm::new_no_bias(weight, eps))
+}
+
 pub fn linear_no_bias(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
     let weight = QMatMul::new(in_dim, out_dim, vb)?;
     Ok(Linear { weight, bias: None })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RmsNorm {
     inner: candle_nn::RmsNorm,
     span: tracing::Span,

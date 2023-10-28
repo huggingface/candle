@@ -56,17 +56,19 @@ These online demos run entirely in your browser:
 - [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm): text generation.
 - [Phi-v1.5](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm): text generation.
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
+- [BLIP](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning): image captioning.
 
 We also provide a some command line based examples using state of the art models:
 
 - [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
-- [Phi-v1.5](./candle-examples/examples/phi/): a 1.3b general LLM with performance on par with LLaMA-v2 7b.
+- [Phi-v1 and Phi-v1.5](./candle-examples/examples/phi/): a 1.3b general LLM with performance on par with LLaMA-v2 7b.
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
   pre-trained on 1T tokens of English and code datasets.
 - [Mistral7b-v0.1](./candle-examples/examples/mistral/): a 7b general LLM with
   performance larger than all publicly available 13b models as of 2023-09-28.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
+- [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
@@ -94,10 +96,13 @@ We also provide a some command line based examples using state of the art models
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
 
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
-- [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
+- [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/),
+  [JinaBert](./candle-examples/examples/jina-bert/) : useful for sentence embeddings.
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
   using self-supervision (can be used for imagenet classification, depth
   evaluation, segmentation).
+- [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
+  generate captions for an image.
 
 Run them using commands like:
 ```
@@ -129,8 +134,13 @@ And then head over to
 
 <!--- ANCHOR: useful_libraries --->
 
-## Useful Libraries
-- [`candle-lora`](https://github.com/EricLBuehler/candle-lora) provides a LoRA implementation that conforms to the official `peft` implementation.
+## Useful External Resources
+- [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): a
+  very detailed tutorial showing how to convert a PyTorch model to Candle.
+- [`optimisers`](https://github.com/KGrewal1/optimisers): a collection of optimisers
+  including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
+- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): a LoRA implementation
+  that conforms to the official `peft` implementation.
 
 If you have an addition to this list, please submit a pull request.
 
@@ -155,17 +165,18 @@ If you have an addition to this list, please submit a pull request.
         - Phi v1.5.
         - Mistral 7b v0.1.
         - StableLM-3B-4E1T.
+        - Replit-code-v1.5-3B.
         - T5.
         - Bert.
     - Whisper (multi-lingual support).
-    - Stable Diffusion v1.5, v2.1, XL v1.0.
-    - Wurstchen v2.
+    - Text to image.
+        - Stable Diffusion v1.5, v2.1, XL v1.0.
+        - Wurstchen v2.
+    - Image to text.
+        - BLIP.
     - Computer Vision Models.
-        - DINOv2.
-        - ConvMixer.
-        - EfficientNet.
-        - yolo-v3.
-        - yolo-v8.
+        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT.
+        - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.

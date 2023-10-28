@@ -1,7 +1,7 @@
 use candle::{Module, Result, Tensor};
 use candle_nn::VarBuilder;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Embedding {
     inner: candle_nn::Embedding,
     span: tracing::Span,
@@ -26,10 +26,18 @@ impl Module for Embedding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Linear {
     inner: candle_nn::Linear,
     span: tracing::Span,
+}
+
+impl Linear {
+    pub fn from_weights(weights: Tensor, bias: Option<Tensor>) -> Self {
+        let inner = candle_nn::Linear::new(weights, bias);
+        let span = tracing::span!(tracing::Level::TRACE, "linear");
+        Self { inner, span }
+    }
 }
 
 pub fn linear(d1: usize, d2: usize, vb: VarBuilder) -> Result<Linear> {
@@ -52,14 +60,14 @@ impl Module for Linear {
 }
 
 // Wrap the conv2d op to provide some tracing.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Conv2d {
     inner: candle_nn::Conv2d,
     span: tracing::Span,
 }
 
-impl Conv2d {
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+impl Module for Conv2d {
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         self.inner.forward(x)
     }
@@ -78,6 +86,7 @@ pub fn conv2d(
 }
 
 // QMatMul wrapper adding some tracing.
+#[derive(Clone)]
 pub struct QMatMul {
     inner: candle::quantized::QMatMul,
     span: tracing::Span,

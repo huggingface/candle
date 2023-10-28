@@ -1,5 +1,7 @@
 import candle
 from candle import Tensor
+from candle.utils import cuda_is_available
+import pytest
 
 
 def test_tensor_can_be_constructed():
@@ -53,6 +55,7 @@ def test_tensor_can_be_sliced():
     assert t[-4:].values() == [5.0, 9.0, 2.0, 6.0]
     assert t[:-4].values() == [3.0, 1.0, 4.0, 10.0]
     assert t[-4:-2].values() == [5.0, 9.0]
+    assert t[...].values() == t.values()
 
 
 def test_tensor_can_be_sliced_2d():
@@ -72,3 +75,176 @@ def test_tensor_can_be_scliced_3d():
     assert t[:, 0, 0].values() == [1, 9]
     assert t[..., 0].values() == [[1, 5], [9, 13]]
     assert t[..., 0:2].values() == [[[1, 2], [5, 6]], [[9, 10], [13, 14]]]
+
+
+def test_tensor_can_be_expanded_with_none():
+    t = candle.rand((12, 12))
+
+    b = t[None]
+    assert b.shape == (1, 12, 12)
+    c = t[:, None, None, :]
+    assert c.shape == (12, 1, 1, 12)
+    d = t[None, :, None, :]
+    assert d.shape == (1, 12, 1, 12)
+    e = t[None, None, :, :]
+    assert e.shape == (1, 1, 12, 12)
+    f = t[:, :, None]
+    assert f.shape == (12, 12, 1)
+
+
+def test_tensor_can_be_index_via_tensor():
+    t = candle.Tensor([[1, 2, 1, 2], [3, 4, 3, 4], [5, 6, 5, 6]])
+    indexed = t[candle.Tensor([0, 2])]
+    assert indexed.shape == (2, 4)
+    assert indexed.values() == [[1, 2, 1, 2], [5, 6, 5, 6]]
+
+    indexed = t[:, candle.Tensor([0, 2])]
+    assert indexed.shape == (3, 2)
+    assert indexed.values() == [[1, 1], [3, 3], [5, 5]]
+
+
+def test_tensor_can_be_index_via_list():
+    t = candle.Tensor([[1, 2, 1, 2], [3, 4, 3, 4], [5, 6, 5, 6]])
+    indexed = t[[0, 2]]
+    assert indexed.shape == (2, 4)
+    assert indexed.values() == [[1, 2, 1, 2], [5, 6, 5, 6]]
+
+    indexed = t[:, [0, 2]]
+    assert indexed.shape == (3, 2)
+    assert indexed.values() == [[1, 1], [3, 3], [5, 5]]
+
+
+def test_tensor_can_be_cast_via_to():
+    t = Tensor(42.0)
+    assert str(t.dtype) == str(candle.f32)
+    t_new_args = t.to(candle.f64)
+    assert str(t_new_args.dtype) == str(candle.f64)
+    t_new_kwargs = t.to(dtype=candle.f64)
+    assert str(t_new_kwargs.dtype) == str(candle.f64)
+    pytest.raises(TypeError, lambda: t.to("not a dtype"))
+    pytest.raises(TypeError, lambda: t.to(dtype="not a dtype"))
+    pytest.raises(TypeError, lambda: t.to(candle.f64, "not a dtype"))
+    pytest.raises(TypeError, lambda: t.to())
+    pytest.raises(ValueError, lambda: t.to(candle.f16, dtype=candle.f64))
+    pytest.raises(ValueError, lambda: t.to(candle.f16, candle.f16))
+
+    other = Tensor(42.0).to(candle.f64)
+    t_new_other_args = t.to(other)
+    assert str(t_new_other_args.dtype) == str(candle.f64)
+    t_new_other_kwargs = t.to(other=other)
+    assert str(t_new_other_kwargs.dtype) == str(candle.f64)
+
+
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA is not available")
+def test_tensor_can_be_moved_via_to():
+    t = Tensor(42.0)
+    assert t.device == "cpu"
+    t_new_args = t.to("cuda")
+    assert t_new_args.device == "cuda"
+    t_new_kwargs = t.to(device="cuda")
+    assert t_new_kwargs.device == "cuda"
+    pytest.raises(TypeError, lambda: t.to("not a device"))
+    pytest.raises(TypeError, lambda: t.to(device="not a device"))
+    pytest.raises(TypeError, lambda: t.to("cuda", "not a device"))
+    pytest.raises(TypeError, lambda: t.to())
+    pytest.raises(ValueError, lambda: t.to("cuda", device="cpu"))
+    pytest.raises(ValueError, lambda: t.to("cuda", "cuda"))
+
+    other = Tensor(42.0).to("cuda")
+    t_new_other_args = t.to(other)
+    assert t_new_other_args.device == "cuda"
+    t_new_other_kwargs = t.to(other=other)
+    assert t_new_other_kwargs.device == "cuda"
+
+
+@pytest.mark.skipif(not cuda_is_available(), reason="CUDA is not available")
+def test_tensor_can_be_moved_and_cast_via_to():
+    t = Tensor(42.0)
+    assert t.device == "cpu"
+    assert str(t.dtype) == str(candle.f32)
+    t_new_args = t.to("cuda", candle.f64)
+    assert t_new_args.device == "cuda"
+    assert str(t_new_args.dtype) == str(candle.f64)
+    t_new_kwargs = t.to(device="cuda", dtype=candle.f64)
+    assert t_new_kwargs.device == "cuda"
+    assert str(t_new_kwargs.dtype) == str(candle.f64)
+
+    other = Tensor(42.0).to("cuda").to(candle.f64)
+    t_new_other_args = t.to(other)
+    assert t_new_other_args.device == "cuda"
+    assert str(t_new_other_args.dtype) == str(candle.f64)
+    t_new_other_kwargs = t.to(other=other)
+    assert t_new_other_kwargs.device == "cuda"
+    assert str(t_new_other_kwargs.dtype) == str(candle.f64)
+
+
+def test_tensor_can_be_added():
+    t = Tensor(42.0)
+    result = t + t
+    assert result.values() == 84.0
+    result = t + 2.0
+    assert result.values() == 44.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_add(b)
+    c = a + b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d + e
+
+
+def test_tensor_can_be_subtracted():
+    t = Tensor(42.0)
+    result = t - t
+    assert result.values() == 0
+    result = t - 2.0
+    assert result.values() == 40.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_sub(b)
+    c = a - b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d - e
+
+
+def test_tensor_can_be_multiplied():
+    t = Tensor(42.0)
+    result = t * t
+    assert result.values() == 1764.0
+    result = t * 2.0
+    assert result.values() == 84.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_mul(b)
+    c = a * b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d * e
+
+
+def test_tensor_can_be_divided():
+    t = Tensor(42.0)
+    result = t / t
+    assert result.values() == 1.0
+    result = t / 2.0
+    assert result.values() == 21.0
+    a = candle.rand((3, 1, 4))
+    b = candle.rand((2, 1))
+    c_native = a.broadcast_div(b)
+    c = a / b
+    assert c.shape == (3, 2, 4)
+    assert c.values() == c_native.values()
+    with pytest.raises(ValueError):
+        d = candle.rand((3, 4, 5))
+        e = candle.rand((4, 6))
+        f = d / e
