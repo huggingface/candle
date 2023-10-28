@@ -109,30 +109,30 @@ impl ReplayBuffer {
                 .map(|i| self.buffer.get(i).unwrap())
                 .collect();
 
-            let states: Result<Vec<Tensor>> = transitions
+            let states: Vec<Tensor> = transitions
                 .iter()
                 .map(|t| t.state.clone().unsqueeze(0))
-                .collect();
-            let actions: Result<Vec<Tensor>> = transitions
+                .collect::<Result<Vec<_>>>()?;
+            let actions: Vec<Tensor> = transitions
                 .iter()
                 .map(|t| t.action.clone().unsqueeze(0))
-                .collect();
-            let rewards: Result<Vec<Tensor>> = transitions
+                .collect::<Result<Vec<_>>>()?;
+            let rewards: Vec<Tensor> = transitions
                 .iter()
                 .map(|t| t.reward.clone().unsqueeze(0))
-                .collect();
-            let next_states: Result<Vec<Tensor>> = transitions
+                .collect::<Result<Vec<_>>>()?;
+            let next_states: Vec<Tensor> = transitions
                 .iter()
                 .map(|t| t.next_state.clone().unsqueeze(0))
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
             let terminateds: Vec<bool> = transitions.iter().map(|t| t.terminated).collect();
             let truncateds: Vec<bool> = transitions.iter().map(|t| t.truncated).collect();
 
             Ok(Some((
-                Tensor::cat(&states?, 0)?,
-                Tensor::cat(&actions?, 0)?,
-                Tensor::cat(&rewards?, 0)?,
-                Tensor::cat(&next_states?, 0)?,
+                Tensor::cat(&states, 0)?,
+                Tensor::cat(&actions, 0)?,
+                Tensor::cat(&rewards, 0)?,
+                Tensor::cat(&next_states, 0)?,
                 terminateds,
                 truncateds,
             )))
