@@ -50,14 +50,9 @@ pub(crate) unsafe fn mul_sum_i8_pairs_float(x: __m256i, y: __m256i) -> __m256 {
 #[inline(always)]
 pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> Result<f32> {
     let qk = QK8_0;
-    let nb = n / qk;
     if n % QK8_0 != 0 {
         crate::bail!("vec_dot_q4_0_q8_0: {n} is not divisible by {qk}")
     }
-    if nb % 2 != 0 {
-        crate::bail!("vec_dot_q4_0_q8_0: {nb} is not even")
-    }
-
     unsafe {
         let mut acc = _mm256_setzero_ps();
         for (x, y) in xs.iter().zip(ys.iter()) {

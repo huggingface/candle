@@ -1,21 +1,21 @@
-#![allow(unused)]
-use super::with_tracing::{linear, linear_no_bias, Embedding, Linear};
+use super::with_tracing::{linear, Embedding, Linear};
 use candle::{Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
+use serde::Deserialize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    vocab_size: usize,
-    hidden_size: usize,
-    encoder_hidden_size: usize,
-    intermediate_size: usize,
-    projection_dim: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    max_position_embeddings: usize,
-    hidden_act: candle_nn::Activation,
-    layer_norm_eps: f64,
-    is_decoder: bool,
+    pub vocab_size: usize,
+    pub hidden_size: usize,
+    pub encoder_hidden_size: usize,
+    pub intermediate_size: usize,
+    pub projection_dim: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub max_position_embeddings: usize,
+    pub hidden_act: candle_nn::Activation,
+    pub layer_norm_eps: f64,
+    pub is_decoder: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +45,14 @@ impl TextEmbeddings {
             position_ids,
         })
     }
+
+    fn forward(&self, xs: &Tensor, past_kv_len: usize) -> Result<Tensor> {
+        let seq_len = xs.dim(1)?;
+        let position_ids = self.position_ids.narrow(1, past_kv_len, seq_len)?;
+        let embeddings = self.word_embedddings.forward(xs)?;
+        let position_embeddings = self.position_embeddings.forward(&position_ids)?;
+        (embeddings + position_embeddings)?.apply(&self.layer_norm)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -52,9 +60,10 @@ struct TextSelfAttention {
     query: Linear,
     key: Linear,
     value: Linear,
-    all_head_size: usize,
     attention_head_size: usize,
     num_attention_heads: usize,
+    attention_scale: f64,
+    kv_cache: Option<(Tensor, Tensor)>,
 }
 
 impl TextSelfAttention {
@@ -70,13 +79,15 @@ impl TextSelfAttention {
         };
         let key = linear(in_size, all_head_size, vb.pp("key"))?;
         let value = linear(in_size, all_head_size, vb.pp("value"))?;
+        let attention_scale = 1f64 / (attention_head_size as f64).sqrt();
         Ok(Self {
             query,
             key,
             value,
-            all_head_size,
             attention_head_size,
             num_attention_heads,
+            attention_scale,
+            kv_cache: None,
         })
     }
 
@@ -89,6 +100,56 @@ impl TextSelfAttention {
             self.attention_head_size,
         ))?
         .permute((0, 2, 1, 3))
+    }
+
+    fn reset_kv_cache(&mut self) {
+        self.kv_cache = None
+    }
+
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        encoder_hidden_states: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let query = self
+            .transpose_for_scores(&self.query.forward(xs)?)?
+            .contiguous()?;
+        let (key, value) = match encoder_hidden_states {
+            None => {
+                let key = self.transpose_for_scores(&self.key.forward(xs)?)?;
+                let value = self.transpose_for_scores(&self.value.forward(xs)?)?;
+                let (key, value) = match &self.kv_cache {
+                    None => (key, value),
+                    Some((prev_key, prev_value)) => {
+                        let key = Tensor::cat(&[prev_key, &key], 2)?;
+                        let value = Tensor::cat(&[prev_value, &value], 2)?;
+                        (key, value)
+                    }
+                };
+                self.kv_cache = Some((key.clone(), value.clone()));
+                (key, value)
+            }
+            Some(xs) => {
+                let key = self.transpose_for_scores(&self.key.forward(xs)?)?;
+                let value = self.transpose_for_scores(&self.value.forward(xs)?)?;
+                // no kv-cache in this case, but the results could probably be memoized.
+                (key, value)
+            }
+        };
+        let key = key.contiguous()?;
+        let value = value.contiguous()?;
+        let attention_scores = query.matmul(&key.t()?)?;
+        let attention_scores = (attention_scores * self.attention_scale)?;
+        let attention_scores = match attention_mask {
+            Some(mask) => attention_scores.broadcast_add(mask)?,
+            None => attention_scores,
+        };
+        let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+        attention_probs
+            .matmul(&value)?
+            .permute((0, 2, 1, 3))?
+            .flatten_from(D::Minus2)
     }
 }
 
@@ -121,6 +182,22 @@ impl TextAttention {
         let self_ = TextSelfAttention::new(cfg, is_cross_attention, vb.pp("self"))?;
         let output = TextSelfOutput::new(cfg, vb.pp("output"))?;
         Ok(Self { self_, output })
+    }
+
+    fn reset_kv_cache(&mut self) {
+        self.self_.reset_kv_cache()
+    }
+
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        encoder_hidden_states: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let self_outputs = self
+            .self_
+            .forward(xs, encoder_hidden_states, attention_mask)?;
+        self.output.forward(&self_outputs, xs)
     }
 }
 
@@ -176,7 +253,7 @@ impl TextLayer {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let attention = TextAttention::new(cfg, false, vb.pp("attention"))?;
         let cross_attention = if cfg.is_decoder {
-            Some(TextAttention::new(cfg, true, vb.pp("attention"))?)
+            Some(TextAttention::new(cfg, true, vb.pp("crossattention"))?)
         } else {
             None
         };
@@ -189,11 +266,27 @@ impl TextLayer {
             output,
         })
     }
-}
 
-impl Module for TextLayer {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn reset_kv_cache(&mut self) {
+        self.attention.reset_kv_cache();
+        if let Some(ca) = &mut self.cross_attention {
+            ca.reset_kv_cache()
+        }
+    }
+
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        encoder_hidden_states: &Tensor,
+        attention_mask: &Tensor,
+    ) -> Result<Tensor> {
+        let attention_output = self.attention.forward(xs, None, Some(attention_mask))?;
+        let attention_output = match &mut self.cross_attention {
+            Some(ca) => ca.forward(&attention_output, Some(encoder_hidden_states), None)?,
+            None => candle::bail!("expected some cross-attn"),
+        };
+        let intermediate_output = self.intermediate.forward(&attention_output)?;
+        self.output.forward(&intermediate_output, &attention_output)
     }
 }
 
@@ -212,25 +305,32 @@ impl TextEncoder {
         }
         Ok(Self { layers })
     }
-}
 
-impl Module for TextEncoder {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn reset_kv_cache(&mut self) {
+        self.layers.iter_mut().for_each(|l| l.reset_kv_cache())
+    }
+
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        encoder_hidden_states: &Tensor,
+        attention_mask: &Tensor,
+    ) -> Result<Tensor> {
         let mut xs = xs.clone();
-        for layer in self.layers.iter() {
-            xs = xs.apply(layer)?
+        for layer in self.layers.iter_mut() {
+            xs = layer.forward(&xs, encoder_hidden_states, attention_mask)?
         }
         Ok(xs)
     }
 }
 
 #[derive(Debug, Clone)]
-struct TextPooler {
+pub struct TextPooler {
     dense: Linear,
 }
 
 impl TextPooler {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let dense = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("dense"))?;
         Ok(Self { dense })
     }
@@ -276,19 +376,15 @@ impl Module for TextPredictionHeadTransform {
 struct TextLMPredictionHead {
     transform: TextPredictionHeadTransform,
     decoder: Linear,
-    bias: Tensor,
 }
 
 impl TextLMPredictionHead {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let transform = TextPredictionHeadTransform::new(cfg, vb.pp("transform"))?;
-        let decoder = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("decoder"))?;
+        let weight = vb.get((cfg.vocab_size, cfg.hidden_size), "decoder.weight")?;
         let bias = vb.get(cfg.vocab_size, "bias")?;
-        Ok(Self {
-            transform,
-            decoder,
-            bias,
-        })
+        let decoder = Linear::from_weights(weight, Some(bias));
+        Ok(Self { transform, decoder })
     }
 }
 
@@ -320,7 +416,8 @@ impl Module for TextOnlyMLMHead {
 struct TextModel {
     embeddings: TextEmbeddings,
     encoder: TextEncoder,
-    pooler: Option<TextPooler>,
+    past_kv_len: usize,
+    // We do not need the pooler for caption generation
 }
 
 impl TextModel {
@@ -330,8 +427,29 @@ impl TextModel {
         Ok(Self {
             embeddings,
             encoder,
-            pooler: None,
+            past_kv_len: 0,
         })
+    }
+
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        encoder_hidden_states: &Tensor,
+        attention_mask: &Tensor,
+    ) -> Result<Tensor> {
+        let (_b_sz, seq_len) = input_ids.dims2()?;
+        let embedding_output = self.embeddings.forward(input_ids, self.past_kv_len)?;
+        let sequence_output =
+            self.encoder
+                .forward(&embedding_output, encoder_hidden_states, attention_mask)?;
+        self.past_kv_len += seq_len;
+        // We're interested in the sequence-output rather than the pooled-output.
+        Ok(sequence_output)
+    }
+
+    fn reset_kv_cache(&mut self) {
+        self.past_kv_len = 0;
+        self.encoder.reset_kv_cache();
     }
 }
 
@@ -346,5 +464,25 @@ impl TextLMHeadModel {
         let bert = TextModel::new(cfg, vb.pp("bert"))?;
         let cls = TextOnlyMLMHead::new(cfg, vb.pp("cls"))?;
         Ok(Self { bert, cls })
+    }
+
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        encoder_hidden_states: &Tensor,
+    ) -> Result<Tensor> {
+        let seq_len = input_ids.dim(1)?;
+        let mask: Vec<_> = (0..seq_len)
+            .flat_map(|i| (0..seq_len).map(move |j| if j > i { f32::NEG_INFINITY } else { 0f32 }))
+            .collect();
+        let mask = Tensor::from_vec(mask, (seq_len, seq_len), input_ids.device())?;
+        let sequence_output = self.bert.forward(input_ids, encoder_hidden_states, &mask)?;
+        let prediction_scores = self.cls.forward(&sequence_output)?;
+        // return_logits is false so we don't discard the last sequence element.
+        Ok(prediction_scores)
+    }
+
+    pub fn reset_kv_cache(&mut self) {
+        self.bert.reset_kv_cache()
     }
 }

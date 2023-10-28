@@ -8,6 +8,12 @@ use std::sync::Arc;
 
 use half::{bf16, f16};
 
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
+
+#[cfg(feature = "accelerate")]
+extern crate accelerate_src;
+
 use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
 
 mod shape;
@@ -192,6 +198,16 @@ enum Indexer {
     IndexSelect(Tensor),
 }
 
+#[derive(Clone, Debug)]
+struct TorchTensor(PyObject);
+
+impl<'source> pyo3::FromPyObject<'source> for TorchTensor {
+    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+        let numpy_value: PyObject = ob.getattr("numpy")?.call0()?.extract()?;
+        Ok(TorchTensor(numpy_value))
+    }
+}
+
 #[pymethods]
 impl PyTensor {
     #[new]
@@ -227,6 +243,8 @@ impl PyTensor {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<f32>>>>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
+        } else if let Ok(TorchTensor(numpy)) = data.extract::<TorchTensor>(py) {
+            return PyTensor::new(py, numpy);
         } else {
             let ty = data.as_ref(py).get_type();
             Err(PyTypeError::new_err(format!(
@@ -278,6 +296,18 @@ impl PyTensor {
         }
         // TODO: Handle arbitrary shapes.
         M(py).map(self)
+    }
+
+    /// Converts candle's tensor to pytorch's tensor
+    /// &RETURNS&: torch.Tensor
+    fn to_torch(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let candle_values = self.values(py)?;
+        let torch_tensor: PyObject = py
+            .import("torch")?
+            .getattr("tensor")?
+            .call1((candle_values,))?
+            .extract()?;
+        Ok(torch_tensor)
     }
 
     #[getter]

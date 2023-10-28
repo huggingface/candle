@@ -1,28 +1,63 @@
-#![allow(unused)]
 use super::blip_text;
 use super::with_tracing::{conv2d, linear, Conv2d, Linear};
 use candle::{Module, Result, Tensor, D};
 use candle_nn::{layer_norm, Conv2dConfig, LayerNorm, VarBuilder};
+use serde::Deserialize;
 
-#[derive(Debug, Clone)]
-struct VisionConfig {
-    hidden_size: usize,
-    intermediate_size: usize,
-    projection_dim: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    image_size: usize,
-    patch_size: usize,
-    hidden_act: candle_nn::Activation,
-    layer_norm_eps: f64,
+#[derive(Debug, Clone, Deserialize)]
+pub struct VisionConfig {
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub projection_dim: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub image_size: usize,
+    pub patch_size: usize,
+    pub hidden_act: candle_nn::Activation,
+    pub layer_norm_eps: f64,
 }
 
-#[derive(Debug, Clone)]
-struct Config {
-    text_config: blip_text::Config,
-    vision_config: VisionConfig,
-    projection_dim: usize,
-    image_text_hidden_size: usize,
+#[derive(Debug, Clone, Deserialize)]
+pub struct Config {
+    pub text_config: blip_text::Config,
+    pub vision_config: VisionConfig,
+    pub projection_dim: usize,
+    pub image_text_hidden_size: usize,
+}
+
+impl Config {
+    pub fn image_captioning_large() -> Self {
+        let text_config = blip_text::Config {
+            vocab_size: 30524,
+            hidden_size: 768,
+            encoder_hidden_size: 1024,
+            intermediate_size: 3072,
+            projection_dim: 768,
+            num_hidden_layers: 12,
+            num_attention_heads: 12,
+            max_position_embeddings: 512,
+            hidden_act: candle_nn::Activation::Gelu,
+            layer_norm_eps: 1e-12,
+            is_decoder: true,
+        };
+        let vision_config = VisionConfig {
+            hidden_size: 1024,
+            intermediate_size: 4096,
+            projection_dim: 512,
+            num_hidden_layers: 24,
+            num_attention_heads: 16,
+            image_size: 384,
+            patch_size: 16,
+            hidden_act: candle_nn::Activation::Gelu,
+            layer_norm_eps: 1e-5,
+        };
+        Self {
+            text_config,
+            vision_config,
+            projection_dim: 512,
+            image_text_hidden_size: 256,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -30,7 +65,6 @@ struct VisionEmbeddings {
     class_embedding: Tensor,
     patch_embedding: Conv2d,
     position_embedding: Tensor,
-    num_positions: usize,
 }
 
 impl VisionEmbeddings {
@@ -56,7 +90,6 @@ impl VisionEmbeddings {
             class_embedding,
             patch_embedding,
             position_embedding,
-            num_positions,
         })
     }
 }
@@ -82,8 +115,6 @@ struct Attention {
     qkv: Linear,
     projection: Linear,
     scale: f64,
-    embed_dim: usize,
-    head_dim: usize,
     num_heads: usize,
 }
 
@@ -99,8 +130,6 @@ impl Attention {
             qkv,
             projection,
             scale,
-            embed_dim,
-            head_dim,
             num_heads,
         })
     }
@@ -200,6 +229,7 @@ struct Encoder {
 impl Encoder {
     fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        let vb = vb.pp("layers");
         for i in 0..cfg.num_hidden_layers {
             let layer = EncoderLayer::new(cfg, vb.pp(i))?;
             layers.push(layer)
@@ -217,7 +247,7 @@ impl Encoder {
 }
 
 #[derive(Debug, Clone)]
-struct VisionModel {
+pub struct VisionModel {
     embeddings: VisionEmbeddings,
     encoder: Encoder,
     post_layernorm: LayerNorm,
@@ -241,23 +271,19 @@ impl Module for VisionModel {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs.apply(&self.embeddings)?;
         let encoder_outputs = self.encoder.forward(&xs, None)?;
-        let last_hidden_state = encoder_outputs.get(0)?;
-        last_hidden_state
-            .apply(&self.post_layernorm)?
-            .narrow(1, 0, 1)?
-            .squeeze(1)?
-            .apply(&self.post_layernorm)
+        // Return the last hidden state rather than pooled outputs.
+        encoder_outputs.apply(&self.post_layernorm)
     }
 }
 
 #[derive(Debug, Clone)]
-struct BlipForConditionalGeneration {
+pub struct BlipForConditionalGeneration {
     vision_model: VisionModel,
     text_decoder: blip_text::TextLMHeadModel,
 }
 
 impl BlipForConditionalGeneration {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vision_model = VisionModel::new(&cfg.vision_config, vb.pp("vision_model"))?;
         let text_decoder =
             blip_text::TextLMHeadModel::new(&cfg.text_config, vb.pp("text_decoder"))?;
@@ -267,12 +293,15 @@ impl BlipForConditionalGeneration {
         })
     }
 
-    fn forward(
-        &self,
-        pixel_values: &Tensor,
-        input_ids: Option<&Tensor>,
-        attention_mask: Option<&Tensor>,
-    ) -> Result<Tensor> {
-        todo!()
+    pub fn vision_model(&self) -> &VisionModel {
+        &self.vision_model
+    }
+
+    pub fn text_decoder(&mut self) -> &mut blip_text::TextLMHeadModel {
+        &mut self.text_decoder
+    }
+
+    pub fn reset_kv_cache(&mut self) {
+        self.text_decoder.reset_kv_cache();
     }
 }

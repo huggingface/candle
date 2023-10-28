@@ -36,9 +36,9 @@ pub struct Cache {
     masks: Arc<Mutex<HashMap<usize, Tensor>>>,
     pub use_kv_cache: bool,
     #[allow(clippy::type_complexity)]
-    kvs: Arc<Mutex<Vec<Option<(Tensor, Tensor)>>>>,
-    cos: Tensor,
-    sin: Tensor,
+    pub kvs: Arc<Mutex<Vec<Option<(Tensor, Tensor)>>>>,
+    pub cos: Tensor,
+    pub sin: Tensor,
     device: Device,
 }
 
@@ -75,7 +75,7 @@ impl Cache {
         })
     }
 
-    fn mask(&self, t: usize) -> Result<Tensor> {
+    pub fn mask(&self, t: usize) -> Result<Tensor> {
         let mut masks = self.masks.lock().unwrap();
         if let Some(mask) = masks.get(&t) {
             Ok(mask.clone())
