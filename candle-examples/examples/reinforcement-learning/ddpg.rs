@@ -112,19 +112,19 @@ impl ReplayBuffer {
             let states: Vec<Tensor> = transitions
                 .iter()
                 .map(|t| t.state.clone().unsqueeze(0))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<_>>()?;
             let actions: Vec<Tensor> = transitions
                 .iter()
                 .map(|t| t.action.clone().unsqueeze(0))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<_>>()?;
             let rewards: Vec<Tensor> = transitions
                 .iter()
                 .map(|t| t.reward.clone().unsqueeze(0))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<_>>()?;
             let next_states: Vec<Tensor> = transitions
                 .iter()
                 .map(|t| t.next_state.clone().unsqueeze(0))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<_>>()?;
             let terminateds: Vec<bool> = transitions.iter().map(|t| t.terminated).collect();
             let truncateds: Vec<bool> = transitions.iter().map(|t| t.truncated).collect();
 
