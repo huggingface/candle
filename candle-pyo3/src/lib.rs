@@ -148,9 +148,10 @@ macro_rules! pydtype {
         }
     };
 }
+
+pydtype!(i64, |v| v);
 pydtype!(u8, |v| v);
 pydtype!(u32, |v| v);
-pydtype!(i64, |v| v);
 pydtype!(f16, f32::from);
 pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
@@ -1576,7 +1577,7 @@ fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyDType>()?;
     m.add("u8", PyDType(DType::U8))?;
     m.add("u32", PyDType(DType::U32))?;
-    m.add("i16", PyDType(DType::I64))?;
+    m.add("i64", PyDType(DType::I64))?;
     m.add("bf16", PyDType(DType::BF16))?;
     m.add("f16", PyDType(DType::F16))?;
     m.add("f32", PyDType(DType::F32))?;

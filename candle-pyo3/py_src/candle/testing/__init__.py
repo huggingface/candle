@@ -2,6 +2,9 @@ import candle
 from candle import Tensor
 
 
+_UNSIGNED_DTYPES = set([str(candle.u8), str(candle.u32)])
+
+
 def _assert_tensor_metadata(
     actual: Tensor,
     expected: Tensor,
@@ -56,11 +59,12 @@ def assert_almost_equal(
     _assert_tensor_metadata(actual, expected, check_device, check_dtype, check_layout, check_stride)
 
     # Secure against overflow of u32 and u8 tensors
-    diff = (
-        (actual - expected).abs()
-        if actual.sum_all().values() > expected.sum_all().values()
-        else (expected - actual).abs()
-    )
+    if str(actual.dtype) in _UNSIGNED_DTYPES or str(expected.dtype) in _UNSIGNED_DTYPES:
+        actual = actual.to(candle.i64)
+        expected = expected.to(candle.i64)
+
+    diff = (actual - expected).abs()
+
     threshold = (expected.abs().to_dtype(candle.f32) * rtol + atol).to(expected)
 
     assert (diff <= threshold).sum_all().values() == actual.nelements, f"Difference between tensors was to great"
