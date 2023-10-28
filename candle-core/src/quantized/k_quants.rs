@@ -236,14 +236,9 @@ impl GgmlType for BlockQ4_0 {
 
     fn vec_dot_unopt(n: usize, xs: &[Self], ys: &[Self::VecDotType]) -> Result<f32> {
         let qk = QK8_0;
-        let nb = n / qk;
         if n % QK8_0 != 0 {
             crate::bail!("vec_dot_q4_0_q8_0: {n} is not divisible by {qk}")
         }
-        if nb % 2 != 0 {
-            crate::bail!("vec_dot_q4_0_q8_0: {nb} is not even")
-        }
-
         // Generic implementation.
         let mut sumf = 0f32;
         for (xs, ys) in xs.iter().zip(ys.iter()) {
