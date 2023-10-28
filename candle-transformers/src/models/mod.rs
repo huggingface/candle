@@ -10,6 +10,7 @@ pub mod jina_bert;
 pub mod llama;
 pub mod llama2_c;
 pub mod llama2_c_weights;
+pub mod marian;
 pub mod mistral;
 pub mod mixformer;
 pub mod mpt;
