@@ -210,14 +210,7 @@ impl Actor<'_> {
         let target_network = make_network("target-actor")?;
 
         // this sets the two networks to be equal to each other using TAU = 1.0
-        track(
-            &mut varmap,
-            &vb,
-            "target-actor",
-            "actor",
-            &dims,
-            1.0,
-        );
+        track(&mut varmap, &vb, "target-actor", "actor", &dims, 1.0);
 
         Ok(Self {
             varmap,
@@ -293,14 +286,7 @@ impl Critic<'_> {
         let target_network = make_network("target-critic")?;
 
         // this sets the two networks to be equal to each other using TAU = 1.0
-        track(
-            &mut varmap,
-            &vb,
-            "target-critic",
-            "critic",
-            &dims,
-            1.0,
-        );
+        track(&mut varmap, &vb, "target-critic", "critic", &dims, 1.0);
 
         Ok(Self {
             varmap,
