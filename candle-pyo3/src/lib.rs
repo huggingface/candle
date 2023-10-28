@@ -19,10 +19,6 @@ extern crate accelerate_src;
 
 use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
 
-mod utils;
-
-use utils::broadcast_shapes;
-
 pub fn wrap_err(err: ::candle::Error) -> PyErr {
     PyErr::new::<PyValueError, _>(format!("{err:?}"))
 }
@@ -726,7 +722,11 @@ impl PyTensor {
                 compare(&self.0, &rhs.0)
             } else {
                 // We broadcast manually here because `candle.cmp` does not support automatic broadcasting
-                let broadcast_shape = broadcast_shapes(&self.0, &rhs.0).map_err(wrap_err)?;
+                let broadcast_shape = self
+                    .0
+                    .shape()
+                    .broadcast_shape_binary_op(rhs.0.shape(), "cmp")
+                    .map_err(wrap_err)?;
                 let broadcasted_lhs = self.0.broadcast_as(&broadcast_shape).map_err(wrap_err)?;
                 let broadcasted_rhs = rhs.0.broadcast_as(&broadcast_shape).map_err(wrap_err)?;
 
