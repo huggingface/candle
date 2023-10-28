@@ -11,6 +11,7 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
+byteorder = { workspace = true }
 candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
 candle-flash-attn = { path = "../candle-flash-attn", version = "0.3.0", optional = true }
 candle-nn = { path = "../candle-nn", version = "0.3.0" }
