@@ -17,7 +17,20 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn tiny() -> Self {
+    pub fn tiny_260k() -> Self {
+        Self {
+            dim: 64,
+            hidden_dim: 768,
+            n_layers: 5,
+            n_heads: 8,
+            n_kv_heads: 4,
+            vocab_size: 32000,
+            seq_len: 512,
+            norm_eps: 1e-5,
+        }
+    }
+
+    pub fn tiny_15m() -> Self {
         Self {
             dim: 288,
             hidden_dim: 768,
@@ -26,6 +39,32 @@ impl Config {
             n_kv_heads: 6,
             vocab_size: 32000,
             seq_len: 256,
+            norm_eps: 1e-5,
+        }
+    }
+
+    pub fn tiny_42m() -> Self {
+        Self {
+            dim: 512,
+            hidden_dim: 768,
+            n_layers: 8,
+            n_heads: 8,
+            n_kv_heads: 8,
+            vocab_size: 32000,
+            seq_len: 1024,
+            norm_eps: 1e-5,
+        }
+    }
+
+    pub fn tiny_110m() -> Self {
+        Self {
+            dim: 768,
+            hidden_dim: 768,
+            n_layers: 12,
+            n_heads: 12,
+            n_kv_heads: 12,
+            vocab_size: 32000,
+            seq_len: 1024,
             norm_eps: 1e-5,
         }
     }
