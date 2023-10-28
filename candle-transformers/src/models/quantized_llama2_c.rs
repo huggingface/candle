@@ -1,7 +1,7 @@
-use super::model::{Cache, Config};
+use super::llama2_c::{Cache, Config};
+use crate::quantized_nn::{linear_no_bias as linear, Embedding, Linear, RmsNorm};
+pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, IndexOp, Module, Result, Tensor, D};
-use candle_transformers::quantized_nn::{linear_no_bias as linear, Embedding, Linear, RmsNorm};
-pub use candle_transformers::quantized_var_builder::VarBuilder;
 
 fn silu(xs: &Tensor) -> Result<Tensor> {
     xs / (xs.neg()?.exp()? + 1.0)?

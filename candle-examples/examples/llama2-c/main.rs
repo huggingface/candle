@@ -6,10 +6,10 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-mod model;
-mod qmodel;
+use candle_transformers::models::llama2_c as model;
+use candle_transformers::models::llama2_c_weights as weights;
+use candle_transformers::models::quantized_llama2_c as qmodel;
 mod training;
-mod weights;
 use clap::{Parser, Subcommand};
 
 use anyhow::{Error as E, Result};
