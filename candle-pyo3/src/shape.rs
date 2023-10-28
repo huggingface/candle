@@ -32,10 +32,10 @@ impl From<PyShape> for ::candle::Shape {
 }
 
 #[derive(Clone, Debug)]
-/// Represents a relative shape e.g. (1, -1, 3)
-pub struct PyRelativeShape(Vec<isize>);
+/// Represents a shape with a hole in it e.g. (1, -1, 3)
+pub struct PyShapeWithHole(Vec<isize>);
 
-impl<'source> pyo3::FromPyObject<'source> for PyRelativeShape {
+impl<'source> pyo3::FromPyObject<'source> for PyShapeWithHole {
     fn extract(ob: &'source PyAny) -> PyResult<Self> {
         if ob.is_none() {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -44,18 +44,28 @@ impl<'source> pyo3::FromPyObject<'source> for PyRelativeShape {
         }
 
         let tuple = ob.downcast::<pyo3::types::PyTuple>()?;
-        if tuple.len() == 1 {
+        let dims: Vec<isize> = if tuple.len() == 1 {
             let first_element = tuple.get_item(0)?;
-            let dims: Vec<isize> = pyo3::FromPyObject::extract(first_element)?;
-            Ok(PyRelativeShape(dims))
+            pyo3::FromPyObject::extract(first_element)?
         } else {
-            let dims: Vec<isize> = pyo3::FromPyObject::extract(tuple)?;
-            Ok(PyRelativeShape(dims))
+            pyo3::FromPyObject::extract(tuple)?
+        };
+
+        // Ensure we have only positive numbers and at most one "hole" (-1)
+        let negative_ones = dims.iter().filter(|&&x| x == -1).count();
+        let any_invalid_dimensions = dims.iter().any(|&x| x < -1 || x == 0);
+        if negative_ones > 1 || any_invalid_dimensions {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid dimension in shape: {:?}",
+                dims
+            )));
         }
+
+        Ok(PyShapeWithHole(dims))
     }
 }
 
-impl PyRelativeShape {
+impl PyShapeWithHole {
     /// Returns `true` if the shape is absolute e.g. (1, 2, 3)
     pub fn is_absolute(&self) -> bool {
         self.0.iter().all(|x| *x > 0)

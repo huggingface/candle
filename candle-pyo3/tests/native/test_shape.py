@@ -27,3 +27,5 @@ def test_relative_shapes_are_valid():
     pytest.raises(TypeError, lambda: c.reshape(1, "foo"))
     pytest.raises(ValueError, lambda: c.reshape(1, -2))
     pytest.raises(ValueError, lambda: c.reshape((-2, 1)))
+    pytest.raises(ValueError, lambda: c.reshape((0, 1)))
+    pytest.raises(ValueError, lambda: c.reshape((1, -1, -1)))

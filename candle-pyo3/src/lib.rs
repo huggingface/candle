@@ -17,7 +17,7 @@ extern crate accelerate_src;
 use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
 
 mod shape;
-use shape::{PyRelativeShape, PyShape};
+use shape::{PyShape, PyShapeWithHole};
 
 pub fn wrap_err(err: ::candle::Error) -> PyErr {
     PyErr::new::<PyValueError, _>(format!("{err:?}"))
@@ -674,7 +674,7 @@ impl PyTensor {
     #[pyo3(signature=(*shape), text_signature = "(self, *shape:Shape)")]
     /// Reshapes the tensor to the given shape.
     /// &RETURNS&: Tensor
-    fn reshape(&self, shape: PyRelativeShape) -> PyResult<Self> {
+    fn reshape(&self, shape: PyShapeWithHole) -> PyResult<Self> {
         Ok(PyTensor(
             self.0
                 .reshape(shape.to_absolute(&self.0)?)
@@ -685,7 +685,7 @@ impl PyTensor {
     #[pyo3(signature=(*shape), text_signature = "(self, *shape:Shape)")]
     /// Broadcasts the tensor to the given shape.
     /// &RETURNS&: Tensor
-    fn broadcast_as(&self, shape: PyRelativeShape) -> PyResult<Self> {
+    fn broadcast_as(&self, shape: PyShapeWithHole) -> PyResult<Self> {
         Ok(PyTensor(
             self.0
                 .broadcast_as(shape.to_absolute(&self.0)?)
@@ -696,7 +696,7 @@ impl PyTensor {
     #[pyo3(signature=(*shape), text_signature = "(self, *shape:Shape)")]
     /// Broadcasts the tensor to the given shape, adding new dimensions on the left.
     /// &RETURNS&: Tensor
-    fn broadcast_left(&self, shape: PyRelativeShape) -> PyResult<Self> {
+    fn broadcast_left(&self, shape: PyShapeWithHole) -> PyResult<Self> {
         Ok(PyTensor(
             self.0
                 .broadcast_left(shape.to_absolute(&self.0)?)
@@ -1087,7 +1087,7 @@ fn ones(
 }
 
 #[pyfunction]
-#[pyo3(signature = (*shape, dtype=None, device=None), text_signature = "(shape:Shape, dtype:Optional[DType]=None, device:Optional[Device]=None)")]
+#[pyo3(signature = (*shape, dtype=None, device=None), text_signature = "(*shape:Shape, dtype:Optional[DType]=None, device:Optional[Device]=None)")]
 /// Creates a new tensor filled with zeros.
 /// &RETURNS&: Tensor
 fn zeros(
