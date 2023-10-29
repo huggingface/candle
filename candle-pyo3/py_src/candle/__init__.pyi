@@ -1,7 +1,7 @@
 # Generated content DO NOT EDIT
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Sequence
 from os import PathLike
-from candle.typing import _ArrayLike, Device, Scalar, Index
+from candle.typing import _ArrayLike, Device, Scalar, Index, Shape
 
 class bf16(DType):
     pass
@@ -26,21 +26,21 @@ class i64(DType):
     pass
 
 @staticmethod
-def ones(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+def ones(*shape: Shape, dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor filled with ones.
     """
     pass
 
 @staticmethod
-def rand(shape: Sequence[int], device: Optional[Device] = None) -> Tensor:
+def rand(*shape: Shape, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor with random values.
     """
     pass
 
 @staticmethod
-def randn(shape: Sequence[int], device: Optional[Device] = None) -> Tensor:
+def randn(*shape: Shape, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor with random values from a normal distribution.
     """
@@ -67,7 +67,7 @@ class u8(DType):
     pass
 
 @staticmethod
-def zeros(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+def zeros(*shape: Shape, dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor filled with zeros.
     """
@@ -174,7 +174,7 @@ class Tensor:
         Adds the two tensors, while broadcasting the right-hand-side tensor to match the shape of the left-hand-side tensor.
         """
         pass
-    def broadcast_as(self, shape: Sequence[int]) -> Tensor:
+    def broadcast_as(self, *shape: Shape) -> Tensor:
         """
         Broadcasts the tensor to the given shape.
         """
@@ -184,7 +184,7 @@ class Tensor:
         Divides the two tensors, while broadcasting the right-hand-side tensor to match the shape of the left-hand-side tensor.
         """
         pass
-    def broadcast_left(self, shape: Sequence[int]) -> Tensor:
+    def broadcast_left(self, *shape: Shape) -> Tensor:
         """
         Broadcasts the tensor to the given shape, adding new dimensions on the left.
         """
@@ -329,7 +329,7 @@ class Tensor:
         Get the `recip` of the tensor.
         """
         pass
-    def reshape(self, shape: Sequence[int]) -> Tensor:
+    def reshape(self, *shape: Shape) -> Tensor:
         """
         Reshapes the tensor to the given shape.
         """
