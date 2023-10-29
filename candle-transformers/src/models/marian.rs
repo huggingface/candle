@@ -214,7 +214,23 @@ impl DecoderLayer {
     }
 
     fn forward(&self, xs: &Tensor, encoder_xs: Option<&Tensor>) -> Result<Tensor> {
-        todo!()
+        let residual = xs;
+        let xs =
+            (self.self_attn.forward(xs, None)? + residual)?.apply(&self.self_attn_layer_norm)?;
+        let xs = match encoder_xs {
+            None => xs,
+            Some(encoder_xs) => {
+                let residual = &xs;
+                let xs = self.encoder_attn.forward(&xs, Some(encoder_xs))?;
+                (residual + xs)?.apply(&self.self_attn_layer_norm)?
+            }
+        };
+        let residual = &xs;
+        let xs = xs
+            .apply(&self.fc1)?
+            .apply(&self.activation_fn)?
+            .apply(&self.fc2)?;
+        (xs + residual)?.apply(&self.final_layer_norm)
     }
 }
 
