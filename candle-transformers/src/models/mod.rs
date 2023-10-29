@@ -29,6 +29,7 @@ pub mod segment_anything;
 pub mod stable_diffusion;
 pub mod stable_lm;
 pub mod t5;
+pub mod vgg;
 pub mod vit;
 pub mod whisper;
 pub mod with_tracing;
