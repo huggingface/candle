@@ -118,8 +118,8 @@ fn fully_connected(
 
 // Function to get the weights and biases for a layer
 // This is required because the weights and biases are stored in different format than our linear layer expects
-fn get_weights_and_biases<'a>(
-    vs: &VarBuilder<'a>,
+fn get_weights_and_biases(
+    vs: &VarBuilder,
     in_dim: (usize, usize, usize, usize),
     target_in: usize,
     target_out: usize,
@@ -189,7 +189,7 @@ fn vgg13_blocks(vb: VarBuilder) -> Result<Vec<Func>> {
             vb.clone(),
         )?,
     ];
-    return Ok(blocks);
+    Ok(blocks)
 }
 
 fn vgg16_blocks(vb: VarBuilder) -> Result<Vec<Func>> {
@@ -248,7 +248,7 @@ fn vgg16_blocks(vb: VarBuilder) -> Result<Vec<Func>> {
             vb.clone(),
         )?,
     ];
-    return Ok(blocks);
+    Ok(blocks)
 }
 
 fn vgg19_blocks(vb: VarBuilder) -> Result<Vec<Func>> {
@@ -310,5 +310,5 @@ fn vgg19_blocks(vb: VarBuilder) -> Result<Vec<Func>> {
             vb.clone(),
         )?,
     ];
-    return Ok(blocks);
+    Ok(blocks)
 }

@@ -53,8 +53,7 @@ pub fn main() -> anyhow::Result<()> {
         Which::Vgg16 => Vgg::new(vb, Models::Vgg16)?,
         Which::Vgg19 => Vgg::new(vb, Models::Vgg19)?,
     };
-    let mut xs = image.clone();
-    let logits = model.forward(&mut xs)?;
+    let logits = model.forward(&image)?;
 
     let prs = candle_nn::ops::softmax(&logits, D::Minus1)?
         .i(0)?
