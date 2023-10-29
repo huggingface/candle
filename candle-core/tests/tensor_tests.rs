@@ -1089,3 +1089,11 @@ fn pad_with_same() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn i64_abs() -> Result<()> {
+    let t = Tensor::new(&[-42i64, 1337], &Device::Cpu)?;
+    let t = t.abs()?;
+    assert_eq!(t.to_vec1::<i64>()?, [42, 1337]);
+    Ok(())
+}
