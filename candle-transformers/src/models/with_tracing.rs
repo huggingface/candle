@@ -14,6 +14,13 @@ impl Embedding {
         Ok(Self { inner, span })
     }
 
+    pub fn from_weights(weights: Tensor) -> Result<Self> {
+        let (_in_size, out_size) = weights.dims2()?;
+        let inner = candle_nn::Embedding::new(weights, out_size);
+        let span = tracing::span!(tracing::Level::TRACE, "embedding");
+        Ok(Self { inner, span })
+    }
+
     pub fn embeddings(&self) -> &Tensor {
         self.inner.embeddings()
     }

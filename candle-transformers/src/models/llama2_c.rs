@@ -1,7 +1,133 @@
-use super::model::{Cache, Config};
-use candle::{DType, IndexOp, Module, Result, Tensor, D};
-use candle_transformers::quantized_nn::{linear_no_bias as linear, Embedding, Linear, RmsNorm};
-pub use candle_transformers::quantized_var_builder::VarBuilder;
+use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_nn::linear_no_bias as linear;
+use candle_nn::{embedding, rms_norm, Embedding, Linear, Module, RmsNorm, VarBuilder};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub dim: usize,        // transformer dimension
+    pub hidden_dim: usize, // for ffn layers
+    pub n_layers: usize,   // number of layers
+    pub n_heads: usize,    // number of query heads
+    pub n_kv_heads: usize, // number of key/value heads (can be < query heads because of multiquery)
+    pub vocab_size: usize, // vocabulary size, usually 256 (byte-level)
+    pub seq_len: usize,    // max sequence length
+    pub norm_eps: f64,
+}
+
+impl Config {
+    pub fn tiny_260k() -> Self {
+        Self {
+            dim: 64,
+            hidden_dim: 768,
+            n_layers: 5,
+            n_heads: 8,
+            n_kv_heads: 4,
+            vocab_size: 32000,
+            seq_len: 512,
+            norm_eps: 1e-5,
+        }
+    }
+
+    pub fn tiny_15m() -> Self {
+        Self {
+            dim: 288,
+            hidden_dim: 768,
+            n_layers: 6,
+            n_heads: 6,
+            n_kv_heads: 6,
+            vocab_size: 32000,
+            seq_len: 256,
+            norm_eps: 1e-5,
+        }
+    }
+
+    pub fn tiny_42m() -> Self {
+        Self {
+            dim: 512,
+            hidden_dim: 768,
+            n_layers: 8,
+            n_heads: 8,
+            n_kv_heads: 8,
+            vocab_size: 32000,
+            seq_len: 1024,
+            norm_eps: 1e-5,
+        }
+    }
+
+    pub fn tiny_110m() -> Self {
+        Self {
+            dim: 768,
+            hidden_dim: 768,
+            n_layers: 12,
+            n_heads: 12,
+            n_kv_heads: 12,
+            vocab_size: 32000,
+            seq_len: 1024,
+            norm_eps: 1e-5,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Cache {
+    masks: Arc<Mutex<HashMap<usize, Tensor>>>,
+    pub use_kv_cache: bool,
+    #[allow(clippy::type_complexity)]
+    pub kvs: Arc<Mutex<Vec<Option<(Tensor, Tensor)>>>>,
+    pub cos: Tensor,
+    pub sin: Tensor,
+    device: Device,
+}
+
+impl Cache {
+    pub fn new(use_kv_cache: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let n_elem = cfg.dim / cfg.n_heads;
+        let theta: Vec<_> = (0..n_elem)
+            .step_by(2)
+            .map(|i| 1f32 / 10000f32.powf(i as f32 / n_elem as f32))
+            .collect();
+        let theta = Tensor::new(theta.as_slice(), vb.device())?;
+        let idx_theta = Tensor::arange(0, cfg.seq_len as u32, vb.device())?
+            .to_dtype(DType::F32)?
+            .reshape((cfg.seq_len, 1))?
+            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+        let precomputed_cos = idx_theta.cos()?;
+        let precomputed_sin = idx_theta.sin()?;
+
+        let freq_cis_real = vb
+            .get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_real")
+            .unwrap_or(precomputed_cos);
+        let freq_cis_imag = vb
+            .get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_imag")
+            .unwrap_or(precomputed_sin);
+        let cos = freq_cis_real.reshape((cfg.seq_len, cfg.head_size() / 2, 1))?;
+        let sin = freq_cis_imag.reshape((cfg.seq_len, cfg.head_size() / 2, 1))?;
+        Ok(Self {
+            masks: Arc::new(Mutex::new(HashMap::new())),
+            use_kv_cache,
+            kvs: Arc::new(Mutex::new(vec![None; cfg.n_layers])),
+            cos,
+            sin,
+            device: vb.device().clone(),
+        })
+    }
+
+    pub fn mask(&self, t: usize) -> Result<Tensor> {
+        let mut masks = self.masks.lock().unwrap();
+        if let Some(mask) = masks.get(&t) {
+            Ok(mask.clone())
+        } else {
+            let mask: Vec<_> = (0..t)
+                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .collect();
+            let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
+            masks.insert(t, mask.clone());
+            Ok(mask)
+        }
+    }
+}
 
 fn silu(xs: &Tensor) -> Result<Tensor> {
     xs / (xs.neg()?.exp()? + 1.0)?
@@ -177,9 +303,9 @@ impl Block {
     fn load(vb: VarBuilder, cache: &Cache, cfg: &Config) -> Result<Self> {
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cache, cfg)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
-        let input_layernorm = RmsNorm::new(cfg.dim, cfg.norm_eps, vb.pp("input_layernorm"))?;
+        let input_layernorm = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm =
-            RmsNorm::new(cfg.dim, cfg.norm_eps, vb.pp("post_attention_layernorm"))?;
+            rms_norm(cfg.dim, cfg.norm_eps, vb.pp("post_attention_layernorm"))?;
         Ok(Self::new(
             input_layernorm,
             attn,
@@ -189,7 +315,7 @@ impl Block {
     }
 }
 
-pub struct QLlama {
+pub struct Llama {
     wte: Embedding,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
@@ -197,7 +323,7 @@ pub struct QLlama {
     pub config: Config,
 }
 
-impl QLlama {
+impl Llama {
     pub fn forward(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, _seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
@@ -210,11 +336,11 @@ impl QLlama {
     }
 
     pub fn load(vb: VarBuilder, cache: &Cache, cfg: Config) -> Result<Self> {
-        let wte = Embedding::new(cfg.vocab_size, cfg.dim, vb.pp("model.embed_tokens"))?;
+        let wte = embedding(cfg.vocab_size, cfg.dim, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.dim, cfg.vocab_size, vb.pp("lm_head"))?;
-        let ln_f = RmsNorm::new(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;
+        let ln_f = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.n_layers)
-            .map(|i| Block::load(vb.pp(format!("model.layers.{i}")), cache, &cfg).unwrap())
+            .map(|i| Block::load(vb.pp(&format!("model.layers.{i}")), cache, &cfg).unwrap())
             .collect();
         Ok(Self {
             wte,

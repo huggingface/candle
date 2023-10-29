@@ -6,10 +6,10 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-mod model;
-mod qmodel;
+use candle_transformers::models::llama2_c as model;
+use candle_transformers::models::llama2_c_weights as weights;
+use candle_transformers::models::quantized_llama2_c as qmodel;
 mod training;
-mod weights;
 use clap::{Parser, Subcommand};
 
 use anyhow::{Error as E, Result};
@@ -262,8 +262,18 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
         .extension()
         .map_or(false, |v| v == "safetensors");
     let (model, config) = if is_gguf {
-        let config = Config::tiny();
         let vb = qmodel::VarBuilder::from_gguf(config_path)?;
+        let (_vocab_size, dim) = vb
+            .get_no_shape("model.embed_tokens.weight")?
+            .shape()
+            .dims2()?;
+        let config = match dim {
+            64 => Config::tiny_260k(),
+            288 => Config::tiny_15m(),
+            512 => Config::tiny_42m(),
+            768 => Config::tiny_110m(),
+            _ => anyhow::bail!("no config for dim {dim}"),
+        };
         let freq_cis_real = vb
             .get(
                 (config.seq_len, config.head_size() / 2),
@@ -291,7 +301,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
         let model = Model::QLlama(QLlama::load(vb, &cache, config.clone())?);
         (model, config)
     } else if is_safetensors {
-        let config = Config::tiny();
+        let config = Config::tiny_15m();
         let tensors = candle::safetensors::load(config_path, &device)?;
         let vb = candle_nn::VarBuilder::from_tensors(tensors, candle::DType::F32, &device);
         let cache = model::Cache::new(true, &config, vb.pp("rot"))?;

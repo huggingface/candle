@@ -84,6 +84,12 @@ impl Dropout {
     }
 }
 
+impl candle::ModuleT for Dropout {
+    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
+        self.forward(xs, train)
+    }
+}
+
 struct SoftmaxLastDim;
 
 impl candle::CustomOp1 for SoftmaxLastDim {
