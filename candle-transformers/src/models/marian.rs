@@ -385,15 +385,18 @@ impl Model {
 #[derive(Debug, Clone)]
 pub struct MTModel {
     model: Model,
-    lm_head: Linear,
+    final_logits_bias: Tensor,
 }
 
 impl MTModel {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let target_vocab_size = cfg.decoder_vocab_size.unwrap_or(cfg.vocab_size);
-        let lm_head = linear_no_bias(cfg.d_model, target_vocab_size, vb.pp("lm_head"))?;
+        let final_logits_bias = vb.get((1, target_vocab_size), "final_logits_bias")?;
         let model = Model::new(cfg, vb.pp("model"))?;
-        Ok(Self { model, lm_head })
+        Ok(Self {
+            model,
+            final_logits_bias,
+        })
     }
 
     pub fn encoder(&self) -> &Encoder {
@@ -405,9 +408,6 @@ impl MTModel {
     }
 
     pub fn decode(&self, xs: &Tensor, encoder_xs: &Tensor) -> Result<Tensor> {
-        self.model
-            .decoder
-            .forward(xs, Some(encoder_xs), 0)?
-            .apply(&self.lm_head)
+        self.model.decoder.forward(xs, Some(encoder_xs), 0)
     }
 }
