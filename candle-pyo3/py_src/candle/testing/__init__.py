@@ -67,4 +67,4 @@ def assert_almost_equal(
 
     threshold = (expected.abs().to_dtype(candle.f32) * rtol + atol).to(expected)
 
-    assert (diff <= threshold).sum_all().values() == actual.nelements, f"Difference between tensors was to great"
+    assert (diff <= threshold).sum_all().values() == actual.nelement, f"Difference between tensors was to great"

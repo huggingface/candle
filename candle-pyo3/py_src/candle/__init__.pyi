@@ -344,7 +344,7 @@ class Tensor:
         """
         pass
     @property
-    def nelements(self) -> int:
+    def nelement(self) -> int:
         """
         Gets the tensor's element count.
         """

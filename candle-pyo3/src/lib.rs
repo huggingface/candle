@@ -337,7 +337,7 @@ impl PyTensor {
     #[getter]
     /// Gets the tensor's element count.
     /// &RETURNS&: int
-    fn nelements(&self) -> usize {
+    fn nelement(&self) -> usize {
         self.0.elem_count()
     }
 
