@@ -67,7 +67,7 @@ class u8(DType):
     pass
 
 @staticmethod
-def zeros(shape: Shape, dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+def zeros(*shape: Shape, dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor filled with zeros.
     """
