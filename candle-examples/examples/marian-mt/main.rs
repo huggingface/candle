@@ -47,7 +47,14 @@ pub fn main() -> anyhow::Result<()> {
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[&args.model], DType::F32, &device)? };
     let model = marian::MTModel::new(&config, vb)?;
 
-    let tokenizer = Tokenizer::from_file(&args.tokenizer).map_err(E::msg)?;
+    let vocab = std::fs::read_to_string(args.tokenizer)?;
+    let vocab = serde_json::from_str(&vocab)?;
+    let tokenizer = tokenizers::models::wordpiece::WordPieceBuilder::new()
+        .unk_token("<unk>".to_string())
+        .vocab(vocab)
+        .build()
+        .map_err(E::msg)?;
+    let tokenizer = Tokenizer::new(tokenizer);
     let mut tokenizer_dec = TokenOutputStream::new(tokenizer.clone());
     let mut logits_processor =
         candle_transformers::generation::LogitsProcessor::new(1337, None, None);
