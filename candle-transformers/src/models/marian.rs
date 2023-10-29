@@ -212,6 +212,10 @@ impl DecoderLayer {
             final_layer_norm,
         })
     }
+
+    fn forward(&self, xs: &Tensor, encoder_xs: Option<&Tensor>) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -267,6 +271,7 @@ pub struct Decoder {
     embed_tokens: Embedding,
     embed_positions: SinusoidalPositionalEmbedding,
     layers: Vec<DecoderLayer>,
+    embed_scale: Option<f64>,
 }
 
 impl Decoder {
@@ -278,11 +283,39 @@ impl Decoder {
             let layer = DecoderLayer::new(cfg, vb_l.pp(idx))?;
             layers.push(layer)
         }
+        let embed_scale = if cfg.scale_embedding {
+            Some((cfg.d_model as f64).sqrt())
+        } else {
+            None
+        };
         Ok(Self {
             embed_tokens: embed_tokens.clone(),
             embed_positions,
             layers,
+            embed_scale,
         })
+    }
+
+    pub fn forward(
+        &self,
+        xs: &Tensor,
+        encoder_xs: Option<&Tensor>,
+        past_kv_len: usize,
+    ) -> Result<Tensor> {
+        let xs = xs.apply(&self.embed_tokens)?;
+        let xs = match self.embed_scale {
+            None => xs,
+            Some(scale) => (xs * scale)?,
+        };
+        let embed_pos = self
+            .embed_positions
+            .forward(&xs, past_kv_len)?
+            .unsqueeze(0)?;
+        let mut xs = xs.broadcast_add(&embed_pos)?;
+        for layer in self.layers.iter() {
+            xs = layer.forward(&xs, encoder_xs)?
+        }
+        Ok(xs)
     }
 }
 
