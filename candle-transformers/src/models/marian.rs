@@ -26,6 +26,33 @@ pub struct Config {
     pub share_encoder_decoder_embeddings: bool,
 }
 
+impl Config {
+    // https://huggingface.co/Helsinki-NLP/opus-mt-tc-big-fr-en/blob/main/config.json
+    pub fn opus_mt_tc_big_fr_en() -> Self {
+        Self {
+            activation_function: candle_nn::Activation::Relu,
+            d_model: 1024,
+            decoder_attention_heads: 16,
+            decoder_ffn_dim: 4096,
+            decoder_layers: 6,
+            decoder_start_token_id: 53016,
+            decoder_vocab_size: Some(53017),
+            encoder_attention_heads: 16,
+            encoder_ffn_dim: 4096,
+            encoder_layers: 6,
+            eos_token_id: 43311,
+            forced_eos_token_id: 43311,
+            is_encoder_decoder: true,
+            max_position_embeddings: 1024,
+            pad_token_id: 53016,
+            scale_embedding: true,
+            share_encoder_decoder_embeddings: true,
+            use_cache: true,
+            vocab_size: 53017,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SinusoidalPositionalEmbedding {
     emb: Embedding,
@@ -375,5 +402,12 @@ impl MTModel {
 
     pub fn decoder(&self) -> &Decoder {
         &self.model.decoder
+    }
+
+    pub fn decode(&self, xs: &Tensor, encoder_xs: &Tensor) -> Result<Tensor> {
+        self.model
+            .decoder
+            .forward(xs, Some(encoder_xs), 0)?
+            .apply(&self.lm_head)
     }
 }
