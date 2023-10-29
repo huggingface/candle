@@ -167,6 +167,18 @@ impl EncoderLayer {
             final_layer_norm,
         })
     }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let residual = xs;
+        let xs =
+            (self.self_attn.forward(xs, None)? + residual)?.apply(&self.self_attn_layer_norm)?;
+        let residual = &xs;
+        let xs = xs
+            .apply(&self.fc1)?
+            .apply(&self.activation_fn)?
+            .apply(&self.fc2)?;
+        (xs + residual)?.apply(&self.final_layer_norm)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +220,7 @@ struct Encoder {
     embed_tokens: Embedding,
     embed_positions: SinusoidalPositionalEmbedding,
     layers: Vec<EncoderLayer>,
+    embed_scale: Option<f64>,
 }
 
 impl Encoder {
@@ -219,11 +232,31 @@ impl Encoder {
             let layer = EncoderLayer::new(cfg, vb_l.pp(idx))?;
             layers.push(layer)
         }
+        let embed_scale = if cfg.scale_embedding {
+            Some((cfg.d_model as f64).sqrt())
+        } else {
+            None
+        };
         Ok(Self {
             embed_tokens: embed_tokens.clone(),
             embed_positions,
             layers,
+            embed_scale,
         })
+    }
+
+    fn forward(&self, xs: &Tensor, past_kv_len: usize) -> Result<Tensor> {
+        let xs = xs.apply(&self.embed_tokens)?;
+        let xs = match self.embed_scale {
+            None => xs,
+            Some(scale) => (xs * scale)?,
+        };
+        let embed_pos = self.embed_positions.forward(&xs, past_kv_len)?;
+        let mut xs = (xs + embed_pos)?;
+        for layer in self.layers.iter() {
+            xs = layer.forward(&xs)?
+        }
+        Ok(xs)
     }
 }
 
