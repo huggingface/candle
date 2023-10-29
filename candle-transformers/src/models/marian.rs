@@ -76,7 +76,7 @@ impl SinusoidalPositionalEmbedding {
         let freqs = t.matmul(&inv_freq)?;
         let sin = freqs.sin()?;
         let cos = freqs.cos()?;
-        let weights = Tensor::cat(&[&sin, &cos], 1)?;
+        let weights = Tensor::cat(&[&sin, &cos], 1)?.contiguous()?;
         let emb = Embedding::from_weights(weights)?;
         Ok(Self { emb })
     }
