@@ -55,7 +55,6 @@ impl SinusoidalPositionalEmbedding {
     }
 
     fn forward(&self, input_ids: &Tensor, past_kv_len: usize) -> Result<Tensor> {
-        let b_size = input_ids.dim(0)?;
         let seq_len = input_ids.dim(1)?;
         Tensor::arange(
             past_kv_len as u32,
@@ -216,7 +215,7 @@ impl DecoderLayer {
 }
 
 #[derive(Debug, Clone)]
-struct Encoder {
+pub struct Encoder {
     embed_tokens: Embedding,
     embed_positions: SinusoidalPositionalEmbedding,
     layers: Vec<EncoderLayer>,
@@ -245,14 +244,17 @@ impl Encoder {
         })
     }
 
-    fn forward(&self, xs: &Tensor, past_kv_len: usize) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, past_kv_len: usize) -> Result<Tensor> {
         let xs = xs.apply(&self.embed_tokens)?;
         let xs = match self.embed_scale {
             None => xs,
             Some(scale) => (xs * scale)?,
         };
-        let embed_pos = self.embed_positions.forward(&xs, past_kv_len)?;
-        let mut xs = (xs + embed_pos)?;
+        let embed_pos = self
+            .embed_positions
+            .forward(&xs, past_kv_len)?
+            .unsqueeze(0)?;
+        let mut xs = xs.broadcast_add(&embed_pos)?;
         for layer in self.layers.iter() {
             xs = layer.forward(&xs)?
         }
@@ -261,7 +263,7 @@ impl Encoder {
 }
 
 #[derive(Debug, Clone)]
-struct Decoder {
+pub struct Decoder {
     embed_tokens: Embedding,
     embed_positions: SinusoidalPositionalEmbedding,
     layers: Vec<DecoderLayer>,
@@ -305,16 +307,24 @@ impl Model {
 }
 
 #[derive(Debug, Clone)]
-struct MTModel {
+pub struct MTModel {
     model: Model,
     lm_head: Linear,
 }
 
 impl MTModel {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let target_vocab_size = cfg.decoder_vocab_size.unwrap_or(cfg.vocab_size);
         let lm_head = linear_no_bias(cfg.d_model, target_vocab_size, vb.pp("lm_head"))?;
         let model = Model::new(cfg, vb.pp("model"))?;
         Ok(Self { model, lm_head })
+    }
+
+    pub fn encoder(&self) -> &Encoder {
+        &self.model.encoder
+    }
+
+    pub fn decoder(&self) -> &Decoder {
+        &self.model.decoder
     }
 }
