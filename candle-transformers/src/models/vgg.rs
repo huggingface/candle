@@ -51,21 +51,21 @@ impl Module for Vgg<'_> {
 
 // Function to create a conv2d block
 // The block is composed of two conv2d layers followed by a max pool layer
-fn conv2d_block(convs: Vec<(usize, usize, String)>, vb: VarBuilder) -> Result<Func> {
+fn conv2d_block(convs: &[(usize, usize, &str)], vb: &VarBuilder) -> Result<Func<'static>> {
     let layers = convs
         .iter()
         .enumerate()
-        .map(|(_, conv)| {
+        .map(|(_, &(in_c, out_c, name))| {
             candle_nn::conv2d(
-                conv.0,
-                conv.1,
+                in_c,
+                out_c,
                 3,
                 candle_nn::Conv2dConfig {
                     stride: 1,
                     padding: 1,
                     ..Default::default()
                 },
-                vb.pp(conv.2.clone()),
+                vb.pp(name),
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -88,29 +88,23 @@ fn fully_connected(
     pre_logit_2: PreLogitConfig,
     vb: VarBuilder,
 ) -> Result<Func> {
-    let (_vb, _vb2) = (vb.clone(), vb.clone());
+    let lin = get_weights_and_biases(
+        &vb.pp("pre_logits.fc1"),
+        pre_logit_1.in_dim,
+        pre_logit_1.target_in,
+        pre_logit_1.target_out,
+    )?;
+    let lin2 = get_weights_and_biases(
+        &vb.pp("pre_logits.fc2"),
+        pre_logit_2.in_dim,
+        pre_logit_2.target_in,
+        pre_logit_2.target_out,
+    )?;
     Ok(Func::new(move |xs| {
         let xs = xs.reshape((1, pre_logit_1.target_out))?;
-
-        let vs = _vb.pp("pre_logits.fc1".to_string());
-        let lin = get_weights_and_biases(
-            &vs,
-            pre_logit_1.in_dim,
-            pre_logit_1.target_in,
-            pre_logit_1.target_out,
-        )?;
         let xs = candle_nn::ops::dropout(&xs, 0.5)?.apply(&lin)?.relu()?;
-
-        let vs2 = _vb2.pp("pre_logits.fc2".to_string());
-        let lin2 = get_weights_and_biases(
-            &vs2,
-            pre_logit_2.in_dim,
-            pre_logit_2.target_in,
-            pre_logit_2.target_out,
-        )?;
         let xs = candle_nn::ops::dropout(&xs, 0.5)?.apply(&lin2)?.relu()?;
-
-        let lin3 = candle_nn::linear(4096, num_classes, vb.pp("head.fc".to_string()))?;
+        let lin3 = candle_nn::linear(4096, num_classes, vb.pp("head.fc"))?;
         let xs = candle_nn::ops::dropout(&xs, 0.5)?.apply(&lin3)?.relu()?;
         Ok(xs)
     }))
@@ -139,41 +133,11 @@ fn get_weights_and_biases(
 fn vgg13_blocks(vb: VarBuilder) -> Result<Vec<Func>> {
     let num_classes = 1000;
     let blocks = vec![
-        conv2d_block(
-            vec![
-                (3, 64, "features.0".to_string()),
-                (64, 64, "features.2".to_string()),
-            ],
-            vb.clone(),
-        )?,
-        conv2d_block(
-            vec![
-                (64, 128, "features.5".to_string()),
-                (128, 128, "features.7".to_string()),
-            ],
-            vb.clone(),
-        )?,
-        conv2d_block(
-            vec![
-                (128, 256, "features.10".to_string()),
-                (256, 256, "features.12".to_string()),
-            ],
-            vb.clone(),
-        )?,
-        conv2d_block(
-            vec![
-                (256, 512, "features.15".to_string()),
-                (512, 512, "features.17".to_string()),
-            ],
-            vb.clone(),
-        )?,
-        conv2d_block(
-            vec![
-                (512, 512, "features.20".to_string()),
-                (512, 512, "features.22".to_string()),
-            ],
-            vb.clone(),
-        )?,
+        conv2d_block(&[(3, 64, "features.0"), (64, 64, "features.2")], &vb)?,
+        conv2d_block(&[(64, 128, "features.5"), (128, 128, "features.7")], &vb)?,
+        conv2d_block(&[(128, 256, "features.10"), (256, 256, "features.12")], &vb)?,
+        conv2d_block(&[(256, 512, "features.15"), (512, 512, "features.17")], &vb)?,
+        conv2d_block(&[(512, 512, "features.20"), (512, 512, "features.22")], &vb)?,
         fully_connected(
             num_classes,
             PreLogitConfig {
@@ -195,43 +159,31 @@ fn vgg13_blocks(vb: VarBuilder) -> Result<Vec<Func>> {
 fn vgg16_blocks(vb: VarBuilder) -> Result<Vec<Func>> {
     let num_classes = 1000;
     let blocks = vec![
+        conv2d_block(&[(3, 64, "features.0"), (64, 64, "features.2")], &vb)?,
+        conv2d_block(&[(64, 128, "features.5"), (128, 128, "features.7")], &vb)?,
         conv2d_block(
-            vec![
-                (3, 64, "features.0".to_string()),
-                (64, 64, "features.2".to_string()),
+            &[
+                (128, 256, "features.10"),
+                (256, 256, "features.12"),
+                (256, 256, "features.14"),
             ],
-            vb.clone(),
+            &vb,
         )?,
         conv2d_block(
-            vec![
-                (64, 128, "features.5".to_string()),
-                (128, 128, "features.7".to_string()),
+            &[
+                (256, 512, "features.17"),
+                (512, 512, "features.19"),
+                (512, 512, "features.21"),
             ],
-            vb.clone(),
+            &vb,
         )?,
         conv2d_block(
-            vec![
-                (128, 256, "features.10".to_string()),
-                (256, 256, "features.12".to_string()),
-                (256, 256, "features.14".to_string()),
+            &[
+                (512, 512, "features.24"),
+                (512, 512, "features.26"),
+                (512, 512, "features.28"),
             ],
-            vb.clone(),
-        )?,
-        conv2d_block(
-            vec![
-                (256, 512, "features.17".to_string()),
-                (512, 512, "features.19".to_string()),
-                (512, 512, "features.21".to_string()),
-            ],
-            vb.clone(),
-        )?,
-        conv2d_block(
-            vec![
-                (512, 512, "features.24".to_string()),
-                (512, 512, "features.26".to_string()),
-                (512, 512, "features.28".to_string()),
-            ],
-            vb.clone(),
+            &vb,
         )?,
         fully_connected(
             num_classes,
@@ -254,46 +206,34 @@ fn vgg16_blocks(vb: VarBuilder) -> Result<Vec<Func>> {
 fn vgg19_blocks(vb: VarBuilder) -> Result<Vec<Func>> {
     let num_classes = 1000;
     let blocks = vec![
+        conv2d_block(&[(3, 64, "features.0"), (64, 64, "features.2")], &vb)?,
+        conv2d_block(&[(64, 128, "features.5"), (128, 128, "features.7")], &vb)?,
         conv2d_block(
-            vec![
-                (3, 64, "features.0".to_string()),
-                (64, 64, "features.2".to_string()),
+            &[
+                (128, 256, "features.10"),
+                (256, 256, "features.12"),
+                (256, 256, "features.14"),
+                (256, 256, "features.16"),
             ],
-            vb.clone(),
+            &vb,
         )?,
         conv2d_block(
-            vec![
-                (64, 128, "features.5".to_string()),
-                (128, 128, "features.7".to_string()),
+            &[
+                (256, 512, "features.19"),
+                (512, 512, "features.21"),
+                (512, 512, "features.23"),
+                (512, 512, "features.25"),
             ],
-            vb.clone(),
+            &vb,
         )?,
         conv2d_block(
-            vec![
-                (128, 256, "features.10".to_string()),
-                (256, 256, "features.12".to_string()),
-                (256, 256, "features.14".to_string()),
-                (256, 256, "features.16".to_string()),
+            &[
+                (512, 512, "features.28"),
+                (512, 512, "features.30"),
+                (512, 512, "features.32"),
+                (512, 512, "features.34"),
             ],
-            vb.clone(),
-        )?,
-        conv2d_block(
-            vec![
-                (256, 512, "features.19".to_string()),
-                (512, 512, "features.21".to_string()),
-                (512, 512, "features.23".to_string()),
-                (512, 512, "features.25".to_string()),
-            ],
-            vb.clone(),
-        )?,
-        conv2d_block(
-            vec![
-                (512, 512, "features.28".to_string()),
-                (512, 512, "features.30".to_string()),
-                (512, 512, "features.32".to_string()),
-                (512, 512, "features.34".to_string()),
-            ],
-            vb.clone(),
+            &vb,
         )?,
         fully_connected(
             num_classes,
