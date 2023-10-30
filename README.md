@@ -103,6 +103,8 @@ We also provide a some command line based examples using state of the art models
   evaluation, segmentation).
 - [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
   generate captions for an image.
+- [Marian-MT](./candle-examples/examples/marian-mt/): neural machine translation
+  model, generates the translated text from the input text.
 
 Run them using commands like:
 ```
@@ -174,6 +176,8 @@ If you have an addition to this list, please submit a pull request.
         - Wurstchen v2.
     - Image to text.
         - BLIP.
+    - Text to text.
+        - Marian MT (Machine Translation).
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT.
         - yolo-v3, yolo-v8.
