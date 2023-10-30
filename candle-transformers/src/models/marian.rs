@@ -18,11 +18,11 @@ pub struct Config {
     pub is_encoder_decoder: bool,
     pub activation_function: candle_nn::Activation,
     pub d_model: usize,
-    pub decoder_start_token_id: usize,
+    pub decoder_start_token_id: u32,
     pub scale_embedding: bool,
-    pub pad_token_id: usize,
-    pub eos_token_id: usize,
-    pub forced_eos_token_id: usize,
+    pub pad_token_id: u32,
+    pub eos_token_id: u32,
+    pub forced_eos_token_id: u32,
     pub share_encoder_decoder_embeddings: bool,
 }
 
