@@ -5,13 +5,19 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Error as E;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::marian;
 
 use tokenizers::Tokenizer;
+
+#[derive(Clone, Debug, Copy, ValueEnum)]
+enum Which {
+    Base,
+    Big,
+}
 
 // TODO: Maybe add support for the conditional prompt.
 #[derive(Parser)]
@@ -24,6 +30,10 @@ struct Args {
 
     #[arg(long)]
     tokenizer_dec: Option<String>,
+
+    /// Choose the variant of the model to run.
+    #[arg(long, default_value = "big")]
+    which: Which,
 
     /// Run on CPU rather than on GPU.
     #[arg(long)]
@@ -42,13 +52,22 @@ pub fn main() -> anyhow::Result<()> {
     use hf_hub::api::sync::Api;
     let args = Args::parse();
 
-    let config = marian::Config::opus_mt_tc_big_fr_en();
+    let config = match args.which {
+        Which::Base => marian::Config::opus_mt_fr_en(),
+        Which::Big => marian::Config::opus_mt_tc_big_fr_en(),
+    };
     let tokenizer = {
         let tokenizer = match args.tokenizer {
             Some(tokenizer) => std::path::PathBuf::from(tokenizer),
-            None => Api::new()?
-                .model("lmz/candle-marian".to_string())
-                .get("tokenizer-marian-fr.json")?,
+            None => {
+                let name = match args.which {
+                    Which::Base => "tokenizer-marian-base-fr.json",
+                    Which::Big => "tokenizer-marian-fr.json",
+                };
+                Api::new()?
+                    .model("lmz/candle-marian".to_string())
+                    .get(name)?
+            }
         };
         Tokenizer::from_file(&tokenizer).map_err(E::msg)?
     };
@@ -56,9 +75,15 @@ pub fn main() -> anyhow::Result<()> {
     let tokenizer_dec = {
         let tokenizer = match args.tokenizer_dec {
             Some(tokenizer) => std::path::PathBuf::from(tokenizer),
-            None => Api::new()?
-                .model("lmz/candle-marian".to_string())
-                .get("tokenizer-marian-en.json")?,
+            None => {
+                let name = match args.which {
+                    Which::Base => "tokenizer-marian-base-en.json",
+                    Which::Big => "tokenizer-marian-en.json",
+                };
+                Api::new()?
+                    .model("lmz/candle-marian".to_string())
+                    .get(name)?
+            }
         };
         Tokenizer::from_file(&tokenizer).map_err(E::msg)?
     };
@@ -67,9 +92,18 @@ pub fn main() -> anyhow::Result<()> {
     let vb = {
         let model = match args.model {
             Some(model) => std::path::PathBuf::from(model),
-            None => Api::new()?
-                .model("Helsinki-NLP/opus-mt-tc-big-fr-en".to_string())
-                .get("model.safetensors")?,
+            None => match args.which {
+                Which::Base => Api::new()?
+                    .repo(hf_hub::Repo::with_revision(
+                        "Helsinki-NLP/opus-mt-fr-en".to_string(),
+                        hf_hub::RepoType::Model,
+                        "refs/pr/4".to_string(),
+                    ))
+                    .get("model.safetensors")?,
+                Which::Big => Api::new()?
+                    .model("Helsinki-NLP/opus-mt-tc-big-fr-en".to_string())
+                    .get("model.safetensors")?,
+            },
         };
         unsafe { VarBuilder::from_mmaped_safetensors(&[&model], DType::F32, &device)? }
     };
