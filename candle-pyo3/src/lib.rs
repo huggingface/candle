@@ -367,11 +367,7 @@ impl PyTensor {
     /// Performs the `abs` operation on the tensor.
     /// &RETURNS&: Tensor
     fn abs(&self) -> PyResult<Self> {
-        match self.0.dtype() {
-            DType::U8 => Ok(PyTensor(self.0.clone())),
-            DType::U32 => Ok(PyTensor(self.0.clone())),
-            _ => Ok(PyTensor(self.0.abs().map_err(wrap_err)?)),
-        }
+        Ok(PyTensor(self.0.abs().map_err(wrap_err)?))
     }
 
     /// Performs the `sin` operation on the tensor.
