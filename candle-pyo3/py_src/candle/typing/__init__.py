@@ -18,3 +18,5 @@ Device = TypeVar("Device", CPU, CUDA)
 Scalar = Union[int, float]
 
 Index = Union[int, slice, None, "Ellipsis"]
+
+Shape = Union[int, Sequence[int]]

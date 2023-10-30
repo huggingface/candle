@@ -19,10 +19,10 @@ candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
 candle-nn = { path = "../candle-nn", version = "0.3.0" }
 half = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
-pyo3 = { version = "0.19.0", features = ["extension-module"] }
+pyo3 = { version = "0.20.0", features = ["extension-module", "abi3-py38"] }
 
 [build-dependencies]
-pyo3-build-config = "0.19"
+pyo3-build-config = "0.20"
 
 [features]
 default = []

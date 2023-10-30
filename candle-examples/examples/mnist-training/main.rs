@@ -9,7 +9,7 @@ use clap::{Parser, ValueEnum};
 use rand::prelude::*;
 
 use candle::{DType, Result, Tensor, D};
-use candle_nn::{loss, ops, Conv2d, Linear, Module, Optimizer, VarBuilder, VarMap};
+use candle_nn::{loss, ops, Conv2d, Linear, Module, ModuleT, Optimizer, VarBuilder, VarMap};
 
 const IMAGE_DIM: usize = 784;
 const LABELS: usize = 10;
@@ -95,7 +95,7 @@ impl ConvNet {
             .flatten_from(1)?
             .apply(&self.fc1)?
             .relu()?;
-        self.dropout.forward(&xs, train)?.apply(&self.fc2)
+        self.dropout.forward_t(&xs, train)?.apply(&self.fc2)
     }
 }
 

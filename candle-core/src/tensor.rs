@@ -385,11 +385,21 @@ impl Tensor {
         step: D,
         device: &Device,
     ) -> Result<Self> {
+        if D::is_zero(&step) {
+            crate::bail!("step cannot be zero")
+        }
         let mut data = vec![];
         let mut current = start;
-        while current < end {
-            data.push(current);
-            current += step;
+        if step >= D::zero() {
+            while current < end {
+                data.push(current);
+                current += step;
+            }
+        } else {
+            while current > end {
+                data.push(current);
+                current += step;
+            }
         }
         let len = data.len();
         Self::from_vec_impl(data, len, device, false)
@@ -1186,14 +1196,16 @@ impl Tensor {
                 op: "scatter-add (self, src)",
                 lhs: self.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         if indexes.dims() != source.dims() {
             Err(Error::ShapeMismatchBinaryOp {
                 op: "scatter-add (indexes, src)",
                 lhs: indexes.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let storage = self.storage().scatter_add(
             self.layout(),
@@ -1265,7 +1277,8 @@ impl Tensor {
                 op: "slice-scatter (self, src)",
                 lhs: self.shape().clone(),
                 rhs: src.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let mut storage = self.device().zeros(self.shape(), self.dtype())?;
         self.storage()
@@ -1299,7 +1312,8 @@ impl Tensor {
                 op: "index-add (self, source)",
                 lhs: self.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         // The number of element in indexes must match the dimension on which the add is
         // performed on the source tensor (and the index values from `indexes` are taken from
@@ -1310,7 +1324,8 @@ impl Tensor {
                 op: "index-add (ids, source))",
                 lhs: indexes.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let storage = self.storage().index_add(
             self.layout(),
@@ -1358,7 +1373,8 @@ impl Tensor {
                 op: "gather",
                 lhs: self.shape().clone(),
                 rhs: indexes.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let storage =
             self.storage()
@@ -2263,6 +2279,11 @@ impl Tensor {
     /// Run the `forward` method of `m` on `self`.
     pub fn apply<M: crate::Module>(&self, m: &M) -> Result<Self> {
         m.forward(self)
+    }
+
+    /// Run the `forward` method of `m` on `self`.
+    pub fn apply_t<M: crate::ModuleT>(&self, m: &M, train: bool) -> Result<Self> {
+        m.forward_t(self, train)
     }
 
     pub(crate) fn storage(&self) -> std::sync::RwLockReadGuard<'_, Storage> {

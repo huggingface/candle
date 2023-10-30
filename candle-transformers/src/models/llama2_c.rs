@@ -1,5 +1,6 @@
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{embedding, linear, rms_norm, Embedding, Linear, Module, RmsNorm, VarBuilder};
+use candle_nn::linear_no_bias as linear;
+use candle_nn::{embedding, rms_norm, Embedding, Linear, Module, RmsNorm, VarBuilder};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -15,21 +16,92 @@ pub struct Config {
     pub norm_eps: f64,
 }
 
+impl Config {
+    pub fn tiny_260k() -> Self {
+        Self {
+            dim: 64,
+            hidden_dim: 768,
+            n_layers: 5,
+            n_heads: 8,
+            n_kv_heads: 4,
+            vocab_size: 32000,
+            seq_len: 512,
+            norm_eps: 1e-5,
+        }
+    }
+
+    pub fn tiny_15m() -> Self {
+        Self {
+            dim: 288,
+            hidden_dim: 768,
+            n_layers: 6,
+            n_heads: 6,
+            n_kv_heads: 6,
+            vocab_size: 32000,
+            seq_len: 256,
+            norm_eps: 1e-5,
+        }
+    }
+
+    pub fn tiny_42m() -> Self {
+        Self {
+            dim: 512,
+            hidden_dim: 768,
+            n_layers: 8,
+            n_heads: 8,
+            n_kv_heads: 8,
+            vocab_size: 32000,
+            seq_len: 1024,
+            norm_eps: 1e-5,
+        }
+    }
+
+    pub fn tiny_110m() -> Self {
+        Self {
+            dim: 768,
+            hidden_dim: 768,
+            n_layers: 12,
+            n_heads: 12,
+            n_kv_heads: 12,
+            vocab_size: 32000,
+            seq_len: 1024,
+            norm_eps: 1e-5,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Cache {
     masks: Arc<Mutex<HashMap<usize, Tensor>>>,
     pub use_kv_cache: bool,
     #[allow(clippy::type_complexity)]
     pub kvs: Arc<Mutex<Vec<Option<(Tensor, Tensor)>>>>,
-    cos: Tensor,
-    sin: Tensor,
+    pub cos: Tensor,
+    pub sin: Tensor,
     device: Device,
 }
 
 impl Cache {
     pub fn new(use_kv_cache: bool, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let freq_cis_real = vb.get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_real")?;
-        let freq_cis_imag = vb.get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_imag")?;
+        let n_elem = cfg.dim / cfg.n_heads;
+        let theta: Vec<_> = (0..n_elem)
+            .step_by(2)
+            .map(|i| 1f32 / 10000f32.powf(i as f32 / n_elem as f32))
+            .collect();
+        let theta = Tensor::new(theta.as_slice(), vb.device())?;
+        let idx_theta = Tensor::arange(0, cfg.seq_len as u32, vb.device())?
+            .to_dtype(DType::F32)?
+            .reshape((cfg.seq_len, 1))?
+            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+        let precomputed_cos = idx_theta.cos()?;
+        let precomputed_sin = idx_theta.sin()?;
+
+        let freq_cis_real = vb
+            .get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_real")
+            .unwrap_or(precomputed_cos);
+        let freq_cis_imag = vb
+            .get((cfg.seq_len, cfg.head_size() / 2), "freq_cis_imag")
+            .unwrap_or(precomputed_sin);
         let cos = freq_cis_real.reshape((cfg.seq_len, cfg.head_size() / 2, 1))?;
         let sin = freq_cis_imag.reshape((cfg.seq_len, cfg.head_size() / 2, 1))?;
         Ok(Self {
@@ -42,7 +114,7 @@ impl Cache {
         })
     }
 
-    fn mask(&self, t: usize) -> Result<Tensor> {
+    pub fn mask(&self, t: usize) -> Result<Tensor> {
         let mut masks = self.masks.lock().unwrap();
         if let Some(mask) = masks.get(&t) {
             Ok(mask.clone())
@@ -55,6 +127,10 @@ impl Cache {
             Ok(mask)
         }
     }
+}
+
+fn silu(xs: &Tensor) -> Result<Tensor> {
+    xs / (xs.neg()?.exp()? + 1.0)?
 }
 
 struct CausalSelfAttention {
@@ -184,7 +260,7 @@ impl Mlp {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x = (candle_nn::ops::silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
+        let x = (silu(&self.c_fc1.forward(x)?)? * self.c_fc2.forward(x)?)?;
         self.c_proj.forward(&x)
     }
 
@@ -244,37 +320,34 @@ pub struct Llama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Linear,
+    pub config: Config,
 }
 
 impl Llama {
-    fn new(wte: Embedding, blocks: Vec<Block>, ln_f: RmsNorm, lm_head: Linear) -> Self {
-        Self {
-            wte,
-            blocks,
-            ln_f,
-            lm_head,
-        }
-    }
-
     pub fn forward(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
-        let (_b_sz, seq_len) = x.dims2()?;
+        let (_b_sz, _seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = block.forward(&x, index_pos, block_idx)?;
         }
         let x = self.ln_f.forward(&x)?;
-        let x = x.i((.., seq_len - 1, ..))?;
         let logits = self.lm_head.forward(&x)?;
         logits.to_dtype(DType::F32)
     }
 
-    pub fn load(vb: VarBuilder, cache: &Cache, cfg: &Config) -> Result<Self> {
+    pub fn load(vb: VarBuilder, cache: &Cache, cfg: Config) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.dim, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.dim, cfg.vocab_size, vb.pp("lm_head"))?;
-        let norm = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;
+        let ln_f = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.n_layers)
-            .map(|i| Block::load(vb.pp(&format!("model.layers.{i}")), cache, cfg).unwrap())
+            .map(|i| Block::load(vb.pp(&format!("model.layers.{i}")), cache, &cfg).unwrap())
             .collect();
-        Ok(Self::new(wte, blocks, norm, lm_head))
+        Ok(Self {
+            wte,
+            blocks,
+            ln_f,
+            lm_head,
+            config: cfg,
+        })
     }
 }

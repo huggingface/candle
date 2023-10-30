@@ -33,7 +33,7 @@ pub fn run(args: &crate::TrainingCmd, common_args: &crate::Args) -> Result<()> {
     );
     let varmap = candle_nn::VarMap::new();
     let vb = candle_nn::VarBuilder::from_varmap(&varmap, DType::F32, &device);
-    let config = Config::tiny();
+    let config = Config::tiny_15m();
     let iter = DatasetRandomIter::new(&dataset, false, config.seq_len, device.clone());
     let batch_iter = candle_datasets::Batcher::new_r2(iter).batch_size(args.batch_size);
 

@@ -124,6 +124,7 @@ enum WhichModel {
     #[value(name = "1.5")]
     V1_5,
     PuffinPhiV2,
+    PhiHermes,
 }
 
 #[derive(Parser, Debug)]
@@ -224,7 +225,9 @@ fn main() -> Result<()> {
                 match args.model {
                     WhichModel::V1 => "microsoft/phi-1".to_string(),
                     WhichModel::V1_5 => "microsoft/phi-1_5".to_string(),
-                    WhichModel::PuffinPhiV2 => "lmz/candle-quantized-phi".to_string(),
+                    WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => {
+                        "lmz/candle-quantized-phi".to_string()
+                    }
                 }
             }
         }
@@ -238,7 +241,7 @@ fn main() -> Result<()> {
                 match args.model {
                     WhichModel::V1 => "refs/pr/2".to_string(),
                     WhichModel::V1_5 => "refs/pr/18".to_string(),
-                    WhichModel::PuffinPhiV2 => "main".to_string(),
+                    WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => "main".to_string(),
                 }
             }
         }
@@ -248,7 +251,9 @@ fn main() -> Result<()> {
         Some(file) => std::path::PathBuf::from(file),
         None => match args.model {
             WhichModel::V1 | WhichModel::V1_5 => repo.get("tokenizer.json")?,
-            WhichModel::PuffinPhiV2 => repo.get("tokenizer-puffin-phi-v2.json")?,
+            WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => {
+                repo.get("tokenizer-puffin-phi-v2.json")?
+            }
         },
     };
     let filename = match args.weight_file {
@@ -259,11 +264,13 @@ fn main() -> Result<()> {
                     WhichModel::V1 => repo.get("model-v1-q4k.gguf")?,
                     WhichModel::V1_5 => repo.get("model-q4k.gguf")?,
                     WhichModel::PuffinPhiV2 => repo.get("model-puffin-phi-v2-q4k.gguf")?,
+                    WhichModel::PhiHermes => repo.get("model-phi-hermes-1_3B-q4k.gguf")?,
                 }
             } else {
                 match args.model {
                     WhichModel::V1 | WhichModel::V1_5 => repo.get("model.safetensors")?,
                     WhichModel::PuffinPhiV2 => repo.get("model-puffin-phi-v2.safetensors")?,
+                    WhichModel::PhiHermes => repo.get("model-phi-hermes-1_3B.safetensors")?,
                 }
             }
         }
@@ -276,6 +283,7 @@ fn main() -> Result<()> {
         WhichModel::V1 => Config::v1(),
         WhichModel::V1_5 => Config::v1_5(),
         WhichModel::PuffinPhiV2 => Config::puffin_phi_v2(),
+        WhichModel::PhiHermes => Config::phi_hermes_1_3b(),
     };
     let (model, device) = if args.quantized {
         let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename)?;

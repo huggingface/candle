@@ -22,7 +22,7 @@ pub use conv::{
     Conv1dConfig, Conv2d, Conv2dConfig, ConvTranspose2d, ConvTranspose2dConfig,
 };
 pub use embedding::{embedding, Embedding};
-pub use func::{func, Func};
+pub use func::{func, func_t, Func, FuncT};
 pub use group_norm::{group_norm, GroupNorm};
 pub use init::Init;
 pub use layer_norm::{layer_norm, rms_norm, LayerNorm, LayerNormConfig, RmsNorm};
@@ -34,4 +34,4 @@ pub use sequential::{seq, Sequential};
 pub use var_builder::VarBuilder;
 pub use var_map::VarMap;
 
-pub use candle::Module;
+pub use candle::{Module, ModuleT};
