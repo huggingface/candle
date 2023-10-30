@@ -124,14 +124,44 @@ class Tensor:
         Add a scalar to a tensor or two tensors together.
         """
         pass
+    def __eq__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+    def __ge__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
     def __getitem__(self, index: Union[Index, Tensor, Sequence[Index]]) -> "Tensor":
         """
         Return a slice of a tensor.
         """
         pass
+    def __gt__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+    def __le__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+    def __lt__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
     def __mul__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
         """
         Multiply a tensor by a scalar or one tensor by another.
+        """
+        pass
+    def __ne__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
         """
         pass
     def __radd__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
@@ -157,6 +187,11 @@ class Tensor:
     def __truediv__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
         """
         Divide a tensor by a scalar or one tensor by another.
+        """
+        pass
+    def abs(self) -> Tensor:
+        """
+        Performs the `abs` operation on the tensor.
         """
         pass
     def argmax_keepdim(self, dim: int) -> Tensor:
@@ -306,6 +341,12 @@ class Tensor:
         """
         Returns a new tensor that is a narrowed version of the input, the dimension `dim`
         ranges from `start` to `start + len`.
+        """
+        pass
+    @property
+    def nelement(self) -> int:
+        """
+        Gets the tensor's element count.
         """
         pass
     def powf(self, p: float) -> Tensor:

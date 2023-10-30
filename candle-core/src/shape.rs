@@ -203,7 +203,7 @@ impl Shape {
 
     /// Check whether the two shapes are compatible for broadcast, and if it is the case return the
     /// broadcasted shape. This is to be used for binary pointwise ops.
-    pub(crate) fn broadcast_shape_binary_op(&self, rhs: &Self, op: &'static str) -> Result<Shape> {
+    pub fn broadcast_shape_binary_op(&self, rhs: &Self, op: &'static str) -> Result<Shape> {
         let lhs = self;
         let lhs_dims = lhs.dims();
         let rhs_dims = rhs.dims();
