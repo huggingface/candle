@@ -224,7 +224,8 @@ impl DecoderLayer {
         let self_attn = Attention::new(cfg, true, vb.pp("self_attn"))?;
         let self_attn_layer_norm = layer_norm(cfg.d_model, 1e-5, vb.pp("self_attn_layer_norm"))?;
         let encoder_attn = Attention::new(cfg, true, vb.pp("encoder_attn"))?;
-        let encoder_attn_layer_norm = layer_norm(cfg.d_model, 1e-5, vb.pp("self_attn_layer_norm"))?;
+        let encoder_attn_layer_norm =
+            layer_norm(cfg.d_model, 1e-5, vb.pp("encoder_attn_layer_norm"))?;
         let fc1 = linear(cfg.d_model, cfg.decoder_ffn_dim, vb.pp("fc1"))?;
         let fc2 = linear(cfg.decoder_ffn_dim, cfg.d_model, vb.pp("fc2"))?;
         let final_layer_norm = layer_norm(cfg.d_model, 1e-5, vb.pp("final_layer_norm"))?;
@@ -249,7 +250,7 @@ impl DecoderLayer {
             Some(encoder_xs) => {
                 let residual = &xs;
                 let xs = self.encoder_attn.forward(&xs, Some(encoder_xs))?;
-                (residual + xs)?.apply(&self.self_attn_layer_norm)?
+                (residual + xs)?.apply(&self.encoder_attn_layer_norm)?
             }
         };
         let residual = &xs;
@@ -257,7 +258,8 @@ impl DecoderLayer {
             .apply(&self.fc1)?
             .apply(&self.activation_fn)?
             .apply(&self.fc2)?;
-        (xs + residual)?.apply(&self.final_layer_norm)
+        let xs = (xs + residual)?.apply(&self.final_layer_norm)?;
+        Ok(xs)
     }
 }
 
@@ -356,7 +358,7 @@ impl Decoder {
             .unsqueeze(0)?;
         let mut xs = xs.broadcast_add(&embed_pos)?;
         for layer in self.layers.iter() {
-            xs = layer.forward(&xs, encoder_xs)?
+            xs = layer.forward(&xs, encoder_xs)?;
         }
         Ok(xs)
     }
