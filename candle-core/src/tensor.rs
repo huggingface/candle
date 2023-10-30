@@ -385,11 +385,21 @@ impl Tensor {
         step: D,
         device: &Device,
     ) -> Result<Self> {
+        if D::is_zero(&step) {
+            crate::bail!("step cannot be zero")
+        }
         let mut data = vec![];
         let mut current = start;
-        while current < end {
-            data.push(current);
-            current += step;
+        if step >= D::zero() {
+            while current < end {
+                data.push(current);
+                current += step;
+            }
+        } else {
+            while current > end {
+                data.push(current);
+                current += step;
+            }
         }
         let len = data.len();
         Self::from_vec_impl(data, len, device, false)

@@ -29,7 +29,26 @@ fn ones(device: &Device) -> Result<()> {
         Tensor::ones((2, 3), DType::F64, device)?.to_vec2::<f64>()?,
         [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
     );
+    Ok(())
+}
 
+fn arange(device: &Device) -> Result<()> {
+    assert_eq!(
+        Tensor::arange(0u8, 5u8, device)?.to_vec1::<u8>()?,
+        [0, 1, 2, 3, 4],
+    );
+    assert_eq!(
+        Tensor::arange_step(0u8, 5u8, 2, device)?.to_vec1::<u8>()?,
+        [0, 2, 4],
+    );
+    assert_eq!(
+        Tensor::arange_step(0u8, 5u8, 3, device)?.to_vec1::<u8>()?,
+        [0, 3],
+    );
+    assert_eq!(
+        Tensor::arange_step(5i64, 0i64, -1, device)?.to_vec1::<i64>()?,
+        [5, 4, 3, 2, 1],
+    );
     Ok(())
 }
 
@@ -1037,6 +1056,7 @@ fn randn(device: &Device) -> Result<()> {
 
 test_device!(zeros, zeros_cpu, zeros_gpu);
 test_device!(ones, ones_cpu, ones_gpu);
+test_device!(arange, arange_cpu, arange_gpu);
 test_device!(add_mul, add_mul_cpu, add_mul_gpu);
 test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu);
 test_device!(narrow, narrow_cpu, narrow_gpu);
