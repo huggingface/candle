@@ -149,6 +149,6 @@ pub fn main() -> anyhow::Result<()> {
     if let Some(rest) = tokenizer.decode_rest().map_err(E::msg)? {
         print!("{rest}");
     }
-
+    println!();
     Ok(())
 }
