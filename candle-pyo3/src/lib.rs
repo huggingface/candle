@@ -83,6 +83,7 @@ impl PyDevice {
         match device {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,
+            Device::Metal(_) => unimplemented!(),
         }
     }
 

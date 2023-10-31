@@ -152,12 +152,18 @@ pub enum Error {
     #[error("the candle crate has not been built with cuda support")]
     NotCompiledWithCudaSupport,
 
+    #[error("the candle crate has not been built with metal support")]
+    NotCompiledWithMetalSupport,
+
     #[error("cannot find tensor {path}")]
     CannotFindTensor { path: String },
 
     // === Wrapped Errors ===
     #[error(transparent)]
     Cuda(Box<dyn std::error::Error + Send + Sync>),
+
+    #[error("Metal error {0}")]
+    Metal(String),
 
     #[error(transparent)]
     TryFromIntError(#[from] core::num::TryFromIntError),
