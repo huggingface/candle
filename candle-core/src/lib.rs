@@ -49,9 +49,12 @@ mod device;
 pub mod display;
 mod dtype;
 mod dummy_cuda_backend;
+mod dummy_metal_backend;
 pub mod error;
 mod indexer;
 pub mod layout;
+#[cfg(feature = "accelerate")]
+mod metal_backend;
 #[cfg(feature = "mkl")]
 mod mkl;
 pub mod npy;
@@ -67,6 +70,9 @@ mod tensor;
 pub mod test_utils;
 pub mod utils;
 mod variable;
+
+#[cfg(not(feature = "cuda"))]
+pub use dummy_metal_backend::{MetalDevice, MetalStorage};
 
 pub use cpu_backend::CpuStorage;
 pub use device::{Device, DeviceLocation};

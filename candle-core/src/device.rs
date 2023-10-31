@@ -1,6 +1,6 @@
 use crate::backend::BackendDevice;
 use crate::cpu_backend::CpuDevice;
-use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
+use crate::{bail, CpuStorage, DType, Result, Shape, Storage, WithDType};
 
 /// A `DeviceLocation` represents a physical device whereas multiple `Device`
 /// can live on the same location (typically for cuda devices).
@@ -8,12 +8,14 @@ use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
 pub enum DeviceLocation {
     Cpu,
     Cuda { gpu_id: usize },
+    Metal,
 }
 
 #[derive(Debug, Clone)]
 pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
+    Metal(crate::MetalDevice),
 }
 
 pub trait NdArray {
@@ -103,14 +105,14 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize, const N4: 
 impl<S: NdArray> NdArray for Vec<S> {
     fn shape(&self) -> Result<Shape> {
         if self.is_empty() {
-            crate::bail!("empty array")
+            bail!("empty array")
         }
         let shape0 = self[0].shape()?;
         let n = self.len();
         for v in self.iter() {
             let shape = v.shape()?;
             if shape != shape0 {
-                crate::bail!("two elements have different shapes {shape:?} {shape0:?}")
+                bail!("two elements have different shapes {shape:?} {shape0:?}")
             }
         }
         Ok(Shape::from([[n].as_slice(), shape0.dims()].concat()))
@@ -130,8 +132,9 @@ impl Device {
 
     pub fn set_seed(&self, seed: u64) -> Result<()> {
         match self {
-            Self::Cpu => crate::cpu_backend::CpuDevice.set_seed(seed),
+            Self::Cpu => CpuDevice.set_seed(seed),
             Self::Cuda(c) => c.set_seed(seed),
+            Self::Metal(m) => m.set_seed(seed),
         }
     }
 
@@ -147,21 +150,16 @@ impl Device {
         match self {
             Self::Cpu => DeviceLocation::Cpu,
             Self::Cuda(device) => device.location(),
+            Device::Metal(device) => device.location(),
         }
     }
 
     pub fn is_cpu(&self) -> bool {
-        match self {
-            Self::Cpu => true,
-            Self::Cuda(_) => false,
-        }
+        matches!(self, Self::Cpu)
     }
 
     pub fn is_cuda(&self) -> bool {
-        match self {
-            Self::Cpu => false,
-            Self::Cuda(_) => true,
-        }
+        matches!(self, Self::Cuda(_))
     }
 
     pub fn cuda_if_available(ordinal: usize) -> Result<Self> {
@@ -187,6 +185,11 @@ impl Device {
             Device::Cuda(device) => {
                 let storage = device.rand_uniform(shape, dtype, lo, up)?;
                 Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(_device) => {
+                // let storage = device.rand_uniform(shape, dtype, lo, up)?;
+                // Ok(Storage::Metal(storage))
+                bail!("Metal rand_uniform not implemented")
             }
         }
     }
@@ -216,6 +219,11 @@ impl Device {
                 let storage = device.rand_normal(shape, dtype, mean, std)?;
                 Ok(Storage::Cuda(storage))
             }
+            Device::Metal(_device) => {
+                // let storage = device.rand_normal(shape, dtype, mean, std)?;
+                // Ok(Storage::Metal(storage))
+                bail!("Metal rand_normal not implemented")
+            }
         }
     }
 
@@ -238,6 +246,11 @@ impl Device {
                 let storage = device.ones_impl(shape, dtype)?;
                 Ok(Storage::Cuda(storage))
             }
+            Device::Metal(_device) => {
+                // let storage = device.ones_impl(shape, dtype)?;
+                // Ok(Storage::Metal(storage))
+                bail!("Metal ones not implemented")
+            }
         }
     }
 
@@ -251,6 +264,11 @@ impl Device {
                 let storage = device.zeros_impl(shape, dtype)?;
                 Ok(Storage::Cuda(storage))
             }
+            Device::Metal(_device) => {
+                // let storage = device.zeros_impl(shape, dtype)?;
+                // Ok(Storage::Metal(storage))
+                bail!("Metal zeros not implemented")
+            }
         }
     }
 
@@ -262,6 +280,12 @@ impl Device {
                 let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Cuda(storage))
             }
+            Device::Metal(_device) => {
+                // let storage = array.to_cpu_storage();
+                // let storage = device.storage_from_cpu_storage(&storage)?;
+                // Ok(Storage::Metal(storage))
+                bail!("Metal storage not implemented")
+            }
         }
     }
 
@@ -272,6 +296,12 @@ impl Device {
                 let storage = S::to_cpu_storage_owned(data);
                 let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(_device) => {
+                // let storage = S::to_cpu_storage_owned(data);
+                // let storage = device.storage_from_cpu_storage(&storage)?;
+                // Ok(Storage::Metal(storage))
+                bail!("Metal storage_owned not implemented")
             }
         }
     }

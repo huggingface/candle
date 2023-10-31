@@ -1,0 +1,13 @@
+[package]
+name = "candle-metal"
+version = "0.0.1"
+edition = "2021"
+
+description = "Metal kernels for Candle"
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+metal = { workspace = true, optional = true}
