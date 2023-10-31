@@ -17,3 +17,22 @@ cargo run --example marian-mt --release -- \
 I know you are waiting for me. I will go through the forest, I will go through the
 mountain. I cannot stay far from you any longer.</s>
 ```
+
+## Generating the tokenizer.json files
+
+You can use the following script to generate the `tokenizer.json` config files
+from the hf-hub repos. This requires the `tokenizers` and `sentencepiece`
+packages to be install and use the `convert_slow_tokenizer.py` script from this
+directory.
+
+```python
+from convert_slow_tokenizer import MarianConverter
+from transformers import AutoTokenizer
+
+
+tokenizer = AutoTokenizer.from_pretrained("Helsinki-NLP/opus-mt-fr-en", use_fast=False)
+fast_tokenizer = MarianConverter(tokenizer, index=0).converted()
+fast_tokenizer.save(f"tokenizer-marian-base-fr.json")
+fast_tokenizer = MarianConverter(tokenizer, index=1).converted()
+fast_tokenizer.save(f"tokenizer-marian-base-en.json")
+```
