@@ -49,7 +49,8 @@ mod device;
 pub mod display;
 mod dtype;
 mod dummy_cuda_backend;
-mod dummy_metal_backend;
+#[cfg(feature = "metal")]
+pub mod metal_backend;
 pub mod error;
 mod indexer;
 pub mod layout;
@@ -71,9 +72,6 @@ pub mod test_utils;
 pub mod utils;
 mod variable;
 
-#[cfg(not(feature = "cuda"))]
-pub use dummy_metal_backend::{MetalDevice, MetalStorage};
-
 pub use cpu_backend::CpuStorage;
 pub use device::{Device, DeviceLocation};
 pub use dtype::{DType, FloatDType, IntDType, WithDType};
@@ -92,6 +90,12 @@ pub use cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(not(feature = "cuda"))]
 pub use dummy_cuda_backend::{CudaDevice, CudaStorage};
+
+#[cfg(feature = "metal")]
+pub use metal_backend::{MetalDevice, MetalStorage};
+
+#[cfg(not(feature = "metal"))]
+pub use dummy_metal_backend::{MetalDevice, MetalStorage};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;

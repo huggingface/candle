@@ -198,20 +198,21 @@ impl BackendStorage for MetalStorage {
 impl BackendDevice for MetalDevice {
     type Storage = MetalStorage;
 
-    fn new(_ordinal: usize) -> Result<Self> {
-        todo!()
+    fn new(ordinal: usize) -> Result<Self> {
+        let device = metal::Device::all().swap_remove(ordinal);
+        Ok(Self{device })
     }
 
     fn set_seed(&self, _seed: u64) -> Result<()> {
-        todo!()
+        todo!("set_seed")
     }
 
     fn location(&self) -> crate::DeviceLocation {
         crate::DeviceLocation::Metal
     }
 
-    fn same_device(&self, _rhs: &Self) -> bool {
-        todo!()
+    fn same_device(&self, rhs: &Self) -> bool {
+        self.device.registry_id() == rhs.device.registry_id()
     }
 
     fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<MetalStorage> {
@@ -223,7 +224,7 @@ impl BackendDevice for MetalDevice {
     }
 
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
-        todo!()
+        todo!("Storage")
     }
 
     fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {

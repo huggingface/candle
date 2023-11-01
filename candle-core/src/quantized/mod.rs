@@ -14,6 +14,7 @@ pub mod utils;
 pub use k_quants::GgmlType;
 
 pub struct QTensor {
+    device: Device,
     data: Box<dyn QuantizedType>,
     shape: Shape,
 }
@@ -170,17 +171,20 @@ impl QTensor {
     pub fn new<S: Into<Shape>, T: k_quants::GgmlType + Send + Sync + 'static>(
         data: Vec<T>,
         shape: S,
+        device: &Device,
     ) -> Result<Self> {
         let shape = shape.into();
         check_shape::<T>(&shape)?;
         Ok(Self {
             data: Box::new(data),
             shape,
+            device: device.clone()
         })
     }
 
     pub fn quantize<T: k_quants::GgmlType + Send + Sync + 'static>(src: &Tensor) -> Result<Self> {
         let shape = src.shape();
+        let device = src.device();
         check_shape::<T>(shape)?;
         let src = src
             .to_dtype(crate::DType::F32)?
@@ -197,6 +201,7 @@ impl QTensor {
         Ok(Self {
             data: Box::new(data),
             shape: shape.clone(),
+            device: device.clone()
         })
     }
 
@@ -212,7 +217,12 @@ impl QTensor {
         &self.shape
     }
 
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
     pub fn dequantize(&self, device: &Device) -> Result<Tensor> {
+        // TODO Skip the CPU part on metal
         let mut f32_data = vec![0f32; self.shape.elem_count()];
         self.data.to_float(&mut f32_data)?;
         Tensor::from_vec(f32_data, &self.shape, device)
