@@ -178,7 +178,7 @@ impl QTensor {
         Ok(Self {
             data: Box::new(data),
             shape,
-            device: device.clone()
+            device: device.clone(),
         })
     }
 
@@ -201,7 +201,7 @@ impl QTensor {
         Ok(Self {
             data: Box::new(data),
             shape: shape.clone(),
-            device: device.clone()
+            device: device.clone(),
         })
     }
 

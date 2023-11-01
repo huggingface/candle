@@ -181,14 +181,20 @@ pub struct ModelWeights {
     span_output: tracing::Span,
 }
 
-fn precomput_freqs_cis(head_dim: usize, freq_base: f32, device: &Device) -> Result<(Tensor, Tensor)> {
+fn precomput_freqs_cis(
+    head_dim: usize,
+    freq_base: f32,
+    device: &Device,
+) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
         .collect();
     let theta = Tensor::new(theta.as_slice(), device)?;
     let range: Vec<f32> = (0..MAX_SEQ_LEN).map(|r| r as f32).collect();
-    let idx_theta = Tensor::new(range.as_slice(), device)?.reshape((MAX_SEQ_LEN, 1))?.matmul(&theta.reshape((1, theta.elem_count()))?)?;
+    let idx_theta = Tensor::new(range.as_slice(), device)?
+        .reshape((MAX_SEQ_LEN, 1))?
+        .matmul(&theta.reshape((1, theta.elem_count()))?)?;
     // TODO This change avoids allocating on Metal and then casting since allocating directly on
     // CPU as f32 seems just as fast
     // let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
@@ -260,7 +266,7 @@ impl ModelWeights {
     pub fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: gguf_file::Content,
         reader: &mut R,
-        device: &Device
+        device: &Device,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
@@ -283,7 +289,10 @@ impl ModelWeights {
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let norm = RmsNorm::new(ct.tensor(reader, "output_norm.weight", device)?, rms_norm_eps)?;
+        let norm = RmsNorm::new(
+            ct.tensor(reader, "output_norm.weight", device)?,
+            rms_norm_eps,
+        )?;
         let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
         for layer_idx in 0..block_count {
@@ -291,11 +300,15 @@ impl ModelWeights {
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
             let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
-            let attention_wo = ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
-            let feed_forward_w1 = ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
-            let feed_forward_w2 = ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
+            let attention_wo =
+                ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
+            let feed_forward_w1 =
+                ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
+            let feed_forward_w2 =
+                ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
             let feed_forward_w3 = ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
-            let attention_norm = ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?;
+            let attention_norm =
+                ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?;
             let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");

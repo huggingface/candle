@@ -49,11 +49,11 @@ mod device;
 pub mod display;
 mod dtype;
 mod dummy_cuda_backend;
-#[cfg(feature = "metal")]
-pub mod metal_backend;
 pub mod error;
 mod indexer;
 pub mod layout;
+#[cfg(feature = "metal")]
+pub mod metal_backend;
 #[cfg(feature = "accelerate")]
 mod metal_backend;
 #[cfg(feature = "mkl")]
