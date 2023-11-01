@@ -1,3 +1,4 @@
+use super::with_tracing::{linear, Linear};
 use candle::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, VarBuilder};
 use serde::Deserialize;
@@ -28,35 +29,6 @@ impl HiddenActLayer {
             // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
             HiddenAct::Gelu => xs.gelu_erf(),
             HiddenAct::Relu => xs.relu(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Linear {
-    weight: Tensor,
-    bias: Option<Tensor>,
-    span: tracing::Span,
-}
-
-impl Linear {
-    pub fn new(weight: Tensor, bias: Option<Tensor>) -> Self {
-        let span = tracing::span!(tracing::Level::TRACE, "linear");
-        Self { weight, bias, span }
-    }
-}
-
-impl Module for Linear {
-    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
-        let _enter = self.span.enter();
-        let w = match x.dims() {
-            &[bsize, _, _] => self.weight.broadcast_left(bsize)?.t()?,
-            _ => self.weight.t()?,
-        };
-        let x = x.matmul(&w)?;
-        match &self.bias {
-            None => Ok(x),
-            Some(bias) => x.broadcast_add(bias),
         }
     }
 }
@@ -182,12 +154,6 @@ impl Config {
 fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
     let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
     Ok(Embedding::new(embeddings, hidden_size))
-}
-
-fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let weight = vb.get((size2, size1), "weight")?;
-    let bias = vb.get(size2, "bias")?;
-    Ok(Linear::new(weight, Some(bias)))
 }
 
 struct Dropout {

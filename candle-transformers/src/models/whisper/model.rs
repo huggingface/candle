@@ -1,37 +1,11 @@
 use super::Config;
+use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv1d, Conv1dConfig, Embedding, LayerNorm, Module, VarBuilder};
 
 fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
     let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
     Ok(Embedding::new(embeddings, hidden_size))
-}
-//
-// We wrap the `Linear` layer here to add some tracing so that it's easier to profile the resulting
-// model.
-#[derive(Debug, Clone)]
-pub struct Linear {
-    inner: candle_nn::Linear,
-    span: tracing::Span,
-}
-
-impl Linear {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
-    }
-}
-
-fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let span = tracing::span!(tracing::Level::TRACE, "linear");
-    let inner = candle_nn::linear(size1, size2, vb)?;
-    Ok(Linear { inner, span })
-}
-
-fn linear_no_bias(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let span = tracing::span!(tracing::Level::TRACE, "linear");
-    let inner = candle_nn::linear_no_bias(size1, size2, vb)?;
-    Ok(Linear { inner, span })
 }
 
 fn conv1d(
