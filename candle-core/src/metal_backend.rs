@@ -21,7 +21,8 @@ pub enum MetalError {
 #[derive(Clone)]
 pub struct MetalDevice {
     device: metal::Device,
-    command_queue: metal::CommandQueue,
+    _command_queue: metal::CommandQueue,
+    command_buffer: metal::CommandBuffer,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -250,15 +251,13 @@ impl BackendStorage for MetalStorage {
                 )
                 .expect("Failed to create matrix multiplication kernel");
 
-                let buffer = self.device.command_queue.new_command_buffer();
                 // Encode kernel to command buffer
                 matrix_multiplication.encode_to_command_buffer(
-                    &buffer,
+                    &self.device.command_buffer,
                     &left_matrix,
                     &right_matrix,
                     &result_matrix,
                 );
-                buffer.commit();
         Ok(Self{
             buffer: out_buffer,
             device: self.device.clone(),
@@ -280,8 +279,9 @@ impl BackendDevice for MetalDevice {
 
     fn new(ordinal: usize) -> Result<Self> {
         let device = metal::Device::all().swap_remove(ordinal);
-        let command_queue = device.new_command_queue();
-        Ok(Self { device, command_queue })
+        let _command_queue = device.new_command_queue();
+        let command_buffer = _command_queue.new_owned_command_buffer();
+        Ok(Self { device, _command_queue, command_buffer })
     }
 
     fn set_seed(&self, _seed: u64) -> Result<()> {
