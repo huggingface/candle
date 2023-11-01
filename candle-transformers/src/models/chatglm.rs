@@ -61,11 +61,28 @@ fn linear(in_dim: usize, out_dim: usize, bias: bool, vb: VarBuilder) -> Result<L
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {}
+struct RotaryEmbedding {
+    cache: Tensor,
+}
 
 impl RotaryEmbedding {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        todo!()
+        let dtype = vb.dtype();
+        let dev = vb.device();
+        let rotary_dim = cfg.kv_channels;
+        let n_elem = rotary_dim / 2;
+        let inv_freq: Vec<_> = (0..n_elem)
+            .step_by(2)
+            .map(|i| 1f32 / 10_000f64.powf(i as f64 / n_elem as f64) as f32)
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
+        let t = Tensor::arange(0u32, cfg.seq_length as u32, dev)?
+            .to_dtype(dtype)?
+            .reshape((cfg.seq_length, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let cache = Tensor::cat(&[&freqs.cos()?, &freqs.sin()?], D::Minus1)?;
+        Ok(Self { cache })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
