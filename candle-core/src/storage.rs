@@ -1,6 +1,6 @@
 use crate::backend::BackendStorage;
 use crate::op::{self, CmpOp, CustomOp1, CustomOp2, CustomOp3, ReduceOp};
-use crate::{CpuStorage, CudaStorage, MetalStorage, DType, Device, Error, Layout, Result, Shape};
+use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
 // out of memory. Instead try_clone should be used.
@@ -659,7 +659,9 @@ impl Storage {
         match (self, dst) {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_strided_src(dst, dst_offset, src_l),
             (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
-            (Self::Metal(src), Self::Metal(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
+            (Self::Metal(src), Self::Metal(dst)) => {
+                Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),

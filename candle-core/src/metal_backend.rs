@@ -3,9 +3,13 @@ use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 pub use candle_metal;
-use metal;
 use core::mem;
-use half::{f16, bf16};
+use half::{bf16, f16};
+use metal;
+use metal::mps::matrix::{MatrixMultiplication, Matrix, MatrixDescriptor};
+use metal::mps::{Float32, MPSDataType};
+use metal::MTLResourceOptions;
+use crate::bail;
 
 /// Metal related errors
 #[derive(thiserror::Error, Debug)]
@@ -17,6 +21,7 @@ pub enum MetalError {
 #[derive(Clone)]
 pub struct MetalDevice {
     device: metal::Device,
+    command_queue: metal::CommandQueue,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -47,8 +52,7 @@ impl MetalDevice {
 pub struct MetalStorage {
     buffer: metal::Buffer,
     device: MetalDevice,
-    dtype: DType
-
+    dtype: DType,
 }
 
 impl BackendStorage for MetalStorage {
@@ -192,12 +196,77 @@ impl BackendStorage for MetalStorage {
         rhs_l: &Layout,
     ) -> Result<Self> {
         let elem_count = b * m * n;
-        let dev = &self.device;
-        match (self.dtype, rhs.dtype){
+        match (self.dtype, rhs.dtype) {
             (DType::F32, DType::F32) => {
-                todo!("MATMUL {b} {m} {n} {k}");
+                if b != 1 {
+                    bail!("Didn't implemented strided matmul yet");
+                }
+                if !lhs_l.is_contiguous() || !rhs_l.is_contiguous() {
+                    bail!("Didn't implemented non contiguous matmul yet");
+                }
+                let out_buffer = self.device.new_buffer(
+                    (elem_count * mem::size_of::<f32>()) as u64,
+                    MTLResourceOptions::empty(),
+                );
+                let m : u64 = m.try_into().expect("usize should fit u64");
+                let n: u64 = n.try_into().expect("usize should fit u64");
+                let k: u64 = k.try_into().expect("usize should fit u64");
+                // Create descriptors
+                let left_descriptor =
+                    MatrixDescriptor::init_single(m, k, k * Float32::SIZE, Float32::TYPE_ID);
+                let right_descriptor =
+                    MatrixDescriptor::init_single(k, n, n * Float32::SIZE, Float32::TYPE_ID);
+                let result_descriptor =
+                    MatrixDescriptor::init_single(m, n, n * Float32::SIZE, Float32::TYPE_ID);
+
+                // Create matrix objects
+                let left_matrix =
+                    Matrix::init_with_buffer_descriptor(&self.buffer, &left_descriptor)
+                        .expect("Failed to create left matrix");
+                let right_matrix =
+                    Matrix::init_with_buffer_descriptor(&rhs.buffer, &right_descriptor)
+                        .expect("Failed to create left matrix");
+
+                let result_matrix =
+                    Matrix::init_with_buffer_descriptor(&out_buffer, &result_descriptor)
+                        .expect("Failed to create left matrix");
+                
+                let transpose_left = false;
+                let transpose_right = false;
+                let alpha = 1.0;
+                let beta = 0.0;
+
+
+                // Create kernel
+                let matrix_multiplication = MatrixMultiplication::init(
+                    &self.device,
+                    transpose_left,
+                    transpose_right,
+                    m,
+                    n,
+                    k,
+                    alpha,
+                    beta,
+                )
+                .expect("Failed to create matrix multiplication kernel");
+
+                let buffer = self.device.command_queue.new_command_buffer();
+                // Encode kernel to command buffer
+                matrix_multiplication.encode_to_command_buffer(
+                    &buffer,
+                    &left_matrix,
+                    &right_matrix,
+                    &result_matrix,
+                );
+                buffer.commit();
+        Ok(Self{
+            buffer: out_buffer,
+            device: self.device.clone(),
+            dtype: self.dtype(),
+        })
+
             }
-            _ => todo!("Unimplemented matmul for this pair")
+            _ => todo!("Unimplemented matmul for this pair"),
         }
     }
 
@@ -211,7 +280,8 @@ impl BackendDevice for MetalDevice {
 
     fn new(ordinal: usize) -> Result<Self> {
         let device = metal::Device::all().swap_remove(ordinal);
-        Ok(Self{device })
+        let command_queue = device.new_command_queue();
+        Ok(Self { device, command_queue })
     }
 
     fn set_seed(&self, _seed: u64) -> Result<()> {
@@ -237,57 +307,47 @@ impl BackendDevice for MetalDevice {
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
         let option = metal::MTLResourceOptions::CPUCacheModeDefaultCache;
         let buffer = match storage {
-            CpuStorage::U8(storage) => {
-                 self.device.new_buffer_with_data(
-                     storage.as_ptr() as *const core::ffi::c_void,
-                     (storage.len() * mem::size_of::<u8>()) as u64,
-                     option
-                 )
-            }
-            CpuStorage::U32(storage) => {
-                 self.device.new_buffer_with_data(
-                     storage.as_ptr() as *const core::ffi::c_void,
-                     (storage.len() * mem::size_of::<u32>()) as u64,
-                     option
-                 )
-            }
-            CpuStorage::I64(storage) => {
-                 self.device.new_buffer_with_data(
-                     storage.as_ptr() as *const core::ffi::c_void,
-                     (storage.len() * mem::size_of::<i64>()) as u64,
-                     option
-                 )
-            }
-            CpuStorage::BF16(storage) => {
-                 self.device.new_buffer_with_data(
-                     storage.as_ptr() as *const core::ffi::c_void,
-                     (storage.len() * mem::size_of::<bf16>()) as u64,
-                     option
-                 )
-            }
-            CpuStorage::F16(storage) => {
-                 self.device.new_buffer_with_data(
-                     storage.as_ptr() as *const core::ffi::c_void,
-                     (storage.len() * mem::size_of::<f16>()) as u64,
-                     option
-                 )
-            }
-            CpuStorage::F32(storage) => {
-                 self.device.new_buffer_with_data(
-                     storage.as_ptr() as *const core::ffi::c_void,
-                     (storage.len() * mem::size_of::<f32>()) as u64,
-                     option
-                 )
-            }
-            CpuStorage::F64(storage) => {
-                 self.device.new_buffer_with_data(
-                     storage.as_ptr() as *const core::ffi::c_void,
-                     (storage.len() * mem::size_of::<f64>()) as u64,
-                     option
-                 )
-            }
+            CpuStorage::U8(storage) => self.device.new_buffer_with_data(
+                storage.as_ptr() as *const core::ffi::c_void,
+                (storage.len() * mem::size_of::<u8>()) as u64,
+                option,
+            ),
+            CpuStorage::U32(storage) => self.device.new_buffer_with_data(
+                storage.as_ptr() as *const core::ffi::c_void,
+                (storage.len() * mem::size_of::<u32>()) as u64,
+                option,
+            ),
+            CpuStorage::I64(storage) => self.device.new_buffer_with_data(
+                storage.as_ptr() as *const core::ffi::c_void,
+                (storage.len() * mem::size_of::<i64>()) as u64,
+                option,
+            ),
+            CpuStorage::BF16(storage) => self.device.new_buffer_with_data(
+                storage.as_ptr() as *const core::ffi::c_void,
+                (storage.len() * mem::size_of::<bf16>()) as u64,
+                option,
+            ),
+            CpuStorage::F16(storage) => self.device.new_buffer_with_data(
+                storage.as_ptr() as *const core::ffi::c_void,
+                (storage.len() * mem::size_of::<f16>()) as u64,
+                option,
+            ),
+            CpuStorage::F32(storage) => self.device.new_buffer_with_data(
+                storage.as_ptr() as *const core::ffi::c_void,
+                (storage.len() * mem::size_of::<f32>()) as u64,
+                option,
+            ),
+            CpuStorage::F64(storage) => self.device.new_buffer_with_data(
+                storage.as_ptr() as *const core::ffi::c_void,
+                (storage.len() * mem::size_of::<f64>()) as u64,
+                option,
+            ),
         };
-        Ok(Self::Storage{buffer, device: self.clone(), dtype: storage.dtype()})
+        Ok(Self::Storage {
+            buffer,
+            device: self.clone(),
+            dtype: storage.dtype(),
+        })
     }
 
     fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {

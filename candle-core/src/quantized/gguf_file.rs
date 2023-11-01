@@ -3,7 +3,7 @@
 //! Spec: https://github.com/philpax/ggml/blob/gguf-spec/docs/gguf.md
 
 use super::{GgmlDType, QTensor};
-use crate::{Result, Device};
+use crate::{Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::HashMap;
 
@@ -70,7 +70,12 @@ impl TensorInfo {
         let mut raw_data = vec![0u8; size_in_bytes];
         reader.seek(std::io::SeekFrom::Start(tensor_data_offset + self.offset))?;
         reader.read_exact(&mut raw_data)?;
-        super::ggml_file::qtensor_from_ggml(self.ggml_dtype, &raw_data, self.shape.dims().to_vec(), device)
+        super::ggml_file::qtensor_from_ggml(
+            self.ggml_dtype,
+            &raw_data,
+            self.shape.dims().to_vec(),
+            device,
+        )
     }
 }
 

@@ -1,5 +1,5 @@
 #![allow(clippy::redundant_closure_call)]
-use crate::{CpuStorage, CudaStorage, MetalStorage, Layout, Result, Shape, Tensor};
+use crate::{CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
 use half::{bf16, f16};
 use num_traits::float::Float;
 
@@ -176,7 +176,11 @@ pub trait CustomOp1 {
 
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
-    fn metal_fwd(&self, _storage: &MetalStorage, _layout: &Layout) -> Result<(MetalStorage, Shape)> {
+    fn metal_fwd(
+        &self,
+        _storage: &MetalStorage,
+        _layout: &Layout,
+    ) -> Result<(MetalStorage, Shape)> {
         Err(crate::Error::Metal(
             format!("no cuda implementation for {}", self.name()).into(),
         ))
