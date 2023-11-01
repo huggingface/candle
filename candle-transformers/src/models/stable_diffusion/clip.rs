@@ -102,6 +102,14 @@ impl Config {
         }
     }
 
+    pub fn ssd1b() -> Self {
+        Self::sdxl()
+    }
+
+    pub fn ssd1b2() -> Self {
+        Self::sdxl2()
+    }
+
     // https://huggingface.co/warp-ai/wuerstchen/blob/main/text_encoder/config.json
     pub fn wuerstchen() -> Self {
         Self {
