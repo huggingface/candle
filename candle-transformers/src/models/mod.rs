@@ -2,6 +2,7 @@ pub mod bert;
 pub mod bigcode;
 pub mod blip;
 pub mod blip_text;
+pub mod chatglm;
 pub mod convmixer;
 pub mod dinov2;
 pub mod efficientnet;

@@ -13,6 +13,7 @@ pub enum Activation {
     Relu6,
     Silu,
     Sigmoid,
+    Swiglu,
     Swish,
     Elu(f64),
     LeakyRelu(f64),
@@ -29,6 +30,10 @@ impl super::Module for Activation {
             Self::Relu6 => xs.clamp(0f32, 6f32),
             Self::Silu => crate::ops::silu(xs),
             Self::Sigmoid => crate::ops::sigmoid(xs),
+            Self::Swiglu => {
+                let xs = xs.chunk(2, candle::D::Minus1)?;
+                crate::ops::silu(&xs[0])? * &xs[1]
+            }
             Self::Swish => xs * crate::ops::sigmoid(xs)?,
             &Self::Elu(alpha) => xs.elu(alpha),
             &Self::LeakyRelu(negative_slope) => crate::ops::leaky_relu(xs, negative_slope),
