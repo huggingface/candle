@@ -311,7 +311,7 @@ fn main() -> anyhow::Result<()> {
                 | Which::L70b
                 | Which::L70bChat => 8,
             };
-            ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa))?
+            ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa), &device)?
         }
     };
     println!("model built");
