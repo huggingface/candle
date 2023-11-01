@@ -1,3 +1,4 @@
+pub use crate::models::with_tracing::Linear;
 use candle::{Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 
@@ -9,13 +10,11 @@ pub mod tiny_vit;
 pub mod transformer;
 
 pub fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Result<Linear> {
-    let inner = if bias {
-        candle_nn::linear(in_dim, out_dim, vb)?
+    if bias {
+        crate::models::with_tracing::linear(in_dim, out_dim, vb)
     } else {
-        candle_nn::linear_no_bias(in_dim, out_dim, vb)?
-    };
-    let span = tracing::span!(tracing::Level::TRACE, "linear");
-    Ok(Linear { inner, span })
+        crate::models::with_tracing::linear_no_bias(in_dim, out_dim, vb)
+    }
 }
 
 #[derive(Debug)]
@@ -83,18 +82,5 @@ impl Module for MlpBlock {
         xs.apply(&self.lin1)?
             .apply(&self.activation)?
             .apply(&self.lin2)
-    }
-}
-
-#[derive(Debug)]
-pub struct Linear {
-    inner: candle_nn::Linear,
-    span: tracing::Span,
-}
-
-impl Module for Linear {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
     }
 }

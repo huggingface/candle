@@ -1,3 +1,4 @@
+use super::with_tracing::{linear_no_bias as linear, Linear};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Module, VarBuilder};
 use serde::Deserialize;
@@ -81,21 +82,6 @@ impl Config {
     }
 }
 
-// We wrap the `Linear` layer here to add some tracing so that it's easier to profile the resulting
-// model.
-#[derive(Debug)]
-pub struct Linear {
-    inner: candle_nn::Linear,
-    span: tracing::Span,
-}
-
-impl Linear {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
-    }
-}
-
 #[derive(Clone)]
 pub struct Cache {
     masks: Arc<Mutex<HashMap<usize, Tensor>>>,
@@ -148,12 +134,6 @@ impl Cache {
             Ok(mask)
         }
     }
-}
-
-fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let span = tracing::span!(tracing::Level::TRACE, "linear");
-    let inner = candle_nn::linear_no_bias(size1, size2, vb)?;
-    Ok(Linear { inner, span })
 }
 
 fn embedding(cfg: &Config, vb: VarBuilder) -> Result<Embedding> {
