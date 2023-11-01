@@ -3,16 +3,27 @@ pub mod imagenet;
 pub mod token_output_stream;
 
 use candle::{Device, Result, Tensor};
+use candle::utils::{cuda_is_available, metal_is_available};
 
 pub fn device(cpu: bool) -> Result<Device> {
     if cpu {
         Ok(Device::Cpu)
     } else {
-        let device = Device::cuda_if_available(0)?;
-        if !device.is_cuda() {
-            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+        if cuda_is_available(){
+            Ok(Device::new_cuda(0)?)
+        }else if metal_is_available(){
+            Ok(Device::new_metal(0)?)
+        }else{
+            #[cfg(all(target_os="macos", target_arch="aarch64"))]
+            {
+                println!("Running on CPU, to run on GPU(metal), build this example with `--features metal`");
+            }
+            #[cfg(not(all(target_os="macos", target_arch="aarch64")))]
+            {
+                println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+            }
+            Ok(Device::Cpu)
         }
-        Ok(device)
     }
 }
 

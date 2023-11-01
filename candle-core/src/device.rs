@@ -130,6 +130,10 @@ impl Device {
         Ok(Self::Cuda(crate::CudaDevice::new(ordinal)?))
     }
 
+    pub fn new_metal(ordinal: usize) -> Result<Self> {
+        Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
+    }
+
     pub fn set_seed(&self, seed: u64) -> Result<()> {
         match self {
             Self::Cpu => CpuDevice.set_seed(seed),
@@ -309,11 +313,10 @@ impl Device {
                 let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Cuda(storage))
             }
-            Device::Metal(_device) => {
-                // let storage = S::to_cpu_storage_owned(data);
-                // let storage = device.storage_from_cpu_storage(&storage)?;
-                // Ok(Storage::Metal(storage))
-                bail!("Metal storage_owned not implemented")
+            Device::Metal(device) => {
+                let storage = S::to_cpu_storage_owned(data);
+                let storage = device.storage_from_cpu_storage(&storage)?;
+                Ok(Storage::Metal(storage))
             }
         }
     }

@@ -234,6 +234,7 @@ fn main() -> anyhow::Result<()> {
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
+    let device = candle_examples::device(false)?;
     let temperature = if args.temperature == 0. {
         None
     } else {
@@ -278,10 +279,10 @@ fn main() -> anyhow::Result<()> {
                 &format_size(total_size_in_bytes),
                 start.elapsed().as_secs_f32(),
             );
-            ModelWeights::from_gguf(model, &mut file)?
+            ModelWeights::from_gguf(model, &mut file, &device)?
         }
         Some("ggml" | "bin") | Some(_) | None => {
-            let model = ggml_file::Content::read(&mut file)?;
+            let model = ggml_file::Content::read(&mut file, &device)?;
             let mut total_size_in_bytes = 0;
             for (_, tensor) in model.tensors.iter() {
                 let elem_count = tensor.shape().elem_count();
