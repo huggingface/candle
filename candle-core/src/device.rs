@@ -223,10 +223,9 @@ impl Device {
                 let storage = device.rand_normal(shape, dtype, mean, std)?;
                 Ok(Storage::Cuda(storage))
             }
-            Device::Metal(_device) => {
-                // let storage = device.rand_normal(shape, dtype, mean, std)?;
-                // Ok(Storage::Metal(storage))
-                bail!("Metal rand_normal not implemented")
+            Device::Metal(device) => {
+                let storage = device.rand_normal(shape, dtype, mean, std)?;
+                Ok(Storage::Metal(storage))
             }
         }
     }
@@ -250,10 +249,9 @@ impl Device {
                 let storage = device.ones_impl(shape, dtype)?;
                 Ok(Storage::Cuda(storage))
             }
-            Device::Metal(_device) => {
-                // let storage = device.ones_impl(shape, dtype)?;
-                // Ok(Storage::Metal(storage))
-                bail!("Metal ones not implemented")
+            Device::Metal(device) => {
+                let storage = device.ones_impl(shape, dtype)?;
+                Ok(Storage::Metal(storage))
             }
         }
     }
@@ -268,10 +266,9 @@ impl Device {
                 let storage = device.zeros_impl(shape, dtype)?;
                 Ok(Storage::Cuda(storage))
             }
-            Device::Metal(_device) => {
-                // let storage = device.zeros_impl(shape, dtype)?;
-                // Ok(Storage::Metal(storage))
-                bail!("Metal zeros not implemented")
+            Device::Metal(device) => {
+                let storage = device.zeros_impl(shape, dtype)?;
+                Ok(Storage::Metal(storage))
             }
         }
     }
@@ -284,11 +281,10 @@ impl Device {
                 let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Cuda(storage))
             }
-            Device::Metal(_device) => {
-                // let storage = array.to_cpu_storage();
-                // let storage = device.storage_from_cpu_storage(&storage)?;
-                // Ok(Storage::Metal(storage))
-                bail!("Metal storage not implemented")
+            Device::Metal(device) => {
+                let storage = array.to_cpu_storage();
+                let storage = device.storage_from_cpu_storage(&storage)?;
+                Ok(Storage::Metal(storage))
             }
         }
     }
