@@ -1,6 +1,5 @@
 use candle::{CpuStorage, Layout, Result, Shape, Tensor};
 use rayon::prelude::*;
-use std::ops::Div;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
@@ -47,7 +46,7 @@ pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
 
 pub fn hard_sigmoid(xs: &Tensor) -> Result<Tensor> {
     // TODO: Should we have a specialized op for this?
-    ((xs + 3.0)?.div(6.0))?.clamp(0f32, 1f32)
+    ((xs + 3.0)? / 6.0)?.clamp(0f32, 1f32)
 }
 
 pub fn leaky_relu(xs: &Tensor, negative_slope: f64) -> Result<Tensor> {
