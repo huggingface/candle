@@ -363,14 +363,20 @@ enum WhichModel {
     LargeV2,
     #[value(name = "distil-medium.en")]
     DistilMediumEn,
+    #[value(name = "distil-large")]
+    DistilLarge,
 }
 
 impl WhichModel {
     fn is_multilingual(&self) -> bool {
         match self {
-            Self::Tiny | Self::Base | Self::Small | Self::Medium | Self::Large | Self::LargeV2 => {
-                true
-            }
+            Self::Tiny
+            | Self::Base
+            | Self::Small
+            | Self::Medium
+            | Self::Large
+            | Self::LargeV2
+            | Self::DistilLarge => true,
             Self::TinyEn | Self::BaseEn | Self::SmallEn | Self::MediumEn | Self::DistilMediumEn => {
                 false
             }
@@ -390,6 +396,7 @@ impl WhichModel {
             Self::Large => ("openai/whisper-large", "refs/pr/36"),
             Self::LargeV2 => ("openai/whisper-large-v2", "refs/pr/57"),
             Self::DistilMediumEn => ("distil-whisper/distil-medium.en", "main"),
+            Self::DistilLarge => ("distil-whisper/distil-large-v2", "main"),
         }
     }
 }
