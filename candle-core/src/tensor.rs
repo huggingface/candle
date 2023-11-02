@@ -1807,17 +1807,23 @@ impl Tensor {
 
     /// Returns a new tensor detached from the current graph, gradient are not propagated through
     /// this new node. The storage of this tensor is shared with the initial tensor.
+    ///
+    /// If the tensor is already detached from the computation graph, the same tensor is returned.
     pub fn detach(&self) -> Result<Tensor> {
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: self.storage.clone(),
-            layout: self.layout.clone(),
-            op: BackpropOp::none(),
-            is_variable: false,
-            dtype: self.dtype,
-            device: self.device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
+        if self.op.is_none() && !self.is_variable {
+            Ok(self.clone())
+        } else {
+            let tensor_ = Tensor_ {
+                id: TensorId::new(),
+                storage: self.storage.clone(),
+                layout: self.layout.clone(),
+                op: BackpropOp::none(),
+                is_variable: false,
+                dtype: self.dtype,
+                device: self.device.clone(),
+            };
+            Ok(Tensor(Arc::new(tensor_)))
+        }
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
