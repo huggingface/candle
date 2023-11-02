@@ -73,7 +73,11 @@ impl BackendStorage for MetalStorage {
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         match self.dtype{
-            DType::F32 => Ok(CpuStorage::F32(self.buffer.read_to_vec(self.buffer.length() as usize / 4))),
+            DType::F32 => {
+// self.buffer.read_to_vec(self.buffer.length() as usize / 4);
+                let mut buffer = vec![0.0; 32000];
+buffer[0] = 1.0;
+                Ok(CpuStorage::F32(buffer))},
             dtype => todo!("Unsupported dtype {dtype:?}")
         }
     }
@@ -271,13 +275,16 @@ impl MetalStorage {
         let elem_count = b * m * n;
         match (self.dtype, rhs.dtype) {
             (DType::F32, DType::F32) => {
+            let span= tracing::span!(tracing::Level::TRACE, "metal alloc matmul");
+            let _enter = span.enter();
+
+                let out_buffer = self.device.new_buffer(
+                    (elem_count * mem::size_of::<f32>()) as u64,
+                    MTLResourceOptions::empty(),
+                );
                 if b != 1 {
                     println!("TODO implement batched matmul for B={b}");
                     // bail!("Didn't implemented strided matmul yet");
-                    let out_buffer = self.device.new_buffer(
-                        (elem_count * mem::size_of::<f32>()) as u64,
-                        MTLResourceOptions::empty(),
-                    );
                     return Ok(Self {
                         buffer: out_buffer,
                         device: self.device.clone(),
@@ -286,20 +293,17 @@ impl MetalStorage {
                 }
                 if !lhs_l.is_contiguous() || !rhs_l.is_contiguous() {
                     println!("Didn't implemented non contiguous matmul yet {:?} {:?}", lhs_l.is_contiguous(), rhs_l.is_contiguous());
-                    let out_buffer = self.device.new_buffer(
-                        (elem_count * mem::size_of::<f32>()) as u64,
-                        MTLResourceOptions::empty(),
-                    );
                     return Ok(Self {
                         buffer: out_buffer,
                         device: self.device.clone(),
                         dtype: self.dtype(),
                     });
                 }
-                let out_buffer = self.device.new_buffer(
-                    (elem_count * mem::size_of::<f32>()) as u64,
-                    MTLResourceOptions::empty(),
-                );
+                return Ok(Self {
+                    buffer: out_buffer,
+                    device: self.device.clone(),
+                    dtype: self.dtype(),
+                });
                 let m: u64 = m.try_into().expect("usize should fit u64");
                 let n: u64 = n.try_into().expect("usize should fit u64");
                 let k: u64 = k.try_into().expect("usize should fit u64");
@@ -359,6 +363,15 @@ impl MetalStorage {
     }
 }
 
+impl MetalDevice{
+    pub fn flush(&mut self){
+        self.command_buffer.commit();
+        self.command_buffer.wait_until_completed();
+        self.command_buffer = self._command_queue.new_owned_command_buffer();
+    }
+
+}
+
 impl BackendDevice for MetalDevice {
     type Storage = MetalStorage;
 
@@ -399,43 +412,47 @@ impl BackendDevice for MetalDevice {
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
         let option = metal::MTLResourceOptions::CPUCacheModeDefaultCache;
-        let buffer = match storage {
-            CpuStorage::U8(storage) => self.device.new_buffer_with_data(
-                storage.as_ptr() as *const core::ffi::c_void,
-                (storage.len() * mem::size_of::<u8>()) as u64,
-                option,
-            ),
-            CpuStorage::U32(storage) => self.device.new_buffer_with_data(
-                storage.as_ptr() as *const core::ffi::c_void,
-                (storage.len() * mem::size_of::<u32>()) as u64,
-                option,
-            ),
-            CpuStorage::I64(storage) => self.device.new_buffer_with_data(
-                storage.as_ptr() as *const core::ffi::c_void,
-                (storage.len() * mem::size_of::<i64>()) as u64,
-                option,
-            ),
-            CpuStorage::BF16(storage) => self.device.new_buffer_with_data(
-                storage.as_ptr() as *const core::ffi::c_void,
-                (storage.len() * mem::size_of::<bf16>()) as u64,
-                option,
-            ),
-            CpuStorage::F16(storage) => self.device.new_buffer_with_data(
-                storage.as_ptr() as *const core::ffi::c_void,
-                (storage.len() * mem::size_of::<f16>()) as u64,
-                option,
-            ),
-            CpuStorage::F32(storage) => self.device.new_buffer_with_data(
-                storage.as_ptr() as *const core::ffi::c_void,
-                (storage.len() * mem::size_of::<f32>()) as u64,
-                option,
-            ),
-            CpuStorage::F64(storage) => self.device.new_buffer_with_data(
-                storage.as_ptr() as *const core::ffi::c_void,
-                (storage.len() * mem::size_of::<f64>()) as u64,
-                option,
-            ),
-        };
+        let span= tracing::span!(tracing::Level::TRACE, "metal alloc");
+        let _enter = span.enter();
+
+        let buffer = self.device.new_buffer(4, option);
+        // let buffer = match storage {
+        //     CpuStorage::U8(storage) => self.device.new_buffer_with_data(
+        //         storage.as_ptr() as *const core::ffi::c_void,
+        //         (storage.len() * mem::size_of::<u8>()) as u64,
+        //         option,
+        //     ),
+        //     CpuStorage::U32(storage) => self.device.new_buffer_with_data(
+        //         storage.as_ptr() as *const core::ffi::c_void,
+        //         (storage.len() * mem::size_of::<u32>()) as u64,
+        //         option,
+        //     ),
+        //     CpuStorage::I64(storage) => self.device.new_buffer_with_data(
+        //         storage.as_ptr() as *const core::ffi::c_void,
+        //         (storage.len() * mem::size_of::<i64>()) as u64,
+        //         option,
+        //     ),
+        //     CpuStorage::BF16(storage) => self.device.new_buffer_with_data(
+        //         storage.as_ptr() as *const core::ffi::c_void,
+        //         (storage.len() * mem::size_of::<bf16>()) as u64,
+        //         option,
+        //     ),
+        //     CpuStorage::F16(storage) => self.device.new_buffer_with_data(
+        //         storage.as_ptr() as *const core::ffi::c_void,
+        //         (storage.len() * mem::size_of::<f16>()) as u64,
+        //         option,
+        //     ),
+        //     CpuStorage::F32(storage) => self.device.new_buffer_with_data(
+        //         storage.as_ptr() as *const core::ffi::c_void,
+        //         (storage.len() * mem::size_of::<f32>()) as u64,
+        //         option,
+        //     ),
+        //     CpuStorage::F64(storage) => self.device.new_buffer_with_data(
+        //         storage.as_ptr() as *const core::ffi::c_void,
+        //         (storage.len() * mem::size_of::<f64>()) as u64,
+        //         option,
+        //     ),
+        // };
         Ok(Self::Storage {
             buffer,
             device: self.clone(),
