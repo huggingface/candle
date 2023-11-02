@@ -151,6 +151,7 @@ impl Tensor {
                 continue;
             }
             let grad = grads.remove(node).unwrap();
+            let grad = grad.detach()?;
             // TODO: We should perform all these operations in place (or at least not track the
             // whole graph). The only drawback would be if we wanted to support grad of grad but
             // this is out of scope.
