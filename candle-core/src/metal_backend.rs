@@ -1,15 +1,15 @@
 use crate::backend::{BackendDevice, BackendStorage};
+use crate::bail;
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
-pub use candle_metal_kernels;
+use candle_metal_kernels;
 use core::mem;
 use half::{bf16, f16};
 use metal;
-use metal::mps::matrix::{MatrixMultiplication, Matrix, MatrixDescriptor};
+use metal::mps::matrix::{Matrix, MatrixDescriptor, MatrixMultiplication};
 use metal::mps::{Float32, MPSDataType};
 use metal::MTLResourceOptions;
-use crate::bail;
 
 /// Metal related errors
 #[derive(thiserror::Error, Debug)]
@@ -72,11 +72,16 @@ impl BackendStorage for MetalStorage {
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        todo!()
+        match self.dtype{
+            DType::F32 => Ok(CpuStorage::F32(self.buffer.read_to_vec(self.buffer.length() as usize / 4))),
+            dtype => todo!("Unsupported dtype {dtype:?}")
+        }
     }
 
     fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self> {
-        todo!()
+        println!("TODO Affine");
+        Ok(self.clone())
+        // todo!()
     }
 
     fn powf(&self, _: &Layout, _: f64) -> Result<Self> {
@@ -88,7 +93,9 @@ impl BackendStorage for MetalStorage {
     }
 
     fn reduce_op(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
-        todo!()
+        println!("TODO reduce_op");
+        Ok(self.clone())
+        // todo!()
     }
 
     fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
@@ -100,15 +107,22 @@ impl BackendStorage for MetalStorage {
     }
 
     fn unary_impl<B: UnaryOpT>(&self, _: &Layout) -> Result<Self> {
-        todo!()
+        // todo!()
+        // TODO
+        println!("TODO {:?}", B::NAME);
+        Ok(self.clone())
     }
 
     fn binary_impl<B: BinaryOpT>(&self, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
-        todo!()
+        println!("TODO Binary {:?}", B::NAME);
+        Ok(self.clone())
+        // todo!()
     }
 
-    fn where_cond(&self, _: &Layout, _: &Self, _: &Layout, _: &Self, _: &Layout) -> Result<Self> {
-        todo!()
+    fn where_cond(&self, _: &Layout, rhs: &Self, _: &Layout, _: &Self, _: &Layout) -> Result<Self> {
+        println!("TODO where_cond");
+        Ok(rhs.clone())
+        // todo!()
     }
 
     fn conv1d(
@@ -174,7 +188,9 @@ impl BackendStorage for MetalStorage {
     }
 
     fn index_select(&self, _: &Self, _: &Layout, _: &Layout, _: usize) -> Result<Self> {
-        todo!()
+        println!("TODO Index select");
+        Ok(self.clone())
+        // todo!()
     }
 
     fn index_add(
@@ -196,20 +212,95 @@ impl BackendStorage for MetalStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
+        let transpose_left = false;
+        let transpose_right = false;
+        let alpha = 1.0;
+        let beta = 0.0;
+        self.matmul_generic(
+            rhs,
+            (b, m, n, k),
+            lhs_l,
+            rhs_l,
+            transpose_left,
+            transpose_right,
+            alpha,
+            beta,
+        )
+    }
+
+    fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()> {
+        println!("TODO Copy strided");
+        Ok(())
+    }
+}
+
+impl MetalStorage {
+    pub(crate) fn matmul_t(
+        &self,
+        rhs: &Self,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self> {
+        let transpose_left = false;
+        let transpose_right = true;
+        let alpha = 1.0;
+        let beta = 0.0;
+        self.matmul_generic(
+            rhs,
+            (b, m, n, k),
+            lhs_l,
+            rhs_l,
+            transpose_left,
+            transpose_right,
+            alpha,
+            beta,
+        )
+    }
+    pub(crate) fn matmul_generic(
+        &self,
+        rhs: &Self,
+        (b, m, n, k): (usize, usize, usize, usize),
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        transpose_left: bool,
+        transpose_right: bool,
+        alpha: f64,
+        beta: f64,
+    ) -> Result<Self> {
         let elem_count = b * m * n;
         match (self.dtype, rhs.dtype) {
             (DType::F32, DType::F32) => {
                 if b != 1 {
-                    bail!("Didn't implemented strided matmul yet");
+                    println!("TODO implement batched matmul for B={b}");
+                    // bail!("Didn't implemented strided matmul yet");
+                    let out_buffer = self.device.new_buffer(
+                        (elem_count * mem::size_of::<f32>()) as u64,
+                        MTLResourceOptions::empty(),
+                    );
+                    return Ok(Self {
+                        buffer: out_buffer,
+                        device: self.device.clone(),
+                        dtype: self.dtype(),
+                    });
                 }
                 if !lhs_l.is_contiguous() || !rhs_l.is_contiguous() {
-                    bail!("Didn't implemented non contiguous matmul yet");
+                    println!("Didn't implemented non contiguous matmul yet {:?} {:?}", lhs_l.is_contiguous(), rhs_l.is_contiguous());
+                    let out_buffer = self.device.new_buffer(
+                        (elem_count * mem::size_of::<f32>()) as u64,
+                        MTLResourceOptions::empty(),
+                    );
+                    return Ok(Self {
+                        buffer: out_buffer,
+                        device: self.device.clone(),
+                        dtype: self.dtype(),
+                    });
                 }
                 let out_buffer = self.device.new_buffer(
                     (elem_count * mem::size_of::<f32>()) as u64,
                     MTLResourceOptions::empty(),
                 );
-                let m : u64 = m.try_into().expect("usize should fit u64");
+                let m: u64 = m.try_into().expect("usize should fit u64");
                 let n: u64 = n.try_into().expect("usize should fit u64");
                 let k: u64 = k.try_into().expect("usize should fit u64");
                 // Create descriptors
@@ -220,6 +311,9 @@ impl BackendStorage for MetalStorage {
                 let result_descriptor =
                     MatrixDescriptor::init_single(m, n, n * Float32::SIZE, Float32::TYPE_ID);
 
+                println!("lhs {:?} {m} {k}", self.buffer.length());
+                println!("rhs {:?} {k} {n}", rhs.buffer.length());
+                println!("out {:?} {m} {n}", out_buffer.length());
                 // Create matrix objects
                 let left_matrix =
                     Matrix::init_with_buffer_descriptor(&self.buffer, &left_descriptor)
@@ -231,12 +325,8 @@ impl BackendStorage for MetalStorage {
                 let result_matrix =
                     Matrix::init_with_buffer_descriptor(&out_buffer, &result_descriptor)
                         .expect("Failed to create left matrix");
-                
-                let transpose_left = false;
-                let transpose_right = false;
-                let alpha = 1.0;
-                let beta = 0.0;
 
+                println!("lhs {:?}", lhs_l.shape());
 
                 // Create kernel
                 let matrix_multiplication = MatrixMultiplication::init(
@@ -258,19 +348,14 @@ impl BackendStorage for MetalStorage {
                     &right_matrix,
                     &result_matrix,
                 );
-        Ok(Self{
-            buffer: out_buffer,
-            device: self.device.clone(),
-            dtype: self.dtype(),
-        })
-
+                Ok(Self {
+                    buffer: out_buffer,
+                    device: self.device.clone(),
+                    dtype: self.dtype(),
+                })
             }
             _ => todo!("Unimplemented matmul for this pair"),
         }
-    }
-
-    fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()> {
-        todo!()
     }
 }
 
@@ -281,7 +366,11 @@ impl BackendDevice for MetalDevice {
         let device = metal::Device::all().swap_remove(ordinal);
         let _command_queue = device.new_command_queue();
         let command_buffer = _command_queue.new_owned_command_buffer();
-        Ok(Self { device, _command_queue, command_buffer })
+        Ok(Self {
+            device,
+            _command_queue,
+            command_buffer,
+        })
     }
 
     fn set_seed(&self, _seed: u64) -> Result<()> {
@@ -296,12 +385,16 @@ impl BackendDevice for MetalDevice {
         self.device.registry_id() == rhs.device.registry_id()
     }
 
-    fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<MetalStorage> {
-        todo!()
+    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+        // TODO Is there a faster way ?
+        let cpu_storage = crate::cpu_backend::CpuDevice.zeros_impl(shape, dtype)?;
+        self.storage_from_cpu_storage(&cpu_storage)
     }
 
-    fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
-        todo!()
+    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+        // TODO Is there a faster way ?
+        let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
+        self.storage_from_cpu_storage(&cpu_storage)
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
@@ -350,11 +443,15 @@ impl BackendDevice for MetalDevice {
         })
     }
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
-        todo!()
+    fn rand_uniform(&self, shape: &Shape, dtype: DType, mean: f64, stddev: f64) -> Result<Self::Storage> {
+        // TODO is there a better way ?
+        let cpu_storage = crate::cpu_backend::CpuDevice.rand_uniform(shape, dtype, mean, stddev)?;
+        self.storage_from_cpu_storage(&cpu_storage)
     }
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
-        todo!()
+    fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, stddev: f64) -> Result<Self::Storage> {
+        // TODO is there a better way ?
+        let cpu_storage = crate::cpu_backend::CpuDevice.rand_normal(shape, dtype, mean, stddev)?;
+        self.storage_from_cpu_storage(&cpu_storage)
     }
 }

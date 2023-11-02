@@ -315,6 +315,49 @@ impl crate::CustomOp1 for QTensor {
         )?;
         Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
     }
+
+    fn metal_fwd(
+        &self,
+        storage: &crate::MetalStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::MetalStorage, Shape)> {
+        println!("TODO qmatmul");
+        if !layout.is_contiguous() {
+            crate::bail!("input tensor is not contiguous {layout:?}")
+        }
+        let src_shape = layout.shape();
+        // self is transposed so n is first then k.
+        let (n, k) = self.shape.dims2()?;
+        if src_shape.rank() < 2 {
+            crate::bail!("input tensor has only one dimension {layout:?}")
+        }
+        let mut dst_shape = src_shape.dims().to_vec();
+        let last_k = dst_shape.pop().unwrap();
+        if last_k != k {
+            crate::bail!("input tensor {layout:?} incompatible with {:?}", self.shape)
+        }
+        dst_shape.push(n);
+        let dst_shape = Shape::from(dst_shape);
+        // let storage = storage.as_slice::<f32>()?;
+        // let storage =
+        //     &storage[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
+        let dst_storage = vec![0f32; dst_shape.elem_count()];
+        // self.matmul_t(
+        //     (dst_shape.elem_count() / n, k, n),
+        //     storage,
+        //     &mut dst_storage,
+        // )?;
+        let cpu_storage = crate::CpuStorage::F32(dst_storage);
+        use crate::backend::{BackendDevice, BackendStorage};
+        if let Device::Metal(device) = &self.device{
+        Ok((
+            device.storage_from_cpu_storage(&cpu_storage)?,
+            dst_shape,
+        ))
+        }else{
+            crate::bail!("qtensor not on metal device")
+        }
+    }
 }
 
 impl QMatMul {

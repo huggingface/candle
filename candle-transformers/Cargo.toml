@@ -28,5 +28,6 @@ wav = { workspace = true }
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda"]
+metal = ["candle/metal", "candle-nn/metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl"]

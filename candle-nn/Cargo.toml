@@ -28,4 +28,5 @@ clap = { workspace = true }
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
+metal = ["candle/metal"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]

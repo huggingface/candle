@@ -190,6 +190,16 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             device: dev.clone(),
         };
         Ok((dst, layout.shape().clone()))
+    }    
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        storage: &candle::MetalStorage,
+        layout: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        println!("TODO softmax-last-dim");
+        Ok((storage.clone(), layout.shape().clone()))
     }
 }
 

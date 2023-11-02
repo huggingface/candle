@@ -51,6 +51,7 @@ anyhow = { workspace = true }
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+metal = ["candle/metal", "candle-nn/metal", "candle-transformers/metal"]
 cudnn = ["candle/cudnn"]
 flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
