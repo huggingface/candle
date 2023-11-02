@@ -192,7 +192,7 @@ pub trait CustomOp1 {
         _layout: &Layout,
     ) -> Result<(MetalStorage, Shape)> {
         Err(crate::Error::Metal(
-            format!("no cuda implementation for {}", self.name()).into(),
+            format!("no metal implementation for {}", self.name()).into(),
         ))
     }
 
