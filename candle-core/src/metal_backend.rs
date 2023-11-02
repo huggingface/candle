@@ -2,7 +2,7 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
-pub use candle_metal;
+pub use candle_metal_kernels;
 use core::mem;
 use half::{bf16, f16};
 use metal;
