@@ -1,5 +1,5 @@
 [package]
-name = "candle-metal"
+name = "candle-metal-kernels"
 version = "0.0.1"
 edition = "2021"
 
