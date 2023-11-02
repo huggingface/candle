@@ -39,6 +39,11 @@ pub fn silu(xs: &Tensor) -> Result<Tensor> {
     xs / (xs.neg()?.exp()? + 1.0)?
 }
 
+pub fn swiglu(xs: &Tensor) -> Result<Tensor> {
+    let xs = xs.chunk(2, candle::D::Minus1)?;
+    crate::ops::silu(&xs[0])? * &xs[1]
+}
+
 pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
     // TODO: Should we have a specialized op for this?
     (xs.neg()?.exp()? + 1.0)?.recip()
