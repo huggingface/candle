@@ -44,6 +44,11 @@ pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
     (xs.neg()?.exp()? + 1.0)?.recip()
 }
 
+pub fn hard_sigmoid(xs: &Tensor) -> Result<Tensor> {
+    // TODO: Should we have a specialized op for this?
+    ((xs + 3.0)? / 6.0)?.clamp(0f32, 1f32)
+}
+
 pub fn leaky_relu(xs: &Tensor, negative_slope: f64) -> Result<Tensor> {
     let zeros = xs.zeros_like()?;
     xs.maximum(&zeros)? + xs.minimum(&zeros)? * negative_slope
