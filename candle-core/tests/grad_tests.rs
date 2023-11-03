@@ -205,6 +205,34 @@ fn unary_grad(device: &Device) -> Result<()> {
         test_utils::to_vec1_round(grad_x, 4)?,
         [1.0116, 1.0830, 1.0003, 0.6188],
     );
+
+    // testing compared to pytorch nn.GELU(approximate = None)
+    // https://pytorch.org/docs/stable/generated/torch.nn.functional.gelu.html
+    let y = x.gelu_erf()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(
+        test_utils::to_vec1_round(&y, 4)?,
+        [2.9960, 0.8413, 3.9999, 0.0839]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&grad_x, 4)?,
+        [1.0119, 1.0833, 1.0005, 0.6188],
+    );
+
+    // testing compared to pytorch Tensor.erf()
+    let y = x.erf()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(
+        test_utils::to_vec1_round(&y, 4)?,
+        [1.0, 0.8427, 1.0, 0.168]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&grad_x, 4)?,
+        [0.0001, 0.4151, 0.0, 1.1033],
+    );
+
     Ok(())
 }
 
