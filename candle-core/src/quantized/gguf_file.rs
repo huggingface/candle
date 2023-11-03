@@ -29,6 +29,7 @@ impl TryFrom<u32> for Magic {
 pub enum VersionedMagic {
     GgufV1,
     GgufV2,
+    GgufV3,
 }
 
 impl VersionedMagic {
@@ -39,6 +40,7 @@ impl VersionedMagic {
         let versioned_magic = match (magic, version) {
             (Magic::Gguf, 1) => Self::GgufV1,
             (Magic::Gguf, 2) => Self::GgufV2,
+            (Magic::Gguf, 3) => Self::GgufV3,
             _ => crate::bail!("ggml: unsupported magic/version {magic:?}/{version}"),
         };
         Ok(versioned_magic)
@@ -84,7 +86,9 @@ pub struct Content {
 fn read_string<R: std::io::Read>(reader: &mut R, magic: &VersionedMagic) -> Result<String> {
     let len = match magic {
         VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
-        VersionedMagic::GgufV2 => reader.read_u64::<LittleEndian>()? as usize,
+        VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
+            reader.read_u64::<LittleEndian>()? as usize
+        }
     };
     let mut v = vec![0u8; len];
     reader.read_exact(&mut v)?;
@@ -284,7 +288,9 @@ impl Value {
                 let value_type = ValueType::from_u32(value_type)?;
                 let len = match magic {
                     VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
-                    VersionedMagic::GgufV2 => reader.read_u64::<LittleEndian>()? as usize,
+                    VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
+                        reader.read_u64::<LittleEndian>()? as usize
+                    }
                 };
                 let mut vs = Vec::with_capacity(len);
                 for _ in 0..len {
@@ -381,11 +387,15 @@ impl Content {
 
         let tensor_count = match magic {
             VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
-            VersionedMagic::GgufV2 => reader.read_u64::<LittleEndian>()? as usize,
+            VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
+                reader.read_u64::<LittleEndian>()? as usize
+            }
         };
         let metadata_kv_count = match magic {
             VersionedMagic::GgufV1 => reader.read_u32::<LittleEndian>()? as usize,
-            VersionedMagic::GgufV2 => reader.read_u64::<LittleEndian>()? as usize,
+            VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
+                reader.read_u64::<LittleEndian>()? as usize
+            }
         };
 
         let mut metadata = HashMap::new();
@@ -407,7 +417,7 @@ impl Content {
                     reader.read_u32_into::<LittleEndian>(&mut dimensions)?;
                     dimensions.into_iter().map(|c| c as usize).collect()
                 }
-                VersionedMagic::GgufV2 => {
+                VersionedMagic::GgufV2 | VersionedMagic::GgufV3 => {
                     let mut dimensions = vec![0; n_dimensions as usize];
                     reader.read_u64_into::<LittleEndian>(&mut dimensions)?;
                     dimensions.into_iter().map(|c| c as usize).collect()
