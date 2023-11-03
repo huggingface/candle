@@ -56,6 +56,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v2
       - name: Install Rust Stable
         run: curl https://sh.rustup.rs -sSf | sh -s -- -y
       - uses: Swatinem/rust-cache@v2
