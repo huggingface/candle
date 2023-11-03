@@ -1808,6 +1808,16 @@ impl BackendStorage for CudaStorage {
         Ok(res_t)
     }
 
+    fn conv_transpose1d(
+        &self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &crate::conv::ParamsConvTranspose1D,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     #[cfg(not(feature = "cudnn"))]
     fn conv2d(
         &self,

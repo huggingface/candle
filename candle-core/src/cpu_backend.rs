@@ -2435,6 +2435,16 @@ impl BackendStorage for CpuStorage {
         Ok(res_t)
     }
 
+    fn conv_transpose1d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConvTranspose1D,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     fn conv2d(
         &self,
         l: &Layout,
