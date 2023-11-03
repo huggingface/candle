@@ -145,6 +145,7 @@ And then head over to
   that conforms to the official `peft` implementation.
 - [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficent platform for inference and
   serving local LLMs including an OpenAI compatible API server.
+- [`kalosm`](https://github.com/floneum/floneum/tree/master/kalosm): A multi-modal meta-framework in Rust for interfacing with local pre-trained models with support for controlled generation, custom samplers, in-memory vector databases, audio transcription, and more.
 
 If you have an addition to this list, please submit a pull request.
 
