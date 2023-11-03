@@ -9,7 +9,7 @@ use std::io::Write;
 use tokenizers::Tokenizer;
 
 use candle::quantized::{ggml_file, gguf_file};
-use candle::{Tensor};
+use candle::Tensor;
 use candle_transformers::generation::LogitsProcessor;
 
 use candle_transformers::models::quantized_llama as model;
