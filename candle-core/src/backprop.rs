@@ -534,14 +534,14 @@ impl Tensor {
                     }
                     Op::Unary(arg, UnaryOp::Erf) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        // d/dx = erf(x) = 2/sqrt(pi) * e^(-x^2)
+                        // d/dx erf(x) = 2/sqrt(pi) * e^(-x^2)
                         let erf_grad =
                             (2. / std::f64::consts::PI.sqrt()) * (arg.sqr()?.neg()?).exp()?;
                         *sum_grad = sum_grad.add(&(&grad * erf_grad)?)?
                     }
                     Op::Unary(arg, UnaryOp::GeluErf) => {
                         let sum_grad = grads.or_insert(arg)?;
-                        // d/dx = 0.5 + 0.398942 e^(-x^2/2) x + 0.5 erf(x/sqrt(2))
+                        // d/dx gelu_erf(x) = 0.5 + 0.398942 e^(-x^2/2) x + 0.5 erf(x/sqrt(2))
                         let neg_half_square = (arg.sqr()?.neg()? / 2.)?;
                         let scaled_exp_arg = (0.398942 * neg_half_square.exp()? * arg)?;
                         let arg_scaled_sqrt = (arg / 2f64.sqrt())?;
