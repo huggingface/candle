@@ -216,7 +216,7 @@ fn unary_grad(device: &Device) -> Result<()> {
         [2.9960, 0.8413, 3.9999, 0.0839]
     );
     assert_eq!(
-        test_utils::to_vec1_round(&grad_x, 4)?,
+        test_utils::to_vec1_round(grad_x, 4)?,
         [1.0119, 1.0833, 1.0005, 0.6188],
     );
 
@@ -229,7 +229,7 @@ fn unary_grad(device: &Device) -> Result<()> {
         [1.0, 0.8427, 1.0, 0.168]
     );
     assert_eq!(
-        test_utils::to_vec1_round(&grad_x, 4)?,
+        test_utils::to_vec1_round(grad_x, 4)?,
         [0.0001, 0.4151, 0.0, 1.1033],
     );
 
