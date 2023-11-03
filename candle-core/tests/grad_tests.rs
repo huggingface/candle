@@ -205,6 +205,47 @@ fn unary_grad(device: &Device) -> Result<()> {
         test_utils::to_vec1_round(grad_x, 4)?,
         [1.0116, 1.0830, 1.0003, 0.6188],
     );
+
+    // Testing compared to pytorch torch.erf
+    //
+    // import torch
+    // x = torch.tensor([3.0, 1.0, 4.0, 0.15], requires_grad=True)
+    // y = x.erf()
+    // print(y)
+    // loss = y.sum()
+    // loss.backward()
+    // print(x.grad)
+    let y = x.erf()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(test_utils::to_vec1_round(&y, 4)?, [1.0, 0.8427, 1.0, 0.168]);
+    assert_eq!(
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [0.0001, 0.4151, 0.0, 1.1033],
+    );
+
+    // Testing compared to pytorch nn.GELU(approximate = 'none')
+    //
+    // import torch
+    // import torch.nn.functional as F
+    // x = torch.tensor([3.0, 1.0, 4.0, 0.15], requires_grad=True)
+    // y = F.gelu(x, approximate='none')
+    // print(y)
+    // loss = y.sum()
+    // loss.backward()
+    // print(x.grad)
+    let y = x.gelu_erf()?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(
+        test_utils::to_vec1_round(&y, 4)?,
+        [2.9960, 0.8413, 3.9999, 0.0839]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [1.0119, 1.0833, 1.0005, 0.6188],
+    );
+
     Ok(())
 }
 

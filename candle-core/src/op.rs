@@ -641,6 +641,8 @@ impl UnaryOpT for Gelu {
     }
 }
 
+/// `erf` operation
+/// <https://en.wikipedia.org/wiki/Error_function>
 impl UnaryOpT for Erf {
     const NAME: &'static str = "erf";
     const KERNEL: &'static str = "uerf";
