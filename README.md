@@ -143,6 +143,8 @@ And then head over to
   including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
 - [`candle-lora`](https://github.com/EricLBuehler/candle-lora): a LoRA implementation
   that conforms to the official `peft` implementation.
+- [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficent platform for inference and
+  serving local LLMs including an OpenAI compatible API server.
 
 If you have an addition to this list, please submit a pull request.
 
