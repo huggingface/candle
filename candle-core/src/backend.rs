@@ -39,6 +39,14 @@ pub trait BackendStorage: Sized {
         _params: &crate::conv::ParamsConv1D,
     ) -> Result<Self>;
 
+    fn conv_transpose1d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &crate::conv::ParamsConvTranspose1D,
+    ) -> Result<Self>;
+
     fn conv2d(
         &self,
         _l: &Layout,

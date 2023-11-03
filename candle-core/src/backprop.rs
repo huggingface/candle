@@ -57,6 +57,11 @@ impl Tensor {
                         kernel: rhs,
                         ..
                     }
+                    | Op::ConvTranspose1D {
+                        arg: lhs,
+                        kernel: rhs,
+                        ..
+                    }
                     | Op::Conv2D {
                         arg: lhs,
                         kernel: rhs,
@@ -247,6 +252,9 @@ impl Tensor {
                         };
                         *sum_grad = sum_grad.add(&grad_kernel)?;
                     }
+                    Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
+                        op: "conv-transpose1d",
+                    })?,
                     Op::ConvTranspose2D { .. } => Err(Error::BackwardNotSupported {
                         op: "conv-transpose2d",
                     })?,
