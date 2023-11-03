@@ -17,4 +17,6 @@ prost = "0.12.1"
 prost-build = "0.12.1"
 
 [dev-dependencies]
-anyhow = "1"
+anyhow = { workspace = true }
+clap = { workspace = true }
+
