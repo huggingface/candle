@@ -1,0 +1,20 @@
+[package]
+name = "candle-onnx"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[dependencies]
+candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
+candle-nn = { path = "../candle-nn", version = "0.3.0" }
+prost = "0.12.1"
+
+[build-dependencies]
+prost-build = "0.12.1"
+
+[dev-dependencies]
+anyhow = "1"
