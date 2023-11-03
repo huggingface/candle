@@ -349,12 +349,9 @@ impl crate::CustomOp1 for QTensor {
         // )?;
         let cpu_storage = crate::CpuStorage::F32(dst_storage);
         use crate::backend::{BackendDevice, BackendStorage};
-        if let Device::Metal(device) = &self.device{
-        Ok((
-            device.storage_from_cpu_storage(&cpu_storage)?,
-            dst_shape,
-        ))
-        }else{
+        if let Device::Metal(device) = &self.device {
+            Ok((device.storage_from_cpu_storage(&cpu_storage)?, dst_shape))
+        } else {
             crate::bail!("qtensor not on metal device")
         }
     }
