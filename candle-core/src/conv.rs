@@ -196,8 +196,8 @@ impl Tensor {
         stride: usize,
         dilation: usize,
     ) -> Result<Self> {
-        let (c_out, c_in_k, k_size) = kernel.dims3()?;
         let (b_size, c_in, l_in) = self.dims3()?;
+        let (c_in_k, c_out, k_size) = kernel.dims3()?;
         if c_in != c_in_k {
             crate::bail!("in_channel mismatch between input ({c_in}) and kernel ({c_in_k})")
         }
