@@ -246,6 +246,30 @@ fn unary_grad(device: &Device) -> Result<()> {
         [1.0119, 1.0833, 1.0005, 0.6188],
     );
 
+    // Testing compared to pytorch elu
+    //
+    // import torch
+    // import torch.nn.functional as F
+    // x = torch.tensor([-1.0, 0.0, -2.0, 3.0], requires_grad=True)
+    // y = F.elu(x, alpha=2.0)
+    // print(y)
+    // loss = y.min
+    // loss = y.sum()
+    // loss.backward()
+    // print(x.grad)
+    let elu_x = Var::new(&[-1.0f32, 0., -2., 3.], device)?;
+    let y = elu_x.elu(2.)?;
+    let grads = y.backward()?;
+    let grad_x = grads.get(&elu_x).context("no grad for x")?;
+    assert_eq!(
+        test_utils::to_vec1_round(&y, 4)?,
+        [-1.2642, 0.0000, -1.7293, 3.0000]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [0.7358, 2.0000, 0.2707, 1.0000]
+    );
+
     Ok(())
 }
 

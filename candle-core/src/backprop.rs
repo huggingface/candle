@@ -554,7 +554,16 @@ impl Tensor {
                         let relu_grad = arg.ge(&arg.zeros_like()?)?.to_dtype(arg.dtype())?;
                         *sum_grad = sum_grad.add(&(&grad * relu_grad)?)?
                     }
-                    Op::Elu(..) => Err(Error::BackwardNotSupported { op: "elu" })?,
+                    Op::Elu(arg, alpha) => {
+                        // d/dx elu(x) = 1 for x > 0, alpha * e^x for x <= 0
+                        let sum_grad = grads.or_insert(arg)?;
+                        let zeros = arg.zeros_like()?;
+                        let positive_mask = arg.gt(&zeros)?.to_dtype(arg.dtype())?;
+                        let negative_mask = arg.le(&zeros)?.to_dtype(arg.dtype())?;
+                        let negative_exp_mask = ((negative_mask * arg.exp())? * *alpha)?;
+                        let combined_mask = (positive_mask + negative_exp_mask)?;
+                        *sum_grad = sum_grad.add(&(grad * combined_mask)?)?
+                    }
                     Op::Powf(arg, e) => {
                         let arg_grad = (&(grad * arg.powf(e - 1.)?)? * *e)?;
                         let sum_grad = grads.or_insert(arg)?;
