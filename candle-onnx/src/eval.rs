@@ -1,8 +1,21 @@
 use crate::onnx;
+use crate::onnx::tensor_proto::DataType;
 use candle::{bail, DType, Device, Result, Tensor};
 use std::collections::HashMap;
 
 pub type Value = Tensor;
+
+pub fn dtype(dt: DataType) -> Option<DType> {
+    match dt {
+        DataType::Uint8 => Some(DType::U8),
+        DataType::Uint32 => Some(DType::U32),
+        DataType::Int64 => Some(DType::I64),
+        DataType::Float16 => Some(DType::F16),
+        DataType::Float => Some(DType::F32),
+        DataType::Double => Some(DType::F64),
+        _ => None,
+    }
+}
 
 // This function provides a direct evaluation of the proto.
 // Longer-term, we should first convert the proto to an intermediate representation of the compute
@@ -79,49 +92,20 @@ pub fn simple_eval(
                 };
                 let output = match value.r#type() {
                     AttributeType::Tensor => {
-                        use crate::onnx::tensor_proto::DataType;
                         let t = value.t.as_ref().unwrap();
                         let dims: Vec<usize> = t.dims.iter().map(|&x| x as usize).collect();
                         match DataType::try_from(t.data_type) {
-                            Ok(DataType::Uint8) => Tensor::from_raw_buffer(
-                                t.raw_data.as_slice(),
-                                DType::U8,
-                                dims.as_slice(),
-                                &Device::Cpu,
-                            )?,
-                            Ok(DataType::Uint32) => Tensor::from_raw_buffer(
-                                t.raw_data.as_slice(),
-                                DType::U32,
-                                dims.as_slice(),
-                                &Device::Cpu,
-                            )?,
-                            Ok(DataType::Int64) => Tensor::from_raw_buffer(
-                                t.raw_data.as_slice(),
-                                DType::I64,
-                                dims.as_slice(),
-                                &Device::Cpu,
-                            )?,
-                            Ok(DataType::Float16) => Tensor::from_raw_buffer(
-                                t.raw_data.as_slice(),
-                                DType::F16,
-                                dims.as_slice(),
-                                &Device::Cpu,
-                            )?,
-                            Ok(DataType::Float) => Tensor::from_raw_buffer(
-                                t.raw_data.as_slice(),
-                                DType::F32,
-                                dims.as_slice(),
-                                &Device::Cpu,
-                            )?,
-                            Ok(DataType::Double) => Tensor::from_raw_buffer(
-                                t.raw_data.as_slice(),
-                                DType::F64,
-                                dims.as_slice(),
-                                &Device::Cpu,
-                            )?,
-                            Ok(dt) => {
-                                bail!("unsupported 'value' data-type {dt:?} for {}", node.name)
-                            }
+                            Ok(dt) => match dtype(dt) {
+                                Some(dt) => Tensor::from_raw_buffer(
+                                    t.raw_data.as_slice(),
+                                    dt,
+                                    dims.as_slice(),
+                                    &Device::Cpu,
+                                )?,
+                                None => {
+                                    bail!("unsupported 'value' data-type {dt:?} for {}", node.name)
+                                }
+                            },
                             Err(_) => {
                                 bail!(
                                     "unsupported 'value' data-type {} for {}",
