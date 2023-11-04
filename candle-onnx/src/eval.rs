@@ -114,6 +114,24 @@ pub fn simple_eval(
                 let output = input0.reshape(input1)?;
                 values.insert(node.output[0].clone(), output);
             }
+            "LogSoftmax" => {
+                let input = get(&node.input[0])?;
+                let output = match get_attr_i("axis") {
+                    Err(_) => candle_nn::ops::softmax_last_dim(input)?,
+                    Ok(axis) => {
+                        let num_axis = input.rank() as i64;
+                        let axis = if axis >= 0 {
+                            axis as usize
+                        } else if axis < -num_axis {
+                            bail!("wrong axis in concat {axis} for shape {:?}", input.shape())
+                        } else {
+                            (num_axis - axis) as usize
+                        };
+                        candle_nn::ops::log_softmax(input, axis)?
+                    }
+                };
+                values.insert(node.output[0].clone(), output);
+            }
             "Softmax" => {
                 let input = get(&node.input[0])?;
                 let output = match get_attr_i("axis") {
