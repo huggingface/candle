@@ -59,6 +59,26 @@ pub fn simple_eval(
                 Ok(dt.i)
             }
         };
+        let get_attr_is = |name: &str| match node.attribute.iter().find(|attr| attr.name == name) {
+            None => {
+                bail!(
+                    "cannot find the '{name}' attribute in '{}' for {}",
+                    node.op_type,
+                    node.name
+                )
+            }
+            Some(dt) => {
+                match dt.r#type() {
+                    AttributeType::Ints => (),
+                    rtype => bail!(
+                        "unsupported type {rtype:?} for '{name}' attribute in '{}' for {}",
+                        node.op_type,
+                        node.name
+                    ),
+                }
+                Ok(dt.ints.as_slice())
+            }
+        };
         // TODO: Validate node.input for each operator.
         match node.op_type.as_str() {
             "Add" => {
@@ -146,6 +166,17 @@ pub fn simple_eval(
                             (num_axis - axis) as usize
                         };
                         candle_nn::ops::softmax(input, axis)?
+                    }
+                };
+                values.insert(node.output[0].clone(), output);
+            }
+            "Transpose" => {
+                let input = get(&node.input[0])?;
+                let output = match get_attr_is("perm") {
+                    Err(_) => input.t()?,
+                    Ok(perm) => {
+                        let perm = perm.iter().map(|&v| v as usize).collect::<Vec<_>>();
+                        input.permute(perm)?
                     }
                 };
                 values.insert(node.output[0].clone(), output);
