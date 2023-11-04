@@ -25,9 +25,44 @@ pub fn simple_eval(
             Some(value) => Ok(value),
             None => candle::bail!("cannot find {input_name} for op {}", node.name),
         };
+        // TODO: Validate node.input for each operator.
         match node.op_type.as_str() {
+            "Add" => {
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[0])?;
+                let output = input0.broadcast_add(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Sub" => {
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[0])?;
+                let output = input0.broadcast_sub(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Mul" => {
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[0])?;
+                let output = input0.broadcast_mul(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Div" => {
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[0])?;
+                let output = input0.broadcast_div(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "MatMul" => {
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[0])?;
+                let output = input0.broadcast_matmul(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Gelu" => {
+                let input = get(&node.input[0])?;
+                let output = input.gelu_erf()?;
+                values.insert(node.output[0].clone(), output);
+            }
             "Relu" => {
-                // TODO: Validate node.input.
                 let input = get(&node.input[0])?;
                 let output = input.relu()?;
                 values.insert(node.output[0].clone(), output);
