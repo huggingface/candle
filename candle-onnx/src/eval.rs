@@ -187,17 +187,22 @@ pub fn simple_eval(
             "Reshape" => {
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?.to_vec1::<i64>()?;
-                // TODO: Check that there is at most a single -1, handle other neg values.
+                // TODO: Check that there is at most a single -1 or 0, handle other neg values.
+                let mut other_than_minus1 = 1usize;
+                for &v in input1.iter() {
+                    if v != -1 && v != 0 {
+                        other_than_minus1 *= v as usize
+                    }
+                }
                 let input1 = input1
                     .iter()
-                    .map(|&v| {
-                        if v == -1 {
-                            input0.elem_count()
-                        } else {
-                            v as usize
-                        }
+                    .enumerate()
+                    .map(|(idx, &v)| match v {
+                        -1 => Ok(input0.elem_count() / other_than_minus1),
+                        0 => input0.dim(idx),
+                        _ => Ok(v as usize),
                     })
-                    .collect::<Vec<usize>>();
+                    .collect::<Result<Vec<usize>>>()?;
                 let output = input0.reshape(input1)?;
                 values.insert(node.output[0].clone(), output);
             }
