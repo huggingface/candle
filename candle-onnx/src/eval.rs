@@ -91,6 +91,23 @@ fn get_attr_opt<'a, T: Attr + ?Sized>(
     }
 }
 
+fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
+    let dims: Vec<usize> = t.dims.iter().map(|&x| x as usize).collect();
+    match DataType::try_from(t.data_type) {
+        Ok(dt) => match dtype(dt) {
+            Some(dt) => {
+                Tensor::from_raw_buffer(t.raw_data.as_slice(), dt, dims.as_slice(), &Device::Cpu)
+            }
+            None => {
+                bail!("unsupported 'value' data-type {dt:?} for {name}")
+            }
+        },
+        Err(_) => {
+            bail!("unsupported 'value' data-type {} for {name}", t.data_type,)
+        }
+    }
+}
+
 // This function provides a direct evaluation of the proto.
 // Longer-term, we should first convert the proto to an intermediate representation of the compute
 // graph so as to make multiple evaluations more efficient.
@@ -106,6 +123,10 @@ pub fn simple_eval(
     };
     // TODO: validate the inputs.
     let mut values = inputs;
+    for t in graph.initializer.iter() {
+        let tensor = get_tensor(t, t.name.as_str())?;
+        values.insert(t.name.to_string(), tensor);
+    }
     // The nodes are topologically sorted so we can just process them in order.
     for node in graph.node.iter() {
         let get = |input_name: &str| match values.get(input_name) {
@@ -233,6 +254,15 @@ pub fn simple_eval(
                         let pads = match pads {
                             None => 0,
                             Some([p]) => *p as usize,
+                            Some([p1, p2]) => {
+                                if p1 != p2 {
+                                    bail!(
+                                        "left and right pad ({p1} <> {p2}) have to be the same {}",
+                                        node.name
+                                    )
+                                }
+                                *p1 as usize
+                            }
                             Some(pads) => {
                                 bail!("more pads than expected in conv1d {pads:?} {}", node.name)
                             }
@@ -257,9 +287,9 @@ pub fn simple_eval(
                         let pads = match pads {
                             None => 0,
                             Some([p]) => *p as usize,
-                            Some([p1, p2]) => {
-                                if p1 != p2 {
-                                    bail!("pads to be the same on both axis {pads:?} {}", node.name)
+                            Some([p1, p2, p3, p4]) => {
+                                if p1 != p2 || p1 != p3 || p1 != p4 {
+                                    bail!("pads to be the same {pads:?} {}", node.name)
                                 }
                                 *p1 as usize
                             }
@@ -308,7 +338,9 @@ pub fn simple_eval(
                 };
                 let ys = if node.input.len() > 2 {
                     let bs = get(&node.input[2])?;
-                    ys.broadcast_add(bs)?
+                    let mut bs_shape = vec![1; ys.rank()];
+                    bs_shape[1] = bs.elem_count();
+                    ys.broadcast_add(&bs.reshape(bs_shape)?)?
                 } else {
                     ys
                 };
@@ -397,27 +429,7 @@ pub fn simple_eval(
                 let output = match value.r#type() {
                     AttributeType::Tensor => {
                         let t = value.t.as_ref().unwrap();
-                        let dims: Vec<usize> = t.dims.iter().map(|&x| x as usize).collect();
-                        match DataType::try_from(t.data_type) {
-                            Ok(dt) => match dtype(dt) {
-                                Some(dt) => Tensor::from_raw_buffer(
-                                    t.raw_data.as_slice(),
-                                    dt,
-                                    dims.as_slice(),
-                                    &Device::Cpu,
-                                )?,
-                                None => {
-                                    bail!("unsupported 'value' data-type {dt:?} for {}", node.name)
-                                }
-                            },
-                            Err(_) => {
-                                bail!(
-                                    "unsupported 'value' data-type {} for {}",
-                                    t.data_type,
-                                    node.name
-                                )
-                            }
-                        }
+                        get_tensor(t, &node.name)?
                     }
                     rtype => bail!("unsupported 'value' type {rtype:?} for {}", node.name),
                 };
