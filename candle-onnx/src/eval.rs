@@ -126,11 +126,23 @@ pub fn simple_eval(
                     None => {
                         bail!("cannot find the 'to' attribute in 'Cast' for {}", node.name)
                     }
-                    Some(dtype) => match dtype.r#type() {
-                        AttributeType::Floats => candle::DType::F32,
-                        AttributeType::Int => candle::DType::I64,
-                        rtype => bail!("unsupported 'to' type {rtype:?} for {}", node.name),
-                    },
+                    Some(dt) => {
+                        match dt.r#type() {
+                            AttributeType::Int => (),
+                            rtype => bail!("unsupported 'to' type {rtype:?} for {}", node.name),
+                        }
+                        match DataType::try_from(dt.i as i32) {
+                            Ok(dt) => match dtype(dt) {
+                                Some(dt) => dt,
+                                None => {
+                                    bail!("unsupported 'to' value {dt:?} for cast {}", node.name)
+                                }
+                            },
+                            Err(_) => {
+                                bail!("unsupported 'to' value {dt:?} for cast {}", node.name)
+                            }
+                        }
+                    }
                 };
                 let output = input.to_dtype(dtype)?;
                 values.insert(node.output[0].clone(), output);
