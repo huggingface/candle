@@ -37,6 +37,13 @@ impl Attr for [i64] {
     }
 }
 
+impl Attr for str {
+    const TYPE: AttributeType = AttributeType::String;
+    fn get(attr: &onnx::AttributeProto) -> Result<&Self> {
+        std::str::from_utf8(&attr.s).map_err(candle::Error::wrap)
+    }
+}
+
 fn get_attr_<'a>(node: &'a onnx::NodeProto, name: &str) -> Result<&'a onnx::AttributeProto> {
     match node.attribute.iter().find(|attr| attr.name == name) {
         None => {
@@ -209,8 +216,103 @@ pub fn simple_eval(
             }
             "Conv" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Conv
-                println!("> {:?}", node.attribute);
-                panic!()
+                let dilations = get_attr_opt::<[i64]>(node, "dilations")?;
+                let groups = get_attr_opt::<i64>(node, "group")?.copied().unwrap_or(1);
+                let _kernel_shape = get_attr_opt::<[i64]>(node, "kernel_shape")?;
+                let pads = get_attr_opt::<[i64]>(node, "pads")?;
+                let strides = get_attr_opt::<[i64]>(node, "strides")?;
+                let auto_pad = get_attr_opt::<str>(node, "auto_pad")?;
+                match auto_pad {
+                    None | Some("NOTSET") => (),
+                    Some(s) => bail!("unsupported auto_pad {s}"),
+                };
+                let xs = get(&node.input[0])?;
+                let ws = get(&node.input[1])?;
+                let ys = match ws.rank() {
+                    3 => {
+                        let pads = match pads {
+                            None => 0,
+                            Some([p]) => *p as usize,
+                            Some(pads) => {
+                                bail!("more pads than expected in conv1d {pads:?} {}", node.name)
+                            }
+                        };
+                        let strides = match strides {
+                            None => 1,
+                            Some([p]) => *p as usize,
+                            Some(s) => {
+                                bail!("more strides than expected in conv1d {s:?} {}", node.name)
+                            }
+                        };
+                        let dilations = match dilations {
+                            None => 1,
+                            Some([p]) => *p as usize,
+                            Some(s) => {
+                                bail!("more dilations than expected in conv1d {s:?} {}", node.name)
+                            }
+                        };
+                        xs.conv1d(ws, pads, strides, dilations, groups as usize)?
+                    }
+                    4 => {
+                        let pads = match pads {
+                            None => 0,
+                            Some([p]) => *p as usize,
+                            Some([p1, p2]) => {
+                                if p1 != p2 {
+                                    bail!("pads to be the same on both axis {pads:?} {}", node.name)
+                                }
+                                *p1 as usize
+                            }
+                            Some(pads) => {
+                                bail!("more pads than expected in conv2d {pads:?} {}", node.name)
+                            }
+                        };
+                        let strides = match strides {
+                            None => 1,
+                            Some([p]) => *p as usize,
+                            Some([p1, p2]) => {
+                                if p1 != p2 {
+                                    bail!(
+                                        "strides to be the same on both axis {pads:?} {}",
+                                        node.name
+                                    )
+                                }
+                                *p1 as usize
+                            }
+                            Some(s) => {
+                                bail!("more strides than expected in conv2d {s:?} {}", node.name)
+                            }
+                        };
+                        let dilations = match dilations {
+                            None => 1,
+                            Some([p]) => *p as usize,
+                            Some([p1, p2]) => {
+                                if p1 != p2 {
+                                    bail!(
+                                        "dilations to be the same on both axis {pads:?} {}",
+                                        node.name
+                                    )
+                                }
+                                *p1 as usize
+                            }
+                            Some(s) => {
+                                bail!("more dilations than expected in conv2d {s:?} {}", node.name)
+                            }
+                        };
+                        xs.conv2d(ws, pads, strides, dilations, groups as usize)?
+                    }
+                    rank => bail!(
+                        "unsupported rank for weight matrix {rank} in conv {}",
+                        node.name
+                    ),
+                };
+                let ys = if node.input.len() > 2 {
+                    let bs = get(&node.input[2])?;
+                    ys.broadcast_add(bs)?
+                } else {
+                    ys
+                };
+                values.insert(node.output[0].clone(), ys);
             }
             "Concat" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Concat
