@@ -1,5 +1,5 @@
 use crate::onnx;
-use candle::{bail, Result, Tensor};
+use candle::{bail, DType, Device, Result, Tensor};
 use std::collections::HashMap;
 
 pub type Value = Tensor;
@@ -13,6 +13,7 @@ pub fn simple_eval(
     model: &onnx::ModelProto,
     inputs: HashMap<String, Value>,
 ) -> Result<HashMap<String, Value>> {
+    use crate::onnx::attribute_proto::AttributeType;
     let graph = match &model.graph {
         None => bail!("no graph defined in proto"),
         Some(graph) => graph,
@@ -67,6 +68,74 @@ pub fn simple_eval(
                 let output = input.relu()?;
                 values.insert(node.output[0].clone(), output);
             }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Constant
+            "Constant" => {
+                let value = match node.attribute.iter().find(|attr| attr.name == "value") {
+                    None => {
+                        // TODO: support sparse_value etc.
+                        bail!("cannot find 'value' attr in 'Constant' for {}", node.name)
+                    }
+                    Some(value) => value,
+                };
+                let output = match value.r#type() {
+                    AttributeType::Tensor => {
+                        use crate::onnx::tensor_proto::DataType;
+                        let t = value.t.as_ref().unwrap();
+                        let dims: Vec<usize> = t.dims.iter().map(|&x| x as usize).collect();
+                        match DataType::try_from(t.data_type) {
+                            Ok(DataType::Uint8) => Tensor::from_raw_buffer(
+                                t.raw_data.as_slice(),
+                                DType::U8,
+                                dims.as_slice(),
+                                &Device::Cpu,
+                            )?,
+                            Ok(DataType::Uint32) => Tensor::from_raw_buffer(
+                                t.raw_data.as_slice(),
+                                DType::U32,
+                                dims.as_slice(),
+                                &Device::Cpu,
+                            )?,
+                            Ok(DataType::Int64) => Tensor::from_raw_buffer(
+                                t.raw_data.as_slice(),
+                                DType::I64,
+                                dims.as_slice(),
+                                &Device::Cpu,
+                            )?,
+                            Ok(DataType::Float16) => Tensor::from_raw_buffer(
+                                t.raw_data.as_slice(),
+                                DType::F16,
+                                dims.as_slice(),
+                                &Device::Cpu,
+                            )?,
+                            Ok(DataType::Float) => Tensor::from_raw_buffer(
+                                t.raw_data.as_slice(),
+                                DType::F32,
+                                dims.as_slice(),
+                                &Device::Cpu,
+                            )?,
+                            Ok(DataType::Double) => Tensor::from_raw_buffer(
+                                t.raw_data.as_slice(),
+                                DType::F64,
+                                dims.as_slice(),
+                                &Device::Cpu,
+                            )?,
+                            Ok(dt) => {
+                                bail!("unsupported 'value' data-type {dt:?} for {}", node.name)
+                            }
+                            Err(_) => {
+                                bail!(
+                                    "unsupported 'value' data-type {} for {}",
+                                    t.data_type,
+                                    node.name
+                                )
+                            }
+                        }
+                    }
+                    rtype => bail!("unsupported 'value' type {rtype:?} for {}", node.name),
+                };
+                values.insert(node.output[0].clone(), output);
+            }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Cast
             "Cast" => {
                 let input = get(&node.input[0])?;
                 let dtype = match node.attribute.iter().find(|attr| attr.name == "to") {
@@ -74,7 +143,8 @@ pub fn simple_eval(
                         bail!("cannot find the 'to' attribute in 'Cast' for {}", node.name)
                     }
                     Some(dtype) => match dtype.r#type() {
-                        crate::onnx::attribute_proto::AttributeType::Floats => candle::DType::F32,
+                        AttributeType::Floats => candle::DType::F32,
+                        AttributeType::Int => candle::DType::I64,
                         rtype => bail!("unsupported 'to' type {rtype:?} for {}", node.name),
                     },
                 };
