@@ -1,5 +1,5 @@
 use crate::onnx;
-use candle::{Result, Tensor};
+use candle::{bail, Result, Tensor};
 use std::collections::HashMap;
 
 pub type Value = Tensor;
@@ -14,7 +14,7 @@ pub fn simple_eval(
     inputs: HashMap<String, Value>,
 ) -> Result<HashMap<String, Value>> {
     let graph = match &model.graph {
-        None => candle::bail!("no graph defined in proto"),
+        None => bail!("no graph defined in proto"),
         Some(graph) => graph,
     };
     // TODO: validate the inputs.
@@ -23,7 +23,7 @@ pub fn simple_eval(
     for node in graph.node.iter() {
         let get = |input_name: &str| match values.get(input_name) {
             Some(value) => Ok(value),
-            None => candle::bail!("cannot find {input_name} for op {}", node.name),
+            None => bail!("cannot find {input_name} for op {}", node.name),
         };
         // TODO: Validate node.input for each operator.
         match node.op_type.as_str() {
@@ -67,14 +67,28 @@ pub fn simple_eval(
                 let output = input.relu()?;
                 values.insert(node.output[0].clone(), output);
             }
-            op_type => candle::bail!("unsupported op_type {op_type} for op {}", node.name),
+            "Cast" => {
+                let input = get(&node.input[0])?;
+                let dtype = match node.attribute.iter().find(|attr| attr.name == "to") {
+                    None => {
+                        bail!("cannot find the 'to' attribute in 'Cast' for {}", node.name)
+                    }
+                    Some(dtype) => match dtype.r#type() {
+                        crate::onnx::attribute_proto::AttributeType::Floats => candle::DType::F32,
+                        rtype => bail!("unsupported 'to' type {rtype:?} for {}", node.name),
+                    },
+                };
+                let output = input.to_dtype(dtype)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            op_type => bail!("unsupported op_type {op_type} for op {}", node.name),
         }
     }
     graph
         .output
         .iter()
         .map(|output| match values.remove(&output.name) {
-            None => candle::bail!("cannot find output {}", output.name),
+            None => bail!("cannot find output {}", output.name),
             Some(value) => Ok((output.name.clone(), value)),
         })
         .collect()
