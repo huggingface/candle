@@ -63,6 +63,27 @@ fn get_attr<'a, T: Attr + ?Sized>(node: &'a onnx::NodeProto, name: &str) -> Resu
     T::get(attr)
 }
 
+fn get_attr_opt<'a, T: Attr + ?Sized>(
+    node: &'a onnx::NodeProto,
+    name: &str,
+) -> Result<Option<&'a T>> {
+    match node.attribute.iter().find(|attr| attr.name == name) {
+        None => Ok(None),
+        Some(attr) => {
+            if attr.r#type() != T::TYPE {
+                bail!(
+                    "unsupported type {:?} for '{name}' attribute in '{}' for {}",
+                    attr.r#type,
+                    node.op_type,
+                    node.name
+                )
+            }
+            let val = T::get(attr)?;
+            Ok(Some(val))
+        }
+    }
+}
+
 // This function provides a direct evaluation of the proto.
 // Longer-term, we should first convert the proto to an intermediate representation of the compute
 // graph so as to make multiple evaluations more efficient.
@@ -141,9 +162,9 @@ pub fn simple_eval(
             }
             "LogSoftmax" => {
                 let input = get(&node.input[0])?;
-                let output = match get_attr::<i64>(node, "axis") {
-                    Err(_) => candle_nn::ops::softmax_last_dim(input)?,
-                    Ok(&axis) => {
+                let output = match get_attr_opt::<i64>(node, "axis")? {
+                    None => candle_nn::ops::softmax_last_dim(input)?,
+                    Some(&axis) => {
                         let num_axis = input.rank() as i64;
                         let axis = if axis >= 0 {
                             axis as usize
@@ -159,9 +180,9 @@ pub fn simple_eval(
             }
             "Softmax" => {
                 let input = get(&node.input[0])?;
-                let output = match get_attr::<i64>(node, "axis") {
-                    Err(_) => candle_nn::ops::softmax_last_dim(input)?,
-                    Ok(&axis) => {
+                let output = match get_attr_opt::<i64>(node, "axis")? {
+                    None => candle_nn::ops::softmax_last_dim(input)?,
+                    Some(&axis) => {
                         let num_axis = input.rank() as i64;
                         let axis = if axis >= 0 {
                             axis as usize
@@ -177,9 +198,9 @@ pub fn simple_eval(
             }
             "Transpose" => {
                 let input = get(&node.input[0])?;
-                let output = match get_attr::<[i64]>(node, "perm") {
-                    Err(_) => input.t()?,
-                    Ok(perm) => {
+                let output = match get_attr_opt::<[i64]>(node, "perm")? {
+                    None => input.t()?,
+                    Some(perm) => {
                         let perm = perm.iter().map(|&v| v as usize).collect::<Vec<_>>();
                         input.permute(perm)?
                     }
