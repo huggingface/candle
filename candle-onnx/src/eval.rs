@@ -65,10 +65,36 @@ pub fn simple_eval(
                 let output = input0.broadcast_div(input1)?;
                 values.insert(node.output[0].clone(), output);
             }
+            "Equal" => {
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[1])?;
+                let output = input0.eq(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
             "MatMul" => {
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?;
                 let output = input0.broadcast_matmul(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Neg" => {
+                let input = get(&node.input[0])?;
+                let output = input.neg()?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Erf" => {
+                let input = get(&node.input[0])?;
+                let output = input.erf()?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Tanh" => {
+                let input = get(&node.input[0])?;
+                let output = input.tanh()?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Sigmoid" => {
+                let input = get(&node.input[0])?;
+                let output = candle_nn::ops::sigmoid(input)?;
                 values.insert(node.output[0].clone(), output);
             }
             "Gelu" => {
