@@ -39,6 +39,26 @@ pub fn simple_eval(
             Some(value) => Ok(value),
             None => bail!("cannot find {input_name} for op {}", node.name),
         };
+        let get_attr_i = |name: &str| match node.attribute.iter().find(|attr| attr.name == name) {
+            None => {
+                bail!(
+                    "cannot find the '{name}' attribute in '{}' for {}",
+                    node.op_type,
+                    node.name
+                )
+            }
+            Some(dt) => {
+                match dt.r#type() {
+                    AttributeType::Int => (),
+                    rtype => bail!(
+                        "unsupported type {rtype:?} for '{name}' attribute in '{}' for {}",
+                        node.op_type,
+                        node.name
+                    ),
+                }
+                Ok(dt.i)
+            }
+        };
         // TODO: Validate node.input for each operator.
         match node.op_type.as_str() {
             "Add" => {
@@ -92,6 +112,31 @@ pub fn simple_eval(
                     })
                     .collect::<Vec<usize>>();
                 let output = input0.reshape(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Concat" => {
+                let inputs = node
+                    .input
+                    .iter()
+                    .map(|n| Ok(get(n.as_str())?.clone()))
+                    .collect::<Result<Vec<Value>>>()?;
+                let axis = get_attr_i("axis")?;
+                let num_axis = if inputs.is_empty() {
+                    bail!("empty concat")
+                } else {
+                    inputs[0].rank() as i64
+                };
+                let axis = if axis >= 0 {
+                    axis as usize
+                } else if axis < -num_axis {
+                    bail!(
+                        "wrong axis in concat {axis} for shape {:?}",
+                        inputs[0].shape()
+                    )
+                } else {
+                    (num_axis - axis) as usize
+                };
+                let output = Tensor::cat(&inputs, axis)?;
                 values.insert(node.output[0].clone(), output);
             }
             "Abs" => {
@@ -180,26 +225,16 @@ pub fn simple_eval(
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Cast
             "Cast" => {
                 let input = get(&node.input[0])?;
-                let dtype = match node.attribute.iter().find(|attr| attr.name == "to") {
-                    None => {
-                        bail!("cannot find the 'to' attribute in 'Cast' for {}", node.name)
-                    }
-                    Some(dt) => {
-                        match dt.r#type() {
-                            AttributeType::Int => (),
-                            rtype => bail!("unsupported 'to' type {rtype:?} for {}", node.name),
+                let dt = get_attr_i("to")?;
+                let dtype = match DataType::try_from(dt as i32) {
+                    Ok(dt) => match dtype(dt) {
+                        Some(dt) => dt,
+                        None => {
+                            bail!("unsupported 'to' value {dt:?} for cast {}", node.name)
                         }
-                        match DataType::try_from(dt.i as i32) {
-                            Ok(dt) => match dtype(dt) {
-                                Some(dt) => dt,
-                                None => {
-                                    bail!("unsupported 'to' value {dt:?} for cast {}", node.name)
-                                }
-                            },
-                            Err(_) => {
-                                bail!("unsupported 'to' value {dt:?} for cast {}", node.name)
-                            }
-                        }
+                    },
+                    Err(_) => {
+                        bail!("unsupported 'to' value {dt:?} for cast {}", node.name)
                     }
                 };
                 let output = input.to_dtype(dtype)?;
