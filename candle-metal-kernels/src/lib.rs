@@ -64,8 +64,8 @@ fn call_unary(_func: &Function, _input: &Buffer, _output: &Buffer, _length: usiz
 mod tests {
     use super::*;
     use metal::{
-        CompileOptions, ComputePipelineDescriptor, Device, FunctionConstantValues, MTLDataType,
-        MTLResourceOptions, MTLResourceUsage, MTLSize, NSUInteger,
+        CompileOptions, ComputePipelineDescriptor, Device, MTLResourceOptions, MTLResourceUsage,
+        MTLSize, NSUInteger,
     };
     use std::ffi::c_void;
     use std::mem;
@@ -99,7 +99,7 @@ mod tests {
         let argument_encoder = func.new_argument_encoder(0);
         let arg_buffer = device.new_buffer(
             argument_encoder.encoded_length(),
-            MTLResourceOptions::empty(),
+            MTLResourceOptions::StorageModeShared,
         );
         argument_encoder.set_argument_buffer(&arg_buffer, 0);
         argument_encoder.set_buffer(0, &input, 0);
@@ -154,66 +154,54 @@ mod tests {
         let left = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         let right = [1.0f32; 15];
         let index = [0u32, 4, 2];
-
         let ids_dim_size = index.len() as u32;
-
-        // Are these reversed?
-        let src_dim_size: u32 = 9;
         let dst_dim_size: u32 = 15;
         let left_size: u32 = 3;
         let right_size: u32 = 3;
 
-        let fcv = FunctionConstantValues::new();
-        fcv.set_constant_value_at_index(void_ptr(&ids_dim_size), MTLDataType::UInt, 0);
-        fcv.set_constant_value_at_index(void_ptr(&src_dim_size), MTLDataType::UInt, 1);
-        fcv.set_constant_value_at_index(void_ptr(&dst_dim_size), MTLDataType::UInt, 2);
-        fcv.set_constant_value_at_index(void_ptr(&left_size), MTLDataType::UInt, 3);
-        fcv.set_constant_value_at_index(void_ptr(&right_size), MTLDataType::UInt, 4);
-
-        let function = library.get_function("index_add", Some(fcv)).unwrap();
+        let function = library.get_function("ia_u32_f32", None).unwrap();
         let pipeline = device
             .new_compute_pipeline_state_with_function(&function)
             .unwrap();
         let options = MTLResourceOptions::StorageModeShared;
 
-        let ids_size = (index.len() * mem::size_of::<u32>()) as NSUInteger;
-        let input_size = (left.len() * mem::size_of::<f32>()) as NSUInteger;
-        let output_size = (right.len() * mem::size_of::<f32>()) as NSUInteger;
-
-        let ids = device.new_buffer_with_data(void_ptr(&index), ids_size, options);
-        let inputs = device.new_buffer_with_data(void_ptr(&left), input_size, options);
-        let outputs = device.new_buffer_with_data(void_ptr(&right), output_size, options);
-
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
         let encoder = command_buffer.new_compute_command_encoder();
 
+        let ids_size = (index.len() * mem::size_of::<u32>()) as NSUInteger;
+        let input_size = (left.len() * mem::size_of::<f32>()) as NSUInteger;
+        let output_size = (right.len() * mem::size_of::<f32>()) as NSUInteger;
+
         encoder.set_compute_pipeline_state(&pipeline);
-        let thread_group_memory_length = output_size;
-        encoder.set_threadgroup_memory_length(0, thread_group_memory_length as NSUInteger);
+        encoder.set_threadgroup_memory_length(0, output_size as NSUInteger);
 
-        encoder.use_resource(&ids, MTLResourceUsage::Read);
-        encoder.use_resource(&inputs, MTLResourceUsage::Read);
-        encoder.use_resource(&outputs, MTLResourceUsage::Write);
+        let index_buffer = device.new_buffer_with_data(void_ptr(&index), ids_size, options);
+        let inputs_buffer = device.new_buffer_with_data(void_ptr(&left), input_size, options);
+        let outputs_buffer = device.new_buffer_with_data(void_ptr(&right), output_size, options);
 
-        encoder.set_buffer(0, Some(&ids), 0);
-        encoder.set_buffer(1, Some(&inputs), 0);
-        encoder.set_buffer(2, Some(&outputs), 0);
-        let width = 16;
+        encoder.set_buffer(0, Some(&index_buffer), 0);
+        encoder.set_buffer(1, Some(&inputs_buffer), 0);
+        encoder.set_buffer(2, Some(&outputs_buffer), 0);
 
-        let thread_group_count = MTLSize {
-            width: 1,
+        encoder.set_bytes(3, 4, void_ptr(&ids_dim_size));
+        encoder.set_bytes(4, 4, void_ptr(&left_size));
+        encoder.set_bytes(5, 4, void_ptr(&dst_dim_size));
+        encoder.set_bytes(6, 4, void_ptr(&right_size));
+
+        let grid_size = MTLSize {
+            width: right.len() as NSUInteger,
             height: 1,
             depth: 1,
         };
 
         let thread_group_size = MTLSize {
-            width,
+            width: pipeline.max_total_threads_per_threadgroup(),
             height: 1,
             depth: 1,
         };
 
-        encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+        encoder.dispatch_threads(grid_size, thread_group_size);
         encoder.end_encoding();
         command_buffer.commit();
         command_buffer.wait_until_completed();
@@ -221,7 +209,7 @@ mod tests {
         let expected = vec![
             2.0, 3.0, 4.0, 1.0, 1.0, 1.0, 8.0, 9.0, 10.0, 1.0, 1.0, 1.0, 5.0, 6.0, 7.0,
         ];
-        let result = outputs.read_to_vec::<f32>(right.len());
+        let result = outputs_buffer.read_to_vec::<f32>(right.len());
         assert_eq!(result, expected);
     }
 }
