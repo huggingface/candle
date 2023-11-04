@@ -77,6 +77,38 @@ pub fn simple_eval(
                 let output = input0.broadcast_matmul(input1)?;
                 values.insert(node.output[0].clone(), output);
             }
+            "Reshape" => {
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[1])?.to_vec1::<i64>()?;
+                // TODO: Check that there is at most a single -1, handle other neg values.
+                let input1 = input1
+                    .iter()
+                    .map(|&v| {
+                        if v == -1 {
+                            input0.elem_count()
+                        } else {
+                            v as usize
+                        }
+                    })
+                    .collect::<Vec<usize>>();
+                let output = input0.reshape(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Abs" => {
+                let input = get(&node.input[0])?;
+                let output = input.abs()?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Cos" => {
+                let input = get(&node.input[0])?;
+                let output = input.cos()?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Sin" => {
+                let input = get(&node.input[0])?;
+                let output = input.sin()?;
+                values.insert(node.output[0].clone(), output);
+            }
             "Neg" => {
                 let input = get(&node.input[0])?;
                 let output = input.neg()?;
