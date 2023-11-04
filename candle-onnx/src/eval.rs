@@ -1,4 +1,5 @@
 use crate::onnx;
+use crate::onnx::attribute_proto::AttributeType;
 use crate::onnx::tensor_proto::DataType;
 use candle::{bail, DType, Device, Result, Tensor};
 use std::collections::HashMap;
@@ -17,6 +18,51 @@ pub fn dtype(dt: DataType) -> Option<DType> {
     }
 }
 
+trait Attr {
+    const TYPE: AttributeType;
+    fn get(attr: &onnx::AttributeProto) -> Result<&Self>;
+}
+
+impl Attr for i64 {
+    const TYPE: AttributeType = AttributeType::Int;
+    fn get(attr: &onnx::AttributeProto) -> Result<&Self> {
+        Ok(&attr.i)
+    }
+}
+
+impl Attr for [i64] {
+    const TYPE: AttributeType = AttributeType::Ints;
+    fn get(attr: &onnx::AttributeProto) -> Result<&Self> {
+        Ok(attr.ints.as_slice())
+    }
+}
+
+fn get_attr_<'a>(node: &'a onnx::NodeProto, name: &str) -> Result<&'a onnx::AttributeProto> {
+    match node.attribute.iter().find(|attr| attr.name == name) {
+        None => {
+            bail!(
+                "cannot find the '{name}' attribute in '{}' for {}",
+                node.op_type,
+                node.name
+            )
+        }
+        Some(dt) => Ok(dt),
+    }
+}
+
+fn get_attr<'a, T: Attr + ?Sized>(node: &'a onnx::NodeProto, name: &str) -> Result<&'a T> {
+    let attr = get_attr_(node, name)?;
+    if attr.r#type() != T::TYPE {
+        bail!(
+            "unsupported type {:?} for '{name}' attribute in '{}' for {}",
+            attr.r#type,
+            node.op_type,
+            node.name
+        )
+    }
+    T::get(attr)
+}
+
 // This function provides a direct evaluation of the proto.
 // Longer-term, we should first convert the proto to an intermediate representation of the compute
 // graph so as to make multiple evaluations more efficient.
@@ -26,7 +72,6 @@ pub fn simple_eval(
     model: &onnx::ModelProto,
     inputs: HashMap<String, Value>,
 ) -> Result<HashMap<String, Value>> {
-    use crate::onnx::attribute_proto::AttributeType;
     let graph = match &model.graph {
         None => bail!("no graph defined in proto"),
         Some(graph) => graph,
@@ -38,46 +83,6 @@ pub fn simple_eval(
         let get = |input_name: &str| match values.get(input_name) {
             Some(value) => Ok(value),
             None => bail!("cannot find {input_name} for op {}", node.name),
-        };
-        let get_attr_i = |name: &str| match node.attribute.iter().find(|attr| attr.name == name) {
-            None => {
-                bail!(
-                    "cannot find the '{name}' attribute in '{}' for {}",
-                    node.op_type,
-                    node.name
-                )
-            }
-            Some(dt) => {
-                match dt.r#type() {
-                    AttributeType::Int => (),
-                    rtype => bail!(
-                        "unsupported type {rtype:?} for '{name}' attribute in '{}' for {}",
-                        node.op_type,
-                        node.name
-                    ),
-                }
-                Ok(dt.i)
-            }
-        };
-        let get_attr_is = |name: &str| match node.attribute.iter().find(|attr| attr.name == name) {
-            None => {
-                bail!(
-                    "cannot find the '{name}' attribute in '{}' for {}",
-                    node.op_type,
-                    node.name
-                )
-            }
-            Some(dt) => {
-                match dt.r#type() {
-                    AttributeType::Ints => (),
-                    rtype => bail!(
-                        "unsupported type {rtype:?} for '{name}' attribute in '{}' for {}",
-                        node.op_type,
-                        node.name
-                    ),
-                }
-                Ok(dt.ints.as_slice())
-            }
         };
         // TODO: Validate node.input for each operator.
         match node.op_type.as_str() {
@@ -136,9 +141,9 @@ pub fn simple_eval(
             }
             "LogSoftmax" => {
                 let input = get(&node.input[0])?;
-                let output = match get_attr_i("axis") {
+                let output = match get_attr::<i64>(node, "axis") {
                     Err(_) => candle_nn::ops::softmax_last_dim(input)?,
-                    Ok(axis) => {
+                    Ok(&axis) => {
                         let num_axis = input.rank() as i64;
                         let axis = if axis >= 0 {
                             axis as usize
@@ -154,9 +159,9 @@ pub fn simple_eval(
             }
             "Softmax" => {
                 let input = get(&node.input[0])?;
-                let output = match get_attr_i("axis") {
+                let output = match get_attr::<i64>(node, "axis") {
                     Err(_) => candle_nn::ops::softmax_last_dim(input)?,
-                    Ok(axis) => {
+                    Ok(&axis) => {
                         let num_axis = input.rank() as i64;
                         let axis = if axis >= 0 {
                             axis as usize
@@ -172,7 +177,7 @@ pub fn simple_eval(
             }
             "Transpose" => {
                 let input = get(&node.input[0])?;
-                let output = match get_attr_is("perm") {
+                let output = match get_attr::<[i64]>(node, "perm") {
                     Err(_) => input.t()?,
                     Ok(perm) => {
                         let perm = perm.iter().map(|&v| v as usize).collect::<Vec<_>>();
@@ -181,6 +186,11 @@ pub fn simple_eval(
                 };
                 values.insert(node.output[0].clone(), output);
             }
+            "Conv" => {
+                // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Conv
+                println!("> {:?}", node.attribute);
+                panic!()
+            }
             "Concat" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Concat
                 let inputs = node
@@ -188,7 +198,7 @@ pub fn simple_eval(
                     .iter()
                     .map(|n| Ok(get(n.as_str())?.clone()))
                     .collect::<Result<Vec<Value>>>()?;
-                let axis = get_attr_i("axis")?;
+                let axis: i64 = *get_attr(node, "axis")?;
                 let num_axis = if inputs.is_empty() {
                     bail!("empty concat")
                 } else {
@@ -293,7 +303,7 @@ pub fn simple_eval(
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Cast
             "Cast" => {
                 let input = get(&node.input[0])?;
-                let dt = get_attr_i("to")?;
+                let dt: i64 = *get_attr(node, "to")?;
                 let dtype = match DataType::try_from(dt as i32) {
                     Ok(dt) => match dtype(dt) {
                         Some(dt) => dt,
