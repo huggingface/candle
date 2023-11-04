@@ -5,6 +5,7 @@ members = [
     "candle-examples",
     "candle-book",
     "candle-nn",
+    "candle-onnx",
     "candle-pyo3",
     "candle-transformers",
     "candle-wasm-examples/*",
