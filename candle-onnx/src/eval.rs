@@ -96,7 +96,20 @@ fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
     match DataType::try_from(t.data_type) {
         Ok(dt) => match dtype(dt) {
             Some(dt) => {
-                Tensor::from_raw_buffer(t.raw_data.as_slice(), dt, dims.as_slice(), &Device::Cpu)
+                if dt == DType::F32 && !t.float_data.is_empty() {
+                    Tensor::from_slice(&t.float_data, dims.as_slice(), &Device::Cpu)
+                } else if dt == DType::F64 && !t.double_data.is_empty() {
+                    Tensor::from_slice(&t.double_data, dims.as_slice(), &Device::Cpu)
+                } else if dt == DType::I64 && !t.int64_data.is_empty() {
+                    Tensor::from_slice(&t.int64_data, dims.as_slice(), &Device::Cpu)
+                } else {
+                    Tensor::from_raw_buffer(
+                        t.raw_data.as_slice(),
+                        dt,
+                        dims.as_slice(),
+                        &Device::Cpu,
+                    )
+                }
             }
             None => {
                 bail!("unsupported 'value' data-type {dt:?} for {name}")
