@@ -248,6 +248,11 @@ pub fn simple_eval(
                 };
                 values.insert(node.output[0].clone(), output);
             }
+            "Dropout" => {
+                let input = get(&node.input[0])?;
+                // Do not apply dropout at the moment, consider that we're only doing inference.
+                values.insert(node.output[0].clone(), input.clone());
+            }
             "MaxPool" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#MaxPool
                 let dilations = get_attr_opt::<[i64]>(node, "dilations")?;
@@ -280,6 +285,41 @@ pub fn simple_eval(
                         xs.max_pool2d_with_stride((k1, k2), (*s1 as usize, *s2 as usize))?
                     }
                     Some(strides) => bail!("only 2d MaxPool is supported, strides {strides:?}"),
+                };
+                values.insert(node.output[0].clone(), ys);
+            }
+            "AveragePool" => {
+                // https://github.com/onnx/onnx/blob/main/docs/Operators.md#AveragePool
+                let dilations = get_attr_opt::<[i64]>(node, "dilations")?;
+                let kernel_shape = get_attr::<[i64]>(node, "kernel_shape")?;
+                let pads = get_attr_opt::<[i64]>(node, "pads")?;
+                let strides = get_attr_opt::<[i64]>(node, "strides")?;
+                let auto_pad = get_attr_opt::<str>(node, "auto_pad")?;
+                match auto_pad {
+                    None | Some("NOTSET") => (),
+                    Some(s) => bail!("unsupported auto_pad {s}"),
+                };
+                if let Some(d) = dilations {
+                    if d.iter().any(|&v| v != 1) {
+                        bail!("AvgPool with dilation != 1, {dilations:?}")
+                    }
+                }
+                if let Some(d) = pads {
+                    if d.iter().any(|&v| v != 0) {
+                        bail!("AvgPool with pads != 0, {pads:?}")
+                    }
+                }
+                let xs = get(&node.input[0])?;
+                let (k1, k2) = match kernel_shape {
+                    [k1, k2] => (*k1 as usize, *k2 as usize),
+                    _ => bail!("only 2d AvgPool is supported, kernel shape {kernel_shape:?}"),
+                };
+                let ys = match strides {
+                    None => xs.avg_pool2d((k1, k2))?,
+                    Some([s1, s2]) => {
+                        xs.avg_pool2d_with_stride((k1, k2), (*s1 as usize, *s2 as usize))?
+                    }
+                    Some(strides) => bail!("only 2d AvgPool is supported, strides {strides:?}"),
                 };
                 values.insert(node.output[0].clone(), ys);
             }
