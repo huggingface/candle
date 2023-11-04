@@ -4,11 +4,17 @@ use rand::{distributions::Distribution, SeedableRng};
 pub struct LogitsProcessor {
     rng: rand::rngs::StdRng,
     temperature: Option<f64>,
-    top_p: Option<f64>,
+    sampling_method: SamplingMethod,
+}
+
+pub enum SamplingMethod {
+    Argmax,
+    TopP(f64),
+    TopK(isize),
 }
 
 impl LogitsProcessor {
-    pub fn new(seed: u64, temperature: Option<f64>, top_p: Option<f64>) -> Self {
+    pub fn new(seed: u64, temperature: Option<f64>, sampling_method: SamplingMethod) -> Self {
         let temperature = if temperature.map_or(true, |v| v < 1e-7) {
             None
         } else {
@@ -17,7 +23,7 @@ impl LogitsProcessor {
         Self {
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             temperature,
-            top_p,
+            sampling_method,
         }
     }
 
@@ -60,21 +66,44 @@ impl LogitsProcessor {
         self.sample_multinomial(prs)
     }
 
+    fn sample_topk(&mut self, prs: &mut Vec<f32>, top_k: usize) -> Result<u32> {
+        prs.sort_by(|x, y| x.total_cmp(y));
+
+        // Clamp smaller probabilities to zero.
+        for index in 0..prs.len() {
+            if index >= top_k {
+                prs[index] = 0.0;
+            }
+        }
+
+        // Sample with clamped probabilities.
+        self.sample_multinomial(prs)
+    }
+
     pub fn sample(&mut self, logits: &Tensor) -> Result<u32> {
         let logits = logits.to_dtype(DType::F32)?;
         let next_token = match self.temperature {
             None => self.sample_argmax(logits)?,
             Some(temperature) => {
-                let logits = &(&logits / temperature)?;
-                let prs = candle_nn::ops::softmax_last_dim(logits)?;
+                let logits = (&logits / temperature)?;
+                let prs = candle_nn::ops::softmax_last_dim(&logits)?;
                 let mut prs: Vec<f32> = prs.to_vec1()?;
-                let top_p = self.top_p.unwrap_or(1.);
-                if top_p <= 0.0 || top_p >= 1.0 {
-                    // simply sample from the predicted probability distribution
-                    self.sample_multinomial(&prs)?
-                } else {
-                    // top-p (nucleus) sampling, clamping the least likely tokens to zero
-                    self.sample_topp(&mut prs, top_p as f32)?
+                match self.sampling_method {
+                    SamplingMethod::Argmax => self.sample_argmax(logits)?,
+                    SamplingMethod::TopP(top_p) => {
+                        if top_p <= 0.0 || top_p >= 1.0 {
+                            // simply sample from the predicted probability distribution
+                            self.sample_multinomial(&prs)?
+                        } else {
+                            // top-p (nucleus) sampling, clamping the least likely tokens to zero
+                            self.sample_topp(&mut prs, top_p as f32)?
+                        }
+                    }
+                    SamplingMethod::TopK(top_k) => {
+                        // use top_k or n
+                        let top_k = top_k.try_into().unwrap_or(prs.len());
+                        self.sample_topk(&mut prs, top_k)?
+                    }
                 }
             }
         };
