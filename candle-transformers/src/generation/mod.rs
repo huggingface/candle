@@ -7,6 +7,11 @@ pub struct LogitsProcessor {
     sampling_method: SamplingMethod,
 }
 
+/// Sampling method for `LogitsProcessor`.
+///
+/// - Multinomial (sample over all tokens)
+/// - Top-P (nucleus sampling)
+/// - Top-K (top-k sampling)
 #[derive(Debug, Clone)]
 pub enum SamplingMethod {
     Multinomial,
@@ -81,6 +86,10 @@ impl LogitsProcessor {
         self.sample_multinomial(prs)
     }
 
+    /// Sample the provided tokens.
+    ///
+    /// If the temperature is `None`, argmax sampling is used. Otherwise, the selected sampling is used.
+    /// With `top-p` sampling, if the `top-p` value is `<= 0.0` or `>= 1.0`, multinomial sampling is used.
     pub fn sample(&mut self, logits: &Tensor) -> Result<u32> {
         let logits = logits.to_dtype(DType::F32)?;
         let next_token = match self.temperature {
