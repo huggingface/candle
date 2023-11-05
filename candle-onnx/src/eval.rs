@@ -382,6 +382,22 @@ pub fn simple_eval(
                 };
                 values.insert(node.output[0].clone(), ys);
             }
+            "Clip" => {
+                let xs = get(&node.input[0])?;
+                let xs = if node.input.len() >= 2 {
+                    let mins = get(&node.input[1])?;
+                    xs.broadcast_maximum(mins)?
+                } else {
+                    xs.clone()
+                };
+                let xs = if node.input.len() >= 3 {
+                    let maxs = get(&node.input[2])?;
+                    xs.broadcast_minimum(maxs)?
+                } else {
+                    xs.clone()
+                };
+                values.insert(node.output[0].clone(), xs);
+            }
             "Conv" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Conv
                 let dilations = get_attr_opt::<[i64]>(node, "dilations")?;
