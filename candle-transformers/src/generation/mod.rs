@@ -11,7 +11,7 @@ pub struct LogitsProcessor {
 pub enum SamplingMethod {
     Argmax,
     TopP(f64),
-    TopK(isize),
+    TopK(usize),
 }
 
 impl LogitsProcessor {
@@ -100,11 +100,7 @@ impl LogitsProcessor {
                             self.sample_topp(&mut prs, top_p as f32)?
                         }
                     }
-                    SamplingMethod::TopK(top_k) => {
-                        // use top_k or n
-                        let top_k = top_k.try_into().unwrap_or(prs.len());
-                        self.sample_topk(&mut prs, top_k)?
-                    }
+                    SamplingMethod::TopK(top_k) => self.sample_topk(&mut prs, top_k)?,
                 }
             }
         };
