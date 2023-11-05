@@ -1,5 +1,5 @@
 use candle::{Device, Tensor};
-use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::generation::{LogitsProcessor, SamplingMethod};
 use candle_wasm_example_llama2::worker::{Model as M, ModelData};
 use wasm_bindgen::prelude::*;
 
@@ -47,7 +47,7 @@ impl Model {
             tokenizer,
             model: weights,
         });
-        let logits_processor = LogitsProcessor::new(299792458, None, None);
+        let logits_processor = LogitsProcessor::new(299792458, None, SamplingMethod::Argmax);
         match model {
             Ok(inner) => Ok(Self {
                 inner,
@@ -81,10 +81,10 @@ impl Model {
             }
         }
         let temp = if temp <= 0. { None } else { Some(temp) };
-        let top_p = if top_p <= 0. || top_p >= 1. {
-            None
+        let top_p = if top_p <= 0. || top_p >= 1.0 {
+            SamplingMethod::Argmax
         } else {
-            Some(top_p)
+            SamplingMethod::TopP(top_p)
         };
         self.logits_processor = LogitsProcessor::new(seed, temp, top_p);
         self.repeat_penalty = repeat_penalty;

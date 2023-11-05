@@ -7,6 +7,7 @@ pub struct LogitsProcessor {
     sampling_method: SamplingMethod,
 }
 
+#[derive(Debug, Clone)]
 pub enum SamplingMethod {
     Argmax,
     TopP(f64),

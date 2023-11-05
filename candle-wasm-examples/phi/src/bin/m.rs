@@ -1,6 +1,6 @@
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::generation::{LogitsProcessor, SamplingMethod};
 use candle_transformers::models::mixformer::{Config, MixFormerSequentialForCausalLM as MixFormer};
 use candle_transformers::models::quantized_mixformer::MixFormerSequentialForCausalLM as QMixFormer;
 use candle_wasm_example_phi::console_log;
@@ -50,7 +50,7 @@ impl Model {
             SelectedModel::MixFormer(model)
         };
         console_log!("model loaded in {:?}s", (Date::now() - start) / 1000.);
-        let logits_processor = LogitsProcessor::new(299792458, None, None);
+        let logits_processor = LogitsProcessor::new(299792458, None, SamplingMethod::Argmax);
         Ok(Self {
             model,
             tokenizer,
@@ -75,10 +75,10 @@ impl Model {
             SelectedModel::Quantized(m) => m.clear_kv_cache(),
         };
         let temp = if temp <= 0. { None } else { Some(temp) };
-        let top_p = if top_p <= 0. || top_p >= 1. {
-            None
+        let top_p = if top_p <= 0. || top_p >= 1.0 {
+            SamplingMethod::Argmax
         } else {
-            Some(top_p)
+            SamplingMethod::TopP(top_p)
         };
         self.logits_processor = LogitsProcessor::new(seed, temp, top_p);
         self.repeat_penalty = repeat_penalty;

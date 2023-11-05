@@ -1,5 +1,5 @@
 use candle::{Device, Tensor};
-use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::generation::{LogitsProcessor, SamplingMethod};
 pub use candle_transformers::models::quantized_t5::{
     Config, T5EncoderModel, T5ForConditionalGeneration, VarBuilder,
 };
@@ -60,9 +60,9 @@ impl ModelConditionalGeneration {
             Some(input.temperature)
         };
         let top_p = if input.top_p <= 0. || input.top_p >= 1. {
-            None
+            SamplingMethod::Argmax
         } else {
-            Some(input.top_p)
+            SamplingMethod::TopP(input.top_p)
         };
         let mut logits_processor = LogitsProcessor::new(seed, temperature, top_p);
         let tokens = self

@@ -2,7 +2,7 @@ use crate::model::{Cache, Config, Llama};
 use byteorder::{LittleEndian, ReadBytesExt};
 use candle::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::generation::{LogitsProcessor, SamplingMethod};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
@@ -68,9 +68,9 @@ impl Model {
         let dev = Device::Cpu;
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1.0 {
-            None
+            SamplingMethod::Argmax
         } else {
-            Some(top_p)
+            SamplingMethod::TopP(top_p)
         };
         console_log!("temp: {temp:?} top_p: {top_p:?} prompt: {prompt}");
         let mut logits_processor = LogitsProcessor::new(299792458, temp, top_p);
