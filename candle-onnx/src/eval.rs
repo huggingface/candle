@@ -134,11 +134,45 @@ pub fn simple_eval(
         None => bail!("no graph defined in proto"),
         Some(graph) => graph,
     };
-    // TODO: validate the inputs.
     let mut values = inputs;
     for t in graph.initializer.iter() {
         let tensor = get_tensor(t, t.name.as_str())?;
         values.insert(t.name.to_string(), tensor);
+    }
+    for input in graph.input.iter() {
+        let input_type = match &input.r#type {
+            Some(input_type) => input_type,
+            None => continue,
+        };
+        let input_type = match &input_type.value {
+            Some(input_type) => input_type,
+            None => continue,
+        };
+        let tensor_type = match input_type {
+            crate::onnx::type_proto::Value::TensorType(tt) => tt,
+            _ => continue,
+        };
+
+        let tensor = match values.get(&input.name) {
+            None => bail!("missing input {}", input.name),
+            Some(tensor) => tensor,
+        };
+        let dt = match DataType::try_from(tensor_type.elem_type) {
+            Ok(dt) => match dtype(dt) {
+                Some(dt) => dt,
+                None => {
+                    bail!("unsupported 'value' data-type {dt:?} for {}", input.name)
+                }
+            },
+            type_ => bail!("unsupported input type {type_:?}"),
+        };
+        if dt != tensor.dtype() {
+            bail!(
+                "unexpected dtype for {}, got {:?}, expected {dt:?}",
+                input.name,
+                tensor.dtype()
+            )
+        }
     }
     // The nodes are topologically sorted so we can just process them in order.
     for node in graph.node.iter() {
@@ -425,7 +459,6 @@ pub fn simple_eval(
                                 bail!("more dilations than expected in conv2d {s:?} {}", node.name)
                             }
                         };
-                        println!("{xs:?} {ws:?}");
                         xs.conv2d(ws, pads, strides, dilations, groups as usize)?
                     }
                     rank => bail!(
