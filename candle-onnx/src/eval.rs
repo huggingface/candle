@@ -382,7 +382,7 @@ pub fn simple_eval(
                             Some([p]) => *p as usize,
                             Some([p1, p2, p3, p4]) => {
                                 if p1 != p2 || p1 != p3 || p1 != p4 {
-                                    bail!("pads to be the same {pads:?} {}", node.name)
+                                    bail!("pads have to be the same {pads:?} {}", node.name)
                                 }
                                 *p1 as usize
                             }
@@ -396,7 +396,7 @@ pub fn simple_eval(
                             Some([p1, p2]) => {
                                 if p1 != p2 {
                                     bail!(
-                                        "strides to be the same on both axis {pads:?} {}",
+                                        "strides have to be the same on both axis {pads:?} {}",
                                         node.name
                                     )
                                 }
@@ -412,7 +412,7 @@ pub fn simple_eval(
                             Some([p1, p2]) => {
                                 if p1 != p2 {
                                     bail!(
-                                        "dilations to be the same on both axis {pads:?} {}",
+                                        "dilations have to be the same on both axis {pads:?} {}",
                                         node.name
                                     )
                                 }
