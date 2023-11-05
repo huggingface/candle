@@ -96,20 +96,20 @@ impl LogitsProcessor {
             None => self.sample_argmax(logits)?,
             Some(temperature) => {
                 let logits = (&logits / temperature)?;
-                let prs = candle_nn::ops::softmax_last_dim(&logits)?;
-                let mut prs: Vec<f32> = prs.to_vec1()?;
+                let probs = candle_nn::ops::softmax_last_dim(&logits)?;
+                let mut probs: Vec<f32> = probs.to_vec1()?;
                 match self.sampling_method {
-                    SamplingMethod::Multinomial => self.sample_multinomial(&prs)?,
+                    SamplingMethod::Multinomial => self.sample_multinomial(&probs)?,
                     SamplingMethod::TopP(top_p) => {
                         if top_p <= 0.0 || top_p >= 1.0 {
                             // simply sample from the predicted probability distribution
-                            self.sample_multinomial(&prs)?
+                            self.sample_multinomial(&probs)?
                         } else {
                             // top-p (nucleus) sampling, clamping the least likely tokens to zero
-                            self.sample_topp(&mut prs, top_p as f32)?
+                            self.sample_topp(&mut probs, top_p as f32)?
                         }
                     }
-                    SamplingMethod::TopK(top_k) => self.sample_topk(&mut prs, top_k)?,
+                    SamplingMethod::TopK(top_k) => self.sample_topk(&mut probs, top_k)?,
                 }
             }
         };
