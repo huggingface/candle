@@ -5,6 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Error as E;
+use candle_transformers::generation::SamplingMethod;
 use clap::Parser;
 
 use candle::{DType, Device, Result, Tensor};
@@ -102,7 +103,7 @@ pub fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
     let mut tokenizer = TokenOutputStream::new(tokenizer);
     let mut logits_processor =
-        candle_transformers::generation::LogitsProcessor::new(1337, None, None);
+        candle_transformers::generation::LogitsProcessor::new(1337, None, SamplingMethod::Argmax);
 
     let config = blip::Config::image_captioning_large();
 

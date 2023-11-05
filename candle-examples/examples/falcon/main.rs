@@ -9,7 +9,7 @@ extern crate intel_mkl_src;
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::generation::{LogitsProcessor, SamplingMethod};
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
@@ -40,8 +40,11 @@ impl TextGeneration {
         seed: u64,
         device: &Device,
     ) -> Self {
-        let logits_processor =
-            LogitsProcessor::new(seed, generation_options.temp, generation_options.top_p);
+        let top_p = match generation_options.top_p {
+            Some(p) => SamplingMethod::TopP(p),
+            None => SamplingMethod::Argmax,
+        };
+        let logits_processor = LogitsProcessor::new(seed, generation_options.temp, top_p);
         let repeat_penalty = generation_options.repeat_penalty;
         let repeat_last_n = generation_options.repeat_last_n;
         Self {

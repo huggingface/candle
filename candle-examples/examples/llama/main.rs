@@ -17,7 +17,7 @@ use clap::Parser;
 
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::generation::{LogitsProcessor, SamplingMethod};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::io::Write;
 
@@ -189,7 +189,11 @@ fn main() -> Result<()> {
 
     println!("starting the inference loop");
     print!("{prompt}");
-    let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature, args.top_p);
+    let top_p = match args.top_p {
+        Some(p) => SamplingMethod::TopP(p),
+        None => SamplingMethod::Argmax,
+    };
+    let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature, top_p);
     let start_gen = std::time::Instant::now();
     let mut index_pos = 0;
     let mut token_generated = 0;

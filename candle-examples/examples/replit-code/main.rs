@@ -12,7 +12,7 @@ use candle_transformers::models::quantized_mpt::Model as Q;
 
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::generation::{LogitsProcessor, SamplingMethod};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
@@ -53,6 +53,10 @@ impl TextGeneration {
         verbose_prompt: bool,
         device: &Device,
     ) -> Self {
+        let top_p = match top_p {
+            Some(p) => SamplingMethod::TopP(p),
+            None => SamplingMethod::Argmax,
+        };
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
             model,

@@ -6,7 +6,7 @@ extern crate accelerate_src;
 use std::io::Write;
 use std::path::PathBuf;
 
-use candle_transformers::models::t5;
+use candle_transformers::{generation::SamplingMethod, models::t5};
 
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, Tensor};
@@ -188,7 +188,11 @@ fn main() -> Result<()> {
                 } else {
                     Some(args.temperature)
                 };
-                let mut logits_processor = LogitsProcessor::new(299792458, temperature, args.top_p);
+                let top_p = match args.top_p {
+                    Some(p) => SamplingMethod::TopP(p),
+                    None => SamplingMethod::Argmax,
+                };
+                let mut logits_processor = LogitsProcessor::new(299792458, temperature, top_p);
                 let encoder_output = model.encode(&input_token_ids)?;
                 let start = std::time::Instant::now();
 

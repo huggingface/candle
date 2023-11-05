@@ -10,7 +10,7 @@ use tokenizers::Tokenizer;
 
 use candle::quantized::{ggml_file, gguf_file};
 use candle::{Device, Tensor};
-use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::generation::{LogitsProcessor, SamplingMethod};
 
 use candle_transformers::models::quantized_llama as model;
 use model::ModelWeights;
@@ -362,7 +362,11 @@ fn main() -> anyhow::Result<()> {
             prompt_tokens
         };
         let mut all_tokens = vec![];
-        let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
+        let top_p = match args.top_p {
+            Some(p) => SamplingMethod::TopP(p),
+            None => SamplingMethod::Argmax,
+        };
+        let mut logits_processor = LogitsProcessor::new(args.seed, temperature, top_p);
 
         let start_prompt_processing = std::time::Instant::now();
         let mut next_token = {

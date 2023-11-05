@@ -7,7 +7,10 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle_transformers::models::bigcode::{Config, GPTBigCode};
+use candle_transformers::{
+    generation::SamplingMethod,
+    models::bigcode::{Config, GPTBigCode},
+};
 
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
@@ -31,6 +34,10 @@ impl TextGeneration {
         top_p: Option<f64>,
         device: &Device,
     ) -> Self {
+        let top_p = match top_p {
+            Some(p) => SamplingMethod::TopP(p),
+            None => SamplingMethod::Argmax,
+        };
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
             model,

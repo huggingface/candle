@@ -6,6 +6,7 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+use candle_transformers::generation::SamplingMethod;
 use candle_transformers::models::llama2_c as model;
 use candle_transformers::models::llama2_c_weights as weights;
 use candle_transformers::models::quantized_llama2_c as qmodel;
@@ -319,7 +320,11 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
     };
 
     println!("starting the inference loop");
-    let mut logits_processor = LogitsProcessor::new(299792458, args.temperature, args.top_p);
+    let top_p = match args.top_p {
+        Some(p) => SamplingMethod::TopP(p),
+        None => SamplingMethod::Argmax,
+    };
+    let mut logits_processor = LogitsProcessor::new(299792458, args.temperature, top_p);
     let mut index_pos = 0;
 
     print!("{}", args.prompt);
