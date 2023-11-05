@@ -165,11 +165,12 @@ impl Tensor {
                 .remove(node)
                 .expect("candle internal error - grad not populated");
             // https://github.com/huggingface/candle/issues/1241
+            // Ideally, we would make these operations in place where possible to ensure that we
+            // do not have to allocate too often. Here we just call `.detach` to avoid computing
+            // the backprop graph of the backprop itself. This would be an issue for second order
+            // derivatives but these are out of scope at the moment.
             let do_not_detach = CANDLE_GRAD_DO_NOT_DETACH.with(|b| *b);
             let grad = if do_not_detach { grad } else { grad.detach()? };
-            // TODO: We should perform all these operations in place (or at least not track the
-            // whole graph). The only drawback would be if we wanted to support grad of grad but
-            // this is out of scope.
             if let Some(op) = node.op() {
                 match op {
                     Op::Binary(lhs, rhs, BinaryOp::Add) => {
