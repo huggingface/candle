@@ -30,6 +30,13 @@ impl Attr for i64 {
     }
 }
 
+impl Attr for f32 {
+    const TYPE: AttributeType = AttributeType::Float;
+    fn get(attr: &onnx::AttributeProto) -> Result<&Self> {
+        Ok(&attr.f)
+    }
+}
+
 impl Attr for [i64] {
     const TYPE: AttributeType = AttributeType::Ints;
     fn get(attr: &onnx::AttributeProto) -> Result<&Self> {
@@ -381,6 +388,34 @@ pub fn simple_eval(
                     Some(strides) => bail!("only 2d AvgPool is supported, strides {strides:?}"),
                 };
                 values.insert(node.output[0].clone(), ys);
+            }
+            "BatchNormalization" => {
+                let training_mode = get_attr_opt::<i64>(node, "training_mode")?;
+                if training_mode.copied().unwrap_or(0) != 0 {
+                    bail!("training mode is not supported for BatchNorm")
+                }
+                let eps = get_attr_opt::<f32>(node, "epsilon")?
+                    .copied()
+                    .unwrap_or(1e-5);
+                let xs = get(&node.input[0])?;
+                let weight = get(&node.input[1])?;
+                let bias = get(&node.input[2])?;
+                let running_mean = get(&node.input[3])?;
+                let running_var = get(&node.input[4])?;
+                let target_shape: Vec<usize> = xs
+                    .dims()
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, v)| if idx == 1 { *v } else { 1 })
+                    .collect();
+                let target_shape = target_shape.as_slice();
+                let xs = xs
+                    .broadcast_sub(&running_mean.reshape(target_shape)?)?
+                    .broadcast_div(&(running_var.reshape(target_shape)? + eps as f64)?.sqrt()?)?;
+                let weight = weight.reshape(target_shape)?;
+                let bias = bias.reshape(target_shape)?;
+                let xs = xs.broadcast_mul(&weight)?.broadcast_add(&bias)?;
+                values.insert(node.output[0].clone(), xs);
             }
             "Clip" => {
                 let xs = get(&node.input[0])?;
