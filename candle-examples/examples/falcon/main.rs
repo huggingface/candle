@@ -42,7 +42,7 @@ impl TextGeneration {
     ) -> Self {
         let top_p = match generation_options.top_p {
             Some(p) => SamplingMethod::TopP(p),
-            None => SamplingMethod::Argmax,
+            None => SamplingMethod::Multinomial,
         };
         let logits_processor = LogitsProcessor::new(seed, generation_options.temp, top_p);
         let repeat_penalty = generation_options.repeat_penalty;

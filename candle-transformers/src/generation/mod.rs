@@ -9,7 +9,7 @@ pub struct LogitsProcessor {
 
 #[derive(Debug, Clone)]
 pub enum SamplingMethod {
-    Argmax,
+    Multinomial,
     TopP(f64),
     TopK(usize),
 }
@@ -90,7 +90,7 @@ impl LogitsProcessor {
                 let prs = candle_nn::ops::softmax_last_dim(&logits)?;
                 let mut prs: Vec<f32> = prs.to_vec1()?;
                 match self.sampling_method {
-                    SamplingMethod::Argmax => self.sample_argmax(logits)?,
+                    SamplingMethod::Multinomial => self.sample_multinomial(&prs)?,
                     SamplingMethod::TopP(top_p) => {
                         if top_p <= 0.0 || top_p >= 1.0 {
                             // simply sample from the predicted probability distribution

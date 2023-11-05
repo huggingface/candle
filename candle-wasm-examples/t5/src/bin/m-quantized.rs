@@ -60,7 +60,7 @@ impl ModelConditionalGeneration {
             Some(input.temperature)
         };
         let top_p = if input.top_p <= 0. || input.top_p >= 1. {
-            SamplingMethod::Argmax
+            SamplingMethod::Multinomial
         } else {
             SamplingMethod::TopP(input.top_p)
         };

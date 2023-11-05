@@ -50,7 +50,7 @@ impl Model {
             SelectedModel::MixFormer(model)
         };
         console_log!("model loaded in {:?}s", (Date::now() - start) / 1000.);
-        let logits_processor = LogitsProcessor::new(299792458, None, SamplingMethod::Argmax);
+        let logits_processor = LogitsProcessor::new(299792458, None, SamplingMethod::Multinomial);
         Ok(Self {
             model,
             tokenizer,
@@ -76,7 +76,7 @@ impl Model {
         };
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1.0 {
-            SamplingMethod::Argmax
+            SamplingMethod::Multinomial
         } else {
             SamplingMethod::TopP(top_p)
         };

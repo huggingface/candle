@@ -89,7 +89,7 @@ impl Model {
             SelectedModel::Q(m) => image.unsqueeze(0)?.apply(m.vision_model())?,
         };
         console_log!("image embedded in {:?}s", (Date::now() - start) / 1000.);
-        let mut logits_processor = LogitsProcessor::new(299792458, None, SamplingMethod::Argmax);
+        let mut logits_processor = LogitsProcessor::new(299792458, None, SamplingMethod::Multinomial);
         let mut token_ids = vec![30522u32];
         let mut text: String = "".to_string();
 

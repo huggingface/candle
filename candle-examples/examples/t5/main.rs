@@ -190,7 +190,7 @@ fn main() -> Result<()> {
                 };
                 let top_p = match args.top_p {
                     Some(p) => SamplingMethod::TopP(p),
-                    None => SamplingMethod::Argmax,
+                    None => SamplingMethod::Multinomial,
                 };
                 let mut logits_processor = LogitsProcessor::new(299792458, temperature, top_p);
                 let encoder_output = model.encode(&input_token_ids)?;

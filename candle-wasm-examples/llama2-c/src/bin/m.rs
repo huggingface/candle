@@ -47,7 +47,7 @@ impl Model {
             tokenizer,
             model: weights,
         });
-        let logits_processor = LogitsProcessor::new(299792458, None, SamplingMethod::Argmax);
+        let logits_processor = LogitsProcessor::new(299792458, None, SamplingMethod::Multinomial);
         match model {
             Ok(inner) => Ok(Self {
                 inner,
@@ -82,7 +82,7 @@ impl Model {
         }
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1.0 {
-            SamplingMethod::Argmax
+            SamplingMethod::Multinomial
         } else {
             SamplingMethod::TopP(top_p)
         };

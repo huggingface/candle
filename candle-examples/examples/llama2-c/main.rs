@@ -322,7 +322,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
     println!("starting the inference loop");
     let top_p = match args.top_p {
         Some(p) => SamplingMethod::TopP(p),
-        None => SamplingMethod::Argmax,
+        None => SamplingMethod::Multinomial,
     };
     let mut logits_processor = LogitsProcessor::new(299792458, args.temperature, top_p);
     let mut index_pos = 0;

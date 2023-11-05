@@ -68,7 +68,7 @@ impl Model {
         let dev = Device::Cpu;
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1.0 {
-            SamplingMethod::Argmax
+            SamplingMethod::Multinomial
         } else {
             SamplingMethod::TopP(top_p)
         };

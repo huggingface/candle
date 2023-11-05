@@ -364,7 +364,7 @@ fn main() -> anyhow::Result<()> {
         let mut all_tokens = vec![];
         let top_p = match args.top_p {
             Some(p) => SamplingMethod::TopP(p),
-            None => SamplingMethod::Argmax,
+            None => SamplingMethod::Multinomial,
         };
         let mut logits_processor = LogitsProcessor::new(args.seed, temperature, top_p);
 
