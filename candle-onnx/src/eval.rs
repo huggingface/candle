@@ -344,17 +344,15 @@ pub fn simple_eval(
                 let ws = get(&node.input[1])?;
                 let ys = match ws.rank() {
                     3 => {
-                        let pads = match pads {
-                            None => 0,
-                            Some([p]) => *p as usize,
+                        let (pads, xs) = match pads {
+                            None => (0, xs.clone()),
+                            Some([p]) => (*p as usize, xs.clone()),
                             Some([p1, p2]) => {
                                 if p1 != p2 {
-                                    bail!(
-                                        "left and right pad ({p1} <> {p2}) have to be the same {}",
-                                        node.name
-                                    )
+                                    (0usize, xs.pad_with_zeros(2, *p1 as usize, *p2 as usize)?)
+                                } else {
+                                    (*p1 as usize, xs.clone())
                                 }
-                                *p1 as usize
                             }
                             Some(pads) => {
                                 bail!("more pads than expected in conv1d {pads:?} {}", node.name)
@@ -377,14 +375,19 @@ pub fn simple_eval(
                         xs.conv1d(ws, pads, strides, dilations, groups as usize)?
                     }
                     4 => {
-                        let pads = match pads {
-                            None => 0,
-                            Some([p]) => *p as usize,
-                            Some([p1, p2, p3, p4]) => {
+                        let (pads, xs) = match pads {
+                            None => (0, xs.clone()),
+                            Some([p]) => (*p as usize, xs.clone()),
+                            Some(&[p1, p2, p3, p4]) => {
+                                let p1 = p1 as usize;
+                                let p2 = p2 as usize;
+                                let p3 = p3 as usize;
+                                let p4 = p4 as usize;
                                 if p1 != p2 || p1 != p3 || p1 != p4 {
-                                    bail!("pads have to be the same {pads:?} {}", node.name)
+                                    (0, xs.narrow(2, p1, p3)?.narrow(3, p2, p4)?)
+                                } else {
+                                    (p1, xs.clone())
                                 }
-                                *p1 as usize
                             }
                             Some(pads) => {
                                 bail!("more pads than expected in conv2d {pads:?} {}", node.name)
@@ -422,6 +425,7 @@ pub fn simple_eval(
                                 bail!("more dilations than expected in conv2d {s:?} {}", node.name)
                             }
                         };
+                        println!("{xs:?} {ws:?}");
                         xs.conv2d(ws, pads, strides, dilations, groups as usize)?
                     }
                     rank => bail!(
