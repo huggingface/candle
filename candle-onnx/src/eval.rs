@@ -149,7 +149,7 @@ pub fn simple_eval(
             None => continue,
         };
         let tensor_type = match input_type {
-            crate::onnx::type_proto::Value::TensorType(tt) => tt,
+            onnx::type_proto::Value::TensorType(tt) => tt,
             _ => continue,
         };
 
@@ -166,11 +166,31 @@ pub fn simple_eval(
             },
             type_ => bail!("unsupported input type {type_:?}"),
         };
+        let shape = match &tensor_type.shape {
+            None => continue,
+            Some(shape) => shape
+                .dim
+                .iter()
+                .map(|dim| match dim.value.as_ref().expect("no dim value") {
+                    onnx::tensor_shape_proto::dimension::Value::DimValue(v) => Ok(*v as usize),
+                    onnx::tensor_shape_proto::dimension::Value::DimParam(_) => {
+                        bail!("DimParam is unsupported for input {}", input.name)
+                    }
+                })
+                .collect::<Result<Vec<usize>>>()?,
+        };
         if dt != tensor.dtype() {
             bail!(
                 "unexpected dtype for {}, got {:?}, expected {dt:?}",
                 input.name,
                 tensor.dtype()
+            )
+        }
+        if shape.as_slice() != tensor.dims() {
+            bail!(
+                "unexpected shape for {}, got {:?}, expected {shape:?}",
+                input.name,
+                tensor.dims()
             )
         }
     }
