@@ -44,46 +44,49 @@ impl LogitsProcessor {
         Ok(next_token)
     }
 
-    fn sample_multinomial(&mut self, prs: &Vec<f32>) -> Result<u32> {
-        let distr = rand::distributions::WeightedIndex::new(prs).map_err(Error::wrap)?;
+    fn sample_multinomial(&mut self, probs: &Vec<f32>) -> Result<u32> {
+        let distr = rand::distributions::WeightedIndex::new(probs).map_err(Error::wrap)?;
         let next_token = distr.sample(&mut self.rng) as u32;
         Ok(next_token)
     }
 
-    fn sample_topp(&mut self, prs: &mut Vec<f32>, top_p: f32) -> Result<u32> {
+    fn sample_topp(&mut self, probs: &mut Vec<f32>, top_p: f32) -> Result<u32> {
         // top-p sampling (or "nucleus sampling") samples from the smallest set of
         // tokens that exceed probability top_p. This way we never sample tokens that
         // have very low probabilities and are less likely to go "off the rails".
-        let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
+        let mut argsort_indices = (0..probs.len()).collect::<Vec<_>>();
 
         // Sort by descending probability.
-        argsort_indices.sort_by(|&i, &j| prs[j].partial_cmp(&prs[i]).unwrap());
+        argsort_indices.sort_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap());
 
         // Clamp smaller probabilities to zero.
         let mut cumsum = 0.;
         for index in &argsort_indices {
             if cumsum >= top_p {
-                prs[*index] = 0.0;
+                probs[*index] = 0.0;
             } else {
-                cumsum += prs[*index];
+                cumsum += probs[*index];
             }
         }
+
         // Sample with clamped probabilities.
-        self.sample_multinomial(prs)
+        self.sample_multinomial(probs)
     }
 
-    fn sample_topk(&mut self, prs: &mut Vec<f32>, top_k: usize) -> Result<u32> {
-        prs.sort_by(|x, y| x.total_cmp(y));
+    fn sample_topk(&mut self, probs: &mut Vec<f32>, top_k: usize) -> Result<u32> {
+        // Sort probs into descending order (highest probs first)
+        probs.sort_by(|x, y| x.total_cmp(y));
+        probs.reverse();
 
         // Clamp smaller probabilities to zero.
-        for (index, val) in prs.iter_mut().enumerate() {
+        for (index, val) in probs.iter_mut().enumerate() {
             if index >= top_k {
                 *val = 0.0;
             }
         }
 
         // Sample with clamped probabilities.
-        self.sample_multinomial(prs)
+        self.sample_multinomial(probs)
     }
 
     /// Sample the provided tokens.
