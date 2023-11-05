@@ -53,10 +53,12 @@ pub fn main() -> anyhow::Result<()> {
     let mut inputs = std::collections::HashMap::new();
     inputs.insert(graph.input[0].name.to_string(), image.unsqueeze(0)?);
     let mut outputs = candle_onnx::simple_eval(&model, inputs)?;
-    let logits = outputs.remove(&graph.output[0].name).unwrap();
-    let prs = candle_nn::ops::softmax(&logits, D::Minus1)?
-        .i(0)?
-        .to_vec1::<f32>()?;
+    let output = outputs.remove(&graph.output[0].name).unwrap();
+    let prs = match args.which {
+        Which::SqueezeNet => candle_nn::ops::softmax(&output, D::Minus1)?,
+        Which::EfficientNet => output,
+    };
+    let prs = prs.i(0)?.to_vec1::<f32>()?;
 
     // Sort the predictions and take the top 5
     let mut top: Vec<_> = prs.iter().enumerate().collect();

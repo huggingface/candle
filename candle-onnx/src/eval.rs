@@ -417,6 +417,35 @@ pub fn simple_eval(
                 let xs = xs.broadcast_mul(&weight)?.broadcast_add(&bias)?;
                 values.insert(node.output[0].clone(), xs);
             }
+            "Squeeze" => {
+                let xs = get(&node.input[0])?;
+                let mut axes = if node.input.len() <= 1 {
+                    // contract all the dimensions with size 1 except the batch dim.
+                    xs.dims()
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(idx, &s)| if s == 1 && idx > 0 { Some(idx) } else { None })
+                        .collect()
+                } else {
+                    get(&node.input[1])?
+                        .to_vec1::<i64>()?
+                        .iter()
+                        .map(|&i| {
+                            if i < 0 {
+                                (xs.rank() as i64 + i) as usize
+                            } else {
+                                i as usize
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                };
+                axes.sort();
+                let mut xs = xs.clone();
+                for &axis in axes.iter().rev() {
+                    xs = xs.squeeze(axis)?
+                }
+                values.insert(node.output[0].clone(), xs);
+            }
             "Clip" => {
                 let xs = get(&node.input[0])?;
                 let xs = if node.input.len() >= 2 {
