@@ -438,7 +438,7 @@ pub fn simple_eval(
                                 let p3 = p3 as usize;
                                 let p4 = p4 as usize;
                                 if p1 != p2 || p1 != p3 || p1 != p4 {
-                                    (0, xs.narrow(2, p1, p3)?.narrow(3, p2, p4)?)
+                                    (0, xs.pad_with_zeros(2, p1, p3)?.pad_with_zeros(3, p2, p4)?)
                                 } else {
                                     (p1, xs.clone())
                                 }
