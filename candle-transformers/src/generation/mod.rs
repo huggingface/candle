@@ -71,9 +71,9 @@ impl LogitsProcessor {
         prs.sort_by(|x, y| x.total_cmp(y));
 
         // Clamp smaller probabilities to zero.
-        for index in 0..prs.len() {
+        for (index, val) in prs.iter_mut().enumerate() {
             if index >= top_k {
-                prs[index] = 0.0;
+                *val = 0.0;
             }
         }
 
