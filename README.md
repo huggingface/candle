@@ -348,6 +348,25 @@ mdbook test candle-book -L .\target\debug\deps\ `
 This may be caused by the models being loaded from `/mnt/c`, more details on
 [stackoverflow](https://stackoverflow.com/questions/68972448/why-is-wsl-extremely-slow-when-compared-with-native-windows-npm-yarn-processing).
 
+#### Missing protoc installation when compiling candle-onnx
+
+The candle-onnx dependency prost-build no longer comes bundled with prost binaries. This could cause the following error when attempting to compile candle-onnx:
+
+```
+error: failed to run custom build command for `candle-onnx v0.3.0 (C:\Projekt\candle\candle-onnx)`
+Caused by: // (...)
+  Could not find `protoc` installation and this build crate cannot proceed without
+      this knowledge.
+```
+
+To fix this issue:
+
+1. Download protoc for your platform from the official Protocol Buffers GitHub repository: [github.com/protocolbuffers/protobuf/releases](https://github.com/protocolbuffers/protobuf/releases).
+2. Extract the protoc binary from the downloaded archive's bin folder.
+3. Add the location of the protoc binary to your system's PATH, or set the location in a new PROTOC environment variable.
+
+This should resolve the error and allow you to compile candle-onnx successfully.
+
 #### Tracking down errors
 
 You can set `RUST_BACKTRACE=1` to be provided with backtraces when a candle
