@@ -221,6 +221,7 @@ Cheatsheet:
 - [candle-datasets](./candle-datasets/): Datasets and data loaders.
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
+- [candle-onnx](./candle-onnx/): ONNX model evaluation.
 
 ## FAQ
 
