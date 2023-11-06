@@ -24,7 +24,7 @@ enum Prompt {
     One(String),
 }
 
-#[derive(Clone, Debug, Copy, ValueEnum)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Which {
     #[value(name = "7b")]
     L7b,
@@ -63,25 +63,9 @@ impl Which {
             | Self::L70bChat
             | Self::L7bCode
             | Self::L13bCode
-            | Self::L34bCode
-            | Self::Zephyr7b => false,
-            Self::Mistral7b | Self::Mistral7bInstruct => true,
-        }
-    }
-    fn is_zephyr(&self) -> bool {
-        match self {
-            Self::L7b
-            | Self::L13b
-            | Self::L70b
-            | Self::L7bChat
-            | Self::L13bChat
-            | Self::L70bChat
-            | Self::L7bCode
-            | Self::L13bCode
-            | Self::L34bCode
-            | Self::Mistral7b
-            | Self::Mistral7bInstruct => false,
-            Self::Zephyr7b => true,
+            | Self::L34bCode => false,
+            // Zephyr is a fine tuned version of mistral and should be treated in the same way.
+            Self::Zephyr7b | Self::Mistral7b | Self::Mistral7bInstruct => true,
         }
     }
 }
@@ -150,7 +134,7 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let api = hf_hub::api::sync::Api::new()?;
-                let repo = if self.which.is_mistral() | self.which.is_zephyr() {
+                let repo = if self.which.is_mistral() {
                     "mistralai/Mistral-7B-v0.1"
                 } else {
                     "hf-internal-testing/llama-tokenizer"
@@ -352,10 +336,10 @@ fn main() -> anyhow::Result<()> {
                         prompt.pop();
                     }
                 }
-                if args.which.is_mistral() {
-                    format!("[INST] {prompt} [/INST]")
-                } else if args.which.is_zephyr() {
+                if args.which == Which::Zephyr7b {
                     format!("<|system|>\n</s>\n<|user|>\n{prompt}</s>\n<|assistant|>")
+                } else if args.which.is_mistral() {
+                    format!("[INST] {prompt} [/INST]")
                 } else {
                     prompt
                 }
