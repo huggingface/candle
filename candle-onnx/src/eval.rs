@@ -245,7 +245,7 @@ pub fn simple_eval(
             "Equal" => {
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?;
-                let output = input0.eq(input1)?;
+                let output = input0.broadcast_eq(input1)?;
                 values.insert(node.output[0].clone(), output);
             }
             "MatMul" => {
@@ -447,6 +447,16 @@ pub fn simple_eval(
                 for &axis in axes.iter().rev() {
                     xs = xs.squeeze(axis)?
                 }
+                values.insert(node.output[0].clone(), xs);
+            }
+            "ConstantOfShape" => {
+                let dims = get(&node.input[0])?;
+                let shape = dims
+                    .to_vec1::<i64>()?
+                    .into_iter()
+                    .map(|v| v as usize)
+                    .collect::<Vec<_>>();
+                let xs = Tensor::zeros(shape, DType::F32, dims.device())?;
                 values.insert(node.output[0].clone(), xs);
             }
             "Unsqueeze" => {
