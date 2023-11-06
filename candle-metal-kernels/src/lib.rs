@@ -137,6 +137,10 @@ mod tests {
     };
     use std::mem;
 
+    fn device() -> Device {
+        Device::system_default().unwrap()
+    }
+
     fn approx(v: Vec<f32>, digits: i32) -> Vec<f32> {
         let b = 10f32.powi(digits);
         v.iter().map(|t| f32::round(t * b) / b).collect()
@@ -148,8 +152,9 @@ mod tests {
     }
 
     fn run_cos<T: Clone>(v: &[T], name: &str) -> Vec<T> {
+        let device = device();
         let option = metal::MTLResourceOptions::CPUCacheModeDefaultCache;
-        let device = Device::system_default().unwrap();
+        let option = metal::MTLResourceOptions::StorageModeManaged;
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
         let input = device.new_buffer_with_data(
@@ -165,18 +170,27 @@ mod tests {
         let pipeline_state_descriptor = ComputePipelineDescriptor::new();
         pipeline_state_descriptor.set_compute_function(Some(&func));
 
-        let pipeline_state = device
+        let pipeline = device
             .new_compute_pipeline_state_with_function(
                 pipeline_state_descriptor.compute_function().unwrap(),
             )
             .unwrap();
 
-        let encoder = command_buffer.new_compute_command_encoder();
-        encoder.set_compute_pipeline_state(&pipeline_state);
-        encoder.set_buffer(0, Some(&input), 0);
-        encoder.set_buffer(1, Some(&output), 0);
+        let dim: u32 = v.len() as u32;
+        // let num_dims: u32 = 1;
+        // let info = [v.len() as u32, 1];
 
-        let width = 16;
+        let encoder = command_buffer.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(&pipeline);
+
+        encoder.set_bytes(0, 4, void_ptr(&dim));
+        // encoder.set_bytes(1, 4, void_ptr(&num_dims));
+        // encoder.set_bytes(2, 4, void_ptr(&info));
+
+        encoder.set_buffer(1, Some(&input), 0);
+        encoder.set_buffer(2, Some(&output), 0);
+
+        let width = v.len() as NSUInteger;
 
         let thread_group_count = MTLSize {
             width,
@@ -185,7 +199,7 @@ mod tests {
         };
 
         let thread_group_size = MTLSize {
-            width: (v.len() as u64 + width) / width,
+            width: pipeline.max_total_threads_per_threadgroup(),
             height: 1,
             depth: 1,
         };
@@ -208,7 +222,7 @@ mod tests {
 
     #[test]
     fn affine() {
-        let device = Device::system_default().expect("no device found");
+        let device = device();
 
         let options = CompileOptions::new();
         let library = device.new_library_with_source(AFFINE, &options).unwrap();
@@ -225,7 +239,8 @@ mod tests {
         let pipeline = device
             .new_compute_pipeline_state_with_function(&function)
             .unwrap();
-        let options = MTLResourceOptions::StorageModeShared;
+        // let options = MTLResourceOptions::StorageModeShared;
+        let options = metal::MTLResourceOptions::StorageModeManaged;
 
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
@@ -291,7 +306,7 @@ mod tests {
         let pipeline = device
             .new_compute_pipeline_state_with_function(&function)
             .unwrap();
-        let options = MTLResourceOptions::StorageModeShared;
+        let options = metal::MTLResourceOptions::StorageModeManaged;
 
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
