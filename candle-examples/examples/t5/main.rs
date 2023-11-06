@@ -172,7 +172,12 @@ fn main() -> Result<()> {
                 println!("Took {:?}", start.elapsed());
             } else {
                 let mut model = builder.build_conditional_generation()?;
-                let mut output_token_ids = [builder.config.pad_token_id as u32].to_vec();
+                let mut output_token_ids = [builder
+                    .config
+                    .decoder_start_token_id
+                    .unwrap_or(builder.config.pad_token_id)
+                    as u32]
+                .to_vec();
                 if let Some(decoder_prompt) = &args.decoder_prompt {
                     print!("{decoder_prompt}");
                     output_token_ids.extend(
