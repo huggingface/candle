@@ -1,7 +1,9 @@
 use metal::{Buffer, CompileOptions, Device, Function, Library};
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::sync::RwLock;
 
+pub const AFFINE: &str = include_str!("affine.metal");
 pub const INDEXING: &str = include_str!("indexing.metal");
 pub const UNARY: &str = include_str!("unary.metal");
 
@@ -60,6 +62,10 @@ fn call_unary(_func: &Function, _input: &Buffer, _output: &Buffer, _length: usiz
     todo!("Call unary");
 }
 
+pub fn void_ptr<T>(v: &T) -> *const c_void {
+    (v as *const T).cast()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,9 +76,6 @@ mod tests {
     use std::ffi::c_void;
     use std::mem;
 
-    pub fn void_ptr<T>(v: &T) -> *const c_void {
-        (v as *const T).cast()
-    }
     fn approx(v: Vec<f32>, digits: i32) -> Vec<f32> {
         let b = 10f32.powi(digits);
         v.iter().map(|t| f32::round(t * b) / b).collect()
@@ -142,6 +145,72 @@ mod tests {
         let results = output.read_to_vec::<f32>(v.len());
         assert_eq!(approx(results, 4), vec![0.5403, -0.4161, -0.99]);
         assert_eq!(approx(expected, 4), vec![0.5403, -0.4161, -0.99]);
+    }
+
+    #[test]
+    fn affine() {
+        let device = Device::system_default().expect("no device found");
+
+        let options = CompileOptions::new();
+        let library = device.new_library_with_source(AFFINE, &options).unwrap();
+
+        let input = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let output = [2.0f32, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        let dim: u32 = 8;
+        let num_dims: u32 = 4;
+        let info = [1u32, 2, 3];
+        let mul: f32 = 1.5;
+        let add: f32 = 1.1;
+
+        let function = library.get_function("affine", None).unwrap();
+        let pipeline = device
+            .new_compute_pipeline_state_with_function(&function)
+            .unwrap();
+        let options = MTLResourceOptions::StorageModeShared;
+
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        let input_size = (input.len() * mem::size_of::<f32>()) as NSUInteger;
+        let output_size = (output.len() * mem::size_of::<f32>()) as NSUInteger;
+
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_threadgroup_memory_length(0, output_size as NSUInteger);
+
+        let inputs_buffer = device.new_buffer_with_data(void_ptr(&input), input_size, options);
+        let outputs_buffer = device.new_buffer_with_data(void_ptr(&output), output_size, options);
+
+        encoder.set_bytes(0, 4, void_ptr(&dim));
+        encoder.set_bytes(1, 4, void_ptr(&num_dims));
+        encoder.set_bytes(2, 4, void_ptr(&info));
+
+        encoder.set_buffer(3, Some(&inputs_buffer), 0);
+        encoder.set_buffer(4, Some(&outputs_buffer), 0);
+
+        encoder.set_bytes(5, 4, void_ptr(&mul));
+        encoder.set_bytes(6, 4, void_ptr(&add));
+
+        let grid_size = MTLSize {
+            width: output.len() as NSUInteger,
+            height: 1,
+            depth: 1,
+        };
+
+        let thread_group_size = MTLSize {
+            width: pipeline.max_total_threads_per_threadgroup(),
+            height: 1,
+            depth: 1,
+        };
+
+        encoder.dispatch_threads(grid_size, thread_group_size);
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        let expected = vec![2.6, 4.1, 5.6, 7.1, 8.6, 10.1, 11.6, 13.1];
+        let result = outputs_buffer.read_to_vec::<f32>(output.len());
+        assert_eq!(result, expected);
     }
 
     #[test]

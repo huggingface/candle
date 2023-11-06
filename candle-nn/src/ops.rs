@@ -190,7 +190,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             device: dev.clone(),
         };
         Ok((dst, layout.shape().clone()))
-    }    
+    }
 
     #[cfg(feature = "metal")]
     fn metal_fwd(

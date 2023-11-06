@@ -4,12 +4,13 @@ use crate::error::Error;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 use candle_metal_kernels;
+use candle_metal_kernels::{void_ptr, AFFINE};
 use core::mem;
 use half::{bf16, f16};
 use metal;
 use metal::mps::matrix::encode_gemm;
 use metal::mps::Float32;
-use metal::{Buffer, MTLResourceOptions, NSUInteger};
+use metal::{Buffer, CompileOptions, MTLResourceOptions, MTLSize, NSUInteger};
 use std::sync::Arc;
 
 /// Metal related errors
@@ -86,10 +87,58 @@ impl BackendStorage for MetalStorage {
         }
     }
 
-    fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self> {
-        println!("TODO Affine");
+    fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
+        let device = self.device().clone();
+
+        /*
+        let shape = layout.shape();
+        let dims = shape.dims();
+        let el = shape.elem_count();
+
+        // TODO: Don't load library every time
+        let library = device.new_library_with_source(AFFINE, &CompileOptions::new()).unwrap();
+        let function = library.get_function("affine", None).unwrap();
+        let pipeline = device
+            .new_compute_pipeline_state_with_function(&function)
+            .unwrap();
+
+        let encoder = device.command_buffer.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(&pipeline);
+
+        let output_size = el * self.dtype.size_in_bytes();
+        encoder.set_threadgroup_memory_length(0, output_size as NSUInteger);
+
+        let output_buffer = device.new_buffer(output_size, self.dtype);
+
+        encoder.set_bytes(0, 4, void_ptr(&el));
+        encoder.set_bytes(1, 4, void_ptr(&dims));
+        let info = [dims, layout.stride()].concat();
+        let info_len = (info.len() * mem::size_of::<usize>()) as NSUInteger;
+        encoder.set_bytes(2, info_len, info.as_slice().as_ptr().cast());
+
+        encoder.set_buffer(3, Some(&self.buffer), 0);
+        encoder.set_buffer(4, Some(&output_buffer), 0);
+
+        encoder.set_bytes(5, 4, void_ptr(&(mul as f32)));
+        encoder.set_bytes(6, 4, void_ptr(&(add as f32)));
+
+        let grid_size = MTLSize {
+            width: output_size as NSUInteger,
+            height: 1,
+            depth: 1,
+        };
+
+        let thread_group_size = MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        };
+
+        encoder.dispatch_threads(grid_size, thread_group_size);
+        encoder.end_encoding();
+        */
+
         Ok(self.clone())
-        // todo!()
     }
 
     fn powf(&self, _: &Layout, _: f64) -> Result<Self> {
