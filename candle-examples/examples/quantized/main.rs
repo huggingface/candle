@@ -63,8 +63,25 @@ impl Which {
             | Self::L70bChat
             | Self::L7bCode
             | Self::L13bCode
-            | Self::L34bCode => false,
-            Self::Mistral7b | Self::Mistral7bInstruct | Self::Zephyr7b => true,
+            | Self::L34bCode
+            | Self::Zephyr7b => false,
+            Self::Mistral7b | Self::Mistral7bInstruct => true,
+        }
+    }
+    fn is_zephyr(&self) -> bool {
+        match self {
+            Self::L7b
+            | Self::L13b
+            | Self::L70b
+            | Self::L7bChat
+            | Self::L13bChat
+            | Self::L70bChat
+            | Self::L7bCode
+            | Self::L13bCode
+            | Self::L34bCode
+            | Self::Mistral7b
+            | Self::Mistral7bInstruct => false,
+            Self::Zephyr7b => true,
         }
     }
 }
@@ -133,7 +150,7 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let api = hf_hub::api::sync::Api::new()?;
-                let repo = if self.which.is_mistral() {
+                let repo = if self.which.is_mistral() | self.which.is_zephyr() {
                     "mistralai/Mistral-7B-v0.1"
                 } else {
                     "hf-internal-testing/llama-tokenizer"
@@ -337,6 +354,8 @@ fn main() -> anyhow::Result<()> {
                 }
                 if args.which.is_mistral() {
                     format!("[INST] {prompt} [/INST]")
+                } else if args.which.is_zephyr() {
+                    format!("<|system|>\n</s>\n<|user|>\n{prompt}</s>\n<|assistant|>")
                 } else {
                     prompt
                 }
