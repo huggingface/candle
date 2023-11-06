@@ -23,7 +23,6 @@ class ONNXModel:
         The domain of the operator set of the model.
         """
         pass
-    @property
     def initializers(self) -> Dict[str, Tensor]:
         """
         Get the weights of the model.

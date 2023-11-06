@@ -162,7 +162,6 @@ impl PyONNXModel {
         self.0.doc_string.clone()
     }
 
-    #[getter]
     /// Get the weights of the model.
     /// &RETURNS&: Dict[str, Tensor]
     fn initializers(&self) -> PyResult<HashMap<String, PyTensor>> {
