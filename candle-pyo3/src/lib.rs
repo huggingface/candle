@@ -28,7 +28,6 @@ use shape::{PyShape, PyShapeWithHole};
 #[cfg(feature = "onnx")]
 mod onnx;
 
-
 #[derive(Clone, Debug)]
 #[pyclass(name = "Tensor")]
 /// A `candle` tensor.
@@ -1563,9 +1562,10 @@ fn candle_functional_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 }
 
 #[cfg(feature = "onnx")]
-fn candle_onnx_m(_py: Python<'_>, m: &PyModule) -> PyResult<()>{
-    use onnx::PyONNXModel;
+fn candle_onnx_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+    use onnx::{PyONNXModel, PyONNXTensorDescriptor};
     m.add_class::<PyONNXModel>()?;
+    m.add_class::<PyONNXTensorDescriptor>()?;
     Ok(())
 }
 
@@ -1574,10 +1574,11 @@ fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     let utils = PyModule::new(py, "utils")?;
     candle_utils(py, utils)?;
     m.add_submodule(utils)?;
-    let nn = PyModule::new(py, "fanctional")?;
+    let nn = PyModule::new(py, "functional")?;
     candle_functional_m(py, nn)?;
     m.add_submodule(nn)?;
-    #[cfg(feature = "onnx")]{
+    #[cfg(feature = "onnx")]
+    {
         let onnx = PyModule::new(py, "onnx")?;
         candle_onnx_m(py, onnx)?;
         m.add_submodule(onnx)?;
