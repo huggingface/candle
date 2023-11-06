@@ -5,13 +5,16 @@ members = [
     "candle-examples",
     "candle-book",
     "candle-nn",
-    "candle-onnx",
     "candle-pyo3",
     "candle-transformers",
     "candle-wasm-examples/*",
     "candle-wasm-tests",
 ]
-exclude = ["candle-flash-attn", "candle-kernels"]
+exclude = [
+   "candle-flash-attn",
+   "candle-kernels",
+   "candle-onnx",
+]
 resolver = "2"
 
 [workspace.package]
