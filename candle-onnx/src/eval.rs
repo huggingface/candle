@@ -465,6 +465,15 @@ pub fn simple_eval(
                 };
                 values.insert(node.output[0].clone(), xs);
             }
+            "Gather" => {
+                let xs = get(&node.input[0])?;
+                let indices = get(&node.input[1])?;
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(0);
+                let axis = xs.normalize_axis(axis)?;
+                println!("{xs} {indices}");
+                let xs = xs.gather(indices, axis)?;
+                values.insert(node.output[0].clone(), xs);
+            }
             "Shape" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Shape
                 let xs = get(&node.input[0])?;
