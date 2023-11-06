@@ -48,9 +48,13 @@ kernel void FN_NAME( \
     uint thread_index [[thread_index_in_threadgroup]] \
 ) { index_add<TYPENAME, INDEX_TYPENAME>(ids, inp, out, ids_dim_size, left_size, dst_dim_size, right_size, threadgroup_size, threadgroup_position_in_grid, thread_index); } \
 
+
+
+#if __METAL_VERSION__ >= 310
 IA_OP(bfloat, int64_t, ia_i64_bf16)
 IA_OP(bfloat, uint32_t, ia_u32_bf16)
 IA_OP(bfloat, uint8_t, ia_u8_bf16)
+#endif
 
 IA_OP(half, uint32_t, ia_u32_f16)
 IA_OP(half, uint8_t, ia_u8_f16)
