@@ -1,4 +1,4 @@
-use crate::{DType, DeviceLocation, Layout, Shape};
+use crate::{metal_backend, DType, DeviceLocation, Layout, Shape};
 
 #[derive(Debug, Clone)]
 pub struct MatMulUnexpectedStriding {
@@ -163,7 +163,7 @@ pub enum Error {
     Cuda(Box<dyn std::error::Error + Send + Sync>),
 
     #[error("Metal error {0}")]
-    Metal(String),
+    Metal(#[from] metal_backend::MetalError),
 
     #[error(transparent)]
     TryFromIntError(#[from] core::num::TryFromIntError),

@@ -1,10 +1,9 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose2D};
-use crate::error::Error;
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 use candle_metal_kernels;
-use candle_metal_kernels::{void_ptr, AFFINE};
+use candle_metal_kernels::{void_ptr, Kernels, AFFINE};
 use core::mem;
 use half::{bf16, f16};
 use metal;
@@ -16,8 +15,22 @@ use std::sync::Arc;
 /// Metal related errors
 #[derive(thiserror::Error, Debug)]
 pub enum MetalError {
-    #[error("metal error")]
-    Metal,
+    #[error("{0}")]
+    Message(String),
+    #[error(transparent)]
+    KernelError(#[from] candle_metal_kernels::MetalKernelError),
+}
+
+impl From<String> for MetalError {
+    fn from(e: String) -> Self {
+        MetalError::Message(e)
+    }
+}
+
+impl MetalError {
+    fn msg<S: AsRef<str>>(msg: S) -> Self {
+        MetalError::Message(msg.as_ref().to_string())
+    }
 }
 
 #[derive(Clone)]
@@ -25,6 +38,7 @@ pub struct MetalDevice {
     device: metal::Device,
     _command_queue: metal::CommandQueue,
     command_buffer: metal::CommandBuffer,
+    kernels: Arc<candle_metal_kernels::Kernels>,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -94,14 +108,15 @@ impl BackendStorage for MetalStorage {
         let dims = shape.dims();
         let el = shape.elem_count();
 
-        // TODO: Don't load library every time
-        let library = device
-            .new_library_with_source(AFFINE, &CompileOptions::new())
-            .unwrap();
-        let function = library.get_function("affine", None).unwrap();
+        let function = self
+            .device
+            .kernels
+            .load_function(&device.device, "affine", "affine")
+            .map_err(MetalError::from)?;
+
         let pipeline = device
             .new_compute_pipeline_state_with_function(&function)
-            .unwrap();
+            .map_err(MetalError::msg)?;
 
         let output_size = el * self.dtype.size_in_bytes();
         let output_buffer = device.new_buffer(output_size, self.dtype);
@@ -385,7 +400,7 @@ impl MetalStorage {
                     alpha,
                     beta,
                 )
-                .map_err(|e| Error::Metal(e))?;
+                .map_err(MetalError::from)?;
 
                 println!("lhs {:?} {m} {k}", self.buffer.length());
                 println!("rhs {:?} {k} {n}", rhs.buffer.length());
@@ -410,10 +425,12 @@ impl BackendDevice for MetalDevice {
         let device = metal::Device::all().swap_remove(ordinal);
         let _command_queue = device.new_command_queue();
         let command_buffer = _command_queue.new_owned_command_buffer();
+        let kernels = Arc::new(Kernels::init(&device).map_err(MetalError::from)?);
         Ok(Self {
             device,
             _command_queue,
             command_buffer,
+            kernels,
         })
     }
 
