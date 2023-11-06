@@ -2406,6 +2406,23 @@ impl Tensor {
     ) -> Result<Self> {
         self.apply_op3_arc(t2, t3, Arc::new(Box::new(c)))
     }
+
+    /// Normalize a 'relative' axis value: positive values are kept, negative
+    /// values means counting the dimensions from the back.
+    pub fn normalize_axis(&self, axis: i64) -> Result<usize> {
+        let rank = self.rank() as i64;
+        if rank <= axis {
+            crate::bail!("axis {axis} is too large, tensor rank {rank}")
+        } else if 0 <= axis {
+            Ok(axis as usize)
+        } else {
+            let naxis = rank + axis;
+            if naxis < 0 {
+                crate::bail!("axis {axis} is too small, tensor rank {rank}")
+            }
+            Ok(naxis as usize)
+        }
+    }
 }
 
 macro_rules! bin_trait {

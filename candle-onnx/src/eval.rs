@@ -439,14 +439,8 @@ pub fn simple_eval(
                     get(&node.input[1])?
                         .to_vec1::<i64>()?
                         .iter()
-                        .map(|&i| {
-                            if i < 0 {
-                                (xs.rank() as i64 + i) as usize
-                            } else {
-                                i as usize
-                            }
-                        })
-                        .collect::<Vec<_>>()
+                        .map(|&i| xs.normalize_axis(i))
+                        .collect::<Result<Vec<_>>>()?
                 };
                 axes.sort();
                 let mut xs = xs.clone();
@@ -476,14 +470,8 @@ pub fn simple_eval(
                 let xs = get(&node.input[0])?;
                 let start = get_attr_opt::<i64>(node, "start")?.copied().unwrap_or(0);
                 let end = get_attr_opt::<i64>(node, "end")?.copied().unwrap_or(-1);
-                let start = if start < 0 {
-                    start + xs.rank() as i64
-                } else {
-                    start
-                };
-                let end = if end < 0 { end + xs.rank() as i64 } else { end };
-                let start = (start as usize).clamp(0, xs.rank().saturating_sub(1));
-                let end = (end as usize).clamp(0, xs.rank().saturating_sub(1));
+                let start = xs.normalize_axis(start)?;
+                let end = xs.normalize_axis(end)?;
                 let mut dims = vec![];
                 for idx in start..=end {
                     dims.push(xs.dim(idx)? as i64)
