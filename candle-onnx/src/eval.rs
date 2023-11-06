@@ -173,31 +173,40 @@ pub fn simple_eval(
             },
             type_ => bail!("unsupported input type {type_:?}"),
         };
-        let shape = match &tensor_type.shape {
+        match &tensor_type.shape {
             None => continue,
-            Some(shape) => shape
-                .dim
-                .iter()
-                .map(|dim| match dim.value.as_ref().expect("no dim value") {
-                    onnx::tensor_shape_proto::dimension::Value::DimValue(v) => Ok(*v as usize),
-                    onnx::tensor_shape_proto::dimension::Value::DimParam(_) => {
-                        bail!("DimParam is unsupported for input {}", input.name)
+            Some(shape) => {
+                if shape.dim.len() != tensor.rank() {
+                    bail!(
+                        "unexpected rank for {}, got {:?}, expected {:?}",
+                        input.name,
+                        shape.dim,
+                        tensor.shape()
+                    )
+                }
+                for (idx, (d, &dim)) in shape.dim.iter().zip(tensor.dims().iter()).enumerate() {
+                    match &d.value {
+                        Some(onnx::tensor_shape_proto::dimension::Value::DimValue(v)) => {
+                            if *v as usize != dim {
+                                bail!(
+                                    "unexpected dim {idx} for {}, got {:?}, expected {:?}",
+                                    input.name,
+                                    shape.dim,
+                                    tensor.shape()
+                                )
+                            }
+                        }
+                        // We do not check equality constraints for the DimParam dimensions for now.
+                        Some(onnx::tensor_shape_proto::dimension::Value::DimParam(_)) | None => (),
                     }
-                })
-                .collect::<Result<Vec<usize>>>()?,
+                }
+            }
         };
         if dt != tensor.dtype() {
             bail!(
                 "unexpected dtype for {}, got {:?}, expected {dt:?}",
                 input.name,
                 tensor.dtype()
-            )
-        }
-        if shape.as_slice() != tensor.dims() {
-            bail!(
-                "unexpected shape for {}, got {:?}, expected {shape:?}",
-                input.name,
-                tensor.dims()
             )
         }
     }
@@ -461,6 +470,26 @@ pub fn simple_eval(
                     xs.clone()
                 };
                 values.insert(node.output[0].clone(), xs);
+            }
+            "Shape" => {
+                // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Shape
+                let xs = get(&node.input[0])?;
+                let start = get_attr_opt::<i64>(node, "start")?.copied().unwrap_or(0);
+                let end = get_attr_opt::<i64>(node, "end")?.copied().unwrap_or(-1);
+                let start = if start < 0 {
+                    start + xs.rank() as i64
+                } else {
+                    start
+                };
+                let end = if end < 0 { end + xs.rank() as i64 } else { end };
+                let start = (start as usize).clamp(0, xs.rank().saturating_sub(1));
+                let end = (end as usize).clamp(0, xs.rank().saturating_sub(1));
+                let mut dims = vec![];
+                for idx in start..=end {
+                    dims.push(xs.dim(idx)? as i64)
+                }
+                let dims = Tensor::from_vec(dims, xs.rank(), xs.device())?;
+                values.insert(node.output[0].clone(), dims);
             }
             "Conv" => {
                 // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Conv
