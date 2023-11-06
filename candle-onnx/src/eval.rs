@@ -101,6 +101,18 @@ fn get_attr_opt<'a, T: Attr + ?Sized>(
 fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
     let dims: Vec<usize> = t.dims.iter().map(|&x| x as usize).collect();
     match DataType::try_from(t.data_type) {
+        Ok(DataType::Int32) => {
+            if t.int32_data.is_empty() {
+                let len = t.raw_data.len() / 4;
+                let data: &[i32] =
+                    unsafe { std::slice::from_raw_parts(t.raw_data.as_ptr() as *const i32, len) };
+                let data = data.iter().map(|v| *v as i64).collect::<Vec<_>>();
+                Tensor::from_vec(data, len, &Device::Cpu)
+            } else {
+                let data = t.int32_data.iter().map(|v| *v as i64).collect::<Vec<_>>();
+                Tensor::from_vec(data, t.int32_data.len(), &Device::Cpu)
+            }
+        }
         Ok(dt) => match dtype(dt) {
             Some(dt) => {
                 if dt == DType::F32 && !t.float_data.is_empty() {
@@ -247,6 +259,11 @@ pub fn simple_eval(
                 let input1 = get(&node.input[1])?;
                 let output = input0.broadcast_eq(input1)?;
                 values.insert(node.output[0].clone(), output);
+            }
+            "Not" => {
+                let xs = get(&node.input[0])?;
+                let xs = xs.eq(&xs.zeros_like()?)?;
+                values.insert(node.output[0].clone(), xs);
             }
             "MatMul" => {
                 let input0 = get(&node.input[0])?;
@@ -735,6 +752,7 @@ pub fn simple_eval(
                 let input = get(&node.input[0])?;
                 let dt: i64 = *get_attr(node, "to")?;
                 let dtype = match DataType::try_from(dt as i32) {
+                    Ok(DataType::Int32) => DType::I64,
                     Ok(dt) => match dtype(dt) {
                         Some(dt) => dt,
                         None => {
