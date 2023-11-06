@@ -1,4 +1,5 @@
 use metal::{Buffer, CompileOptions, Device, Function, Library};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::RwLock;
@@ -7,53 +8,114 @@ pub const AFFINE: &str = include_str!("affine.metal");
 pub const INDEXING: &str = include_str!("indexing.metal");
 pub const UNARY: &str = include_str!("unary.metal");
 
-pub enum Error {}
+static LIBRARY_SOURCES: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+    let mut l = HashMap::new();
+    l.insert("affine", AFFINE);
+    l.insert("indexing", INDEXING);
+    l.insert("unary", UNARY);
+    l
+});
 
+#[derive(thiserror::Error, Debug)]
+pub enum MetalKernelError {
+    #[error("Could not lock kernel map: {0}")]
+    LockError(String),
+    #[error("Error while loading library: {0}")]
+    LoadLibraryError(String),
+    #[error("Error while loading function: {0}")]
+    LoadFunctionError(String),
+}
+
+impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
+    fn from(e: std::sync::PoisonError<T>) -> Self {
+        Self::LockError(e.to_string())
+    }
+}
+
+type KernelMap<T> = HashMap<&'static str, T>;
+type Libraries = KernelMap<Library>;
+type Functions = KernelMap<Function>;
+
+#[derive(Debug)]
 pub struct Kernels {
-    libraries: RwLock<HashMap<&'static str, Library>>,
-    funcs: RwLock<HashMap<String, Function>>,
+    libraries: RwLock<Libraries>,
+    funcs: RwLock<Functions>,
 }
 
 impl Kernels {
     pub fn new() -> Self {
-        let libraries = RwLock::new(HashMap::new());
-        let funcs = RwLock::new(HashMap::new());
+        let libraries = RwLock::new(Libraries::new());
+        let funcs = RwLock::new(Functions::new());
         Self { libraries, funcs }
     }
+
+    pub fn init(device: &Device) -> Result<Self, MetalKernelError> {
+        let kernels = Self::new();
+        kernels.load_libraries(device)?;
+        Ok(kernels)
+    }
+
+    fn load_libraries(&self, device: &Device) -> Result<(), MetalKernelError> {
+        for name in LIBRARY_SOURCES.keys() {
+            self.load_library(device, name)?;
+        }
+        Ok(())
+    }
+
+    fn get_library_source(&self, name: &'static str) -> Option<&'static str> {
+        LIBRARY_SOURCES.get(name).cloned()
+    }
+
+    pub fn load_library(
+        &self,
+        device: &Device,
+        name: &'static str,
+    ) -> Result<Library, MetalKernelError> {
+        let mut libraries = self.libraries.write()?;
+        if let Some(lib) = libraries.get(name) {
+            Ok(lib.clone())
+        } else {
+            let source = self.get_library_source(name).ok_or_else(|| {
+                MetalKernelError::LoadLibraryError(format!("No source found for {}", name))
+            })?;
+            let lib = device
+                .new_library_with_source(source, &CompileOptions::new())
+                .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?;
+            libraries.insert(name, lib.clone());
+            Ok(lib)
+        }
+    }
+
+    pub fn load_function(
+        &self,
+        device: &Device,
+        library_name: &'static str,
+        name: &'static str,
+    ) -> Result<Function, MetalKernelError> {
+        let mut funcs = self.funcs.write()?;
+        if let Some(func) = funcs.get(name) {
+            Ok(func.clone())
+        } else {
+            let func = self
+                .load_library(device, library_name)?
+                .get_function(name, None)
+                .map_err(|e| MetalKernelError::LoadFunctionError(e.to_string()))?;
+            funcs.insert(name, func.clone());
+            Ok(func)
+        }
+    }
+
     pub fn call_unary(
         &self,
         device: &Device,
-        name: &str,
+        library_name: &'static str,
+        name: &'static str,
         input: &Buffer,
         output: &mut Buffer,
         length: usize,
-    ) -> Result<(), Error> {
-        if let Some(func) = self
-            .funcs
-            .read()
-            .expect("Failed to acquire kernel lock")
-            .get(name)
-        {
-            call_unary(func, input, output, length);
-        } else {
-            let func = self
-                .libraries
-                .write()
-                .expect("Failed to acquire lock")
-                .entry("unary")
-                .or_insert_with(|| {
-                    device
-                        .new_library_with_source(UNARY, &CompileOptions::new())
-                        .expect("Failed to load unary library")
-                })
-                .get_function(name, None)
-                .expect("Could not find unary function");
-            self.funcs
-                .write()
-                .expect("Failed to acquire lock")
-                .insert(name.to_string(), func.clone());
-            call_unary(&func, input, output, length);
-        }
+    ) -> Result<(), MetalKernelError> {
+        let func = self.load_function(device, library_name, name)?;
+        call_unary(&func, input, output, length);
         Ok(())
     }
 }

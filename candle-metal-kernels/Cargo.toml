@@ -10,3 +10,5 @@ license.workspace = true
 
 [dependencies]
 metal = { workspace = true }
+once_cell = "1.18.0"
+thiserror = { workspace = true }
