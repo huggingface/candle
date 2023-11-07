@@ -143,9 +143,11 @@ And then head over to
   including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
 - [`candle-lora`](https://github.com/EricLBuehler/candle-lora): a LoRA implementation
   that conforms to the official `peft` implementation.
-- [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficent platform for inference and
+- [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficient platform for inference and
   serving local LLMs including an OpenAI compatible API server.
+- [`candle-ext`](https://github.com/mokeyish/candle-ext): an extension library to Candle that provides PyTorch functions not currently available in Candle.
 - [`kalosm`](https://github.com/floneum/floneum/tree/master/kalosm): A multi-modal meta-framework in Rust for interfacing with local pre-trained models with support for controlled generation, custom samplers, in-memory vector databases, audio transcription, and more.
+- [`candle-sampling`](https://github.com/EricLBuehler/candle-sampling): Sampling techniques for Candle.
 
 If you have an addition to this list, please submit a pull request.
 

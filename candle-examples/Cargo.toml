@@ -69,3 +69,7 @@ required-features = ["pyo3"]
 [[example]]
 name = "onnx"
 required-features = ["onnx"]
+
+[[example]]
+name = "onnx_basics"
+required-features = ["onnx"]

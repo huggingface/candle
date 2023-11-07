@@ -67,7 +67,7 @@ pub fn main() -> Result<()> {
                                 .iter()
                                 .map(|dim| match dim.value.as_ref().expect("no dim value") {
                                     candle_onnx::onnx::tensor_shape_proto::dimension::Value::DimValue(v) => Ok(*v as usize),
-                                    candle_onnx::onnx::tensor_shape_proto::dimension::Value::DimParam(_) => anyhow::bail!("DimParam is unsupported for input {}", input.name),
+                                    candle_onnx::onnx::tensor_shape_proto::dimension::Value::DimParam(_) => Ok(42),
                                 })
                                 .collect::<Result<Vec<usize>>>()?;
                         Tensor::zeros(dims, dt, &Device::Cpu)?
