@@ -37,7 +37,7 @@ kernel void FN_NAME( \
     const size_t start = thread_index * length; \
     const size_t stop = min(start + length, dim); \
     for (size_t i = start; i < stop; i++){ \
-        output[i] = FN(input[i]); \
+        output[i] = TYPENAME(FN(input[i])); \
     } \
 }\
 kernel void FN_NAME_STRIDED( \
@@ -55,7 +55,7 @@ kernel void FN_NAME_STRIDED( \
     const size_t start = thread_index * length; \
     const size_t stop = min(start + length, dim); \
     for (size_t i = start; i < stop; i++){ \
-        output[i] = FN(input[get_strided_index(i, num_dims, dims, strides, offset)]); \
+        output[i] = TYPENAME(FN(input[get_strided_index(i, num_dims, dims, strides, offset)])); \
     } \
 }
 
