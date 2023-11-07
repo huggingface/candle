@@ -1,8 +1,7 @@
 use metal::{
-    Buffer, CommandBuffer, CompileOptions, ComputePipelineDescriptor, Device, Function, Library,
+    Buffer, CommandBufferRef, CompileOptions, ComputePipelineDescriptor, Device, Function, Library,
     MTLSize,
 };
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::RwLock;
@@ -11,11 +10,18 @@ const AFFINE: &str = include_str!("affine.metal");
 const INDEXING: &str = include_str!("indexing.metal");
 const UNARY: &str = include_str!("unary.metal");
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Source {
+    Affine,
+    Indexing,
+    Unary,
+}
+
 macro_rules! unary{
     ($($name:ident),+) => {
 
         pub mod contiguous {
-        pub struct Kernel(pub &'static str);
+        pub struct Kernel(pub(crate) &'static str);
         $(
         pub mod $name {
             use super::Kernel;
@@ -27,7 +33,7 @@ macro_rules! unary{
         }
 
         pub mod strided {
-        pub struct Kernel(pub &'static str);
+        pub struct Kernel(pub(crate) &'static str);
         $(
         pub mod $name {
             use super::Kernel;
@@ -41,17 +47,17 @@ macro_rules! unary{
 }
 
 pub mod unary {
-    unary!(cos, sin, exp);
+    unary!(cos, sin, exp, sqr, sqrt, neg);
 }
 
-static LIBRARY_SOURCES: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
-    let mut l = HashMap::new();
-    l.insert("affine", AFFINE);
-    l.insert("indexing", INDEXING);
-    l.insert("unary", UNARY);
-    l
-});
-
+// static LIBRARY_SOURCES: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+//     let mut l = HashMap::new();
+//     l.insert("affine", AFFINE);
+//     l.insert("indexing", INDEXING);
+//     l.insert("unary", UNARY);
+//     l
+// });
+//
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
     #[error("Could not lock kernel map: {0}")]
@@ -69,7 +75,7 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
 }
 
 type KernelMap<T> = HashMap<&'static str, T>;
-type Libraries = KernelMap<Library>;
+type Libraries = HashMap<Source, Library>;
 type Functions = KernelMap<Function>;
 
 #[derive(Debug)]
@@ -85,39 +91,42 @@ impl Kernels {
         Self { libraries, funcs }
     }
 
-    pub fn init(device: &Device) -> Result<Self, MetalKernelError> {
-        let kernels = Self::new();
-        kernels.load_libraries(device)?;
-        Ok(kernels)
-    }
+    // pub fn init(device: &Device) -> Result<Self, MetalKernelError> {
+    //     let kernels = Self::new();
+    //     kernels.load_libraries(device)?;
+    //     Ok(kernels)
+    // }
 
-    fn load_libraries(&self, device: &Device) -> Result<(), MetalKernelError> {
-        for name in LIBRARY_SOURCES.keys() {
-            self.load_library(device, name)?;
+    // fn load_libraries(&self, device: &Device) -> Result<(), MetalKernelError> {
+    //     for name in LIBRARY_SOURCES.keys() {
+    //         self.load_library(device, name)?;
+    //     }
+    //     Ok(())
+    // }
+
+    fn get_library_source(&self, source: Source) -> &'static str {
+        // LIBRARY_SOURCES.get(name).cloned()
+        match source {
+            Source::Affine => AFFINE,
+            Source::Unary => UNARY,
+            Source::Indexing => INDEXING,
         }
-        Ok(())
-    }
-
-    fn get_library_source(&self, name: &'static str) -> Option<&'static str> {
-        LIBRARY_SOURCES.get(name).cloned()
     }
 
     pub fn load_library(
         &self,
         device: &Device,
-        name: &'static str,
+        source: Source,
     ) -> Result<Library, MetalKernelError> {
         let mut libraries = self.libraries.write()?;
-        if let Some(lib) = libraries.get(name) {
+        if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
-            let source = self.get_library_source(name).ok_or_else(|| {
-                MetalKernelError::LoadLibraryError(format!("No source found for {}", name))
-            })?;
+            let source_content = self.get_library_source(source);
             let lib = device
-                .new_library_with_source(source, &CompileOptions::new())
+                .new_library_with_source(source_content, &CompileOptions::new())
                 .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?;
-            libraries.insert(name, lib.clone());
+            libraries.insert(source, lib.clone());
             Ok(lib)
         }
     }
@@ -125,7 +134,7 @@ impl Kernels {
     pub fn load_function(
         &self,
         device: &Device,
-        library_name: &'static str,
+        source: Source,
         name: &'static str,
     ) -> Result<Function, MetalKernelError> {
         let mut funcs = self.funcs.write()?;
@@ -133,7 +142,7 @@ impl Kernels {
             Ok(func.clone())
         } else {
             let func = self
-                .load_library(device, library_name)?
+                .load_library(device, source)?
                 .get_function(name, None)
                 .map_err(|e| MetalKernelError::LoadFunctionError(e.to_string()))?;
             funcs.insert(name, func.clone());
@@ -144,15 +153,16 @@ impl Kernels {
 
 pub fn call_unary_contiguous(
     device: &Device,
-    command_buffer: &CommandBuffer,
+    command_buffer: &CommandBufferRef,
     kernels: &Kernels,
     kernel_name: unary::contiguous::Kernel,
     length: usize,
     input: &Buffer,
     output: &mut Buffer,
 ) -> Result<(), MetalKernelError> {
-    assert_eq!(input.length(), output.length());
-    let func = kernels.load_function(device, "unary", kernel_name.0)?;
+    // println!("Kernel {:?}", kernel_name.0);
+    // assert_eq!(input.length(), output.length());
+    let func = kernels.load_function(device, Source::Unary, kernel_name.0)?;
     let pipeline_state_descriptor = ComputePipelineDescriptor::new();
     pipeline_state_descriptor.set_compute_function(Some(&func));
 
@@ -188,7 +198,7 @@ pub fn call_unary_contiguous(
 }
 pub fn call_unary_strided(
     device: &Device,
-    command_buffer: &CommandBuffer,
+    command_buffer: &CommandBufferRef,
     kernels: &Kernels,
     name: unary::strided::Kernel,
     input: &Buffer,
@@ -197,7 +207,7 @@ pub fn call_unary_strided(
     offset: usize,
     output: &mut Buffer,
 ) -> Result<(), MetalKernelError> {
-    let func = kernels.load_function(device, "unary", name.0)?;
+    let func = kernels.load_function(device, Source::Unary, name.0)?;
     let pipeline_state_descriptor = ComputePipelineDescriptor::new();
     pipeline_state_descriptor.set_compute_function(Some(&func));
 
@@ -277,7 +287,7 @@ mod tests {
         let device = device();
         let kernels = Kernels::new();
         let command_queue = device.new_command_queue();
-        let command_buffer = command_queue.new_owned_command_buffer();
+        let command_buffer = command_queue.new_command_buffer();
         let options = MTLResourceOptions::StorageModeManaged;
         let input = device.new_buffer_with_data(
             v.as_ptr() as *const core::ffi::c_void,
@@ -310,7 +320,7 @@ mod tests {
         let device = device();
         let options = MTLResourceOptions::StorageModeManaged;
         let command_queue = device.new_command_queue();
-        let command_buffer = command_queue.new_owned_command_buffer();
+        let command_buffer = command_queue.new_command_buffer();
         let input = device.new_buffer_with_data(
             v.as_ptr() as *const core::ffi::c_void,
             (v.len() * core::mem::size_of::<T>()) as u64,
