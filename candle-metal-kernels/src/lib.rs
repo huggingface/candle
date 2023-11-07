@@ -9,15 +9,19 @@ use std::sync::RwLock;
 const AFFINE: &str = include_str!("affine.metal");
 const INDEXING: &str = include_str!("indexing.metal");
 const UNARY: &str = include_str!("unary.metal");
+const BINARY: &str = include_str!("binary.metal");
+const CAST: &str = include_str!("cast.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     Affine,
     Indexing,
     Unary,
+    Binary,
+    Cast,
 }
 
-macro_rules! unary{
+macro_rules! ops{
     ($($name:ident),+) => {
 
         pub mod contiguous {
@@ -47,7 +51,10 @@ macro_rules! unary{
 }
 
 pub mod unary {
-    unary!(cos, sin, exp, sqr, sqrt, neg);
+    ops!(cos, sin, exp, sqr, sqrt, neg);
+}
+pub mod binary {
+    ops!(add, sub, mul, div);
 }
 
 // static LIBRARY_SOURCES: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
@@ -109,7 +116,9 @@ impl Kernels {
         match source {
             Source::Affine => AFFINE,
             Source::Unary => UNARY,
+            Source::Binary => BINARY,
             Source::Indexing => INDEXING,
+            Source::Cast => CAST,
         }
     }
 
@@ -234,10 +243,9 @@ pub fn call_unary_strided(
         (strides.len() * std::mem::size_of::<usize>()) as u64,
         strides.as_ptr() as *const c_void,
     );
-    encoder.set_bytes(4, std::mem::size_of::<usize>() as u64, void_ptr(&offset));
 
-    encoder.set_buffer(5, Some(&input), 0);
-    encoder.set_buffer(6, Some(&output), 0);
+    encoder.set_buffer(4, Some(&input), offset as u64);
+    encoder.set_buffer(5, Some(&output), 0);
 
     let width = output.length();
 
@@ -249,6 +257,170 @@ pub fn call_unary_strided(
 
     let thread_group_size = MTLSize {
         width: std::cmp::min(pipeline.max_total_threads_per_threadgroup(), width),
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+pub fn call_binary_contiguous(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    kernel_name: binary::contiguous::Kernel,
+    length: usize,
+    left: &Buffer,
+    right: &Buffer,
+    output: &mut Buffer,
+) -> Result<(), MetalKernelError> {
+    // println!("Kernel {:?}", kernel_name.0);
+    // assert_eq!(input.length(), output.length());
+    let func = kernels.load_function(device, Source::Binary, kernel_name.0)?;
+    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
+    pipeline_state_descriptor.set_compute_function(Some(&func));
+
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(
+            pipeline_state_descriptor.compute_function().unwrap(),
+        )
+        .unwrap();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_bytes(0, 4, void_ptr(&length));
+    encoder.set_buffer(1, Some(&left), 0);
+    encoder.set_buffer(2, Some(&right), 0);
+    encoder.set_buffer(3, Some(&output), 0);
+
+    let thread_group_count = MTLSize {
+        width: 1,
+        height: 1,
+        depth: 1,
+    };
+
+    let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), length as u64);
+    let thread_group_size = MTLSize {
+        width,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+pub fn call_binary_strided(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: binary::strided::Kernel,
+    shape: &[usize],
+    left_input: &Buffer,
+    left_strides: &[usize],
+    left_offset: usize,
+    right_input: &Buffer,
+    right_strides: &[usize],
+    right_offset: usize,
+    output: &mut Buffer,
+) -> Result<(), MetalKernelError> {
+    let func = kernels.load_function(device, Source::Binary, name.0)?;
+    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
+    pipeline_state_descriptor.set_compute_function(Some(&func));
+
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(
+            pipeline_state_descriptor.compute_function().unwrap(),
+        )
+        .unwrap();
+
+    let num_dims: usize = shape.len() as usize;
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let length: usize = shape.iter().product();
+    encoder.set_bytes(0, std::mem::size_of::<usize>() as u64, void_ptr(&length));
+    encoder.set_bytes(1, std::mem::size_of::<usize>() as u64, void_ptr(&num_dims));
+    encoder.set_bytes(
+        2,
+        (shape.len() * std::mem::size_of::<usize>()) as u64,
+        shape.as_ptr() as *const c_void,
+    );
+    encoder.set_bytes(
+        3,
+        (left_strides.len() * std::mem::size_of::<usize>()) as u64,
+        left_strides.as_ptr() as *const c_void,
+    );
+    encoder.set_bytes(
+        4,
+        (right_strides.len() * std::mem::size_of::<usize>()) as u64,
+        right_strides.as_ptr() as *const c_void,
+    );
+
+    encoder.set_buffer(5, Some(&left_input), left_offset as u64);
+    encoder.set_buffer(6, Some(&right_input), right_offset as u64);
+    encoder.set_buffer(7, Some(&output), 0);
+
+    let width = output.length();
+
+    let thread_group_count = MTLSize {
+        width: 1,
+        height: 1,
+        depth: 1,
+    };
+
+    let thread_group_size = MTLSize {
+        width: std::cmp::min(pipeline.max_total_threads_per_threadgroup(), width),
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+pub fn call_cast_contiguous(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    kernel_name: &'static str,
+    length: usize,
+    input: &Buffer,
+    output: &mut Buffer,
+) -> Result<(), MetalKernelError> {
+    // println!("Kernel {:?}", kernel_name.0);
+    // assert_eq!(input.length(), output.length());
+    let func = kernels.load_function(device, Source::Cast, kernel_name)?;
+    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
+    pipeline_state_descriptor.set_compute_function(Some(&func));
+
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(
+            pipeline_state_descriptor.compute_function().unwrap(),
+        )
+        .unwrap();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_bytes(0, 4, void_ptr(&length));
+    encoder.set_buffer(1, Some(&input), 0);
+    encoder.set_buffer(2, Some(&output), 0);
+
+    let thread_group_count = MTLSize {
+        width: 1,
+        height: 1,
+        depth: 1,
+    };
+
+    let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), length as u64);
+    let thread_group_size = MTLSize {
+        width,
         height: 1,
         depth: 1,
     };
@@ -308,6 +480,39 @@ mod tests {
         command_buffer.commit();
         command_buffer.wait_until_completed();
         output.read_to_vec::<T>(v.len())
+    }
+
+    fn run_binary<T: Clone>(x: &[T], y: &[T], name: binary::contiguous::Kernel) -> Vec<T> {
+        let device = device();
+        let kernels = Kernels::new();
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+        let options = MTLResourceOptions::StorageModeManaged;
+        let left = device.new_buffer_with_data(
+            x.as_ptr() as *const core::ffi::c_void,
+            (x.len() * core::mem::size_of::<T>()) as u64,
+            options,
+        );
+        let right = device.new_buffer_with_data(
+            y.as_ptr() as *const core::ffi::c_void,
+            (y.len() * core::mem::size_of::<T>()) as u64,
+            options,
+        );
+        let mut output = device.new_buffer((x.len() * core::mem::size_of::<T>()) as u64, options);
+        call_binary_contiguous(
+            &device,
+            &command_buffer,
+            &kernels,
+            name,
+            x.len(),
+            &left,
+            &right,
+            &mut output,
+        )
+        .unwrap();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+        output.read_to_vec::<T>(x.len())
     }
 
     fn run_strided<T: Clone>(
@@ -416,6 +621,62 @@ mod tests {
         let strides = vec![2, 1];
         let offset = 0;
         let results = run_strided(&v, unary::strided::cos::FLOAT, &shape, &strides, offset);
+        let expected: Vec<_> = v.iter().map(|v| v.cos()).collect();
+        assert_eq!(approx(results, 4), vec![0.5403; 10_000]);
+        assert_eq!(approx(expected, 4), vec![0.5403; 10_000]);
+    }
+
+    #[test]
+    fn binary_add_f32() {
+        let left = vec![1.0f32, 2.0, 3.0];
+        let right = vec![2.0f32, 3.1, 4.2];
+        let results = run_binary(&left, &right, binary::contiguous::add::FLOAT);
+        let expected: Vec<_> = left
+            .iter()
+            .zip(right.iter())
+            .map(|(&x, &y)| x + y)
+            .collect();
+        assert_eq!(approx(results, 4), vec![3.0f32, 5.1, 7.2]);
+        assert_eq!(approx(expected, 4), vec![3.0f32, 5.1, 7.2]);
+    }
+
+    fn cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
+        let device = device();
+        let kernels = Kernels::new();
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+        let options = MTLResourceOptions::StorageModeManaged;
+        let input = device.new_buffer_with_data(
+            v.as_ptr() as *const core::ffi::c_void,
+            (v.len() * core::mem::size_of::<T>()) as u64,
+            options,
+        );
+        let mut output = device.new_buffer((v.len() * core::mem::size_of::<U>()) as u64, options);
+        call_cast_contiguous(
+            &device,
+            &command_buffer,
+            &kernels,
+            name,
+            v.len(),
+            &input,
+            &mut output,
+        )
+        .unwrap();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+        output.read_to_vec::<U>(v.len())
+    }
+
+    #[test]
+    fn cast_u32_f32() {
+        let v = vec![1u32, 2, 3];
+        let results = cast(&v, "cast_u32_f32");
+        let expected: Vec<_> = v.iter().map(|&v| v as f32).collect();
+        assert_eq!(approx(results, 4), vec![1.0f32, 2.0, 3.0]);
+        assert_eq!(approx(expected, 4), vec![1.0f32, 2.0, 3.0]);
+
+        let v = vec![1.0f32; 10_000];
+        let results = run(&v, unary::contiguous::cos::FLOAT);
         let expected: Vec<_> = v.iter().map(|v| v.cos()).collect();
         assert_eq!(approx(results, 4), vec![0.5403; 10_000]);
         assert_eq!(approx(expected, 4), vec![0.5403; 10_000]);
