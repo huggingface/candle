@@ -22,6 +22,9 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
+template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
+template <typename T> METAL_FUNC T neg(T in){ return -in; }
+
 
 using namespace metal;
 
@@ -59,12 +62,26 @@ kernel void FN_NAME_STRIDED( \
     } \
 }
 
-UNARY(cos, float, cos_float, cos_float_strided);
-UNARY(cos, half, cos_half, cos_half_strided);
-UNARY(sin, float, sin_float, sin_float_strided);
-UNARY(sin, half, sin_half, sin_half_strided);
+#define UNARY_OP(NAME) \
+UNARY(NAME, float, NAME##_float, NAME##_float_strided); \
+UNARY(NAME, half, NAME##_half, NAME##_half_strided);
+
+#define BFLOAT_UNARY_OP(NAME) \
+UNARY(NAME, bfloat, NAME##_bfloat, NAME##_bfloat_strided);
+
+
+UNARY_OP(cos)
+UNARY_OP(sin)
+UNARY_OP(sqr)
+UNARY_OP(sqrt)
+UNARY_OP(neg)
+UNARY_OP(exp)
 
 #if __METAL_VERSION__ >= 310
-UNARY(cos, bfloat, cos_bfloat, cos_bfloat_strided);
-UNARY(sin, bfloat, sin_bfloat, sin_bfloat_strided);
+BFLOAT_UNARY_OP(cos)
+BFLOAT_UNARY_OP(sin)
+BFLOAT_UNARY_OP(sqr)
+BFLOAT_UNARY_OP(sqrt)
+BFLOAT_UNARY_OP(neg)
+BFLOAT_UNARY_OP(exp)
 #endif
