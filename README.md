@@ -173,16 +173,16 @@ If you have an addition to this list, please submit a pull request.
         - Mistral 7b v0.1.
         - StableLM-3B-4E1T.
         - Replit-code-v1.5-3B.
-        - T5 and its variants: FlanT5, MADLAD400 (translation), CoEdit (Grammar correction).
         - Bert.
+    - Text to text.
+        - T5 and its variants: FlanT5, MADLAD400 (translation), CoEdit (Grammar correction).
+        - Marian MT (Machine Translation).
     - Whisper (multi-lingual support).
     - Text to image.
         - Stable Diffusion v1.5, v2.1, XL v1.0.
         - Wurstchen v2.
     - Image to text.
         - BLIP.
-    - Text to text.
-        - Marian MT (Machine Translation).
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT.
         - yolo-v3, yolo-v8.
