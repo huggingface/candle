@@ -424,15 +424,13 @@ mod tests {
     #[test]
     fn affine() {
         let device = device();
-
         let options = CompileOptions::new();
         let library = device.new_library_with_source(AFFINE, &options).unwrap();
 
         let input = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let output = [2.0f32, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-        let dim: u32 = 8;
-        let num_dims: u32 = 4;
-        let info = [1u32, 2, 3];
+        let shape = vec![4usize, 2];
+        let strides = vec![2usize, 1];
         let mul: f32 = 1.5;
         let add: f32 = 1.1;
 
@@ -455,29 +453,42 @@ mod tests {
         let inputs_buffer = device.new_buffer_with_data(void_ptr(&input), input_size, options);
         let outputs_buffer = device.new_buffer_with_data(void_ptr(&output), output_size, options);
 
-        encoder.set_bytes(0, 4, void_ptr(&dim));
-        encoder.set_bytes(1, 4, void_ptr(&num_dims));
-        encoder.set_bytes(2, 4, void_ptr(&info));
+        let dim: usize = shape.iter().product();
+        let num_dims = shape.len();
+        encoder.set_bytes(0, core::mem::size_of::<usize>() as u64, void_ptr(&dim));
+        encoder.set_bytes(1, core::mem::size_of::<usize>() as u64, void_ptr(&num_dims));
+        encoder.set_bytes(
+            2,
+            (core::mem::size_of::<usize>() * shape.len()) as u64,
+            shape.as_ptr() as *const c_void,
+        );
+        encoder.set_bytes(
+            3,
+            (core::mem::size_of::<usize>() * strides.len()) as u64,
+            strides.as_ptr() as *const c_void,
+        );
 
-        encoder.set_buffer(3, Some(&inputs_buffer), 0);
-        encoder.set_buffer(4, Some(&outputs_buffer), 0);
+        encoder.set_buffer(4, Some(&inputs_buffer), 0);
+        encoder.set_buffer(5, Some(&outputs_buffer), 0);
 
-        encoder.set_bytes(5, 4, void_ptr(&mul));
-        encoder.set_bytes(6, 4, void_ptr(&add));
+        encoder.set_bytes(6, core::mem::size_of::<f32>() as u64, void_ptr(&mul));
+        encoder.set_bytes(7, core::mem::size_of::<f32>() as u64, void_ptr(&add));
 
-        let grid_size = MTLSize {
-            width: output.len() as NSUInteger,
+        let thread_group_count = MTLSize {
+            width: 1,
             height: 1,
             depth: 1,
         };
 
+        let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), dim as u64);
+        println!("WIDTH {width}");
         let thread_group_size = MTLSize {
-            width: pipeline.max_total_threads_per_threadgroup(),
+            width,
             height: 1,
             depth: 1,
         };
 
-        encoder.dispatch_threads(grid_size, thread_group_size);
+        encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
         encoder.end_encoding();
         command_buffer.commit();
         command_buffer.wait_until_completed();
@@ -545,7 +556,7 @@ mod tests {
             depth: 1,
         };
 
-        encoder.dispatch_threads(grid_size, thread_group_size);
+        encoder.dispatch_thread_groups(grid_size, thread_group_size);
         encoder.end_encoding();
         command_buffer.commit();
         command_buffer.wait_until_completed();

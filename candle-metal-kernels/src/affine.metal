@@ -35,25 +35,27 @@ METAL_FUNC uint get_strided_index(
 kernel void affine(
     constant size_t &dim,
     constant size_t &num_dims,
-    constant size_t *info,
+    constant size_t *dims,
+    constant size_t *strides,
 
-    device float *inp [[buffer(3)]],
-    device float *out [[buffer(4)]],
+    device float *inp [[buffer(4)]],
+    device float *out [[buffer(5)]],
 
     constant float &mul,
-    constant float &add
+    constant float &add,
+    uint threadgroup_size [[threads_per_threadgroup]], \
+    uint thread_index [[thread_index_in_threadgroup]]
 ) {
-
-    constant size_t *dims = info;
-    constant size_t *strides = info + num_dims;
-
+    const size_t length = (dim  + threadgroup_size - 1) / threadgroup_size;
+    const size_t start = thread_index * length;
+    const size_t stop = min(start + length, dim);
     if (is_contiguous(num_dims, dims, strides)) {
-        for (size_t i = 0; i < dim; i++) {
+        for (size_t i = start; i < stop; i++) {
             float x = inp ? inp[i] : out[i];
             out[i] = x * mul + add;
         }
     } else {
-        for (size_t i = 0; i < dim; i++) {
+        for (size_t i = start; i < stop; i++) {
             uint strided_i = get_strided_index(i, num_dims, dims, strides);
             float x = inp ? inp[strided_i] : out[strided_i];
             out[strided_i] = x * mul + add;

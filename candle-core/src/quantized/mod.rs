@@ -1,4 +1,5 @@
 use crate::{Device, Result, Shape, Tensor};
+use tracing::debug;
 
 #[cfg(target_feature = "avx")]
 pub mod avx;
@@ -321,7 +322,7 @@ impl crate::CustomOp1 for QTensor {
         storage: &crate::MetalStorage,
         layout: &crate::Layout,
     ) -> Result<(crate::MetalStorage, Shape)> {
-        println!("TODO qmatmul");
+        debug!("TODO qmatmul");
         if !layout.is_contiguous() {
             crate::bail!("input tensor is not contiguous {layout:?}")
         }

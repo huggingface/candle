@@ -1,5 +1,6 @@
 use candle::{CpuStorage, Layout, Result, Shape, Tensor};
 use rayon::prelude::*;
+use tracing::debug;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
@@ -198,7 +199,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         storage: &candle::MetalStorage,
         layout: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
-        println!("TODO softmax-last-dim");
+        debug!("TODO softmax-last-dim");
         Ok((storage.clone(), layout.shape().clone()))
     }
 }

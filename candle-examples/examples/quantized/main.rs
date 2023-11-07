@@ -238,13 +238,16 @@ fn main() -> anyhow::Result<()> {
     } else {
         Some(args.temperature)
     };
-    let _guard = if args.tracing {
-        let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
-        tracing_subscriber::registry().with(chrome_layer).init();
-        Some(guard)
-    } else {
-        None
-    };
+    tracing_subscriber::fmt::init();
+    // let _guard = if args.tracing {
+    //     // let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
+    //     // tracing_subscriber::registry().with(chrome_layer).init();
+    //     tracing_subscriber::fmt::init();
+    //     None
+    //     // Some(guard)
+    // } else {
+    //     None
+    // };
 
     println!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
