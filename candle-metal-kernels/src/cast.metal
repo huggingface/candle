@@ -15,17 +15,14 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
-template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
-template <typename T> METAL_FUNC T neg(T in){ return -in; }
-
 
 using namespace metal;
 
-#define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
+#define CAST(FN_NAME, FN_NAME_STRIDED, LEFT_TYPENAME, RIGHT_TYPENAME) \
 kernel void FN_NAME( \
     constant size_t &dim, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
+    device const LEFT_TYPENAME *input,  \
+    device RIGHT_TYPENAME *output, \
     uint threadgroup_size [[threads_per_threadgroup]], \
     uint thread_index [[thread_index_in_threadgroup]] \
 ) { \
@@ -33,16 +30,16 @@ kernel void FN_NAME( \
     const size_t start = thread_index * length; \
     const size_t stop = min(start + length, dim); \
     for (size_t i = start; i < stop; i++){ \
-        output[i] = TYPENAME(FN(input[i])); \
+        output[i] = RIGHT_TYPENAME(input[i]); \
     } \
-}\
+} \
 kernel void FN_NAME_STRIDED( \
     constant size_t &dim, \
     constant size_t &num_dims, \
     constant size_t *dims, \
     constant size_t *strides, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
+    device const LEFT_TYPENAME *input,  \
+    device RIGHT_TYPENAME *output, \
     uint threadgroup_size [[threads_per_threadgroup]], \
     uint thread_index [[thread_index_in_threadgroup]] \
 ) { \
@@ -50,30 +47,12 @@ kernel void FN_NAME_STRIDED( \
     const size_t start = thread_index * length; \
     const size_t stop = min(start + length, dim); \
     for (size_t i = start; i < stop; i++){ \
-        output[i] = TYPENAME(FN(input[get_strided_index(i, num_dims, dims, strides)])); \
+        output[i] = RIGHT_TYPENAME(input[get_strided_index(i, num_dims, dims, strides)]); \
     } \
 }
 
-#define UNARY_OP(NAME) \
-UNARY(NAME, float, NAME##_float, NAME##_float_strided); \
-UNARY(NAME, half, NAME##_half, NAME##_half_strided);
 
-#define BFLOAT_UNARY_OP(NAME) \
-UNARY(NAME, bfloat, NAME##_bfloat, NAME##_bfloat_strided);
-
-
-UNARY_OP(cos)
-UNARY_OP(sin)
-UNARY_OP(sqr)
-UNARY_OP(sqrt)
-UNARY_OP(neg)
-UNARY_OP(exp)
+CAST(cast_u32_f32, cast_u32_f32_strided, int32_t, float)
 
 #if __METAL_VERSION__ >= 310
-BFLOAT_UNARY_OP(cos)
-BFLOAT_UNARY_OP(sin)
-BFLOAT_UNARY_OP(sqr)
-BFLOAT_UNARY_OP(sqrt)
-BFLOAT_UNARY_OP(neg)
-BFLOAT_UNARY_OP(exp)
 #endif
