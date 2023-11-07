@@ -90,4 +90,8 @@ impl VarBuilder {
     pub fn device(&self) -> &Device {
         &self.device
     }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.data.contains_key(key)
+    }
 }

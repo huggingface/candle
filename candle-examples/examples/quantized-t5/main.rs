@@ -173,7 +173,11 @@ fn main() -> Result<()> {
         .to_vec();
     let input_token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
     let mut model = builder.build_model()?;
-    let mut output_token_ids = [builder.config.pad_token_id as u32].to_vec();
+    let mut output_token_ids = [builder
+        .config
+        .decoder_start_token_id
+        .unwrap_or(builder.config.pad_token_id) as u32]
+    .to_vec();
     let temperature = if args.temperature <= 0. {
         None
     } else {
