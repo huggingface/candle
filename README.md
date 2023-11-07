@@ -173,7 +173,7 @@ If you have an addition to this list, please submit a pull request.
         - Mistral 7b v0.1.
         - StableLM-3B-4E1T.
         - Replit-code-v1.5-3B.
-        - T5.
+        - T5 and its variants: FlanT5, MADLAD400 (translation), CoEdit (Grammar correction).
         - Bert.
     - Whisper (multi-lingual support).
     - Text to image.
