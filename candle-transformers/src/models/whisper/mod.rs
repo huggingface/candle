@@ -18,6 +18,7 @@ pub struct Config {
     // pub n_text_state: usize,
     pub decoder_attention_heads: usize, // n_text_head
     pub decoder_layers: usize,          // n_text_layer
+    #[serde(default)]
     pub suppress_tokens: Vec<u32>,
 }
 
@@ -26,7 +27,6 @@ pub const DTYPE: candle::DType = candle::DType::F32;
 // Audio parameters.
 pub const SAMPLE_RATE: usize = 16000;
 pub const N_FFT: usize = 400;
-pub const N_MELS: usize = 80;
 pub const HOP_LENGTH: usize = 160;
 pub const CHUNK_LENGTH: usize = 30;
 pub const N_SAMPLES: usize = CHUNK_LENGTH * SAMPLE_RATE; // 480000 samples in a 30-second chunk
