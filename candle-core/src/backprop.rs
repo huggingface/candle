@@ -15,6 +15,17 @@ fn broadcast_back(arg: &Tensor, node: &Tensor, reduced_dims: &[usize]) -> Result
     }
 }
 
+thread_local! {
+    static CANDLE_GRAD_DO_NOT_DETACH: bool = {
+        match std::env::var("CANDLE_GRAD_DO_NOT_DETACH") {
+            Ok(s) => {
+                !s.is_empty() && s != "0"
+            },
+            Err(_) => false,
+        }
+    }
+}
+
 impl Tensor {
     /// Return all the nodes that lead to this value in a topologically sorted vec, the first
     /// elements having dependencies on the latter ones, e.g. the first element if any is the
@@ -53,6 +64,11 @@ impl Tensor {
                         nodes
                     }
                     Op::Conv1D {
+                        arg: lhs,
+                        kernel: rhs,
+                        ..
+                    }
+                    | Op::ConvTranspose1D {
                         arg: lhs,
                         kernel: rhs,
                         ..
@@ -150,10 +166,16 @@ impl Tensor {
             if node.is_variable() {
                 continue;
             }
-            let grad = grads.remove(node).unwrap();
-            // TODO: We should perform all these operations in place (or at least not track the
-            // whole graph). The only drawback would be if we wanted to support grad of grad but
-            // this is out of scope.
+            let grad = grads
+                .remove(node)
+                .expect("candle internal error - grad not populated");
+            // https://github.com/huggingface/candle/issues/1241
+            // Ideally, we would make these operations in place where possible to ensure that we
+            // do not have to allocate too often. Here we just call `.detach` to avoid computing
+            // the backprop graph of the backprop itself. This would be an issue for second order
+            // derivatives but these are out of scope at the moment.
+            let do_not_detach = CANDLE_GRAD_DO_NOT_DETACH.with(|b| *b);
+            let grad = if do_not_detach { grad } else { grad.detach()? };
             if let Some(op) = node.op() {
                 match op {
                     Op::Binary(lhs, rhs, BinaryOp::Add) => {
@@ -208,7 +230,44 @@ impl Tensor {
                         let f_grad = pred.where_cond(&zeros, &grad)?;
                         *f_sum_grad = f_sum_grad.add(&f_grad)?;
                     }
-                    Op::Conv1D { .. } => Err(Error::BackwardNotSupported { op: "conv1d" })?,
+                    Op::Conv1D {
+                        arg,
+                        kernel,
+                        padding,
+                        stride,
+                        dilation,
+                    } => {
+                        // The output height for conv_transpose1d is:
+                        // (l_in - 1) * stride - 2 * padding + dilation * (k_size - 1) + out_padding + 1
+                        let grad_l_in = grad.dim(2)?;
+                        let k_size = kernel.dim(2)?;
+                        let out_size =
+                            (grad_l_in - 1) * stride + dilation * (k_size - 1) + 1 - 2 * padding;
+                        let out_padding = arg.dim(2)? - out_size;
+                        let grad_arg = grad.conv_transpose1d(
+                            kernel,
+                            *padding,
+                            out_padding,
+                            *stride,
+                            *dilation,
+                        )?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad_arg)?;
+
+                        let grad_kernel = arg
+                            .transpose(0, 1)?
+                            .conv1d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
+                            .transpose(0, 1)?;
+                        let sum_grad = grads.or_insert(kernel)?;
+                        let (_, _, k0) = kernel.dims3()?;
+                        let (_, _, g_k0) = grad_kernel.dims3()?;
+                        let grad_kernel = if g_k0 != k0 {
+                            grad_kernel.narrow(2, 0, k0)?
+                        } else {
+                            grad_kernel
+                        };
+                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                    }
                     Op::Conv2D {
                         arg,
                         kernel,
@@ -238,8 +297,18 @@ impl Tensor {
                             .conv2d(&grad.transpose(0, 1)?, *padding, *dilation, *stride, 1)?
                             .transpose(0, 1)?;
                         let sum_grad = grads.or_insert(kernel)?;
+                        let (_, _, k0, k1) = kernel.dims4()?;
+                        let (_, _, g_k0, g_k1) = grad_kernel.dims4()?;
+                        let grad_kernel = if g_k0 != k0 || g_k1 != k1 {
+                            grad_kernel.narrow(2, 0, k0)?.narrow(3, 0, k1)?
+                        } else {
+                            grad_kernel
+                        };
                         *sum_grad = sum_grad.add(&grad_kernel)?;
                     }
+                    Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
+                        op: "conv-transpose1d",
+                    })?,
                     Op::ConvTranspose2D { .. } => Err(Error::BackwardNotSupported {
                         op: "conv-transpose2d",
                     })?,
@@ -471,17 +540,47 @@ impl Tensor {
                     Op::Unary(_, UnaryOp::Round) => {
                         Err(Error::BackwardNotSupported { op: "round" })?
                     }
-                    Op::Unary(_, UnaryOp::Gelu) => Err(Error::BackwardNotSupported { op: "gelu" })?,
-                    Op::Unary(_, UnaryOp::Erf) => Err(Error::BackwardNotSupported { op: "erf" })?,
-                    Op::Unary(_, UnaryOp::GeluErf) => {
-                        Err(Error::BackwardNotSupported { op: "gelu-erf" })?
+                    Op::Unary(arg, UnaryOp::Gelu) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        let cube = arg.powf(3.)?;
+                        let tanh = (0.0356774 * &cube + (0.797885 * arg)?)?.tanh()?;
+                        let gelu_grad = (((0.5 * &tanh)?
+                            + (0.0535161 * cube + (0.398942 * arg)?)? * (1. - tanh.powf(2.)?))?
+                            + 0.5)?;
+                        *sum_grad = sum_grad.add(&(&grad * gelu_grad)?)?
+                    }
+                    Op::Unary(arg, UnaryOp::Erf) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        // d/dx erf(x) = 2/sqrt(pi) * e^(-x^2)
+                        let erf_grad =
+                            (2. / std::f64::consts::PI.sqrt()) * (arg.sqr()?.neg()?).exp()?;
+                        *sum_grad = sum_grad.add(&(&grad * erf_grad)?)?
+                    }
+                    Op::Unary(arg, UnaryOp::GeluErf) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        // d/dx gelu_erf(x) = 0.5 + 0.398942 e^(-x^2/2) x + 0.5 erf(x/sqrt(2))
+                        let neg_half_square = (arg.sqr()?.neg()? / 2.)?;
+                        let scaled_exp_arg = (0.398942 * neg_half_square.exp()? * arg)?;
+                        let arg_scaled_sqrt = (arg / 2f64.sqrt())?;
+                        let erf_scaled_sqrt = (0.5 * arg_scaled_sqrt.erf()?)?;
+                        let gelu_erf_grad = (0.5 + scaled_exp_arg + erf_scaled_sqrt)?;
+                        *sum_grad = sum_grad.add(&(&grad * gelu_erf_grad)?)?;
                     }
                     Op::Unary(arg, UnaryOp::Relu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let relu_grad = arg.ge(&arg.zeros_like()?)?.to_dtype(arg.dtype())?;
                         *sum_grad = sum_grad.add(&(&grad * relu_grad)?)?
                     }
-                    Op::Elu(..) => Err(Error::BackwardNotSupported { op: "elu" })?,
+                    Op::Elu(arg, alpha) => {
+                        // d/dx elu(x) = 1 for x > 0, alpha * e^x for x <= 0
+                        let sum_grad = grads.or_insert(arg)?;
+                        let zeros = arg.zeros_like()?;
+                        let positive_mask = arg.gt(&zeros)?.to_dtype(arg.dtype())?;
+                        let negative_mask = arg.le(&zeros)?.to_dtype(arg.dtype())?;
+                        let negative_exp_mask = ((negative_mask * arg.exp())? * *alpha)?;
+                        let combined_mask = (positive_mask + negative_exp_mask)?;
+                        *sum_grad = sum_grad.add(&(grad * combined_mask)?)?
+                    }
                     Op::Powf(arg, e) => {
                         let arg_grad = (&(grad * arg.powf(e - 1.)?)? * *e)?;
                         let sum_grad = grads.or_insert(arg)?;

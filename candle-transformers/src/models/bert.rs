@@ -1,3 +1,4 @@
+use super::with_tracing::{layer_norm, linear, LayerNorm, Linear};
 use candle::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, VarBuilder};
 use serde::Deserialize;
@@ -32,72 +33,6 @@ impl HiddenActLayer {
     }
 }
 
-#[derive(Debug)]
-pub struct Linear {
-    weight: Tensor,
-    bias: Option<Tensor>,
-    span: tracing::Span,
-}
-
-impl Linear {
-    pub fn new(weight: Tensor, bias: Option<Tensor>) -> Self {
-        let span = tracing::span!(tracing::Level::TRACE, "linear");
-        Self { weight, bias, span }
-    }
-
-    pub fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
-        let _enter = self.span.enter();
-        let w = match x.dims() {
-            &[bsize, _, _] => self.weight.broadcast_left(bsize)?.t()?,
-            _ => self.weight.t()?,
-        };
-        let x = x.matmul(&w)?;
-        match &self.bias {
-            None => Ok(x),
-            Some(bias) => x.broadcast_add(bias),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct LayerNorm {
-    weight: Tensor,
-    bias: Tensor,
-    eps: f64,
-    span: tracing::Span,
-}
-
-impl LayerNorm {
-    pub fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
-        let span = tracing::span!(tracing::Level::TRACE, "layer-norm");
-        Self {
-            weight,
-            bias,
-            eps,
-            span,
-        }
-    }
-
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        let x_dtype = x.dtype();
-        let internal_dtype = match x_dtype {
-            DType::F16 | DType::BF16 => DType::F32,
-            d => d,
-        };
-        let (_bsize, _seq_len, hidden_size) = x.dims3()?;
-        let x = x.to_dtype(internal_dtype)?;
-        let mean_x = (x.sum_keepdim(2)? / hidden_size as f64)?;
-        let x = x.broadcast_sub(&mean_x)?;
-        let norm_x = (x.sqr()?.sum_keepdim(2)? / hidden_size as f64)?;
-        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        let x = x_normed
-            .to_dtype(x_dtype)?
-            .broadcast_mul(&self.weight)?
-            .broadcast_add(&self.bias)?;
-        Ok(x)
-    }
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 enum PositionEmbeddingType {
@@ -180,12 +115,6 @@ fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Em
     Ok(Embedding::new(embeddings, hidden_size))
 }
 
-fn linear(size1: usize, size2: usize, vb: VarBuilder) -> Result<Linear> {
-    let weight = vb.get((size2, size1), "weight")?;
-    let bias = vb.get(size2, "bias")?;
-    Ok(Linear::new(weight, Some(bias)))
-}
-
 struct Dropout {
     #[allow(dead_code)]
     pr: f64,
@@ -195,25 +124,13 @@ impl Dropout {
     fn new(pr: f64) -> Self {
         Self { pr }
     }
+}
 
+impl Module for Dropout {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // TODO
         Ok(x.clone())
     }
-}
-
-fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
-    let (weight, bias) = match (vb.get(size, "weight"), vb.get(size, "bias")) {
-        (Ok(weight), Ok(bias)) => (weight, bias),
-        (Err(err), _) | (_, Err(err)) => {
-            if let (Ok(weight), Ok(bias)) = (vb.get(size, "gamma"), vb.get(size, "beta")) {
-                (weight, bias)
-            } else {
-                return Err(err);
-            }
-        }
-    };
-    Ok(LayerNorm::new(weight, bias, eps))
 }
 
 // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L180
@@ -316,7 +233,9 @@ impl BertSelfAttention {
         let xs = xs.reshape(new_x_shape.as_slice())?.transpose(1, 2)?;
         xs.contiguous()
     }
+}
 
+impl Module for BertSelfAttention {
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let query_layer = self.query.forward(hidden_states)?;
@@ -391,7 +310,9 @@ impl BertAttention {
             span: tracing::span!(tracing::Level::TRACE, "attn"),
         })
     }
+}
 
+impl Module for BertAttention {
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let self_outputs = self.self_attention.forward(hidden_states)?;
@@ -416,7 +337,9 @@ impl BertIntermediate {
             span: tracing::span!(tracing::Level::TRACE, "inter"),
         })
     }
+}
 
+impl Module for BertIntermediate {
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let hidden_states = self.dense.forward(hidden_states)?;
@@ -478,7 +401,9 @@ impl BertLayer {
             span: tracing::span!(tracing::Level::TRACE, "layer"),
         })
     }
+}
 
+impl Module for BertLayer {
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let attention_output = self.attention.forward(hidden_states)?;
@@ -507,7 +432,9 @@ impl BertEncoder {
         let span = tracing::span!(tracing::Level::TRACE, "encoder");
         Ok(BertEncoder { layers, span })
     }
+}
 
+impl Module for BertEncoder {
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let mut hidden_states = hidden_states.clone();

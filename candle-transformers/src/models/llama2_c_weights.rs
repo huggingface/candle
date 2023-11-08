@@ -1,9 +1,8 @@
-use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle::{DType, Device, IndexOp, Shape, Tensor};
+use candle::{DType, Device, IndexOp, Result, Shape, Tensor};
 use candle_nn::VarBuilder;
 
-use crate::model::Config;
+use super::llama2_c::Config;
 
 pub struct TransformerWeights {
     // token embedding table

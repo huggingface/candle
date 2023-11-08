@@ -91,6 +91,16 @@ pub enum Op {
     },
 
     #[allow(dead_code)]
+    ConvTranspose1D {
+        arg: Tensor,
+        kernel: Tensor,
+        padding: usize,
+        output_padding: usize,
+        stride: usize,
+        dilation: usize,
+    },
+
+    #[allow(dead_code)]
     Conv2D {
         arg: Tensor,
         kernel: Tensor,
@@ -536,7 +546,6 @@ unary_op!(Log, "log", v, v.ln(), vs_ln, vd_ln);
 unary_op!(Sin, "sin", v, v.sin(), vs_sin, vd_sin);
 unary_op!(Cos, "cos", v, v.cos(), vs_cos, vd_cos);
 unary_op!(Tanh, "tanh", v, v.tanh(), vs_tanh, vd_tanh);
-unary_op!(Abs, "abs", v, v.abs());
 unary_op!(Neg, "neg", v, -v);
 unary_op!(Recip, "recip", v, v.recip());
 unary_op!(Sqr, "sqr", v, v * v, vs_sqr, vd_sqr);
@@ -632,6 +641,8 @@ impl UnaryOpT for Gelu {
     }
 }
 
+/// `erf` operation
+/// <https://en.wikipedia.org/wiki/Error_function>
 impl UnaryOpT for Erf {
     const NAME: &'static str = "erf";
     const KERNEL: &'static str = "uerf";
@@ -663,6 +674,40 @@ impl UnaryOpT for Erf {
     #[inline(always)]
     fn i64(_: i64) -> i64 {
         0
+    }
+}
+
+impl UnaryOpT for Abs {
+    const NAME: &'static str = "abs";
+    const KERNEL: &'static str = "uabs";
+    const V: Self = Abs;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        v.abs()
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        v.abs()
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        v.abs()
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        v.abs()
+    }
+    #[inline(always)]
+    fn u8(v: u8) -> u8 {
+        v
+    }
+    #[inline(always)]
+    fn u32(v: u32) -> u32 {
+        v
+    }
+    #[inline(always)]
+    fn i64(v: i64) -> i64 {
+        v.abs()
     }
 }
 
@@ -886,6 +931,10 @@ impl BackpropOp {
             None
         };
         Self(op)
+    }
+
+    pub(crate) fn is_none(&self) -> bool {
+        self.0.is_none()
     }
 }
 

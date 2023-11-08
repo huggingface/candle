@@ -804,11 +804,11 @@ impl<'a, I: IntDType> Map1 for Gather<'a, I> {
     fn f<T: WithDType>(&self, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
         let ids = match self.ids_l.contiguous_offsets() {
             Some((a, b)) => &self.ids[a..b],
-            None => Err(Error::RequiresContiguous { op: "gather" })?,
+            None => Err(Error::RequiresContiguous { op: "gather" }.bt())?,
         };
         let src = match src_l.contiguous_offsets() {
             Some((a, b)) => &src[a..b],
-            None => Err(Error::RequiresContiguous { op: "gather" })?,
+            None => Err(Error::RequiresContiguous { op: "gather" }.bt())?,
         };
         let dim = self.dim;
         let ids_dims = self.ids_l.dims();
@@ -857,7 +857,7 @@ impl<'a, I: IntDType> Map1 for IndexSelect<'a, I> {
     fn f<T: WithDType>(&self, src: &[T], layout: &Layout) -> Result<Vec<T>> {
         let src = match layout.contiguous_offsets() {
             Some((a, b)) => &src[a..b],
-            None => Err(Error::RequiresContiguous { op: "index-select" })?,
+            None => Err(Error::RequiresContiguous { op: "index-select" }.bt())?,
         };
         let dim = self.dim;
         let n_ids = match self.ids_l.dims() {
@@ -913,7 +913,7 @@ impl<'a, I: IntDType> Map2 for ScatterAdd<'a, I> {
         let mut dst = vec![T::zero(); dst_len];
         copy_strided_src_(v1, &mut dst, 0, l1);
         let src = match src_l.contiguous_offsets() {
-            None => Err(Error::RequiresContiguous { op: "scatter-add" })?,
+            None => Err(Error::RequiresContiguous { op: "scatter-add" }.bt())?,
             Some((o1, o2)) => &src[o1..o2],
         };
 
@@ -929,7 +929,7 @@ impl<'a, I: IntDType> Map2 for ScatterAdd<'a, I> {
 
         let ids = match self.ids_l.contiguous_offsets() {
             Some((a, b)) => &self.ids[a..b],
-            None => Err(Error::RequiresContiguous { op: "gather" })?,
+            None => Err(Error::RequiresContiguous { op: "gather" }.bt())?,
         };
         for left_i in 0..ids_left_len {
             let start_ids_idx = left_i * ids_right_len * ids_dim_len;
@@ -971,7 +971,7 @@ impl<'a, I: IntDType> Map2 for IndexAdd<'a, I> {
         let mut dst = vec![T::zero(); dst_len];
         copy_strided_src_(v1, &mut dst, 0, l1);
         let src = match src_l.contiguous_offsets() {
-            None => Err(Error::RequiresContiguous { op: "index-add" })?,
+            None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
             Some((o1, o2)) => &src[o1..o2],
         };
         let dim = self.dim;
@@ -1251,6 +1251,74 @@ impl Map1 for Im2Col {
                     }
                 }
             }
+        }
+        Ok(dst)
+    }
+}
+
+struct ConvTranspose1D<'a>(&'a crate::conv::ParamsConvTranspose1D);
+
+impl<'a> Map2 for ConvTranspose1D<'a> {
+    const OP: &'static str = "conv_transpose1d";
+    fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
+        let p = self.0;
+        let inp = &inp[inp_l.start_offset()..];
+        let (inp_s0, inp_s1, inp_s2) = crate::shape::dims3(inp_l.stride())?;
+        let (k_s0, k_s1, k_s2) = crate::shape::dims3(k_l.stride())?;
+        let l_out = p.l_out();
+
+        // Output shape: [b_size, c_out, l_out].
+        let dst_elems = p.c_out * l_out * p.b_size;
+        let dst = vec![T::zero(); dst_elems];
+        let dst_s0 = p.c_out * l_out;
+        let dst_s1 = l_out;
+        let dst_s2 = 1;
+
+        // TODO: Avoid making this copy if `inp` already has the appropriate layout.
+        let mut inp_cont = vec![T::zero(); p.b_size * p.c_in * p.l_in];
+        let cont_s0 = p.l_in * p.c_in;
+        let cont_s1 = p.c_in;
+        for b_idx in 0..p.b_size {
+            for l_idx in 0..p.l_in {
+                for c_idx in 0..p.c_in {
+                    let src_idx = b_idx * inp_s0 + c_idx * inp_s1 + l_idx * inp_s2;
+                    let dst_idx = b_idx * cont_s0 + l_idx * cont_s1 + c_idx;
+                    inp_cont[dst_idx] = inp[src_idx]
+                }
+            }
+        }
+
+        for k_idx in 0..p.k_size {
+            (0..p.c_out).into_par_iter().for_each(|dst_c_idx| {
+                let k_cont = (0..p.c_in)
+                    .map(|c_in_idx| k[c_in_idx * k_s0 + dst_c_idx * k_s1 + k_idx * k_s2])
+                    .collect::<Vec<_>>();
+                for b_idx in 0..p.b_size {
+                    for l_idx in 0..p.l_in {
+                        let out_idx = l_idx * p.stride + k_idx * p.dilation;
+                        if out_idx < p.padding {
+                            continue;
+                        }
+                        let out_idx = out_idx - p.padding;
+                        if out_idx < l_out {
+                            let inp_cont = &inp_cont[b_idx * cont_s0 + l_idx * cont_s1..];
+                            let dst_idx = b_idx * dst_s0 + out_idx * dst_s2 + dst_c_idx * dst_s1;
+                            let mut d = T::zero();
+                            unsafe {
+                                T::vec_dot(inp_cont.as_ptr(), k_cont.as_ptr(), &mut d, p.c_in)
+                            }
+                            let dst_p = dst.as_ptr();
+                            // Safety: dst_idx are uniques per dst_c_idx which is used to
+                            // parallelise the different tasks so no two threads can try to
+                            // write at the same location.
+                            unsafe {
+                                let ptr = dst_p.add(dst_idx) as *mut T;
+                                *ptr += d
+                            }
+                        }
+                    }
+                }
+            })
         }
         Ok(dst)
     }
@@ -2435,6 +2503,16 @@ impl BackendStorage for CpuStorage {
         Ok(res_t)
     }
 
+    fn conv_transpose1d(
+        &self,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &crate::conv::ParamsConvTranspose1D,
+    ) -> Result<Self> {
+        ConvTranspose1D(params).map(self, l, kernel, kernel_l)
+    }
+
     fn conv2d(
         &self,
         l: &Layout,
@@ -2539,25 +2617,25 @@ impl BackendStorage for CpuStorage {
             Self::U8(ids) => {
                 let ids = match ids_l.contiguous_offsets() {
                     Some((a, b)) => &ids[a..b],
-                    None => Err(Error::RequiresContiguous { op: "index-add" })?,
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
                 };
                 IndexAdd { ids, dim }.map(self, l, src, src_l)
             }
             Self::U32(ids) => {
                 let ids = match ids_l.contiguous_offsets() {
                     Some((a, b)) => &ids[a..b],
-                    None => Err(Error::RequiresContiguous { op: "index-add" })?,
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
                 };
                 IndexAdd { ids, dim }.map(self, l, src, src_l)
             }
             Self::I64(ids) => {
                 let ids = match ids_l.contiguous_offsets() {
                     Some((a, b)) => &ids[a..b],
-                    None => Err(Error::RequiresContiguous { op: "index-add" })?,
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
                 };
                 IndexAdd { ids, dim }.map(self, l, src, src_l)
             }
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-add")),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-add").bt()),
         }
     }
 

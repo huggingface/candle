@@ -198,13 +198,17 @@ fn log_mel_spectrogram_<T: Float + std::fmt::Display>(
     mel
 }
 
-pub fn pcm_to_mel<T: Float + std::fmt::Display>(samples: &[T], filters: &[T]) -> Vec<T> {
+pub fn pcm_to_mel<T: Float + std::fmt::Display>(
+    cfg: &super::Config,
+    samples: &[T],
+    filters: &[T],
+) -> Vec<T> {
     log_mel_spectrogram_(
         samples,
         filters,
         super::N_FFT,
         super::HOP_LENGTH,
-        super::N_MELS,
+        cfg.num_mel_bins,
         false,
     )
 }

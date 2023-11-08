@@ -1,7 +1,7 @@
 # Generated content DO NOT EDIT
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Sequence
 from os import PathLike
-from candle.typing import _ArrayLike, Device, Scalar, Index
+from candle.typing import _ArrayLike, Device, Scalar, Index, Shape
 
 class bf16(DType):
     pass
@@ -26,21 +26,21 @@ class i64(DType):
     pass
 
 @staticmethod
-def ones(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+def ones(*shape: Shape, dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor filled with ones.
     """
     pass
 
 @staticmethod
-def rand(shape: Sequence[int], device: Optional[Device] = None) -> Tensor:
+def rand(*shape: Shape, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor with random values.
     """
     pass
 
 @staticmethod
-def randn(shape: Sequence[int], device: Optional[Device] = None) -> Tensor:
+def randn(*shape: Shape, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor with random values from a normal distribution.
     """
@@ -67,7 +67,7 @@ class u8(DType):
     pass
 
 @staticmethod
-def zeros(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+def zeros(*shape: Shape, dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor filled with zeros.
     """
@@ -124,14 +124,44 @@ class Tensor:
         Add a scalar to a tensor or two tensors together.
         """
         pass
+    def __eq__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+    def __ge__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
     def __getitem__(self, index: Union[Index, Tensor, Sequence[Index]]) -> "Tensor":
         """
         Return a slice of a tensor.
         """
         pass
+    def __gt__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+    def __le__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+    def __lt__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
     def __mul__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
         """
         Multiply a tensor by a scalar or one tensor by another.
+        """
+        pass
+    def __ne__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
         """
         pass
     def __radd__(self, rhs: Union[Tensor, Scalar]) -> "Tensor":
@@ -159,6 +189,11 @@ class Tensor:
         Divide a tensor by a scalar or one tensor by another.
         """
         pass
+    def abs(self) -> Tensor:
+        """
+        Performs the `abs` operation on the tensor.
+        """
+        pass
     def argmax_keepdim(self, dim: int) -> Tensor:
         """
         Returns the indices of the maximum value(s) across the selected dimension.
@@ -174,7 +209,7 @@ class Tensor:
         Adds the two tensors, while broadcasting the right-hand-side tensor to match the shape of the left-hand-side tensor.
         """
         pass
-    def broadcast_as(self, shape: Sequence[int]) -> Tensor:
+    def broadcast_as(self, *shape: Shape) -> Tensor:
         """
         Broadcasts the tensor to the given shape.
         """
@@ -184,7 +219,7 @@ class Tensor:
         Divides the two tensors, while broadcasting the right-hand-side tensor to match the shape of the left-hand-side tensor.
         """
         pass
-    def broadcast_left(self, shape: Sequence[int]) -> Tensor:
+    def broadcast_left(self, *shape: Shape) -> Tensor:
         """
         Broadcasts the tensor to the given shape, adding new dimensions on the left.
         """
@@ -308,6 +343,12 @@ class Tensor:
         ranges from `start` to `start + len`.
         """
         pass
+    @property
+    def nelement(self) -> int:
+        """
+        Gets the tensor's element count.
+        """
+        pass
     def powf(self, p: float) -> Tensor:
         """
         Performs the `pow` operation on the tensor with the given exponent.
@@ -329,7 +370,7 @@ class Tensor:
         Get the `recip` of the tensor.
         """
         pass
-    def reshape(self, shape: Sequence[int]) -> Tensor:
+    def reshape(self, *shape: Shape) -> Tensor:
         """
         Reshapes the tensor to the given shape.
         """
@@ -394,6 +435,11 @@ class Tensor:
     def to_dtype(self, dtype: Union[str, DType]) -> Tensor:
         """
         Convert the tensor to a new dtype.
+        """
+        pass
+    def to_torch(self) -> torch.Tensor:
+        """
+        Converts candle's tensor to pytorch's tensor
         """
         pass
     def transpose(self, dim1: int, dim2: int) -> Tensor:

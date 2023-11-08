@@ -53,3 +53,39 @@ class Tensor:
         Return a slice of a tensor.
         """
         pass
+
+    def __eq__(self, rhs: Union["Tensor", "Scalar"]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+
+    def __ne__(self, rhs: Union["Tensor", "Scalar"]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+
+    def __lt__(self, rhs: Union["Tensor", "Scalar"]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+
+    def __le__(self, rhs: Union["Tensor", "Scalar"]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+
+    def __gt__(self, rhs: Union["Tensor", "Scalar"]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass
+
+    def __ge__(self, rhs: Union["Tensor", "Scalar"]) -> "Tensor":
+        """
+        Compare a tensor with a scalar or one tensor with another.
+        """
+        pass

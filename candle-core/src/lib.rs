@@ -125,3 +125,15 @@ impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {
         self(xs)
     }
 }
+
+// A trait defining a module with forward method using a single tensor argument and a flag to
+// separate the training and evaluation behaviors.
+pub trait ModuleT {
+    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor>;
+}
+
+impl<M: Module> ModuleT for M {
+    fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
+        self.forward(xs)
+    }
+}

@@ -1,34 +1,32 @@
 #![allow(clippy::redundant_closure_call)]
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::pyclass::CompareOp;
 use pyo3::types::{IntoPyDict, PyDict, PyTuple};
 use pyo3::ToPyObject;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::os::raw::c_long;
 use std::sync::Arc;
 
 use half::{bf16, f16};
 
+#[cfg(feature = "mkl")]
+extern crate intel_mkl_src;
+
+#[cfg(feature = "accelerate")]
+extern crate accelerate_src;
+
 use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
 
-pub fn wrap_err(err: ::candle::Error) -> PyErr {
-    PyErr::new::<PyValueError, _>(format!("{err:?}"))
-}
+mod utils;
+use utils::wrap_err;
 
-#[derive(Clone, Debug)]
-struct PyShape(Vec<usize>);
+mod shape;
+use shape::{PyShape, PyShapeWithHole};
 
-impl<'source> pyo3::FromPyObject<'source> for PyShape {
-    fn extract(ob: &'source PyAny) -> PyResult<Self> {
-        let dims: Vec<usize> = pyo3::FromPyObject::extract(ob)?;
-        Ok(PyShape(dims))
-    }
-}
-
-impl From<PyShape> for ::candle::Shape {
-    fn from(val: PyShape) -> Self {
-        val.0.into()
-    }
-}
+#[cfg(feature = "onnx")]
+mod onnx;
 
 #[derive(Clone, Debug)]
 #[pyclass(name = "Tensor")]
@@ -139,9 +137,10 @@ macro_rules! pydtype {
         }
     };
 }
+
+pydtype!(i64, |v| v);
 pydtype!(u8, |v| v);
 pydtype!(u32, |v| v);
-pydtype!(i64, |v| v);
 pydtype!(f16, f32::from);
 pydtype!(bf16, f32::from);
 pydtype!(f32, |v| v);
@@ -205,6 +204,16 @@ enum Indexer {
     IndexSelect(Tensor),
 }
 
+#[derive(Clone, Debug)]
+struct TorchTensor(PyObject);
+
+impl<'source> pyo3::FromPyObject<'source> for TorchTensor {
+    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+        let numpy_value: PyObject = ob.getattr("numpy")?.call0()?.extract()?;
+        Ok(TorchTensor(numpy_value))
+    }
+}
+
 #[pymethods]
 impl PyTensor {
     #[new]
@@ -240,6 +249,8 @@ impl PyTensor {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
         } else if let Ok(vs) = data.extract::<Vec<Vec<Vec<f32>>>>(py) {
             Tensor::new(vs, &Cpu).map_err(wrap_err)?
+        } else if let Ok(TorchTensor(numpy)) = data.extract::<TorchTensor>(py) {
+            return PyTensor::new(py, numpy);
         } else {
             let ty = data.as_ref(py).get_type();
             Err(PyTypeError::new_err(format!(
@@ -293,11 +304,30 @@ impl PyTensor {
         M(py).map(self)
     }
 
+    /// Converts candle's tensor to pytorch's tensor
+    /// &RETURNS&: torch.Tensor
+    fn to_torch(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let candle_values = self.values(py)?;
+        let torch_tensor: PyObject = py
+            .import("torch")?
+            .getattr("tensor")?
+            .call1((candle_values,))?
+            .extract()?;
+        Ok(torch_tensor)
+    }
+
     #[getter]
     /// Gets the tensor's shape.
     /// &RETURNS&: Tuple[int]
     fn shape(&self, py: Python<'_>) -> PyObject {
         PyTuple::new(py, self.0.dims()).to_object(py)
+    }
+
+    #[getter]
+    /// Gets the tensor's element count.
+    /// &RETURNS&: int
+    fn nelement(&self) -> usize {
+        self.0.elem_count()
     }
 
     #[getter]
@@ -334,6 +364,12 @@ impl PyTensor {
 
     fn __str__(&self) -> String {
         self.__repr__()
+    }
+
+    /// Performs the `abs` operation on the tensor.
+    /// &RETURNS&: Tensor
+    fn abs(&self) -> PyResult<Self> {
+        Ok(PyTensor(self.0.abs().map_err(wrap_err)?))
     }
 
     /// Performs the `sin` operation on the tensor.
@@ -653,26 +689,90 @@ impl PyTensor {
         };
         Ok(Self(tensor))
     }
+    /// Rich-compare two tensors.
+    /// &RETURNS&: Tensor
+    fn __richcmp__(&self, rhs: &PyAny, op: CompareOp) -> PyResult<Self> {
+        let compare = |lhs: &Tensor, rhs: &Tensor| {
+            let t = match op {
+                CompareOp::Eq => lhs.eq(rhs),
+                CompareOp::Ne => lhs.ne(rhs),
+                CompareOp::Lt => lhs.lt(rhs),
+                CompareOp::Le => lhs.le(rhs),
+                CompareOp::Gt => lhs.gt(rhs),
+                CompareOp::Ge => lhs.ge(rhs),
+            };
+            Ok(PyTensor(t.map_err(wrap_err)?))
+        };
+        if let Ok(rhs) = rhs.extract::<PyTensor>() {
+            if self.0.shape() == rhs.0.shape() {
+                compare(&self.0, &rhs.0)
+            } else {
+                // We broadcast manually here because `candle.cmp` does not support automatic broadcasting
+                let broadcast_shape = self
+                    .0
+                    .shape()
+                    .broadcast_shape_binary_op(rhs.0.shape(), "cmp")
+                    .map_err(wrap_err)?;
+                let broadcasted_lhs = self.0.broadcast_as(&broadcast_shape).map_err(wrap_err)?;
+                let broadcasted_rhs = rhs.0.broadcast_as(&broadcast_shape).map_err(wrap_err)?;
 
-    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+                compare(&broadcasted_lhs, &broadcasted_rhs)
+            }
+        } else if let Ok(rhs) = rhs.extract::<f64>() {
+            let scalar_tensor = Tensor::new(rhs, self.0.device())
+                .map_err(wrap_err)?
+                .to_dtype(self.0.dtype())
+                .map_err(wrap_err)?
+                .broadcast_as(self.0.shape())
+                .map_err(wrap_err)?;
+
+            compare(&self.0, &scalar_tensor)
+        } else {
+            return Err(PyTypeError::new_err("unsupported rhs for __richcmp__"));
+        }
+    }
+
+    fn __hash__(&self) -> u64 {
+        // we have overridden __richcmp__ => py03 wants us to also override __hash__
+        // we simply hash the address of the tensor
+        let mut hasher = DefaultHasher::new();
+        let pointer = &self.0 as *const Tensor;
+        let address = pointer as usize;
+        address.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[pyo3(signature=(*shape), text_signature = "(self, *shape:Shape)")]
     /// Reshapes the tensor to the given shape.
     /// &RETURNS&: Tensor
-    fn reshape(&self, shape: PyShape) -> PyResult<Self> {
-        Ok(PyTensor(self.0.reshape(shape).map_err(wrap_err)?))
+    fn reshape(&self, shape: PyShapeWithHole) -> PyResult<Self> {
+        Ok(PyTensor(
+            self.0
+                .reshape(shape.to_absolute(&self.0)?)
+                .map_err(wrap_err)?,
+        ))
     }
 
-    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+    #[pyo3(signature=(*shape), text_signature = "(self, *shape:Shape)")]
     /// Broadcasts the tensor to the given shape.
     /// &RETURNS&: Tensor
-    fn broadcast_as(&self, shape: PyShape) -> PyResult<Self> {
-        Ok(PyTensor(self.0.broadcast_as(shape).map_err(wrap_err)?))
+    fn broadcast_as(&self, shape: PyShapeWithHole) -> PyResult<Self> {
+        Ok(PyTensor(
+            self.0
+                .broadcast_as(shape.to_absolute(&self.0)?)
+                .map_err(wrap_err)?,
+        ))
     }
 
-    #[pyo3(text_signature = "(self, shape:Sequence[int])")]
+    #[pyo3(signature=(*shape), text_signature = "(self, *shape:Shape)")]
     /// Broadcasts the tensor to the given shape, adding new dimensions on the left.
     /// &RETURNS&: Tensor
-    fn broadcast_left(&self, shape: PyShape) -> PyResult<Self> {
-        Ok(PyTensor(self.0.broadcast_left(shape).map_err(wrap_err)?))
+    fn broadcast_left(&self, shape: PyShapeWithHole) -> PyResult<Self> {
+        Ok(PyTensor(
+            self.0
+                .broadcast_left(shape.to_absolute(&self.0)?)
+                .map_err(wrap_err)?,
+        ))
     }
 
     #[pyo3(text_signature = "(self, dim:int)")]
@@ -885,21 +985,21 @@ impl PyTensor {
         }
 
         if let Some(kwargs) = kwargs {
-            if let Some(any) = kwargs.get_item("dtype") {
+            if let Ok(Some(any)) = kwargs.get_item("dtype") {
                 handle_duplicates(
                     &mut dtype,
                     any.extract::<PyDType>(),
                     "cannot specify multiple dtypes",
                 )?;
             }
-            if let Some(any) = kwargs.get_item("device") {
+            if let Ok(Some(any)) = kwargs.get_item("device") {
                 handle_duplicates(
                     &mut device,
                     any.extract::<PyDevice>(),
                     "cannot specify multiple devices",
                 )?;
             }
-            if let Some(any) = kwargs.get_item("other") {
+            if let Ok(Some(any)) = kwargs.get_item("other") {
                 handle_duplicates(
                     &mut other,
                     any.extract::<PyTensor>(),
@@ -1019,27 +1119,27 @@ fn tensor(py: Python<'_>, data: PyObject) -> PyResult<PyTensor> {
 }
 
 #[pyfunction]
-#[pyo3(signature = (shape, *, device=None), text_signature = "(shape:Sequence[int], device:Optional[Device]=None)")]
+#[pyo3(signature = (*shape,device=None), text_signature = "(*shape:Shape, device:Optional[Device]=None)")]
 /// Creates a new tensor with random values.
 /// &RETURNS&: Tensor
 fn rand(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<PyTensor> {
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::rand(0f32, 1f32, shape.0, &device).map_err(wrap_err)?;
+    let tensor = Tensor::rand(0f32, 1f32, shape, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
 #[pyfunction]
-#[pyo3(signature = (shape, *, device=None), text_signature = "(shape:Sequence[int], device:Optional[Device]=None)")]
+#[pyo3(signature = (*shape,device=None), text_signature = "(*shape:Shape, device:Optional[Device]=None)")]
 /// Creates a new tensor with random values from a normal distribution.
 /// &RETURNS&: Tensor
 fn randn(_py: Python<'_>, shape: PyShape, device: Option<PyDevice>) -> PyResult<PyTensor> {
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::randn(0f32, 1f32, shape.0, &device).map_err(wrap_err)?;
+    let tensor = Tensor::randn(0f32, 1f32, shape, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
 #[pyfunction]
-#[pyo3(signature = (shape, *, dtype=None, device=None),text_signature = "(shape:Sequence[int], dtype:Optional[DType]=None, device:Optional[Device]=None)")]
+#[pyo3(signature = (*shape, dtype=None, device=None),text_signature = "(*shape:Shape, dtype:Optional[DType]=None, device:Optional[Device]=None)")]
 /// Creates a new tensor filled with ones.
 /// &RETURNS&: Tensor
 fn ones(
@@ -1053,12 +1153,12 @@ fn ones(
         Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
     };
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::ones(shape.0, dtype, &device).map_err(wrap_err)?;
+    let tensor = Tensor::ones(shape, dtype, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
 #[pyfunction]
-#[pyo3(signature = (shape, *, dtype=None, device=None), text_signature = "(shape:Sequence[int], dtype:Optional[DType]=None, device:Optional[Device]=None)")]
+#[pyo3(signature = (*shape, dtype=None, device=None), text_signature = "(*shape:Shape, dtype:Optional[DType]=None, device:Optional[Device]=None)")]
 /// Creates a new tensor filled with zeros.
 /// &RETURNS&: Tensor
 fn zeros(
@@ -1072,7 +1172,7 @@ fn zeros(
         Some(dtype) => PyDType::from_pyobject(dtype, py)?.0,
     };
     let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
-    let tensor = Tensor::zeros(shape.0, dtype, &device).map_err(wrap_err)?;
+    let tensor = Tensor::zeros(shape, dtype, &device).map_err(wrap_err)?;
     Ok(PyTensor(tensor))
 }
 
@@ -1461,6 +1561,14 @@ fn candle_functional_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
+#[cfg(feature = "onnx")]
+fn candle_onnx_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+    use onnx::{PyONNXModel, PyONNXTensorDescriptor};
+    m.add_class::<PyONNXModel>()?;
+    m.add_class::<PyONNXTensorDescriptor>()?;
+    Ok(())
+}
+
 #[pymodule]
 fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     let utils = PyModule::new(py, "utils")?;
@@ -1469,12 +1577,18 @@ fn candle(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     let nn = PyModule::new(py, "functional")?;
     candle_functional_m(py, nn)?;
     m.add_submodule(nn)?;
+    #[cfg(feature = "onnx")]
+    {
+        let onnx = PyModule::new(py, "onnx")?;
+        candle_onnx_m(py, onnx)?;
+        m.add_submodule(onnx)?;
+    }
     m.add_class::<PyTensor>()?;
     m.add_class::<PyQTensor>()?;
     m.add_class::<PyDType>()?;
     m.add("u8", PyDType(DType::U8))?;
     m.add("u32", PyDType(DType::U32))?;
-    m.add("i16", PyDType(DType::I64))?;
+    m.add("i64", PyDType(DType::I64))?;
     m.add("bf16", PyDType(DType::BF16))?;
     m.add("f16", PyDType(DType::F16))?;
     m.add("f32", PyDType(DType::F32))?;

@@ -51,11 +51,12 @@ For more advanced examples, please have a look at the following section.
 These online demos run entirely in your browser:
 - [yolo](https://huggingface.co/spaces/lmz/candle-yolo): pose estimation and
   object recognition.
-- [whisper](https://huggingface.co/spaces/lmz/candle-whisper): text to speech.
+- [whisper](https://huggingface.co/spaces/lmz/candle-whisper): speech recognition.
 - [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
 - [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm): text generation.
 - [Phi-v1.5](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm): text generation.
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
+- [BLIP](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning): image captioning.
 
 We also provide a some command line based examples using state of the art models:
 
@@ -95,12 +96,15 @@ We also provide a some command line based examples using state of the art models
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
 
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
-- [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/): useful for sentence embeddings.
+- [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/),
+  [JinaBert](./candle-examples/examples/jina-bert/) : useful for sentence embeddings.
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
   using self-supervision (can be used for imagenet classification, depth
   evaluation, segmentation).
 - [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
   generate captions for an image.
+- [Marian-MT](./candle-examples/examples/marian-mt/): neural machine translation
+  model, generates the translated text from the input text.
 
 Run them using commands like:
 ```
@@ -135,8 +139,15 @@ And then head over to
 ## Useful External Resources
 - [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): a
   very detailed tutorial showing how to convert a PyTorch model to Candle.
+- [`optimisers`](https://github.com/KGrewal1/optimisers): a collection of optimisers
+  including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
 - [`candle-lora`](https://github.com/EricLBuehler/candle-lora): a LoRA implementation
   that conforms to the official `peft` implementation.
+- [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficient platform for inference and
+  serving local LLMs including an OpenAI compatible API server.
+- [`candle-ext`](https://github.com/mokeyish/candle-ext): an extension library to Candle that provides PyTorch functions not currently available in Candle.
+- [`kalosm`](https://github.com/floneum/floneum/tree/master/kalosm): A multi-modal meta-framework in Rust for interfacing with local pre-trained models with support for controlled generation, custom samplers, in-memory vector databases, audio transcription, and more.
+- [`candle-sampling`](https://github.com/EricLBuehler/candle-sampling): Sampling techniques for Candle.
 
 If you have an addition to this list, please submit a pull request.
 
@@ -162,8 +173,10 @@ If you have an addition to this list, please submit a pull request.
         - Mistral 7b v0.1.
         - StableLM-3B-4E1T.
         - Replit-code-v1.5-3B.
-        - T5.
         - Bert.
+    - Text to text.
+        - T5 and its variants: FlanT5, MADLAD400 (translation), CoEdit (Grammar correction).
+        - Marian MT (Machine Translation).
     - Whisper (multi-lingual support).
     - Text to image.
         - Stable Diffusion v1.5, v2.1, XL v1.0.
@@ -210,6 +223,7 @@ Cheatsheet:
 - [candle-datasets](./candle-datasets/): Datasets and data loaders.
 - [candle-transformers](./candle-transformers): transformers-related utilities.
 - [candle-flash-attn](./candle-flash-attn): Flash attention v2 layer.
+- [candle-onnx](./candle-onnx/): ONNX model evaluation.
 
 ## FAQ
 

@@ -26,32 +26,54 @@
 
       // models base url
       const MODELS = {
-        tiny_multilingual: {
-          base_url: "https://huggingface.co/openai/whisper-tiny/resolve/main/",
-          model: "model.safetensors",
-          tokenizer: "tokenizer.json",
-          config: "config.json",
-        },
-        tiny_en: {
-          base_url:
-            "https://huggingface.co/openai/whisper-tiny.en/resolve/main/",
-          model: "model.safetensors",
-          tokenizer: "tokenizer.json",
-          config: "config.json",
-        },
-        tiny_quantized_multilingual_q80: {
-          base_url: "https://huggingface.co/lmz/candle-whisper/resolve/main/",
-          model: "model-tiny-q80.gguf",
-          tokenizer: "tokenizer-tiny.json",
-          config: "config-tiny.json",
-        },
-        tiny_en_quantized_q80: {
-          base_url: "https://huggingface.co/lmz/candle-whisper/resolve/main/",
-          model: "model-tiny-q80.gguf",
-          tokenizer: "tokenizer-tiny-en.json",
-          config: "config-tiny-en.json",
-        },
-      };
+          tiny_multilingual: {
+            base_url: "https://huggingface.co/openai/whisper-tiny/resolve/main/",
+            model: "model.safetensors",
+            tokenizer: "tokenizer.json",
+            config: "config.json",
+            size: "151 MB",
+          },
+          tiny_en: {
+            base_url:
+              "https://huggingface.co/openai/whisper-tiny.en/resolve/main/",
+            model: "model.safetensors",
+            tokenizer: "tokenizer.json",
+            config: "config.json",
+            size: "151 MB",
+          },
+          tiny_quantized_multilingual_q80: {
+            base_url: "https://huggingface.co/lmz/candle-whisper/resolve/main/",
+            model: "model-tiny-q80.gguf",
+            tokenizer: "tokenizer-tiny.json",
+            config: "config-tiny.json",
+            size: "41.5 MB",
+          },
+          tiny_en_quantized_q80: {
+            base_url: "https://huggingface.co/lmz/candle-whisper/resolve/main/",
+            model: "model-tiny-q80.gguf",
+            tokenizer: "tokenizer-tiny-en.json",
+            config: "config-tiny-en.json",
+            size: "41.8 MB",
+          },
+          distil_medium_en: {
+            base_url:
+              "https://huggingface.co/distil-whisper/distil-medium.en/resolve/main/",
+            model: "model.safetensors",
+            tokenizer: "tokenizer.json",
+            config: "config.json",
+            size: "789 MB",
+          },
+        };
+
+      const modelEl = document.querySelector("#model");
+
+      Object.keys(MODELS).forEach((modelID) => {
+        const model = MODELS[modelID];
+        const option = document.createElement("option");
+        option.value = modelID;
+        option.textContent = `${modelID} (${model.size})`;
+        modelEl.appendChild(option);
+      });
       const whisperWorker = new Worker("./whisperWorker.js", {
         type: "module",
       });
@@ -150,7 +172,7 @@
         if (audioURL === null) {
           return;
         }
-        const modelID = document.querySelector("#model").value;
+        const modelID = modelEl.value;
         const model = MODELS[modelID];
         const modelURL = model.base_url + model.model;
         const tokenizerURL = model.base_url + model.tokenizer;
@@ -222,14 +244,6 @@
         <select
           id="model"
           class="border-2 border-gray-500 rounded-md font-light">
-          <option value="tiny_multilingual" selected>tiny (151 MB)</option>
-          <option value="tiny_en" selected>tiny.en (151 MB)</option>
-          <option value="tiny_quantized_multilingual_q80">
-            tiny quantized q80 (41.5 MB)
-          </option>
-          <option value="tiny_en_quantized_q80">
-            tiny.en quantized q80 (41.8 MB)
-          </option>
         </select>
       </div>
       <!-- drag and drop area -->

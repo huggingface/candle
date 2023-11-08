@@ -39,6 +39,12 @@ jobs:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v2
+        with:
+            version: "25.0"
+            repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install
         working-directory: ./candle-pyo3
         run: |
@@ -46,7 +52,7 @@ jobs:
           source .env/bin/activate
           pip install -U pip
           pip install pytest maturin black
-          python -m maturin develop -r
+          python -m maturin develop -r --features onnx
 
       - name: Check style
         working-directory: ./candle-pyo3

@@ -385,11 +385,21 @@ impl Tensor {
         step: D,
         device: &Device,
     ) -> Result<Self> {
+        if D::is_zero(&step) {
+            crate::bail!("step cannot be zero")
+        }
         let mut data = vec![];
         let mut current = start;
-        while current < end {
-            data.push(current);
-            current += step;
+        if step >= D::zero() {
+            while current < end {
+                data.push(current);
+                current += step;
+            }
+        } else {
+            while current > end {
+                data.push(current);
+                current += step;
+            }
         }
         let len = data.len();
         Self::from_vec_impl(data, len, device, false)
@@ -467,6 +477,12 @@ impl Tensor {
     broadcast_binary_op!(broadcast_div, div);
     broadcast_binary_op!(broadcast_maximum, maximum);
     broadcast_binary_op!(broadcast_minimum, minimum);
+    broadcast_binary_op!(broadcast_eq, eq);
+    broadcast_binary_op!(broadcast_ne, ne);
+    broadcast_binary_op!(broadcast_lt, lt);
+    broadcast_binary_op!(broadcast_le, le);
+    broadcast_binary_op!(broadcast_gt, gt);
+    broadcast_binary_op!(broadcast_ge, ge);
 
     unary_op!(recip, Recip);
     unary_op!(neg, Neg);
@@ -538,6 +554,73 @@ impl Tensor {
             }
         }
         Ok(inp)
+    }
+
+    /// Creates grids of coordinates specified by the 1D inputs.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - A slice of 1D tensors.
+    /// * `xy_indexing` - Whether to use xy indexing or ij indexing. If xy is selected, the
+    /// first dimension corresponds to the cardinality of the second input and the second
+    /// dimension corresponds to the cardinality of the first input. If ij is selected, the
+    /// dimensions are in the same order as the cardinality of the inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device, Shape};
+    /// let x = Tensor::new(&[1f32, 2., 3.], &Device::Cpu)?;
+    /// let y = Tensor::new(&[4f32, 5., 6.], &Device::Cpu)?;
+    ///
+    /// let grids_xy = Tensor::meshgrid(&[&x, &y], true)?;
+    ///
+    /// assert_eq!(grids_xy.len(), 2);
+    /// assert_eq!(grids_xy[0].dims(), &[3, 3]);
+    ///
+    /// assert_eq!(grids_xy[0].to_vec2::<f32>()?, &[[1., 2., 3.], [1., 2., 3.], [1., 2., 3.]]);
+    /// assert_eq!(grids_xy[1].to_vec2::<f32>()?, &[[4., 4., 4.], [5., 5., 5.], [6., 6., 6.]]);
+    ///
+    /// let grids_ij = Tensor::meshgrid(&[&x, &y], false)?;
+    ///
+    /// assert_eq!(grids_ij[0].to_vec2::<f32>()?, &[[1., 1., 1.], [2., 2., 2.], [3., 3., 3.]]);
+    /// assert_eq!(grids_ij[1].to_vec2::<f32>()?, &[[4., 5., 6.], [4., 5., 6.], [4., 5., 6.]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// * Will return `Err` if `args` contains less than 2 tensors.
+    ///
+    pub fn meshgrid<A: AsRef<Tensor>>(args: &[A], xy_indexing: bool) -> Result<Vec<Self>> {
+        if args.len() <= 1 {
+            Err(Error::OpRequiresAtLeastTwoTensors { op: "meshgrid" }.bt())?
+        }
+        let args: Vec<_> = if xy_indexing {
+            args.iter().rev().collect()
+        } else {
+            args.iter().collect()
+        };
+
+        let mut shape = Vec::with_capacity(args.len());
+        for arg in args.iter() {
+            shape.push(arg.as_ref().dims1()?)
+        }
+
+        let mut grids = Vec::with_capacity(args.len());
+        for idx in 0..args.len() {
+            let mut ones = vec![1usize; args.len()];
+            ones[idx] = shape[idx];
+            let arg = args[idx].as_ref().reshape(ones)?;
+            let mut repeats = shape.clone();
+            repeats[idx] = 1;
+            let repeated_tensor = arg.repeat(repeats)?;
+            grids.push(repeated_tensor);
+        }
+        if xy_indexing {
+            grids.reverse();
+        }
+        Ok(grids)
     }
 
     /// This operation multiplies the input tensor by `mul` then adds `add` and return the result.
@@ -1119,14 +1202,16 @@ impl Tensor {
                 op: "scatter-add (self, src)",
                 lhs: self.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         if indexes.dims() != source.dims() {
             Err(Error::ShapeMismatchBinaryOp {
                 op: "scatter-add (indexes, src)",
                 lhs: indexes.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let storage = self.storage().scatter_add(
             self.layout(),
@@ -1198,7 +1283,8 @@ impl Tensor {
                 op: "slice-scatter (self, src)",
                 lhs: self.shape().clone(),
                 rhs: src.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let mut storage = self.device().zeros(self.shape(), self.dtype())?;
         self.storage()
@@ -1232,7 +1318,8 @@ impl Tensor {
                 op: "index-add (self, source)",
                 lhs: self.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         // The number of element in indexes must match the dimension on which the add is
         // performed on the source tensor (and the index values from `indexes` are taken from
@@ -1243,7 +1330,8 @@ impl Tensor {
                 op: "index-add (ids, source))",
                 lhs: indexes.shape().clone(),
                 rhs: source.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let storage = self.storage().index_add(
             self.layout(),
@@ -1291,7 +1379,8 @@ impl Tensor {
                 op: "gather",
                 lhs: self.shape().clone(),
                 rhs: indexes.shape().clone(),
-            })?
+            }
+            .bt())?
         }
         let storage =
             self.storage()
@@ -1724,17 +1813,23 @@ impl Tensor {
 
     /// Returns a new tensor detached from the current graph, gradient are not propagated through
     /// this new node. The storage of this tensor is shared with the initial tensor.
+    ///
+    /// If the tensor is already detached from the computation graph, the same tensor is returned.
     pub fn detach(&self) -> Result<Tensor> {
-        let tensor_ = Tensor_ {
-            id: TensorId::new(),
-            storage: self.storage.clone(),
-            layout: self.layout.clone(),
-            op: BackpropOp::none(),
-            is_variable: false,
-            dtype: self.dtype,
-            device: self.device.clone(),
-        };
-        Ok(Tensor(Arc::new(tensor_)))
+        if self.op.is_none() && !self.is_variable {
+            Ok(self.clone())
+        } else {
+            let tensor_ = Tensor_ {
+                id: TensorId::new(),
+                storage: self.storage.clone(),
+                layout: self.layout.clone(),
+                op: BackpropOp::none(),
+                is_variable: false,
+                dtype: self.dtype,
+                device: self.device.clone(),
+            };
+            Ok(Tensor(Arc::new(tensor_)))
+        }
     }
 
     /// If the target device is the same as the tensor device, only a shallow copy is performed.
@@ -2198,6 +2293,11 @@ impl Tensor {
         m.forward(self)
     }
 
+    /// Run the `forward` method of `m` on `self`.
+    pub fn apply_t<M: crate::ModuleT>(&self, m: &M, train: bool) -> Result<Self> {
+        m.forward_t(self, train)
+    }
+
     pub(crate) fn storage(&self) -> std::sync::RwLockReadGuard<'_, Storage> {
         self.storage.read().unwrap()
     }
@@ -2311,6 +2411,23 @@ impl Tensor {
         c: C,
     ) -> Result<Self> {
         self.apply_op3_arc(t2, t3, Arc::new(Box::new(c)))
+    }
+
+    /// Normalize a 'relative' axis value: positive values are kept, negative
+    /// values means counting the dimensions from the back.
+    pub fn normalize_axis(&self, axis: i64) -> Result<usize> {
+        let rank = self.rank() as i64;
+        if rank <= axis {
+            crate::bail!("axis {axis} is too large, tensor rank {rank}")
+        } else if 0 <= axis {
+            Ok(axis as usize)
+        } else {
+            let naxis = rank + axis;
+            if naxis < 0 {
+                crate::bail!("axis {axis} is too small, tensor rank {rank}")
+            }
+            Ok(naxis as usize)
+        }
     }
 }
 

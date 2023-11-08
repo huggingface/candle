@@ -77,7 +77,21 @@ impl VarBuilder {
         }
     }
 
+    pub fn get_no_shape(&self, name: &str) -> Result<Arc<QTensor>> {
+        let path = self.path(name);
+        match self.data.get(&path) {
+            None => {
+                candle::bail!("cannot find tensor {name}")
+            }
+            Some(qtensor) => Ok(qtensor.clone()),
+        }
+    }
+
     pub fn device(&self) -> &Device {
         &self.device
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.data.contains_key(key)
     }
 }

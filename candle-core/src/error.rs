@@ -142,6 +142,9 @@ pub enum Error {
     #[error("{op} expects at least one tensor")]
     OpRequiresAtLeastOneTensor { op: &'static str },
 
+    #[error("{op} expects at least two tensors")]
+    OpRequiresAtLeastTwoTensors { op: &'static str },
+
     #[error("backward is not supported for {op}")]
     BackwardNotSupported { op: &'static str },
 

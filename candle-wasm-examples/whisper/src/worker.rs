@@ -349,9 +349,10 @@ impl Decoder {
             .map(|v| *v as f32 / 32768.)
             .collect();
         console_log!("pcm data loaded {}", pcm_data.len());
-        let mel = crate::audio::pcm_to_mel(&pcm_data, &self.mel_filters)?;
+        let mel = crate::audio::pcm_to_mel(self.model.config(), &pcm_data, &self.mel_filters)?;
         let mel_len = mel.len();
-        let mel = Tensor::from_vec(mel, (1, m::N_MELS, mel_len / m::N_MELS), &device)?;
+        let n_mels = self.model.config().num_mel_bins;
+        let mel = Tensor::from_vec(mel, (1, n_mels, mel_len / n_mels), &device)?;
         console_log!("loaded mel: {:?}", mel.dims());
         let segments = self.run(&mel)?;
         Ok(segments)

@@ -7,7 +7,7 @@ use std::sync::Arc;
 pub use crate::models::stable_lm::Config;
 use crate::models::stable_lm::RotaryEmbedding;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
 struct MLP {
     gate_proj: Linear,
@@ -43,7 +43,7 @@ impl Module for MLP {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Attention {
     q_proj: Linear,
     k_proj: Linear,
@@ -168,7 +168,7 @@ impl Attention {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
@@ -213,7 +213,7 @@ impl DecoderLayer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,

@@ -1808,6 +1808,16 @@ impl BackendStorage for CudaStorage {
         Ok(res_t)
     }
 
+    fn conv_transpose1d(
+        &self,
+        _: &Layout,
+        _: &Self,
+        _: &Layout,
+        _: &crate::conv::ParamsConvTranspose1D,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     #[cfg(not(feature = "cudnn"))]
     fn conv2d(
         &self,
@@ -2171,7 +2181,7 @@ impl BackendStorage for CudaStorage {
                 if src_l.is_contiguous() {
                     dev.dtod_copy(&src, &mut dst).w()?
                 } else {
-                    let func = dev.get_or_load_func("ucopy_64", kernels::UNARY)?;
+                    let func = dev.get_or_load_func("ucopy_f64", kernels::UNARY)?;
                     // SAFETY: Set later by running the kernel.
                     let params = (el_count, dims.len(), &ds, &src, &mut dst);
                     // SAFETY: ffi.
