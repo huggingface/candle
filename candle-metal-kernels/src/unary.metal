@@ -17,6 +17,7 @@ METAL_FUNC uint get_strided_index(
 
 template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
 template <typename T> METAL_FUNC T neg(T in){ return -in; }
+template <typename T> METAL_FUNC T id(T in){ return in; }
 
 
 using namespace metal;
@@ -68,6 +69,8 @@ UNARY_OP(sqr)
 UNARY_OP(sqrt)
 UNARY_OP(neg)
 UNARY_OP(exp)
+UNARY(id, float, copy_float, copy_float_strided)
+UNARY(id, half, copy_half, copy_half_strided)
 
 #if __METAL_VERSION__ >= 310
 BFLOAT_UNARY_OP(cos)

@@ -51,7 +51,7 @@ macro_rules! ops{
 }
 
 pub mod unary {
-    ops!(cos, sin, exp, sqr, sqrt, neg);
+    ops!(cos, sin, exp, sqr, sqrt, neg, copy);
 }
 pub mod binary {
     ops!(add, sub, mul, div);
@@ -210,11 +210,12 @@ pub fn call_unary_strided(
     command_buffer: &CommandBufferRef,
     kernels: &Kernels,
     name: unary::strided::Kernel,
-    input: &Buffer,
     shape: &[usize],
+    input: &Buffer,
     strides: &[usize],
     offset: usize,
     output: &mut Buffer,
+    output_offset: usize,
 ) -> Result<(), MetalKernelError> {
     let func = kernels.load_function(device, Source::Unary, name.0)?;
     let pipeline_state_descriptor = ComputePipelineDescriptor::new();
@@ -245,7 +246,7 @@ pub fn call_unary_strided(
     );
 
     encoder.set_buffer(4, Some(&input), offset as u64);
-    encoder.set_buffer(5, Some(&output), 0);
+    encoder.set_buffer(5, Some(&output), output_offset as u64);
 
     let width = output.length();
 
@@ -434,6 +435,53 @@ pub fn void_ptr<T>(v: &T) -> *const c_void {
     (v as *const T).cast()
 }
 
+pub fn call_affine(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    size: usize,
+    input: &Buffer,
+    output: &mut Buffer,
+    mul: f32,
+    add: f32,
+) -> Result<(), MetalKernelError> {
+    let func = kernels.load_function(device, Source::Affine, "affine_float")?;
+    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
+    pipeline_state_descriptor.set_compute_function(Some(&func));
+
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(
+            pipeline_state_descriptor.compute_function().unwrap(),
+        )
+        .unwrap();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_bytes(0, core::mem::size_of::<usize>() as u64, void_ptr(&size));
+    encoder.set_bytes(1, core::mem::size_of::<f32>() as u64, void_ptr(&mul));
+    encoder.set_bytes(2, core::mem::size_of::<f32>() as u64, void_ptr(&add));
+    encoder.set_buffer(3, Some(&input), 0);
+    encoder.set_buffer(4, Some(&output), 0);
+
+    let thread_group_count = MTLSize {
+        width: 1,
+        height: 1,
+        depth: 1,
+    };
+
+    let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), size as u64);
+    let thread_group_size = MTLSize {
+        width,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,11 +586,12 @@ mod tests {
             &command_buffer,
             &kernels,
             kernel,
-            &input,
             shape,
+            &input,
             strides,
             offset,
             &mut output,
+            0,
         )
         .unwrap();
         command_buffer.commit();
@@ -682,82 +731,52 @@ mod tests {
         assert_eq!(approx(expected, 4), vec![0.5403; 10_000]);
     }
 
-    #[test]
-    fn affine() {
+    fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
         let device = device();
-        let options = CompileOptions::new();
-        let library = device.new_library_with_source(AFFINE, &options).unwrap();
-
-        let input = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let output = [2.0f32, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-        let shape = vec![4usize, 2];
-        let strides = vec![2usize, 1];
-        let mul: f32 = 1.5;
-        let add: f32 = 1.1;
-
-        let function = library.get_function("affine", None).unwrap();
-        let pipeline = device
-            .new_compute_pipeline_state_with_function(&function)
-            .unwrap();
-        let options = MTLResourceOptions::StorageModeManaged;
-
+        let kernels = Kernels::new();
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
-        let encoder = command_buffer.new_compute_command_encoder();
+        let options = MTLResourceOptions::StorageModeManaged;
 
-        let input_size = (input.len() * mem::size_of::<f32>()) as NSUInteger;
-        let output_size = (output.len() * mem::size_of::<f32>()) as NSUInteger;
-
-        encoder.set_compute_pipeline_state(&pipeline);
-        encoder.set_threadgroup_memory_length(0, output_size as NSUInteger);
-
-        let inputs_buffer = device.new_buffer_with_data(void_ptr(&input), input_size, options);
-        let outputs_buffer = device.new_buffer_with_data(void_ptr(&output), output_size, options);
-
-        let dim: usize = shape.iter().product();
-        let num_dims = shape.len();
-        encoder.set_bytes(0, core::mem::size_of::<usize>() as u64, void_ptr(&dim));
-        encoder.set_bytes(1, core::mem::size_of::<usize>() as u64, void_ptr(&num_dims));
-        encoder.set_bytes(
-            2,
-            (core::mem::size_of::<usize>() * shape.len()) as u64,
-            shape.as_ptr() as *const c_void,
+        let input = device.new_buffer_with_data(
+            v.as_ptr() as *const core::ffi::c_void,
+            (v.len() * core::mem::size_of::<T>()) as u64,
+            options,
         );
-        encoder.set_bytes(
-            3,
-            (core::mem::size_of::<usize>() * strides.len()) as u64,
-            strides.as_ptr() as *const c_void,
-        );
+        let mut output = device.new_buffer((v.len() * core::mem::size_of::<T>()) as u64, options);
 
-        encoder.set_buffer(4, Some(&inputs_buffer), 0);
-        encoder.set_buffer(5, Some(&outputs_buffer), 0);
+        let size = v.len();
 
-        encoder.set_bytes(6, core::mem::size_of::<f32>() as u64, void_ptr(&mul));
-        encoder.set_bytes(7, core::mem::size_of::<f32>() as u64, void_ptr(&add));
-
-        let thread_group_count = MTLSize {
-            width: 1,
-            height: 1,
-            depth: 1,
-        };
-
-        let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), dim as u64);
-        println!("WIDTH {width}");
-        let thread_group_size = MTLSize {
-            width,
-            height: 1,
-            depth: 1,
-        };
-
-        encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-        encoder.end_encoding();
+        call_affine(
+            &device,
+            &command_buffer,
+            &kernels,
+            size,
+            &input,
+            &mut output,
+            mul as f32,
+            add as f32,
+        )
+        .unwrap();
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
-        let expected = vec![2.6, 4.1, 5.6, 7.1, 8.6, 10.1, 11.6, 13.1];
-        let result = outputs_buffer.read_to_vec::<f32>(output.len());
-        println!("Result {:?}", result.as_ptr());
-        assert_eq!(result, expected);
+        output.read_to_vec::<T>(v.len())
+    }
+
+    #[test]
+    fn affine() {
+        let input = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let mul = 1.5;
+        let add = 1.1;
+        let result = run_affine(&input, mul, add);
+        assert_eq!(result, vec![2.6, 4.1, 5.6, 7.1, 8.6, 10.1, 11.6, 13.1]);
+
+        let input = [1.0f32; 40_000];
+        let mul = 1.5;
+        let add = 1.1;
+        let result = run_affine(&input, mul, add);
+        assert_eq!(result, vec![2.6; 40_000]);
     }
 
     #[test]
@@ -826,7 +845,6 @@ mod tests {
             2.0, 3.0, 4.0, 1.0, 1.0, 1.0, 8.0, 9.0, 10.0, 1.0, 1.0, 1.0, 5.0, 6.0, 7.0,
         ];
         let result = outputs_buffer.read_to_vec::<f32>(right.len());
-        println!("Result {:?}", result.as_ptr());
         assert_eq!(result, expected);
     }
 

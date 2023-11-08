@@ -111,89 +111,28 @@ impl BackendStorage for MetalStorage {
         let el = shape.elem_count();
         let dtype = self.dtype;
 
-        debug!("{shape:?} {el:?} {:?}", layout.stride());
-        let output_buffer = device.new_buffer(el, self.dtype);
+        assert!(layout.is_contiguous());
+        assert_eq!(dtype, DType::F32);
+
+        let mut buffer = device.new_buffer(el, self.dtype);
+        let command_buffer = self.device.command_queue.new_command_buffer();
+        candle_metal_kernels::call_affine(
+            &device.device,
+            &command_buffer,
+            &device.kernels,
+            el,
+            &self.buffer,
+            &mut buffer,
+            mul as f32,
+            add as f32,
+        )
+        .unwrap();
+        command_buffer.commit();
         return Ok(Self {
-            buffer: output_buffer,
+            buffer,
             device: device.clone(),
             dtype,
         });
-        let function = self
-            .device
-            .kernels
-            .load_function(&device.device, Source::Affine, "affine")
-            .map_err(MetalError::from)?;
-
-        let pipeline = device
-            .new_compute_pipeline_state_with_function(&function)
-            .map_err(MetalError::msg)?;
-        let command_buffer = self.device.command_queue.new_command_buffer();
-
-        assert_eq!(output_buffer.length(), self.buffer.length());
-
-        let length = el;
-        let encoder = command_buffer.new_compute_command_encoder();
-        encoder.set_compute_pipeline_state(&pipeline);
-        // encoder.set_threadgroup_memory_length(0, output_size as NSUInteger);
-
-        encoder.set_bytes(0, 4, void_ptr(&el));
-        encoder.set_bytes(1, 4, void_ptr(&dims));
-        encoder.set_bytes(
-            2,
-            (mem::size_of::<usize>() * dims.len()) as u64,
-            dims.as_ptr() as *const core::ffi::c_void,
-        );
-        encoder.set_bytes(
-            3,
-            (mem::size_of::<usize>() * layout.stride().len()) as u64,
-            layout.stride().as_ptr() as *const core::ffi::c_void,
-        );
-        encoder.set_buffer(4, Some(&self.buffer), 0);
-        encoder.set_buffer(5, Some(&output_buffer), 0);
-
-        encoder.set_bytes(6, mem::size_of::<f32>() as u64, void_ptr(&(mul as f32)));
-        encoder.set_bytes(7, mem::size_of::<f32>() as u64, void_ptr(&(add as f32)));
-
-        let grid_size = MTLSize {
-            width: 1,
-            height: 1,
-            depth: 1,
-        };
-
-        let thread_group_size = MTLSize {
-            width: std::cmp::min(pipeline.max_total_threads_per_threadgroup(), el as u64),
-            height: 1,
-            depth: 1,
-        };
-
-        encoder.dispatch_thread_groups(grid_size, thread_group_size);
-        encoder.end_encoding();
-
-        let start = std::time::Instant::now();
-        command_buffer.commit();
-        // debug!(
-        //     "Affine {:?}({:?}, {:?}) - {:?}",
-        //     command_buffer.status(),
-        //     self.buffer.length(),
-        //     output_buffer.length(),
-        //     start.elapsed()
-        // );
-        // command_buffer.wait_until_completed();
-        debug!(
-            "Affine {:?} - {:?}",
-            command_buffer.status(),
-            start.elapsed()
-        );
-
-        // let capture = metal::CaptureManager::shared();
-        // capture.stop_capture();
-        // panic!("Done");
-
-        Ok(Self {
-            buffer: output_buffer,
-            device: device.clone(),
-            dtype,
-        })
     }
 
     fn powf(&self, _: &Layout, _: f64) -> Result<Self> {
@@ -288,12 +227,6 @@ impl BackendStorage for MetalStorage {
         let dims = shape.dims();
         let el_count = shape.elem_count();
         let mut buffer = device.new_buffer(el_count, dtype);
-        // TODO remove
-        // return Ok(Self {
-        //     buffer,
-        //     device: device.clone(),
-        //     dtype,
-        // });
         let command_buffer = device.command_queue.new_command_buffer();
         if layout.is_contiguous() {
             use candle_metal_kernels::unary::contiguous;
@@ -547,7 +480,11 @@ impl BackendStorage for MetalStorage {
     }
 
     fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
-        // todo!("TODO Index select {:?} {ids:?} {l:?} {ids_l:?} {dim:?}", self.buffer.length());
+        debug!(
+            "TODO Index select {:?} {:?} {src_l:?} {ids_l:?} {dim:?}",
+            self.buffer.length(),
+            ids.buffer.length(),
+        );
         let src = self;
         let ids_shape = ids_l.shape();
         let ids_dims = ids_shape.dims();
@@ -607,8 +544,46 @@ impl BackendStorage for MetalStorage {
         )
     }
 
-    fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()> {
-        debug!("TODO Copy strided");
+    fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
+        let src_shape = src_l.shape();
+        let dims = src_shape.dims();
+        let el_count = src_shape.elem_count();
+        if el_count == 0 {
+            return Ok(());
+        }
+        if src_l.is_contiguous() {
+            let command_buffer = self.device.command_queue.new_command_buffer();
+            let blip = command_buffer.new_blit_command_encoder();
+            blip.copy_from_buffer(
+                &self.buffer,
+                src_l.start_offset() as u64,
+                &dst.buffer,
+                dst_offset as u64,
+                self.buffer.length(),
+            );
+        } else {
+            let command_buffer = self.device.command_queue.new_command_buffer();
+            let kernel_name = match self.dtype {
+                DType::F32 => candle_metal_kernels::unary::strided::copy::FLOAT,
+                DType::F16 => candle_metal_kernels::unary::strided::copy::HALF,
+                DType::BF16 => candle_metal_kernels::unary::strided::copy::BFLOAT,
+                dtype => todo!("copy_strided not implemented for {dtype:?}"),
+            };
+            candle_metal_kernels::call_unary_strided(
+                &self.device.device,
+                &command_buffer,
+                &self.device.kernels,
+                kernel_name,
+                src_l.dims(),
+                &self.buffer,
+                &src_l.stride(),
+                src_l.start_offset(),
+                &mut dst.buffer,
+                dst_offset,
+            )
+            .map_err(MetalError::from)?;
+            command_buffer.commit();
+        }
         Ok(())
     }
 }
@@ -662,7 +637,7 @@ impl MetalStorage {
                 }
                 if !lhs_l.is_contiguous() || !rhs_l.is_contiguous() {
                     debug!(
-                        "Didn't implemented non contiguous matmul yet {:?} {:?}",
+                        "TODO non contiguous matmul yet {:?} {:?}",
                         lhs_l.is_contiguous(),
                         rhs_l.is_contiguous()
                     );
@@ -674,30 +649,26 @@ impl MetalStorage {
                 }
 
                 debug!("GEMM");
-                // let command_buffer = self.device.command_queue.new_command_buffer();
-                // encode_gemm::<Float32, Float32, Float32>(
-                //     &self.device,
-                //     &command_buffer,
-                //     transpose_left,
-                //     transpose_right,
-                //     &self.buffer,
-                //     &rhs.buffer,
-                //     &mut out_buffer,
-                //     m as NSUInteger,
-                //     n as NSUInteger,
-                //     k as NSUInteger,
-                //     alpha,
-                //     beta,
-                // )
-                // .map_err(MetalError::from)?;
+                let command_buffer = self.device.command_queue.new_command_buffer();
+                encode_gemm::<Float32, Float32, Float32>(
+                    &self.device,
+                    &command_buffer,
+                    transpose_left,
+                    transpose_right,
+                    &self.buffer,
+                    &rhs.buffer,
+                    &mut out_buffer,
+                    m as NSUInteger,
+                    n as NSUInteger,
+                    k as NSUInteger,
+                    alpha as f32,
+                    beta as f32,
+                    Some(b as NSUInteger),
+                )
+                .map_err(MetalError::from)?;
 
-                // command_buffer.commit();
+                command_buffer.commit();
                 // command_buffer.wait_until_scheduled();
-
-                // println!("lhs {:?} {m} {k}", self.buffer.length());
-                // println!("rhs {:?} {k} {n}", rhs.buffer.length());
-                // println!("out {:?} {m} {n}", out_buffer.length());
-                // println!("lhs {:?}", lhs_l.shape());
 
                 Ok(Self {
                     buffer: out_buffer,
@@ -719,7 +690,6 @@ impl BackendDevice for MetalDevice {
         // let capture = metal::CaptureManager::shared();
         // let descriptor = metal::CaptureDescriptor::new();
         // descriptor.set_destination(metal::MTLCaptureDestination::GpuTraceDocument);
-        // println!("{:?}", std::env::current_dir()?);
         // descriptor.set_capture_device(&device);
         // let mut dir = std::env::current_dir()?;
         // dir.push("out.gputrace");
