@@ -8,6 +8,18 @@ pub struct MetalDevice;
 #[derive(Debug)]
 pub struct MetalStorage;
 
+#[derive(thiserror::Error, Debug)]
+pub enum MetalError {
+    #[error("{0}")]
+    Message(String),
+}
+
+impl From<String> for MetalError {
+    fn from(e: String) -> Self {
+        MetalError::Message(e)
+    }
+}
+
 macro_rules! fail {
     () => {
         unimplemented!("metal support has not been enabled, add `metal` feature to enable.")

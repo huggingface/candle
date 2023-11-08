@@ -221,10 +221,11 @@ impl Benchmark for QMatMul {
     type PreProcessData = (candle::quantized::QMatMul, Tensor);
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
+        let device = Device::Cpu;
         let zeros = vec![candle::quantized::k_quants::BlockQ4_0::zeros(); 4096 * 11008 / 32];
-        let mm = candle::quantized::QTensor::new(zeros, (4096, 11008))?;
+        let mm = candle::quantized::QTensor::new(zeros, (4096, 11008), &device)?;
         let mm = candle::quantized::QMatMul::from_qtensor(mm)?;
-        let arg = Tensor::randn(0f32, 1., (128, 11008), &Device::Cpu)?;
+        let arg = Tensor::randn(0f32, 1., (128, 11008), &device)?;
         Ok((mm, arg))
     }
 

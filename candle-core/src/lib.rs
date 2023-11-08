@@ -49,13 +49,12 @@ mod device;
 pub mod display;
 mod dtype;
 mod dummy_cuda_backend;
+mod dummy_metal_backend;
 pub mod error;
 mod indexer;
 pub mod layout;
 #[cfg(feature = "metal")]
 pub mod metal_backend;
-#[cfg(feature = "accelerate")]
-mod metal_backend;
 #[cfg(feature = "mkl")]
 mod mkl;
 pub mod npy;
@@ -92,10 +91,10 @@ pub use cuda_backend::{CudaDevice, CudaStorage};
 pub use dummy_cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(feature = "metal")]
-pub use metal_backend::{MetalDevice, MetalStorage};
+pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
 
 #[cfg(not(feature = "metal"))]
-pub use dummy_metal_backend::{MetalDevice, MetalStorage};
+pub use dummy_metal_backend::{MetalDevice, MetalError, MetalStorage};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;

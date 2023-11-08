@@ -491,6 +491,64 @@ pub fn call_reduce_contiguous(
     Ok(())
 }
 
+pub fn call_last_softmax(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    kernel_name: &'static str,
+    length: usize,
+    elements_to_sum: usize,
+    input: &Buffer,
+    output: &mut Buffer,
+) -> Result<(), MetalKernelError> {
+    let func = kernels.load_function(device, Source::Reduce, kernel_name)?;
+    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
+    pipeline_state_descriptor.set_compute_function(Some(&func));
+
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(
+            pipeline_state_descriptor.compute_function().unwrap(),
+        )
+        .unwrap();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_bytes(0, core::mem::size_of::<usize>() as u64, void_ptr(&length));
+    encoder.set_bytes(
+        1,
+        core::mem::size_of::<usize>() as u64,
+        void_ptr(&elements_to_sum),
+    );
+    encoder.set_buffer(2, Some(&input), 0);
+    encoder.set_buffer(3, Some(&output), 0);
+
+    let out_length = length / elements_to_sum;
+
+    let thread_group_count = MTLSize {
+        width: out_length as u64,
+        height: 1,
+        depth: 1,
+    };
+
+    let width = std::cmp::min(
+        pipeline.max_total_threads_per_threadgroup(),
+        // (elements_to_sum as u64 + 2 - 1) / 2,
+        elements_to_sum as u64,
+    )
+    .next_power_of_two();
+
+    let thread_group_size = MTLSize {
+        width,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
 pub fn void_ptr<T>(v: &T) -> *const c_void {
     (v as *const T).cast()
 }
@@ -954,6 +1012,39 @@ mod tests {
         output.read_to_vec::<T>(out_length)
     }
 
+    fn run_softmax<T: Clone + std::fmt::Debug>(
+        v: &[T],
+        last_dim: usize,
+        name: &'static str,
+    ) -> Vec<T> {
+        let device = device();
+        let kernels = Kernels::new();
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+        let options = MTLResourceOptions::StorageModeManaged;
+        let input = device.new_buffer_with_data(
+            v.as_ptr() as *const core::ffi::c_void,
+            (v.len() * core::mem::size_of::<T>()) as u64,
+            options,
+        );
+        let mut output = device.new_buffer((v.len() * core::mem::size_of::<T>()) as u64, options);
+        call_last_softmax(
+            &device,
+            &command_buffer,
+            &kernels,
+            name,
+            v.len(),
+            last_dim,
+            &input,
+            &mut output,
+        )
+        .unwrap();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        output.read_to_vec::<T>(v.len())
+    }
+
     #[test]
     fn reduce_sum() {
         let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -970,5 +1061,32 @@ mod tests {
 
         let results = run_reduce(&v, out_length, "fast_sum_float");
         assert_eq!(approx(results, 4), vec![6.0, 15.0]);
+    }
+
+    #[test]
+    fn softmax() {
+        let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let last_dim = 6;
+        let results = run_softmax(&v, last_dim, "softmax_float");
+        assert_eq!(
+            approx(results, 4),
+            vec![0.0043, 0.0116, 0.0315, 0.0858, 0.2331, 0.6337]
+        );
+
+        let v = vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let last_dim = 6;
+        let results = run_softmax(&v, last_dim, "softmax_float");
+        assert_eq!(
+            approx(results, 4),
+            vec![0.0043, 0.0116, 0.0315, 0.0858, 0.2331, 0.6337]
+        );
+
+        let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let last_dim = 3;
+        let results = run_softmax(&v, last_dim, "softmax_float");
+        assert_eq!(
+            approx(results, 4),
+            vec![0.0900, 0.2447, 0.6652, 0.0900, 0.2447, 0.6652]
+        );
     }
 }

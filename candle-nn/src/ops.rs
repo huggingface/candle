@@ -1,6 +1,5 @@
-use candle::{CpuStorage, Layout, Result, Shape, Tensor};
+use candle::{backend::BackendStorage, CpuStorage, DType, Layout, Result, Shape, Tensor};
 use rayon::prelude::*;
-use tracing::debug;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
@@ -209,7 +208,31 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         storage: &candle::MetalStorage,
         layout: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
-        debug!("TODO softmax-last-dim");
+        // debug!("TODO softmax-last-dim");
+        assert!(layout.is_contiguous());
+        assert_eq!(storage.dtype(), DType::F32);
+        let el = layout.shape().elem_count();
+        let dims = layout.shape().dims();
+        let last_dim = dims[dims.len() - 1];
+
+        let device: &candle::MetalDevice = storage.device();
+        let dtype = storage.dtype();
+
+        let command_buffer = device.command_queue().new_command_buffer();
+        let kernels = device.kernels();
+        let mut output = device.new_buffer(el, dtype);
+        candle_metal_kernels::call_last_softmax(
+            &device.device(),
+            &command_buffer,
+            &kernels,
+            "softmax_float",
+            el,
+            last_dim,
+            &storage.buffer(),
+            &mut output,
+        )
+        .unwrap();
+        command_buffer.commit();
         Ok((storage.clone(), layout.shape().clone()))
     }
 }

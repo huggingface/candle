@@ -15,6 +15,7 @@ candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
 half = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+candle-metal-kernels = { path = "../candle-metal-kernels", version = "0.3.0", optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
 rayon = { workspace = true }
@@ -29,5 +30,5 @@ clap = { workspace = true }
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
-metal = ["candle/metal"]
+metal = ["candle/metal", "candle-metal-kernels"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]

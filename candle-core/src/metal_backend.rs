@@ -9,7 +9,7 @@ use half::{bf16, f16};
 use metal;
 use metal::mps::matrix::encode_gemm;
 use metal::mps::Float32;
-use metal::{Buffer, CompileOptions, MTLResourceOptions, MTLSize, NSUInteger};
+use metal::{Buffer, CommandQueue, CompileOptions, MTLResourceOptions, MTLSize, NSUInteger};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -64,7 +64,19 @@ impl MetalDevice {
         self.registry_id()
     }
 
-    fn new_buffer(&self, element_count: usize, dtype: DType) -> Buffer {
+    pub fn command_queue(&self) -> &CommandQueue {
+        &self.command_queue
+    }
+
+    pub fn kernels(&self) -> &Kernels {
+        &self.kernels
+    }
+
+    pub fn device(&self) -> &metal::Device {
+        &self.device
+    }
+
+    pub fn new_buffer(&self, element_count: usize, dtype: DType) -> Buffer {
         let size = (element_count * dtype.size_in_bytes()) as u64;
         // debug!("Allocate 1 - buffer size {size}");
         self.device
@@ -242,13 +254,11 @@ impl BackendStorage for MetalStorage {
             );
         }
 
-        let start = std::time::Instant::now();
         command_buffer.commit();
         // command_buffer.wait_until_scheduled();
         debug!(
-            "cast {:?} - {:?} - {:?} - {:?}",
+            "cast {:?} - {:?} - {:?}",
             dtype,
-            start.elapsed(),
             self.buffer.length(),
             buffer.length()
         );
@@ -667,6 +677,10 @@ impl MetalStorage {
             }
             _ => todo!("Unimplemented matmul for this pair"),
         }
+    }
+
+    pub fn buffer(&self) -> &Buffer {
+        &self.buffer
     }
 }
 
