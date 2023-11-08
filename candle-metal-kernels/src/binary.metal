@@ -62,7 +62,7 @@ BINARY(FN, float, float, NAME##_float, NAME##_float_strided); \
 BINARY(FN, half, half, NAME##_half, NAME##_half_strided);
 
 #define BFLOAT_BINARY_OP(FN, NAME) \
-BINARY(NAME, bfloat, bfloat, NAME##_bfloat, NAME##_bfloat_strided);
+BINARY(FN, bfloat, bfloat, NAME##_bfloat, NAME##_bfloat_strided);
 
 
 BINARY_OP(x + y, add)
@@ -71,8 +71,8 @@ BINARY_OP(x * y, mul)
 BINARY_OP(x / y, div)
 
 #if __METAL_VERSION__ >= 310
-BFLOAT_BINARY_OP(x + y, badd)
-BFLOAT_BINARY_OP(x - y, bsub)
-BFLOAT_BINARY_OP(x * y, bmul)
-BFLOAT_BINARY_OP(x / y, bdiv)
+BFLOAT_BINARY_OP(x + y, add)
+BFLOAT_BINARY_OP(x - y, sub)
+BFLOAT_BINARY_OP(x * y, mul)
+BFLOAT_BINARY_OP(x / y, div)
 #endif
