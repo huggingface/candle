@@ -144,7 +144,11 @@ impl BackendStorage for MetalStorage {
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
-        debug!("TODO reduce_op {op:?}");
+        // debug!("TODO reduce_op {op:?} {sum_dims:?}");
+        assert!(sum_dims.len() == 1);
+        assert!(sum_dims[0] == layout.shape().rank() - 1);
+        assert!(layout.is_contiguous());
+        let device = self.device.clone();
         let src_stride = layout.stride();
         let src_dims = layout.shape().dims();
         let src_el: usize = src_dims.iter().product();
@@ -163,56 +167,41 @@ impl BackendStorage for MetalStorage {
             dims.push(src_dims[dim_idx]);
             stride.push(src_stride[dim_idx]);
         }
-        // let el_to_sum_per_block = src_el / dst_el;
-        // // The reduction loop requires the shared array to be properly initialized and for
-        // // this we want the number of threads to be a power of two.
-        // let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
-        // let cfg = LaunchConfig {
-        //     // TODO: Maybe use grid_y if the output is too large?
-        //     // TODO: Specialized implementation when reducing on no or all dimensions or when
-        //     // reducing only aggregate a small number of elements together.
-        //     grid_dim: (dst_el as u32, 1, 1),
-        //     block_dim: (block_dim as u32, 1, 1),
-        //     shared_mem_bytes: 0,
-        // };
-        // let ds = dev
-        //     .htod_copy([dims.as_slice(), stride.as_slice()].concat())
-        //     .w()?;
-        // let src = &src.slice(layout.start_offset()..);
-        // let (name, check_empty, return_index) = match self.1 {
-        //     ReduceOp::Sum => ("fast_sum", false, false),
-        //     ReduceOp::Min => ("fast_min", true, false),
-        //     ReduceOp::Max => ("fast_max", true, false),
-        //     ReduceOp::ArgMin => ("fast_argmin", true, true),
-        //     ReduceOp::ArgMax => ("fast_argmax", true, true),
-        // };
-        // if check_empty && layout.shape().elem_count() == 0 {
-        //     Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
-        // }
-        // let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::REDUCE)?;
-        // if return_index {
-        //     // SAFETY: filled in by the follow up kernel.
-        //     let out = unsafe { dev.alloc::<u32>(dst_el) }.w()?;
-        //     let params = (src_el, el_to_sum_per_block, src_dims.len(), &ds, src, &out);
-        //     // SAFETY: ffi.
-        //     unsafe { func.launch(cfg, params) }.w()?;
-        //     Ok(S::U32(out))
-        // } else {
-        //     // SAFETY: filled in by the follow up kernel.
-        //     let out = unsafe { dev.alloc::<T>(dst_el) }.w()?;
-        //     let params = (src_el, el_to_sum_per_block, src_dims.len(), &ds, src, &out);
-        //     // SAFETY: ffi.
-        //     unsafe { func.launch(cfg, params) }.w()?;
-        //     Ok(wrap(out))
-        // }
-        // Ok(self.clone())
-        // todo!()
-        let dtype = self.dtype;
-        let device = self.device();
-        let buffer = device.new_buffer(dst_el, dtype);
+
+        let el_to_sum_per_block = src_el / dst_el;
+        // The reduction loop requires the shared array to be properly initialized and for
+        // this we want the number of threads to be a power of two.
+        let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
+        let (name, check_empty, return_index) = match (op, self.dtype) {
+            (ReduceOp::Sum, DType::F32) => ("fast_sum_float", false, false),
+            (ReduceOp::Min, DType::F32) => ("fast_min_float", true, false),
+            (ReduceOp::Max, DType::F32) => ("fast_max_float", true, false),
+            (ReduceOp::ArgMin, DType::F32) => ("fast_argmin_float", true, true),
+            (ReduceOp::ArgMax, DType::F32) => ("fast_argmax_float", true, true),
+            _ => todo!("Reduce op for non float"),
+        };
+        if check_empty && layout.shape().elem_count() == 0 {
+            Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
+        }
+        let dtype = if return_index { DType::U32 } else { self.dtype };
+        let mut buffer = device.new_buffer(dst_el, dtype);
+        let command_buffer = self.device.command_queue.new_command_buffer();
+        candle_metal_kernels::call_reduce_contiguous(
+            &device.device,
+            &command_buffer,
+            &device.kernels,
+            name,
+            src_el,
+            dst_el,
+            &self.buffer,
+            &mut buffer,
+        )
+        .map_err(MetalError::from)?;
+        command_buffer.commit();
+
         Ok(Self {
             buffer,
-            device: device.clone(),
+            device,
             dtype,
         })
     }

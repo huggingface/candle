@@ -12,6 +12,7 @@ license.workspace = true
 metal = { workspace = true }
 once_cell = "1.18.0"
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 half = { workspace = true }

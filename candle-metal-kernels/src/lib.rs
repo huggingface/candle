@@ -11,6 +11,7 @@ const INDEXING: &str = include_str!("indexing.metal");
 const UNARY: &str = include_str!("unary.metal");
 const BINARY: &str = include_str!("binary.metal");
 const CAST: &str = include_str!("cast.metal");
+const REDUCE: &str = include_str!("reduce.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
@@ -19,6 +20,7 @@ pub enum Source {
     Unary,
     Binary,
     Cast,
+    Reduce,
 }
 
 macro_rules! ops{
@@ -119,6 +121,7 @@ impl Kernels {
             Source::Binary => BINARY,
             Source::Indexing => INDEXING,
             Source::Cast => CAST,
+            Source::Reduce => REDUCE,
         }
     }
 
@@ -420,6 +423,63 @@ pub fn call_cast_contiguous(
     };
 
     let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), length as u64);
+    let thread_group_size = MTLSize {
+        width,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+pub fn call_reduce_contiguous(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    kernel_name: &'static str,
+    length: usize,
+    out_length: usize,
+    input: &Buffer,
+    output: &mut Buffer,
+) -> Result<(), MetalKernelError> {
+    let func = kernels.load_function(device, Source::Reduce, kernel_name)?;
+    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
+    pipeline_state_descriptor.set_compute_function(Some(&func));
+
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(
+            pipeline_state_descriptor.compute_function().unwrap(),
+        )
+        .unwrap();
+
+    let elements_to_sum = length / out_length;
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_bytes(0, core::mem::size_of::<usize>() as u64, void_ptr(&length));
+    encoder.set_bytes(
+        1,
+        core::mem::size_of::<usize>() as u64,
+        void_ptr(&elements_to_sum),
+    );
+    encoder.set_buffer(2, Some(&input), 0);
+    encoder.set_buffer(3, Some(&output), 0);
+
+    let thread_group_count = MTLSize {
+        width: out_length as u64,
+        height: 1,
+        depth: 1,
+    };
+
+    let width = std::cmp::min(
+        pipeline.max_total_threads_per_threadgroup(),
+        (elements_to_sum as u64 + 2 - 1) / 2,
+    )
+    .next_power_of_two();
+
     let thread_group_size = MTLSize {
         width,
         height: 1,
@@ -858,5 +918,57 @@ mod tests {
         let expected: Vec<f16> = v.iter().map(|v| f16::from_f32(v.to_f32().cos())).collect();
         assert_eq!(approx_f16(results, 4), vec![0.54, -0.4165, -0.9902]);
         assert_eq!(approx_f16(expected, 4), vec![0.5405, -0.4163, -0.9902]);
+    }
+
+    fn run_reduce<T: Clone + std::fmt::Debug>(
+        v: &[T],
+        out_length: usize,
+        name: &'static str,
+    ) -> Vec<T> {
+        let device = device();
+        let kernels = Kernels::new();
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+        let options = MTLResourceOptions::StorageModeManaged;
+        let input = device.new_buffer_with_data(
+            v.as_ptr() as *const core::ffi::c_void,
+            (v.len() * core::mem::size_of::<T>()) as u64,
+            options,
+        );
+        let mut output =
+            device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
+        call_reduce_contiguous(
+            &device,
+            &command_buffer,
+            &kernels,
+            name,
+            v.len(),
+            out_length,
+            &input,
+            &mut output,
+        )
+        .unwrap();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        output.read_to_vec::<T>(out_length)
+    }
+
+    #[test]
+    fn reduce_sum() {
+        let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let out_length = 1;
+
+        let results = run_reduce(&v, out_length, "fast_sum_float");
+        assert_eq!(approx(results, 4), vec![21.0]);
+    }
+
+    #[test]
+    fn reduce_sum2() {
+        let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let out_length = 2;
+
+        let results = run_reduce(&v, out_length, "fast_sum_float");
+        assert_eq!(approx(results, 4), vec![6.0, 15.0]);
     }
 }
