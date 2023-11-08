@@ -231,7 +231,9 @@ impl T5LayerFF {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
-        let (dense_act, gated_dense_act) = if cfg.feed_forward_proj == Activation::NewGelu {
+        let gated = cfg.feed_forward_proj == Activation::NewGelu
+            || cfg.feed_forward_proj == Activation::GatedSilu;
+        let (dense_act, gated_dense_act) = if gated {
             (
                 None,
                 Some(T5DenseGatedActDense::load(vb.pp("DenseReluDense"), cfg)?),

@@ -12,6 +12,8 @@ pub enum Activation {
     Relu2,
     Relu6,
     Silu,
+    #[serde(rename = "gated-silu")]
+    GatedSilu,
     Sigmoid,
     HardSigmoid,
     Swiglu,
@@ -31,6 +33,7 @@ impl super::Module for Activation {
             Self::Relu2 => xs.relu()?.sqr(),
             Self::Relu6 => xs.clamp(0f32, 6f32),
             Self::Silu => crate::ops::silu(xs),
+            Self::GatedSilu => crate::ops::silu(xs),
             Self::Sigmoid => crate::ops::sigmoid(xs),
             Self::HardSigmoid => crate::ops::hard_sigmoid(xs),
             Self::Swiglu => crate::ops::swiglu(xs),
