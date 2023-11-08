@@ -27,11 +27,13 @@ kernel void FN_NAME( \
     uint threadgroup_size [[threads_per_threadgroup]], \
     uint thread_index [[thread_index_in_threadgroup]] \
 ) { \
+    const TYPENAME m = TYPENAME(mul); \
+    const TYPENAME a = TYPENAME(add); \
     const size_t length = (dim  + threadgroup_size - 1) / threadgroup_size; \
     const size_t start = thread_index * length; \
     const size_t stop = min(start + length, dim); \
     for (size_t i = start; i < stop; i++){ \
-        output[i] = input[i] * mul + add; \
+        output[i] = input[i] * m + a; \
     } \
 } \
 
