@@ -144,7 +144,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
-        debug!("TODO reduce_op");
+        debug!("TODO reduce_op {op:?}");
         let src_stride = layout.stride();
         let src_dims = layout.shape().dims();
         let src_el: usize = src_dims.iter().product();
