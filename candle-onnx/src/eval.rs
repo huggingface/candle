@@ -304,7 +304,7 @@ pub fn simple_eval(
                         } else if axis < -num_axis {
                             bail!("wrong axis in concat {axis} for shape {:?}", input.shape())
                         } else {
-                            (num_axis - axis) as usize
+                            (num_axis + axis) as usize
                         };
                         candle_nn::ops::log_softmax(input, axis)?
                     }
@@ -322,7 +322,7 @@ pub fn simple_eval(
                         } else if axis < -num_axis {
                             bail!("wrong axis in concat {axis} for shape {:?}", input.shape())
                         } else {
-                            (num_axis - axis) as usize
+                            (num_axis + axis) as usize
                         };
                         candle_nn::ops::softmax(input, axis)?
                     }
@@ -679,7 +679,7 @@ pub fn simple_eval(
                         inputs[0].shape()
                     )
                 } else {
-                    (num_axis - axis) as usize
+                    (num_axis + axis) as usize
                 };
                 let output = Tensor::cat(&inputs, axis)?;
                 values.insert(node.output[0].clone(), output);
