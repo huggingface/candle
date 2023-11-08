@@ -98,7 +98,7 @@ fn get_attr_opt<'a, T: Attr + ?Sized>(
     }
 }
 
-fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
+pub fn get_tensor(t: &onnx::TensorProto, name: &str) -> Result<Tensor> {
     let dims: Vec<usize> = t.dims.iter().map(|&x| x as usize).collect();
     match DataType::try_from(t.data_type) {
         Ok(DataType::Int32) => {
