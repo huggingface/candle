@@ -61,7 +61,7 @@ where D: serde::de::Deserializer<'de> {
     let activation = serde_plain::from_str(&buf).map_err(serde::de::Error::custom)?;
     return Ok(ActivationWithOptionalGating {
         gated: false,
-        activation: Activation::from(activation),
+        activation: activation,
     });
 }
 
