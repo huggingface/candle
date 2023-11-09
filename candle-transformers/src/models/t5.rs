@@ -59,10 +59,10 @@ where D: serde::de::Deserializer<'de> {
         });
     }
     let activation = serde_plain::from_str(&buf).map_err(serde::de::Error::custom)?;
-    return Ok(ActivationWithOptionalGating {
+    Ok(ActivationWithOptionalGating {
         gated: false,
         activation: activation,
-    });
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
