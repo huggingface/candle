@@ -38,12 +38,12 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 #[derive(Debug, Deserialize, Default, Clone, PartialEq)]
-struct ActivationWithOptionalGating {
-    gated: bool,
-    activation: candle_nn::Activation,
+pub struct ActivationWithOptionalGating {
+    pub gated: bool,
+    pub activation: candle_nn::Activation,
 }
 
-fn deserialize_feed_forward_proj_activation<'de, D>(
+pub fn deserialize_feed_forward_proj_activation<'de, D>(
     deserializer: D,
 ) -> std::result::Result<ActivationWithOptionalGating, D::Error>
 where

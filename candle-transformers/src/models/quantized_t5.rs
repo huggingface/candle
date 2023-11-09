@@ -1,6 +1,7 @@
 // T5 Text Model, quantized version
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
+use crate::models::t5::{deserialize_feed_forward_proj_activation, ActivationWithOptionalGating};
 use crate::models::with_tracing::QMatMul;
 use crate::quantized_nn::Embedding;
 pub use crate::quantized_var_builder::VarBuilder;
@@ -39,38 +40,6 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
     Ok(m)
 }
 
-#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
-struct ActivationWithOptionalGating {
-    gated: bool,
-    activation: candle_nn::Activation,
-}
-
-fn deserialize_feed_forward_proj_activation<'de, D>(
-    deserializer: D,
-) -> std::result::Result<ActivationWithOptionalGating, D::Error>
-where
-    D: serde::de::Deserializer<'de>,
-{
-    let buf = String::deserialize(deserializer)?;
-    if buf == "gated-gelu" {
-        return Ok(ActivationWithOptionalGating {
-            gated: true,
-            activation: candle_nn::Activation::NewGelu,
-        });
-    }
-    if buf == "gated-silu" {
-        return Ok(ActivationWithOptionalGating {
-            gated: true,
-            activation: candle_nn::Activation::Silu,
-        });
-    }
-    let activation = serde_plain::from_str(&buf).map_err(serde::de::Error::custom)?;
-    Ok(ActivationWithOptionalGating {
-        gated: false,
-        activation,
-    })
-}
-
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
     vocab_size: usize,
@@ -87,7 +56,7 @@ pub struct Config {
     layer_norm_epsilon: f64,
     initializer_factor: f64,
     #[serde(default, deserialize_with = "deserialize_feed_forward_proj_activation")]
-    feed_forward_proj: ActivationWithOptionalGating,
+    pub feed_forward_proj: ActivationWithOptionalGating,
     #[serde(default = "default_tie_word_embeddings")]
     tie_word_embeddings: bool,
     #[serde(default = "default_is_decoder")]
