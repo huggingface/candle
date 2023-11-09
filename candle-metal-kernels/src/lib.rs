@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use metal::{
     Buffer, CommandBufferRef, CompileOptions, ComputePipelineDescriptor, Device, Function, Library,
-    MTLSize,
+    MTLSize, NSUInteger,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -30,6 +30,7 @@ macro_rules! ops{
     ($($name:ident),+) => {
 
         pub mod contiguous {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct Kernel(pub(crate) &'static str);
         $(
         pub mod $name {
@@ -42,6 +43,7 @@ macro_rules! ops{
         }
 
         pub mod strided {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct Kernel(pub(crate) &'static str);
         $(
         pub mod $name {
@@ -195,20 +197,25 @@ pub fn call_unary_contiguous(
     encoder.set_buffer(1, Some(input), 0);
     encoder.set_buffer(2, Some(output), 0);
 
+    let threads = std::cmp::min(
+        pipeline.max_total_threads_per_threadgroup(),
+        length as NSUInteger,
+    );
+    let remainder = length as NSUInteger % threads == 0;
+    let thread_groups = length as NSUInteger / threads + if remainder { 0 } else { 1 };
     let thread_group_count = MTLSize {
-        width: 1,
+        width: thread_groups,
         height: 1,
         depth: 1,
     };
 
-    let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), length as u64);
-    let thread_group_size = MTLSize {
-        width,
+    let threads_per_threadgroup = MTLSize {
+        width: threads,
         height: 1,
         depth: 1,
     };
 
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.dispatch_thread_groups(thread_group_count, threads_per_threadgroup);
     encoder.end_encoding();
     Ok(())
 }
