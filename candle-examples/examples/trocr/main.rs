@@ -26,9 +26,6 @@ struct Args {
     #[arg(long)]
     model: Option<String>,
 
-    #[arg(long)]
-    tokenizer: Option<String>,
-
     /// Choose the variant of the model to run.
     #[arg(long, default_value = "base")]
     which: Which,
@@ -47,15 +44,10 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let tokenizer_dec = {
-        let tokenizer = match args.tokenizer {
-            Some(tokenizer) => std::path::PathBuf::from(tokenizer),
-            None => {
-                let name = "tokenizer.json";
-                Api::new()?
-                    .model(args.model.clone().unwrap().to_string())
-                    .get(name)?
-            }
-        };
+        let tokenizer = Api::new()?
+            .model(String::from("ToluClassics/candle-trocr-tokenizer"))
+            .get("tokenizer.json")?;
+
         Tokenizer::from_file(&tokenizer).map_err(E::msg)?
     };
 
