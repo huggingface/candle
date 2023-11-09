@@ -176,7 +176,7 @@ impl T5DenseGatedActDense {
             wi_0,
             wi_1,
             wo,
-            act: Activation::NewGelu,
+            act: Activation::ApproximateGelu,
             span: tracing::span!(tracing::Level::TRACE, "dense-gated-act-dense"),
         })
     }

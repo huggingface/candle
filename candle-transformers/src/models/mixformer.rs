@@ -84,7 +84,7 @@ impl Config {
             n_inner: None,
             n_head: 32,
             rotary_dim: usize::min(32, 2048 / 32),
-            activation_function: Activation::NewGelu,
+            activation_function: Activation::ApproximateGelu,
             layer_norm_epsilon: 1e-5,
             tie_word_embeddings: false,
             pad_vocab_size_multiple: 64,

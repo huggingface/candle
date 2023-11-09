@@ -9,7 +9,7 @@ $ cargo run --example t5 --release -- --model-id "t5-small" --prompt "translate 
 9 tokens generated (2.42 token/s)
 ```
 
-[flan-t5](https://huggingface.co/google/flan-t5-small) models, and [flan-ul2](https://huggingface.co/google/flan-ul2) (with `--revision "refs/pr/25"`) are also supported.
+Variants such as [flan-t5](https://huggingface.co/google/flan-t5-small), [flan-ul2](https://huggingface.co/google/flan-ul2) (with `--revision "refs/pr/25"`), and [Co-EdIT](https://huggingface.co/grammarly/coedit-large) are also supported.
 
 ## Translation with [MADLAD-400](https://arxiv.org/abs/2309.04662)
 

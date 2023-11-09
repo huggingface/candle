@@ -37,6 +37,34 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
     Ok(m)
 }
 
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
+struct ActivationWithOptionalGating {
+    gated: bool,
+    activation: candle_nn::Activation,
+}
+
+fn deserialize_feed_forward_proj_activation<'de, D>(deserializer: D) -> std::result::Result<ActivationWithOptionalGating, D::Error>
+where D: serde::de::Deserializer<'de> {
+    let buf = String::deserialize(deserializer)?;
+    if buf == "gated-gelu" {
+        return Ok(ActivationWithOptionalGating {
+            gated: true,
+            activation: candle_nn::Activation::ApproximateGelu,
+        });
+    }
+    if buf == "gated-silu" {
+        return Ok(ActivationWithOptionalGating {
+            gated: true,
+            activation: candle_nn::Activation::Silu,
+        });
+    }
+    let activation = serde_plain::from_str(&buf).map_err(serde::de::Error::custom)?;
+    return Ok(ActivationWithOptionalGating {
+        gated: false,
+        activation: Activation::from(activation),
+    });
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
     vocab_size: usize,
@@ -52,8 +80,8 @@ pub struct Config {
     dropout_rate: f64,
     layer_norm_epsilon: f64,
     initializer_factor: f64,
-    #[serde(default)]
-    feed_forward_proj: Activation,
+    #[serde(default, deserialize_with = "deserialize_feed_forward_proj_activation")]
+    feed_forward_proj: ActivationWithOptionalGating,
     #[serde(default = "default_tie_word_embeddings")]
     tie_word_embeddings: bool,
     #[serde(default = "default_is_decoder")]
@@ -81,7 +109,10 @@ impl Default for Config {
             dropout_rate: 0.1,
             layer_norm_epsilon: 1e-6,
             initializer_factor: 1.0,
-            feed_forward_proj: Activation::Relu,
+            feed_forward_proj: ActivationWithOptionalGating {
+                gated: false,
+                activation: Activation::Relu,
+            },
             tie_word_embeddings: true,
             is_decoder: false,
             is_encoder_decoder: true,
@@ -102,7 +133,10 @@ impl Config {
             d_model: 768,
             dropout_rate: 0.1,
             eos_token_id: 1,
-            feed_forward_proj: Activation::Relu,
+            feed_forward_proj: ActivationWithOptionalGating {
+                gated: false,
+                activation: Activation::Relu,
+            },
             tie_word_embeddings: true,
             initializer_factor: 1.0,
             is_decoder: false,
@@ -202,7 +236,7 @@ impl T5DenseGatedActDense {
             wi_0,
             wi_1,
             wo,
-            act: Activation::NewGelu,
+            act: cfg.feed_forward_proj.activation,
             span: tracing::span!(tracing::Level::TRACE, "dense-gated-act-dense"),
         })
     }
@@ -231,9 +265,7 @@ impl T5LayerFF {
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
-        let gated = cfg.feed_forward_proj == Activation::NewGelu
-            || cfg.feed_forward_proj == Activation::GatedSilu;
-        let (dense_act, gated_dense_act) = if gated {
+        let (dense_act, gated_dense_act) = if cfg.feed_forward_proj.gated {
             (
                 None,
                 Some(T5DenseGatedActDense::load(vb.pp("DenseReluDense"), cfg)?),
