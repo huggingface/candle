@@ -6,7 +6,7 @@ use serde::Deserialize;
 pub enum Activation {
     #[default]
     Gelu,
-    ApproximateGelu,
+    NewGelu,
     Relu,
     Relu2,
     Relu6,
@@ -25,7 +25,7 @@ impl super::Module for Activation {
         match self {
             Self::Gelu => xs.gelu_erf(),
             // https://github.com/huggingface/transformers/blob/12f043eaeaabfef6f6efea411d98e6f6d3c094b7/src/transformers/activations.py#L49-L78
-            Self::ApproximateGelu => xs.gelu(),
+            Self::NewGelu => xs.gelu(),
             Self::Relu => xs.relu(),
             Self::Relu2 => xs.relu()?.sqr(),
             Self::Relu6 => xs.clamp(0f32, 6f32),

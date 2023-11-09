@@ -49,7 +49,7 @@ where D: serde::de::Deserializer<'de> {
     if buf == "gated-gelu" {
         return Ok(ActivationWithOptionalGating {
             gated: true,
-            activation: candle_nn::Activation::ApproximateGelu,
+            activation: candle_nn::Activation::NewGelu,
         });
     }
     if buf == "gated-silu" {
