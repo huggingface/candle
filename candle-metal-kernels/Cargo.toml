@@ -10,10 +10,10 @@ categories = ["science"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-metal = { workspace = true }
+metal = { git = "https://github.com/ivarflakstad/metal-rs.git", features = ["mps"] }
 once_cell = "1.18.0"
-thiserror = { workspace = true }
-tracing = { workspace = true }
+thiserror = "1"
+tracing = "0.1.37"
 
 [dev-dependencies]
-half = { workspace = true }
+half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
