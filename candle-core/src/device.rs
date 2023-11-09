@@ -1,6 +1,6 @@
 use crate::backend::BackendDevice;
 use crate::cpu_backend::CpuDevice;
-use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
+use crate::{bail, CpuStorage, DType, Result, Shape, Storage, WithDType};
 
 /// A `DeviceLocation` represents a physical device whereas multiple `Device`
 /// can live on the same location (typically for cuda devices).
@@ -105,14 +105,14 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize, const N4: 
 impl<S: NdArray> NdArray for Vec<S> {
     fn shape(&self) -> Result<Shape> {
         if self.is_empty() {
-            crate::bail!("empty array")
+            bail!("empty array")
         }
         let shape0 = self[0].shape()?;
         let n = self.len();
         for v in self.iter() {
             let shape = v.shape()?;
             if shape != shape0 {
-                crate::bail!("two elements have different shapes {shape:?} {shape0:?}")
+                bail!("two elements have different shapes {shape:?} {shape0:?}")
             }
         }
         Ok(Shape::from([[n].as_slice(), shape0.dims()].concat()))
@@ -203,7 +203,11 @@ impl Device {
             Device::Metal(_device) => {
                 // let storage = device.rand_uniform(shape, dtype, lo, up)?;
                 // Ok(Storage::Metal(storage))
+<<<<<<< HEAD
                 crate::bail!("Metal rand_uniform not implemented")
+=======
+                bail!("Metal rand_uniform not implemented")
+>>>>>>> 8cf39d27 (Metal part 1 - Scaffolding for metal.)
             }
         }
     }

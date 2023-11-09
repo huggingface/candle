@@ -12,6 +12,7 @@ readme = "README.md"
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
+tracing = { workspace = true }
 candle-kernels = { path = "../candle-kernels", version = "0.3.0", optional = true }
 metal = { workspace = true, optional = true}
 cudarc = { workspace = true, optional = true }
