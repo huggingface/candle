@@ -1,12 +1,13 @@
 [package]
 name = "candle-metal-kernels"
-version.workspace = true
-edition.workspace = true
-description.workspace = true
-repository.workspace = true
-keywords.workspace = true
-categories.workspace = true
-license.workspace = true
+version = "0.3.0"
+edition = "2021"
+
+description = "CUDA kernels for Candle"
+repository = "https://github.com/huggingface/candle"
+keywords = ["blas", "tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 metal = { workspace = true }
