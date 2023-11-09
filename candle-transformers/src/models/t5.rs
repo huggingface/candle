@@ -49,24 +49,23 @@ pub fn deserialize_feed_forward_proj_activation<'de, D>(
 where
     D: serde::de::Deserializer<'de>,
 {
-    let buf = String::deserialize(deserializer)?;
-    if buf == "gated-gelu" {
-        return Ok(ActivationWithOptionalGating {
+    match String::deserialize(deserializer)?.as_str() {
+        "gated-gelu" => Ok(ActivationWithOptionalGating {
             gated: true,
             activation: candle_nn::Activation::NewGelu,
-        });
-    }
-    if buf == "gated-silu" {
-        return Ok(ActivationWithOptionalGating {
+        }),
+        "gated-silu" => Ok(ActivationWithOptionalGating {
             gated: true,
             activation: candle_nn::Activation::Silu,
-        });
+        }),
+        buf => {
+            let activation = serde_plain::from_str(buf).map_err(serde::de::Error::custom)?;
+            Ok(ActivationWithOptionalGating {
+                gated: false,
+                activation,
+            })
+        }
     }
-    let activation = serde_plain::from_str(&buf).map_err(serde::de::Error::custom)?;
-    Ok(ActivationWithOptionalGating {
-        gated: false,
-        activation,
-    })
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
