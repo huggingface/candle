@@ -38,9 +38,11 @@ impl Model {
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
         let start = Date::now();
+        let device = Device::Cpu;
         let model = if quantized {
-            let vb =
-                candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(&weights)?;
+            let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(
+                &weights, &device,
+            )?;
             let model = QMixFormer::new(&config, vb)?;
             SelectedModel::Quantized(model)
         } else {

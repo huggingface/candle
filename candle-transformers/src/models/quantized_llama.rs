@@ -195,12 +195,6 @@ fn precomput_freqs_cis(
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
         .collect();
     let theta = Tensor::new(theta.as_slice(), device)?;
-    let range: Vec<f32> = (0..MAX_SEQ_LEN).map(|r| r as f32).collect();
-    // let idx_theta = Tensor::new(range.as_slice(), device)?
-    //     .reshape((MAX_SEQ_LEN, 1))?
-    //     .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-    // TODO This change avoids allocating on Metal and then casting since allocating directly on
-    // CPU as f32 seems just as fast
     let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
         .to_dtype(DType::F32)?
         .reshape((MAX_SEQ_LEN, 1))?

@@ -1,5 +1,4 @@
-use crate::{Device, Result, Shape, Tensor};
-use tracing::debug;
+use crate::{backend::BackendStorage, Device, Result, Shape, Tensor};
 
 #[cfg(target_feature = "avx")]
 pub mod avx;
@@ -317,12 +316,14 @@ impl crate::CustomOp1 for QTensor {
         Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
     }
 
+    #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
         storage: &crate::MetalStorage,
         layout: &crate::Layout,
     ) -> Result<(crate::MetalStorage, Shape)> {
-        debug!("TODO qmatmul");
+        use tracing::debug;
+        debug!("TODO qmatmul {self:?} - {layout:?}");
         if !layout.is_contiguous() {
             crate::bail!("input tensor is not contiguous {layout:?}")
         }
@@ -339,22 +340,12 @@ impl crate::CustomOp1 for QTensor {
         }
         dst_shape.push(n);
         let dst_shape = Shape::from(dst_shape);
-        // let storage = storage.as_slice::<f32>()?;
-        // let storage =
-        //     &storage[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
-        let dst_storage = vec![0f32; dst_shape.elem_count()];
-        // self.matmul_t(
-        //     (dst_shape.elem_count() / n, k, n),
-        //     storage,
-        //     &mut dst_storage,
-        // )?;
-        let cpu_storage = crate::CpuStorage::F32(dst_storage);
-        use crate::backend::{BackendDevice, BackendStorage};
-        if let Device::Metal(device) = &self.device {
-            Ok((device.storage_from_cpu_storage(&cpu_storage)?, dst_shape))
-        } else {
-            crate::bail!("qtensor not on metal device")
-        }
+        let dtype = storage.dtype();
+        let buffer = storage.device().new_buffer(dst_shape.elem_count(), dtype);
+
+        let device: crate::MetalDevice = storage.device().clone();
+        let dst_storage = crate::MetalStorage::new(buffer, device, dtype);
+        Ok((dst_storage, dst_shape))
     }
 }
 

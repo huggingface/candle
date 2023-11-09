@@ -1273,7 +1273,9 @@ fn save_safetensors(
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any], List[str]]
 fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObject)> {
     let mut file = std::fs::File::open(path)?;
-    let ggml = ::candle::quantized::ggml_file::Content::read(&mut file).map_err(wrap_err)?;
+    let device = Device::Cpu;
+    let ggml =
+        ::candle::quantized::ggml_file::Content::read(&mut file, &device).map_err(wrap_err)?;
     let tensors = ggml
         .tensors
         .into_iter()
@@ -1308,6 +1310,7 @@ fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObje
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any]]
 fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
     use ::candle::quantized::gguf_file;
+    let device = Device::Cpu;
     fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<PyObject> {
         let v: PyObject = match v {
             gguf_file::Value::U8(x) => x.into_py(py),
@@ -1338,7 +1341,7 @@ fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
         .tensor_infos
         .keys()
         .map(|key| {
-            let qtensor = gguf.tensor(&mut file, key)?;
+            let qtensor = gguf.tensor(&mut file, key, &device)?;
             Ok((key, PyQTensor(Arc::new(qtensor)).into_py(py)))
         })
         .collect::<::candle::Result<Vec<_>>>()

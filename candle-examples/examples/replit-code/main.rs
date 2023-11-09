@@ -238,9 +238,11 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let config = Config::replit_code_v1_5_3b();
     let (model, device) = if args.quantized {
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename)?;
+        let device = Device::Cpu;
+        let vb =
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename, &device)?;
         let model = Model::Q(Q::new(&config, vb.pp("transformer"))?);
-        (model, Device::Cpu)
+        (model, device)
     } else {
         let device = candle_examples::device(args.cpu)?;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[filename], DType::F32, &device)? };

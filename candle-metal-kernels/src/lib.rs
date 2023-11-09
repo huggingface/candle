@@ -10,6 +10,7 @@ const AFFINE: &str = include_str!("affine.metal");
 const INDEXING: &str = include_str!("indexing.metal");
 const UNARY: &str = include_str!("unary.metal");
 const BINARY: &str = include_str!("binary.metal");
+const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
 const REDUCE: &str = include_str!("reduce.metal");
 
@@ -19,6 +20,7 @@ pub enum Source {
     Indexing,
     Unary,
     Binary,
+    Ternary,
     Cast,
     Reduce,
 }
@@ -119,6 +121,7 @@ impl Kernels {
             Source::Affine => AFFINE,
             Source::Unary => UNARY,
             Source::Binary => BINARY,
+            Source::Ternary => TERNARY,
             Source::Indexing => INDEXING,
             Source::Cast => CAST,
             Source::Reduce => REDUCE,
@@ -600,6 +603,83 @@ pub fn call_affine(
     Ok(())
 }
 
+pub fn call_where_cond_strided(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    shape: &[usize],
+    cond: &Buffer,
+    (cond_stride, cond_offset): (&[usize], usize),
+    left: &Buffer,
+    (left_stride, left_offset): (&[usize], usize),
+    right: &Buffer,
+    (right_stride, right_offset): (&[usize], usize),
+    output: &mut Buffer,
+) -> Result<(), MetalKernelError> {
+    let func = kernels.load_function(device, Source::Ternary, name)?;
+    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
+    pipeline_state_descriptor.set_compute_function(Some(&func));
+
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(
+            pipeline_state_descriptor.compute_function().unwrap(),
+        )
+        .unwrap();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let size: usize = shape.iter().product();
+    encoder.set_bytes(0, core::mem::size_of::<usize>() as u64, void_ptr(&size));
+    encoder.set_bytes(
+        1,
+        core::mem::size_of::<usize>() as u64,
+        void_ptr(&shape.len()),
+    );
+    encoder.set_bytes(
+        2,
+        (shape.len() * core::mem::size_of::<usize>()) as u64,
+        shape.as_ptr() as *const c_void,
+    );
+    encoder.set_bytes(
+        3,
+        (cond_stride.len() * core::mem::size_of::<usize>()) as u64,
+        cond_stride.as_ptr() as *const c_void,
+    );
+    encoder.set_bytes(
+        4,
+        (left_stride.len() * core::mem::size_of::<usize>()) as u64,
+        left_stride.as_ptr() as *const c_void,
+    );
+    encoder.set_bytes(
+        5,
+        (right_stride.len() * core::mem::size_of::<usize>()) as u64,
+        right_stride.as_ptr() as *const c_void,
+    );
+    encoder.set_buffer(6, Some(&cond), cond_offset as u64);
+    encoder.set_buffer(7, Some(&left), left_offset as u64);
+    encoder.set_buffer(8, Some(&right), right_offset as u64);
+    encoder.set_buffer(9, Some(&output), 0);
+
+    let thread_group_count = MTLSize {
+        width: 1,
+        height: 1,
+        depth: 1,
+    };
+
+    let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), size as u64);
+    let thread_group_size = MTLSize {
+        width,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -978,11 +1058,7 @@ mod tests {
         assert_eq!(approx_f16(expected, 4), vec![0.5405, -0.4163, -0.9902]);
     }
 
-    fn run_reduce<T: Clone + std::fmt::Debug>(
-        v: &[T],
-        out_length: usize,
-        name: &'static str,
-    ) -> Vec<T> {
+    fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T> {
         let device = device();
         let kernels = Kernels::new();
         let command_queue = device.new_command_queue();
@@ -1088,5 +1164,82 @@ mod tests {
             approx(results, 4),
             vec![0.0900, 0.2447, 0.6652, 0.0900, 0.2447, 0.6652]
         );
+    }
+
+    fn run_where_cond<I: Clone, T: Clone>(
+        shape: &[usize],
+        cond: &[I],
+        (cond_stride, cond_offset): (Vec<usize>, usize),
+        left_true: &[T],
+        (left_stride, left_offset): (Vec<usize>, usize),
+        right_false: &[T],
+        (right_stride, right_offset): (Vec<usize>, usize),
+        name: &'static str,
+    ) -> Vec<T> {
+        let device = device();
+        let kernels = Kernels::new();
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+        let options = MTLResourceOptions::StorageModeManaged;
+
+        let length = cond.len();
+        let cond = device.new_buffer_with_data(
+            cond.as_ptr() as *const core::ffi::c_void,
+            (cond.len() * core::mem::size_of::<I>()) as u64,
+            options,
+        );
+        let left = device.new_buffer_with_data(
+            left_true.as_ptr() as *const core::ffi::c_void,
+            (length * core::mem::size_of::<T>()) as u64,
+            options,
+        );
+        let right = device.new_buffer_with_data(
+            right_false.as_ptr() as *const core::ffi::c_void,
+            (length * core::mem::size_of::<T>()) as u64,
+            options,
+        );
+
+        let mut output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
+        call_where_cond_strided(
+            &device,
+            &command_buffer,
+            &kernels,
+            name,
+            &shape,
+            &cond,
+            (&cond_stride, cond_offset),
+            &left,
+            (&left_stride, left_offset),
+            &right,
+            (&cond_stride, cond_offset),
+            &mut output,
+        )
+        .unwrap();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        output.read_to_vec::<T>(length)
+    }
+
+    #[test]
+    fn where_cond() {
+        let shape = vec![6];
+        let cond = vec![0u8, 1, 0, 0, 1, 1];
+        let cond_l = (vec![1], 0);
+        let left_true = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let left_l = (vec![1], 0);
+        let right_false = vec![-1.0f32, -2.0, -3.0, -4.0, -5.0, -6.0];
+        let right_l = (vec![1], 0);
+        let results = run_where_cond(
+            &shape,
+            &cond,
+            cond_l,
+            &left_true,
+            left_l,
+            &right_false,
+            right_l,
+            "where_u8_f32",
+        );
+        assert_eq!(approx(results, 4), vec![-1.0f32, 2.0, -3.0, -4.0, 5.0, 6.0]);
     }
 }

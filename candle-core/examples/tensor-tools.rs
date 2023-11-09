@@ -191,7 +191,8 @@ fn run_ls(file: &std::path::PathBuf, format: Option<Format>, verbose: bool) -> R
         }
         Format::Ggml => {
             let mut file = std::fs::File::open(file)?;
-            let content = candle_core::quantized::ggml_file::Content::read(&mut file)?;
+            let device = Device::Cpu;
+            let content = candle_core::quantized::ggml_file::Content::read(&mut file, &device)?;
             let mut tensors = content.tensors.into_iter().collect::<Vec<_>>();
             tensors.sort_by(|a, b| a.0.cmp(&b.0));
             for (name, qtensor) in tensors.iter() {
@@ -291,6 +292,7 @@ fn run_quantize(
     q: Quantization,
     qmode: QuantizationMode,
 ) -> Result<()> {
+    let device = Device::Cpu;
     if in_files.is_empty() {
         candle_core::bail!("no specified input files")
     }
@@ -338,7 +340,7 @@ fn run_quantize(
         .map(|(name, _)| {
             println!("  quantizing {name}");
             let mut in_file = std::fs::File::open(&in_files[0])?;
-            let tensor = content.tensor(&mut in_file, name)?;
+            let tensor = content.tensor(&mut in_file, name, &device)?;
             let tensor = qmode.quantize(name, tensor, quantize_fn)?;
             Ok((name, tensor))
         })

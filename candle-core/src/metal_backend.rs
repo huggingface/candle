@@ -28,12 +28,6 @@ impl From<String> for MetalError {
     }
 }
 
-impl MetalError {
-    fn msg<S: AsRef<str>>(msg: S) -> Self {
-        MetalError::Message(msg.as_ref().to_string())
-    }
-}
-
 #[derive(Clone)]
 pub struct MetalDevice {
     device: metal::Device,
@@ -410,10 +404,42 @@ impl BackendStorage for MetalStorage {
         })
     }
 
-    fn where_cond(&self, _: &Layout, rhs: &Self, _: &Layout, _: &Self, _: &Layout) -> Result<Self> {
-        debug!("TODO where_cond");
-        Ok(rhs.clone())
-        // todo!()
+    fn where_cond(
+        &self,
+        layout: &Layout,
+        t: &Self,
+        t_l: &Layout,
+        f: &Self,
+        f_l: &Layout,
+    ) -> Result<Self> {
+        let device = self.device.clone();
+        let shape = t_l.shape();
+        let dims = shape.dims();
+        let el = shape.elem_count();
+        let dtype = t.dtype;
+        let mut buffer = self.device.new_buffer(el, dtype);
+        let command_buffer = self.device.command_queue.new_command_buffer();
+        candle_metal_kernels::call_where_cond_strided(
+            &device.device,
+            &command_buffer,
+            &device.kernels,
+            "where_u8_f32",
+            &dims,
+            &self.buffer,
+            (layout.stride(), layout.start_offset()),
+            &t.buffer,
+            (&t_l.stride(), t_l.start_offset()),
+            &f.buffer,
+            (&f_l.stride(), f_l.start_offset()),
+            &mut buffer,
+        )
+        .map_err(MetalError::from)?;
+        command_buffer.commit();
+        Ok(Self {
+            buffer,
+            device,
+            dtype,
+        })
     }
 
     fn conv1d(
@@ -528,7 +554,7 @@ impl BackendStorage for MetalStorage {
         rhs_l: &Layout,
     ) -> Result<Self> {
         let transpose_left = false;
-        let transpose_right = false;
+        let transpose_right = !rhs_l.is_contiguous();
         let alpha = 1.0;
         let beta = 0.0;
         self.matmul_generic(
@@ -588,27 +614,12 @@ impl BackendStorage for MetalStorage {
 }
 
 impl MetalStorage {
-    pub(crate) fn matmul_t(
-        &self,
-        rhs: &Self,
-        (b, m, n, k): (usize, usize, usize, usize),
-        lhs_l: &Layout,
-        rhs_l: &Layout,
-    ) -> Result<Self> {
-        let transpose_left = false;
-        let transpose_right = true;
-        let alpha = 1.0;
-        let beta = 0.0;
-        self.matmul_generic(
-            rhs,
-            (b, m, n, k),
-            lhs_l,
-            rhs_l,
-            transpose_left,
-            transpose_right,
-            alpha,
-            beta,
-        )
+    pub fn new(buffer: Buffer, device: MetalDevice, dtype: DType) -> Self {
+        Self {
+            buffer,
+            device,
+            dtype,
+        }
     }
     pub(crate) fn matmul_generic(
         &self,
@@ -636,9 +647,10 @@ impl MetalStorage {
                 }
                 if !lhs_l.is_contiguous() || !rhs_l.is_contiguous() {
                     debug!(
-                        "TODO non contiguous matmul yet {:?} {:?}",
+                        "TODO non contiguous matmul yet {:?} {:?} - {:?} - {transpose_right}",
                         lhs_l.is_contiguous(),
-                        rhs_l.is_contiguous()
+                        rhs_l.is_contiguous(),
+                        rhs_l
                     );
                     return Ok(Self {
                         buffer: out_buffer,
@@ -647,7 +659,7 @@ impl MetalStorage {
                     });
                 }
 
-                debug!("GEMM");
+                debug!("TODO GEMM");
                 let command_buffer = self.device.command_queue.new_command_buffer();
                 encode_gemm::<Float32, Float32, Float32>(
                     &self.device,

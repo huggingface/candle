@@ -234,12 +234,14 @@ fn main() -> Result<()> {
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+    let device = Device::Cpu;
 
     let start = std::time::Instant::now();
     let config = Config::config_7b_v0_1(args.use_flash_attn);
     let (model, device) = if args.quantized {
         let filename = &filenames[0];
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename)?;
+        let vb =
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
         let model = QMistral::new(&config, vb)?;
         (Model::Quantized(model), Device::Cpu)
     } else {

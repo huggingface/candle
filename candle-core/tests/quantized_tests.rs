@@ -42,7 +42,7 @@ fn quantized_matmul() -> Result<()> {
         ]
     );
 
-    let qtensor = quantized::QTensor::new(rhs_t, (4, 64))?;
+    let qtensor = quantized::QTensor::new(rhs_t, (4, 64), &cpu)?;
     let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&tensor_lhs)?;
     assert_eq!(
@@ -90,7 +90,7 @@ fn quantized_matmul_neg() -> Result<()> {
         ]
     );
 
-    let qtensor = quantized::QTensor::new(rhs_t, (4, 64))?;
+    let qtensor = quantized::QTensor::new(rhs_t, (4, 64), cpu)?;
     let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&tensor_lhs)?;
     assert_eq!(
