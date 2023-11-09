@@ -43,8 +43,12 @@ struct ActivationWithOptionalGating {
     activation: candle_nn::Activation,
 }
 
-fn deserialize_feed_forward_proj_activation<'de, D>(deserializer: D) -> std::result::Result<ActivationWithOptionalGating, D::Error>
-where D: serde::de::Deserializer<'de> {
+fn deserialize_feed_forward_proj_activation<'de, D>(
+    deserializer: D,
+) -> std::result::Result<ActivationWithOptionalGating, D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
     let buf = String::deserialize(deserializer)?;
     if buf == "gated-gelu" {
         return Ok(ActivationWithOptionalGating {
@@ -61,7 +65,7 @@ where D: serde::de::Deserializer<'de> {
     let activation = serde_plain::from_str(&buf).map_err(serde::de::Error::custom)?;
     Ok(ActivationWithOptionalGating {
         gated: false,
-        activation: activation,
+        activation,
     })
 }
 
