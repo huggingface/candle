@@ -13,6 +13,11 @@ res = torch.nn.functional.conv1d(t, w)
 print(res.flatten())
 res = torch.nn.functional.conv1d(t, w, padding=1)
 print(res.flatten())
+
+w_t = w.transpose(0, 1)
+res = torch.nn.functional.conv_transpose1d(t, w_t)
+print(res.shape)
+print(res)
 */
 fn conv1d(dev: &Device) -> Result<()> {
     let t = Tensor::new(
@@ -45,6 +50,17 @@ fn conv1d(dev: &Device) -> Result<()> {
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
         [2.4509, 2.6357, -1.3336, 4.1393, 0.5657, 1.8091, -1.1784, 3.5675, 0.5069, 3.3352]
     );
+    if dev.is_cpu() {
+        let res = t.conv_transpose1d(&w.transpose(0, 1)?, 0, 0, 1, 1)?;
+        assert_eq!(res.dims(), [1, 2, 7]);
+        assert_eq!(
+            test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+            [
+                0.0699, -1.2899, 8.3018, 5.5873, 2.4572, -2.6143, -0.0706, 1.8765, 4.8318, 1.1538,
+                4.7076, -5.9745, -0.8276, 1.621
+            ],
+        );
+    }
     Ok(())
 }
 

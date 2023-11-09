@@ -91,6 +91,16 @@ pub enum Op {
     },
 
     #[allow(dead_code)]
+    ConvTranspose1D {
+        arg: Tensor,
+        kernel: Tensor,
+        padding: usize,
+        output_padding: usize,
+        stride: usize,
+        dilation: usize,
+    },
+
+    #[allow(dead_code)]
     Conv2D {
         arg: Tensor,
         kernel: Tensor,
@@ -631,6 +641,8 @@ impl UnaryOpT for Gelu {
     }
 }
 
+/// `erf` operation
+/// <https://en.wikipedia.org/wiki/Error_function>
 impl UnaryOpT for Erf {
     const NAME: &'static str = "erf";
     const KERNEL: &'static str = "uerf";

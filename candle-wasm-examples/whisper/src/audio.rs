@@ -200,6 +200,7 @@ fn log_mel_spectrogram_<T: Float + std::fmt::Display>(
 }
 
 pub fn pcm_to_mel<T: Float + std::fmt::Display>(
+    cfg: &worker::m::Config,
     samples: &[T],
     filters: &[T],
 ) -> anyhow::Result<Vec<T>> {
@@ -208,7 +209,7 @@ pub fn pcm_to_mel<T: Float + std::fmt::Display>(
         filters,
         worker::m::N_FFT,
         worker::m::HOP_LENGTH,
-        worker::m::N_MELS,
+        cfg.num_mel_bins,
         false,
     );
     Ok(mel)

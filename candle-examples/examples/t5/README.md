@@ -5,9 +5,21 @@
 ```bash
 $ cargo run --example t5 --release -- --model-id "t5-small" --prompt "translate to German: A beautiful candle." --decode
 ...
-Running on CPU, to run on GPU, build this example with `--features cuda`
  Eine schöne Kerze.
 9 tokens generated (2.42 token/s)
+```
+
+## Translation with [MADLAD-400](https://arxiv.org/abs/2309.04662)
+
+MADLAD-400 is a series of multilingual machine translation T5 models trained on 250 billion tokens covering over 450 languages using publicly available data. These models are competitive with significantly larger models.
+
+```bash
+cargo run --example t5 --release  -- \
+  --model-id "jbochi/madlad400-3b-mt" \
+  --prompt "<2de> How are you, my friend?" \
+  --decode --temperature 0
+...
+ Wie geht es dir, mein Freund?
 ```
 
 ## Sentence embedding example:

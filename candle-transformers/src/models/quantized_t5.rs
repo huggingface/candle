@@ -65,6 +65,7 @@ pub struct Config {
     pub use_cache: bool,
     pub pad_token_id: usize,
     pub eos_token_id: usize,
+    pub decoder_start_token_id: Option<usize>,
 }
 
 impl Default for Config {
@@ -89,6 +90,7 @@ impl Default for Config {
             use_cache: true,
             pad_token_id: 0,
             eos_token_id: 1,
+            decoder_start_token_id: Some(0),
         }
     }
 }
@@ -642,7 +644,12 @@ pub struct T5EncoderModel {
 
 impl T5EncoderModel {
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
-        let shared = Embedding::new(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
+        let shared_vb = if vb.contains_key("shared.weight") {
+            vb.pp("shared")
+        } else {
+            vb.pp("decoder").pp("embed_tokens")
+        };
+        let shared = Embedding::new(cfg.vocab_size, cfg.d_model, shared_vb)?;
         let shared = Arc::new(shared);
         let encoder = T5Stack::load(false, vb.pp("encoder"), &shared, cfg)?;
         Ok(Self {
@@ -683,7 +690,12 @@ impl T5ForConditionalGeneration {
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         assert!(cfg.is_encoder_decoder);
         let d_model = cfg.d_model;
-        let shared = Embedding::new(cfg.vocab_size, cfg.d_model, vb.pp("shared"))?;
+        let shared_vb = if vb.contains_key("shared.weight") {
+            vb.pp("shared")
+        } else {
+            vb.pp("decoder").pp("embed_tokens")
+        };
+        let shared = Embedding::new(cfg.vocab_size, cfg.d_model, shared_vb)?;
         let shared = Arc::new(shared);
 
         let mut encoder_cfg = cfg.clone();
