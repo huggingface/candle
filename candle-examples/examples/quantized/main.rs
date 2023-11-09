@@ -371,15 +371,15 @@ fn main() -> anyhow::Result<()> {
             prompt_tokens
         };
         let mut all_tokens = vec![];
-        let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
+        let _logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
 
         let start_prompt_processing = std::time::Instant::now();
-        let mut next_token = {
+        let next_token = {
             let input = Tensor::new(prompt_tokens.as_slice(), &device)?.unsqueeze(0)?;
             let logits = model.forward(&input, 0)?;
             let logits = logits.squeeze(0)?;
             // TODO Remove this once implementation is finished.
-            let logits = logits.ones_like()?;
+            let _logits = logits.ones_like()?;
             // logits_processor.sample(&logits)?
             15043
         };
@@ -398,7 +398,7 @@ fn main() -> anyhow::Result<()> {
             let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
             let logits = model.forward(&input, prompt_tokens.len() + index)?;
             let logits = logits.squeeze(0)?;
-            let logits = if args.repeat_penalty == 1. {
+            let _logits = if args.repeat_penalty == 1. {
                 logits
             } else {
                 let start_at = all_tokens.len().saturating_sub(args.repeat_last_n);
