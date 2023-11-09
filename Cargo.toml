@@ -13,6 +13,7 @@ members = [
 exclude = [
    "candle-flash-attn",
    "candle-kernels",
+   "candle-metal-kernels",
    "candle-onnx",
 ]
 resolver = "2"
