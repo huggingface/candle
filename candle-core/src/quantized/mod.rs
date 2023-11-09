@@ -1,4 +1,6 @@
-use crate::{backend::BackendStorage, Device, Result, Shape, Tensor};
+#[cfg(feature = "metal")]
+use crate::backend::BackendStorage;
+use crate::{Device, Result, Shape, Tensor};
 
 #[cfg(target_feature = "avx")]
 pub mod avx;

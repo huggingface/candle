@@ -1,4 +1,6 @@
-use candle::{backend::BackendStorage, CpuStorage, Layout, Result, Shape, Tensor};
+#[cfg(feature = "metal")]
+use candle::backend::BackendStorage;
+use candle::{CpuStorage, Layout, Result, Shape, Tensor};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on

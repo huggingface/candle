@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 use metal::{
     Buffer, CommandBufferRef, CompileOptions, ComputePipelineDescriptor, Device, Function, Library,
     MTLSize,
@@ -89,7 +90,7 @@ type KernelMap<T> = HashMap<&'static str, T>;
 type Libraries = HashMap<Source, Library>;
 type Functions = KernelMap<Function>;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Kernels {
     libraries: RwLock<Libraries>,
     funcs: RwLock<Functions>,
