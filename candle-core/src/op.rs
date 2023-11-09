@@ -551,7 +551,8 @@ unary_op!(Recip, "recip", v, v.recip());
 unary_op!(Sqr, "sqr", v, v * v, vs_sqr, vd_sqr);
 unary_op!(Sqrt, "sqrt", v, v.sqrt(), vs_sqrt, vd_sqrt);
 
-/// `gelu` operation
+/// Tanh based approximation of the `gelu` operation
+/// GeluErf is the more precise one.
 /// <https://en.wikipedia.org/wiki/Activation_function#Comparison_of_activation_functions>
 impl UnaryOpT for Gelu {
     const NAME: &'static str = "gelu";

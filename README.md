@@ -175,7 +175,7 @@ If you have an addition to this list, please submit a pull request.
         - Replit-code-v1.5-3B.
         - Bert.
     - Text to text.
-        - T5 and its variants: FlanT5, MADLAD400 (translation), CoEdit (Grammar correction).
+        - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
     - Whisper (multi-lingual support).
     - Text to image.
