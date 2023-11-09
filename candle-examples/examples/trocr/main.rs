@@ -43,20 +43,19 @@ struct Args {
 }
 
 pub fn main() -> anyhow::Result<()> {
-
     use hf_hub::api::sync::Api;
     let args = Args::parse();
 
     let tokenizer_dec = {
-            let tokenizer = match args.tokenizer {
-                Some(tokenizer) => std::path::PathBuf::from(tokenizer),
-                None => {
-                    let name = "tokenizer.json";
-                    Api::new()?
-                        .model(args.model.clone().unwrap().to_string())
-                        .get(name)?
-                }
-            };
+        let tokenizer = match args.tokenizer {
+            Some(tokenizer) => std::path::PathBuf::from(tokenizer),
+            None => {
+                let name = "tokenizer.json";
+                Api::new()?
+                    .model(args.model.clone().unwrap().to_string())
+                    .get(name)?
+            }
+        };
         Tokenizer::from_file(&tokenizer).map_err(E::msg)?
     };
 
@@ -89,8 +88,10 @@ pub fn main() -> anyhow::Result<()> {
     };
 
     let encoder_config = match args.which {
-        Which::Base =>  candle_transformers::models::vit::Config::microsoft_trocr_base_handwritten(),
-        Which::Large =>  candle_transformers::models::vit::Config::microsoft_trocr_base_handwritten(),
+        Which::Base => candle_transformers::models::vit::Config::microsoft_trocr_base_handwritten(),
+        Which::Large => {
+            candle_transformers::models::vit::Config::microsoft_trocr_base_handwritten()
+        }
     };
 
     let decoder_config = trocr::TrOCRConfig::default();
@@ -104,7 +105,8 @@ pub fn main() -> anyhow::Result<()> {
 
     let encoder_xs = model.encoder().forward(&image)?;
 
-    let mut logits_processor =  candle_transformers::generation::LogitsProcessor::new(1337, None, None);
+    let mut logits_processor =
+        candle_transformers::generation::LogitsProcessor::new(1337, None, None);
 
     let mut token_ids: Vec<u32> = vec![decoder_config.decoder_start_token_id];
     for index in 0..1000 {
@@ -134,10 +136,5 @@ pub fn main() -> anyhow::Result<()> {
     }
     println!();
 
-
-
-
-
     Ok(())
-
 }

@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use image::{DynamicImage, ImageBuffer};
 use serde::Deserialize;
+use std::collections::HashMap;
 
-
-use candle::{DType, Device, Tensor, Result};
+use candle::{DType, Device, Result, Tensor};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ProcessorConfig {
@@ -30,7 +29,7 @@ impl Default for ProcessorConfig {
     }
 }
 
-pub struct ViTImageProcessor{
+pub struct ViTImageProcessor {
     do_resize: bool,
     height: u32,
     width: u32,
@@ -40,20 +39,18 @@ pub struct ViTImageProcessor{
 }
 
 impl ViTImageProcessor {
-
     pub fn new(config: &ProcessorConfig) -> Self {
         Self {
             do_resize: config.do_resize,
             height: config.height,
             width: config.width,
             do_normalize: config.do_normalize,
-            image_mean : config.image_mean.clone(),
+            image_mean: config.image_mean.clone(),
             image_std: config.image_std.clone(),
         }
     }
 
-    pub fn preprocess(&self, images: Vec<&str>) -> Result<Tensor>{
-
+    pub fn preprocess(&self, images: Vec<&str>) -> Result<Tensor> {
         let height = self.height as usize;
         let width = self.width as usize;
         let channels = 3;
@@ -63,7 +60,10 @@ impl ViTImageProcessor {
         let resized_images: Vec<DynamicImage>;
 
         if self.do_resize {
-            resized_images = images.iter().map(|image| self.resize(image.clone(), None).unwrap()).collect();
+            resized_images = images
+                .iter()
+                .map(|image| self.resize(image.clone(), None).unwrap())
+                .collect();
         } else {
             resized_images = images;
         }
@@ -71,35 +71,56 @@ impl ViTImageProcessor {
         let normalized_images: Vec<Tensor>;
 
         if self.do_normalize {
-            normalized_images = resized_images.iter().map(|image| self.normalize(image.clone(), None, None).unwrap()).collect();
+            normalized_images = resized_images
+                .iter()
+                .map(|image| self.normalize(image.clone(), None, None).unwrap())
+                .collect();
         } else {
-            let resized_images: Vec<ImageBuffer<image::Rgb<u8>, Vec<u8>>> = resized_images.iter().map(|image| image.to_rgb8()).collect();
-            let data = resized_images.into_iter().map(|image| image.into_raw()).collect::<Vec<Vec<u8>>>();
+            let resized_images: Vec<ImageBuffer<image::Rgb<u8>, Vec<u8>>> =
+                resized_images.iter().map(|image| image.to_rgb8()).collect();
+            let data = resized_images
+                .into_iter()
+                .map(|image| image.into_raw())
+                .collect::<Vec<Vec<u8>>>();
 
-            normalized_images = data.iter().map(|image| Tensor::from_vec(image.clone(), (height, width, channels), &Device::Cpu).unwrap().permute((2, 0, 1)).unwrap()).collect::<Vec<Tensor>>();
+            normalized_images = data
+                .iter()
+                .map(|image| {
+                    Tensor::from_vec(image.clone(), (height, width, channels), &Device::Cpu)
+                        .unwrap()
+                        .permute((2, 0, 1))
+                        .unwrap()
+                })
+                .collect::<Vec<Tensor>>();
         }
 
         let normalized_images = Tensor::stack(&normalized_images, 0);
 
         normalized_images
-
     }
 
-    fn resize(&self, image: image::DynamicImage, size: Option<HashMap<String, u32>>) -> Result<image::DynamicImage> {
-
+    fn resize(
+        &self,
+        image: image::DynamicImage,
+        size: Option<HashMap<String, u32>>,
+    ) -> Result<image::DynamicImage> {
         let (height, width) = match &size {
             Some(size) => (size.get("height").unwrap(), size.get("width").unwrap()),
             None => (&self.height, &self.width),
         };
 
-        let resized_image = image.resize_exact(*width, *height, image::imageops::FilterType::Triangle);
+        let resized_image =
+            image.resize_exact(*width, *height, image::imageops::FilterType::Triangle);
 
         Ok(resized_image)
-
     }
 
-    fn normalize(&self, image: image::DynamicImage, mean: Option<Vec<f32>>, std: Option<Vec<f32>>) -> Result<Tensor> {
-
+    fn normalize(
+        &self,
+        image: image::DynamicImage,
+        mean: Option<Vec<f32>>,
+        std: Option<Vec<f32>>,
+    ) -> Result<Tensor> {
         let mean = match mean {
             Some(mean) => mean,
             None => self.image_mean.clone(),
@@ -110,8 +131,8 @@ impl ViTImageProcessor {
             None => self.image_std.clone(),
         };
 
-        let mean = Tensor::from_vec(mean, (3,1,1), &Device::Cpu)?;
-        let std = Tensor::from_vec(std, (3,1,1), &Device::Cpu)?;
+        let mean = Tensor::from_vec(mean, (3, 1, 1), &Device::Cpu)?;
+        let std = Tensor::from_vec(std, (3, 1, 1), &Device::Cpu)?;
 
         let image = image.to_rgb8();
         let data = image.into_raw();
@@ -120,16 +141,15 @@ impl ViTImageProcessor {
         let width = self.width as usize;
         let channels = 3;
 
-        let data = Tensor::from_vec(data, &[height, width, channels], &Device::Cpu)?.permute((2, 0, 1))?;
+        let data =
+            Tensor::from_vec(data, &[height, width, channels], &Device::Cpu)?.permute((2, 0, 1))?;
 
         println!("data: {:?}", data.shape());
 
         (data.to_dtype(DType::F32)? / 255.)?
-        .broadcast_sub(&mean)?
-        .broadcast_div(&std)
-
+            .broadcast_sub(&mean)?
+            .broadcast_div(&std)
     }
-
 
     pub fn load_images(&self, image_path: Vec<&str>) -> Result<Vec<image::DynamicImage>> {
         let mut images: Vec<image::DynamicImage> = Vec::new();
