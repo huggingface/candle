@@ -57,24 +57,20 @@ impl ViTImageProcessor {
 
         let images = self.load_images(images)?;
 
-        let resized_images: Vec<DynamicImage>;
-
-        if self.do_resize {
-            resized_images = images
+        let resized_images: Vec<DynamicImage> = if self.do_resize {
+            images
                 .iter()
                 .map(|image| self.resize(image.clone(), None).unwrap())
-                .collect();
+                .collect()
         } else {
-            resized_images = images;
-        }
+            images
+        };
 
-        let normalized_images: Vec<Tensor>;
-
-        if self.do_normalize {
-            normalized_images = resized_images
+        let normalized_images: Vec<Tensor> = if self.do_normalize {
+            resized_images
                 .iter()
                 .map(|image| self.normalize(image.clone(), None, None).unwrap())
-                .collect();
+                .collect()
         } else {
             let resized_images: Vec<ImageBuffer<image::Rgb<u8>, Vec<u8>>> =
                 resized_images.iter().map(|image| image.to_rgb8()).collect();
@@ -83,20 +79,17 @@ impl ViTImageProcessor {
                 .map(|image| image.into_raw())
                 .collect::<Vec<Vec<u8>>>();
 
-            normalized_images = data
-                .iter()
+            data.iter()
                 .map(|image| {
                     Tensor::from_vec(image.clone(), (height, width, channels), &Device::Cpu)
                         .unwrap()
                         .permute((2, 0, 1))
                         .unwrap()
                 })
-                .collect::<Vec<Tensor>>();
-        }
+                .collect::<Vec<Tensor>>()
+        };
 
-        let normalized_images = Tensor::stack(&normalized_images, 0);
-
-        normalized_images
+        Tensor::stack(&normalized_images, 0)
     }
 
     fn resize(
@@ -143,8 +136,6 @@ impl ViTImageProcessor {
 
         let data =
             Tensor::from_vec(data, &[height, width, channels], &Device::Cpu)?.permute((2, 0, 1))?;
-
-        println!("data: {:?}", data.shape());
 
         (data.to_dtype(DType::F32)? / 255.)?
             .broadcast_sub(&mean)?
