@@ -23,6 +23,10 @@ pub fn cuda_is_available() -> bool {
     cfg!(feature = "cuda")
 }
 
+pub fn metal_is_available() -> bool {
+    cfg!(feature = "metal")
+}
+
 pub fn with_avx() -> bool {
     cfg!(target_feature = "avx")
 }
