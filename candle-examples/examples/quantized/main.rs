@@ -91,6 +91,63 @@ impl Which {
             Self::Zephyr7bAlpha | Self::Zephyr7bBeta => true,
         }
     }
+
+    fn default_path(&self) -> anyhow::Result<std::path::PathBuf> {
+        let (repo, filename) = match self {
+            Self::L7b => ("TheBloke/Llama-2-7B-GGML", "llama-2-7b.ggmlv3.q4_0.bin"),
+            Self::L13b => ("TheBloke/Llama-2-13B-GGML", "llama-2-13b.ggmlv3.q4_0.bin"),
+            Self::L70b => ("TheBloke/Llama-2-70B-GGML", "llama-2-70b.ggmlv3.q4_0.bin"),
+            Self::L7bChat => (
+                "TheBloke/Llama-2-7B-Chat-GGML",
+                "llama-2-7b-chat.ggmlv3.q4_0.bin",
+            ),
+            Self::L13bChat => (
+                "TheBloke/Llama-2-13B-Chat-GGML",
+                "llama-2-13b-chat.ggmlv3.q4_0.bin",
+            ),
+            Self::L70bChat => (
+                "TheBloke/Llama-2-70B-Chat-GGML",
+                "llama-2-70b-chat.ggmlv3.q4_0.bin",
+            ),
+            Self::L7bCode => ("TheBloke/CodeLlama-7B-GGUF", "codellama-7b.Q8_0.gguf"),
+            Self::L13bCode => ("TheBloke/CodeLlama-13B-GGUF", "codellama-13b.Q8_0.gguf"),
+            Self::L34bCode => ("TheBloke/CodeLlama-34B-GGUF", "codellama-34b.Q8_0.gguf"),
+            Self::Mistral7b => (
+                "TheBloke/Mistral-7B-v0.1-GGUF",
+                "mistral-7b-v0.1.Q4_K_S.gguf",
+            ),
+            Self::Mistral7bInstruct => (
+                "TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
+                "mistral-7b-instruct-v0.1.Q4_K_S.gguf",
+            ),
+            Self::Zephyr7bAlpha => (
+                "TheBloke/zephyr-7B-alpha-GGUF",
+                "zephyr-7b-alpha.Q4_K_M.gguf",
+            ),
+            Self::Zephyr7bBeta => ("TheBloke/zephyr-7B-beta-GGUF", "zephyr-7b-beta.Q4_K_M.gguf"),
+        };
+        let api = hf_hub::api::sync::Api::new()?;
+        let api = api.model(repo.to_string());
+        Ok(api.get(filename)?)
+    }
+
+    fn default_gqa(&self) -> usize {
+        return match self {
+            Self::L7b
+            | Self::L13b
+            | Self::L7bChat
+            | Self::L13bChat
+            | Self::L7bCode
+            | Self::L13bCode
+            | Self::L34bCode => 1,
+            Self::Mistral7b
+            | Self::Mistral7bInstruct
+            | Self::Zephyr7bAlpha
+            | Self::Zephyr7bBeta
+            | Self::L70b
+            | Self::L70bChat => 8,
+        };
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -153,67 +210,28 @@ struct Args {
 
 impl Args {
     fn tokenizer(&self) -> anyhow::Result<Tokenizer> {
-        let tokenizer_path = match &self.tokenizer {
-            Some(config) => std::path::PathBuf::from(config),
-            None => {
-                let api = hf_hub::api::sync::Api::new()?;
-                let repo = if self.which.is_mistral() {
-                    "mistralai/Mistral-7B-v0.1"
-                } else {
-                    "hf-internal-testing/llama-tokenizer"
-                };
-                let api = api.model(repo.to_string());
-                api.get("tokenizer.json")?
-            }
-        };
-        Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)
+        if let Some(config) = &self.tokenizer {
+            let tokenizer_path = std::path::PathBuf::from(config);
+            return Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg);
+        } else {
+            let api = hf_hub::api::sync::Api::new()?;
+            let repo = if self.which.is_mistral() {
+                "mistralai/Mistral-7B-v0.1"
+            } else {
+                "hf-internal-testing/llama-tokenizer"
+            };
+            let api = api.model(repo.to_string());
+            let tokenizer_path = api.get("tokenizer.json")?;
+            return Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg);
+        }
     }
 
     fn model(&self) -> anyhow::Result<std::path::PathBuf> {
-        let model_path = match &self.model {
-            Some(config) => std::path::PathBuf::from(config),
-            None => {
-                let (repo, filename) = match self.which {
-                    Which::L7b => ("TheBloke/Llama-2-7B-GGML", "llama-2-7b.ggmlv3.q4_0.bin"),
-                    Which::L13b => ("TheBloke/Llama-2-13B-GGML", "llama-2-13b.ggmlv3.q4_0.bin"),
-                    Which::L70b => ("TheBloke/Llama-2-70B-GGML", "llama-2-70b.ggmlv3.q4_0.bin"),
-                    Which::L7bChat => (
-                        "TheBloke/Llama-2-7B-Chat-GGML",
-                        "llama-2-7b-chat.ggmlv3.q4_0.bin",
-                    ),
-                    Which::L13bChat => (
-                        "TheBloke/Llama-2-13B-Chat-GGML",
-                        "llama-2-13b-chat.ggmlv3.q4_0.bin",
-                    ),
-                    Which::L70bChat => (
-                        "TheBloke/Llama-2-70B-Chat-GGML",
-                        "llama-2-70b-chat.ggmlv3.q4_0.bin",
-                    ),
-                    Which::L7bCode => ("TheBloke/CodeLlama-7B-GGUF", "codellama-7b.Q8_0.gguf"),
-                    Which::L13bCode => ("TheBloke/CodeLlama-13B-GGUF", "codellama-13b.Q8_0.gguf"),
-                    Which::L34bCode => ("TheBloke/CodeLlama-34B-GGUF", "codellama-34b.Q8_0.gguf"),
-                    Which::Mistral7b => (
-                        "TheBloke/Mistral-7B-v0.1-GGUF",
-                        "mistral-7b-v0.1.Q4_K_S.gguf",
-                    ),
-                    Which::Mistral7bInstruct => (
-                        "TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
-                        "mistral-7b-instruct-v0.1.Q4_K_S.gguf",
-                    ),
-                    Which::Zephyr7bAlpha => (
-                        "TheBloke/zephyr-7B-alpha-GGUF",
-                        "zephyr-7b-alpha.Q4_K_M.gguf",
-                    ),
-                    Which::Zephyr7bBeta => {
-                        ("TheBloke/zephyr-7B-beta-GGUF", "zephyr-7b-beta.Q4_K_M.gguf")
-                    }
-                };
-                let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model(repo.to_string());
-                api.get(filename)?
-            }
-        };
-        Ok(model_path)
+        if let Some(config) = &self.model {
+            return Ok(std::path::PathBuf::from(config));
+        } else {
+            return self.which.default_path();
+        }
     }
 }
 
@@ -295,21 +313,7 @@ fn main() -> anyhow::Result<()> {
                 start.elapsed().as_secs_f32(),
             );
             println!("params: {:?}", model.hparams);
-            let default_gqa = match args.which {
-                Which::L7b
-                | Which::L13b
-                | Which::L7bChat
-                | Which::L13bChat
-                | Which::L7bCode
-                | Which::L13bCode
-                | Which::L34bCode => 1,
-                Which::Mistral7b
-                | Which::Mistral7bInstruct
-                | Which::Zephyr7bAlpha
-                | Which::Zephyr7bBeta
-                | Which::L70b
-                | Which::L70bChat => 8,
-            };
+            let default_gqa = args.which.default_gqa();
             ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa))?
         }
     };
