@@ -132,7 +132,7 @@ impl Which {
     }
 
     fn default_gqa(&self) -> usize {
-        return match self {
+        match self {
             Self::L7b
             | Self::L13b
             | Self::L7bChat
@@ -146,7 +146,7 @@ impl Which {
             | Self::Zephyr7bBeta
             | Self::L70b
             | Self::L70bChat => 8,
-        };
+        }
     }
 }
 
