@@ -18,7 +18,7 @@ fn main() {
         .collect::<Vec<_>>();
 
     println!(
-        "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <11} | {5: <11}",
+        "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <12} | {5:}",
         "dtype", "kernel", "size", "runs", "total time", "avg time"
     );
 
@@ -42,6 +42,25 @@ fn run_affine_bench<T: Clone>(device: &Device, kernels: &Kernels, v: &[T]) {
 
     let mul: f32 = 1.2345;
     let add: f32 = 2.3456;
+
+    // Ghost pass to ensure kernel load time is not included in benchmarks
+    autoreleasepool(|| {
+        let command_buffer = command_queue.new_command_buffer();
+        call_affine(
+            &device,
+            command_buffer,
+            &kernels,
+            v.len(),
+            &input,
+            &mut output,
+            mul,
+            add,
+        )
+        .unwrap();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+    });
+
     let total_time = autoreleasepool(|| {
         let command_buffer = command_queue.new_command_buffer();
         let start = Instant::now();
@@ -64,7 +83,7 @@ fn run_affine_bench<T: Clone>(device: &Device, kernels: &Kernels, v: &[T]) {
         start.elapsed()
     });
     println!(
-        "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <11?} | {5: <11?}",
+        "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <12?} | {5:?}",
         type_name::<T>().split("::").last().unwrap(),
         "affine",
         v.len(),

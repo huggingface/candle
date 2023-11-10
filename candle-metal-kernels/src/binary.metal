@@ -23,18 +23,12 @@ kernel void FN_NAME( \
     device const TYPENAME *left,  \
     device const TYPENAME *right,  \
     device TYPENAME *output, \
-    uint threadgroup_position_in_grid   [[ threadgroup_position_in_grid ]], \
-    uint thread_position_in_threadgroup [[ thread_position_in_threadgroup ]], \
-    uint threads_per_threadgroup        [[ threads_per_threadgroup ]] \
+    uint gid [[thread_position_in_grid]] \
 ) { \
-    uint thread_position_in_grid = (threadgroup_position_in_grid * threads_per_threadgroup) + \
-        thread_position_in_threadgroup; \
-    if (thread_position_in_grid >= dim) { \
-        return; \
-    } \
-    TYPENAME x = left[thread_position_in_grid]; \
-    TYPENAME y = right[thread_position_in_grid]; \
-    output[thread_position_in_grid] = OUT_TYPENAME(FN); \
+    if (gid >= dim) return; \
+    TYPENAME x = left[gid]; \
+    TYPENAME y = right[gid]; \
+    output[gid] = OUT_TYPENAME(FN); \
 }\
 kernel void FN_NAME_STRIDED( \
     constant size_t &dim, \
@@ -45,18 +39,12 @@ kernel void FN_NAME_STRIDED( \
     device const TYPENAME *left,  \
     device const TYPENAME *right,  \
     device TYPENAME *output, \
-    uint threadgroup_position_in_grid   [[ threadgroup_position_in_grid ]], \
-    uint thread_position_in_threadgroup [[ thread_position_in_threadgroup ]], \
-    uint threads_per_threadgroup        [[ threads_per_threadgroup ]] \
+    uint gid [[thread_position_in_grid]] \
 ) { \
-    uint thread_position_in_grid = (threadgroup_position_in_grid * threads_per_threadgroup) + \
-        thread_position_in_threadgroup; \
-    if (thread_position_in_grid >= dim) { \
-        return; \
-    } \
-    TYPENAME x = left[get_strided_index(thread_position_in_grid, num_dims, dims, left_strides)]; \
-    TYPENAME y = right[get_strided_index(thread_position_in_grid, num_dims, dims, left_strides)]; \
-    output[thread_position_in_grid] = OUT_TYPENAME(FN); \
+    if (gid >= dim) return; \
+    TYPENAME x = left[get_strided_index(gid, num_dims, dims, left_strides)]; \
+    TYPENAME y = right[get_strided_index(gid, num_dims, dims, left_strides)]; \
+    output[gid] = OUT_TYPENAME(FN); \
 }
 
 #define BINARY_OP(FN, NAME) \

@@ -27,16 +27,10 @@ kernel void FN_NAME( \
     constant size_t &dim, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint threadgroup_position_in_grid   [[ threadgroup_position_in_grid ]], \
-    uint thread_position_in_threadgroup [[ thread_position_in_threadgroup ]], \
-    uint threads_per_threadgroup        [[ threads_per_threadgroup ]]) \
-{ \
-    uint thread_position_in_grid = (threadgroup_position_in_grid * threads_per_threadgroup) + \
-        thread_position_in_threadgroup; \
-    if (thread_position_in_grid >= dim) { \
-        return; \
-    } \
-    output[thread_position_in_grid] = TYPENAME(FN(input[thread_position_in_grid])); \
+    uint gid [[thread_position_in_grid]] \
+) { \
+    if (gid >= dim) return; \
+    output[gid] = TYPENAME(FN(input[gid])); \
 }\
 kernel void FN_NAME_STRIDED( \
     constant size_t &dim, \
@@ -45,16 +39,10 @@ kernel void FN_NAME_STRIDED( \
     constant size_t *strides, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint threadgroup_position_in_grid   [[ threadgroup_position_in_grid ]], \
-    uint thread_position_in_threadgroup [[ thread_position_in_threadgroup ]], \
-    uint threads_per_threadgroup        [[ threads_per_threadgroup ]]) \
-{ \
-    uint thread_position_in_grid = (threadgroup_position_in_grid * threads_per_threadgroup) + \
-        thread_position_in_threadgroup; \
-    if (thread_position_in_grid >= dim) { \
-        return; \
-    } \
-    output[thread_position_in_grid] = TYPENAME(FN(input[get_strided_index(thread_position_in_grid, num_dims, dims, strides)])); \
+    uint gid [[thread_position_in_grid]] \
+) { \
+    if (gid >= dim) return; \
+    output[gid] = TYPENAME(FN(input[get_strided_index(gid, num_dims, dims, strides)])); \
 }
 
 #define UNARY_OP(NAME) \

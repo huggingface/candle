@@ -190,8 +190,7 @@ pub fn call_unary_contiguous(
         pipeline.max_total_threads_per_threadgroup(),
         length as NSUInteger,
     );
-    let remainder = length as NSUInteger % threads;
-    let thread_groups = length as NSUInteger / threads + if remainder == 0 { 0 } else { 1 };
+    let thread_groups = (length as NSUInteger + threads - 1) / threads;
     let diff = (threads * thread_groups) - length as NSUInteger;
     let threads = threads - (diff / thread_groups);
 
@@ -257,8 +256,7 @@ pub fn call_unary_strided(
         pipeline.max_total_threads_per_threadgroup(),
         length as NSUInteger,
     );
-    let remainder = length as NSUInteger % threads;
-    let thread_groups = length as NSUInteger / threads + if remainder == 0 { 0 } else { 1 };
+    let thread_groups = (length as NSUInteger + threads - 1) / threads;
     let diff = (threads * thread_groups) - length as NSUInteger;
     let threads = threads - (diff / thread_groups);
 
@@ -312,8 +310,7 @@ pub fn call_binary_contiguous(
         pipeline.max_total_threads_per_threadgroup(),
         length as NSUInteger,
     );
-    let remainder = length as NSUInteger % threads;
-    let thread_groups = length as NSUInteger / threads + if remainder == 0 { 0 } else { 1 };
+    let thread_groups = (length as NSUInteger + threads - 1) / threads;
     let diff = (threads * thread_groups) - length as NSUInteger;
     let threads = threads - (diff / thread_groups);
 
@@ -389,8 +386,7 @@ pub fn call_binary_strided(
         pipeline.max_total_threads_per_threadgroup(),
         length as NSUInteger,
     );
-    let remainder = length as NSUInteger % threads;
-    let thread_groups = length as NSUInteger / threads + if remainder == 0 { 0 } else { 1 };
+    let thread_groups = (length as NSUInteger + threads - 1) / threads;
     let diff = (threads * thread_groups) - length as NSUInteger;
     let threads = threads - (diff / thread_groups);
 
@@ -442,8 +438,7 @@ pub fn call_cast_contiguous(
         pipeline.max_total_threads_per_threadgroup(),
         length as NSUInteger,
     );
-    let remainder = length as NSUInteger % threads;
-    let thread_groups = length as NSUInteger / threads + if remainder == 0 { 0 } else { 1 };
+    let thread_groups = (length as NSUInteger + threads - 1) / threads;
     let diff = (threads * thread_groups) - length as NSUInteger;
     let threads = threads - (diff / thread_groups);
 
@@ -617,8 +612,7 @@ pub fn call_affine(
         pipeline.max_total_threads_per_threadgroup(),
         length as NSUInteger,
     );
-    let remainder = length as NSUInteger % threads;
-    let thread_groups = length as NSUInteger / threads + if remainder == 0 { 0 } else { 1 };
+    let thread_groups = (length as NSUInteger + threads - 1) / threads;
     let diff = (threads * thread_groups) - length as NSUInteger;
     let threads = threads - (diff / thread_groups);
 
@@ -697,20 +691,27 @@ pub fn call_where_cond_strided(
     encoder.set_buffer(8, Some(right), right_offset as u64);
     encoder.set_buffer(9, Some(output), 0);
 
+    let length = size as NSUInteger;
+    let threads = std::cmp::min(
+        pipeline.max_total_threads_per_threadgroup(),
+        length as NSUInteger,
+    );
+    let thread_groups = (length as NSUInteger + threads - 1) / threads;
+    let diff = (threads * thread_groups) - length as NSUInteger;
+    let threads = threads - (diff / thread_groups);
+
     let thread_group_count = MTLSize {
-        width: 1,
+        width: thread_groups,
         height: 1,
         depth: 1,
     };
-
-    let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), size as u64);
-    let thread_group_size = MTLSize {
-        width,
-        height: 1,
-        depth: 1,
+    let threads_per_threadgroup = MTLSize {
+        width: threads,
+        height: threads,
+        depth: threads,
     };
 
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.dispatch_thread_groups(thread_group_count, threads_per_threadgroup);
     encoder.end_encoding();
     Ok(())
 }

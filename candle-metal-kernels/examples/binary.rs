@@ -66,7 +66,7 @@ fn main() {
     ];
 
     println!(
-        "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <11} | {5: <11}",
+        "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <12} | {5}",
         "dtype", "kernel", "size", "runs", "total time", "avg time"
     );
 
@@ -105,6 +105,25 @@ fn run_binary_bench<T: Clone>(
     let mut output = device.new_buffer(core::mem::size_of_val(v) as u64, options);
 
     // Contiguous
+    // Ghost pass to ensure kernel load time is not included in benchmarks
+    for kernel_name in contiguous {
+        autoreleasepool(|| {
+            let command_buffer = command_queue.new_command_buffer();
+            call_binary_contiguous(
+                device,
+                &command_buffer,
+                kernels,
+                kernel_name,
+                v.len(),
+                &input,
+                &input,
+                &mut output,
+            )
+            .unwrap();
+            command_buffer.commit();
+            command_buffer.wait_until_completed();
+        });
+    }
     for kernel_name in contiguous {
         let total_time = autoreleasepool(|| {
             let command_buffer = command_queue.new_command_buffer();
@@ -128,7 +147,7 @@ fn run_binary_bench<T: Clone>(
             start.elapsed()
         });
         println!(
-            "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <11?} | {5: <11?}",
+            "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <12?} | {5:?}",
             type_name::<T>().split("::").last().unwrap(),
             kernel_name.to_string(),
             v.len(),
@@ -142,6 +161,29 @@ fn run_binary_bench<T: Clone>(
     let shape = vec![2, 5_000];
     let strides = vec![2, 1];
     let offset = 0;
+    // Ghost pass to ensure kernel load time is not included in benchmarks
+    for kernel_name in strided {
+        autoreleasepool(|| {
+            let command_buffer = command_queue.new_command_buffer();
+            call_binary_strided(
+                device,
+                command_buffer,
+                &kernels,
+                kernel_name,
+                &shape,
+                &input,
+                &strides,
+                offset,
+                &input,
+                &strides,
+                offset,
+                &mut output,
+            )
+            .unwrap();
+            command_buffer.commit();
+            command_buffer.wait_until_completed();
+        });
+    }
     for kernel_name in strided {
         let total_time = autoreleasepool(|| {
             let command_buffer = command_queue.new_command_buffer();
@@ -170,7 +212,7 @@ fn run_binary_bench<T: Clone>(
         });
 
         println!(
-            "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <11?} | {5: <11?}",
+            "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <12?} | {5:?}",
             type_name::<T>().split("::").last().unwrap(),
             kernel_name.to_string(),
             v.len(),
