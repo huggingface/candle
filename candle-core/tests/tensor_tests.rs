@@ -180,6 +180,22 @@ fn transpose(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn var(device: &Device) -> Result<()> {
+    // Values taken from https://pytorch.org/docs/stable/generated/torch.var.html
+    let data = &[
+        [0.2035f32, 1.2959, 1.8101, -0.4644],
+        [1.5027, -0.3270, 0.5905, 0.6538],
+        [-1.5745, 1.3330, -0.5596, -0.6548],
+        [0.1264, -0.5080, 1.6420, 0.1992],
+    ];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(
+        test_utils::to_vec2_round(&tensor.var_keepdim(1)?, 4)?,
+        &[[1.0631], [0.559], [1.4893], [0.8258]]
+    );
+    Ok(())
+}
+
 fn sum(device: &Device) -> Result<()> {
     let data = &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]];
     let tensor = Tensor::new(data, device)?;
@@ -1082,6 +1098,7 @@ test_device!(scatter_add, scatter_add_cpu, scatter_add_gpu);
 test_device!(slice_scatter, slice_scatter_cpu, slice_scatter_gpu);
 test_device!(randn, randn_cpu, randn_gpu);
 test_device!(clamp, clamp_cpu, clamp_gpu);
+test_device!(var, var_cpu, var_gpu);
 
 // There was originally a bug on the CPU implementation for randn
 // https://github.com/huggingface/candle/issues/381

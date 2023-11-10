@@ -856,6 +856,20 @@ impl Tensor {
         self.sum_impl(mean_dims, false)? * scale
     }
 
+    /// Returns the unbiased variance over the selected dimension.
+    pub fn var_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "var")?;
+        let mean = self.mean_keepdim(dim)?;
+        let squares = self.broadcast_sub(&mean)?.sqr()?;
+        squares.sum_impl(dim, true)? / (self.dim(dim)? - 1) as f64
+    }
+
+    /// Returns the unbiased variance over the selected dimension.
+    pub fn var<D: Dim>(&self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "var")?;
+        self.var_keepdim(dim)?.squeeze(dim)
+    }
+
     /// Gathers the maximum value across the selected dimension. The resulting shape has the same
     /// number of dimensions as the original tensor and the select dimension has a single element.
     pub fn max_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
