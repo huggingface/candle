@@ -325,10 +325,12 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut pre_prompt_tokens = vec![];
+    let mut first = true;
     loop {
         let prompt_str = match &prompt {
             Prompt::One(prompt) => prompt.clone(),
             Prompt::Interactive | Prompt::Chat => {
+                let is_interactive = matches!(prompt, Prompt::Interactive);
                 print!("> ");
                 std::io::stdout().flush()?;
                 let mut prompt = String::new();
@@ -340,7 +342,14 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 if args.which.is_zephyr() {
-                    format!("<|system|>\n</s>\n<|user|>\n{prompt}</s>\n<|assistant|>")
+                    format!(
+                        "{}<|user|>\n{prompt}</s>\n<|assistant|>",
+                        if first || is_interactive {
+                            "<|system|>\n</s>\n"
+                        } else {
+                            ""
+                        }
+                    )
                 } else if args.which.is_mistral() {
                     format!("[INST] {prompt} [/INST]")
                 } else {
@@ -348,6 +357,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         };
+        first = false;
         print!("{}", &prompt_str);
         let tokens = tos
             .tokenizer()
