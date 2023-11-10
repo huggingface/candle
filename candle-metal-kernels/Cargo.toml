@@ -22,3 +22,7 @@ rand = "0.8.5"
 [[example]]
 name = "unary"
 path = "examples/unary.rs"
+
+[[example]]
+name = "binary"
+path = "examples/binary.rs"
