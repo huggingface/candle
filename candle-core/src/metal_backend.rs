@@ -1,17 +1,16 @@
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose2D};
+use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 use candle_metal_kernels;
-use candle_metal_kernels::{void_ptr, Kernels, Source};
+use candle_metal_kernels::Kernels;
 use core::mem;
 use half::{bf16, f16};
 use metal;
 use metal::mps::matrix::encode_gemm;
 use metal::mps::Float32;
-use metal::{Buffer, CommandQueue, CompileOptions, MTLResourceOptions, MTLSize, NSUInteger};
+use metal::{Buffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::sync::Arc;
-use tracing::debug;
 
 /// Metal related errors
 #[derive(thiserror::Error, Debug)]
@@ -113,7 +112,6 @@ impl BackendStorage for MetalStorage {
         let device = self.device().clone();
 
         let shape = layout.shape();
-        let dims = shape.dims();
         let el = shape.elem_count();
         let dtype = self.dtype;
 
@@ -174,10 +172,8 @@ impl BackendStorage for MetalStorage {
             stride.push(src_stride[dim_idx]);
         }
 
-        let el_to_sum_per_block = src_el / dst_el;
         // The reduction loop requires the shared array to be properly initialized and for
         // this we want the number of threads to be a power of two.
-        let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
         let (name, check_empty, return_index) = match (op, self.dtype) {
             (ReduceOp::Sum, DType::F32) => ("fast_sum_float", false, false),
             (ReduceOp::Min, DType::F32) => ("fast_min_float", true, false),
@@ -219,13 +215,10 @@ impl BackendStorage for MetalStorage {
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
         let device = self.device();
         let shape = layout.shape();
-        let dims = shape.dims();
         let el_count = shape.elem_count();
         let mut buffer = device.new_buffer(el_count, dtype);
         let command_buffer = device.command_queue.new_command_buffer();
         if layout.is_contiguous() {
-            use candle_metal_kernels::unary::contiguous;
-
             let kernel_name = match (self.dtype, dtype) {
                 (DType::U32, DType::F32) => "cast_u32_f32",
                 (left, right) => todo!("to dtype {left:?} - {right:?}"),
@@ -250,12 +243,12 @@ impl BackendStorage for MetalStorage {
 
         command_buffer.commit();
         // command_buffer.wait_until_scheduled();
-        debug!(
-            "cast {:?} - {:?} - {:?}",
-            dtype,
-            self.buffer.length(),
-            buffer.length()
-        );
+        // debug!(
+        //     "cast {:?} - {:?} - {:?}",
+        //     dtype,
+        //     self.buffer.length(),
+        //     buffer.length()
+        // );
         Ok(Self {
             buffer,
             device: device.clone(),
@@ -267,15 +260,8 @@ impl BackendStorage for MetalStorage {
         let device = self.device();
         let dtype = self.dtype;
         let shape = layout.shape();
-        let dims = shape.dims();
         let el_count = shape.elem_count();
         let mut buffer = device.new_buffer(el_count, dtype);
-        // TODO remove
-        // return Ok(Self {
-        //     buffer,
-        //     device: device.clone(),
-        //     dtype,
-        // });
         let command_buffer = device.command_queue.new_command_buffer();
         if layout.is_contiguous() {
             use candle_metal_kernels::unary::contiguous;
@@ -302,17 +288,7 @@ impl BackendStorage for MetalStorage {
         } else {
             todo!("TODO Implement the kernel calling {}", B::KERNEL);
         }
-
-        let start = std::time::Instant::now();
         command_buffer.commit();
-        // command_buffer.wait_until_scheduled();
-        debug!(
-            "Unary {:?} - {:?} - {:?} - {:?}",
-            B::KERNEL,
-            start.elapsed(),
-            self.buffer.length(),
-            buffer.length()
-        );
 
         Ok(Self {
             buffer,
@@ -330,7 +306,6 @@ impl BackendStorage for MetalStorage {
         let device = self.device();
         let dtype = self.dtype;
         let shape = lhs_l.shape();
-        let dims = shape.dims();
         let el_count = shape.elem_count();
         let mut buffer = device.new_buffer(el_count, dtype);
         let command_buffer = device.command_queue.new_command_buffer();
@@ -385,17 +360,7 @@ impl BackendStorage for MetalStorage {
             )
             .map_err(MetalError::from)?;
         }
-
-        let start = std::time::Instant::now();
         command_buffer.commit();
-        // command_buffer.wait_until_scheduled();
-        debug!(
-            "Binary {:?} - {:?} - {:?} - {:?}",
-            B::KERNEL,
-            start.elapsed(),
-            self.buffer.length(),
-            buffer.length()
-        );
 
         Ok(Self {
             buffer,
@@ -452,6 +417,16 @@ impl BackendStorage for MetalStorage {
         todo!()
     }
 
+    fn conv_transpose1d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &ParamsConvTranspose1D,
+    ) -> Result<Self> {
+        todo!()
+    }
+
     fn conv2d(
         &self,
         _l: &Layout,
@@ -504,34 +479,28 @@ impl BackendStorage for MetalStorage {
         todo!()
     }
 
-    fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
-        debug!(
-            "TODO Index select {:?} {:?} {src_l:?} {ids_l:?} {dim:?}",
-            self.buffer.length(),
-            ids.buffer.length(),
-        );
-        let src = self;
-        let ids_shape = ids_l.shape();
-        let ids_dims = ids_shape.dims();
-        // let ds = dev.htod_copy([ids_dims, ids_l.stride()].concat()).w()?;
-        // let src = match src_l.contiguous_offsets() {
-        //     Some((o1, o2)) => src.slice(o1..o2),
-        //     None => Err(crate::Error::RequiresContiguous { op: "index-select" }.bt())?,
-        // };
-        let left_size: usize = src_l.dims()[..dim].iter().product();
-        let right_size: usize = src_l.dims()[dim + 1..].iter().product();
-        let src_dim_size = src_l.dims()[dim];
-        let ids_dim_size = ids_shape.elem_count();
-        let dst_el = ids_shape.elem_count() * left_size * right_size;
-        let dtype = self.dtype;
-        let device = self.device();
-        let buffer = device.new_buffer(dst_el, dtype);
-        Ok(Self {
-            buffer,
-            device: device.clone(),
-            dtype,
-        })
-        // todo!()
+    fn index_select(
+        &self,
+        _ids: &Self,
+        _src_l: &Layout,
+        _ids_l: &Layout,
+        _dim: usize,
+    ) -> Result<Self> {
+        todo!("Index select");
+        // let ids_shape = ids_l.shape();
+        // let left_size: usize = src_l.dims()[..dim].iter().product();
+        // let right_size: usize = src_l.dims()[dim + 1..].iter().product();
+        // let src_dim_size = src_l.dims()[dim];
+        // let ids_dim_size = ids_shape.elem_count();
+        // let dst_el = ids_shape.elem_count() * left_size * right_size;
+        // let dtype = self.dtype;
+        // let device = self.device();
+        // let buffer = device.new_buffer(dst_el, dtype);
+        // Ok(Self {
+        //     buffer,
+        //     device: device.clone(),
+        //     dtype,
+        // })
     }
 
     fn index_add(
@@ -571,7 +540,6 @@ impl BackendStorage for MetalStorage {
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         let src_shape = src_l.shape();
-        let dims = src_shape.dims();
         let el_count = src_shape.elem_count();
         if el_count == 0 {
             return Ok(());
@@ -637,7 +605,7 @@ impl MetalStorage {
             (DType::F32, DType::F32) => {
                 let mut out_buffer = self.device.new_buffer(elem_count, self.dtype);
                 if b != 1 {
-                    debug!("TODO implement batched matmul for B={b}");
+                    // debug!("TODO implement batched matmul for B={b}");
                     // bail!("Didn't implemented strided matmul yet");
                     return Ok(Self {
                         buffer: out_buffer,
@@ -646,12 +614,12 @@ impl MetalStorage {
                     });
                 }
                 if !lhs_l.is_contiguous() || !rhs_l.is_contiguous() {
-                    debug!(
-                        "TODO non contiguous matmul yet {:?} {:?} - {:?} - {transpose_right}",
-                        lhs_l.is_contiguous(),
-                        rhs_l.is_contiguous(),
-                        rhs_l
-                    );
+                    // debug!(
+                    //     "TODO non contiguous matmul yet {:?} {:?} - {:?} - {transpose_right}",
+                    //     lhs_l.is_contiguous(),
+                    //     rhs_l.is_contiguous(),
+                    //     rhs_l
+                    // );
                     return Ok(Self {
                         buffer: out_buffer,
                         device: self.device.clone(),
@@ -659,7 +627,7 @@ impl MetalStorage {
                     });
                 }
 
-                debug!("TODO GEMM");
+                // debug!("TODO GEMM");
                 let command_buffer = self.device.command_queue.new_command_buffer();
                 encode_gemm::<Float32, Float32, Float32>(
                     &self.device,
