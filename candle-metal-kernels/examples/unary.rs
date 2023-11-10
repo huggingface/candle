@@ -1,7 +1,7 @@
 use candle_metal_kernels::{call_unary_contiguous, call_unary_strided, unary, Kernels};
 use half::{bf16, f16};
 use metal::objc::rc::autoreleasepool;
-use metal::{CommandQueue, Device, MTLResourceOptions};
+use metal::{Device, MTLResourceOptions};
 use rand;
 use std::any::type_name;
 use std::time::Instant;

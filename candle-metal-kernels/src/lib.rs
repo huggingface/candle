@@ -28,31 +28,42 @@ pub enum Source {
 
 macro_rules! ops{
     ($($name:ident),+) => {
-
         pub mod contiguous {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct Kernel(pub(crate) &'static str);
-        $(
-        pub mod $name {
-            use super::Kernel;
-            pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_float"));
-            pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_half"));
-            pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bfloat"));
-        }
-        )+
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+            pub struct Kernel(pub(crate) &'static str);
+
+            impl std::fmt::Display for Kernel {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    write!(f, "{}", self.0)
+                }
+            }
+            $(
+            pub mod $name {
+                use super::Kernel;
+                pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_float"));
+                pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_half"));
+                pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bfloat"));
+            }
+            )+
         }
 
         pub mod strided {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct Kernel(pub(crate) &'static str);
-        $(
-        pub mod $name {
-            use super::Kernel;
-            pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_float_strided"));
-            pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_half_strided"));
-            pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bfloat_strided"));
-        }
-        )+
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+            pub struct Kernel(pub(crate) &'static str);
+
+            impl std::fmt::Display for Kernel {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    write!(f, "{}", self.0)
+                }
+            }
+            $(
+            pub mod $name {
+                use super::Kernel;
+                pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_float_strided"));
+                pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_half_strided"));
+                pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bfloat_strided"));
+            }
+            )+
         }
     };
 }
@@ -64,14 +75,6 @@ pub mod binary {
     ops!(add, sub, mul, div);
 }
 
-// static LIBRARY_SOURCES: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
-//     let mut l = HashMap::new();
-//     l.insert("affine", AFFINE);
-//     l.insert("indexing", INDEXING);
-//     l.insert("unary", UNARY);
-//     l
-// });
-//
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
     #[error("Could not lock kernel map: {0}")]
@@ -105,21 +108,7 @@ impl Kernels {
         Self { libraries, funcs }
     }
 
-    // pub fn init(device: &Device) -> Result<Self, MetalKernelError> {
-    //     let kernels = Self::new();
-    //     kernels.load_libraries(device)?;
-    //     Ok(kernels)
-    // }
-
-    // fn load_libraries(&self, device: &Device) -> Result<(), MetalKernelError> {
-    //     for name in LIBRARY_SOURCES.keys() {
-    //         self.load_library(device, name)?;
-    //     }
-    //     Ok(())
-    // }
-
     fn get_library_source(&self, source: Source) -> &'static str {
-        // LIBRARY_SOURCES.get(name).cloned()
         match source {
             Source::Affine => AFFINE,
             Source::Unary => UNARY,
@@ -201,14 +190,16 @@ pub fn call_unary_contiguous(
         pipeline.max_total_threads_per_threadgroup(),
         length as NSUInteger,
     );
-    let remainder = length as NSUInteger % threads == 0;
-    let thread_groups = length as NSUInteger / threads + if remainder { 0 } else { 1 };
+    let remainder = length as NSUInteger % threads;
+    let thread_groups = length as NSUInteger / threads + if remainder == 0 { 0 } else { 1 };
+    let diff = (threads * thread_groups) - length as NSUInteger;
+    let threads = threads - (diff / thread_groups);
+
     let thread_group_count = MTLSize {
         width: thread_groups,
         height: 1,
         depth: 1,
     };
-
     let threads_per_threadgroup = MTLSize {
         width: threads,
         height: 1,
@@ -262,21 +253,27 @@ pub fn call_unary_strided(
     encoder.set_buffer(4, Some(input), offset as u64);
     encoder.set_buffer(5, Some(output), output_offset as u64);
 
-    let width = output.length();
+    let threads = std::cmp::min(
+        pipeline.max_total_threads_per_threadgroup(),
+        length as NSUInteger,
+    );
+    let remainder = length as NSUInteger % threads;
+    let thread_groups = length as NSUInteger / threads + if remainder == 0 { 0 } else { 1 };
+    let diff = (threads * thread_groups) - length as NSUInteger;
+    let threads = threads - (diff / thread_groups);
 
     let thread_group_count = MTLSize {
-        width: 1,
+        width: thread_groups,
+        height: 1,
+        depth: 1,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: threads,
         height: 1,
         depth: 1,
     };
 
-    let thread_group_size = MTLSize {
-        width: std::cmp::min(pipeline.max_total_threads_per_threadgroup(), width),
-        height: 1,
-        depth: 1,
-    };
-
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.dispatch_thread_groups(thread_group_count, threads_per_threadgroup);
     encoder.end_encoding();
     Ok(())
 }

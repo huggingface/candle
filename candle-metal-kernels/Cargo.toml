@@ -17,6 +17,7 @@ tracing = "0.1.37"
 
 [dev-dependencies]
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
+rand = "0.8.5"
 
 [[example]]
 name = "unary"
