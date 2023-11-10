@@ -157,6 +157,8 @@ pub(crate) fn from_storage<S: Into<Shape>>(
 ) -> Tensor {
     let dtype = storage.dtype();
     let device = storage.device();
+    let shape = shape.into();
+    // println!("{:?} {storage:?}", shape);
     let tensor_ = Tensor_ {
         id: TensorId::new(),
         storage: Arc::new(RwLock::new(storage)),
@@ -166,7 +168,11 @@ pub(crate) fn from_storage<S: Into<Shape>>(
         dtype,
         device,
     };
-    Tensor(Arc::new(tensor_))
+    let result = Tensor(Arc::new(tensor_));
+    // todo!(" from_storage");
+    // let result = result.to_device(&Device::Cpu).unwrap();
+    // todo!(" {result}");
+    result
 }
 
 impl Tensor {

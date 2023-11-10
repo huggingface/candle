@@ -8,7 +8,7 @@ use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
 pub enum DeviceLocation {
     Cpu,
     Cuda { gpu_id: usize },
-    Metal,
+    Metal { gpu_id: usize },
 }
 
 #[derive(Debug, Clone)]

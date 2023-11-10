@@ -47,7 +47,7 @@ kernel void FN_NAME_STRIDED( \
         return; \
     } \
     TYPENAME x = left[get_strided_index(thread_position_in_grid, num_dims, dims, left_strides)]; \
-    TYPENAME y = right[get_strided_index(thread_position_in_grid, num_dims, dims, left_strides)]; \
+    TYPENAME y = right[get_strided_index(thread_position_in_grid, num_dims, dims, right_strides)]; \
     output[thread_position_in_grid] = OUT_TYPENAME(FN); \
 }
 
