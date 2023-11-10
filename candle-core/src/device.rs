@@ -146,6 +146,7 @@ impl Device {
         match (self, rhs) {
             (Self::Cpu, Self::Cpu) => true,
             (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
+            (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
             _ => false,
         }
     }

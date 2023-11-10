@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 use metal::{
-    Buffer, CommandBufferRef, CompileOptions, ComputePipelineDescriptor, Device, Function, Library,
-    MTLSize,
+    Buffer, CommandBufferRef, CompileOptions, ComputeCommandEncoderRef, ComputePipelineDescriptor,
+    Device, Function, Library, MTLSize,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -14,6 +14,70 @@ const BINARY: &str = include_str!("binary.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
 const REDUCE: &str = include_str!("reduce.metal");
+
+fn set_param<P: EncoderParam>(encoder: &ComputeCommandEncoderRef, position: u64, data: P) {
+    <P as EncoderParam>::set_param(encoder, position, data)
+}
+trait EncoderParam {
+    fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self);
+}
+macro_rules! primitive {
+    ($type:ty) => {
+        impl EncoderParam for $type {
+            fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+                encoder.set_bytes(
+                    position,
+                    core::mem::size_of::<$type>() as u64,
+                    &data as *const $type as *const c_void,
+                );
+            }
+        }
+    };
+}
+primitive!(usize);
+primitive!(u32);
+primitive!(f32);
+
+impl<T> EncoderParam for &[T] {
+    fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+        encoder.set_bytes(
+            position,
+            (core::mem::size_of::<T>() * data.len()) as u64,
+            data.as_ptr() as *const T as *const c_void,
+        );
+    }
+}
+
+impl EncoderParam for &Buffer {
+    fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+        encoder.set_buffer(position, Some(data), 0);
+    }
+}
+impl EncoderParam for (&Buffer, usize) {
+    fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+        encoder.set_buffer(position, Some(data.0), data.1 as u64);
+    }
+}
+impl EncoderParam for &mut Buffer {
+    fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+        encoder.set_buffer(position, Some(data), 0);
+    }
+}
+impl EncoderParam for (&mut Buffer, usize) {
+    fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+        encoder.set_buffer(position, Some(data.0), data.1 as u64);
+    }
+}
+
+macro_rules! set_params {
+    ($encoder:ident, ($($param:expr),+)) => (
+        let mut _index = 0;
+        $(
+            set_param($encoder, _index, $param);
+            _index += 1;
+        )*
+    );
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
@@ -191,9 +255,7 @@ pub fn call_unary_contiguous(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_bytes(0, 4, void_ptr(&length));
-    encoder.set_buffer(1, Some(input), 0);
-    encoder.set_buffer(2, Some(output), 0);
+    set_params!(encoder, (length, input, output));
 
     let thread_group_count = MTLSize {
         width: 1,
@@ -239,24 +301,19 @@ pub fn call_unary_strided(
     encoder.set_compute_pipeline_state(&pipeline);
 
     let length: usize = shape.iter().product();
-    encoder.set_bytes(0, std::mem::size_of::<usize>() as u64, void_ptr(&length));
-    encoder.set_bytes(1, std::mem::size_of::<usize>() as u64, void_ptr(&num_dims));
-    encoder.set_bytes(
-        2,
-        std::mem::size_of_val(shape) as u64,
-        shape.as_ptr() as *const c_void,
+    set_params!(
+        encoder,
+        (
+            length,
+            num_dims,
+            shape,
+            strides,
+            (input, offset),
+            (output, output_offset)
+        )
     );
-    encoder.set_bytes(
-        3,
-        std::mem::size_of_val(strides) as u64,
-        strides.as_ptr() as *const c_void,
-    );
 
-    encoder.set_buffer(4, Some(input), offset as u64);
-    encoder.set_buffer(5, Some(output), output_offset as u64);
-
-    let width = output.length();
-
+    let width: usize = shape.iter().product();
     let thread_group_count = MTLSize {
         width: 1,
         height: 1,
@@ -264,7 +321,7 @@ pub fn call_unary_strided(
     };
 
     let thread_group_size = MTLSize {
-        width: std::cmp::min(pipeline.max_total_threads_per_threadgroup(), width),
+        width: std::cmp::min(pipeline.max_total_threads_per_threadgroup(), width as u64),
         height: 1,
         depth: 1,
     };
@@ -299,10 +356,7 @@ pub fn call_binary_contiguous(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_bytes(0, 4, void_ptr(&length));
-    encoder.set_buffer(1, Some(left), 0);
-    encoder.set_buffer(2, Some(right), 0);
-    encoder.set_buffer(3, Some(output), 0);
+    set_params!(encoder, (length, left, right, output));
 
     let thread_group_count = MTLSize {
         width: 1,
@@ -348,32 +402,24 @@ pub fn call_binary_strided(
 
     let num_dims: usize = shape.len();
     let encoder = command_buffer.new_compute_command_encoder();
+    let width: usize = shape.iter().product();
     encoder.set_compute_pipeline_state(&pipeline);
 
     let length: usize = shape.iter().product();
-    encoder.set_bytes(0, std::mem::size_of::<usize>() as u64, void_ptr(&length));
-    encoder.set_bytes(1, std::mem::size_of::<usize>() as u64, void_ptr(&num_dims));
-    encoder.set_bytes(
-        2,
-        std::mem::size_of_val(shape) as u64,
-        shape.as_ptr() as *const c_void,
-    );
-    encoder.set_bytes(
-        3,
-        std::mem::size_of_val(left_strides) as u64,
-        left_strides.as_ptr() as *const c_void,
-    );
-    encoder.set_bytes(
-        4,
-        std::mem::size_of_val(right_strides) as u64,
-        right_strides.as_ptr() as *const c_void,
-    );
 
-    encoder.set_buffer(5, Some(left_input), left_offset as u64);
-    encoder.set_buffer(6, Some(right_input), right_offset as u64);
-    encoder.set_buffer(7, Some(output), 0);
-
-    let width = output.length();
+    set_params!(
+        encoder,
+        (
+            length,
+            num_dims,
+            shape,
+            left_strides,
+            right_strides,
+            (left_input, left_offset),
+            (right_input, right_offset),
+            output
+        )
+    );
 
     let thread_group_count = MTLSize {
         width: 1,
@@ -382,7 +428,7 @@ pub fn call_binary_strided(
     };
 
     let thread_group_size = MTLSize {
-        width: std::cmp::min(pipeline.max_total_threads_per_threadgroup(), width),
+        width: std::cmp::min(pipeline.max_total_threads_per_threadgroup(), width as u64),
         height: 1,
         depth: 1,
     };
@@ -416,9 +462,7 @@ pub fn call_cast_contiguous(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_bytes(0, 4, void_ptr(&length));
-    encoder.set_buffer(1, Some(input), 0);
-    encoder.set_buffer(2, Some(output), 0);
+    set_params!(encoder, (length, input, output));
 
     let thread_group_count = MTLSize {
         width: 1,
@@ -463,14 +507,7 @@ pub fn call_reduce_contiguous(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_bytes(0, core::mem::size_of::<usize>() as u64, void_ptr(&length));
-    encoder.set_bytes(
-        1,
-        core::mem::size_of::<usize>() as u64,
-        void_ptr(&elements_to_sum),
-    );
-    encoder.set_buffer(2, Some(input), 0);
-    encoder.set_buffer(3, Some(output), 0);
+    set_params!(encoder, (length, elements_to_sum, input, output));
 
     let thread_group_count = MTLSize {
         width: out_length as u64,
@@ -518,14 +555,7 @@ pub fn call_last_softmax(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_bytes(0, core::mem::size_of::<usize>() as u64, void_ptr(&length));
-    encoder.set_bytes(
-        1,
-        core::mem::size_of::<usize>() as u64,
-        void_ptr(&elements_to_sum),
-    );
-    encoder.set_buffer(2, Some(input), 0);
-    encoder.set_buffer(3, Some(output), 0);
+    set_params!(encoder, (length, elements_to_sum, input, output));
 
     let out_length = length / elements_to_sum;
 
@@ -553,10 +583,6 @@ pub fn call_last_softmax(
     Ok(())
 }
 
-pub fn void_ptr<T>(v: &T) -> *const c_void {
-    (v as *const T).cast()
-}
-
 pub fn call_affine(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -580,11 +606,7 @@ pub fn call_affine(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_bytes(0, core::mem::size_of::<usize>() as u64, void_ptr(&size));
-    encoder.set_bytes(1, core::mem::size_of::<f32>() as u64, void_ptr(&mul));
-    encoder.set_bytes(2, core::mem::size_of::<f32>() as u64, void_ptr(&add));
-    encoder.set_buffer(3, Some(input), 0);
-    encoder.set_buffer(4, Some(output), 0);
+    set_params!(encoder, (size, mul, add, input, output));
 
     let thread_group_count = MTLSize {
         width: 1,
@@ -632,36 +654,23 @@ pub fn call_where_cond_strided(
     encoder.set_compute_pipeline_state(&pipeline);
 
     let size: usize = shape.iter().product();
-    encoder.set_bytes(0, core::mem::size_of::<usize>() as u64, void_ptr(&size));
-    encoder.set_bytes(
-        1,
-        core::mem::size_of::<usize>() as u64,
-        void_ptr(&shape.len()),
+    let rank = shape.len();
+
+    set_params!(
+        encoder,
+        (
+            size,
+            rank,
+            shape,
+            cond_stride,
+            left_stride,
+            right_stride,
+            (cond, cond_offset),
+            (left, left_offset),
+            (right, right_offset),
+            output
+        )
     );
-    encoder.set_bytes(
-        2,
-        std::mem::size_of_val(shape) as u64,
-        shape.as_ptr() as *const c_void,
-    );
-    encoder.set_bytes(
-        3,
-        std::mem::size_of_val(cond_stride) as u64,
-        cond_stride.as_ptr() as *const c_void,
-    );
-    encoder.set_bytes(
-        4,
-        std::mem::size_of_val(left_stride) as u64,
-        left_stride.as_ptr() as *const c_void,
-    );
-    encoder.set_bytes(
-        5,
-        std::mem::size_of_val(right_stride) as u64,
-        right_stride.as_ptr() as *const c_void,
-    );
-    encoder.set_buffer(6, Some(cond), cond_offset as u64);
-    encoder.set_buffer(7, Some(left), left_offset as u64);
-    encoder.set_buffer(8, Some(right), right_offset as u64);
-    encoder.set_buffer(9, Some(output), 0);
 
     let thread_group_count = MTLSize {
         width: 1,
@@ -686,7 +695,13 @@ mod tests {
     use super::*;
     use half::f16;
     use metal::{CompileOptions, Device, MTLResourceOptions, MTLSize, NSUInteger};
-    use std::mem;
+
+    fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
+        let options = MTLResourceOptions::StorageModeManaged;
+        let ptr = data.as_ptr() as *const core::ffi::c_void;
+        let size = (data.len() * std::mem::size_of::<T>()) as u64;
+        device.new_buffer_with_data(ptr, size, options)
+    }
 
     fn device() -> Device {
         Device::system_default().unwrap()
@@ -707,13 +722,8 @@ mod tests {
         let kernels = Kernels::new();
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
-        let options = MTLResourceOptions::StorageModeManaged;
-        let input = device.new_buffer_with_data(
-            v.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(v) as u64,
-            options,
-        );
-        let mut output = device.new_buffer(std::mem::size_of_val(v) as u64, options);
+        let input = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
         call_unary_contiguous(
             &device,
             command_buffer,
@@ -735,16 +745,8 @@ mod tests {
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
         let options = MTLResourceOptions::StorageModeManaged;
-        let left = device.new_buffer_with_data(
-            x.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(x) as u64,
-            options,
-        );
-        let right = device.new_buffer_with_data(
-            y.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(y) as u64,
-            options,
-        );
+        let left = new_buffer(&device, x);
+        let right = new_buffer(&device, y);
         let mut output = device.new_buffer(std::mem::size_of_val(x) as u64, options);
         call_binary_contiguous(
             &device,
@@ -770,15 +772,10 @@ mod tests {
         offset: usize,
     ) -> Vec<T> {
         let device = device();
-        let options = MTLResourceOptions::StorageModeManaged;
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
-        let input = device.new_buffer_with_data(
-            v.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(v) as u64,
-            options,
-        );
-        let mut output = device.new_buffer(std::mem::size_of_val(v) as u64, options);
+        let input = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
         let kernels = Kernels::new();
         call_unary_strided(
             &device,
@@ -893,13 +890,9 @@ mod tests {
         let kernels = Kernels::new();
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
-        let options = MTLResourceOptions::StorageModeManaged;
-        let input = device.new_buffer_with_data(
-            v.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(v) as u64,
-            options,
-        );
-        let mut output = device.new_buffer((v.len() * core::mem::size_of::<U>()) as u64, options);
+        let input = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
+
         call_cast_contiguous(
             &device,
             command_buffer,
@@ -935,14 +928,9 @@ mod tests {
         let kernels = Kernels::new();
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
-        let options = MTLResourceOptions::StorageModeManaged;
 
-        let input = device.new_buffer_with_data(
-            v.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(v) as u64,
-            options,
-        );
-        let mut output = device.new_buffer(std::mem::size_of_val(v) as u64, options);
+        let input = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
 
         let size = v.len();
 
@@ -979,6 +967,104 @@ mod tests {
     }
 
     #[test]
+    fn index_select() {
+        let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let shape = [5, 2];
+        let ids = [0u32, 4, 2];
+        let dim = 0;
+        let result = run_index_select(&embedding, &shape, &ids, dim);
+        assert_eq!(result, vec![1.0f32, 2.0, 9.0, 10.0, 5.0, 6.0]);
+
+        let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let shape = [2, 5];
+        let ids = [0u32, 1, 0];
+        let dim = 0;
+        let result = run_index_select(&embedding, &shape, &ids, dim);
+        assert_eq!(
+            result,
+            vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.0f32, 2.0, 3.0, 4.0, 5.0]
+        );
+
+        let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let shape = [5, 2];
+        let ids = [0u32, 1, 0];
+        let dim = 1;
+        let result = run_index_select(&embedding, &shape, &ids, dim);
+        assert_eq!(
+            result,
+            vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.0f32, 2.0, 3.0, 4.0, 5.0]
+        );
+    }
+
+    fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
+        embeddings: &[T],
+        shape: &[usize],
+        ids: &[I],
+        dim: usize,
+    ) -> Vec<T> {
+        let device = Device::system_default().expect("no device found");
+        let options = CompileOptions::new();
+        let library = device.new_library_with_source(INDEXING, &options).unwrap();
+
+        let left_size: usize = shape[..dim].iter().product();
+        let right_size: usize = shape[dim + 1..].iter().product();
+        let src_dim_size = shape[dim];
+        let dst_el = ids.len() * left_size * right_size;
+        let ids_size = ids.len();
+
+        let function = library.get_function("is_u32_f32", None).unwrap();
+        let pipeline = device
+            .new_compute_pipeline_state_with_function(&function)
+            .unwrap();
+
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+
+        encoder.set_compute_pipeline_state(&pipeline);
+
+        let embeddings_buffer = new_buffer(&device, &embeddings);
+        let ids_buffer = new_buffer(&device, &ids);
+        let mut dst_buffer = new_buffer(&device, &vec![0.0f32; dst_el]);
+
+        set_params!(
+            encoder,
+            (
+                dst_el,
+                left_size,
+                src_dim_size,
+                right_size,
+                ids_size,
+                &embeddings_buffer,
+                &ids_buffer,
+                &mut dst_buffer
+            )
+        );
+
+        let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), dst_el as u64);
+        let grid_size = MTLSize {
+            width: (dst_el as u64 + width - 1) / width,
+            height: 1,
+            depth: 1,
+        };
+
+        let thread_group_size = MTLSize {
+            width,
+            height: 1,
+            depth: 1,
+        };
+
+        println!("{width:?} - {:?}", grid_size);
+
+        encoder.dispatch_thread_groups(grid_size, thread_group_size);
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        dst_buffer.read_to_vec::<T>(dst_el)
+    }
+
+    #[test]
     fn index_add() {
         let device = Device::system_default().expect("no device found");
 
@@ -997,31 +1083,29 @@ mod tests {
         let pipeline = device
             .new_compute_pipeline_state_with_function(&function)
             .unwrap();
-        let options = MTLResourceOptions::StorageModeManaged;
 
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
         let encoder = command_buffer.new_compute_command_encoder();
 
-        let ids_size = (index.len() * mem::size_of::<u32>()) as NSUInteger;
-        let input_size = (left.len() * mem::size_of::<f32>()) as NSUInteger;
-        let output_size = (right.len() * mem::size_of::<f32>()) as NSUInteger;
-
         encoder.set_compute_pipeline_state(&pipeline);
-        encoder.set_threadgroup_memory_length(0, output_size as NSUInteger);
 
-        let index_buffer = device.new_buffer_with_data(void_ptr(&index), ids_size, options);
-        let inputs_buffer = device.new_buffer_with_data(void_ptr(&left), input_size, options);
-        let outputs_buffer = device.new_buffer_with_data(void_ptr(&right), output_size, options);
+        let index_buffer = new_buffer(&device, &index);
+        let inputs_buffer = new_buffer(&device, &left);
+        let outputs_buffer = new_buffer(&device, &right);
 
-        encoder.set_buffer(0, Some(&index_buffer), 0);
-        encoder.set_buffer(1, Some(&inputs_buffer), 0);
-        encoder.set_buffer(2, Some(&outputs_buffer), 0);
-
-        encoder.set_bytes(3, 4, void_ptr(&ids_dim_size));
-        encoder.set_bytes(4, 4, void_ptr(&left_size));
-        encoder.set_bytes(5, 4, void_ptr(&dst_dim_size));
-        encoder.set_bytes(6, 4, void_ptr(&right_size));
+        set_params!(
+            encoder,
+            (
+                &index_buffer,
+                &inputs_buffer,
+                &outputs_buffer,
+                ids_dim_size,
+                left_size,
+                dst_dim_size,
+                right_size
+            )
+        );
 
         let grid_size = MTLSize {
             width: right.len() as NSUInteger,
@@ -1064,12 +1148,9 @@ mod tests {
         let kernels = Kernels::new();
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
+        let input = new_buffer(&device, v);
+
         let options = MTLResourceOptions::StorageModeManaged;
-        let input = device.new_buffer_with_data(
-            v.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(v) as u64,
-            options,
-        );
         let mut output =
             device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
         call_reduce_contiguous(
@@ -1098,13 +1179,8 @@ mod tests {
         let kernels = Kernels::new();
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
-        let options = MTLResourceOptions::StorageModeManaged;
-        let input = device.new_buffer_with_data(
-            v.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(v) as u64,
-            options,
-        );
-        let mut output = device.new_buffer(std::mem::size_of_val(v) as u64, options);
+        let input = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
         call_last_softmax(
             &device,
             command_buffer,
