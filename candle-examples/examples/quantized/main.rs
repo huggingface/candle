@@ -212,7 +212,7 @@ impl Args {
     fn tokenizer(&self) -> anyhow::Result<Tokenizer> {
         if let Some(config) = &self.tokenizer {
             let tokenizer_path = std::path::PathBuf::from(config);
-            return Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg);
+            Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)
         } else {
             let api = hf_hub::api::sync::Api::new()?;
             let repo = if self.which.is_mistral() {
@@ -222,15 +222,15 @@ impl Args {
             };
             let api = api.model(repo.to_string());
             let tokenizer_path = api.get("tokenizer.json")?;
-            return Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg);
+            Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)
         }
     }
 
     fn model(&self) -> anyhow::Result<std::path::PathBuf> {
         if let Some(config) = &self.model {
-            return Ok(std::path::PathBuf::from(config));
+            Ok(std::path::PathBuf::from(config))
         } else {
-            return self.which.default_path();
+            self.which.default_path()
         }
     }
 }
