@@ -23,15 +23,16 @@ kernel void FN_NAME( \
     constant size_t &dim, \
     device const LEFT_TYPENAME *input,  \
     device RIGHT_TYPENAME *output, \
-    uint threadgroup_size [[threads_per_threadgroup]], \
-    uint thread_index [[thread_index_in_threadgroup]] \
-) { \
-    const size_t length = (dim  + threadgroup_size - 1) / threadgroup_size; \
-    const size_t start = thread_index * length; \
-    const size_t stop = min(start + length, dim); \
-    for (size_t i = start; i < stop; i++){ \
-        output[i] = RIGHT_TYPENAME(input[i]); \
+    uint threadgroup_position_in_grid   [[ threadgroup_position_in_grid ]], \
+    uint thread_position_in_threadgroup [[ thread_position_in_threadgroup ]], \
+    uint threads_per_threadgroup        [[ threads_per_threadgroup ]]) \
+{ \
+    uint thread_position_in_grid = (threadgroup_position_in_grid * threads_per_threadgroup) + \
+        thread_position_in_threadgroup; \
+    if (thread_position_in_grid >= dim) { \
+        return; \
     } \
+    output[thread_position_in_grid] = RIGHT_TYPENAME(input[thread_position_in_grid]); \
 } \
 kernel void FN_NAME_STRIDED( \
     constant size_t &dim, \
@@ -40,17 +41,17 @@ kernel void FN_NAME_STRIDED( \
     constant size_t *strides, \
     device const LEFT_TYPENAME *input,  \
     device RIGHT_TYPENAME *output, \
-    uint threadgroup_size [[threads_per_threadgroup]], \
-    uint thread_index [[thread_index_in_threadgroup]] \
-) { \
-    const size_t length = (dim  + threadgroup_size - 1) / threadgroup_size; \
-    const size_t start = thread_index * length; \
-    const size_t stop = min(start + length, dim); \
-    for (size_t i = start; i < stop; i++){ \
-        output[i] = RIGHT_TYPENAME(input[get_strided_index(i, num_dims, dims, strides)]); \
+    uint threadgroup_position_in_grid   [[ threadgroup_position_in_grid ]], \
+    uint thread_position_in_threadgroup [[ thread_position_in_threadgroup ]], \
+    uint threads_per_threadgroup        [[ threads_per_threadgroup ]]) \
+{ \
+    uint i = (threadgroup_position_in_grid * threads_per_threadgroup) + \
+        thread_position_in_threadgroup; \
+    if (i >= dim) { \
+        return; \
     } \
-}
-
+    output[i] = RIGHT_TYPENAME(input[get_strided_index(i, num_dims, dims, strides)]); \
+} \
 
 CAST(cast_u32_f32, cast_u32_f32_strided, int32_t, float)
 

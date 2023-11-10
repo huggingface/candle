@@ -238,7 +238,7 @@ impl BackendStorage for MetalStorage {
             .map_err(MetalError::from)?;
         } else {
             todo!(
-                "TODO Implement the kernel calling cast {:?}-{:?}",
+                "TODO Implement the kernel calling strided cast {:?}-{:?}",
                 self.dtype,
                 dtype
             );

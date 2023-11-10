@@ -438,20 +438,27 @@ pub fn call_cast_contiguous(
     encoder.set_buffer(1, Some(input), 0);
     encoder.set_buffer(2, Some(output), 0);
 
+    let threads = std::cmp::min(
+        pipeline.max_total_threads_per_threadgroup(),
+        length as NSUInteger,
+    );
+    let remainder = length as NSUInteger % threads;
+    let thread_groups = length as NSUInteger / threads + if remainder == 0 { 0 } else { 1 };
+    let diff = (threads * thread_groups) - length as NSUInteger;
+    let threads = threads - (diff / thread_groups);
+
     let thread_group_count = MTLSize {
-        width: 1,
+        width: thread_groups,
+        height: 1,
+        depth: 1,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: threads,
         height: 1,
         depth: 1,
     };
 
-    let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), length as u64);
-    let thread_group_size = MTLSize {
-        width,
-        height: 1,
-        depth: 1,
-    };
-
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.dispatch_thread_groups(thread_group_count, threads_per_threadgroup);
     encoder.end_encoding();
     Ok(())
 }
