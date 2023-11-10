@@ -105,8 +105,6 @@ impl BackendStorage for MetalStorage {
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        // TODO Is this necessary
-        // self.buffer.synchronize();
         match self.dtype {
             DType::U8 => Ok(CpuStorage::U8(
                 self.buffer.read_to_vec(self.buffer.length() as usize / 1),
@@ -140,6 +138,7 @@ impl BackendStorage for MetalStorage {
         let dtype = self.dtype;
 
         assert!(layout.is_contiguous());
+        assert!(layout.start_offset() == 0);
         assert_eq!(dtype, DType::F32);
 
         let mut buffer = device.new_buffer(el, self.dtype);
@@ -173,10 +172,10 @@ impl BackendStorage for MetalStorage {
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
-        // debug!("TODO reduce_op {op:?} {sum_dims:?}");
         assert!(sum_dims.len() == 1);
         assert!(sum_dims[0] == layout.shape().rank() - 1);
         assert!(layout.is_contiguous());
+        assert!(layout.start_offset() == 0);
         let device = self.device.clone();
         let src_stride = layout.stride();
         let src_dims = layout.shape().dims();
@@ -269,13 +268,6 @@ impl BackendStorage for MetalStorage {
 
         command_buffer.commit();
         command_buffer.wait_until_completed();
-        // command_buffer.wait_until_scheduled();
-        // debug!(
-        //     "cast {:?} - {:?} - {:?}",
-        //     dtype,
-        //     self.buffer.length(),
-        //     buffer.length()
-        // );
         Ok(Self {
             buffer,
             device: device.clone(),
@@ -290,7 +282,7 @@ impl BackendStorage for MetalStorage {
         let el_count = shape.elem_count();
         let mut buffer = device.new_buffer(el_count, dtype);
         let command_buffer = device.command_queue.new_command_buffer();
-        if layout.is_contiguous() {
+        if layout.is_contiguous() && layout.start_offset() == 0 {
             use candle_metal_kernels::unary::contiguous;
 
             let kernel_name = match (B::KERNEL, dtype) {
@@ -300,6 +292,7 @@ impl BackendStorage for MetalStorage {
                 ("usqrt", DType::F32) => contiguous::sqrt::FLOAT,
                 ("uneg", DType::F32) => contiguous::neg::FLOAT,
                 ("uexp", DType::F32) => contiguous::exp::FLOAT,
+                ("ulog", DType::F32) => contiguous::log::FLOAT,
                 (name, dtype) => todo!("Match {name} - {dtype:?}"),
             };
             candle_metal_kernels::call_unary_contiguous(
@@ -337,7 +330,9 @@ impl BackendStorage for MetalStorage {
         let el_count = shape.elem_count();
         let mut buffer = device.new_buffer(el_count, dtype);
         let command_buffer = device.command_queue.new_command_buffer();
-        if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
+        if (lhs_l.is_contiguous() && lhs_l.start_offset() == 0)
+            && (rhs_l.is_contiguous() && rhs_l.start_offset() == 0)
+        {
             use candle_metal_kernels::binary::contiguous;
 
             let kernel_name = match (B::KERNEL, dtype) {
@@ -380,10 +375,10 @@ impl BackendStorage for MetalStorage {
                 lhs_l.dims(),
                 &self.buffer,
                 &lhs_l.stride(),
-                lhs_l.start_offset(),
+                lhs_l.start_offset() * self.dtype.size_in_bytes(),
                 &rhs.buffer,
                 &rhs_l.stride(),
-                rhs_l.start_offset(),
+                rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
                 &mut buffer,
             )
             .map_err(MetalError::from)?;
@@ -420,11 +415,14 @@ impl BackendStorage for MetalStorage {
             "where_u8_f32",
             &dims,
             &self.buffer,
-            (layout.stride(), layout.start_offset()),
+            (
+                layout.stride(),
+                layout.start_offset() * self.dtype.size_in_bytes(),
+            ),
             &t.buffer,
-            (&t_l.stride(), t_l.start_offset()),
+            (&t_l.stride(), t_l.start_offset() * t.dtype.size_in_bytes()),
             &f.buffer,
-            (&f_l.stride(), f_l.start_offset()),
+            (&f_l.stride(), f_l.start_offset() * f.dtype.size_in_bytes()),
             &mut buffer,
         )
         .map_err(MetalError::from)?;
@@ -511,7 +509,9 @@ impl BackendStorage for MetalStorage {
 
     fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
         assert!(src_l.is_contiguous());
+        assert!(src_l.start_offset() == 0);
         assert!(ids_l.is_contiguous());
+        assert!(ids_l.start_offset() == 0);
         let left_size: usize = src_l.dims()[..dim].iter().product();
         let right_size: usize = src_l.dims()[dim + 1..].iter().product();
         let ids_el = ids_l.shape().elem_count();
@@ -681,6 +681,7 @@ impl BackendStorage for MetalStorage {
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         let src_shape = src_l.shape();
         let el_count = src_shape.elem_count();
+        // todo!("COPY STRIDED {src_shape:?} {el_count} {src_l:?} {dst_offset}");
         if el_count == 0 {
             return Ok(());
         }
@@ -699,15 +700,13 @@ impl BackendStorage for MetalStorage {
             src_l.dims(),
             &self.buffer,
             &src_l.stride(),
-            src_l.start_offset(),
+            src_l.start_offset() * self.dtype.size_in_bytes(),
             &mut dst.buffer,
             dst_offset,
         )
         .map_err(MetalError::from)?;
         command_buffer.commit();
         command_buffer.wait_until_completed();
-        // todo!("Output {:?}", dst.buffer.read_to_vec::<f32>(10));
-        // }
         Ok(())
     }
 }
@@ -732,24 +731,11 @@ impl BackendDevice for MetalDevice {
     fn new(ordinal: usize) -> Result<Self> {
         let device = metal::Device::all().swap_remove(ordinal);
 
-        // let capture = metal::CaptureManager::shared();
-        // let descriptor = metal::CaptureDescriptor::new();
-        // descriptor.set_destination(metal::MTLCaptureDestination::GpuTraceDocument);
-        // descriptor.set_capture_device(&device);
-        // let mut dir = std::env::current_dir()?;
-        // dir.push("out.gputrace");
-        // descriptor.set_output_url(dir);
-
-        // capture
-        //     .start_capture(&descriptor)
-        //     .map_err(MetalError::from)?;
         let command_queue = device.new_command_queue();
-        // let command_buffer = _command_queue.new_owned_command_buffer();
         let kernels = Arc::new(Kernels::new());
         Ok(Self {
             device,
             command_queue,
-            // command_buffer,
             kernels,
         })
     }
@@ -819,9 +805,6 @@ impl BackendDevice for MetalDevice {
                 option,
             ),
         };
-        // TODO is that necessary ?
-        // buffer.did_modify_range(metal::NSRange::new(0, buffer.length()));
-        // debug!("Allocate 2 - buffer size {}", buffer.length());
         Ok(Self::Storage {
             buffer,
             device: self.clone(),
