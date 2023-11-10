@@ -2,7 +2,7 @@
 using namespace metal;
 
 # define INDEX_OP(NAME, INDEX_TYPENAME, TYPENAME) \
-kernel void NAME( \ 
+kernel void NAME( \
     constant size_t &dst_size, \
     constant size_t &left_size, \
     constant size_t &src_dim_size, \
@@ -42,12 +42,9 @@ void index_add(
     constant uint &dst_dim_size,
     constant uint &right_size,
 
-    uint threadgroup_size [[threads_per_threadgroup]],
-    uint threadgroup_position_in_grid [[threadgroup_position_in_grid]],
-    uint thread_index [[thread_index_in_threadgroup]]
+    uint gid [[ thread_position_in_grid ]] \
 ) {
 
-    const uint gid = thread_index + (threadgroup_position_in_grid * threadgroup_size);
     if (gid >= left_size * right_size) {
         return;
     }
@@ -73,13 +70,12 @@ kernel void FN_NAME( \
     constant uint &left_size, \
     constant uint &dst_dim_size, \
     constant uint &right_size, \
-    uint threadgroup_size [[threads_per_threadgroup]], \
-    uint threadgroup_position_in_grid [[threadgroup_position_in_grid]], \
-    uint thread_index [[thread_index_in_threadgroup]] \
-) { index_add<TYPENAME, INDEX_TYPENAME>(ids, inp, out, ids_dim_size, left_size, dst_dim_size, right_size, threadgroup_size, threadgroup_position_in_grid, thread_index); } \
+    uint gid [[ thread_position_in_grid ]] \
+) { index_add<TYPENAME, INDEX_TYPENAME>(ids, inp, out, ids_dim_size, left_size, dst_dim_size, right_size, gid); } \
 
 
 INDEX_OP(is_u32_f32, uint, float)
+
 
 #if __METAL_VERSION__ >= 310
 IA_OP(bfloat, int64_t, ia_i64_bf16)
