@@ -63,6 +63,7 @@ UNARY_OP(sqr)
 UNARY_OP(sqrt)
 UNARY_OP(neg)
 UNARY_OP(exp)
+UNARY_OP(log)
 UNARY(id, float, copy_float, copy_float_strided)
 UNARY(id, half, copy_half, copy_half_strided)
 
@@ -73,6 +74,7 @@ BFLOAT_UNARY_OP(sqr)
 BFLOAT_UNARY_OP(sqrt)
 BFLOAT_UNARY_OP(neg)
 BFLOAT_UNARY_OP(exp)
+BFLOAT_UNARY_OP(log)
 
 UNARY(id, bfloat, copy_bfloat, copy_bfloat_strided)
 #endif

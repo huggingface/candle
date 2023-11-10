@@ -9,7 +9,6 @@ pub struct Embedding {
 
 impl Embedding {
     pub fn new(embeddings: Tensor, hidden_size: usize) -> Self {
-        // todo!("Embedding {embeddings}");
         Self {
             embeddings,
             hidden_size,
