@@ -860,7 +860,7 @@ impl Tensor {
     pub fn var_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
         let dim = dim.to_index(self.shape(), "var")?;
         let mean = self.mean_keepdim(dim)?;
-        let squares = self.broadcast_sub(&mean)?;
+        let squares = self.broadcast_sub(&mean)?.sqr()?;
         squares.sum_impl(dim, true)? / (self.dim(dim)? - 1) as f64
     }
 
