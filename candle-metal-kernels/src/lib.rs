@@ -571,6 +571,7 @@ pub fn call_affine(
     mul: f32,
     add: f32,
 ) -> Result<(), MetalKernelError> {
+    // TODO: Support f16 and bf16
     let func = kernels.load_function(device, Source::Affine, "affine_float")?;
     let pipeline_state_descriptor = ComputePipelineDescriptor::new();
     pipeline_state_descriptor.set_compute_function(Some(&func));

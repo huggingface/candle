@@ -212,7 +212,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     ) -> Result<(candle::MetalStorage, Shape)> {
         // debug!("TODO softmax-last-dim");
         assert!(layout.is_contiguous());
-        assert_eq!(storage.dtype(), DType::F32);
+        assert_eq!(storage.dtype(), candle::DType::F32);
         let el = layout.shape().elem_count();
         let dims = layout.shape().dims();
         let last_dim = dims[dims.len() - 1];

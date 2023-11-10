@@ -1,15 +1,15 @@
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose2D};
+use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 use candle_metal_kernels;
-use candle_metal_kernels::{void_ptr, Kernels, Source};
+use candle_metal_kernels::Kernels;
 use core::mem;
 use half::{bf16, f16};
 use metal;
 use metal::mps::matrix::encode_gemm;
 use metal::mps::Float32;
-use metal::{Buffer, CommandQueue, CompileOptions, MTLResourceOptions, MTLSize, NSUInteger};
+use metal::{Buffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -31,8 +31,8 @@ impl From<String> for MetalError {
 #[derive(Clone)]
 pub struct MetalDevice {
     device: metal::Device,
-    command_queue: metal::CommandQueue,
-    kernels: Arc<candle_metal_kernels::Kernels>,
+    command_queue: CommandQueue,
+    kernels: Arc<Kernels>,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -132,7 +132,7 @@ impl BackendStorage for MetalStorage {
             mul as f32,
             add as f32,
         )
-        .unwrap();
+        .map_err(MetalError::from)?;
         command_buffer.commit();
         return Ok(Self {
             buffer,
@@ -151,8 +151,8 @@ impl BackendStorage for MetalStorage {
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
         // debug!("TODO reduce_op {op:?} {sum_dims:?}");
-        assert!(sum_dims.len() == 1);
-        assert!(sum_dims[0] == layout.shape().rank() - 1);
+        assert_eq!(sum_dims.len(), 1);
+        assert_eq!(sum_dims[0], layout.shape().rank() - 1);
         assert!(layout.is_contiguous());
         let device = self.device.clone();
         let src_stride = layout.stride();
@@ -174,10 +174,6 @@ impl BackendStorage for MetalStorage {
             stride.push(src_stride[dim_idx]);
         }
 
-        let el_to_sum_per_block = src_el / dst_el;
-        // The reduction loop requires the shared array to be properly initialized and for
-        // this we want the number of threads to be a power of two.
-        let block_dim = usize::min(1024, el_to_sum_per_block).next_power_of_two();
         let (name, check_empty, return_index) = match (op, self.dtype) {
             (ReduceOp::Sum, DType::F32) => ("fast_sum_float", false, false),
             (ReduceOp::Min, DType::F32) => ("fast_min_float", true, false),
@@ -224,7 +220,7 @@ impl BackendStorage for MetalStorage {
         let mut buffer = device.new_buffer(el_count, dtype);
         let command_buffer = device.command_queue.new_command_buffer();
         if layout.is_contiguous() {
-            use candle_metal_kernels::unary::contiguous;
+            // use candle_metal_kernels::unary::contiguous;
 
             let kernel_name = match (self.dtype, dtype) {
                 (DType::U32, DType::F32) => "cast_u32_f32",
@@ -448,6 +444,16 @@ impl BackendStorage for MetalStorage {
         _kernel: &Self,
         _kernel_l: &Layout,
         _params: &ParamsConv1D,
+    ) -> Result<Self> {
+        todo!()
+    }
+
+    fn conv_transpose1d(
+        &self,
+        _l: &Layout,
+        _kernel: &Self,
+        _kernel_l: &Layout,
+        _params: &ParamsConvTranspose1D,
     ) -> Result<Self> {
         todo!()
     }
