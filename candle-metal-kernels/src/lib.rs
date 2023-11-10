@@ -26,7 +26,7 @@ pub enum Source {
     Reduce,
 }
 
-macro_rules! ops{
+macro_rules! ops {
     ($($name:ident),+) => {
         pub mod contiguous {
             #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -716,6 +716,83 @@ pub fn call_where_cond_strided(
     Ok(())
 }
 
+pub fn call_index_add(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    ids: &Buffer,
+    input: &Buffer,
+    output: &mut Buffer,
+    ids_dim_size: NSUInteger,
+    left_size: NSUInteger,
+    dst_dim_size: NSUInteger,
+    right_size: NSUInteger,
+) -> Result<(), MetalKernelError> {
+    let func = kernels.load_function(device, Source::Indexing, name)?;
+    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
+    pipeline_state_descriptor.set_compute_function(Some(&func));
+
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(
+            pipeline_state_descriptor.compute_function().unwrap(),
+        )
+        .unwrap();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_threadgroup_memory_length(0, output.length() as NSUInteger);
+
+    encoder.set_buffer(0, Some(&ids), 0);
+    encoder.set_buffer(1, Some(&input), 0);
+    encoder.set_buffer(2, Some(&output), 0);
+
+    encoder.set_bytes(
+        3,
+        core::mem::size_of_val(&ids_dim_size) as NSUInteger,
+        void_ptr(&ids_dim_size),
+    );
+    encoder.set_bytes(
+        4,
+        core::mem::size_of_val(&left_size) as NSUInteger,
+        void_ptr(&left_size),
+    );
+    encoder.set_bytes(
+        5,
+        core::mem::size_of_val(&dst_dim_size) as NSUInteger,
+        void_ptr(&dst_dim_size),
+    );
+    encoder.set_bytes(
+        6,
+        core::mem::size_of_val(&right_size) as NSUInteger,
+        void_ptr(&right_size),
+    );
+
+    let length = left_size * right_size;
+    let threads = std::cmp::min(
+        pipeline.max_total_threads_per_threadgroup(),
+        length as NSUInteger,
+    );
+    let thread_groups = (length as NSUInteger + threads - 1) / threads;
+    let diff = (threads * thread_groups) - length as NSUInteger;
+    let threads = threads - (diff / thread_groups);
+
+    let thread_group_count = MTLSize {
+        width: thread_groups,
+        height: 1,
+        depth: 1,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: threads,
+        height: threads,
+        depth: threads,
+    };
+
+    encoder.dispatch_thread_groups(thread_group_count, threads_per_threadgroup);
+    encoder.end_encoding();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1058,19 +1135,27 @@ mod tests {
         encoder.set_bytes(5, 4, void_ptr(&dst_dim_size));
         encoder.set_bytes(6, 4, void_ptr(&right_size));
 
-        let grid_size = MTLSize {
-            width: right.len() as NSUInteger,
+        let length = left_size * right_size;
+        let threads = std::cmp::min(
+            pipeline.max_total_threads_per_threadgroup(),
+            length as NSUInteger,
+        );
+        let thread_groups = (length as NSUInteger + threads - 1) / threads;
+        let diff = (threads * thread_groups) - length as NSUInteger;
+        let threads = threads - (diff / thread_groups);
+
+        let thread_group_count = MTLSize {
+            width: thread_groups,
             height: 1,
             depth: 1,
         };
-
-        let thread_group_size = MTLSize {
-            width: pipeline.max_total_threads_per_threadgroup(),
-            height: 1,
-            depth: 1,
+        let threads_per_threadgroup = MTLSize {
+            width: threads,
+            height: threads,
+            depth: threads,
         };
 
-        encoder.dispatch_thread_groups(grid_size, thread_group_size);
+        encoder.dispatch_thread_groups(thread_group_count, threads_per_threadgroup);
         encoder.end_encoding();
         command_buffer.commit();
         command_buffer.wait_until_completed();

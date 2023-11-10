@@ -1,7 +1,7 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Layout, Result, Shape};
+use crate::{bail, CpuStorage, DType, Layout, Result, Shape};
 use candle_metal_kernels;
 use candle_metal_kernels::Kernels;
 use core::mem;
@@ -542,14 +542,77 @@ impl BackendStorage for MetalStorage {
 
     fn index_add(
         &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<Self> {
-        todo!()
+        // TODO: Definitely refactor this
+        let kernel_name = match ids.dtype {
+            DType::U8 => match src.dtype {
+                DType::U8 => "ia_u8_u8",
+                DType::U32 => "ia_u8_u32",
+                DType::I64 => "ia_u8_i64",
+                DType::BF16 => "ia_u8_bf16",
+                DType::F16 => "ia_u8_f16",
+                DType::F32 => "ia_u8_f32",
+                _ => bail!("Unsupported dtype for index add"),
+            },
+            DType::U32 => match src.dtype {
+                DType::U8 => "ia_u32_u8",
+                DType::U32 => "ia_u32_u32",
+                DType::I64 => "ia_u32_i64",
+                DType::BF16 => "ia_u32_bf16",
+                DType::F16 => "ia_u32_f16",
+                DType::F32 => "ia_u32_f32",
+                _ => bail!("Unsupported dtype for index add"),
+            },
+            DType::I64 => match src.dtype {
+                DType::U8 => "ia_i64_u8",
+                DType::U32 => "ia_i64_u32",
+                DType::I64 => "ia_i64_i64",
+                DType::BF16 => "ia_i64_bf16",
+                DType::F16 => "ia_i64_f16",
+                DType::F32 => "ia_i64_f32",
+                _ => bail!("Unsupported dtype for index add"),
+            },
+            _ => bail!("Unsupported index dtype for index add"),
+        };
+
+        let device = self.device.clone();
+        let mut dst = device.zeros_impl(l.shape(), self.dtype())?;
+        self.copy_strided_src(&mut dst, 0, l)?;
+
+        let left_size: usize = src_l.dims()[..dim].iter().product();
+        let right_size: usize = src_l.dims()[dim + 1..].iter().product();
+        let dst_dim_size = l.dims()[dim];
+        let ids_dim_size = ids_l.dims()[0];
+
+        let command_buffer = self.device.command_queue.new_command_buffer();
+        candle_metal_kernels::call_index_add(
+            device.device(),
+            &command_buffer,
+            &device.kernels,
+            &kernel_name,
+            &ids.buffer,
+            &src.buffer,
+            &mut dst.buffer,
+            ids_dim_size as NSUInteger,
+            left_size as NSUInteger,
+            dst_dim_size as NSUInteger,
+            right_size as NSUInteger,
+        )
+        .unwrap();
+
+        command_buffer.commit();
+
+        return Ok(Self {
+            buffer: dst.buffer,
+            device: self.device.clone(),
+            dtype: self.dtype(),
+        });
     }
 
     fn matmul(
