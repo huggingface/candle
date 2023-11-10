@@ -60,6 +60,7 @@ tracing-subscriber = "0.3.7"
 wav = "1.0.0"
 yoke = { version = "0.7.2", features = ["derive"] }
 zip = { version = "0.6.6", default-features = false }
+metal = { git = "https://github.com/ivarflakstad/metal-rs.git", features = ["mps"] }
 
 [profile.release-with-debug]
 inherits = "release"
