@@ -462,7 +462,7 @@ impl T5Attention {
                                             self.relative_attention_max_distance as f32
                                                 / max_exact as f32,
                                         ) * (num_buckets - max_exact) as f32;
-                                        max_exact + b as u32
+                                        u32::min(max_exact + b as u32, num_buckets - 1)
                                     }
                                 })
                                 .collect::<Vec<u32>>()
