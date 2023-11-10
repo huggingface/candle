@@ -27,15 +27,12 @@ kernel void FN_NAME( \
     constant size_t &dim, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint threadgroup_size [[threads_per_threadgroup]], \
-    uint thread_index [[thread_index_in_threadgroup]] \
+    uint thread_position_in_grid [[ thread_position_in_grid ]] \
 ) { \
-    const size_t length = (dim  + threadgroup_size - 1) / threadgroup_size; \
-    const size_t start = thread_index * length; \
-    const size_t stop = min(start + length, dim); \
-    for (size_t i = start; i < stop; i++){ \
-        output[i] = TYPENAME(FN(input[i])); \
+    if (thread_position_in_grid >= dim) { \
+        return; \
     } \
+    output[thread_position_in_grid] = TYPENAME(FN(input[thread_position_in_grid])); \
 }\
 kernel void FN_NAME_STRIDED( \
     constant size_t &dim, \
@@ -44,15 +41,12 @@ kernel void FN_NAME_STRIDED( \
     constant size_t *strides, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint threadgroup_size [[threads_per_threadgroup]], \
-    uint thread_index [[thread_index_in_threadgroup]] \
+    uint thread_position_in_grid [[ thread_position_in_grid ]] \
 ) { \
-    const size_t length = (dim  + threadgroup_size - 1) / threadgroup_size; \
-    const size_t start = thread_index * length; \
-    const size_t stop = min(start + length, dim); \
-    for (size_t i = start; i < stop; i++){ \
-        output[i] = TYPENAME(FN(input[get_strided_index(i, num_dims, dims, strides)])); \
+    if (thread_position_in_grid >= dim) { \
+        return; \
     } \
+    output[thread_position_in_grid] = TYPENAME(FN(input[get_strided_index(thread_position_in_grid, num_dims, dims, strides)])); \
 }
 
 #define UNARY_OP(NAME) \
@@ -79,4 +73,6 @@ BFLOAT_UNARY_OP(sqr)
 BFLOAT_UNARY_OP(sqrt)
 BFLOAT_UNARY_OP(neg)
 BFLOAT_UNARY_OP(exp)
+
+UNARY(id, bfloat, copy_bfloat, copy_bfloat_strided)
 #endif
