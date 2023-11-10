@@ -7,8 +7,6 @@ use candle_metal_kernels::Kernels;
 use core::mem;
 use half::{bf16, f16};
 use metal;
-use metal::mps::matrix::encode_gemm;
-use metal::mps::Float32;
 use metal::{Buffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::sync::Arc;
 
