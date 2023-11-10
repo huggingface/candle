@@ -100,11 +100,30 @@ impl BackendStorage for MetalStorage {
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
+        // TODO Is this necessary
+        // self.buffer.synchronize();
         match self.dtype {
+            DType::U8 => Ok(CpuStorage::U8(
+                self.buffer.read_to_vec(self.buffer.length() as usize / 1),
+            )),
+            DType::U32 => Ok(CpuStorage::U32(
+                self.buffer.read_to_vec(self.buffer.length() as usize / 4),
+            )),
+            DType::I64 => Ok(CpuStorage::I64(
+                self.buffer.read_to_vec(self.buffer.length() as usize / 8),
+            )),
+            DType::F16 => Ok(CpuStorage::F16(
+                self.buffer.read_to_vec(self.buffer.length() as usize / 2),
+            )),
+            DType::BF16 => Ok(CpuStorage::BF16(
+                self.buffer.read_to_vec(self.buffer.length() as usize / 2),
+            )),
             DType::F32 => Ok(CpuStorage::F32(
                 self.buffer.read_to_vec(self.buffer.length() as usize / 4),
             )),
-            dtype => todo!("Unsupported dtype {dtype:?}"),
+            DType::F64 => Ok(CpuStorage::F64(
+                self.buffer.read_to_vec(self.buffer.length() as usize / 8),
+            )),
         }
     }
 
@@ -132,6 +151,7 @@ impl BackendStorage for MetalStorage {
         )
         .unwrap();
         command_buffer.commit();
+        command_buffer.wait_until_completed();
         return Ok(Self {
             buffer,
             device: device.clone(),
@@ -200,6 +220,7 @@ impl BackendStorage for MetalStorage {
         )
         .map_err(MetalError::from)?;
         command_buffer.commit();
+        command_buffer.wait_until_completed();
 
         Ok(Self {
             buffer,
@@ -242,6 +263,7 @@ impl BackendStorage for MetalStorage {
         }
 
         command_buffer.commit();
+        command_buffer.wait_until_completed();
         // command_buffer.wait_until_scheduled();
         // debug!(
         //     "cast {:?} - {:?} - {:?}",
@@ -289,6 +311,7 @@ impl BackendStorage for MetalStorage {
             todo!("TODO Implement the kernel calling {}", B::KERNEL);
         }
         command_buffer.commit();
+        command_buffer.wait_until_completed();
 
         Ok(Self {
             buffer,
@@ -361,6 +384,7 @@ impl BackendStorage for MetalStorage {
             .map_err(MetalError::from)?;
         }
         command_buffer.commit();
+        command_buffer.wait_until_completed();
 
         Ok(Self {
             buffer,
@@ -400,6 +424,7 @@ impl BackendStorage for MetalStorage {
         )
         .map_err(MetalError::from)?;
         command_buffer.commit();
+        command_buffer.wait_until_completed();
         Ok(Self {
             buffer,
             device,
@@ -489,6 +514,7 @@ impl BackendStorage for MetalStorage {
         let dtype = self.dtype;
         let device = self.device();
         let mut buffer = device.new_buffer(dst_el, dtype);
+        let out = self.to_cpu_storage().unwrap();
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "is_u32_f32",
             (left, right) => todo!("index select metal {left:?} {right:?}"),
@@ -508,6 +534,7 @@ impl BackendStorage for MetalStorage {
         )
         .map_err(MetalError::from)?;
         command_buffer.commit();
+        command_buffer.wait_until_completed();
         Ok(Self {
             buffer,
             device: device.clone(),
@@ -556,39 +583,42 @@ impl BackendStorage for MetalStorage {
         if el_count == 0 {
             return Ok(());
         }
-        if src_l.is_contiguous() {
-            let command_buffer = self.device.command_queue.new_command_buffer();
-            let blip = command_buffer.new_blit_command_encoder();
-            blip.copy_from_buffer(
-                &self.buffer,
-                src_l.start_offset() as u64,
-                &dst.buffer,
-                dst_offset as u64,
-                self.buffer.length(),
-            );
-        } else {
-            let command_buffer = self.device.command_queue.new_command_buffer();
-            let kernel_name = match self.dtype {
-                DType::F32 => candle_metal_kernels::unary::strided::copy::FLOAT,
-                DType::F16 => candle_metal_kernels::unary::strided::copy::HALF,
-                DType::BF16 => candle_metal_kernels::unary::strided::copy::BFLOAT,
-                dtype => todo!("copy_strided not implemented for {dtype:?}"),
-            };
-            candle_metal_kernels::call_unary_strided(
-                &self.device.device,
-                &command_buffer,
-                &self.device.kernels,
-                kernel_name,
-                src_l.dims(),
-                &self.buffer,
-                &src_l.stride(),
-                src_l.start_offset(),
-                &mut dst.buffer,
-                dst_offset,
-            )
-            .map_err(MetalError::from)?;
-            command_buffer.commit();
-        }
+        // todo!("Copy strided {:?}", src_l.is_contiguous());
+        // if src_l.is_contiguous() {
+        //     let command_buffer = self.device.command_queue.new_command_buffer();
+        //     let blip = command_buffer.new_blit_command_encoder();
+        //     blip.copy_from_buffer(
+        //         &self.buffer,
+        //         src_l.start_offset() as u64,
+        //         &dst.buffer,
+        //         dst_offset as u64,
+        //         self.buffer.length(),
+        //     );
+        // } else {
+        let command_buffer = self.device.command_queue.new_command_buffer();
+        let kernel_name = match self.dtype {
+            DType::F32 => candle_metal_kernels::unary::strided::copy::FLOAT,
+            DType::F16 => candle_metal_kernels::unary::strided::copy::HALF,
+            DType::BF16 => candle_metal_kernels::unary::strided::copy::BFLOAT,
+            dtype => todo!("copy_strided not implemented for {dtype:?}"),
+        };
+        candle_metal_kernels::call_unary_strided(
+            &self.device.device,
+            &command_buffer,
+            &self.device.kernels,
+            kernel_name,
+            src_l.dims(),
+            &self.buffer,
+            &src_l.stride(),
+            src_l.start_offset(),
+            &mut dst.buffer,
+            dst_offset,
+        )
+        .map_err(MetalError::from)?;
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+        // todo!("Output {:?}", dst.buffer.read_to_vec::<f32>(10));
+        // }
         Ok(())
     }
 }
@@ -616,28 +646,29 @@ impl MetalStorage {
         match (self.dtype, rhs.dtype) {
             (DType::F32, DType::F32) => {
                 let mut out_buffer = self.device.new_buffer(elem_count, self.dtype);
-                if b != 1 {
-                    // debug!("TODO implement batched matmul for B={b}");
-                    // bail!("Didn't implemented strided matmul yet");
-                    return Ok(Self {
-                        buffer: out_buffer,
-                        device: self.device.clone(),
-                        dtype: self.dtype(),
-                    });
-                }
-                if !lhs_l.is_contiguous() || !rhs_l.is_contiguous() {
-                    // debug!(
-                    //     "TODO non contiguous matmul yet {:?} {:?} - {:?} - {transpose_right}",
-                    //     lhs_l.is_contiguous(),
-                    //     rhs_l.is_contiguous(),
-                    //     rhs_l
-                    // );
-                    return Ok(Self {
-                        buffer: out_buffer,
-                        device: self.device.clone(),
-                        dtype: self.dtype(),
-                    });
-                }
+                // if b != 1 {
+                //    // debug!("TODO implement batched matmul for B={b}");
+                //    crate::bail!("Didn't implemented strided matmul yet");
+                //    return Ok(Self {
+                //        buffer: out_buffer,
+                //        device: self.device.clone(),
+                //        dtype: self.dtype(),
+                //    });
+                //}
+                // if !lhs_l.is_contiguous() || !rhs_l.is_contiguous() {
+                //     // debug!(
+                //     //     "TODO non contiguous matmul yet {:?} {:?} - {:?} - {transpose_right}",
+                //     //     lhs_l.is_contiguous(),
+                //     //     rhs_l.is_contiguous(),
+                //     //     rhs_l
+                //     // );
+                //     crate::bail!("No not contiguous matmul");
+                //     return Ok(Self {
+                //         buffer: out_buffer,
+                //         device: self.device.clone(),
+                //         dtype: self.dtype(),
+                //     });
+                // }
 
                 // debug!("TODO GEMM");
                 let command_buffer = self.device.command_queue.new_command_buffer();
@@ -659,7 +690,15 @@ impl MetalStorage {
                 .map_err(MetalError::from)?;
 
                 command_buffer.commit();
+                command_buffer.wait_until_completed();
                 // command_buffer.wait_until_scheduled();
+                //
+                let left = self.buffer.read_to_vec::<f32>(10);
+                let right = rhs.buffer.read_to_vec::<f32>(10);
+                let out = out_buffer.read_to_vec::<f32>(10);
+
+                println!("{b} {m} {n} {k} ");
+                println!("{left:?} {right:?} {out:?}");
 
                 Ok(Self {
                     buffer: out_buffer,
@@ -709,7 +748,9 @@ impl BackendDevice for MetalDevice {
     }
 
     fn location(&self) -> crate::DeviceLocation {
-        crate::DeviceLocation::Metal
+        crate::DeviceLocation::Metal {
+            gpu_id: self.registry_id() as usize,
+        }
     }
 
     fn same_device(&self, rhs: &Self) -> bool {
@@ -767,6 +808,8 @@ impl BackendDevice for MetalDevice {
                 option,
             ),
         };
+        // TODO is that necessary ?
+        // buffer.did_modify_range(metal::NSRange::new(0, buffer.length()));
         // debug!("Allocate 2 - buffer size {}", buffer.length());
         Ok(Self::Storage {
             buffer,
