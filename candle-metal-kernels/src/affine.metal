@@ -24,17 +24,14 @@ kernel void FN_NAME( \
     constant float &add, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint threadgroup_size [[threads_per_threadgroup]], \
-    uint thread_index [[thread_index_in_threadgroup]] \
+    uint id [[ thread_position_in_grid ]] \
 ) { \
+    if (id >= dim) { \
+        return; \
+    } \
     const TYPENAME m = TYPENAME(mul); \
     const TYPENAME a = TYPENAME(add); \
-    const size_t length = (dim  + threadgroup_size - 1) / threadgroup_size; \
-    const size_t start = thread_index * length; \
-    const size_t stop = min(start + length, dim); \
-    for (size_t i = start; i < stop; i++){ \
-        output[i] = input[i] * m + a; \
-    } \
+    output[id] = input[id] * m + a; \
 } \
 
 AFFINE(affine_float, float)
