@@ -315,9 +315,29 @@ fn binary_grad(device: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(simple_grad, simple_grad_cpu, simple_grad_gpu);
-test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu);
-test_device!(matmul_grad, matmul_grad_cpu, matmul_grad_gpu);
-test_device!(grad_descent, grad_descent_cpu, grad_descent_gpu);
-test_device!(unary_grad, unary_grad_cpu, unary_grad_gpu);
-test_device!(binary_grad, binary_grad_cpu, binary_grad_gpu);
+test_device!(
+    simple_grad,
+    simple_grad_cpu,
+    simple_grad_gpu,
+    simple_grad_metal
+);
+test_device!(sum_grad, sum_grad_cpu, sum_grad_gpu, sum_grad_metal);
+test_device!(
+    matmul_grad,
+    matmul_grad_cpu,
+    matmul_grad_gpu,
+    matmul_grad_metal
+);
+test_device!(
+    grad_descent,
+    grad_descent_cpu,
+    grad_descent_gpu,
+    grad_descent_metal
+);
+test_device!(unary_grad, unary_grad_cpu, unary_grad_gpu, unary_grad_metal);
+test_device!(
+    binary_grad,
+    binary_grad_cpu,
+    binary_grad_gpu,
+    binary_grad_metal
+);

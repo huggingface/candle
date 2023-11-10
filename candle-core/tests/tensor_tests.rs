@@ -1070,35 +1070,59 @@ fn randn(device: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(zeros, zeros_cpu, zeros_gpu);
-test_device!(ones, ones_cpu, ones_gpu);
-test_device!(arange, arange_cpu, arange_gpu);
-test_device!(add_mul, add_mul_cpu, add_mul_gpu);
-test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu);
-test_device!(narrow, narrow_cpu, narrow_gpu);
-test_device!(broadcast, broadcast_cpu, broadcast_gpu);
-test_device!(cat, cat_cpu, cat_gpu);
-test_device!(sum, sum_cpu, sum_gpu);
-test_device!(min, min_cpu, min_gpu);
-test_device!(max, max_cpu, max_gpu);
-test_device!(argmax, argmax_cpu, argmax_gpu);
-test_device!(argmin, argmin_cpu, argmin_gpu);
-test_device!(transpose, transpose_cpu, transpose_gpu);
-test_device!(unary_op, unary_op_cpu, unary_op_gpu);
-test_device!(binary_op, binary_op_cpu, binary_op_gpu);
-test_device!(embeddings, embeddings_cpu, embeddings_gpu);
-test_device!(cmp, cmp_cpu, cmp_gpu);
-test_device!(matmul, matmul_cpu, matmul_gpu);
-test_device!(broadcast_matmul, broadcast_matmul_cpu, broadcast_matmul_gpu);
-test_device!(broadcasting, broadcasting_cpu, broadcasting_gpu);
-test_device!(index_select, index_select_cpu, index_select_gpu);
-test_device!(index_add, index_add_cpu, index_add_gpu);
-test_device!(gather, gather_cpu, gather_gpu);
-test_device!(scatter_add, scatter_add_cpu, scatter_add_gpu);
-test_device!(slice_scatter, slice_scatter_cpu, slice_scatter_gpu);
-test_device!(randn, randn_cpu, randn_gpu);
-test_device!(clamp, clamp_cpu, clamp_gpu);
-test_device!(var, var_cpu, var_gpu);
+test_device!(zeros, zeros_cpu, zeros_gpu, zeros_metal);
+test_device!(ones, ones_cpu, ones_gpu, ones_metal);
+test_device!(arange, arange_cpu, arange_gpu, arange_metal);
+test_device!(add_mul, add_mul_cpu, add_mul_gpu, add_mul_metal);
+test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu, tensor_2d_metal);
+test_device!(narrow, narrow_cpu, narrow_gpu, narrow_metal);
+test_device!(broadcast, broadcast_cpu, broadcast_gpu, broadcast_metal);
+test_device!(cat, cat_cpu, cat_gpu, cat_metal);
+test_device!(sum, sum_cpu, sum_gpu, sum_metal);
+test_device!(min, min_cpu, min_gpu, min_metal);
+test_device!(max, max_cpu, max_gpu, max_metal);
+test_device!(argmax, argmax_cpu, argmax_gpu, argmax_metal);
+test_device!(argmin, argmin_cpu, argmin_gpu, argmin_metal);
+test_device!(transpose, transpose_cpu, transpose_gpu, transpose_metal);
+test_device!(unary_op, unary_op_cpu, unary_op_gpu, unary_op_metal);
+test_device!(binary_op, binary_op_cpu, binary_op_gpu, binary_op_metal);
+test_device!(embeddings, embeddings_cpu, embeddings_gpu, embeddings_metal);
+test_device!(cmp, cmp_cpu, cmp_gpu, cmp_metal);
+test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal);
+test_device!(
+    broadcast_matmul,
+    broadcast_matmul_cpu,
+    broadcast_matmul_gpu,
+    broadcast_matmul_metal
+);
+test_device!(
+    broadcasting,
+    broadcasting_cpu,
+    broadcasting_gpu,
+    broadcasting_metal
+);
+test_device!(
+    index_select,
+    index_select_cpu,
+    index_select_gpu,
+    index_select_metal
+);
+test_device!(index_add, index_add_cpu, index_add_gpu, index_add_metal);
+test_device!(gather, gather_cpu, gather_gpu, gather_metal);
+test_device!(
+    scatter_add,
+    scatter_add_cpu,
+    scatter_add_gpu,
+    scatter_add_metal
+);
+test_device!(
+    slice_scatter,
+    slice_scatter_cpu,
+    slice_scatter_gpu,
+    slice_scatter_metal
+);
+test_device!(randn, randn_cpu, randn_gpu, randn_metal);
+test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
 
 // There was originally a bug on the CPU implementation for randn
 // https://github.com/huggingface/candle/issues/381

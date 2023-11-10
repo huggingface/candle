@@ -98,15 +98,17 @@ fn upsample_nearest2d(dev: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(avg_pool2d, avg_pool2d_cpu, avg_pool2d_gpu);
+test_device!(avg_pool2d, avg_pool2d_cpu, avg_pool2d_gpu, avg_pool2d_metal);
 test_device!(
     avg_pool2d_pytorch,
     avg_pool2d_pytorch_cpu,
-    avg_pool2d_pytorch_gpu
+    avg_pool2d_pytorch_gpu,
+    avg_pool2d_pytorch_metal
 );
-test_device!(max_pool2d, max_pool2d_cpu, max_pool2d_gpu);
+test_device!(max_pool2d, max_pool2d_cpu, max_pool2d_gpu, max_pool2d_metal);
 test_device!(
     upsample_nearest2d,
     upsample_nearest2d_cpu,
-    upsample_nearest2d_gpu
+    upsample_nearest2d_gpu,
+    upsample_nearest2d_metal
 );
