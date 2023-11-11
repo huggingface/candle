@@ -1123,6 +1123,7 @@ test_device!(
 );
 test_device!(randn, randn_cpu, randn_gpu, randn_metal);
 test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
+test_device!(var, var_cpu, var_gpu, var_metal);
 
 // There was originally a bug on the CPU implementation for randn
 // https://github.com/huggingface/candle/issues/381
