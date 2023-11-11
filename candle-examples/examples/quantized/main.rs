@@ -325,8 +325,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut pre_prompt_tokens = vec![];
-    let mut first = true;
-    loop {
+    for prompt_index in 0.. {
         let prompt_str = match &prompt {
             Prompt::One(prompt) => prompt.clone(),
             Prompt::Interactive | Prompt::Chat => {
@@ -342,14 +341,11 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 if args.which.is_zephyr() {
-                    format!(
-                        "{}<|user|>\n{prompt}</s>\n<|assistant|>",
-                        if first || is_interactive {
-                            "<|system|>\n</s>\n"
-                        } else {
-                            ""
-                        }
-                    )
+                    if prompt_index == 0 || is_interactive {
+                        format!("<|system|>\n</s>\n<|user|>\n{prompt}</s>\n<|assistant|>",)
+                    } else {
+                        format!("<|user|>\n{prompt}</s>\n<|assistant|>")
+                    }
                 } else if args.which.is_mistral() {
                     format!("[INST] {prompt} [/INST]")
                 } else {
@@ -357,7 +353,6 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         };
-        first = false;
         print!("{}", &prompt_str);
         let tokens = tos
             .tokenizer()
