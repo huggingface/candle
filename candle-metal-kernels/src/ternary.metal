@@ -32,6 +32,9 @@ kernel void FN_NAME(  \
     device TYPENAME *out ,\
     uint i [[ thread_position_in_grid ]] \
 ) {  \
+   if (i >= numel){ \
+       return; \
+   } \
    uint strided_i = get_strided_index(i, num_dims, dims, strides); \
    uint strided_i_t = get_strided_index(i, num_dims, dims, strides_t); \
    uint strided_i_f = get_strided_index(i, num_dims, dims, strides_f); \

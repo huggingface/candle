@@ -33,6 +33,24 @@ kernel void FN_NAME( \
     const TYPENAME a = TYPENAME(add); \
     output[id] = input[id] * m + a; \
 } \
+kernel void FN_NAME##_strided( \
+    constant size_t &dim, \
+    constant size_t &num_dims, \
+    constant size_t *dims, \
+    constant size_t *strides, \
+    constant float &mul, \
+    constant float &add, \
+    device const TYPENAME *input,  \
+    device TYPENAME *output, \
+    uint id [[ thread_position_in_grid ]] \
+) { \
+    if (id >= dim) { \
+        return; \
+    } \
+    const TYPENAME m = TYPENAME(mul); \
+    const TYPENAME a = TYPENAME(add); \
+    output[id] = input[get_strided_index(id, num_dims, dims, strides)] * m + a; \
+} \
 
 AFFINE(affine_float, float)
 AFFINE(affine_half, half)

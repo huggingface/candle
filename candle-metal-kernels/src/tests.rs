@@ -1,5 +1,5 @@
 use super::*;
-use half::f16;
+use half::{bf16, f16};
 use metal::{CompileOptions, Device, MTLResourceOptions, MTLSize, NSUInteger};
 
 fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
@@ -23,13 +23,18 @@ fn approx_f16(v: Vec<f16>, digits: i32) -> Vec<f32> {
     v.iter().map(|t| f32::round(t.to_f32() * b) / b).collect()
 }
 
+fn approx_bf16(v: Vec<bf16>, digits: i32) -> Vec<f32> {
+    let b = 10f32.powi(digits);
+    v.iter().map(|t| f32::round(t.to_f32() * b) / b).collect()
+}
+
 fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
-    let mut output = new_buffer(&device, v);
+    let output = new_buffer(&device, v);
     call_unary_contiguous(
         &device,
         command_buffer,
@@ -37,7 +42,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
         name,
         v.len(),
         &input,
-        &mut output,
+        &output,
     )
     .unwrap();
     command_buffer.commit();
@@ -53,7 +58,7 @@ fn run_binary<T: Clone>(x: &[T], y: &[T], name: binary::contiguous::Kernel) -> V
     let options = MTLResourceOptions::StorageModeManaged;
     let left = new_buffer(&device, x);
     let right = new_buffer(&device, y);
-    let mut output = device.new_buffer(std::mem::size_of_val(x) as u64, options);
+    let output = device.new_buffer(std::mem::size_of_val(x) as u64, options);
     call_binary_contiguous(
         &device,
         command_buffer,
@@ -62,7 +67,7 @@ fn run_binary<T: Clone>(x: &[T], y: &[T], name: binary::contiguous::Kernel) -> V
         x.len(),
         &left,
         &right,
-        &mut output,
+        &output,
     )
     .unwrap();
     command_buffer.commit();
@@ -81,7 +86,7 @@ fn run_strided<T: Clone>(
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
-    let mut output = new_buffer(&device, v);
+    let output = new_buffer(&device, v);
     let kernels = Kernels::new();
     call_unary_strided(
         &device,
@@ -92,7 +97,7 @@ fn run_strided<T: Clone>(
         &input,
         strides,
         offset,
-        &mut output,
+        &output,
         0,
     )
     .unwrap();
@@ -220,7 +225,9 @@ fn cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
-    let mut output = new_buffer(&device, v);
+    let options = MTLResourceOptions::StorageModeManaged;
+    let size = (v.len() * std::mem::size_of::<U>()) as u64;
+    let output = device.new_buffer(size, options);
 
     call_cast_contiguous(
         &device,
@@ -229,7 +236,8 @@ fn cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
         name,
         v.len(),
         &input,
-        &mut output,
+        0,
+        &output,
     )
     .unwrap();
     command_buffer.commit();
@@ -245,11 +253,17 @@ fn cast_u32_f32() {
     assert_eq!(approx(results, 4), vec![1.0f32, 2.0, 3.0]);
     assert_eq!(approx(expected, 4), vec![1.0f32, 2.0, 3.0]);
 
+    let v = vec![1.0f32, 2.0, 3.0];
+    let input: Vec<f16> = v.iter().map(|v| f16::from_f32(*v)).collect();
+    let results: Vec<f32> = cast(&input, "cast_f16_f32");
+    assert_eq!(results, vec![1.0f32, 2.0, 3.0]);
+
     let v = vec![1.0f32; 10_000];
-    let results = run(&v, unary::contiguous::cos::FLOAT);
-    let expected: Vec<_> = v.iter().map(|v| v.cos()).collect();
-    assert_eq!(approx(results, 4), vec![0.5403; 10_000]);
-    assert_eq!(approx(expected, 4), vec![0.5403; 10_000]);
+    let input: Vec<f16> = v.iter().map(|v| f16::from_f32(*v)).collect();
+    let results: Vec<f32> = cast(&input, "cast_f16_f32");
+    assert_eq!(results.len(), 10_000);
+    assert_eq!(&results[..10], vec![1.0f32; 10]);
+    assert_eq!(results, vec![1.0f32; 10_000]);
 }
 
 fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
@@ -259,7 +273,7 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
     let command_buffer = command_queue.new_command_buffer();
 
     let input = new_buffer(&device, v);
-    let mut output = new_buffer(&device, v);
+    let output = new_buffer(&device, v);
 
     let size = v.len();
 
@@ -267,9 +281,45 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
         &device,
         command_buffer,
         &kernels,
+        "affine_float",
         size,
         &input,
-        &mut output,
+        &output,
+        mul as f32,
+        add as f32,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    output.read_to_vec::<T>(v.len())
+}
+
+fn _run_affine_strided<T: Clone>(
+    v: &[T],
+    shape: &[usize],
+    strides: &[usize],
+    mul: f64,
+    add: f64,
+) -> Vec<T> {
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+
+    let input = new_buffer(&device, v);
+    let output = new_buffer(&device, v);
+
+    call_affine_strided(
+        &device,
+        command_buffer,
+        &kernels,
+        "affine_float",
+        shape,
+        &input,
+        strides,
+        0,
+        &output,
         mul as f32,
         add as f32,
     )
@@ -295,6 +345,16 @@ fn affine() {
     assert_eq!(result, vec![2.6; 40_000]);
 }
 
+// #[test]
+// fn affine_strided() {
+//     let input = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+//     let mul = 1.5;
+//     let add = 1.1;
+//     let result = run_affine_(&input, mul, add);
+//     assert_eq!(result, vec![2.6, 4.1, 5.6, 7.1, 8.6, 10.1, 11.6, 13.1]);
+
+// }
+
 #[test]
 fn index_select() {
     let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
@@ -313,7 +373,26 @@ fn index_select() {
         result,
         vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.0f32, 2.0, 3.0, 4.0, 5.0]
     );
+}
 
+#[test]
+fn index_select_f16() {
+    let embedding: Vec<_> = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+        .into_iter()
+        .map(|x| f16::from_f32(x))
+        .collect();
+    let shape = [5, 2];
+    let ids = [0u32, 4, 2];
+    let dim = 0;
+    let result = run_index_select(&embedding, &shape, &ids, dim);
+    assert_eq!(
+        approx_f16(result, 4),
+        vec![1.0f32, 2.0, 9.0, 10.0, 5.0, 6.0]
+    );
+}
+
+#[test]
+fn index_select_dim1() {
     let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
     let shape = [5, 2];
     let ids = [0u32, 1, 0];
@@ -321,7 +400,7 @@ fn index_select() {
     let result = run_index_select(&embedding, &shape, &ids, dim);
     assert_eq!(
         result,
-        vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.0f32, 2.0, 3.0, 4.0, 5.0]
+        vec![1.0f32, 2.0, 1.0, 3.0, 4.0, 3.0, 5.0, 6.0, 5.0, 7.0, 8.0f32, 7.0, 9.0, 10.0, 9.0]
     );
 }
 
@@ -341,20 +420,26 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
     let left_size: usize = shape[..dim].iter().product();
     let right_size: usize = shape[dim + 1..].iter().product();
     let dst_el = ids.len() * left_size * right_size;
-    let mut dst_buffer = new_buffer(&device, &vec![0.0f32; dst_el]);
+    let dst_buffer = new_buffer(&device, &vec![0.0f32; dst_el]);
+
+    let name = match core::mem::size_of::<T>() {
+        4 => "is_u32_f32",
+        2 => "is_u32_f16",
+        _ => unimplemented!(),
+    };
 
     let kernels = Kernels::new();
     call_index_select(
         &device,
         &command_buffer,
         &kernels,
-        "is_u32_f32",
+        name,
         shape,
         ids.len(),
         dim,
         &embeddings_buffer,
         &ids_buffer,
-        &mut dst_buffer,
+        &dst_buffer,
     )
     .unwrap();
 
@@ -451,7 +536,7 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
     let input = new_buffer(&device, v);
 
     let options = MTLResourceOptions::StorageModeManaged;
-    let mut output = device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
+    let output = device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
     call_reduce_contiguous(
         &device,
         command_buffer,
@@ -460,7 +545,8 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
         v.len(),
         out_length,
         &input,
-        &mut output,
+        0,
+        &output,
     )
     .unwrap();
     command_buffer.commit();
@@ -475,7 +561,7 @@ fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'sta
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
-    let mut output = new_buffer(&device, v);
+    let output = new_buffer(&device, v);
     call_last_softmax(
         &device,
         command_buffer,
@@ -484,7 +570,7 @@ fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'sta
         v.len(),
         last_dim,
         &input,
-        &mut output,
+        &output,
     )
     .unwrap();
     command_buffer.commit();
@@ -536,6 +622,28 @@ fn softmax() {
         approx(results, 4),
         vec![0.0900, 0.2447, 0.6652, 0.0900, 0.2447, 0.6652]
     );
+
+    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    let last_dim = 6;
+    let results = run_softmax(&v, last_dim, "softmax_half");
+    assert_eq!(
+        approx_f16(results, 4),
+        vec![0.0043, 0.0116, 0.0316, 0.0858, 0.2332, 0.6338]
+    );
+
+    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+    let last_dim = 6;
+    let results = run_softmax(&v, last_dim, "softmax_bfloat");
+    assert_eq!(
+        approx_bf16(results, 4),
+        vec![0.0043, 0.0116, 0.0315, 0.0859, 0.2324, 0.6328]
+    );
 }
 
 fn run_where_cond<I: Clone, T: Clone>(
@@ -571,7 +679,7 @@ fn run_where_cond<I: Clone, T: Clone>(
         options,
     );
 
-    let mut output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
+    let output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
     call_where_cond_strided(
         &device,
         command_buffer,
@@ -584,7 +692,7 @@ fn run_where_cond<I: Clone, T: Clone>(
         (&left_stride, left_offset),
         &right,
         (&cond_stride, cond_offset),
-        &mut output,
+        &output,
     )
     .unwrap();
     command_buffer.commit();
