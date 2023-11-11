@@ -220,17 +220,17 @@ fn main() -> Result<()> {
             .collect::<Vec<_>>(),
         None => match args.which {
             Which::L6b => vec![
-                repo.get("pytorch_model-00001-of-00002.safetensors")?,
-                repo.get("pytorch_model-00002-of-00002.safetensors")?,
+                repo.get("model-00001-of-00002.safetensors")?,
+                repo.get("model-00002-of-00002.safetensors")?,
             ],
             Which::L34b => vec![
-                repo.get("pytorch_model-00001-of-00007.safetensors")?,
-                repo.get("pytorch_model-00002-of-00007.safetensors")?,
-                repo.get("pytorch_model-00003-of-00007.safetensors")?,
-                repo.get("pytorch_model-00004-of-00007.safetensors")?,
-                repo.get("pytorch_model-00005-of-00007.safetensors")?,
-                repo.get("pytorch_model-00006-of-00007.safetensors")?,
-                repo.get("pytorch_model-00007-of-00007.safetensors")?,
+                repo.get("model-00001-of-00007.safetensors")?,
+                repo.get("model-00002-of-00007.safetensors")?,
+                repo.get("model-00003-of-00007.safetensors")?,
+                repo.get("model-00004-of-00007.safetensors")?,
+                repo.get("model-00005-of-00007.safetensors")?,
+                repo.get("model-00006-of-00007.safetensors")?,
+                repo.get("model-00007-of-00007.safetensors")?,
             ],
         },
     };
