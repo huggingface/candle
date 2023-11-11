@@ -14,6 +14,7 @@ const BINARY: &str = include_str!("binary.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
 const REDUCE: &str = include_str!("reduce.metal");
+const FILL: &str = include_str!("fill.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
@@ -24,6 +25,7 @@ pub enum Source {
     Ternary,
     Cast,
     Reduce,
+    Fill,
 }
 
 macro_rules! ops {
@@ -117,6 +119,7 @@ impl Kernels {
             Source::Indexing => INDEXING,
             Source::Cast => CAST,
             Source::Reduce => REDUCE,
+            Source::Fill => FILL,
         }
     }
 
@@ -209,6 +212,7 @@ pub fn call_unary_contiguous(
     encoder.end_encoding();
     Ok(())
 }
+
 pub fn call_unary_strided(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -793,6 +797,66 @@ pub fn call_index_add(
     Ok(())
 }
 
+pub fn call_fill<D>(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    elem_count: usize,
+    buffer: &mut Buffer,
+    value: D,
+) -> Result<(), MetalKernelError> {
+    let function = kernels.load_function(&device, Source::Fill, name)?;
+    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
+    pipeline_state_descriptor.set_compute_function(Some(&function));
+
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(
+            pipeline_state_descriptor.compute_function().unwrap(),
+        )
+        .unwrap();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_threadgroup_memory_length(0, elem_count as NSUInteger);
+
+    encoder.set_buffer(0, Some(&buffer), 0);
+
+    encoder.set_bytes(
+        1,
+        core::mem::size_of_val(&value) as NSUInteger,
+        void_ptr(&value),
+    );
+    encoder.set_bytes(
+        2,
+        core::mem::size_of_val(&elem_count) as NSUInteger,
+        void_ptr(&elem_count),
+    );
+    let length = elem_count;
+    let threads = std::cmp::min(
+        pipeline.max_total_threads_per_threadgroup(),
+        length as NSUInteger,
+    );
+    let thread_groups = (length as NSUInteger + threads - 1) / threads;
+    let diff = (threads * thread_groups) - length as NSUInteger;
+    let threads = threads - (diff / thread_groups);
+
+    let thread_group_count = MTLSize {
+        width: thread_groups,
+        height: 1,
+        depth: 1,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: threads,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(thread_group_count, threads_per_threadgroup);
+    encoder.end_encoding();
+
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;

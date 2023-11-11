@@ -71,10 +71,88 @@ impl MetalDevice {
     }
 
     pub fn new_buffer(&self, element_count: usize, dtype: DType) -> Buffer {
-        let size = (element_count * dtype.size_in_bytes()) as u64;
+        let size = (element_count * dtype.size_in_bytes()) as NSUInteger;
         // debug!("Allocate 1 - buffer size {size}");
         self.device
-            .new_buffer(size, MTLResourceOptions::StorageModeManaged)
+            .new_buffer(size, MTLResourceOptions::StorageModeShared)
+    }
+
+    fn fill_impl(&self, shape: &Shape, dtype: DType, v: f64) -> Result<MetalStorage> {
+        let device = self.device();
+        let command_buffer = self.command_queue.new_command_buffer();
+        let kernels = self.kernels();
+        let mut buffer = self.new_buffer(shape.elem_count(), dtype);
+        match dtype {
+            DType::U8 => candle_metal_kernels::call_fill(
+                device,
+                command_buffer,
+                kernels,
+                "fill_u8",
+                shape.elem_count(),
+                &mut buffer,
+                v as u8,
+            )
+            .map_err(MetalError::from)?,
+            DType::U32 => candle_metal_kernels::call_fill(
+                device,
+                command_buffer,
+                kernels,
+                "fill_u32",
+                shape.elem_count(),
+                &mut buffer,
+                v as u32,
+            )
+            .map_err(MetalError::from)?,
+            DType::I64 => candle_metal_kernels::call_fill(
+                device,
+                command_buffer,
+                kernels,
+                "fill_i64",
+                shape.elem_count(),
+                &mut buffer,
+                v as i64,
+            )
+            .map_err(MetalError::from)?,
+            DType::BF16 => candle_metal_kernels::call_fill(
+                device,
+                command_buffer,
+                kernels,
+                "fill_bf16",
+                shape.elem_count(),
+                &mut buffer,
+                bf16::from_f64(v),
+            )
+            .map_err(MetalError::from)?,
+            DType::F16 => candle_metal_kernels::call_fill(
+                device,
+                command_buffer,
+                kernels,
+                "fill_f16",
+                shape.elem_count(),
+                &mut buffer,
+                f16::from_f64(v),
+            )
+            .map_err(MetalError::from)?,
+            DType::F32 => candle_metal_kernels::call_fill(
+                device,
+                command_buffer,
+                kernels,
+                "fill_f32",
+                shape.elem_count(),
+                &mut buffer,
+                v as f32,
+            )
+            .map_err(MetalError::from)?,
+            DType::F64 => bail!("Metal does not support double precision"),
+        };
+
+        command_buffer.commit();
+
+        return Ok(MetalStorage {
+            buffer,
+            device: self.clone(),
+            dtype,
+        });
     }
 }
 
@@ -806,15 +884,11 @@ impl BackendDevice for MetalDevice {
     }
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-        // TODO Is there a faster way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.zeros_impl(shape, dtype)?;
-        self.storage_from_cpu_storage(&cpu_storage)
+        self.fill_impl(shape, dtype, 0.0)
     }
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
-        // TODO Is there a faster way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
-        self.storage_from_cpu_storage(&cpu_storage)
+        self.fill_impl(shape, dtype, 1.0)
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
