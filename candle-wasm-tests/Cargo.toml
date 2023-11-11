@@ -7,7 +7,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
+candle = { path = "../candle-core", version = "0.3.1", package = "candle-core" }
 rand = { workspace = true }
 getrandom = { version = "0.2", features = ["js"] }
 
