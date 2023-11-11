@@ -1,4 +1,7 @@
 #include <metal_stdlib>
+#include <metal_math>
+#
+using namespace metal;
 
 METAL_FUNC uint get_strided_index(
     uint idx,
@@ -18,9 +21,15 @@ METAL_FUNC uint get_strided_index(
 template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
 template <typename T> METAL_FUNC T neg(T in){ return -in; }
 template <typename T> METAL_FUNC T id(T in){ return in; }
+template <typename T> METAL_FUNC T gelu(T x){
+    T x_sq = x * x;
+    T x_cube = x_sq * x;
+    T alpha = x + static_cast<T>(0.044715) * x_cube;
+    T beta =  (static_cast<T>(M_2_SQRTPI_F * M_SQRT1_2_F) * alpha);
+    return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + tanh(beta));
+}
 
 
-using namespace metal;
 
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
@@ -64,8 +73,14 @@ UNARY_OP(sqrt)
 UNARY_OP(neg)
 UNARY_OP(exp)
 UNARY_OP(log)
+UNARY_OP(gelu)
+UNARY_OP(ceil)
+UNARY_OP(floor)
+UNARY_OP(round)
 UNARY(id, float, copy_float, copy_float_strided)
 UNARY(id, half, copy_half, copy_half_strided)
+UNARY(id, uint8_t, copy_u8, copy_u8_strided)
+UNARY(id, uint32_t, copy_u32, copy_u32_strided)
 
 #if __METAL_VERSION__ >= 310
 BFLOAT_UNARY_OP(cos)
@@ -75,6 +90,10 @@ BFLOAT_UNARY_OP(sqrt)
 BFLOAT_UNARY_OP(neg)
 BFLOAT_UNARY_OP(exp)
 BFLOAT_UNARY_OP(log)
+BFLOAT_UNARY_OP(gelu)
+BFLOAT_UNARY_OP(ceil)
+BFLOAT_UNARY_OP(floor)
+BFLOAT_UNARY_OP(round)
 
 UNARY(id, bfloat, copy_bfloat, copy_bfloat_strided)
 #endif
