@@ -592,6 +592,53 @@ pub fn call_affine(
     Ok(())
 }
 
+pub fn call_affine_strided(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    shape: &[usize],
+    input: &Buffer,
+    input_stride: &[usize],
+    input_offset: usize,
+    output: &mut Buffer,
+    mul: f32,
+    add: f32,
+) -> Result<(), MetalKernelError> {
+    let func = kernels.load_function(device, Source::Affine, "affine_float_strided")?;
+    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
+    pipeline_state_descriptor.set_compute_function(Some(&func));
+
+    let size: usize = shape.iter().product();
+
+    let pipeline = device
+        .new_compute_pipeline_state_with_function(
+            pipeline_state_descriptor.compute_function().unwrap(),
+        )
+        .unwrap();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            size,
+            shape.len(),
+            shape,
+            input_stride,
+            mul,
+            add,
+            (input, input_offset),
+            output
+        )
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
 pub fn call_where_cond_strided(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -977,6 +1024,43 @@ mod tests {
         output.read_to_vec::<T>(v.len())
     }
 
+    fn run_affine_strided<T: Clone>(
+        v: &[T],
+        shape: &[usize],
+        strides: &[usize],
+        mul: f64,
+        add: f64,
+    ) -> Vec<T> {
+        let device = device();
+        let kernels = Kernels::new();
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+
+        let input = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
+
+        let size = v.len();
+
+        call_affine_strided(
+            &device,
+            command_buffer,
+            &kernels,
+            size,
+            shape,
+            &input,
+            strides,
+            0,
+            &mut output,
+            mul as f32,
+            add as f32,
+        )
+        .unwrap();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        output.read_to_vec::<T>(v.len())
+    }
+
     #[test]
     fn affine() {
         let input = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
@@ -991,6 +1075,16 @@ mod tests {
         let result = run_affine(&input, mul, add);
         assert_eq!(result, vec![2.6; 40_000]);
     }
+
+    // #[test]
+    // fn affine_strided() {
+    //     let input = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    //     let mul = 1.5;
+    //     let add = 1.1;
+    //     let result = run_affine_(&input, mul, add);
+    //     assert_eq!(result, vec![2.6, 4.1, 5.6, 7.1, 8.6, 10.1, 11.6, 13.1]);
+
+    // }
 
     #[test]
     fn index_select() {

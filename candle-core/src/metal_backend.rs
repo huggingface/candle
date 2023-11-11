@@ -137,23 +137,37 @@ impl BackendStorage for MetalStorage {
         let el = shape.elem_count();
         let dtype = self.dtype;
 
-        assert!(layout.is_contiguous());
-        assert!(layout.start_offset() == 0);
-        assert_eq!(dtype, DType::F32);
-
         let mut buffer = device.new_buffer(el, self.dtype);
         let command_buffer = self.device.command_queue.new_command_buffer();
-        candle_metal_kernels::call_affine(
-            &device.device,
-            &command_buffer,
-            &device.kernels,
-            el,
-            &self.buffer,
-            &mut buffer,
-            mul as f32,
-            add as f32,
-        )
-        .unwrap();
+        if layout.is_contiguous() && layout.start_offset() == 0 {
+            assert_eq!(dtype, DType::F32);
+            candle_metal_kernels::call_affine(
+                &device.device,
+                &command_buffer,
+                &device.kernels,
+                el,
+                &self.buffer,
+                &mut buffer,
+                mul as f32,
+                add as f32,
+            )
+            .unwrap();
+        } else {
+            assert_eq!(dtype, DType::F32);
+            candle_metal_kernels::call_affine_strided(
+                &device.device,
+                &command_buffer,
+                &device.kernels,
+                layout.dims(),
+                &self.buffer,
+                layout.stride(),
+                layout.start_offset() * dtype.size_in_bytes(),
+                &mut buffer,
+                mul as f32,
+                add as f32,
+            )
+            .unwrap();
+        }
         command_buffer.commit();
         command_buffer.wait_until_completed();
         return Ok(Self {
@@ -295,7 +309,8 @@ impl BackendStorage for MetalStorage {
                 ("ulog", DType::F32) => contiguous::log::FLOAT,
                 ("ugelu", DType::F32) => contiguous::gelu::FLOAT,
                 // TODO erf does not exist in metal
-                ("ugelu_erf", DType::F32) => contiguous::gelu::FLOAT,
+                ("ugelu_erf", DType::F32) => crate::bail!("erf is not implemented in metal"),
+                ("uerf", DType::F32) => crate::bail!("erf is not implemented in metal"),
                 ("uceil", DType::F32) => contiguous::ceil::FLOAT,
                 ("ufloor", DType::F32) => contiguous::floor::FLOAT,
                 ("uround", DType::F32) => contiguous::round::FLOAT,
@@ -625,56 +640,63 @@ impl BackendStorage for MetalStorage {
         };
         let result_descriptor = MatrixDescriptor::init_single(m, n, n * size, type_id);
 
-        // Create matrix objects
-        let left_matrix = Matrix::init_with_buffer_descriptor(&self.buffer, &left_descriptor)
-            .ok_or_else(|| {
-                MetalError::from("Failed to create matrix multiplication kernel".to_string())
-            })?;
-        let right_matrix = Matrix::init_with_buffer_descriptor(&rhs.buffer, &right_descriptor)
-            .ok_or_else(|| {
-                MetalError::from("Failed to create matrix multiplication kernel".to_string())
-            })?;
-
         let out_buffer = self.device.new_buffer(elem_count, self.dtype);
-        let result_matrix = Matrix::init_with_buffer_descriptor(&out_buffer, &result_descriptor)
+        let command_buffer = self.device.command_queue.new_command_buffer();
+        for bi in 0..b {
+            // Create matrix objects
+            let left_matrix = Matrix::init_with_buffer_descriptor(
+                &self.buffer,
+                bi * m * k * size,
+                &left_descriptor,
+            )
+            .ok_or_else(|| {
+                MetalError::from("Failed to create matrix multiplication kernel".to_string())
+            })?;
+            let right_matrix = Matrix::init_with_buffer_descriptor(
+                &rhs.buffer,
+                bi * n * k * size,
+                &right_descriptor,
+            )
             .ok_or_else(|| {
                 MetalError::from("Failed to create matrix multiplication kernel".to_string())
             })?;
 
-        let alpha = 1.0f64;
-        let beta = 0.0f64;
-        // Create kernel
-        let matrix_multiplication = MatrixMultiplication::init(
-            &self.device,
-            transpose_left,
-            transpose_right,
-            m,
-            n,
-            k,
-            alpha,
-            beta,
-        )
-        .ok_or_else(|| {
-            MetalError::from("Failed to create matrix multiplication kernel".to_string())
-        })?;
+            let result_matrix = Matrix::init_with_buffer_descriptor(
+                &out_buffer,
+                bi * m * n * size,
+                &result_descriptor,
+            )
+            .ok_or_else(|| {
+                MetalError::from("Failed to create matrix multiplication kernel".to_string())
+            })?;
 
-        matrix_multiplication.set_batch_size(b);
+            let alpha = 1.0f64;
+            let beta = 0.0f64;
+            // Create kernel
+            let matrix_multiplication = MatrixMultiplication::init(
+                &self.device,
+                transpose_left,
+                transpose_right,
+                m,
+                n,
+                k,
+                alpha,
+                beta,
+            )
+            .ok_or_else(|| {
+                MetalError::from("Failed to create matrix multiplication kernel".to_string())
+            })?;
 
-        // Encode kernel to command buffer
-        let command_buffer = self.device.command_queue.new_command_buffer();
-        matrix_multiplication.encode_to_command_buffer(
-            command_buffer,
-            &left_matrix,
-            &right_matrix,
-            &result_matrix,
-        );
+            // Encode kernel to command buffer
+            matrix_multiplication.encode_to_command_buffer(
+                command_buffer,
+                &left_matrix,
+                &right_matrix,
+                &result_matrix,
+            );
+        }
         command_buffer.commit();
         command_buffer.wait_until_completed();
-
-        // let left = self.buffer.read_to_vec::<f32>(10);
-        // let right = rhs.buffer.read_to_vec::<f32>(10);
-        // let out = out_buffer.read_to_vec::<f32>(40);
-        // todo!("Out {left:?} {right:?} {out:?}");
 
         Ok(Self {
             buffer: out_buffer,
