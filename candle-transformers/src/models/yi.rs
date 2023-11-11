@@ -33,6 +33,21 @@ impl Config {
             rope_theta: 5_000_000.,
         }
     }
+
+    pub fn config_34b() -> Self {
+        Self {
+            vocab_size: 64000,
+            hidden_size: 7168,
+            intermediate_size: 20480,
+            num_hidden_layers: 60,
+            num_attention_heads: 56,
+            num_key_value_heads: 8,
+            hidden_act: Activation::Silu,
+            max_position_embeddings: 4096,
+            rms_norm_eps: 1e-5,
+            rope_theta: 5_000_000.,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
