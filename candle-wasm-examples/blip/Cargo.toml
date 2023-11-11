@@ -9,9 +9,9 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-candle = { path = "../../candle-core", version = "0.3.0", package = "candle-core" }
-candle-nn = { path = "../../candle-nn", version = "0.3.0" }
-candle-transformers = { path = "../../candle-transformers", version = "0.3.0" }
+candle = { path = "../../candle-core", version = "0.3.1", package = "candle-core" }
+candle-nn = { path = "../../candle-nn", version = "0.3.1" }
+candle-transformers = { path = "../../candle-transformers", version = "0.3.1" }
 tokenizers = { workspace = true, features = ["unstable_wasm"] }
 num-traits = { workspace = true }
 
