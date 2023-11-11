@@ -201,6 +201,37 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         };
         Ok((dst, layout.shape().clone()))
     }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        storage: &candle::MetalStorage,
+        layout: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        use candle::backend::{BackendStorage};
+        let device  = storage.device();
+        let command_buffer = device.command_buffer();
+        let kernels = device.kernels();
+        let name = "softmax_float";
+        assert!(layout.is_contiguous());
+        assert!(layout.start_offset() == 0);
+        let last_dim = layout.dims()[layout.shape().rank() - 1];
+        let elem_count = layout.shape().elem_count();
+        let mut output = device.new_buffer(elem_count, storage.dtype());
+        candle_metal_kernels::call_last_softmax(
+            device.metal_device(),
+            &command_buffer,
+            &kernels,
+            name,
+            elem_count,
+            last_dim,
+            storage.buffer(),
+            &mut output,
+        )
+        .unwrap();
+        let newstorage = candle::MetalStorage::new(output, device.clone(), storage.dtype());
+        Ok((newstorage, layout.shape().clone()))
+    }
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {

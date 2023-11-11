@@ -147,7 +147,7 @@ fn run_unary_bench<T: Clone>(
         println!(
             "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <11?} | {5: <11?}",
             type_name::<T>().split("::").last().unwrap(),
-            kernel_name.to_string(),
+            kernel_name.0,
             v.len(),
             iterations,
             total_time,
@@ -159,7 +159,7 @@ fn run_unary_bench<T: Clone>(
     let shape = vec![2, 5_000];
     let strides = vec![2, 1];
     let offset = 0;
-    for kernel_name in strided {
+    for kernel_name in &strided {
         let total_time = autoreleasepool(|| {
             let command_buffer = command_queue.new_command_buffer();
             let start = Instant::now();
@@ -187,7 +187,7 @@ fn run_unary_bench<T: Clone>(
         println!(
             "{0: <5} | {1: <19} | {2: <6} | {3: <5} | {4: <11?} | {5: <11?}",
             type_name::<T>().split("::").last().unwrap(),
-            kernel_name.to_string(),
+            kernel_name.0,
             v.len(),
             iterations,
             total_time,

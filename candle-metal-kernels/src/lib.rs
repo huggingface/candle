@@ -1,6 +1,6 @@
 use metal::{
-    Buffer, CommandBufferRef, CompileOptions, ComputeCommandEncoderRef, ComputePipelineDescriptor,
-    ComputePipelineState, Device, Function, Library, MTLSize,
+    Buffer, CommandBufferRef, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState,
+    Device, Function, Library, MTLSize,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -59,8 +59,8 @@ impl<T> EncoderParam for &[T] {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
         encoder.set_bytes(
             position,
-            (core::mem::size_of::<T>() * data.len()) as u64,
-            data.as_ptr() as *const T as *const c_void,
+            core::mem::size_of_val(data) as u64,
+            data.as_ptr() as *const c_void,
         );
     }
 }
@@ -111,13 +111,7 @@ macro_rules! ops{
     ($($name:ident),+) => {
 
         pub mod contiguous {
-        #[derive(Clone, Copy)]
-        pub struct Kernel(pub(crate) &'static str);
-        impl std::fmt::Display for Kernel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-        }
+        pub struct Kernel(pub &'static str);
         $(
         pub mod $name {
             use super::Kernel;
@@ -126,16 +120,17 @@ macro_rules! ops{
             pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bfloat"));
         }
         )+
+            pub mod copy {
+                use super::Kernel;
+                pub const FLOAT: Kernel = Kernel("copy_float");
+                pub const HALF: Kernel = Kernel("copy_half");
+                pub const BFLOAT: Kernel = Kernel("copy_bfloat");
+                pub const U32: Kernel = Kernel("copy_u32");
+            }
         }
 
         pub mod strided {
-        #[derive(Clone, Copy)]
-        pub struct Kernel(pub(crate) &'static str);
-        impl std::fmt::Display for Kernel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-        }
+        pub struct Kernel(pub &'static str);
         $(
         pub mod $name {
             use super::Kernel;
@@ -144,12 +139,19 @@ macro_rules! ops{
             pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bfloat_strided"));
         }
         )+
+            pub mod copy {
+                use super::Kernel;
+                pub const FLOAT: Kernel = Kernel("copy_float_strided");
+                pub const HALF: Kernel = Kernel("copy_half_strided");
+                pub const BFLOAT: Kernel = Kernel("copy_bfloat_strided");
+                pub const U32: Kernel = Kernel("copy_u32_strided");
+            }
         }
     };
 }
 
 pub mod unary {
-    ops!(cos, sin, exp, sqr, sqrt, neg, copy, log);
+    ops!(cos, sin, exp, sqr, sqrt, neg, log, gelu, ceil, floor, round, erf, gelu_erf);
 }
 pub mod binary {
     ops!(add, sub, mul, div);
@@ -161,8 +163,12 @@ pub enum MetalKernelError {
     LockError(String),
     #[error("Error while loading library: {0}")]
     LoadLibraryError(String),
-    #[error("Error while loading function: {0}")]
+    #[error("Error while loading function: {0:?}")]
     LoadFunctionError(String),
+    #[error("Failed to create compute function")]
+    FailedToCreateComputeFunction,
+    #[error("Failed to create pipeline")]
+    FailedToCreatePipeline(String),
 }
 
 impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
@@ -173,19 +179,22 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
 
 type KernelMap<T> = HashMap<&'static str, T>;
 type Libraries = HashMap<Source, Library>;
-type Functions = KernelMap<Function>;
+type Pipelines = KernelMap<ComputePipelineState>;
 
 #[derive(Debug, Default)]
 pub struct Kernels {
     libraries: RwLock<Libraries>,
-    funcs: RwLock<Functions>,
+    pipelines: RwLock<Pipelines>,
 }
 
 impl Kernels {
     pub fn new() -> Self {
         let libraries = RwLock::new(Libraries::new());
-        let funcs = RwLock::new(Functions::new());
-        Self { libraries, funcs }
+        let pipelines = RwLock::new(Pipelines::new());
+        Self {
+            libraries,
+            pipelines,
+        }
     }
 
     fn get_library_source(&self, source: Source) -> &'static str {
@@ -218,22 +227,43 @@ impl Kernels {
         }
     }
 
-    pub fn load_function(
+    fn load_function(
         &self,
         device: &Device,
         source: Source,
         name: &'static str,
     ) -> Result<Function, MetalKernelError> {
-        let mut funcs = self.funcs.write()?;
-        if let Some(func) = funcs.get(name) {
-            Ok(func.clone())
+        let func = self
+            .load_library(device, source)?
+            .get_function(name, None)
+            .map_err(|e| MetalKernelError::LoadFunctionError(e.to_string()))?;
+        Ok(func)
+        // let mut funcs = self.funcs.write()?;
+        // if let Some(func) = funcs.get(name) {
+        //     Ok(func.clone())
+        // } else {
+        //     funcs.insert(name, func.clone());
+        //     Ok(func)
+        // }
+    }
+
+    pub fn load_pipeline(
+        &self,
+        device: &Device,
+        source: Source,
+        name: &'static str,
+    ) -> Result<ComputePipelineState, MetalKernelError> {
+        let mut pipelines = self.pipelines.write()?;
+        if let Some(pipeline) = pipelines.get(name) {
+            Ok(pipeline.clone())
         } else {
-            let func = self
-                .load_library(device, source)?
-                .get_function(name, None)
-                .map_err(|e| MetalKernelError::LoadFunctionError(e.to_string()))?;
-            funcs.insert(name, func.clone());
-            Ok(func)
+            let func = self.load_function(device, source, name)?;
+            let pipeline = device
+                .new_compute_pipeline_state_with_function(&func)
+                .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
+            pipelines.insert(name, pipeline.clone());
+
+            Ok(pipeline)
         }
     }
 }
@@ -246,18 +276,9 @@ pub fn call_unary_contiguous(
     kernel_name: unary::contiguous::Kernel,
     length: usize,
     input: &Buffer,
-    output: &mut Buffer,
+    output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let func = kernels.load_function(device, Source::Unary, kernel_name.0)?;
-    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
-    pipeline_state_descriptor.set_compute_function(Some(&func));
-
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(
-            pipeline_state_descriptor.compute_function().unwrap(),
-        )
-        .unwrap();
-
+    let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
@@ -279,18 +300,10 @@ pub fn call_unary_strided(
     input: &Buffer,
     strides: &[usize],
     offset: usize,
-    output: &mut Buffer,
+    output: &Buffer,
     output_offset: usize,
 ) -> Result<(), MetalKernelError> {
-    let func = kernels.load_function(device, Source::Unary, name.0)?;
-    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
-    pipeline_state_descriptor.set_compute_function(Some(&func));
-
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(
-            pipeline_state_descriptor.compute_function().unwrap(),
-        )
-        .unwrap();
+    let pipeline = kernels.load_pipeline(device, Source::Unary, name.0)?;
 
     let num_dims: usize = shape.len();
     let encoder = command_buffer.new_compute_command_encoder();
@@ -326,17 +339,9 @@ pub fn call_binary_contiguous(
     length: usize,
     left: &Buffer,
     right: &Buffer,
-    output: &mut Buffer,
+    output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let func = kernels.load_function(device, Source::Binary, kernel_name.0)?;
-    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
-    pipeline_state_descriptor.set_compute_function(Some(&func));
-
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(
-            pipeline_state_descriptor.compute_function().unwrap(),
-        )
-        .unwrap();
+    let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.0)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -363,17 +368,9 @@ pub fn call_binary_strided(
     right_input: &Buffer,
     right_strides: &[usize],
     right_offset: usize,
-    output: &mut Buffer,
+    output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let func = kernels.load_function(device, Source::Binary, name.0)?;
-    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
-    pipeline_state_descriptor.set_compute_function(Some(&func));
-
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(
-            pipeline_state_descriptor.compute_function().unwrap(),
-        )
-        .unwrap();
+    let pipeline = kernels.load_pipeline(device, Source::Binary, name.0)?;
 
     let num_dims: usize = shape.len();
     let encoder = command_buffer.new_compute_command_encoder();
@@ -411,17 +408,9 @@ pub fn call_cast_contiguous(
     kernel_name: &'static str,
     length: usize,
     input: &Buffer,
-    output: &mut Buffer,
+    output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let func = kernels.load_function(device, Source::Cast, kernel_name)?;
-    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
-    pipeline_state_descriptor.set_compute_function(Some(&func));
-
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(
-            pipeline_state_descriptor.compute_function().unwrap(),
-        )
-        .unwrap();
+    let pipeline = kernels.load_pipeline(device, Source::Cast, kernel_name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -436,6 +425,36 @@ pub fn call_cast_contiguous(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn call_cast_strided(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    kernel_name: &'static str,
+    shape: &[usize],
+    input: &Buffer,
+    input_strides: &[usize],
+    input_offset: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Cast, kernel_name)?;
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let length: usize = shape.iter().product();
+
+    set_params!(
+        encoder,
+        (length, shape, input_strides, (input, input_offset), output)
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
 pub fn call_reduce_contiguous(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -444,24 +463,16 @@ pub fn call_reduce_contiguous(
     length: usize,
     out_length: usize,
     input: &Buffer,
-    output: &mut Buffer,
+    input_offset: usize, 
+    output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let func = kernels.load_function(device, Source::Reduce, kernel_name)?;
-    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
-    pipeline_state_descriptor.set_compute_function(Some(&func));
-
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(
-            pipeline_state_descriptor.compute_function().unwrap(),
-        )
-        .unwrap();
-
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let elements_to_sum = length / out_length;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (length, elements_to_sum, input, output));
+    set_params!(encoder, (length, elements_to_sum, (input,input_offset), output));
 
     let thread_group_count = MTLSize {
         width: out_length as u64,
@@ -495,18 +506,9 @@ pub fn call_last_softmax(
     length: usize,
     elements_to_sum: usize,
     input: &Buffer,
-    output: &mut Buffer,
+    output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let func = kernels.load_function(device, Source::Reduce, kernel_name)?;
-    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
-    pipeline_state_descriptor.set_compute_function(Some(&func));
-
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(
-            pipeline_state_descriptor.compute_function().unwrap(),
-        )
-        .unwrap();
-
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
@@ -542,21 +544,14 @@ pub fn call_affine(
     device: &Device,
     command_buffer: &CommandBufferRef,
     kernels: &Kernels,
+    name: &'static str,
     size: usize,
     input: &Buffer,
-    output: &mut Buffer,
+    output: &Buffer,
     mul: f32,
     add: f32,
 ) -> Result<(), MetalKernelError> {
-    let func = kernels.load_function(device, Source::Affine, "affine_float")?;
-    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
-    pipeline_state_descriptor.set_compute_function(Some(&func));
-
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(
-            pipeline_state_descriptor.compute_function().unwrap(),
-        )
-        .unwrap();
+    let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -570,6 +565,45 @@ pub fn call_affine(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn call_affine_strided(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    shape: &[usize],
+    input: &Buffer,
+    input_stride: &[usize],
+    input_offset: usize,
+    output: &Buffer,
+    mul: f32,
+    add: f32,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
+    let size: usize = shape.iter().product();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            size,
+            shape.len(),
+            shape,
+            input_stride,
+            mul,
+            add,
+            (input, input_offset),
+            output
+        )
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
 pub fn call_where_cond_strided(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -582,17 +616,9 @@ pub fn call_where_cond_strided(
     (left_stride, left_offset): (&[usize], usize),
     right: &Buffer,
     (right_stride, right_offset): (&[usize], usize),
-    output: &mut Buffer,
+    output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let func = kernels.load_function(device, Source::Ternary, name)?;
-    let pipeline_state_descriptor = ComputePipelineDescriptor::new();
-    pipeline_state_descriptor.set_compute_function(Some(&func));
-
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(
-            pipeline_state_descriptor.compute_function().unwrap(),
-        )
-        .unwrap();
+    let pipeline = kernels.load_pipeline(device, Source::Ternary, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -634,17 +660,14 @@ pub fn call_index_select(
     dim: usize,
     input: &Buffer,
     ids: &Buffer,
-    output: &mut Buffer,
+    output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let left_size: usize = shape[..dim].iter().product();
     let right_size: usize = shape[dim + 1..].iter().product();
     let src_dim_size = shape[dim];
     let dst_el = ids_size * left_size * right_size;
 
-    let func = kernels.load_function(device, Source::Indexing, name)?;
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(&func)
-        .unwrap();
+    let pipeline = kernels.load_pipeline(device, Source::Indexing, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
 
@@ -712,7 +735,7 @@ mod tests {
             name,
             v.len(),
             &input,
-            &mut output,
+            &output,
         )
         .unwrap();
         command_buffer.commit();
@@ -737,7 +760,7 @@ mod tests {
             x.len(),
             &left,
             &right,
-            &mut output,
+            &output,
         )
         .unwrap();
         command_buffer.commit();
@@ -767,7 +790,7 @@ mod tests {
             &input,
             strides,
             offset,
-            &mut output,
+            &output,
             0,
         )
         .unwrap();
@@ -904,7 +927,7 @@ mod tests {
             name,
             v.len(),
             &input,
-            &mut output,
+            &output,
         )
         .unwrap();
         command_buffer.commit();
@@ -942,9 +965,47 @@ mod tests {
             &device,
             command_buffer,
             &kernels,
+            "affine_float",
             size,
             &input,
-            &mut output,
+            &output,
+            mul as f32,
+            add as f32,
+        )
+        .unwrap();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        output.read_to_vec::<T>(v.len())
+    }
+
+    fn run_affine_strided<T: Clone>(
+        v: &[T],
+        shape: &[usize],
+        strides: &[usize],
+        mul: f64,
+        add: f64,
+    ) -> Vec<T> {
+        let device = device();
+        let kernels = Kernels::new();
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer();
+
+        let input = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
+
+        let size = v.len();
+
+        call_affine_strided(
+            &device,
+            command_buffer,
+            &kernels,
+            "affine_float",
+            shape,
+            &input,
+            strides,
+            0,
+            &output,
             mul as f32,
             add as f32,
         )
@@ -970,6 +1031,16 @@ mod tests {
         assert_eq!(result, vec![2.6; 40_000]);
     }
 
+    // #[test]
+    // fn affine_strided() {
+    //     let input = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    //     let mul = 1.5;
+    //     let add = 1.1;
+    //     let result = run_affine_(&input, mul, add);
+    //     assert_eq!(result, vec![2.6, 4.1, 5.6, 7.1, 8.6, 10.1, 11.6, 13.1]);
+
+    // }
+
     #[test]
     fn index_select() {
         let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
@@ -988,7 +1059,10 @@ mod tests {
             result,
             vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.0f32, 2.0, 3.0, 4.0, 5.0]
         );
+    }
 
+    #[test]
+    fn index_select_dim1() {
         let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         let shape = [5, 2];
         let ids = [0u32, 1, 0];
@@ -996,7 +1070,7 @@ mod tests {
         let result = run_index_select(&embedding, &shape, &ids, dim);
         assert_eq!(
             result,
-            vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.0f32, 2.0, 3.0, 4.0, 5.0]
+            vec![1.0f32, 2.0, 1.0, 3.0, 4.0, 3.0, 5.0, 6.0, 5.0, 7.0, 8.0f32, 7.0, 9.0, 10.0, 9.0]
         );
     }
 
@@ -1029,7 +1103,7 @@ mod tests {
             dim,
             &embeddings_buffer,
             &ids_buffer,
-            &mut dst_buffer,
+            &dst_buffer,
         )
         .unwrap();
 
@@ -1136,7 +1210,8 @@ mod tests {
             v.len(),
             out_length,
             &input,
-            &mut output,
+            0, 
+            &output,
         )
         .unwrap();
         command_buffer.commit();
@@ -1164,7 +1239,7 @@ mod tests {
             v.len(),
             last_dim,
             &input,
-            &mut output,
+            &output,
         )
         .unwrap();
         command_buffer.commit();
@@ -1264,7 +1339,7 @@ mod tests {
             (&left_stride, left_offset),
             &right,
             (&cond_stride, cond_offset),
-            &mut output,
+            &output,
         )
         .unwrap();
         command_buffer.commit();

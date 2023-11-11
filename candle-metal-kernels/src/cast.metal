@@ -46,6 +46,8 @@ kernel void FN_NAME_STRIDED( \
 } \
 
 CAST(cast_u32_f32, cast_u32_f32_strided, int32_t, float)
+CAST(cast_f16_f32, cast_f16_f32_strided, half, float)
+CAST(cast_f32_f16, cast_f32_f16_strided, float, half)
 
 #if __METAL_VERSION__ >= 310
 #endif
