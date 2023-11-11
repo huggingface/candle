@@ -112,7 +112,7 @@ macro_rules! ops{
     ($($name:ident),+) => {
 
         pub mod contiguous {
-        pub struct Kernel(pub(crate) &'static str);
+        pub struct Kernel(pub &'static str);
         $(
         pub mod $name {
             use super::Kernel;
@@ -131,7 +131,7 @@ macro_rules! ops{
         }
 
         pub mod strided {
-        pub struct Kernel(pub(crate) &'static str);
+        pub struct Kernel(pub &'static str);
         $(
         pub mod $name {
             use super::Kernel;
@@ -172,7 +172,7 @@ pub enum MetalKernelError {
     LockError(String),
     #[error("Error while loading library: {0}")]
     LoadLibraryError(String),
-    #[error("Error while loading function: {0}")]
+    #[error("Error while loading function: {0:?}")]
     LoadFunctionError(String),
 }
 
@@ -1053,6 +1053,7 @@ mod tests {
             &device,
             command_buffer,
             &kernels,
+            "affine_float",
             size,
             &input,
             &mut output,
@@ -1087,7 +1088,7 @@ mod tests {
             &device,
             command_buffer,
             &kernels,
-            size,
+            "affine_float",
             shape,
             &input,
             strides,
@@ -1146,7 +1147,10 @@ mod tests {
             result,
             vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.0f32, 2.0, 3.0, 4.0, 5.0]
         );
+    }
 
+    #[test]
+    fn index_select_dim1() {
         let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         let shape = [5, 2];
         let ids = [0u32, 1, 0];
@@ -1154,7 +1158,7 @@ mod tests {
         let result = run_index_select(&embedding, &shape, &ids, dim);
         assert_eq!(
             result,
-            vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.0f32, 2.0, 3.0, 4.0, 5.0]
+            vec![1.0f32, 2.0, 1.0, 3.0, 4.0, 3.0, 5.0, 6.0, 5.0, 7.0, 8.0f32, 7.0, 9.0, 10.0, 9.0]
         );
     }
 

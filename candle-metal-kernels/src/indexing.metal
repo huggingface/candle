@@ -16,16 +16,16 @@ kernel void NAME( \
     if (gid >= dst_size) { \
         return; \
     } \
-    const size_t id_i = gid / right_size / left_size; \
+    const size_t id_i = (gid / right_size) % ids_size; \
+    const INDEX_TYPENAME input_i = min(input_ids[id_i], (INDEX_TYPENAME)(src_dim_size - 1)); \
     const size_t right_rank_i = gid % right_size; \
-    const size_t left_rank_i = gid % left_size; \
+    const size_t left_rank_i = gid / right_size / ids_size; \
     /* \
     // Force prevent out of bounds indexing \
     // since there doesn't seem to be a good way to force crash \
     // No need to check for zero we're only allowing unsized. \
     */ \
-    const INDEX_TYPENAME input_i = min(input_ids[id_i], (INDEX_TYPENAME)(src_dim_size - 1)); \
-    const size_t src_i = ((input_i * right_size) + right_rank_i) * left_size + left_rank_i; \
+    const size_t src_i = left_rank_i * src_dim_size * right_size + input_i * right_size + right_rank_i; \
     output[gid] = input[src_i]; \
 }
 
@@ -75,7 +75,6 @@ kernel void FN_NAME( \
 
 
 INDEX_OP(is_u32_f32, uint, float)
-INDEX_OP(is_u32_f16, uint, half)
 
 
 #if __METAL_VERSION__ >= 310

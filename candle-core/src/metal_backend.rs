@@ -172,8 +172,8 @@ impl BackendStorage for MetalStorage {
             .unwrap();
         } else {
             let name = match self.dtype {
-                DType::F32 => "affine_float",
-                DType::F16 => "affine_half",
+                DType::F32 => "affine_float_strided",
+                DType::F16 => "affine_half_strided",
                 dtype => todo!("Affine {dtype:?}"),
             };
             candle_metal_kernels::call_affine_strided(
@@ -829,7 +829,6 @@ impl BackendStorage for MetalStorage {
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         let src_shape = src_l.shape();
         let el_count = src_shape.elem_count();
-        // todo!("COPY STRIDED {src_shape:?} {el_count} {src_l:?} {dst_offset}");
         if el_count == 0 {
             return Ok(());
         }
@@ -851,7 +850,7 @@ impl BackendStorage for MetalStorage {
             &src_l.stride(),
             src_l.start_offset() * self.dtype.size_in_bytes(),
             &mut dst.buffer,
-            dst_offset,
+            dst_offset * dst.dtype.size_in_bytes(),
         )
         .map_err(MetalError::from)?;
         // command_buffer.commit();
