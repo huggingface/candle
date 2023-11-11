@@ -75,6 +75,7 @@ kernel void FN_NAME( \
 
 
 INDEX_OP(is_u32_f32, uint, float)
+INDEX_OP(is_u32_f16, uint, half)
 
 
 #if __METAL_VERSION__ >= 310
