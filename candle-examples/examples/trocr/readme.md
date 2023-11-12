@@ -8,7 +8,7 @@ the model itself.
 ## Running an example
 
 ```bash
-cargo run --example trocr --release --  --which base --cpu --image assets/trocr.png
+cargo run --example trocr --release --  --which base --cpu --image candle-examples/examples/trocr/assets/trocr.png
 ```
 
 ```
