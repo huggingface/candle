@@ -40,7 +40,7 @@ template <typename T> METAL_FUNC T erf(T in){
     float t = 1.0/(1.0 + p*x);
     float y = 1.0 - (((((a5*t + a4)*t) + a3)*t + a2)*t + a1)*t*exp(-x*x);
 
-    return (T) sign*y;
+    return T(sign*y);
 }
 template <typename T> METAL_FUNC T id(T in){ return in; }
 template <typename T> METAL_FUNC T gelu_erf(T x){ return x * (1 + erf(x * M_SQRT1_2_F)) / 2; }
@@ -49,7 +49,7 @@ template <typename T> METAL_FUNC T gelu(T x){
     T x_cube = x_sq * x;
     T alpha = x + static_cast<T>(0.044715) * x_cube;
     T beta =  (static_cast<T>(M_2_SQRTPI_F * M_SQRT1_2_F) * alpha);
-    return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + tanh(beta));
+    return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + T(tanh(beta)));
 }
 
 
