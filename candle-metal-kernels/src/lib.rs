@@ -60,8 +60,8 @@ impl<T> EncoderParam for &[T] {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
         encoder.set_bytes(
             position,
-            (core::mem::size_of::<T>() * data.len()) as u64,
-            data.as_ptr() as *const T as *const c_void,
+            core::mem::size_of_val(data) as u64,
+            data.as_ptr() as *const c_void,
         );
     }
 }
@@ -190,7 +190,7 @@ type KernelMap<T> = HashMap<&'static str, T>;
 type Libraries = HashMap<Source, Library>;
 type Pipelines = KernelMap<ComputePipelineState>;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Kernels {
     libraries: RwLock<Libraries>,
     pipelines: RwLock<Pipelines>,

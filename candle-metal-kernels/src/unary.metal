@@ -43,7 +43,7 @@ template <typename T> METAL_FUNC T erf(T in){
     return T(sign*y);
 }
 template <typename T> METAL_FUNC T id(T in){ return in; }
-template <typename T> METAL_FUNC T gelu_erf(T x){ return x * (1 + erf(x * M_SQRT1_2_F)) / 2; }
+template <typename T> METAL_FUNC T gelu_erf(T x){ return T(x * (1 + erf(x * M_SQRT1_2_F)) / 2); }
 template <typename T> METAL_FUNC T gelu(T x){
     T x_sq = x * x;
     T x_cube = x_sq * x;
