@@ -3,7 +3,7 @@ name = "candle-metal-kernels"
 version = "0.3.0"
 edition = "2021"
 
-description = "CUDA kernels for Candle"
+description = "Metal kernels for Candle"
 repository = "https://github.com/huggingface/candle"
 keywords = ["blas", "tensor", "machine-learning"]
 categories = ["science"]
