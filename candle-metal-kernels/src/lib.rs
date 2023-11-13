@@ -300,9 +300,6 @@ pub fn call_unary_contiguous(
     input: &Buffer,
     output: &mut Buffer,
 ) -> Result<(), MetalKernelError> {
-    // println!("Kernel {:?}", kernel_name.0);
-    // assert_eq!(input.length(), output.length());
-
     let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
