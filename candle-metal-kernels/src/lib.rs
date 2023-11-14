@@ -1133,6 +1133,7 @@ mod tests {
         let device = Device::system_default().expect("no device found");
 
         let options = CompileOptions::new();
+        options.set_fast_math_enabled(true);
         let library = device.new_library_with_source(INDEXING, &options).unwrap();
 
         let left = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
