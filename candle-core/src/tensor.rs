@@ -2450,6 +2450,30 @@ impl Tensor {
             Ok(naxis as usize)
         }
     }
+
+    /// Returns a lower triangular matrix of ones of size n by n.
+    pub fn tril2(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let t = Tensor::arange(0u32, n as u32, device)?;
+        let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
+        let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
+        t1.le(&t2)?.to_dtype(dtype)
+    }
+
+    /// Returns an upper triangular matrix of ones of size n by n.
+    pub fn triu2(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let t = Tensor::arange(0u32, n as u32, device)?;
+        let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
+        let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
+        t1.ge(&t2)?.to_dtype(dtype)
+    }
+
+    /// Returns a matrix with a diagonal of ones of size n by n.
+    pub fn eye(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let t = Tensor::arange(0u32, n as u32, device)?;
+        let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
+        let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
+        t1.eq(&t2)?.to_dtype(dtype)
+    }
 }
 
 macro_rules! bin_trait {
