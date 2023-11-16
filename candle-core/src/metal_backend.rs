@@ -63,14 +63,14 @@ impl MetalDevice {
     }
 
     pub fn command_buffer(&self) -> std::sync::RwLockReadGuard<CommandBuffer> {
-        self.command_buffer.read().unwrap()
+        self.command_buffer.try_read().unwrap()
     }
 
     pub fn wait_until_completed(&self) {
-        let mut old = self.command_buffer.write().unwrap();
+        let mut old = self.command_buffer.try_write().unwrap();
         old.commit();
         old.wait_until_completed();
-        let command_buffer = self.command_queue.new_owned_command_buffer();
+        let command_buffer = self.command_queue.new_command_buffer().to_owned();
         *old = command_buffer;
         // self.command_buffer.replace_with(|_| command_buffer)
     }
@@ -880,8 +880,21 @@ impl BackendDevice for MetalDevice {
     fn new(ordinal: usize) -> Result<Self> {
         let device = metal::Device::all().swap_remove(ordinal);
 
+        
+        // let capture = metal::CaptureManager::shared();
+        // let descriptor = metal::CaptureDescriptor::new();
+        // descriptor.set_destination(metal::MTLCaptureDestination::GpuTraceDocument);
+        // descriptor.set_capture_device(&device);
+        // let mut dir = std::env::current_dir()?;
+        // dir.push("out.gputrace");
+        // descriptor.set_output_url(dir);
+
+        // capture
+        //     .start_capture(&descriptor)
+        //     .map_err(MetalError::from)?;
+
         let command_queue = device.new_command_queue();
-        let command_buffer = Arc::new(RwLock::new(command_queue.new_owned_command_buffer()));
+        let command_buffer = Arc::new(RwLock::new(command_queue.new_command_buffer().to_owned()));
         let kernels = Arc::new(Kernels::new());
         Ok(Self {
             device,
