@@ -10,17 +10,23 @@ Then let's start by downloading the [model file](https://huggingface.co/bert-bas
 
 
 ```rust
-# extern crate candle_core;
 # extern crate hf_hub;
+# extern crate candle_core;
 use hf_hub::api::sync::Api;
 use candle_core::Device;
 
-let api = Api::new().unwrap();
-let repo = api.model("bert-base-uncased".to_string());
+fn main() {
+    let api = Api::new().unwrap();
+    let repo = api.model("bert-base-uncased".to_string());
 
-let weights = repo.get("model.safetensors").unwrap();
+    let weights = repo.get("model.safetensors").unwrap();
 
-let weights = candle_core::safetensors::load(weights, &Device::Cpu);
+    let weights = candle_core::safetensors::load(weights, &Device::Cpu);
+
+    for (name, tensor) in weights.iter() {
+        println!("Weight: {}, Dimensions: {:?}", name, tensor);
+    }
+}
 ```
 
 We now have access to all the [tensors](https://huggingface.co/bert-base-uncased?show_tensors=true) within the file.
@@ -38,8 +44,13 @@ cargo add hf-hub --features tokio
 
 ```rust,ignore
 # This is tested directly in examples crate because it needs external dependencies unfortunately:
-# See [this](https://github.com/rust-lang/mdBook/issues/706)
-{{#include ../lib.rs:book_hub_1}}
+# See [this mdBook issue from 2019](https://github.com/rust-lang/mdBook/issues/706)
+{{#include ./mod.rs:book_hub_1_top}}
+
+#[tokio::main]
+async fn main() {
+    {{#include ./mod.rs:book_hub_1}}
+}
 ```
 
 
@@ -81,7 +92,7 @@ For more efficient loading, instead of reading the file, you could use [`memmap2
 and will definitely be slower on network mounted disk, because it will issue more read calls.
 
 ```rust,ignore
-{{#include ../lib.rs:book_hub_2}}
+{{#include ./mod.rs:book_hub_2}}
 ```
 
 **Note**: This operation is **unsafe**. [See the safety notice](https://docs.rs/memmap2/latest/memmap2/struct.Mmap.html#safety).

@@ -1,5 +1,6 @@
 #[cfg(test)]
 pub mod simplified;
+pub mod inference;
 
 #[cfg(test)]
 mod tests {
@@ -8,23 +9,6 @@ mod tests {
     use parquet::file::reader::SerializedFileReader;
 
     // NOTE: Waiting on https://github.com/rust-lang/mdBook/pull/1856
-    #[rustfmt::skip]
-    #[tokio::test]
-    async fn book_hub_1() {
-// ANCHOR: book_hub_1
-use candle::Device;
-use hf_hub::api::tokio::Api;
-
-let api = Api::new().unwrap();
-let repo = api.model("bert-base-uncased".to_string());
-
-let weights_filename = repo.get("model.safetensors").await.unwrap();
-
-let weights = candle::safetensors::load(weights_filename, &Device::Cpu).unwrap();
-// ANCHOR_END: book_hub_1
-        assert_eq!(weights.len(), 206);
-    }
-
     #[rustfmt::skip]
     #[test]
     fn book_hub_2() {
