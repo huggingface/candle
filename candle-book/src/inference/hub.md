@@ -92,7 +92,7 @@ For more efficient loading, instead of reading the file, you could use [`memmap2
 and will definitely be slower on network mounted disk, because it will issue more read calls.
 
 ```rust,ignore
-{{#include ./mod.rs:book_hub_2}}
+{{#include ../lib.rs:book_hub_2}}
 ```
 
 **Note**: This operation is **unsafe**. [See the safety notice](https://docs.rs/memmap2/latest/memmap2/struct.Mmap.html#safety).
