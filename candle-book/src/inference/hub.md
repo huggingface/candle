@@ -10,8 +10,8 @@ Then let's start by downloading the [model file](https://huggingface.co/bert-bas
 
 
 ```rust
-# extern crate hf_hub;
 # extern crate candle_core;
+# extern crate hf_hub;
 use hf_hub::api::sync::Api;
 use candle_core::Device;
 
