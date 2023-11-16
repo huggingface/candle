@@ -512,11 +512,7 @@ fn main() -> Result<()> {
             )
         } else {
             let config = repo.get("config.json")?;
-            let tokenizer = if args.model == WhichModel::LargeV3 {
-                panic!("openai/whisper-large-v3 does not provide a compatible tokenizer.json config at the moment")
-            } else {
-                repo.get("tokenizer.json")?
-            };
+            let tokenizer = repo.get("tokenizer.json")?;
             let model = repo.get("model.safetensors")?;
             (config, tokenizer, model)
         };
