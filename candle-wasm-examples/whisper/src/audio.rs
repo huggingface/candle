@@ -59,8 +59,7 @@ fn dft<T: Float>(inp: &[T]) -> Vec<T> {
     let n = inp.len();
     let two_pi = T::PI() + T::PI();
 
-    let mut out = Vec::new();
-    out.reserve(2 * n);
+    let mut out = Vec::with_capacity(2 * n);
     let n_t = T::from(n).unwrap();
     for k in 0..n {
         let k_t = T::from(k).unwrap();

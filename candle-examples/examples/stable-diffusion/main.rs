@@ -416,7 +416,7 @@ fn run(args: Args) -> Result<()> {
 
     println!("Building the autoencoder.");
     let vae_weights = ModelFile::Vae.get(vae_weights, sd_version, use_f16)?;
-    let vae = sd_config.build_vae(&vae_weights, &device, dtype)?;
+    let vae = sd_config.build_vae(vae_weights, &device, dtype)?;
     let init_latent_dist = match &img2img {
         None => None,
         Some(image) => {
@@ -426,7 +426,7 @@ fn run(args: Args) -> Result<()> {
     };
     println!("Building the unet.");
     let unet_weights = ModelFile::Unet.get(unet_weights, sd_version, use_f16)?;
-    let unet = sd_config.build_unet(&unet_weights, &device, 4, use_flash_attn, dtype)?;
+    let unet = sd_config.build_unet(unet_weights, &device, 4, use_flash_attn, dtype)?;
 
     let t_start = if img2img.is_some() {
         n_steps - (n_steps as f64 * img2img_strength) as usize
