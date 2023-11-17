@@ -58,6 +58,10 @@ impl MetalDevice {
         self.registry_id()
     }
 
+    pub fn metal_device(&self) -> &metal::Device {
+        &self.device
+    }
+
     pub fn command_queue(&self) -> &CommandQueue {
         &self.command_queue
     }
@@ -215,8 +219,9 @@ impl BackendStorage for MetalStorage {
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
         assert!(sum_dims.len() == 1);
         assert!(sum_dims[0] == layout.shape().rank() - 1);
-        assert!(layout.is_contiguous());
-        assert!(layout.start_offset() == 0);
+        assert!(layout.stride()[sum_dims[0]] == 1);
+        // assert!(layout.is_contiguous());
+        // assert!(layout.start_offset() == 0);
         let device = self.device.clone();
         let src_stride = layout.stride();
         let src_dims = layout.shape().dims();
@@ -251,6 +256,9 @@ impl BackendStorage for MetalStorage {
             Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
         }
         let dtype = if return_index { DType::U32 } else { self.dtype };
+        if dtype == DType::U32{
+            todo!("Implement this");
+        }
         let mut buffer = device.new_buffer(dst_el, dtype);
         let command_buffer = self.device.command_buffer();
         candle_metal_kernels::call_reduce_contiguous(
@@ -261,6 +269,7 @@ impl BackendStorage for MetalStorage {
             src_el,
             dst_el,
             &self.buffer,
+            layout.start_offset() * self.dtype.size_in_bytes(),
             &mut buffer,
         )
         .map_err(MetalError::from)?;
@@ -727,26 +736,26 @@ impl BackendStorage for MetalStorage {
                 mnk: (m, n, k),
             })?
         };
-        let stride_left: u64 = match lhs_stride[..lhs_stride.len() - 2] {
-            [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
-            [stride] => stride,
-            [] => m * k,
-            _ => Err(MetalError::MatMulNonContiguous {
-                lhs_stride: lhs_stride.to_vec(),
-                rhs_stride: rhs_stride.to_vec(),
-                mnk: (m, n, k),
-            })?,
-        } as u64;
-        let stride_right: u64 = match rhs_stride[..rhs_stride.len() - 2] {
-            [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
-            [stride] => stride,
-            [] => n * k,
-            _ => Err(MetalError::MatMulNonContiguous {
-                lhs_stride: lhs_stride.to_vec(),
-                rhs_stride: rhs_stride.to_vec(),
-                mnk: (m, n, k),
-            })?,
-        } as u64;
+        // let stride_left: u64 = match lhs_stride[..lhs_stride.len() - 2] {
+        //     [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
+        //     [stride] => stride,
+        //     [] => m * k,
+        //     _ => Err(MetalError::MatMulNonContiguous {
+        //         lhs_stride: lhs_stride.to_vec(),
+        //         rhs_stride: rhs_stride.to_vec(),
+        //         mnk: (m, n, k),
+        //     })?,
+        // } as u64;
+        // let stride_right: u64 = match rhs_stride[..rhs_stride.len() - 2] {
+        //     [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
+        //     [stride] => stride,
+        //     [] => n * k,
+        //     _ => Err(MetalError::MatMulNonContiguous {
+        //         lhs_stride: lhs_stride.to_vec(),
+        //         rhs_stride: rhs_stride.to_vec(),
+        //         mnk: (m, n, k),
+        //     })?,
+        // } as u64;
 
         let b = b as NSUInteger;
         let m = m as NSUInteger;
