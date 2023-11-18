@@ -9,6 +9,8 @@ pub mod k_quants;
 pub mod neon;
 #[cfg(target_feature = "simd128")]
 pub mod simd128;
+#[cfg(feature = "metal")]
+pub mod metal;
 pub mod utils;
 
 pub use k_quants::GgmlType;
@@ -122,6 +124,7 @@ pub trait QuantizedType: Send + Sync {
     fn to_float(&self, ys: &mut [f32]) -> Result<()>;
     fn storage_size_in_bytes(&self) -> usize;
     fn as_ptr(&self) -> *const u8;
+    fn block_size(&self) -> usize;
 }
 
 impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
@@ -131,6 +134,10 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
 
     fn dtype(&self) -> GgmlDType {
         T::DTYPE
+    }
+
+    fn block_size(&self) -> usize {
+        T::BLCK_SIZE
     }
 
     fn to_float(&self, ys: &mut [f32]) -> Result<()> {
@@ -152,36 +159,36 @@ impl std::fmt::Debug for QTensor {
     }
 }
 
-fn check_shape<T: k_quants::GgmlType>(shape: &Shape) -> Result<()> {
+fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
     let dims = shape.dims();
     if dims.is_empty() {
         crate::bail!("scalar tensor cannot be quantized {shape:?}")
     }
-    if dims[dims.len() - 1] % T::BLCK_SIZE != 0 {
+    if dims[dims.len() - 1] % block_size != 0 {
         crate::bail!(
             "quantized tensor must have their last dim divisible by block size {shape:?} {}",
-            T::BLCK_SIZE
+            block_size
         )
     }
     Ok(())
 }
 
 impl QTensor {
-    pub fn new<S: Into<Shape>, T: k_quants::GgmlType + Send + Sync + 'static>(
-        data: Vec<T>,
+    pub fn new<S: Into<Shape>>(
+        data: Box<dyn QuantizedType>,
         shape: S,
     ) -> Result<Self> {
         let shape = shape.into();
-        check_shape::<T>(&shape)?;
+        check_shape(&shape, data.block_size())?;
         Ok(Self {
-            data: Box::new(data),
+            data,
             shape,
         })
     }
 
     pub fn quantize<T: k_quants::GgmlType + Send + Sync + 'static>(src: &Tensor) -> Result<Self> {
         let shape = src.shape();
-        check_shape::<T>(shape)?;
+        check_shape(shape, T::BLCK_SIZE)?;
         let src = src
             .to_dtype(crate::DType::F32)?
             .flatten_all()?
