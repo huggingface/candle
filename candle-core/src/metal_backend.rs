@@ -8,6 +8,7 @@ use half::f16;
 use metal;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
 
 /// Metal related errors
 #[derive(thiserror::Error, Debug)]
@@ -37,6 +38,7 @@ pub struct MetalDevice {
     command_queue: metal::CommandQueue,
     command_buffer: Arc<RwLock<metal::CommandBuffer>>,
     kernels: Arc<candle_metal_kernels::Kernels>,
+    buffers: Arc<RwLock<HashMap<usize, Vec<Arc<Buffer>>>>>,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -87,8 +89,26 @@ impl MetalDevice {
         &self.device
     }
 
-    pub fn new_buffer(&self, element_count: usize, dtype: DType) -> Buffer {
-        let size = (element_count * dtype.size_in_bytes()) as NSUInteger;
+    pub fn new_buffer(&self, element_count: usize, dtype: DType) -> Arc<Buffer >{
+        let size = element_count * dtype.size_in_bytes();
+        let mut buffers = self.buffers.try_write().unwrap();
+        let subbuffers = buffers.entry(size).or_insert(vec![]);
+
+        for sub in &mut *subbuffers{
+            // if sub.retain_count() == 1{
+            // println!("{size} {:?}", );
+            if Arc::strong_count(sub) == 1{
+                return sub.clone();
+            }
+        }
+        let new_buffer = self.device
+            .new_buffer(size as NSUInteger, MTLResourceOptions::StorageModePrivate);
+        let new_buffer = Arc::new(new_buffer);
+        subbuffers.push(new_buffer.clone());
+        new_buffer
+    }
+
+    pub fn new_buffer_managed(&self, size: NSUInteger) -> Buffer {
         self.device
             .new_buffer(size, MTLResourceOptions::StorageModeManaged)
     }
@@ -105,7 +125,7 @@ impl MetalDevice {
 
 #[derive(Debug, Clone)]
 pub struct MetalStorage {
-    buffer: metal::Buffer,
+    buffer: Arc<metal::Buffer>,
     device: MetalDevice,
     dtype: DType,
 }
@@ -126,29 +146,38 @@ impl BackendStorage for MetalStorage {
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
+        let buffer = self.device.new_buffer_managed(self.buffer.length());
+        {
+            let command = self.device.command_buffer();
+            let blit = command.new_blit_command_encoder();
+            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+            blit.end_encoding();
+
+        }
+
         self.device.wait_until_completed();
 
         match self.dtype {
             DType::U8 => Ok(CpuStorage::U8(
-                self.buffer.read_to_vec(self.buffer.length() as usize),
+                buffer.read_to_vec(buffer.length() as usize),
             )),
             DType::U32 => Ok(CpuStorage::U32(
-                self.buffer.read_to_vec(self.buffer.length() as usize / 4),
+                buffer.read_to_vec(buffer.length() as usize / 4),
             )),
             DType::I64 => Ok(CpuStorage::I64(
-                self.buffer.read_to_vec(self.buffer.length() as usize / 8),
+                buffer.read_to_vec(buffer.length() as usize / 8),
             )),
             DType::F16 => Ok(CpuStorage::F16(
-                self.buffer.read_to_vec(self.buffer.length() as usize / 2),
+                buffer.read_to_vec(buffer.length() as usize / 2),
             )),
             DType::BF16 => Ok(CpuStorage::BF16(
-                self.buffer.read_to_vec(self.buffer.length() as usize / 2),
+                buffer.read_to_vec(buffer.length() as usize / 2),
             )),
             DType::F32 => Ok(CpuStorage::F32(
-                self.buffer.read_to_vec(self.buffer.length() as usize / 4),
+                buffer.read_to_vec(buffer.length() as usize / 4),
             )),
             DType::F64 => Ok(CpuStorage::F64(
-                self.buffer.read_to_vec(self.buffer.length() as usize / 8),
+                buffer.read_to_vec(buffer.length() as usize / 8),
             )),
         }
     }
@@ -175,7 +204,7 @@ impl BackendStorage for MetalStorage {
                 name,
                 el,
                 &self.buffer,
-                &mut buffer,
+                &buffer,
                 mul as f32,
                 add as f32,
             )
@@ -195,7 +224,7 @@ impl BackendStorage for MetalStorage {
                 &self.buffer,
                 layout.stride(),
                 layout.start_offset() * dtype.size_in_bytes(),
-                &mut buffer,
+                &buffer,
                 mul as f32,
                 add as f32,
             )
@@ -270,7 +299,7 @@ impl BackendStorage for MetalStorage {
             dst_el,
             &self.buffer,
             layout.start_offset() * self.dtype.size_in_bytes(),
-            &mut buffer,
+            &buffer,
         )
         .map_err(MetalError::from)?;
 
@@ -305,7 +334,7 @@ impl BackendStorage for MetalStorage {
                 kernel_name,
                 el_count,
                 &self.buffer,
-                &mut buffer,
+                &buffer,
             )
             .map_err(MetalError::from)?;
         } else {
@@ -324,7 +353,7 @@ impl BackendStorage for MetalStorage {
                 &self.buffer,
                 layout.stride(),
                 layout.start_offset() * self.dtype.size_in_bytes(),
-                &mut buffer,
+                &buffer,
             )
             .map_err(MetalError::from)?;
         }
@@ -382,7 +411,7 @@ impl BackendStorage for MetalStorage {
                 kernel_name,
                 el_count,
                 &self.buffer,
-                &mut buffer,
+                &buffer,
             )
             .map_err(MetalError::from)?;
         } else {
@@ -425,7 +454,7 @@ impl BackendStorage for MetalStorage {
                 &self.buffer,
                 layout.stride(),
                 layout.start_offset() * self.dtype.size_in_bytes(),
-                &mut buffer,
+                &buffer,
                 0,
             )
             .map_err(MetalError::from)?;
@@ -481,7 +510,7 @@ impl BackendStorage for MetalStorage {
                 el_count,
                 &self.buffer,
                 &rhs.buffer,
-                &mut buffer,
+                &buffer,
             )
             .map_err(MetalError::from)?;
         } else {
@@ -510,7 +539,7 @@ impl BackendStorage for MetalStorage {
                 &rhs.buffer,
                 rhs_l.stride(),
                 rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
-                &mut buffer,
+                &buffer,
             )
             .map_err(MetalError::from)?;
         }
@@ -551,7 +580,7 @@ impl BackendStorage for MetalStorage {
             (&t_l.stride(), t_l.start_offset() * t.dtype.size_in_bytes()),
             &f.buffer,
             (&f_l.stride(), f_l.start_offset() * f.dtype.size_in_bytes()),
-            &mut buffer,
+            &buffer,
         )
         .map_err(MetalError::from)?;
         Ok(Self {
@@ -661,7 +690,7 @@ impl BackendStorage for MetalStorage {
             dim,
             &self.buffer,
             &ids.buffer,
-            &mut buffer,
+            &buffer,
         )
         .map_err(MetalError::from)?;
         Ok(Self {
@@ -860,7 +889,7 @@ impl BackendStorage for MetalStorage {
             &self.buffer,
             src_l.stride(),
             src_l.start_offset() * self.dtype.size_in_bytes(),
-            &mut dst.buffer,
+            &dst.buffer,
             dst_offset * dst.dtype.size_in_bytes(),
         )
         .map_err(MetalError::from)?;
@@ -869,7 +898,7 @@ impl BackendStorage for MetalStorage {
 }
 
 impl MetalStorage {
-    pub fn new(buffer: Buffer, device: MetalDevice, dtype: DType) -> Self {
+    pub fn new(buffer: Arc<Buffer>, device: MetalDevice, dtype: DType) -> Self {
         Self {
             buffer,
             device,
@@ -904,10 +933,12 @@ impl BackendDevice for MetalDevice {
         let command_queue = device.new_command_queue();
         let command_buffer = Arc::new(RwLock::new(command_queue.new_command_buffer().to_owned()));
         let kernels = Arc::new(Kernels::new());
+        let buffers = Arc::new(RwLock::new(HashMap::new()));
         Ok(Self {
             device,
             command_queue,
             command_buffer,
+            buffers,
             kernels,
         })
     }
@@ -952,7 +983,7 @@ impl BackendDevice for MetalDevice {
             CpuStorage::F64(storage) => self.new_buffer_with_data(storage),
         };
         Ok(Self::Storage {
-            buffer,
+            buffer: buffer.into(),
             device: self.clone(),
             dtype: storage.dtype(),
         })
