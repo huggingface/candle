@@ -426,7 +426,9 @@ impl Tensor {
         if buffer_size != shape.elem_count() {
             return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
         }
+        // println!("from vec {buffer_size}");
         let storage = device.storage_owned(data)?;
+        // println!("Created storage");
         let none = BackpropOp::none();
         Ok(from_storage(storage, shape, none, is_variable))
     }
