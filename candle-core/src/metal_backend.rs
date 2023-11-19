@@ -7,6 +7,7 @@ use candle_metal_kernels::Kernels;
 use half::f16;
 use metal;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
+use metal::mps::matrix::{Matrix, MatrixDescriptor, MatrixMultiplication};
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 
@@ -38,7 +39,7 @@ pub struct MetalDevice {
     command_queue: metal::CommandQueue,
     command_buffer: Arc<RwLock<metal::CommandBuffer>>,
     kernels: Arc<candle_metal_kernels::Kernels>,
-    buffers: Arc<RwLock<HashMap<usize, Vec<Arc<Buffer>>>>>,
+    buffers: Arc<RwLock<HashMap<(NSUInteger, MTLResourceOptions), Vec<Arc<Buffer>>>>>,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -72,10 +73,28 @@ impl MetalDevice {
         self.command_buffer.try_read().unwrap()
     }
 
+    pub fn commit(&self) {
+        let mut old = self.command_buffer.try_write().unwrap();
+        match old.status(){
+            metal::MTLCommandBufferStatus::NotEnqueued | metal::MTLCommandBufferStatus::Enqueued => {
+                old.commit();
+            let command_buffer = self.command_queue.new_command_buffer().to_owned();
+            *old = command_buffer;
+            }
+            _ => {}
+        }
+        // self.command_buffer.replace_with(|_| command_buffer)
+    }
+
     pub fn wait_until_completed(&self) {
         let mut old = self.command_buffer.try_write().unwrap();
-        old.commit();
-        old.wait_until_completed();
+        match old.status(){
+            metal::MTLCommandBufferStatus::NotEnqueued | metal::MTLCommandBufferStatus::Enqueued => {
+                old.commit();
+                old.wait_until_completed();
+            }
+            _ => {}
+        }
         let command_buffer = self.command_queue.new_command_buffer().to_owned();
         *old = command_buffer;
         // self.command_buffer.replace_with(|_| command_buffer)
@@ -90,42 +109,71 @@ impl MetalDevice {
     }
 
     pub fn new_buffer(&self, element_count: usize, dtype: DType) -> Arc<Buffer >{
-        let size = element_count * dtype.size_in_bytes();
+        let size = (element_count * dtype.size_in_bytes()) as NSUInteger;
+        self._new_buffer(size, MTLResourceOptions::StorageModePrivate)
+    }
+
+    fn _new_buffer(&self, size: NSUInteger, option: MTLResourceOptions) -> Arc<Buffer >{
         let mut buffers = self.buffers.try_write().unwrap();
-        let subbuffers = buffers.entry(size).or_insert(vec![]);
+        let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
 
         for sub in &mut *subbuffers{
-            // if sub.retain_count() == 1{
-            // println!("{size} {:?}", );
             if Arc::strong_count(sub) == 1{
                 return sub.clone();
             }
         }
         let new_buffer = self.device
-            .new_buffer(size as NSUInteger, MTLResourceOptions::StorageModePrivate);
+            .new_buffer(size as NSUInteger, option);
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
         new_buffer
     }
 
-    pub fn new_buffer_managed(&self, size: NSUInteger) -> Buffer {
-        self.device
-            .new_buffer(size, MTLResourceOptions::StorageModeManaged)
+    pub fn new_buffer_managed(&self, size: NSUInteger) -> Arc<Buffer> {
+        self._new_buffer(size, MTLResourceOptions::StorageModeManaged)
     }
 
-    pub fn new_buffer_with_data<T>(&self, data: &[T]) -> Buffer {
-        let option = metal::MTLResourceOptions::StorageModeManaged;
-        self.device.new_buffer_with_data(
+    pub fn new_buffer_with_data<T>(&self, data: &[T]) -> Arc<Buffer> {
+        let tmp = self.device.new_buffer_with_data(
             data.as_ptr() as *const core::ffi::c_void,
             core::mem::size_of_val(data) as NSUInteger,
-            option,
+            metal::MTLResourceOptions::StorageModeManaged
+        );
+        let real = self._new_buffer(
+            core::mem::size_of_val(data) as NSUInteger,
+            metal::MTLResourceOptions::StorageModePrivate
+        );
+        {
+            let command = self.command_buffer();
+            let blit = command.new_blit_command_encoder();
+            blit.copy_from_buffer(&tmp, 0, &real, 0, tmp.length());
+            blit.end_encoding();
+
+        }
+        real
+    }
+
+    pub fn new_matrix(&self, (b, m, n): (NSUInteger, NSUInteger, NSUInteger), size: NSUInteger, type_id: u32, dtype:DType) -> Result<(Matrix, Arc<Buffer>)>{
+        let elem_count = (b * m * n ) as usize;
+        let out_buffer = self.new_buffer(elem_count, dtype);
+
+        let result_descriptor = MatrixDescriptor::init_multiple(m, n, b, n * size, m * n * size, type_id);
+        let result_matrix = Matrix::init_with_buffer_descriptor(
+            &out_buffer,
+            0,
+            &result_descriptor,
         )
+        .ok_or_else(|| {
+            MetalError::from("Failed to create matrix multiplication kernel".to_string())
+        })?;
+        Ok((result_matrix, out_buffer))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct MetalStorage {
     buffer: Arc<metal::Buffer>,
+    matrices: Arc<RwLock<HashMap<(NSUInteger, NSUInteger, NSUInteger, bool, NSUInteger, NSUInteger, u32), Matrix>>>,
     device: MetalDevice,
     dtype: DType,
 }
@@ -147,14 +195,11 @@ impl BackendStorage for MetalStorage {
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         let buffer = self.device.new_buffer_managed(self.buffer.length());
-        {
-            let command = self.device.command_buffer();
-            let blit = command.new_blit_command_encoder();
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
-            blit.end_encoding();
-
-        }
-
+        let command_buffer = self.device.command_buffer();
+        let blit = command_buffer.new_blit_command_encoder();
+        blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+        blit.end_encoding();
+        drop(command_buffer);
         self.device.wait_until_completed();
 
         match self.dtype {
@@ -189,7 +234,7 @@ impl BackendStorage for MetalStorage {
         let el = shape.elem_count();
         let dtype = self.dtype;
 
-        let mut buffer = device.new_buffer(el, self.dtype);
+        let buffer = device.new_buffer(el, self.dtype);
         let command_buffer = self.device.command_buffer();
         if layout.is_contiguous() && layout.start_offset() == 0 {
             let name = match self.dtype {
@@ -230,11 +275,11 @@ impl BackendStorage for MetalStorage {
             )
             .unwrap();
         }
-        Ok(Self {
+        Ok(Self::new(
             buffer,
-            device: device.clone(),
+            device.clone(),
             dtype,
-        })
+        ))
     }
 
     fn powf(&self, _: &Layout, _: f64) -> Result<Self> {
@@ -288,7 +333,7 @@ impl BackendStorage for MetalStorage {
         if dtype == DType::U32{
             todo!("Implement this");
         }
-        let mut buffer = device.new_buffer(dst_el, dtype);
+        let buffer = device.new_buffer(dst_el, dtype);
         let command_buffer = self.device.command_buffer();
         candle_metal_kernels::call_reduce_contiguous(
             &device.device,
@@ -303,11 +348,11 @@ impl BackendStorage for MetalStorage {
         )
         .map_err(MetalError::from)?;
 
-        Ok(Self {
+        Ok(Self::new(
             buffer,
             device,
             dtype,
-        })
+        ))
     }
 
     fn cmp(&self, _: CmpOp, _: &Self, _: &Layout, _: &Layout) -> Result<Self> {
@@ -318,7 +363,7 @@ impl BackendStorage for MetalStorage {
         let device = self.device();
         let shape = layout.shape();
         let el_count = shape.elem_count();
-        let mut buffer = device.new_buffer(el_count, dtype);
+        let buffer = device.new_buffer(el_count, dtype);
         let command_buffer = device.command_buffer();
         if layout.is_contiguous() {
             let kernel_name = match (self.dtype, dtype) {
@@ -358,11 +403,11 @@ impl BackendStorage for MetalStorage {
             .map_err(MetalError::from)?;
         }
 
-        Ok(Self {
+        Ok(Self::new(
             buffer,
-            device: device.clone(),
+            device.clone(),
             dtype,
-        })
+        ))
     }
 
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
@@ -370,7 +415,7 @@ impl BackendStorage for MetalStorage {
         let dtype = self.dtype;
         let shape = layout.shape();
         let el_count = shape.elem_count();
-        let mut buffer = device.new_buffer(el_count, dtype);
+        let buffer = device.new_buffer(el_count, dtype);
         let command_buffer = device.command_buffer();
         if layout.is_contiguous() && layout.start_offset() == 0 {
             use candle_metal_kernels::unary::contiguous;
@@ -459,11 +504,14 @@ impl BackendStorage for MetalStorage {
             )
             .map_err(MetalError::from)?;
         }
-        Ok(Self {
+        command_buffer.set_label("unary");
+        drop(command_buffer);
+        self.device.commit();
+        Ok(Self::new(
             buffer,
-            device: device.clone(),
+            device.clone(),
             dtype,
-        })
+        ))
     }
 
     fn binary_impl<B: BinaryOpT>(
@@ -476,7 +524,7 @@ impl BackendStorage for MetalStorage {
         let dtype = self.dtype;
         let shape = lhs_l.shape();
         let el_count = shape.elem_count();
-        let mut buffer = device.new_buffer(el_count, dtype);
+        let buffer = device.new_buffer(el_count, dtype);
         let command_buffer = device.command_buffer();
         if (lhs_l.is_contiguous() && lhs_l.start_offset() == 0)
             && (rhs_l.is_contiguous() && rhs_l.start_offset() == 0)
@@ -543,11 +591,14 @@ impl BackendStorage for MetalStorage {
             )
             .map_err(MetalError::from)?;
         }
-        Ok(Self {
+        command_buffer.set_label("binary");
+        drop(command_buffer);
+        self.device.commit();
+        Ok(Self::new(
             buffer,
-            device: device.clone(),
+            device.clone(),
             dtype,
-        })
+        ))
     }
 
     fn where_cond(
@@ -563,7 +614,7 @@ impl BackendStorage for MetalStorage {
         let dims = shape.dims();
         let el = shape.elem_count();
         let dtype = t.dtype;
-        let mut buffer = self.device.new_buffer(el, dtype);
+        let buffer = self.device.new_buffer(el, dtype);
         let command_buffer = self.device.command_buffer();
         candle_metal_kernels::call_where_cond_strided(
             &device.device,
@@ -583,11 +634,11 @@ impl BackendStorage for MetalStorage {
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self {
+        Ok(Self::new(
             buffer,
             device,
             dtype,
-        })
+        ))
     }
 
     fn conv1d(
@@ -673,7 +724,7 @@ impl BackendStorage for MetalStorage {
         let dst_el = ids_el * left_size * right_size;
         let dtype = self.dtype;
         let device = self.device();
-        let mut buffer = device.new_buffer(dst_el, dtype);
+        let buffer = device.new_buffer(dst_el, dtype);
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "is_u32_f32",
             (DType::U32, DType::F16) => "is_u32_f16",
@@ -693,11 +744,11 @@ impl BackendStorage for MetalStorage {
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self {
+        Ok(Self::new(
             buffer,
-            device: device.clone(),
+            device.clone(),
             dtype,
-        })
+        ))
     }
 
     fn index_add(
@@ -720,7 +771,8 @@ impl BackendStorage for MetalStorage {
         rhs_l: &Layout,
     ) -> Result<Self> {
         // Create descriptors
-        use metal::mps::matrix::*;
+
+        // let start = std::time::Instant::now();
 
         let (type_id, size) = match self.dtype {
             DType::F32 => (
@@ -734,7 +786,6 @@ impl BackendStorage for MetalStorage {
             dtype => todo!("Dtype for matmul {dtype:?} is not supported"),
         };
 
-        let elem_count = b * m * n;
 
         let lhs_stride = lhs_l.stride();
         let rhs_stride = rhs_l.stride();
@@ -765,73 +816,19 @@ impl BackendStorage for MetalStorage {
                 mnk: (m, n, k),
             })?
         };
-        // let stride_left: u64 = match lhs_stride[..lhs_stride.len() - 2] {
-        //     [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
-        //     [stride] => stride,
-        //     [] => m * k,
-        //     _ => Err(MetalError::MatMulNonContiguous {
-        //         lhs_stride: lhs_stride.to_vec(),
-        //         rhs_stride: rhs_stride.to_vec(),
-        //         mnk: (m, n, k),
-        //     })?,
-        // } as u64;
-        // let stride_right: u64 = match rhs_stride[..rhs_stride.len() - 2] {
-        //     [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
-        //     [stride] => stride,
-        //     [] => n * k,
-        //     _ => Err(MetalError::MatMulNonContiguous {
-        //         lhs_stride: lhs_stride.to_vec(),
-        //         rhs_stride: rhs_stride.to_vec(),
-        //         mnk: (m, n, k),
-        //     })?,
-        // } as u64;
-
         let b = b as NSUInteger;
         let m = m as NSUInteger;
         let n = n as NSUInteger;
         let k = k as NSUInteger;
 
-        let left_descriptor = if transpose_left {
-            MatrixDescriptor::init_multiple(k, m, b, m * size, m * k * size, type_id)
-        } else {
-            MatrixDescriptor::init_multiple(m, k, b, k * size, k * m * size, type_id)
-        };
-        let right_descriptor = if transpose_right {
-            MatrixDescriptor::init_multiple(n, k, b, k * size, k * n * size, type_id)
-        } else {
-            MatrixDescriptor::init_multiple(k, n, b, n * size, n * k * size, type_id)
-        };
-        let result_descriptor = MatrixDescriptor::init_multiple(m, n, b, n * size, m * n * size, type_id);
-
-        let out_buffer = self.device.new_buffer(elem_count, self.dtype);
+        let left_matrix = self.matrix((b, m, k), transpose_left, size,
+            lhs_l.start_offset() as NSUInteger * size, type_id)?;
+        let right_matrix = rhs.matrix((b, k, n), transpose_right, size,
+            rhs_l.start_offset() as NSUInteger * size, type_id)?;
+        let (result_matrix, out_buffer) = self.device.new_matrix((b, m, n), size, type_id, self.dtype)?;
 
         let command_buffer = self.device.command_buffer();
-        // Create matrix objects
-        let left_matrix = Matrix::init_with_buffer_descriptor(
-            &self.buffer,
-            lhs_l.start_offset() as NSUInteger * size,
-            &left_descriptor,
-        )
-        .ok_or_else(|| {
-            MetalError::from("Failed to create matrix multiplication kernel".to_string())
-        })?;
-        let right_matrix = Matrix::init_with_buffer_descriptor(
-            &rhs.buffer,
-            rhs_l.start_offset() as NSUInteger * size,
-            &right_descriptor,
-        )
-        .ok_or_else(|| {
-            MetalError::from("Failed to create matrix multiplication kernel".to_string())
-        })?;
 
-        let result_matrix = Matrix::init_with_buffer_descriptor(
-            &out_buffer,
-            0,
-            &result_descriptor,
-        )
-        .ok_or_else(|| {
-            MetalError::from("Failed to create matrix multiplication kernel".to_string())
-        })?;
 
         let alpha = 1.0f64;
         let beta = 0.0f64;
@@ -849,7 +846,8 @@ impl BackendStorage for MetalStorage {
         .ok_or_else(|| {
             MetalError::from("Failed to create matrix multiplication kernel".to_string())
         })?;
-        matrix_multiplication.set_batch_size(b);
+
+        // matrix_multiplication.set_batch_size(b);
 
         // Encode kernel to command buffer
         matrix_multiplication.encode_to_command_buffer(
@@ -858,12 +856,15 @@ impl BackendStorage for MetalStorage {
             &right_matrix,
             &result_matrix,
         );
+        command_buffer.set_label("matmul");
+        drop(command_buffer);
+        self.device.commit();
 
-        Ok(Self {
-            buffer: out_buffer,
-            device: self.device.clone(),
-            dtype: self.dtype(),
-        })
+        Ok(Self::new(
+            out_buffer,
+            self.device.clone(),
+            self.dtype(),
+        ))
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
@@ -893,21 +894,52 @@ impl BackendStorage for MetalStorage {
             dst_offset * dst.dtype.size_in_bytes(),
         )
         .map_err(MetalError::from)?;
+        command_buffer.set_label("copy");
+        drop(command_buffer);
+        self.device.commit();
         Ok(())
     }
 }
 
 impl MetalStorage {
     pub fn new(buffer: Arc<Buffer>, device: MetalDevice, dtype: DType) -> Self {
+        let matrices = Arc::new(RwLock::new(HashMap::new()));
         Self {
             buffer,
             device,
             dtype,
+            matrices
         }
     }
 
     pub fn buffer(&self) -> &Buffer {
         &self.buffer
+    }
+
+    fn matrix(&self, (b, m, n): (NSUInteger, NSUInteger, NSUInteger), transpose: bool, size: NSUInteger, offset: NSUInteger, type_id: u32) -> Result<Matrix>{
+
+        let key = (b, m, n, transpose, size, offset, type_id);
+
+        let mut matrices = self.matrices.try_write().unwrap();
+        if let Some(matrix) = matrices.get(&key){
+            Ok(matrix.clone())
+        }else{
+        let descriptor = if transpose{
+            MatrixDescriptor::init_multiple(n, m, b, m * size, m * n * size, type_id)
+        } else {
+            MatrixDescriptor::init_multiple(m, n, b, n * size, m * n * size, type_id)
+        };
+        let matrix = Matrix::init_with_buffer_descriptor(
+            &self.buffer,
+            offset,
+            &descriptor,
+        )
+        .ok_or_else(|| {
+            MetalError::from("Failed to create matrix multiplication kernel".to_string())
+        })?;
+        matrices.insert(key, matrix.clone());
+        Ok(matrix)
+        }
     }
 }
 
@@ -959,11 +991,7 @@ impl BackendDevice for MetalDevice {
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
         let buffer = self.new_buffer(shape.elem_count(), dtype);
-        Ok(MetalStorage {
-            buffer,
-            device: self.clone(),
-            dtype,
-        })
+        Ok(MetalStorage::new(buffer, self.clone(), dtype))
     }
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
@@ -982,11 +1010,11 @@ impl BackendDevice for MetalDevice {
             CpuStorage::F32(storage) => self.new_buffer_with_data(storage),
             CpuStorage::F64(storage) => self.new_buffer_with_data(storage),
         };
-        Ok(Self::Storage {
-            buffer: buffer.into(),
-            device: self.clone(),
-            dtype: storage.dtype(),
-        })
+        Ok(Self::Storage::new(
+            buffer.into(),
+            self.clone(),
+            storage.dtype(),
+        ))
     }
 
     fn rand_uniform(
