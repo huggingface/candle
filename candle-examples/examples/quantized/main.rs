@@ -180,9 +180,7 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let api = hf_hub::api::sync::Api::new()?;
-                let repo = if self.which.is_open_chat() {
-                    "openchat/openchat_3.5"
-                } else if self.which.is_mistral() {
+                let repo = if self.which.is_mistral() {
                     "mistralai/Mistral-7B-v0.1"
                 } else {
                     "hf-internal-testing/llama-tokenizer"
@@ -419,18 +417,12 @@ fn main() -> anyhow::Result<()> {
             std::io::stdout().flush()?;
         }
 
-        let eos_token = *tos.tokenizer().get_vocab(true).get("</s>").unwrap();
-        let end_of_turn_token = if args.which.is_open_chat() {
-            Some(
-                *tos.tokenizer()
-                    .get_vocab(true)
-                    .get("<|end_of_turn|>")
-                    .unwrap(),
-            )
+        let eos_token = if args.which.is_open_chat() {
+            "<|end_of_turn|>"
         } else {
-            None
+            "</s>"
         };
-
+        let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
         for index in 0..to_sample {
@@ -457,9 +449,6 @@ fn main() -> anyhow::Result<()> {
             if next_token == eos_token {
                 break;
             };
-            if args.which.is_open_chat() && next_token == end_of_turn_token.unwrap() {
-                break;
-            }
         }
         if let Some(rest) = tos.decode_rest().map_err(candle::Error::msg)? {
             print!("{rest}");
