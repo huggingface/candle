@@ -14,7 +14,6 @@ const BINARY: &str = include_str!("binary.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
 const REDUCE: &str = include_str!("reduce.metal");
-const FLASH: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
 
 fn linear_split(pipeline: &ComputePipelineState, length: usize) -> (MTLSize, MTLSize) {
     let size = length as u64;
@@ -107,7 +106,6 @@ pub enum Source {
     Ternary,
     Cast,
     Reduce,
-    Gemm,
 }
 
 macro_rules! ops{
@@ -231,7 +229,6 @@ impl Kernels {
             Source::Indexing => INDEXING,
             Source::Cast => CAST,
             Source::Reduce => REDUCE,
-            Source::Gemm => ""
         }
     }
 
@@ -244,17 +241,10 @@ impl Kernels {
         if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
-            let lib = match source {
-                Source::Gemm => device
-                    .new_library_with_data(FLASH)
-                    .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?,
-                _souce => {
-                    let source_content = self.get_library_source(source);
-                    device
-                        .new_library_with_source(source_content, &CompileOptions::new())
-                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
-                }
-            };
+            let source_content = self.get_library_source(source);
+            let lib = device
+                .new_library_with_source(source_content, &CompileOptions::new())
+                .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?;
             libraries.insert(source, lib.clone());
             Ok(lib)
         }
@@ -299,160 +289,6 @@ impl Kernels {
             Ok(pipeline)
         }
     }
-}
-
-enum Gemm{
-    Float,
-    Half,
-}
-
-impl Gemm{
-    fn size_of_dtype(&self) -> usize{
-        match self{
-            Gemm::Float => 4,
-            Gemm::Half => 2,
-        }
-    }
-    fn name(&self) -> &'static str{
-        match self{
-            Gemm::Float => "sgemm",
-            Gemm::Half => "hgemm",
-        }
-    }
-}
-
-pub fn call_gemm(
-    device: &Device,
-    command_buffer: &CommandBufferRef,
-    kernels: &Kernels,
-    name: Gemm,
-) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Gemm, name.name())?;
-    let encoder = command_buffer.new_compute_command_encoder();
-    encoder.set_compute_pipeline_state(&pipeline);
-
-    let config = gemm_config(&p);
-    let m_group = config.m_group;
-    let n_group = config.n_group;
-    let k_simd = config.k_simd.value;
-    let m_splits = config.m_splits.value;
-    let n_splits = config.n_splits.value;
-
-    let size_of_dtype = name.size_of_dtype();
-    let a_block_bytes = m_group * k_simd * size_of_dtype;
-    let b_block_bytes = k_simd * n_group * size_of_dtype;
-    let c_block_bytes = m_group * n_group * size_of_dtype;
-    let mut thread_group_memory_length = a_block_bytes + b_block_bytes;
-
-    if p.m % 8 > 0 && p.n % 8 > 0 {
-        thread_group_memory_length = max(thread_group_memory_length, c_block_bytes);
-    }
-    if p.fused_bias {
-        let d_block_bytes = if p.d_trans {
-            m_group * T::SIZE
-        } else {
-            n_group * T::SIZE
-        };
-        thread_group_memory_length = max(thread_group_memory_length, d_block_bytes);
-    }
-
-    let grid_size = MTLSize::new(
-        utils::ceil_divide(p.n, n_group)?,
-        utils::ceil_divide(p.m, m_group)?,
-        1,
-    );
-
-    let group_size = MTLSize::new((32 * m_splits * n_splits) as NSUInteger, 1, 1);
-
-    let mut flags = 0;
-    if p.batched {
-        flags |= 0x1;
-    }
-    if p.fused_activation {
-        flags |= 0x2;
-    }
-    if p.fused_bias {
-        flags |= 0x4;
-    }
-
-    let constant_values = config.create_function_constant_values();
-    let function = lib.get_function(T::FN_NAME, Some(constant_values))?;
-    encoder
-        .set_threadgroup_memory_length(0, memory_length);
-
-    encoder.use_resources(&[a.buffer(), b.buffer()], MTLResourceUsage::Read);
-    encoder.use_resource(c.buffer(), MTLResourceUsage::Write);
-
-    if let Some(d) = d {
-        encoder.use_resource(d.buffer(), MTLResourceUsage::Read);
-    }
-
-    encoder.set_buffers(
-        0,
-        &[Some(a.buffer()), Some(b.buffer()), Some(c.buffer())],
-        &[0; 3],
-    );
-    if let Some(d) = d {
-        encoder.set_buffer(3, Some(d.buffer()), 0);
-    }
-
-    let mut grid_z = 1;
-    if pipeline.flags() & 0x1 > 0 {
-        panic!("Batched gemm not implemented yet");
-        //   let batch_dimensions_a = tensors.a.shape.dropLast(2);
-        //   let batch_dimensions_b = tensors.b.shape.dropLast(2);
-        //   let batch_dimensions_c = tensors.c.shape.dropLast(2);
-        //   assert!(batch_dimensions_a.iter().product() > 0);
-        //   assert!(
-        //     batch_dimensions_b.iter().product() == 1 ||
-        //     batch_dimensions_b == batch_dimensions_a);
-        //   assert!(batch_dimensions_a == batch_dimensions_c);
-        //   grid_z = batch_dimensions_a.iter().product();
-        //
-        //   if let Some(batch_dimensions_d) = tensors.d { .shape.dropLast(1)
-        //     assert!(
-        //       batch_dimensions_d.reduce(1, *) == 1 ||
-        //       batch_dimensions_d == batch_dimensions_a);
-        //   }
-        //
-        //   // Mixed precision will cause undefined behavior.
-        //   let element_size = mem::size_of::<T>();
-        //   let byte_stride = |shape: Vec<u64>| -> u32 {
-        //       let rank = shape.len();
-        //       let mut output = element_size * shape[rank - 2] * shape[rank - 1];
-        //       if shape.dropLast(2).product() == 1 {
-        //           output = 0
-        //       }
-        //       output
-        //   } as u32;
-        //   let byte_stride_a = byte_stride(tensors.a.shape);
-        //   let byte_stride_b = byte_stride(tensors.b.shape);
-        //   let byte_stride_c = byte_stride(tensors.c.shape);
-        //
-        //   var byteStrideD = 0
-        //   if let shapeD = tensors.d?.shape {
-        //     let rank = shapeD.count
-        //     byteStrideD = element_size * shapeD[rank - 1]
-        //     if shapeD.dropLast(1).reduce(1, *) == 1 {
-        //       byteStrideD = 0
-        //     }
-        //   }
-        //   withUnsafeTemporaryAllocation(
-        //     of: SIMD4<UInt64>.self, capacity: gridZ
-        //   ) { buffer in
-        //     for i in 0..<buffer.count {
-        //       buffer[i] = SIMD4(
-        //           UInt64(truncatingIfNeeded: i * byte_stride_a),
-        //           UInt64(truncatingIfNeeded: i * byte_stride_b),
-        //           UInt64(truncatingIfNeeded: i * byte_stride_c),
-        //           UInt64(truncatingIfNeeded: i * byteStrideD))
-        //     }
-        //
-        //     let bufferLength = buffer.count * MemoryLayout<SIMD3<UInt64>>.stride
-        //     assert(MemoryLayout<SIMD3<UInt64>>.stride == 8 * 4)
-        //     encoder.setBytes(buffer.baseAddress!, length: bufferLength, index: 10)
-        //   }
-    Ok(())
 }
 
 pub fn call_unary_contiguous(
@@ -645,7 +481,7 @@ pub fn call_reduce_contiguous(
     length: usize,
     out_length: usize,
     input: &Buffer,
-    input_offset: usize,
+    input_offset: usize, 
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
@@ -654,10 +490,7 @@ pub fn call_reduce_contiguous(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(
-        encoder,
-        (length, elements_to_sum, (input, input_offset), output)
-    );
+    set_params!(encoder, (length, elements_to_sum, (input,input_offset), output));
 
     let thread_group_count = MTLSize {
         width: out_length as u64,
@@ -909,7 +742,7 @@ mod tests {
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
         let input = new_buffer(&device, v);
-        let output = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
         call_unary_contiguous(
             &device,
             command_buffer,
@@ -933,7 +766,7 @@ mod tests {
         let options = MTLResourceOptions::StorageModeManaged;
         let left = new_buffer(&device, x);
         let right = new_buffer(&device, y);
-        let output = device.new_buffer(std::mem::size_of_val(x) as u64, options);
+        let mut output = device.new_buffer(std::mem::size_of_val(x) as u64, options);
         call_binary_contiguous(
             &device,
             command_buffer,
@@ -961,7 +794,7 @@ mod tests {
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
         let input = new_buffer(&device, v);
-        let output = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
         let kernels = Kernels::new();
         call_unary_strided(
             &device,
@@ -1059,7 +892,7 @@ mod tests {
 
     #[test]
     fn cos_strided_random() {
-        let v: Vec<_> = (0..10_000).map(|_| rand::random::<f32>()).collect();
+        let v: Vec<_> = (0..10_000).map(|i| rand::random::<f32>()).collect();
         let shape = vec![5_000, 2];
         let strides = vec![1, 5_000];
         let offset = 0;
@@ -1101,7 +934,7 @@ mod tests {
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
         let input = new_buffer(&device, v);
-        let output = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
 
         call_cast_contiguous(
             &device,
@@ -1140,7 +973,7 @@ mod tests {
         let command_buffer = command_queue.new_command_buffer();
 
         let input = new_buffer(&device, v);
-        let output = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
 
         let size = v.len();
 
@@ -1162,7 +995,7 @@ mod tests {
         output.read_to_vec::<T>(v.len())
     }
 
-    fn _run_affine_strided<T: Clone>(
+    fn run_affine_strided<T: Clone>(
         v: &[T],
         shape: &[usize],
         strides: &[usize],
@@ -1175,7 +1008,9 @@ mod tests {
         let command_buffer = command_queue.new_command_buffer();
 
         let input = new_buffer(&device, v);
-        let output = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
+
+        let size = v.len();
 
         call_affine_strided(
             &device,
@@ -1271,7 +1106,7 @@ mod tests {
         let left_size: usize = shape[..dim].iter().product();
         let right_size: usize = shape[dim + 1..].iter().product();
         let dst_el = ids.len() * left_size * right_size;
-        let dst_buffer = new_buffer(&device, &vec![0.0f32; dst_el]);
+        let mut dst_buffer = new_buffer(&device, &vec![0.0f32; dst_el]);
 
         let kernels = Kernels::new();
         call_index_select(
@@ -1381,7 +1216,7 @@ mod tests {
         let input = new_buffer(&device, v);
 
         let options = MTLResourceOptions::StorageModeManaged;
-        let output =
+        let mut output =
             device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
         call_reduce_contiguous(
             &device,
@@ -1391,7 +1226,7 @@ mod tests {
             v.len(),
             out_length,
             &input,
-            0,
+            0, 
             &output,
         )
         .unwrap();
@@ -1411,7 +1246,7 @@ mod tests {
         let command_queue = device.new_command_queue();
         let command_buffer = command_queue.new_command_buffer();
         let input = new_buffer(&device, v);
-        let output = new_buffer(&device, v);
+        let mut output = new_buffer(&device, v);
         call_last_softmax(
             &device,
             command_buffer,
@@ -1507,7 +1342,7 @@ mod tests {
             options,
         );
 
-        let output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
+        let mut output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
         call_where_cond_strided(
             &device,
             command_buffer,
@@ -1548,52 +1383,6 @@ mod tests {
             right_l,
             "where_u8_f32",
         );
-        assert_eq!(approx(results, 4), vec![-1.0f32, 2.0, -3.0, -4.0, 5.0, 6.0]);
-    }
-
-    #[test]
-    fn flash_gemm() {
-        let b = 2;
-        let m = 3;
-        let n = 2; 
-        let k = 4;
-
-
-        let left: Vec<_> = (0..b*m*k).map(|f| f as f32).collect();
-        let right: Vec<_> = (0..b*k*n).map(|f| f as f32).collect();
-        let out: Vec<_> = (0..b*m*n).map(|f| f as f32).collect();
-
-        let dims = 3;
-        let left_shape= vec![b, m, k];
-        let right_shape= vec![b, k, n];
-        let out_shape = vec![b, m , n];
-
-        let left_stride = vec![m * k, k, 1];
-
-        let device = device();
-        let kernels = Kernels::new();
-        let command_queue = device.new_command_queue();
-        let command_buffer = command_queue.new_command_buffer();
-        let options = MTLResourceOptions::StorageModeManaged;
-
-        let left = device.new_buffer_with_data(
-            left.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(left.as_slice()) as u64,
-            options,
-        );
-        let right = device.new_buffer_with_data(
-            right.as_ptr() as *const core::ffi::c_void,
-            std::mem::size_of_val(right.as_slice()) as u64,
-            options,
-        );
-        let out = device.new_buffer(
-            (out.len() * std::mem::size_of::<f32>()) as NSUInteger,
-            options,
-        );
-
-        command_buffer.commit();
-        command_buffer.wait_until_completed();
-        let results = out.read_to_vec::<f32>(b * m * n);
         assert_eq!(approx(results, 4), vec![-1.0f32, 2.0, -3.0, -4.0, 5.0, 6.0]);
     }
 }
