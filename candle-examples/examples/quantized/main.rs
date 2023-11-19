@@ -95,6 +95,25 @@ impl Which {
             Self::Zephyr7bAlpha | Self::Zephyr7bBeta => true,
         }
     }
+
+    fn is_open_chat(&self) -> bool {
+        match self {
+            Which::L7b
+            | Which::L13b
+            | Which::L70b
+            | Which::L7bChat
+            | Which::L13bChat
+            | Which::L70bChat
+            | Which::L7bCode
+            | Which::L13bCode
+            | Which::L34bCode
+            | Which::Mistral7b
+            | Which::Mistral7bInstruct
+            | Which::Zephyr7bAlpha
+            | Which::Zephyr7bBeta => false,
+            Which::OpenChat35 => true,
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -161,7 +180,9 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let api = hf_hub::api::sync::Api::new()?;
-                let repo = if self.which.is_mistral() {
+                let repo = if self.which.is_open_chat() {
+                    "openchat/openchat_3.5"
+                } else if self.which.is_mistral() {
                     "mistralai/Mistral-7B-v0.1"
                 } else {
                     "hf-internal-testing/llama-tokenizer"
@@ -346,7 +367,9 @@ fn main() -> anyhow::Result<()> {
                         prompt.pop();
                     }
                 }
-                if args.which.is_zephyr() {
+                if args.which.is_open_chat() {
+                    format!("User: {prompt}<|end_of_turn|>Assistant: ")
+                } else if args.which.is_zephyr() {
                     if prompt_index == 0 || is_interactive {
                         format!("<|system|>\n</s>\n<|user|>\n{prompt}</s>\n<|assistant|>",)
                     } else {
@@ -397,6 +420,16 @@ fn main() -> anyhow::Result<()> {
         }
 
         let eos_token = *tos.tokenizer().get_vocab(true).get("</s>").unwrap();
+        let end_of_turn_token = if args.which.is_open_chat() {
+            Some(
+                *tos.tokenizer()
+                    .get_vocab(true)
+                    .get("<|end_of_turn|>")
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
 
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
@@ -424,6 +457,9 @@ fn main() -> anyhow::Result<()> {
             if next_token == eos_token {
                 break;
             };
+            if args.which.is_open_chat() && next_token == end_of_turn_token.unwrap() {
+                break;
+            }
         }
         if let Some(rest) = tos.decode_rest().map_err(candle::Error::msg)? {
             print!("{rest}");
