@@ -69,7 +69,8 @@ impl Which {
             | Self::L7bCode
             | Self::L13bCode
             | Self::L34bCode => false,
-            // Zephyr and OpenChart are fine tuned versions of mistral and should be treated in the same way.
+            // Zephyr and OpenChat are fine tuned versions of mistral and should be treated in the
+            // same way.
             Self::OpenChat35
             | Self::Zephyr7bAlpha
             | Self::Zephyr7bBeta
