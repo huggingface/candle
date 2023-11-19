@@ -181,7 +181,9 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let api = hf_hub::api::sync::Api::new()?;
-                let repo = if self.which.is_mistral() {
+                let repo = if self.which.is_open_chat() {
+                    "openchat/openchat_3.5"
+                } else if self.which.is_mistral() {
                     "mistralai/Mistral-7B-v0.1"
                 } else {
                     "hf-internal-testing/llama-tokenizer"
