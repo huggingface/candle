@@ -514,7 +514,6 @@ impl BackendStorage for MetalStorage {
         let dtype = self.dtype;
         let device = self.device();
         let mut buffer = device.new_buffer(dst_el, dtype);
-        let out = self.to_cpu_storage()?;
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "is_u32_f32",
             (left, right) => crate::bail!("index select metal {left:?} {right:?}"),
@@ -616,17 +615,17 @@ impl BackendStorage for MetalStorage {
         let result_descriptor = MatrixDescriptor::init_single(m, n, n * size, type_id);
 
         // Create matrix objects
-        let left_matrix = Matrix::init_with_buffer_descriptor(&self.buffer, &left_descriptor)
+        let left_matrix = Matrix::init_with_buffer_descriptor(&self.buffer, 0, &left_descriptor)
             .ok_or_else(|| {
                 MetalError::from("Failed to create matrix multiplication kernel".to_string())
             })?;
-        let right_matrix = Matrix::init_with_buffer_descriptor(&rhs.buffer, &right_descriptor)
+        let right_matrix = Matrix::init_with_buffer_descriptor(&rhs.buffer, 0, &right_descriptor)
             .ok_or_else(|| {
-                MetalError::from("Failed to create matrix multiplication kernel".to_string())
-            })?;
+            MetalError::from("Failed to create matrix multiplication kernel".to_string())
+        })?;
 
         let out_buffer = self.device.new_buffer(elem_count, self.dtype);
-        let result_matrix = Matrix::init_with_buffer_descriptor(&out_buffer, &result_descriptor)
+        let result_matrix = Matrix::init_with_buffer_descriptor(&out_buffer, 0, &result_descriptor)
             .ok_or_else(|| {
                 MetalError::from("Failed to create matrix multiplication kernel".to_string())
             })?;
