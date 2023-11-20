@@ -212,9 +212,16 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         let device = storage.device();
         let command_buffer = device.command_buffer();
         let kernels = device.kernels();
-        let name = "softmax_float";
-        assert!(layout.is_contiguous());
-        assert!(layout.start_offset() == 0);
+        let name = match self.dtype {
+            DType::F32 => "softmax_float",
+            DType::F16 => "softmax_half",
+            DType::BF16 => "softmax_bfloat",
+            dtype => crate::bail!("softmax-last-dim is not implemented for {dtype:?}")
+        };
+
+        if !(layout.is_contiguous() && layout.start_offset != 0){
+            candle::bail!("Non contiguous softmax-last-dim is not implemented");
+        }
         let last_dim = layout.dims()[layout.shape().rank() - 1];
         let elem_count = layout.shape().elem_count();
         let mut output = device.new_buffer(elem_count, storage.dtype());
