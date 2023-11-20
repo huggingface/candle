@@ -208,8 +208,8 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         storage: &candle::MetalStorage,
         layout: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
-        use candle::backend::{BackendStorage};
-        let device  = storage.device();
+        use candle::backend::BackendStorage;
+        let device = storage.device();
         let command_buffer = device.command_buffer();
         let kernels = device.kernels();
         let name = "softmax_float";
