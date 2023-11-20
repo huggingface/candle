@@ -463,7 +463,7 @@ pub fn call_reduce_contiguous(
     length: usize,
     out_length: usize,
     input: &Buffer,
-    input_offset: usize, 
+    input_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
@@ -472,7 +472,10 @@ pub fn call_reduce_contiguous(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (length, elements_to_sum, (input,input_offset), output));
+    set_params!(
+        encoder,
+        (length, elements_to_sum, (input, input_offset), output)
+    );
 
     let thread_group_count = MTLSize {
         width: out_length as u64,
@@ -1210,7 +1213,7 @@ mod tests {
             v.len(),
             out_length,
             &input,
-            0, 
+            0,
             &output,
         )
         .unwrap();
