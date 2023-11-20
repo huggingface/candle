@@ -126,7 +126,7 @@ impl BackendStorage for MetalStorage {
         let el = shape.elem_count();
         let dtype = self.dtype;
 
-        if layout.is_contiguous() || layout.start_offset() != 0|| dtype != DType::F32{
+        if layout.is_contiguous() || layout.start_offset() != 0 || dtype != DType::F32 {
             crate::bail!("Not contiguous, non-f32 affine is not implemented yet.");
         }
 
@@ -161,8 +161,11 @@ impl BackendStorage for MetalStorage {
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
-
-        if !(sum_dims.len() == 1 && sum_dims[0] == layout.shape().rank() - 1 && layout.is_contiguous() && layout.start_offset() == 0){
+        if !(sum_dims.len() == 1
+            && sum_dims[0] == layout.shape().rank() - 1
+            && layout.is_contiguous()
+            && layout.start_offset() == 0)
+        {
             crate::bail!("Non contiguous reduce op not supported yet");
         }
         let device = self.device.clone();
@@ -497,7 +500,11 @@ impl BackendStorage for MetalStorage {
     }
 
     fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
-        if !(src_l.is_contiguous() && src_l.start_offset() == 0 && ids_l.is_contiguous() && ids_l.start_offset() == 0){
+        if !(src_l.is_contiguous()
+            && src_l.start_offset() == 0
+            && ids_l.is_contiguous()
+            && ids_l.start_offset() == 0)
+        {
             crate::bail!("Non contiguous index select not implemented");
         }
         let left_size: usize = src_l.dims()[..dim].iter().product();
