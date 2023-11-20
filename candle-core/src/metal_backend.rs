@@ -9,6 +9,7 @@ use metal;
 use metal::mps::matrix::{Matrix, MatrixDescriptor, MatrixMultiplication};
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 /// Metal related errors
@@ -84,7 +85,6 @@ impl MetalDevice {
             }
             _ => {}
         }
-        // self.command_buffer.replace_with(|_| command_buffer)
     }
 
     pub fn wait_until_completed(&self) {
@@ -95,11 +95,13 @@ impl MetalDevice {
                 old.commit();
                 old.wait_until_completed();
             }
+            metal::MTLCommandBufferStatus::Committed | metal::MTLCommandBufferStatus::Scheduled => {
+                old.wait_until_completed();
+            }
             _ => {}
         }
         let command_buffer = self.command_queue.new_command_buffer().to_owned();
         *old = command_buffer;
-        // self.command_buffer.replace_with(|_| command_buffer)
     }
 
     pub fn kernels(&self) -> &Kernels {
@@ -171,6 +173,19 @@ impl MetalDevice {
             })?;
         Ok((result_matrix, out_buffer))
     }
+
+    pub fn capture<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let capture = metal::CaptureManager::shared();
+        let descriptor = metal::CaptureDescriptor::new();
+        descriptor.set_destination(metal::MTLCaptureDestination::GpuTraceDocument);
+        descriptor.set_capture_device(&self);
+        descriptor.set_output_url(path);
+
+        capture
+            .start_capture(&descriptor)
+            .map_err(MetalError::from)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -230,13 +245,13 @@ impl BackendStorage for MetalStorage {
         self.device.wait_until_completed();
 
         match self.dtype {
-            DType::U8 => Ok(CpuStorage::U8(self.buffer.read_to_vec(length / size))),
-            DType::U32 => Ok(CpuStorage::U32(self.buffer.read_to_vec(length / size))),
-            DType::I64 => Ok(CpuStorage::I64(self.buffer.read_to_vec(length / size))),
-            DType::F16 => Ok(CpuStorage::F16(self.buffer.read_to_vec(length / size))),
-            DType::BF16 => Ok(CpuStorage::BF16(self.buffer.read_to_vec(length / size))),
-            DType::F32 => Ok(CpuStorage::F32(self.buffer.read_to_vec(length / size))),
-            DType::F64 => Ok(CpuStorage::F64(self.buffer.read_to_vec(length / size))),
+            DType::U8 => Ok(CpuStorage::U8(buffer.read_to_vec(length / size))),
+            DType::U32 => Ok(CpuStorage::U32(buffer.read_to_vec(length / size))),
+            DType::I64 => Ok(CpuStorage::I64(buffer.read_to_vec(length / size))),
+            DType::F16 => Ok(CpuStorage::F16(buffer.read_to_vec(length / size))),
+            DType::BF16 => Ok(CpuStorage::BF16(buffer.read_to_vec(length / size))),
+            DType::F32 => Ok(CpuStorage::F32(buffer.read_to_vec(length / size))),
+            DType::F64 => Ok(CpuStorage::F64(buffer.read_to_vec(length / size))),
         }
     }
 
@@ -302,8 +317,6 @@ impl BackendStorage for MetalStorage {
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
         if !(sum_dims.len() == 1
             && sum_dims[0] == layout.shape().rank() - 1
-            && layout.is_contiguous()
-            && layout.start_offset() == 0
             && layout.stride()[sum_dims[0]] == 1)
         {
             crate::bail!("Non last dim reduce op not supported yet");
@@ -764,8 +777,6 @@ impl BackendStorage for MetalStorage {
     ) -> Result<Self> {
         // Create descriptors
 
-        // let start = std::time::Instant::now();
-
         let (type_id, size) = match self.dtype {
             DType::F32 => (
                 metal::mps::MPS_FLOATBIT_ENCODING | 32,
@@ -848,8 +859,6 @@ impl BackendStorage for MetalStorage {
         .ok_or_else(|| {
             MetalError::from("Failed to create matrix multiplication kernel".to_string())
         })?;
-
-        // matrix_multiplication.set_batch_size(b);
 
         // Encode kernel to command buffer
         matrix_multiplication.encode_to_command_buffer(
@@ -963,18 +972,6 @@ impl BackendDevice for MetalDevice {
 
     fn new(ordinal: usize) -> Result<Self> {
         let device = metal::Device::all().swap_remove(ordinal);
-
-        // let capture = metal::CaptureManager::shared();
-        // let descriptor = metal::CaptureDescriptor::new();
-        // descriptor.set_destination(metal::MTLCaptureDestination::GpuTraceDocument);
-        // descriptor.set_capture_device(&device);
-        // let mut dir = std::env::current_dir()?;
-        // dir.push("out.gputrace");
-        // descriptor.set_output_url(dir);
-
-        // capture
-        //     .start_capture(&descriptor)
-        //     .map_err(MetalError::from)?;
 
         let command_queue = device.new_command_queue();
         let command_buffer = Arc::new(RwLock::new(command_queue.new_command_buffer().to_owned()));
