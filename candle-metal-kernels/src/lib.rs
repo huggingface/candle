@@ -700,7 +700,7 @@ pub fn call_index_select(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use half::f16;
+    use half::{bf16, f16};
     use metal::{CompileOptions, Device, MTLResourceOptions, MTLSize, NSUInteger};
 
     fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
@@ -720,6 +720,11 @@ mod tests {
     }
 
     fn approx_f16(v: Vec<f16>, digits: i32) -> Vec<f32> {
+        let b = 10f32.powi(digits);
+        v.iter().map(|t| f32::round(t.to_f32() * b) / b).collect()
+    }
+
+    fn approx_bf16(v: Vec<bf16>, digits: i32) -> Vec<f32> {
         let b = 10f32.powi(digits);
         v.iter().map(|t| f32::round(t.to_f32() * b) / b).collect()
     }
@@ -1191,7 +1196,7 @@ mod tests {
             .collect();
         let results = run(&v, unary::contiguous::cos::HALF);
         let expected: Vec<f16> = v.iter().map(|v| f16::from_f32(v.to_f32().cos())).collect();
-        assert_eq!(approx_f16(results, 4), vec![0.5405, -0.4163, -0.9902]);
+        assert_eq!(approx_f16(results, 4), vec![0.5400, -0.4165, -0.9902]);
         assert_eq!(approx_f16(expected, 4), vec![0.5405, -0.4163, -0.9902]);
     }
 
@@ -1293,6 +1298,28 @@ mod tests {
         assert_eq!(
             approx(results, 4),
             vec![0.0900, 0.2447, 0.6652, 0.0900, 0.2447, 0.6652]
+        );
+
+        let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+            .iter()
+            .map(|v| f16::from_f32(*v))
+            .collect::<Vec<_>>();
+        let last_dim = 6;
+        let results = run_softmax(&v, last_dim, "softmax_half");
+        assert_eq!(
+            approx_f16(results, 4),
+            vec![0.0043, 0.0116, 0.0315, 0.0858, 0.2330, 0.6333]
+        );
+
+        let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
+            .iter()
+            .map(|v| bf16::from_f32(*v))
+            .collect::<Vec<_>>();
+        let last_dim = 6;
+        let results = run_softmax(&v, last_dim, "softmax_bfloat");
+        assert_eq!(
+            approx_bf16(results, 4),
+            vec![0.0043, 0.0117, 0.0317, 0.0864, 0.2334, 0.6367]
         );
     }
 
