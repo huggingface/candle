@@ -853,7 +853,7 @@ mod tests {
 
     #[test]
     fn cos_strided_random() {
-        let v: Vec<_> = (0..10_000).map(|i| rand::random::<f32>()).collect();
+        let v: Vec<_> = (0..10_000).map(|_| rand::random::<f32>()).collect();
         let shape = vec![5_000, 2];
         let strides = vec![1, 5_000];
         let offset = 0;
@@ -1114,7 +1114,7 @@ mod tests {
             .collect();
         let results = run(&v, unary::contiguous::cos::HALF);
         let expected: Vec<f16> = v.iter().map(|v| f16::from_f32(v.to_f32().cos())).collect();
-        assert_eq!(approx_f16(results, 4), vec![0.54, -0.4165, -0.9902]);
+        assert_eq!(approx_f16(results, 4), vec![0.5405, -0.4163, -0.9902]);
         assert_eq!(approx_f16(expected, 4), vec![0.5405, -0.4163, -0.9902]);
     }
 
