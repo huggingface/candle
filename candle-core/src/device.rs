@@ -8,7 +8,7 @@ use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
 pub enum DeviceLocation {
     Cpu,
     Cuda { gpu_id: usize },
-    Metal,
+    Metal { gpu_id: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +146,7 @@ impl Device {
         match (self, rhs) {
             (Self::Cpu, Self::Cpu) => true,
             (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
+            (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
             _ => false,
         }
     }
