@@ -216,10 +216,10 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             DType::F32 => "softmax_float",
             DType::F16 => "softmax_half",
             DType::BF16 => "softmax_bfloat",
-            dtype => crate::bail!("softmax-last-dim is not implemented for {dtype:?}")
+            dtype => crate::bail!("softmax-last-dim is not implemented for {dtype:?}"),
         };
 
-        if !(layout.is_contiguous() && layout.start_offset != 0){
+        if !(layout.is_contiguous() && layout.start_offset != 0) {
             candle::bail!("Non contiguous softmax-last-dim is not implemented");
         }
         let last_dim = layout.dims()[layout.shape().rank() - 1];
