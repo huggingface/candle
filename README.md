@@ -139,15 +139,15 @@ And then head over to
 <!--- ANCHOR: useful_libraries --->
 
 ## Useful External Resources
-- [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): a
+- [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): A
   very detailed tutorial showing how to convert a PyTorch model to Candle.
-- [`optimisers`](https://github.com/KGrewal1/optimisers): a collection of optimisers
+- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): Efficient and ergonomic LoRA implemenation for Candle. `candle-lora` has      
+  out-of-the-box LoRA support for many models from Candle, which can be found [here](https://github.com/EricLBuehler/candle-lora/tree/master/candle-lora-transformers/examples).
+- [`optimisers`](https://github.com/KGrewal1/optimisers): A collection of optimisers
   including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
-- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): a LoRA implementation
-  that conforms to the official `peft` implementation.
 - [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficient platform for inference and
   serving local LLMs including an OpenAI compatible API server.
-- [`candle-ext`](https://github.com/mokeyish/candle-ext): an extension library to Candle that provides PyTorch functions not currently available in Candle.
+- [`candle-ext`](https://github.com/mokeyish/candle-ext): An extension library to Candle that provides PyTorch functions not currently available in Candle.
 - [`kalosm`](https://github.com/floneum/floneum/tree/master/interfaces/kalosm): A multi-modal meta-framework in Rust for interfacing with local pre-trained models with support for controlled generation, custom samplers, in-memory vector databases, audio transcription, and more.
 - [`candle-sampling`](https://github.com/EricLBuehler/candle-sampling): Sampling techniques for Candle.
 
