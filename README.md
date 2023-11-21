@@ -141,20 +141,8 @@ And then head over to
 ## Useful External Resources
 - [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): A
   very detailed tutorial showing how to convert a PyTorch model to Candle.
-- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): Efficient and ergonomic LoRA implemenation for Candle.
-
-  Additionally, `candle-lora` has out-of-the-box LoRA support for many models from Candle, including:
-    - [Falcon](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/falcon.rs)
-    - [Llama](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/llama.rs)
-    - [Mistral](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/mistral.rs)
-    - [BERT](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/bert.rs)
-    - [Bigcode (Starcoder)](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/bigcode.rs)
-    - [BLIP](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/blip.rs)
-    - [DINOv2](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/dinov2.rs)
-    - [MPT](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/mpt.rs)
-    - [ResNet](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/resnet.rs)
-    - [StableLM](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/stable_lm.rs)
-    - [T5](https://github.com/EricLBuehler/candle-lora/blob/master/candle-lora-transformers/examples/t5.rs)
+- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): Efficient and ergonomic LoRA implemenation for Candle. `candle-lora` has      
+  out-of-the-box LoRA support for many models from Candle, which can be found [here](https://github.com/EricLBuehler/candle-lora/tree/master/candle-lora-transformers/examples).
 - [`optimisers`](https://github.com/KGrewal1/optimisers): A collection of optimisers
   including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
 - [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficient platform for inference and
