@@ -177,6 +177,11 @@ If you have an addition to this list, please submit a pull request.
         - Replit-code-v1.5-3B.
         - Bert.
         - Yi-6B and Yi-34B.
+    - Quantized LLMs.
+        - Llama 7b, 13b, 70b, as well as the chat and code variants.
+        - Mistral 7b, and 7b instruct.
+        - Zephyr 7b a and b (Mistral based).
+        - OpenChat 3.5 (Mistral based).
     - Text to text.
         - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
