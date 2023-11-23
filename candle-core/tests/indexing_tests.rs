@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candle_core::{Device, IndexOp, Tensor};
+use candle_core::{Device, IndexOp, StepRange, Tensor};
 
 #[test]
 fn integer_index() -> Result<()> {
@@ -89,5 +89,34 @@ fn index_3d() -> Result<()> {
         &[[3, 7, 11], [15, 19, 23]]
     );
     assert_eq!(tensor.i((1, .., 3))?.to_vec1::<u32>()?, &[15, 19, 23]);
+    Ok(())
+}
+
+#[test]
+fn step_index() -> Result<()> {
+    let tensor = Tensor::from_iter(0..=10u32, &Device::Cpu)?;
+    assert_eq!(
+        tensor.i(StepRange::new(.., 1))?.to_vec1::<u32>()?,
+        &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    );
+
+    assert_eq!(
+        tensor.i(StepRange::new(.., 2))?.to_vec1::<u32>()?,
+        &[0, 2, 4, 6, 8, 10]
+    );
+    assert_eq!(
+        tensor.i(StepRange::new(1.., 2))?.to_vec1::<u32>()?,
+        &[1, 3, 5, 7, 9]
+    );
+
+    assert_eq!(
+        tensor.i(StepRange::new(.., -1))?.to_vec1::<u32>()?,
+        &[10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+    );
+    assert_eq!(
+        tensor.i(StepRange::new(..5, -1))?.to_vec1::<u32>()?,
+        &[4, 3, 2, 1, 0]
+    );
+
     Ok(())
 }
