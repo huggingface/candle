@@ -279,7 +279,7 @@ impl BackendStorage for MetalStorage {
 
             let kernel_name = match (B::KERNEL, dtype) {
                 ("ucos", DType::F32) => contiguous::cos::FLOAT,
-                ("usin", DType::F32) => contiguous::sin::FLOAT,
+                ("using", DType::F32) => contiguous::sin::FLOAT,
                 ("usqr", DType::F32) => contiguous::sqr::FLOAT,
                 ("usqrt", DType::F32) => contiguous::sqrt::FLOAT,
                 ("uneg", DType::F32) => contiguous::neg::FLOAT,
@@ -464,7 +464,7 @@ impl BackendStorage for MetalStorage {
         _kernel_l: &Layout,
         _params: &ParamsConvTranspose2D,
     ) -> Result<Self> {
-        crate::bail!("conv_tranpose2d metal")
+        crate::bail!("conv_transpose2d metal")
     }
 
     fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {

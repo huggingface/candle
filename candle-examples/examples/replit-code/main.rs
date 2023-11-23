@@ -243,7 +243,7 @@ fn main() -> Result<()> {
         (model, Device::Cpu)
     } else {
         let device = candle_examples::device(args.cpu)?;
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[filename], DType::F32, &device)? };
+        let vb = unsafe { VarBuilder::from_mapped_safetensors(&[filename], DType::F32, &device)? };
         let model = Model::M(M::new(&config, vb.pp("transformer"))?);
         (model, device)
     };

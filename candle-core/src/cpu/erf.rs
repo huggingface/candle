@@ -396,7 +396,7 @@ const ERF_IMPL_NN: &[f64] = &[
 
 /// Polynomial coefficients for a denominator in `erf_impl`
 /// in the interval [85, 110].
-const ERF_IMPL_ND: &[f64] = &[
+const ERF_IMPL_AND: &[f64] = &[
     1.0,
     0.0375328846356293715248719,
     0.000467919535974625308126054,
@@ -690,7 +690,7 @@ fn erf_impl(z: f64, inv: bool) -> f64 {
         } else {
             (
                 evaluate::polynomial(z - 85.0, ERF_IMPL_NN)
-                    / evaluate::polynomial(z - 85.0, ERF_IMPL_ND),
+                    / evaluate::polynomial(z - 85.0, ERF_IMPL_AND),
                 0.5641584396,
             )
         };

@@ -63,7 +63,7 @@ This documents the main changes to the `candle` crate.
   [760](https://github.com/huggingface/candle/pull/760).
 - Add the Segment-Anything Model (SAM) as an example
   [773](https://github.com/huggingface/candle/pull/773).
-- TinyViT backbone for the segemnt anything example
+- TinyViT backbone for the segment anything example
   [787](https://github.com/huggingface/candle/pull/787).
 - Shape with holes support
   [770](https://github.com/huggingface/candle/pull/770).

@@ -157,10 +157,10 @@ struct Flash_fwd_kernel_traits : public Base {
 
 };
 
-// Is_V_in_regs is an option to reduce smem usage, but will increase register pressue.
+// Is_V_in_regs is an option to reduce smem usage, but will increase register pressure.
 // No_double_buffer is another option to reduce smem usage, but will slow things down.
 template<int kHeadDim_, int kBlockM_, int kBlockN_, int kNWarps_,
-         int AtomLayoutMSdP_=1, int AtomLayoutNdKV=2, int AtomLayoutMdQ=2,
+         int AtomLayoutMSdP_=1, int AtomLayoutAndKV=2, int AtomLayoutMdQ=2,
          bool Is_V_in_regs_=false, bool No_double_buffer_=false, typename elem_type=cutlass::half_t,
          typename Base=Flash_kernel_traits<kHeadDim_, kBlockM_, kBlockN_, kNWarps_, elem_type> >
 struct Flash_bwd_kernel_traits : public Base {
@@ -188,7 +188,7 @@ struct Flash_bwd_kernel_traits : public Base {
 
     static constexpr int AtomLayoutMSdP = AtomLayoutMSdP_;
     static_assert(kNWarps % AtomLayoutMSdP == 0);
-    static_assert(kNWarps % AtomLayoutNdKV == 0);
+    static_assert(kNWarps % AtomLayoutAndKV == 0);
     static_assert(kNWarps % AtomLayoutMdQ == 0);
 
     using TiledMmaSdP = TiledMMA<
@@ -198,7 +198,7 @@ struct Flash_bwd_kernel_traits : public Base {
 
     using TiledMmadKV = TiledMMA<
         typename Base::MMA_Atom_Arch,
-        Layout<Shape<Int<AtomLayoutNdKV>, Int<kNWarps / AtomLayoutNdKV>, _1>>,
+        Layout<Shape<Int<AtomLayoutAndKV>, Int<kNWarps / AtomLayoutAndKV>, _1>>,
         typename Base::ValLayoutMNK>; // 1x2x1 or 1x2x2 value group for 16x16x16 MMA and LDSM
 
     using TiledMmadQ = TiledMMA<

@@ -147,7 +147,7 @@ pub fn main() -> Result<()> {
 
     // Create the model and load the weights from the file.
     let model = args.model()?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &Device::Cpu)? };
+    let vb = unsafe { VarBuilder::from_mapped_safetensors(&[model], DType::F32, &Device::Cpu)? };
     let config = args.config()?;
     let darknet = darknet::parse_config(config)?;
     let model = darknet.build_model(vb)?;

@@ -83,7 +83,7 @@ impl Var {
 
     /// Creates a new tensor on the specified device using the content and shape of the input.
     /// This is similar to `new` but the resulting tensor is a variable.
-    pub fn new<A: crate::device::NdArray>(array: A, device: &Device) -> Result<Self> {
+    pub fn new<A: crate::device::AndArray>(array: A, device: &Device) -> Result<Self> {
         let shape = array.shape()?;
         let inner = Tensor::new_impl(array, shape, device, true)?;
         Ok(Self(inner))

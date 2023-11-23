@@ -42,7 +42,7 @@ pub fn main() -> anyhow::Result<()> {
         }
         Some(model) => model.into(),
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mapped_safetensors(&[model_file], DType::F32, &device)? };
     let model = dinov2::vit_small(vb)?;
     println!("model built");
     let logits = model.forward(&image.unsqueeze(0)?)?;

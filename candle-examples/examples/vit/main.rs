@@ -39,7 +39,7 @@ pub fn main() -> anyhow::Result<()> {
         }
         Some(model) => model.into(),
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mapped_safetensors(&[model_file], DType::F32, &device)? };
     let model = vit::Model::new(&vit::Config::vit_base_patch16_224(), 1000, vb)?;
     println!("model built");
     let logits = model.forward(&image.unsqueeze(0)?)?;

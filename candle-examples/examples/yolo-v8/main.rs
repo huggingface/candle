@@ -383,7 +383,7 @@ pub fn run<T: Task>(args: Args) -> anyhow::Result<()> {
         Which::X => Multiples::x(),
     };
     let model = args.model()?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mapped_safetensors(&[model], DType::F32, &device)? };
     let model = T::load(vb, multiples)?;
     println!("model loaded");
     for image_name in args.images.iter() {

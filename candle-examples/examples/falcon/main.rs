@@ -182,7 +182,7 @@ fn main() -> Result<()> {
     } else {
         DType::BF16
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    let vb = unsafe { VarBuilder::from_mapped_safetensors(&filenames, dtype, &device)? };
     let config = Config::falcon7b();
     config.validate()?;
     let model = Falcon::load(vb, config)?;

@@ -73,7 +73,7 @@ fn main() -> Result<()> {
             ))
             .get("model.safetensors")?,
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DTYPE, &device)? };
+    let vb = unsafe { VarBuilder::from_mapped_safetensors(&[model], DTYPE, &device)? };
     let config = GenConfig::small();
     let mut model = MusicgenForConditionalGeneration::load(vb, config)?;
 

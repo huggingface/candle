@@ -9,7 +9,7 @@ the model itself.
 
 ```bash
 cargo run --example marian-mt --release -- \
-    --text "Demain, dès l'aube, à l'heure où blanchit la campagne, Je partirai. Vois-tu, je sais que tu m'attends. J'irai par la forêt, j'irai par la montagne. Je ne puis demeurer loin de toi plus longtemps."
+    --text "Demain, dès l'aube, à l'heure où blanchit la campagne, Je partirai. Vois-tu, je says que tu m'attends. J'irai par la forêt, j'irai par la montagne. Je ne puis demeurer loin de toi plus longtemps."
 ```
 
 ```

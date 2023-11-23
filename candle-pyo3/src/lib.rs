@@ -212,7 +212,7 @@ trait MapDType {
 enum Indexer {
     Index(usize),
     Slice(usize, usize),
-    Elipsis,
+    Ellipsis,
     Expand,
     IndexSelect(Tensor),
 }
@@ -568,7 +568,7 @@ impl PyTensor {
                         "Ellipsis ('...') can only be used at the start of an indexing operation",
                     ));
                 }
-                Ok((Indexer::Elipsis, dims.len() - (index_argument_count - 1)))
+                Ok((Indexer::Ellipsis, dims.len() - (index_argument_count - 1)))
             } else if py_indexer.is_none() {
                 // Handle None e.g. tensor[None, 0]
                 Ok((Indexer::Expand, current_dim))
@@ -616,8 +616,8 @@ impl PyTensor {
                     current_dim += 1;
                     out
                 }
-                Indexer::Elipsis => {
-                    // Elipsis is a special case, it means that all remaining dimensions should be selected => advance the current_dim to the last dimension we have indexers for
+                Indexer::Ellipsis => {
+                    // Ellipsis is a special case, it means that all remaining dimensions should be selected => advance the current_dim to the last dimension we have indexers for
                     current_dim += dims.len() - (indexers.len() - 1);
                     x
                 }
@@ -960,11 +960,11 @@ impl PyTensor {
             extraction_result: PyResult<T>,
             err_msg: &'static str,
         ) -> PyResult<()> {
-            if let Ok(sucessfull_extraction) = extraction_result {
+            if let Ok(successful_extraction) = extraction_result {
                 if opt.is_some() {
                     return Err(PyValueError::new_err(err_msg));
                 }
-                *opt = Some(sucessfull_extraction);
+                *opt = Some(successful_extraction);
             }
             Ok(())
         }
@@ -1046,7 +1046,7 @@ impl PyTensor {
             (Some(device), None) => self.0.to_device(&device.as_device()?).map_err(wrap_err)?,
             (None, Some(dtype)) => self.0.to_dtype(dtype.0).map_err(wrap_err)?,
             (None, None) => {
-                return Err(PyTypeError::new_err("No valide dtype or device specified"))
+                return Err(PyTypeError::new_err("No valid dtype or device specified"))
             }
         };
 

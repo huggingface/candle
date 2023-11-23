@@ -63,7 +63,7 @@ pub fn main() -> anyhow::Result<()> {
         }
         Some(model) => model.into(),
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mapped_safetensors(&[model_file], DType::F32, &device)? };
     let class_count = candle_examples::imagenet::CLASS_COUNT as usize;
     let model = match args.which {
         Which::Resnet18 => resnet::resnet18(class_count, vb)?,

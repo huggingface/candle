@@ -18,13 +18,13 @@ pub enum Device {
     Metal(crate::MetalDevice),
 }
 
-pub trait NdArray {
+pub trait AndArray {
     fn shape(&self) -> Result<Shape>;
 
     fn to_cpu_storage(&self) -> CpuStorage;
 }
 
-impl<S: WithDType> NdArray for S {
+impl<S: WithDType> AndArray for S {
     fn shape(&self) -> Result<Shape> {
         Ok(Shape::from(()))
     }
@@ -34,7 +34,7 @@ impl<S: WithDType> NdArray for S {
     }
 }
 
-impl<S: WithDType, const N: usize> NdArray for &[S; N] {
+impl<S: WithDType, const N: usize> AndArray for &[S; N] {
     fn shape(&self) -> Result<Shape> {
         Ok(Shape::from(self.len()))
     }
@@ -44,7 +44,7 @@ impl<S: WithDType, const N: usize> NdArray for &[S; N] {
     }
 }
 
-impl<S: WithDType> NdArray for &[S] {
+impl<S: WithDType> AndArray for &[S] {
     fn shape(&self) -> Result<Shape> {
         Ok(Shape::from(self.len()))
     }
@@ -54,7 +54,7 @@ impl<S: WithDType> NdArray for &[S] {
     }
 }
 
-impl<S: WithDType, const N: usize, const M: usize> NdArray for &[[S; N]; M] {
+impl<S: WithDType, const N: usize, const M: usize> AndArray for &[[S; N]; M] {
     fn shape(&self) -> Result<Shape> {
         Ok(Shape::from((M, N)))
     }
@@ -64,7 +64,7 @@ impl<S: WithDType, const N: usize, const M: usize> NdArray for &[[S; N]; M] {
     }
 }
 
-impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize> NdArray
+impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize> AndArray
     for &[[[S; N3]; N2]; N1]
 {
     fn shape(&self) -> Result<Shape> {
@@ -82,7 +82,7 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize> NdArray
     }
 }
 
-impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize, const N4: usize> NdArray
+impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize, const N4: usize> AndArray
     for &[[[[S; N4]; N3]; N2]; N1]
 {
     fn shape(&self) -> Result<Shape> {
@@ -102,7 +102,7 @@ impl<S: WithDType, const N1: usize, const N2: usize, const N3: usize, const N4: 
     }
 }
 
-impl<S: NdArray> NdArray for Vec<S> {
+impl<S: AndArray> AndArray for Vec<S> {
     fn shape(&self) -> Result<Shape> {
         if self.is_empty() {
             crate::bail!("empty array")
@@ -290,7 +290,7 @@ impl Device {
         }
     }
 
-    pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
+    pub(crate) fn storage<A: AndArray>(&self, array: A) -> Result<Storage> {
         match self {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
             Device::Cuda(device) => {

@@ -84,7 +84,7 @@ pub fn main() -> anyhow::Result<()> {
             api.get(filename)?
         }
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mapped_safetensors(&[model], DType::F32, &device)? };
     let sam = if args.use_tiny {
         sam::Sam::new_tiny(vb)? // tiny vit_t
     } else {

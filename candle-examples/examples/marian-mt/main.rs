@@ -107,7 +107,7 @@ pub fn main() -> anyhow::Result<()> {
                     .get("model.safetensors")?,
             },
         };
-        unsafe { VarBuilder::from_mmaped_safetensors(&[&model], DType::F32, &device)? }
+        unsafe { VarBuilder::from_mapped_safetensors(&[&model], DType::F32, &device)? }
     };
     let mut model = marian::MTModel::new(&config, vb)?;
 

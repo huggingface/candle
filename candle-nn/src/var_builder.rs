@@ -1,5 +1,5 @@
 //! A `VarBuilder` is used to retrieve variables used by a model. These variables can either come
-//! from a pre-trained checkpoint, e.g. using `VarBuilder::from_mmaped_safetensors`, or initialized
+//! from a pre-trained checkpoint, e.g. using `VarBuilder::from_mapped_safetensors`, or initialized
 //! for training, e.g. using `VarBuilder::from_varmap`.
 use crate::VarMap;
 use candle::{safetensors::Load, DType, Device, Error, Result, Shape, Tensor};
@@ -40,7 +40,7 @@ struct TensorData<B: Backend> {
 /// A trait that defines how tensor data is retrieved.
 ///
 /// Typically this would use disk storage in some specific format, or random initialization.
-/// Note that there is a speciliazed version of this trait (`SimpleBackend`) that can be used most
+/// Note that there is a specialize version of this trait (`SimpleBackend`) that can be used most
 /// of the time. The main restriction is that it doesn't allow for specific args (besides
 /// initialization hints).
 pub trait Backend: Send + Sync {
@@ -359,7 +359,7 @@ impl SimpleBackend for candle::pickle::PthTensors {
     }
 }
 
-impl SimpleBackend for candle::safetensors::MmapedSafetensors {
+impl SimpleBackend for candle::safetensors::MappedSafetensors {
     fn get(
         &self,
         s: Shape,
@@ -452,12 +452,12 @@ impl<'a> VarBuilder<'a> {
     /// # Safety
     ///
     /// The unsafe is inherited from [`memmap2::MmapOptions`].
-    pub unsafe fn from_mmaped_safetensors<P: AsRef<std::path::Path>>(
+    pub unsafe fn from_mapped_safetensors<P: AsRef<std::path::Path>>(
         paths: &[P],
         dtype: DType,
         dev: &Device,
     ) -> Result<Self> {
-        let tensors = candle::safetensors::MmapedSafetensors::multi(paths)?;
+        let tensors = candle::safetensors::MappedSafetensors::multi(paths)?;
         Ok(Self::new(Box::new(tensors), dtype, dev.clone()))
     }
 
@@ -480,7 +480,7 @@ impl<'a> VarBuilder<'a> {
     }
 }
 
-pub struct ShardedSafeTensors(candle::safetensors::MmapedSafetensors);
+pub struct ShardedSafeTensors(candle::safetensors::MappedSafetensors);
 
 pub type ShardedVarBuilder<'a> = VarBuilderArgs<'a, ShardedSafeTensors>;
 
@@ -496,7 +496,7 @@ impl ShardedSafeTensors {
         dtype: DType,
         dev: &Device,
     ) -> Result<ShardedVarBuilder<'static>> {
-        let tensors = candle::safetensors::MmapedSafetensors::multi(paths)?;
+        let tensors = candle::safetensors::MappedSafetensors::multi(paths)?;
         let backend = ShardedSafeTensors(tensors);
         Ok(VarBuilderArgs::new_with_args(backend, dtype, dev))
     }

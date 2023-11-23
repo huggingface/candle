@@ -562,7 +562,7 @@ fn main() -> Result<()> {
         Model::Quantized(m::quantized_model::Whisper::load(&vb, config)?)
     } else {
         let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], m::DTYPE, &device)? };
+            unsafe { VarBuilder::from_mapped_safetensors(&[weights_filename], m::DTYPE, &device)? };
         Model::Normal(m::model::Whisper::load(&vb, config)?)
     };
 

@@ -174,7 +174,7 @@ fn main() -> Result<()> {
             println!("building the model");
             let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;
 
-            let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+            let vb = unsafe { VarBuilder::from_mapped_safetensors(&filenames, dtype, &device)? };
             (Llama::load(vb, &cache, &config)?, tokenizer_filename, cache)
         }
     };

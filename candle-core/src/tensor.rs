@@ -1,4 +1,4 @@
-//! Tensors are N-dimenional matrixes of elements using a single data type.
+//! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{
@@ -339,7 +339,7 @@ impl Tensor {
         Self::randn_impl(mean, std, s, device, false)
     }
 
-    pub(crate) fn new_impl<A: crate::device::NdArray>(
+    pub(crate) fn new_impl<A: crate::device::AndArray>(
         array: A,
         shape: Shape,
         device: &Device,
@@ -356,7 +356,7 @@ impl Tensor {
     }
 
     /// Creates a new tensor on the specified device using the content and shape of the input.
-    pub fn new<A: crate::device::NdArray>(array: A, device: &Device) -> Result<Self> {
+    pub fn new<A: crate::device::AndArray>(array: A, device: &Device) -> Result<Self> {
         let shape = array.shape()?;
         Self::new_impl(array, shape, device, false)
     }
@@ -669,7 +669,7 @@ impl Tensor {
     }
 
     /// Split a tensor into the specified number of chunks, this may return less chunks than
-    /// specificed.
+    /// specified.
     pub fn chunk<D: Dim>(&self, chunks: usize, dim: D) -> Result<Vec<Self>> {
         let dim = dim.to_index(self.shape(), "chunk")?;
         let size = self.dim(dim)?;

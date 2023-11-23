@@ -353,7 +353,7 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
                 q3 = q3.add(32);
 
                 // Prepare low and high bits
-                // We hardcode the shifts here to avoid loading them into a seperate register
+                // We hardcode the shifts here to avoid loading them into a separate register
                 let q3l_0 = _mm256_and_si256(q3bits, m3);
                 let q3h_0 = if j == 0 {
                     _mm256_srli_epi16(_mm256_andnot_si256(hbits, _mm256_slli_epi16(mone, 0)), 0)
@@ -586,7 +586,7 @@ pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> Res
                 let q5bits = _mm256_loadu_si256(q5 as *const __m256i);
                 q5 = q5.add(32);
 
-                //Similar to q3k we hardcode the shifts here to avoid loading them into a seperate register
+                //Similar to q3k we hardcode the shifts here to avoid loading them into a separate register
                 let q5l_0 = _mm256_and_si256(q5bits, m4);
                 let q5l_0_shift_input = _mm256_and_si256(hbits, hmask);
                 let q5l_0_right_shift = match j {

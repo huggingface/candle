@@ -310,11 +310,11 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
       for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel;  \
            i += blockDim.x * gridDim.x) {                                      \
         size_t dst_index = i;                                                  \
-        for (unsigned int nd = 0; nd < num_sum_dims; ++nd) {                   \
-          size_t stride = sum_dims_s[nd];                                      \
+        for (unsigned int and = 0; and < num_sum_dims; ++and) {                   \
+          size_t stride = sum_dims_s[and];                                      \
           size_t pre = dst_index / stride;                                     \
           size_t post = dst_index % stride;                                    \
-          dst_index = (pre / sum_dims_l[nd]) * stride + post;                  \
+          dst_index = (pre / sum_dims_l[and]) * stride + post;                  \
         }                                                                      \
         atomicAdd(out + dst_index, inp[i]);                                    \
       }                                                                        \
@@ -323,11 +323,11 @@ fast_argmax(const size_t src_numel, const size_t el_to_sum_per_block,
            i += blockDim.x * gridDim.x) {                                      \
         unsigned strided_i = get_strided_index(i, num_dims, dims, strides);    \
         size_t dst_index = i;                                                  \
-        for (unsigned int nd = 0; nd < num_sum_dims; ++nd) {                   \
-          size_t stride = sum_dims_s[nd];                                      \
+        for (unsigned int and = 0; and < num_sum_dims; ++and) {                   \
+          size_t stride = sum_dims_s[and];                                      \
           size_t pre = dst_index / stride;                                     \
           size_t post = dst_index % stride;                                    \
-          dst_index = (pre / sum_dims_l[nd]) * stride + post;                  \
+          dst_index = (pre / sum_dims_l[and]) * stride + post;                  \
         }                                                                      \
         atomicAdd(out + dst_index, inp[strided_i]);                            \
       }                                                                        \

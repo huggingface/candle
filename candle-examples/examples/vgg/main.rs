@@ -47,7 +47,7 @@ pub fn main() -> anyhow::Result<()> {
     let filename = "model.safetensors";
     let model_file = api.get(filename)?;
 
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mapped_safetensors(&[model_file], DType::F32, &device)? };
     let model = match args.which {
         Which::Vgg13 => Vgg::new(vb, Models::Vgg13)?,
         Which::Vgg16 => Vgg::new(vb, Models::Vgg16)?,

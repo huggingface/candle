@@ -68,7 +68,7 @@ pub fn main() -> anyhow::Result<()> {
         }
         Some(model) => model.into(),
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mapped_safetensors(&[model_file], DType::F32, &device)? };
     let cfg = match args.which {
         Which::B0 => MBConvConfig::b0(),
         Which::B1 => MBConvConfig::b1(),

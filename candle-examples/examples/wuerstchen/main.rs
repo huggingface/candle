@@ -277,7 +277,7 @@ fn run(args: Args) -> Result<()> {
         let prior = {
             let file = ModelFile::Prior.get(prior_weights)?;
             let vb = unsafe {
-                candle_nn::VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device)?
+                candle_nn::VarBuilder::from_mapped_safetensors(&[file], DType::F32, &device)?
             };
             wuerstchen::prior::WPrior::new(
                 /* c_in */ PRIOR_CIN,
@@ -314,7 +314,7 @@ fn run(args: Args) -> Result<()> {
     let vqgan = {
         let file = ModelFile::VqGan.get(vqgan_weights)?;
         let vb = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device)?
+            candle_nn::VarBuilder::from_mapped_safetensors(&[file], DType::F32, &device)?
         };
         wuerstchen::paella_vq::PaellaVQ::new(vb)?
     };
@@ -325,7 +325,7 @@ fn run(args: Args) -> Result<()> {
     let decoder = {
         let file = ModelFile::Decoder.get(decoder_weights)?;
         let vb = unsafe {
-            candle_nn::VarBuilder::from_mmaped_safetensors(&[file], DType::F32, &device)?
+            candle_nn::VarBuilder::from_mapped_safetensors(&[file], DType::F32, &device)?
         };
         wuerstchen::diffnext::WDiffNeXt::new(
             /* c_in */ DECODER_CIN,

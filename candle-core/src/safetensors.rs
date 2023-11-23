@@ -254,12 +254,12 @@ pub fn save<K: AsRef<str> + Ord + std::fmt::Display, P: AsRef<Path>>(
 #[derive(yoke::Yokeable)]
 struct SafeTensors_<'a>(SafeTensors<'a>);
 
-pub struct MmapedSafetensors {
+pub struct MappedSafetensors {
     safetensors: Vec<yoke::Yoke<SafeTensors_<'static>, memmap2::Mmap>>,
     routing: Option<HashMap<String, usize>>,
 }
 
-impl MmapedSafetensors {
+impl MappedSafetensors {
     /// Creates a wrapper around a memory mapped file and deserialize the safetensors header.
     ///
     /// # Safety
@@ -379,14 +379,14 @@ impl BufferedSafetensors {
     }
 }
 
-pub struct MmapedFile {
+pub struct MappedFile {
     path: std::path::PathBuf,
     inner: memmap2::Mmap,
 }
 
-impl MmapedFile {
+impl MappedFile {
     /// Creates a wrapper around a memory mapped file from which you can retrieve
-    /// tensors using [`MmapedFile::deserialize`]
+    /// tensors using [`MappedFile::deserialize`]
     ///
     /// # Safety
     ///

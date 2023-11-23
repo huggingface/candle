@@ -65,7 +65,7 @@ impl Args {
         let device = candle_examples::device(self.cpu)?;
         let config = Config::v2_base();
         let tokenizer = tokenizers::Tokenizer::from_file(tokenizer).map_err(E::msg)?;
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
+        let vb = unsafe { VarBuilder::from_mapped_safetensors(&[model], DType::F32, &device)? };
         let model = BertModel::new(vb, &config)?;
         Ok((model, tokenizer))
     }

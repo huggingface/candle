@@ -121,7 +121,7 @@ pub fn main() -> anyhow::Result<()> {
         println!("loaded image {image:?}");
 
         let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+            unsafe { VarBuilder::from_mapped_safetensors(&[model_file], DType::F32, &device)? };
         let model = blip::BlipForConditionalGeneration::new(&config, vb)?;
         let image_embeds = image.unsqueeze(0)?.apply(model.vision_model())?;
         (image_embeds, device, Model::M(model))

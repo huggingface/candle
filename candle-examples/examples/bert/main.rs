@@ -79,7 +79,7 @@ impl Args {
         let vb = if self.use_pth {
             VarBuilder::from_pth(&weights_filename, DTYPE, &device)?
         } else {
-            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? }
+            unsafe { VarBuilder::from_mapped_safetensors(&[weights_filename], DTYPE, &device)? }
         };
         let model = BertModel::load(vb, &config)?;
         Ok((model, tokenizer))

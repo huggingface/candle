@@ -208,10 +208,10 @@ impl Module for SqueezeExcitation {
 
 #[derive(Debug)]
 struct MBConv {
-    expand_cna: Option<ConvNormActivation>,
-    depthwise_cna: ConvNormActivation,
+    expand_can: Option<ConvNormActivation>,
+    depthwise_can: ConvNormActivation,
     squeeze_excitation: SqueezeExcitation,
-    project_cna: ConvNormActivation,
+    project_can: ConvNormActivation,
     config: MBConvConfig,
 }
 
@@ -219,7 +219,7 @@ impl MBConv {
     fn new(vb: VarBuilder, c: MBConvConfig) -> Result<Self> {
         let vb = vb.pp("block");
         let exp = make_divisible(c.input_channels as f64 * c.expand_ratio, 8);
-        let expand_cna = if exp != c.input_channels {
+        let expand_can = if exp != c.input_channels {
             Some(ConvNormActivation::new(
                 vb.pp("0"),
                 c.input_channels,
@@ -231,20 +231,20 @@ impl MBConv {
         } else {
             None
         };
-        let start_index = if expand_cna.is_some() { 1 } else { 0 };
-        let depthwise_cna =
+        let start_index = if expand_can.is_some() { 1 } else { 0 };
+        let depthwise_can =
             ConvNormActivation::new(vb.pp(start_index), exp, exp, c.kernel, c.stride, exp)?;
         let squeeze_channels = usize::max(1, c.input_channels / 4);
         let squeeze_excitation =
             SqueezeExcitation::new(vb.pp(start_index + 1), exp, squeeze_channels)?;
-        let project_cna =
+        let project_can =
             ConvNormActivation::new(vb.pp(start_index + 2), exp, c.out_channels, 1, 1, 1)?
                 .no_activation();
         Ok(Self {
-            expand_cna,
-            depthwise_cna,
+            expand_can,
+            depthwise_can,
             squeeze_excitation,
-            project_cna,
+            project_can,
             config: c,
         })
     }
@@ -254,13 +254,13 @@ impl Module for MBConv {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let use_res_connect =
             self.config.stride == 1 && self.config.input_channels == self.config.out_channels;
-        let ys = match &self.expand_cna {
-            Some(expand_cna) => expand_cna.forward(xs)?,
+        let ys = match &self.expand_can {
+            Some(expand_can) => expand_can.forward(xs)?,
             None => xs.clone(),
         };
-        let ys = self.depthwise_cna.forward(&ys)?;
+        let ys = self.depthwise_can.forward(&ys)?;
         let ys = self.squeeze_excitation.forward(&ys)?;
-        let ys = self.project_cna.forward(&ys)?;
+        let ys = self.project_can.forward(&ys)?;
         if use_res_connect {
             ys + xs
         } else {
@@ -275,9 +275,9 @@ fn swish(s: &Tensor) -> Result<Tensor> {
 
 #[derive(Debug)]
 pub struct EfficientNet {
-    init_cna: ConvNormActivation,
+    init_can: ConvNormActivation,
     blocks: Vec<MBConv>,
-    final_cna: ConvNormActivation,
+    final_can: ConvNormActivation,
     classifier: nn::Linear,
 }
 
@@ -287,7 +287,7 @@ impl EfficientNet {
         let first_in_c = configs[0].input_channels;
         let last_out_c = configs.last().unwrap().out_channels;
         let final_out_c = 4 * last_out_c;
-        let init_cna = ConvNormActivation::new(f_p.pp(0), 3, first_in_c, 3, 2, 1)?;
+        let init_can = ConvNormActivation::new(f_p.pp(0), 3, first_in_c, 3, 2, 1)?;
         let nconfigs = configs.len();
         let mut blocks = vec![];
         for (index, cnf) in configs.into_iter().enumerate() {
@@ -305,13 +305,13 @@ impl EfficientNet {
                 blocks.push(MBConv::new(f_p.pp(r_index), cnf)?)
             }
         }
-        let final_cna =
+        let final_can =
             ConvNormActivation::new(f_p.pp(nconfigs + 1), last_out_c, final_out_c, 1, 1, 1)?;
         let classifier = nn::linear(final_out_c, nclasses, p.pp("classifier.1"))?;
         Ok(Self {
-            init_cna,
+            init_can,
             blocks,
-            final_cna,
+            final_can,
             classifier,
         })
     }
@@ -319,11 +319,11 @@ impl EfficientNet {
 
 impl Module for EfficientNet {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut xs = self.init_cna.forward(xs)?;
+        let mut xs = self.init_can.forward(xs)?;
         for block in self.blocks.iter() {
             xs = block.forward(&xs)?
         }
-        let xs = self.final_cna.forward(&xs)?;
+        let xs = self.final_can.forward(&xs)?;
         // Equivalent to adaptive_avg_pool2d([1, 1]) -> squeeze(-1) -> squeeze(-1)
         let xs = xs.mean(D::Minus1)?.mean(D::Minus1)?;
         self.classifier.forward(&xs)

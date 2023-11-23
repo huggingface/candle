@@ -152,7 +152,7 @@ fn run_ls(file: &std::path::PathBuf, format: Option<Format>, verbose: bool) -> R
             }
         }
         Format::Safetensors => {
-            let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(file)? };
+            let tensors = unsafe { candle_core::safetensors::MappedSafetensors::new(file)? };
             let mut tensors = tensors.tensors();
             tensors.sort_by(|a, b| a.0.cmp(&b.0));
             for (name, view) in tensors.iter() {

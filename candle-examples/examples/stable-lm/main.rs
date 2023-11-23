@@ -246,7 +246,7 @@ fn main() -> Result<()> {
         } else {
             DType::F32
         };
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let vb = unsafe { VarBuilder::from_mapped_safetensors(&filenames, dtype, &device)? };
         let model = StableLM::new(&config, vb)?;
         (Model::StableLM(model), device)
     };

@@ -134,14 +134,14 @@ impl T5ModelBuilder {
 
     pub fn build_encoder(&self) -> Result<t5::T5EncoderModel> {
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&self.weights_filename, DTYPE, &self.device)?
+            VarBuilder::from_mapped_safetensors(&self.weights_filename, DTYPE, &self.device)?
         };
         Ok(t5::T5EncoderModel::load(vb, &self.config)?)
     }
 
     pub fn build_conditional_generation(&self) -> Result<t5::T5ForConditionalGeneration> {
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&self.weights_filename, DTYPE, &self.device)?
+            VarBuilder::from_mapped_safetensors(&self.weights_filename, DTYPE, &self.device)?
         };
         Ok(t5::T5ForConditionalGeneration::load(vb, &self.config)?)
     }

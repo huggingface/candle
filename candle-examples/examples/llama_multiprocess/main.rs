@@ -69,7 +69,7 @@ EDWARD:
 'Tis wondrous strange, the like yet never heard of.
 I think it cites us, brother, to the field,
 That we, the sons of brave Plantagenet,
-Each one already blazing by our meeds,
+Each one already blazing by our needs,
 Should notwithstanding join our lights together
 And over-shine the earth as this the world.
 Whate'er it bodes, henceforward will I bear

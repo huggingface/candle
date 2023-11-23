@@ -291,7 +291,7 @@ fn main() -> Result<()> {
         (Model::Quantized(model), Device::Cpu)
     } else {
         let device = candle_examples::device(args.cpu)?;
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[filename], DType::F32, &device)? };
+        let vb = unsafe { VarBuilder::from_mapped_safetensors(&[filename], DType::F32, &device)? };
         let model = MixFormer::new(&config, vb)?;
         (Model::MixFormer(model), device)
     };

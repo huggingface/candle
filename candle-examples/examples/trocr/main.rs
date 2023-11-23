@@ -76,7 +76,7 @@ pub fn main() -> anyhow::Result<()> {
             },
         };
         println!("model: {:?}", model);
-        unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? }
+        unsafe { VarBuilder::from_mapped_safetensors(&[model], DType::F32, &device)? }
     };
 
     let encoder_config = match args.which {
