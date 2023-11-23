@@ -7,7 +7,7 @@ extern crate accelerate_src;
 mod model;
 use model::{Multiples, YoloV8, YoloV8Pose};
 
-use candle::{DType, IndexOp, Result, Tensor};
+use candle::{DType, IndexOp, Result, Tensor, Device};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::object_detection::{non_maximum_suppression, Bbox, KeyPoint};
 use clap::{Parser, ValueEnum};
@@ -61,6 +61,7 @@ pub fn report_detect(
     nms_threshold: f32,
     legend_size: u32,
 ) -> Result<DynamicImage> {
+    let pred = pred.to_device(&Device::Cpu)?;
     let (pred_size, npreds) = pred.dims2()?;
     let nclasses = pred_size - 4;
     // The bounding boxes grouped by (maximum) class index.
@@ -153,6 +154,7 @@ pub fn report_pose(
     confidence_threshold: f32,
     nms_threshold: f32,
 ) -> Result<DynamicImage> {
+    let pred = pred.to_device(&Device::Cpu)?;
     let (pred_size, npreds) = pred.dims2()?;
     if pred_size != 17 * 3 + 4 + 1 {
         candle::bail!("unexpected pred-size {pred_size}");
