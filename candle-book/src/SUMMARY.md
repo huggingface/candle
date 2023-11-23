@@ -5,8 +5,11 @@
 # User Guide
 
 - [Installation](guide/installation.md)
+- [Example Models](guide/examples.md)
 - [Hello World - MNIST](guide/hello_world.md)
 - [PyTorch cheatsheet](guide/cheatsheet.md)
+- [Matrix Multiplication Example](guide/matmul.md)
+- [Common Errors](guide/common_errors.md)
 
 # Reference Guide
 
