@@ -43,6 +43,7 @@ pub fn report(
     confidence_threshold: f32,
     nms_threshold: f32,
 ) -> Result<DynamicImage> {
+    let pred = pred.to_device(&Device::Cpu)?;
     let (npreds, pred_size) = pred.dims2()?;
     let nclasses = pred_size - 5;
     // The bounding boxes grouped by (maximum) class index.
