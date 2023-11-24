@@ -55,7 +55,6 @@ pub struct Config {
     n_heads: usize,
     hidden_dim: usize,
     activation: HiddenAct,
-    dropout: f64,
     max_position_embeddings: usize,
     initializer_range: f64,
     pad_token_id: usize,
@@ -63,7 +62,6 @@ pub struct Config {
     position_embedding_type: PositionEmbeddingType,
     #[serde(default)]
     use_cache: bool,
-    classifier_dropout: Option<f64>,
     model_type: Option<String>,
 }
 
@@ -76,13 +74,11 @@ impl Default for Config {
             n_heads: 12,
             hidden_dim: 3072,
             activation: HiddenAct::Gelu,
-            dropout: 0.1,
             max_position_embeddings: 512,
             initializer_range: 0.02,
             pad_token_id: 0,
             position_embedding_type: PositionEmbeddingType::Absolute,
             use_cache: true,
-            classifier_dropout: None,
             model_type: Some("distilbert".to_string()),
         }
     }
@@ -93,54 +89,26 @@ fn embedding(vocab_size: usize, dim: usize, vb: VarBuilder) -> Result<Embedding>
     Ok(Embedding::new(embeddings, dim))
 }
 
-struct Dropout {
-    #[allow(dead_code)]
-    pr: f64,
-}
-
-impl Dropout {
-    fn new(pr: f64) -> Self {
-        Self { pr }
-    }
-}
-
-impl Module for Dropout {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // TODO
-        Ok(x.clone())
-    }
-}
-
 struct Embeddings {
     word_embeddings: Embedding,
     position_embeddings: Embedding,
     layer_norm: LayerNorm,
-    dropout: Dropout,
     span: tracing::Span,
 }
 
 impl Embeddings {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
-        let word_embeddings = embedding(
-            config.vocab_size,
-            config.dim,
-            vb.pp("word_embeddings"),
-        )?;
+        let word_embeddings = embedding(config.vocab_size, config.dim, vb.pp("word_embeddings"))?;
         let position_embeddings = embedding(
             config.max_position_embeddings,
             config.dim,
             vb.pp("position_embeddings"),
         )?;
-        let layer_norm = layer_norm(
-            config.dim,
-            1e-12,
-            vb.pp("LayerNorm"),
-        )?;
+        let layer_norm = layer_norm(config.dim, 1e-12, vb.pp("LayerNorm"))?;
         Ok(Self {
             word_embeddings,
-            position_embeddings: position_embeddings,
+            position_embeddings,
             layer_norm,
-            dropout: Dropout::new(config.dropout),
             span: tracing::span!(tracing::Level::TRACE, "embeddings"),
         })
     }
@@ -151,10 +119,10 @@ impl Embeddings {
         let input_embeddings = self.word_embeddings.forward(input_ids)?;
         let position_ids = (0..seq_len as u32).collect::<Vec<_>>();
         let position_ids = Tensor::new(&position_ids[..], input_ids.device())?;
-        let embeddings = input_embeddings.broadcast_add(&self.position_embeddings.forward(&position_ids)?)?;
+        let embeddings =
+            input_embeddings.broadcast_add(&self.position_embeddings.forward(&position_ids)?)?;
 
         let embeddings = self.layer_norm.forward(&embeddings)?;
-        let embeddings = self.dropout.forward(&embeddings)?;
         Ok(embeddings)
     }
 }
@@ -164,18 +132,15 @@ struct MultiHeadSelfAttention {
     k_lin: Linear,
     v_lin: Linear,
     out_lin: Linear,
-    dropout: Dropout,
     n_heads: usize,
     attention_head_size: usize,
     span: tracing::Span,
-    span_softmax: tracing::Span,
 }
 
 impl MultiHeadSelfAttention {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let attention_head_size = config.dim / config.n_heads;
         let all_head_size = config.n_heads * attention_head_size;
-        let dropout = Dropout::new(config.dropout);
         let dim = config.dim;
         let q_lin = linear(dim, all_head_size, vb.pp("q_lin"))?;
         let v_lin = linear(dim, all_head_size, vb.pp("v_lin"))?;
@@ -186,55 +151,53 @@ impl MultiHeadSelfAttention {
             k_lin,
             v_lin,
             out_lin,
-            dropout,
             n_heads: config.n_heads,
             attention_head_size,
             span: tracing::span!(tracing::Level::TRACE, "attention"),
-            span_softmax: tracing::span!(tracing::Level::TRACE, "softmax"),
         })
     }
-
 }
 
 impl MultiHeadSelfAttention {
     fn forward(&self, hidden_states: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let (bs, q_length, _dim) = hidden_states.dims3()?;
-        let (_, k_length, _) = hidden_states.dims3()?;
 
         let dim_per_head = self.attention_head_size;
         let q = self.q_lin.forward(hidden_states)?;
         let k = self.k_lin.forward(hidden_states)?;
         let v = self.v_lin.forward(hidden_states)?;
 
-        let q = q.reshape((bs, q_length, self.n_heads, dim_per_head))?.transpose(1, 2)?;
-        let k = k.reshape((bs, q_length, self.n_heads, dim_per_head))?.transpose(1, 2)?;
-        let v = v.reshape((bs, q_length, self.n_heads, dim_per_head))?.transpose(1, 2)?;
+        let q = q
+            .reshape((bs, q_length, self.n_heads, dim_per_head))?
+            .transpose(1, 2)?;
+        let k = k
+            .reshape((bs, q_length, self.n_heads, dim_per_head))?
+            .transpose(1, 2)?;
+        let v = v
+            .reshape((bs, q_length, self.n_heads, dim_per_head))?
+            .transpose(1, 2)?;
 
         let q: Tensor = (q / (dim_per_head as f64).sqrt())?;
         let scores = q.matmul(&k.transpose(2, 3)?.contiguous()?)?;
         let mask = attention_mask.broadcast_as(scores.shape())?;
 
-        // println!("mask: {:?}", mask.squeeze(0)?.to_vec3::<u32>());
         let scores = masked_fill(&scores.to_dtype(DType::F32)?, &mask, f32::NEG_INFINITY)?;
-
-        // println!("scores: {:?}", scores.squeeze(0)?.to_vec3::<f32>());
-
-
         let weights = candle_nn::ops::softmax(&scores, candle::D::Minus1)?;
-        let weights = self.dropout.forward(&weights)?;
 
         let context = weights.matmul(&v.contiguous()?)?;
-        let context = context.transpose(1, 2)?.reshape((bs, q_length, self.n_heads * dim_per_head))?.contiguous()?;
+        let context = context
+            .transpose(1, 2)?
+            .reshape((bs, q_length, self.n_heads * dim_per_head))?
+            .contiguous()?;
         let context = self.out_lin.forward(&context)?;
 
         Ok(context)
-
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 struct FFN {
-    dropout: Dropout,
     lin1: Linear,
     lin2: Linear,
     activation: HiddenActLayer,
@@ -244,13 +207,8 @@ struct FFN {
 impl FFN {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let lin1 = linear(config.dim, config.hidden_dim, vb.pp("lin1"))?;
-        let lin2 = linear(
-            config.hidden_dim,
-            config.dim,
-            vb.pp("lin2"),
-        )?;
+        let lin2 = linear(config.hidden_dim, config.dim, vb.pp("lin2"))?;
         Ok(Self {
-            dropout: Dropout::new(config.dropout),
             lin1,
             lin2,
             activation: HiddenActLayer::new(config.activation),
@@ -265,11 +223,9 @@ impl Module for FFN {
         let hidden_states = self.lin1.forward(hidden_states)?;
         let hidden_states = self.activation.forward(&hidden_states)?;
         let hidden_states = self.lin2.forward(&hidden_states)?;
-        let hidden_states = self.dropout.forward(&hidden_states)?;
         Ok(hidden_states)
     }
 }
-
 
 struct TransformerBlock {
     attention: MultiHeadSelfAttention,
@@ -282,17 +238,9 @@ struct TransformerBlock {
 impl TransformerBlock {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
         let attention = MultiHeadSelfAttention::load(vb.pp("attention"), config)?;
-        let sa_layer_norm = layer_norm(
-            config.dim,
-            1e-12,
-            vb.pp("sa_layer_norm"),
-        )?;
+        let sa_layer_norm = layer_norm(config.dim, 1e-12, vb.pp("sa_layer_norm"))?;
         let ffn = FFN::load(vb.pp("ffn"), config)?;
-        let output_layer_norm = layer_norm(
-            config.dim,
-            1e-12,
-            vb.pp("output_layer_norm"),
-        )?;
+        let output_layer_norm = layer_norm(config.dim, 1e-12, vb.pp("output_layer_norm"))?;
         Ok(Self {
             attention,
             sa_layer_norm,
@@ -310,7 +258,7 @@ impl TransformerBlock {
         // TODO: Support cross-attention?
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L523
         // TODO: Support something similar to `apply_chunking_to_forward`?
-        let sa_output = &sa_output.broadcast_add(hidden_states)?;
+        let sa_output = sa_output.broadcast_add(hidden_states)?;
         let sa_output = self.sa_layer_norm.forward(&sa_output)?;
 
         let ffn_output = self.ffn.forward(&sa_output)?;
@@ -342,7 +290,7 @@ impl Transformer {
         let mut hidden_states = hidden_states.clone();
         // Use a loop rather than a fold as it's easier to modify when adding debug/...
         for layer in self.layers.iter() {
-            hidden_states = layer.forward(&hidden_states, &attention_mask)?;
+            hidden_states = layer.forward(&hidden_states, attention_mask)?;
             println!("hidden_states: {:?}", hidden_states.dims3());
         }
         Ok(hidden_states)
@@ -389,7 +337,9 @@ impl DistilBertModel {
     pub fn forward(&self, input_ids: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids)?;
-        let sequence_output = self.transformer.forward(&embedding_output, attention_mask)?;
+        let sequence_output = self
+            .transformer
+            .forward(&embedding_output, attention_mask)?;
         Ok(sequence_output)
     }
 }

@@ -3,14 +3,14 @@ extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
-use candle_transformers::models::distilbert::{DistilBertModel, Config, DTYPE};
+use candle_transformers::models::distilbert::{Config, DistilBertModel, DTYPE};
 
 use anyhow::{Error as E, Result};
-use candle::{Tensor, Device};
+use candle::{Device, Tensor};
 use candle_nn::VarBuilder;
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
-use tokenizers::{PaddingParams, Tokenizer};
+use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -106,8 +106,6 @@ fn main() -> Result<()> {
     } else {
         None
     };
-    let start = std::time::Instant::now();
-
     let (model, mut tokenizer) = args.build_model_and_tokenizer()?;
     let device = &model.device;
 
@@ -125,7 +123,6 @@ fn main() -> Result<()> {
 
     println!("token_ids: {:?}", token_ids.to_vec2::<u32>());
     println!("mask: {:?}", mask.to_vec2::<u8>());
-
 
     let ys = model.forward(&token_ids, &mask)?;
     println!("{ys}");
