@@ -29,7 +29,9 @@ impl HiddenActLayer {
         let span = tracing::span!(tracing::Level::TRACE, "hidden-act");
         Self { act, span }
     }
+}
 
+impl Module for HiddenActLayer {
     fn forward(&self, xs: &Tensor) -> candle::Result<Tensor> {
         let _enter = self.span.enter();
         match self.act {
@@ -84,11 +86,6 @@ impl Default for Config {
     }
 }
 
-fn embedding(vocab_size: usize, dim: usize, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((vocab_size, dim), "weight")?;
-    Ok(Embedding::new(embeddings, dim))
-}
-
 struct Embeddings {
     word_embeddings: Embedding,
     position_embeddings: Embedding,
@@ -98,8 +95,9 @@ struct Embeddings {
 
 impl Embeddings {
     fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
-        let word_embeddings = embedding(config.vocab_size, config.dim, vb.pp("word_embeddings"))?;
-        let position_embeddings = embedding(
+        let word_embeddings =
+            candle_nn::embedding(config.vocab_size, config.dim, vb.pp("word_embeddings"))?;
+        let position_embeddings = candle_nn::embedding(
             config.max_position_embeddings,
             config.dim,
             vb.pp("position_embeddings"),
@@ -220,10 +218,10 @@ impl FFN {
 impl Module for FFN {
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let hidden_states = self.lin1.forward(hidden_states)?;
-        let hidden_states = self.activation.forward(&hidden_states)?;
-        let hidden_states = self.lin2.forward(&hidden_states)?;
-        Ok(hidden_states)
+        hidden_states
+            .apply(&self.lin1)?
+            .apply(&self.activation)?
+            .apply(&self.lin2)
     }
 }
 
