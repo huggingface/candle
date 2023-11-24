@@ -4,6 +4,7 @@ pub mod blip;
 pub mod blip_text;
 pub mod convmixer;
 pub mod dinov2;
+pub mod distilbert;
 pub mod efficientnet;
 pub mod falcon;
 pub mod jina_bert;
