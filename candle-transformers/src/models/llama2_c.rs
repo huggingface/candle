@@ -235,6 +235,11 @@ impl CausalSelfAttention {
             cache: cache.clone(),
         })
     }
+
+    fn clear_cache(&mut self, config: &Config) {
+        self.cache.masks = Arc::new(Mutex::new(HashMap::new()));
+        self.cache.kvs = Arc::new(Mutex::new(vec![None; config.n_layers]));
+    }
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -349,5 +354,15 @@ impl Llama {
             lm_head,
             config: cfg,
         })
+    }
+
+    pub fn clear_cache(&mut self, config: &Config) {
+        for block in &mut self.blocks {
+            block.attn.clear_cache(config);
+        }
+    }
+
+    pub fn get_config(&self) -> &Config {
+        &self.config
     }
 }

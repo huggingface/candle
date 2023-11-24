@@ -306,6 +306,11 @@ impl CausalSelfAttention {
             cache: cache.clone(),
         })
     }
+
+    fn clear_cache(&mut self, config: &Config) {
+        self.cache.masks = Arc::new(Mutex::new(HashMap::new()));
+        self.cache.kvs = Arc::new(Mutex::new(vec![None; config.num_hidden_layers]));
+    }
 }
 
 struct Mlp {
@@ -391,15 +396,23 @@ pub struct Llama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Linear,
+    cfg: Config,
 }
 
 impl Llama {
-    fn new(wte: Embedding, blocks: Vec<Block>, ln_f: RmsNorm, lm_head: Linear) -> Self {
+    fn new(
+        wte: Embedding,
+        blocks: Vec<Block>,
+        ln_f: RmsNorm,
+        lm_head: Linear,
+        cfg: Config,
+    ) -> Self {
         Self {
             wte,
             blocks,
             ln_f,
             lm_head,
+            cfg,
         }
     }
 
@@ -431,6 +444,16 @@ impl Llama {
             })
             .collect();
 
-        Ok(Self::new(wte, blocks, norm, lm_head))
+        Ok(Self::new(wte, blocks, norm, lm_head, cfg.clone()))
+    }
+
+    pub fn clear_cache(&mut self, config: &Config) {
+        for block in &mut self.blocks {
+            block.attn.clear_cache(config);
+        }
+    }
+
+    pub fn get_config(&self) -> &Config {
+        &self.cfg
     }
 }
