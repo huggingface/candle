@@ -13,12 +13,13 @@ members = [
 exclude = [
    "candle-flash-attn",
    "candle-kernels",
+   "candle-metal-kernels",
    "candle-onnx",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Minimalist ML framework."
 repository = "https://github.com/huggingface/candle"
@@ -50,6 +51,7 @@ rayon = "1.7.0"
 rusttype = { version = "0.9", default-features = false }
 safetensors = "0.3.1"
 serde = { version = "1.0.171", features = ["derive"] }
+serde_plain = "1.0.2"
 serde_json = "1.0.99"
 thiserror = "1"
 tokenizers = { version = "0.13.4", default-features = false }
@@ -59,6 +61,7 @@ tracing-subscriber = "0.3.7"
 wav = "1.0.0"
 yoke = { version = "0.7.2", features = ["derive"] }
 zip = { version = "0.6.6", default-features = false }
+metal = { version = "0.27.1", features = ["mps"], package="candle-metal" }
 
 [profile.release-with-debug]
 inherits = "release"

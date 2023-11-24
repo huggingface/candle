@@ -104,6 +104,17 @@ impl T5ModelBuilder {
                 api.get("model-00004-of-00005.safetensors")?,
                 api.get("model-00005-of-00005.safetensors")?,
             ]
+        } else if model_id == "google/flan-ul2" {
+            vec![
+                api.get("model-00001-of-00008.safetensors")?,
+                api.get("model-00002-of-00008.safetensors")?,
+                api.get("model-00003-of-00008.safetensors")?,
+                api.get("model-00004-of-00008.safetensors")?,
+                api.get("model-00005-of-00008.safetensors")?,
+                api.get("model-00006-of-00008.safetensors")?,
+                api.get("model-00007-of-00008.safetensors")?,
+                api.get("model-00008-of-00008.safetensors")?,
+            ]
         } else {
             vec![api.get("model.safetensors")?]
         };

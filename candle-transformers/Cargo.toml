@@ -12,15 +12,16 @@ readme = "README.md"
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
-candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
-candle-flash-attn = { path = "../candle-flash-attn", version = "0.3.0", optional = true }
-candle-nn = { path = "../candle-nn", version = "0.3.0" }
+candle = { path = "../candle-core", version = "0.3.1", package = "candle-core" }
+candle-flash-attn = { path = "../candle-flash-attn", version = "0.3.1", optional = true }
+candle-nn = { path = "../candle-nn", version = "0.3.1" }
 intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
 rand = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_plain = { workspace = true }
 tracing = { workspace = true }
 wav = { workspace = true }
 

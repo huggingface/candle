@@ -128,7 +128,13 @@ impl Decoder {
         let transcribe_token = token_id(&tokenizer, m::TRANSCRIBE_TOKEN)?;
         let translate_token = token_id(&tokenizer, m::TRANSLATE_TOKEN)?;
         let eot_token = token_id(&tokenizer, m::EOT_TOKEN)?;
-        let no_speech_token = token_id(&tokenizer, m::NO_SPEECH_TOKEN)?;
+        let no_speech_token = m::NO_SPEECH_TOKENS
+            .iter()
+            .find_map(|token| token_id(&tokenizer, token).ok());
+        let no_speech_token = match no_speech_token {
+            None => anyhow::bail!("unable to find any non-speech token"),
+            Some(n) => n,
+        };
         Ok(Self {
             model,
             rng: rand::rngs::StdRng::seed_from_u64(seed),
@@ -512,11 +518,7 @@ fn main() -> Result<()> {
             )
         } else {
             let config = repo.get("config.json")?;
-            let tokenizer = if args.model == WhichModel::LargeV3 {
-                panic!("openai/whisper-large-v3 does not provide a compatible tokenizer.json config at the moment")
-            } else {
-                repo.get("tokenizer.json")?
-            };
+            let tokenizer = repo.get("tokenizer.json")?;
             let model = repo.get("model.safetensors")?;
             (config, tokenizer, model)
         };

@@ -43,4 +43,4 @@ pub const TRANSCRIBE_TOKEN: &str = "<|transcribe|>";
 pub const TRANSLATE_TOKEN: &str = "<|translate|>";
 pub const NO_TIMESTAMPS_TOKEN: &str = "<|notimestamps|>";
 pub const EOT_TOKEN: &str = "<|endoftext|>";
-pub const NO_SPEECH_TOKEN: &str = "<|nocaptions|>";
+pub const NO_SPEECH_TOKENS: [&str; 2] = ["<|nocaptions|>", "<|nospeech|>"];

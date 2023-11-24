@@ -6,7 +6,6 @@ use serde::Deserialize;
 pub enum Activation {
     #[default]
     Gelu,
-    #[serde(rename = "gated-gelu")]
     NewGelu,
     Relu,
     Relu2,

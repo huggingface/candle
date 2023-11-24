@@ -180,6 +180,22 @@ fn transpose(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn var(device: &Device) -> Result<()> {
+    // Values taken from https://pytorch.org/docs/stable/generated/torch.var.html
+    let data = &[
+        [0.2035f32, 1.2959, 1.8101, -0.4644],
+        [1.5027, -0.3270, 0.5905, 0.6538],
+        [-1.5745, 1.3330, -0.5596, -0.6548],
+        [0.1264, -0.5080, 1.6420, 0.1992],
+    ];
+    let tensor = Tensor::new(data, device)?;
+    assert_eq!(
+        test_utils::to_vec2_round(&tensor.var_keepdim(1)?, 4)?,
+        &[[1.0631], [0.559], [1.4893], [0.8258]]
+    );
+    Ok(())
+}
+
 fn sum(device: &Device) -> Result<()> {
     let data = &[[[3u32, 1, 4], [1, 5, 9]], [[2, 1, 7], [8, 2, 8]]];
     let tensor = Tensor::new(data, device)?;
@@ -1082,6 +1098,7 @@ test_device!(scatter_add, scatter_add_cpu, scatter_add_gpu);
 test_device!(slice_scatter, slice_scatter_cpu, slice_scatter_gpu);
 test_device!(randn, randn_cpu, randn_gpu);
 test_device!(clamp, clamp_cpu, clamp_gpu);
+test_device!(var, var_cpu, var_gpu);
 
 // There was originally a bug on the CPU implementation for randn
 // https://github.com/huggingface/candle/issues/381
@@ -1115,5 +1132,67 @@ fn i64_abs() -> Result<()> {
     let t = Tensor::new(&[-42i64, 1337], &Device::Cpu)?;
     let t = t.abs()?;
     assert_eq!(t.to_vec1::<i64>()?, [42, 1337]);
+    Ok(())
+}
+
+#[test]
+fn tril_triu_eye() -> Result<()> {
+    let t = Tensor::tril2(4, DType::F32, &Device::Cpu)?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0, 1.0]
+        ],
+    );
+    let t = Tensor::triu2(4, DType::F32, &Device::Cpu)?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        [
+            [1.0, 1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ]
+    );
+    let t = Tensor::eye(4, DType::F32, &Device::Cpu)?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn cumsum() -> Result<()> {
+    let t = &[3f32, 1., 4., 1., 5.];
+    let t = Tensor::new(t, &Device::Cpu)?;
+    assert_eq!(t.cumsum(0)?.to_vec1::<f32>()?, [3., 4., 8., 9., 14.]);
+    let t = t.unsqueeze(1)?;
+    assert_eq!(
+        t.cumsum(0)?.to_vec2::<f32>()?,
+        [[3.0], [4.0], [8.0], [9.0], [14.0]]
+    );
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [[3.0], [1.0], [4.0], [1.0], [5.0]]
+    );
+    let t = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
+    let t = Tensor::new(t, &Device::Cpu)?;
+    assert_eq!(
+        t.cumsum(1)?.to_vec2::<f32>()?,
+        [[3.0, 4.0, 8.0, 9.0, 14.0], [2.0, 3.0, 10.0, 18.0, 20.0]],
+    );
+    assert_eq!(
+        t.cumsum(0)?.to_vec2::<f32>()?,
+        [[3.0, 1.0, 4.0, 1.0, 5.0], [5.0, 2.0, 11.0, 9.0, 7.0]]
+    );
     Ok(())
 }

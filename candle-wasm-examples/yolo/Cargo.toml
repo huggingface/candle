@@ -9,8 +9,8 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-candle = { path = "../../candle-core", version = "0.3.0", package = "candle-core" }
-candle-nn = { path = "../../candle-nn", version = "0.3.0" }
+candle = { path = "../../candle-core", version = "0.3.1", package = "candle-core" }
+candle-nn = { path = "../../candle-nn", version = "0.3.1" }
 num-traits = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -6,7 +6,7 @@ use crate::op::{
 };
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims};
-use crate::{storage::Storage, DType, Device, Error, Layout, Result, Shape};
+use crate::{bail, storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
 
 /// Unique identifier for tensors.
@@ -529,6 +529,7 @@ impl Tensor {
         match &*self.storage() {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -853,6 +854,20 @@ impl Tensor {
         let reduced_dim: usize = mean_dims.iter().map(|i| self.dims()[*i]).product();
         let scale = 1f64 / (reduced_dim as f64);
         self.sum_impl(mean_dims, false)? * scale
+    }
+
+    /// Returns the unbiased variance over the selected dimension.
+    pub fn var_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "var")?;
+        let mean = self.mean_keepdim(dim)?;
+        let squares = self.broadcast_sub(&mean)?.sqr()?;
+        squares.sum_impl(dim, true)? / (self.dim(dim)? - 1) as f64
+    }
+
+    /// Returns the unbiased variance over the selected dimension.
+    pub fn var<D: Dim>(&self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "var")?;
+        self.var_keepdim(dim)?.squeeze(dim)
     }
 
     /// Gathers the maximum value across the selected dimension. The resulting shape has the same
@@ -1454,6 +1469,7 @@ impl Tensor {
         match &*self.storage() {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1484,6 +1500,7 @@ impl Tensor {
         match &*self.storage() {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1524,6 +1541,7 @@ impl Tensor {
         match &*self.storage() {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1841,7 +1859,14 @@ impl Tensor {
                 (Storage::Cpu(storage), Device::Cuda(cuda)) => {
                     Storage::Cuda(cuda.storage_from_cpu_storage(storage)?)
                 }
+                (Storage::Cpu(storage), Device::Metal(metal)) => {
+                    Storage::Metal(metal.storage_from_cpu_storage(storage)?)
+                }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                (Storage::Metal(storage), Device::Cpu) => {
+                    println!("{storage:?} - {:?}", storage.to_cpu_storage()?);
+                    Storage::Cpu(storage.to_cpu_storage()?)
+                }
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {
                     // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
                     // are the same.
@@ -1849,6 +1874,9 @@ impl Tensor {
                     Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
+                _ => {
+                    bail!("not implemented yet")
+                }
             };
             let op = BackpropOp::new1(self, Op::ToDevice);
             let tensor_ = Tensor_ {
@@ -2427,6 +2455,52 @@ impl Tensor {
                 crate::bail!("axis {axis} is too small, tensor rank {rank}")
             }
             Ok(naxis as usize)
+        }
+    }
+
+    /// Returns a lower triangular matrix of ones of size n by n.
+    pub fn tril2(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let t = Tensor::arange(0u32, n as u32, device)?;
+        let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
+        let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
+        t1.le(&t2)?.to_dtype(dtype)
+    }
+
+    /// Returns an upper triangular matrix of ones of size n by n.
+    pub fn triu2(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let t = Tensor::arange(0u32, n as u32, device)?;
+        let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
+        let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
+        t1.ge(&t2)?.to_dtype(dtype)
+    }
+
+    /// Returns a matrix with a diagonal of ones of size n by n.
+    pub fn eye(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let t = Tensor::arange(0u32, n as u32, device)?;
+        let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
+        let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
+        t1.eq(&t2)?.to_dtype(dtype)
+    }
+
+    /// Returns the cumulative sum of elements of the input tensor summed over the specified
+    /// dimension.
+    ///
+    /// This operation is most efficient when dim is the last dimension of the tensor.
+    pub fn cumsum<D: Dim>(&self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "cumsum")?;
+        let rank = self.rank();
+        if rank == 0 {
+            return Ok(self.clone());
+        }
+        let n_axis = self.dim(dim)?;
+        let triu = Tensor::triu2(n_axis, self.dtype(), self.device())?;
+        if rank == 1 {
+            self.unsqueeze(0)?.matmul(&triu)?.squeeze(0)
+        } else {
+            let last = rank - 1;
+            let t = self.transpose(dim, last)?;
+            let t = t.broadcast_matmul(&triu)?;
+            t.transpose(dim, last)
         }
     }
 }

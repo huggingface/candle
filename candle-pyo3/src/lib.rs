@@ -71,11 +71,13 @@ impl PyDType {
 }
 
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PyDevice {
     Cpu,
     Cuda,
+    Metal,
 }
 
 impl PyDevice {
@@ -83,6 +85,7 @@ impl PyDevice {
         match device {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,
+            Device::Metal(_) => Self::Metal,
         }
     }
 
@@ -95,6 +98,15 @@ impl PyDevice {
                     return Ok(device.clone());
                 };
                 let d = Device::new_cuda(0).map_err(wrap_err)?;
+                *device = Some(d.clone());
+                Ok(d)
+            }
+            Self::Metal => {
+                let mut device = METAL_DEVICE.lock().unwrap();
+                if let Some(device) = device.as_ref() {
+                    return Ok(device.clone());
+                };
+                let d = Device::new_metal(0).map_err(wrap_err)?;
                 *device = Some(d.clone());
                 Ok(d)
             }
@@ -119,6 +131,7 @@ impl ToPyObject for PyDevice {
         let str = match self {
             PyDevice::Cpu => "cpu",
             PyDevice::Cuda => "cuda",
+            PyDevice::Metal => "metal",
         };
         str.to_object(py)
     }

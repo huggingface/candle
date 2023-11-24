@@ -1,5 +1,5 @@
 #![allow(clippy::redundant_closure_call)]
-use crate::{CpuStorage, CudaStorage, Layout, Result, Shape, Tensor};
+use crate::{CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
 use half::{bf16, f16};
 use num_traits::float::Float;
 
@@ -184,6 +184,18 @@ pub trait CustomOp1 {
         ))
     }
 
+    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn metal_fwd(
+        &self,
+        _storage: &MetalStorage,
+        _layout: &Layout,
+    ) -> Result<(MetalStorage, Shape)> {
+        Err(crate::Error::Metal(
+            format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+
     /// This function takes as argument the argument `arg` used in the forward pass, the result
     /// produced by the forward operation `res` and the gradient of the result `grad_res`.
     /// The function should return the gradient of the argument.
@@ -216,6 +228,20 @@ pub trait CustomOp2 {
     ) -> Result<(CudaStorage, Shape)> {
         Err(crate::Error::Cuda(
             format!("no cuda implementation for {}", self.name()).into(),
+        ))
+    }
+
+    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn metal_fwd(
+        &self,
+        _: &MetalStorage,
+        _: &Layout,
+        _: &MetalStorage,
+        _: &Layout,
+    ) -> Result<(MetalStorage, Shape)> {
+        Err(crate::Error::Metal(
+            format!("no metal implementation for {}", self.name()).into(),
         ))
     }
 
@@ -258,6 +284,22 @@ pub trait CustomOp3 {
     ) -> Result<(CudaStorage, Shape)> {
         Err(crate::Error::Cuda(
             format!("no cuda implementation for {}", self.name()).into(),
+        ))
+    }
+
+    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn metal_fwd(
+        &self,
+        _: &MetalStorage,
+        _: &Layout,
+        _: &MetalStorage,
+        _: &Layout,
+        _: &MetalStorage,
+        _: &Layout,
+    ) -> Result<(MetalStorage, Shape)> {
+        Err(crate::Error::Metal(
+            format!("no metal implementation for {}", self.name()).into(),
         ))
     }
 
@@ -551,7 +593,8 @@ unary_op!(Recip, "recip", v, v.recip());
 unary_op!(Sqr, "sqr", v, v * v, vs_sqr, vd_sqr);
 unary_op!(Sqrt, "sqrt", v, v.sqrt(), vs_sqrt, vd_sqrt);
 
-/// `gelu` operation
+/// Tanh based approximation of the `gelu` operation
+/// GeluErf is the more precise one.
 /// <https://en.wikipedia.org/wiki/Activation_function#Comparison_of_activation_functions>
 impl UnaryOpT for Gelu {
     const NAME: &'static str = "gelu";

@@ -69,6 +69,8 @@ We also provide a some command line based examples using state of the art models
   performance larger than all publicly available 13b models as of 2023-09-28.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
 - [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
+- [Yi-6B / Yi-34B](./candle-examples/examples/yi/): two bilingual
+  (English/Chinese) general LLMs with 6b and 34b parameters.
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
@@ -137,16 +139,16 @@ And then head over to
 <!--- ANCHOR: useful_libraries --->
 
 ## Useful External Resources
-- [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): a
+- [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): A
   very detailed tutorial showing how to convert a PyTorch model to Candle.
-- [`optimisers`](https://github.com/KGrewal1/optimisers): a collection of optimisers
+- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): Efficient and ergonomic LoRA implemenation for Candle. `candle-lora` has      
+  out-of-the-box LoRA support for many models from Candle, which can be found [here](https://github.com/EricLBuehler/candle-lora/tree/master/candle-lora-transformers/examples).
+- [`optimisers`](https://github.com/KGrewal1/optimisers): A collection of optimisers
   including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
-- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): a LoRA implementation
-  that conforms to the official `peft` implementation.
 - [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficient platform for inference and
   serving local LLMs including an OpenAI compatible API server.
-- [`candle-ext`](https://github.com/mokeyish/candle-ext): an extension library to Candle that provides PyTorch functions not currently available in Candle.
-- [`kalosm`](https://github.com/floneum/floneum/tree/master/kalosm): A multi-modal meta-framework in Rust for interfacing with local pre-trained models with support for controlled generation, custom samplers, in-memory vector databases, audio transcription, and more.
+- [`candle-ext`](https://github.com/mokeyish/candle-ext): An extension library to Candle that provides PyTorch functions not currently available in Candle.
+- [`kalosm`](https://github.com/floneum/floneum/tree/master/interfaces/kalosm): A multi-modal meta-framework in Rust for interfacing with local pre-trained models with support for controlled generation, custom samplers, in-memory vector databases, audio transcription, and more.
 - [`candle-sampling`](https://github.com/EricLBuehler/candle-sampling): Sampling techniques for Candle.
 
 If you have an addition to this list, please submit a pull request.
@@ -174,8 +176,14 @@ If you have an addition to this list, please submit a pull request.
         - StableLM-3B-4E1T.
         - Replit-code-v1.5-3B.
         - Bert.
+        - Yi-6B and Yi-34B.
+    - Quantized LLMs.
+        - Llama 7b, 13b, 70b, as well as the chat and code variants.
+        - Mistral 7b, and 7b instruct.
+        - Zephyr 7b a and b (Mistral based).
+        - OpenChat 3.5 (Mistral based).
     - Text to text.
-        - T5 and its variants: FlanT5, MADLAD400 (translation), CoEdit (Grammar correction).
+        - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
     - Whisper (multi-lingual support).
     - Text to image.

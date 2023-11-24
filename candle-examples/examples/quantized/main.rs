@@ -53,6 +53,8 @@ enum Which {
     Zephyr7bAlpha,
     #[value(name = "7b-zephyr-b")]
     Zephyr7bBeta,
+    #[value(name = "7b-open-chat-3.5")]
+    OpenChat35,
 }
 
 impl Which {
@@ -67,8 +69,10 @@ impl Which {
             | Self::L7bCode
             | Self::L13bCode
             | Self::L34bCode => false,
-            // Zephyr is a fine tuned version of mistral and should be treated in the same way.
-            Self::Zephyr7bAlpha
+            // Zephyr and OpenChat are fine tuned versions of mistral and should be treated in the
+            // same way.
+            Self::OpenChat35
+            | Self::Zephyr7bAlpha
             | Self::Zephyr7bBeta
             | Self::Mistral7b
             | Self::Mistral7bInstruct => true,
@@ -87,8 +91,28 @@ impl Which {
             | Self::L13bCode
             | Self::L34bCode
             | Self::Mistral7b
-            | Self::Mistral7bInstruct => false,
+            | Self::Mistral7bInstruct
+            | Self::OpenChat35 => false,
             Self::Zephyr7bAlpha | Self::Zephyr7bBeta => true,
+        }
+    }
+
+    fn is_open_chat(&self) -> bool {
+        match self {
+            Which::L7b
+            | Which::L13b
+            | Which::L70b
+            | Which::L7bChat
+            | Which::L13bChat
+            | Which::L70bChat
+            | Which::L7bCode
+            | Which::L13bCode
+            | Which::L34bCode
+            | Which::Mistral7b
+            | Which::Mistral7bInstruct
+            | Which::Zephyr7bAlpha
+            | Which::Zephyr7bBeta => false,
+            Which::OpenChat35 => true,
         }
     }
 }
@@ -157,7 +181,9 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let api = hf_hub::api::sync::Api::new()?;
-                let repo = if self.which.is_mistral() {
+                let repo = if self.which.is_open_chat() {
+                    "openchat/openchat_3.5"
+                } else if self.which.is_mistral() {
                     "mistralai/Mistral-7B-v0.1"
                 } else {
                     "hf-internal-testing/llama-tokenizer"
@@ -207,6 +233,7 @@ impl Args {
                     Which::Zephyr7bBeta => {
                         ("TheBloke/zephyr-7B-beta-GGUF", "zephyr-7b-beta.Q4_K_M.gguf")
                     }
+                    Which::OpenChat35 => ("TheBloke/openchat_3.5-GGUF", "openchat_3.5.Q4_K_M.gguf"),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
                 let api = api.model(repo.to_string());
@@ -308,7 +335,8 @@ fn main() -> anyhow::Result<()> {
                 | Which::Zephyr7bAlpha
                 | Which::Zephyr7bBeta
                 | Which::L70b
-                | Which::L70bChat => 8,
+                | Which::L70bChat
+                | Which::OpenChat35 => 8,
             };
             ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa))?
         }
@@ -325,10 +353,11 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut pre_prompt_tokens = vec![];
-    loop {
+    for prompt_index in 0.. {
         let prompt_str = match &prompt {
             Prompt::One(prompt) => prompt.clone(),
             Prompt::Interactive | Prompt::Chat => {
+                let is_interactive = matches!(prompt, Prompt::Interactive);
                 print!("> ");
                 std::io::stdout().flush()?;
                 let mut prompt = String::new();
@@ -339,8 +368,14 @@ fn main() -> anyhow::Result<()> {
                         prompt.pop();
                     }
                 }
-                if args.which.is_zephyr() {
-                    format!("<|system|>\n</s>\n<|user|>\n{prompt}</s>\n<|assistant|>")
+                if args.which.is_open_chat() {
+                    format!("User: {prompt}<|end_of_turn|>Assistant: ")
+                } else if args.which.is_zephyr() {
+                    if prompt_index == 0 || is_interactive {
+                        format!("<|system|>\n</s>\n<|user|>\n{prompt}</s>\n<|assistant|>",)
+                    } else {
+                        format!("<|user|>\n{prompt}</s>\n<|assistant|>")
+                    }
                 } else if args.which.is_mistral() {
                     format!("[INST] {prompt} [/INST]")
                 } else {
@@ -385,8 +420,12 @@ fn main() -> anyhow::Result<()> {
             std::io::stdout().flush()?;
         }
 
-        let eos_token = *tos.tokenizer().get_vocab(true).get("</s>").unwrap();
-
+        let eos_token = if args.which.is_open_chat() {
+            "<|end_of_turn|>"
+        } else {
+            "</s>"
+        };
+        let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
         for index in 0..to_sample {
