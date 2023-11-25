@@ -1,7 +1,7 @@
 use candle::{
     quantized::{self, k_quants, GgmlDType, GgmlType},
     test_utils::to_vec2_round,
-    Device, Result, Tensor,
+    Device, Module, Result, Tensor,
 };
 
 use wasm_bindgen_test::*;

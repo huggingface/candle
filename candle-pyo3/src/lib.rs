@@ -17,7 +17,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
+use ::candle::{quantized::QTensor, DType, Device, Module, Tensor, WithDType};
 
 mod utils;
 use utils::wrap_err;
