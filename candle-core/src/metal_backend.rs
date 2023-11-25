@@ -749,6 +749,12 @@ impl BackendDevice for MetalDevice {
         self.storage_from_cpu_storage(&cpu_storage)
     }
 
+    fn empty_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+        // TODO Is there a faster way ?
+        let cpu_storage = crate::cpu_backend::CpuDevice.empty_impl(shape, dtype)?;
+        self.storage_from_cpu_storage(&cpu_storage)
+    }
+
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
         // TODO Is there a faster way ?
         let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
