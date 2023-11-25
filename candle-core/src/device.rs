@@ -290,6 +290,23 @@ impl Device {
         }
     }
 
+    pub(crate) fn empty(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+        match self {
+            Device::Cpu => {
+                let storage = CpuDevice.empty_impl(shape, dtype)?;
+                Ok(Storage::Cpu(storage))
+            }
+            Device::Cuda(device) => {
+                let storage = device.empty_impl(shape, dtype)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = device.empty_impl(shape, dtype)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
     pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
         match self {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),

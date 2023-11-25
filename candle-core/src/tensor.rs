@@ -222,6 +222,20 @@ impl Tensor {
         Ok(from_storage(storage, shape, none, is_variable))
     }
 
+    // Do not expose outside of the crate, the `is_variable=true` case should only be accessed from
+    // the variable module.
+    pub(crate) fn empty_impl<S: Into<Shape>>(
+        shape: S,
+        dtype: DType,
+        device: &Device,
+        is_variable: bool,
+    ) -> Result<Self> {
+        let none = BackpropOp::none();
+        let shape = shape.into();
+        let storage = device.empty(&shape, dtype)?;
+        Ok(from_storage(storage, shape, none, is_variable))
+    }
+
     /// Creates a new tensor filled with zeros.
     ///
     /// ```rust
@@ -247,6 +261,33 @@ impl Tensor {
     /// ```
     pub fn zeros_like(&self) -> Result<Self> {
         Tensor::zeros(self.shape(), self.dtype(), self.device())
+    }
+
+    /// Creates a new tensor filled with uninitialized data.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, DType, Device};
+    /// let a = Tensor::empty((2, 3), DType::F32, &Device::Cpu)?;
+    /// let b = Tensor::from_slice(&[0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0], (2, 3), &Device::Cpu)?;
+    /// // a.shape() == b.shape()
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn empty<S: Into<Shape>>(shape: S, dtype: DType, device: &Device) -> Result<Self> {
+        Self::empty_impl(shape, dtype, device, false)
+    }
+
+    /// Creates a new tensor filled with uninitialized data with same shape, dtype, and device as the other
+    /// tensor.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, DType, Device};
+    /// let a = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+    /// let b = a.empty_like()?;
+    /// // b is on CPU f32.
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn empty_like(&self) -> Result<Self> {
+        Tensor::empty(self.shape(), self.dtype(), self.device())
     }
 
     pub(crate) fn rand_impl<S: Into<Shape>, T: crate::FloatDType>(
