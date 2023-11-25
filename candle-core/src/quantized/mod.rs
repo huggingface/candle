@@ -307,8 +307,8 @@ impl crate::CustomOp1 for QTensor {
     }
 }
 
-impl QMatMul {
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+impl crate::Module for QMatMul {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::QTensor(t) => xs.apply_op1_no_bwd(t.as_ref()),
             Self::Tensor(w) => {

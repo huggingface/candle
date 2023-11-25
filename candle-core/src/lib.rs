@@ -123,12 +123,6 @@ pub trait Module {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
 }
 
-impl Module for quantized::QMatMul {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.forward(xs)
-    }
-}
-
 impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self(xs)

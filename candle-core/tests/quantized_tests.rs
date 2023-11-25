@@ -1,7 +1,7 @@
 use candle_core::{
     quantized::{self, GgmlDType},
     test_utils::to_vec2_round,
-    Device, Result, Tensor,
+    Device, Module, Result, Tensor,
 };
 use quantized::{k_quants, GgmlType};
 use rand::prelude::*;

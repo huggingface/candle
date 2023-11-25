@@ -6,7 +6,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::quantized::GgmlType;
-use candle::{CpuStorage, Device, Layout, Result, Shape, Tensor, D};
+use candle::{CpuStorage, Device, Layout, Module, Result, Shape, Tensor, D};
 use clap::{Parser, Subcommand};
 
 const CHECK_CONV2D: bool = false;
