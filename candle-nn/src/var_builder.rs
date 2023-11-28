@@ -535,12 +535,17 @@ impl Backend for ShardedSafeTensors {
 
     fn get(
         &self,
-        _target_shape: Shape, // The size is not checked for ShardedTensors
+        target_shape: Shape, // The size is not checked for ShardedTensors
         path: &str,
         h: Self::Hints,
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
+        if h == Default::default() {
+            // no sharding
+            return SimpleBackend::get(&self.0, target_shape, path, Default::default(), dtype, dev);
+        }
+
         let Shard {
             dim,
             rank,
