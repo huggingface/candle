@@ -126,8 +126,11 @@ impl BackendStorage for MetalStorage {
         let el = shape.elem_count();
         let dtype = self.dtype;
 
-        if layout.is_contiguous() || layout.start_offset() != 0 || dtype != DType::F32 {
-            crate::bail!("Not contiguous, non-f32 affine is not implemented yet.");
+        if !layout.is_contiguous() || layout.start_offset() != 0 {
+            crate::bail!("Not contiguous affine is not implemented yet.");
+        }
+        if dtype != DType::F32 {
+            crate::bail!("Non-f32 affine is not implemented yet.");
         }
 
         let mut buffer = device.new_buffer(el, self.dtype);
