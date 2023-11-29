@@ -149,7 +149,7 @@ macro_rules! ops{
 }
 
 pub mod unary {
-    ops!(cos, sin, exp, sqr, sqrt, neg, copy, log);
+    ops!(cos, sin, exp, sqr, sqrt, neg, copy, log, ugelu);
 }
 pub mod binary {
     ops!(add, sub, mul, div);

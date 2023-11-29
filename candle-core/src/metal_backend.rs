@@ -285,7 +285,8 @@ impl BackendStorage for MetalStorage {
                 ("uneg", DType::F32) => contiguous::neg::FLOAT,
                 ("uexp", DType::F32) => contiguous::exp::FLOAT,
                 ("ulog", DType::F32) => contiguous::log::FLOAT,
-                (name, dtype) => crate::bail!("Match {name} - {dtype:?}"),
+                ("ugelu", DType::F32) => contiguous::ugelu::FLOAT,
+                (name, dtype) => crate::bail!("No unary_impl match {name} - {dtype:?}"),
             };
             candle_metal_kernels::call_unary_contiguous(
                 &device.device,

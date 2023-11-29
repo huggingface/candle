@@ -1,4 +1,8 @@
+#include <metal_math>
 #include <metal_stdlib>
+
+#define M_SQRT1_2 0.707106781186547524401
+#define M_2_SQRTPI 1.12837916709551257390
 
 METAL_FUNC uint get_strided_index(
     uint idx,
@@ -18,6 +22,12 @@ METAL_FUNC uint get_strided_index(
 template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
 template <typename T> METAL_FUNC T neg(T in){ return -in; }
 template <typename T> METAL_FUNC T id(T in){ return in; }
+template <typename T> METAL_FUNC T gelu_fwd(T x) {
+    T x_sq = x * x;
+    T x_cube = x_sq * x;
+    T alpha = x + static_cast<T>(0.044715) * x_cube;
+    return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + metal::tanh(static_cast<T>(M_2_SQRTPI * M_SQRT1_2) * alpha));
+}
 
 
 using namespace metal;
@@ -66,6 +76,8 @@ UNARY_OP(exp)
 UNARY_OP(log)
 UNARY(id, float, copy_float, copy_float_strided)
 UNARY(id, half, copy_half, copy_half_strided)
+UNARY(gelu_fwd, float, ugelu_float, ugelu_float_strided)
+UNARY(gelu_fwd, half, ugelu_half, ugelu_half_strided)
 
 #if __METAL_VERSION__ >= 310
 BFLOAT_UNARY_OP(cos)

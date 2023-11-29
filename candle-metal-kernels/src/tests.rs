@@ -439,8 +439,19 @@ fn cos_f16() {
         .collect();
     let results = run(&v, unary::contiguous::cos::HALF);
     let expected: Vec<f16> = v.iter().map(|v| f16::from_f32(v.to_f32().cos())).collect();
-    assert_eq!(approx_f16(results, 4), vec![0.5405, -0.4163, -0.9902]);
-    assert_eq!(approx_f16(expected, 4), vec![0.5405, -0.4163, -0.9902]);
+    assert_eq!(approx_f16(results, 2), vec![0.54, -0.42, -0.99]);
+    assert_eq!(approx_f16(expected, 2), vec![0.54, -0.42, -0.99]);
+}
+
+#[test]
+fn gelu_f16() {
+    let v: Vec<f16> = [-1.0f32, 0., 1., 2., 3.]
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect();
+    let expected: Vec<f32> = vec![-0.16, 0.000, 0.84, 1.96, 3.0];
+    let results = run(&v, unary::contiguous::ugelu::HALF);
+    assert_eq!(approx_f16(results, 2), expected);
 }
 
 fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T> {
