@@ -13,3 +13,62 @@ pub fn linspace(start: f64, stop: f64, steps: usize) -> Result<Tensor> {
         Tensor::from_vec(vs, steps, &Device::Cpu)
     }
 }
+
+/// A linear interpolator for a sorted array of x and y values.
+struct LinearInterpolator<'x, 'y> {
+    xp: &'x Vec<f64>,
+    fp: &'y Vec<f64>,
+    cache: usize,
+}
+
+impl<'x, 'y> LinearInterpolator<'x, 'y> {
+    fn bsearch(&self, x: f64, idx_low: usize, idx_high: usize) -> usize {
+        let mut ilow = idx_low;
+        let mut ihigh = idx_high;
+
+        while ihigh > ilow + 1 {
+            let i = (ihigh + ilow) / 2;
+            if self.xp[i] > x {
+                ihigh = i;
+            } else {
+                ilow = i;
+            }
+        }
+        ilow
+    }
+
+    fn accel_find(&mut self, x: f64) -> usize {
+        let xidx = self.cache;
+        if x < self.xp[xidx] {
+            self.cache = self.bsearch(x, 0, xidx);
+        } else if x >= self.xp[xidx + 1] {
+            self.cache = self.bsearch(x, xidx, self.xp.len() - 1);
+        }
+
+        self.cache
+    }
+
+    fn eval(&mut self, x: f64) -> f64 {
+        if x < self.xp[0] || x > self.xp[self.xp.len() - 1] {
+            return f64::NAN;
+        }
+
+        let idx = self.accel_find(x);
+
+        let x_l = self.xp[idx];
+        let x_h = self.xp[idx + 1];
+        let y_l = self.fp[idx];
+        let y_h = self.fp[idx + 1];
+        let dx = x_h - x_l;
+        if dx > 0.0 {
+            y_l + (x - x_l) / dx * (y_h - y_l)
+        } else {
+            f64::NAN
+        }
+    }
+}
+
+pub fn interp(x: &Vec<f64>, xp: &Vec<f64>, fp: &Vec<f64>) -> Vec<f64> {
+    let mut interpolator = LinearInterpolator { xp, fp, cache: 0 };
+    x.iter().map(|&x| interpolator.eval(x)).collect()
+}

@@ -7,7 +7,7 @@
 //!
 //! Denoising Diffusion Implicit Models, J. Song et al, 2020.
 //! https://arxiv.org/abs/2010.02502
-use super::schedulers::{betas_for_alpha_bar, BetaSchedule, PredictionType};
+use super::schedulers::{betas_for_alpha_bar, BetaSchedule, PredictionType, TimestepSpacing};
 use candle::{Result, Tensor};
 
 /// The configuration for the DDIM scheduler.
@@ -29,6 +29,8 @@ pub struct DDIMSchedulerConfig {
     pub prediction_type: PredictionType,
     /// number of diffusion steps used to train the model
     pub train_timesteps: usize,
+    /// time step spacing for the diffusion process
+    pub timestep_spacing: TimestepSpacing,
 }
 
 impl Default for DDIMSchedulerConfig {
@@ -41,6 +43,7 @@ impl Default for DDIMSchedulerConfig {
             steps_offset: 1,
             prediction_type: PredictionType::Epsilon,
             train_timesteps: 1000,
+            timestep_spacing: TimestepSpacing::Leading,
         }
     }
 }
@@ -62,10 +65,30 @@ impl DDIMScheduler {
     /// during training.
     pub fn new(inference_steps: usize, config: DDIMSchedulerConfig) -> Result<Self> {
         let step_ratio = config.train_timesteps / inference_steps;
-        let timesteps: Vec<usize> = (0..(inference_steps))
-            .map(|s| s * step_ratio + config.steps_offset)
-            .rev()
-            .collect();
+        let timesteps: Vec<usize> = match config.timestep_spacing {
+            TimestepSpacing::Leading => (0..(inference_steps))
+                .map(|s| s * step_ratio + config.steps_offset)
+                .rev()
+                .collect(),
+            TimestepSpacing::Trailing => std::iter::successors(Some(config.train_timesteps), |n| {
+                if *n > step_ratio {
+                    Some(n - step_ratio)
+                } else {
+                    None
+                }
+            })
+            .map(|n| n - 1)
+            .collect(),
+            TimestepSpacing::Linspace => {
+                super::utils::linspace(0.0, (config.train_timesteps - 1) as f64, inference_steps)?
+                    .to_vec1::<f64>()?
+                    .iter()
+                    .map(|&f| f as usize)
+                    .rev()
+                    .collect()
+            }
+        };
+
         let betas = match config.beta_schedule {
             BetaSchedule::ScaledLinear => super::utils::linspace(
                 config.beta_start.sqrt(),

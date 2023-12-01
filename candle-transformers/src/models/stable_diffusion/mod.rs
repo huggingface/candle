@@ -3,6 +3,7 @@ pub mod clip;
 pub mod ddim;
 pub mod ddpm;
 pub mod embeddings;
+pub mod euler_ancestral_discrete;
 pub mod resnet;
 pub mod schedulers;
 pub mod unet_2d;
