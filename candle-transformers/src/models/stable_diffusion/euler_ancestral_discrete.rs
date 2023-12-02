@@ -114,14 +114,6 @@ impl EulerAncestralDiscreteScheduler {
             .map(|&f| ((1. - f) / f).sqrt())
             .collect();
 
-        // standard deviation of the inital noise distribution
-        // f64 does not implement Ord such that there is no `max`, so we need to use this workaround
-        let init_noise_sigma = *sigmas
-            .iter()
-            .chain(std::iter::once(&0.0))
-            .reduce(|a, b| if a > b { a } else { b })
-            .expect("init_noise_sigma could not be reduced from sigmas - this should never happen");
-
         let sigmas_xa = (0..sigmas.len()).map(|i| i as f64).collect();
 
         let mut sigmas_int = interp(
@@ -130,6 +122,14 @@ impl EulerAncestralDiscreteScheduler {
             &sigmas,
         );
         sigmas_int.push(0.0);
+
+        // standard deviation of the inital noise distribution
+        // f64 does not implement Ord such that there is no `max`, so we need to use this workaround
+        let init_noise_sigma = *sigmas_int
+            .iter()
+            .chain(std::iter::once(&0.0))
+            .reduce(|a, b| if a > b { a } else { b })
+            .expect("init_noise_sigma could not be reduced from sigmas - this should never happen");
 
         Ok(Self {
             sigmas: sigmas_int,
