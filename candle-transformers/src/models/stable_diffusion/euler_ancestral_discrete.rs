@@ -46,7 +46,7 @@ impl Default for EulerAncestralDiscreteSchedulerConfig {
             steps_offset: 1,
             prediction_type: PredictionType::Epsilon,
             train_timesteps: 1000,
-            timestep_spacing: TimestepSpacing::Trailing,
+            timestep_spacing: TimestepSpacing::Leading,
         }
     }
 }

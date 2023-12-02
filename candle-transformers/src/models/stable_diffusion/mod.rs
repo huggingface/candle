@@ -285,6 +285,7 @@ impl StableDiffusionConfig {
         let scheduler = Arc::new(
             euler_ancestral_discrete::EulerAncestralDiscreteSchedulerConfig {
                 prediction_type,
+                timestep_spacing: schedulers::TimestepSpacing::Trailing,
                 ..Default::default()
             },
         );
