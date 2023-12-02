@@ -398,10 +398,8 @@ fn main() -> anyhow::Result<()> {
                         prompt.pop();
                     }
                 }
-                if args.which.is_starling() {
-                    format!("GPT4 Correct User: {prompt}<|end_of_turn|>GPT4 Correct Assistant: ")
-                } else if args.which.is_open_chat() {
-                    format!("GPT4 User: {prompt}<|end_of_turn|>GPT4 Assistant: ")
+                if args.which.is_open_chat() {
+                    format!("GPT4 Correct User: {prompt}<|end_of_turn|>GPT4 Correct Assistant:")
                 } else if args.which.is_zephyr() {
                     if prompt_index == 0 || is_interactive {
                         format!("<|system|>\n</s>\n<|user|>\n{prompt}</s>\n<|assistant|>",)
