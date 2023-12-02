@@ -11,7 +11,7 @@ use super::{
     schedulers::{betas_for_alpha_bar, BetaSchedule, PredictionType, TimestepSpacing},
     utils::interp,
 };
-use candle::{Error, Result, Tensor};
+use candle::{bail, Error, Result, Tensor};
 
 /// The configuration for the EulerAncestral Discrete scheduler.
 #[derive(Debug, Clone, Copy)]
@@ -148,15 +148,10 @@ impl EulerAncestralDiscreteScheduler {
     ///
     /// Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the K-LMS algorithm
     pub fn scale_model_input(&self, sample: Tensor, timestep: usize) -> Result<Tensor> {
-        let step_index = self
-            .timesteps
-            .iter()
-            .position(|&t| t == timestep)
-            .ok_or_else(|| {
-                Error::Msg(format!(
-                    "timestep out of this schedulers bounds: {timestep}"
-                ))
-            })?;
+        let step_index = match self.timesteps.iter().position(|&t| t == timestep) {
+            Some(i) => i,
+            None => bail!("timestep out of this schedulers bounds: {timestep}"),
+        };
 
         let sigma = self
             .sigmas
@@ -184,7 +179,7 @@ impl EulerAncestralDiscreteScheduler {
                 ((model_output * (-sigma_from / (sigma_from.powi(2) + 1.0).sqrt()))?
                     + (sample / (sigma_from.powi(2) + 1.0))?)?
             }
-            PredictionType::Sample => unimplemented!("prediction_type not implemented yet: sample"),
+            PredictionType::Sample => bail!("prediction_type not implemented yet: sample"),
         };
 
         let sigma_up = (sigma_to.powi(2) * (sigma_from.powi(2) - sigma_to.powi(2))
@@ -195,10 +190,9 @@ impl EulerAncestralDiscreteScheduler {
         // 2. convert to a ODE derivative
         let derivative = ((sample - pred_original_sample)? / *sigma_from)?;
         let dt = sigma_down - *sigma_from;
-        let prev_sample = (sample + (derivative * dt))?;
+        let prev_sample = (sample + derivative * dt)?;
 
-        let noise = Tensor::randn(0f32, 1.0f32, prev_sample.shape(), prev_sample.device())?
-            .to_dtype(prev_sample.dtype())?;
+        let noise = prev_sample.randn_like(0.0, 1.0)?;
 
         prev_sample + noise * sigma_up
     }
