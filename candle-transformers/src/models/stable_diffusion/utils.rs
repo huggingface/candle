@@ -22,27 +22,14 @@ struct LinearInterpolator<'x, 'y> {
 }
 
 impl<'x, 'y> LinearInterpolator<'x, 'y> {
-    fn bsearch(&self, x: f64, idx_low: usize, idx_high: usize) -> usize {
-        let mut ilow = idx_low;
-        let mut ihigh = idx_high;
-
-        while ihigh > ilow + 1 {
-            let i = (ihigh + ilow) / 2;
-            if self.xp[i] > x {
-                ihigh = i;
-            } else {
-                ilow = i;
-            }
-        }
-        ilow
-    }
-
     fn accel_find(&mut self, x: f64) -> usize {
         let xidx = self.cache;
         if x < self.xp[xidx] {
-            self.cache = self.bsearch(x, 0, xidx);
+            self.cache = self.xp[0..xidx].partition_point(|o| *o < x);
+            self.cache = self.cache.checked_sub(1).unwrap_or(0);
         } else if x >= self.xp[xidx + 1] {
-            self.cache = self.bsearch(x, xidx, self.xp.len() - 1);
+            self.cache = self.xp[xidx..self.xp.len()].partition_point(|o| *o < x) + xidx;
+            self.cache = self.cache.checked_sub(1).unwrap_or(0);
         }
 
         self.cache
