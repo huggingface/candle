@@ -114,10 +114,10 @@ impl EulerAncestralDiscreteScheduler {
             .map(|&f| ((1. - f) / f).sqrt())
             .collect();
 
-        let sigmas_xa = (0..sigmas.len()).map(|i| i as f64).collect();
+        let sigmas_xa: Vec<_> = (0..sigmas.len()).map(|i| i as f64).collect();
 
         let mut sigmas_int = interp(
-            &timesteps.iter().map(|&t| t as f64).collect(),
+            &timesteps.iter().map(|&t| t as f64).collect::<Vec<_>>(),
             &sigmas_xa,
             &sigmas,
         );

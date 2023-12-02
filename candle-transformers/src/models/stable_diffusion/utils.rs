@@ -16,8 +16,8 @@ pub fn linspace(start: f64, stop: f64, steps: usize) -> Result<Tensor> {
 
 /// A linear interpolator for a sorted array of x and y values.
 struct LinearInterpolator<'x, 'y> {
-    xp: &'x Vec<f64>,
-    fp: &'y Vec<f64>,
+    xp: &'x [f64],
+    fp: &'y [f64],
     cache: usize,
 }
 
@@ -26,10 +26,10 @@ impl<'x, 'y> LinearInterpolator<'x, 'y> {
         let xidx = self.cache;
         if x < self.xp[xidx] {
             self.cache = self.xp[0..xidx].partition_point(|o| *o < x);
-            self.cache = self.cache.checked_sub(1).unwrap_or(0);
+            self.cache = self.cache.saturating_sub(1);
         } else if x >= self.xp[xidx + 1] {
             self.cache = self.xp[xidx..self.xp.len()].partition_point(|o| *o < x) + xidx;
-            self.cache = self.cache.checked_sub(1).unwrap_or(0);
+            self.cache = self.cache.saturating_sub(1);
         }
 
         self.cache
@@ -55,7 +55,7 @@ impl<'x, 'y> LinearInterpolator<'x, 'y> {
     }
 }
 
-pub fn interp(x: &Vec<f64>, xp: &Vec<f64>, fp: &Vec<f64>) -> Vec<f64> {
+pub fn interp(x: &[f64], xp: &[f64], fp: &[f64]) -> Vec<f64> {
     let mut interpolator = LinearInterpolator { xp, fp, cache: 0 };
     x.iter().map(|&x| interpolator.eval(x)).collect()
 }
