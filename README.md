@@ -78,7 +78,7 @@ We also provide a some command line based examples using state of the art models
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/quantized/assets/aoc.gif" width="600">
   
 - [Stable Diffusion](./candle-examples/examples/stable-diffusion/): text to
-  image generative model, support for the 1.5, 2.1, and SDXL 1.0 versions.
+  image generative model, support for the 1.5, 2.1, SDXL 1.0 and Turbo versions.
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/stable-diffusion/assets/stable-diffusion-xl.jpg" width="200">
 

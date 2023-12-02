@@ -3,8 +3,25 @@
 //!
 //! Noise schedulers can be used to set the trade-off between
 //! inference speed and quality.
-
 use candle::{Result, Tensor};
+use std::fmt::Debug;
+
+pub trait SchedulerConfig: Debug {
+    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler>>;
+}
+
+/// This trait represents a scheduler for the diffusion process.
+pub trait Scheduler {
+    fn timesteps(&self) -> &[usize];
+
+    fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor>;
+
+    fn init_noise_sigma(&self) -> f64;
+
+    fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Result<Tensor>;
+
+    fn step(&self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor>;
+}
 
 /// This represents how beta ranges from its minimum value to the maximum
 /// during training.

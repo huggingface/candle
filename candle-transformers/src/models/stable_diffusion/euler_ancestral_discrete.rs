@@ -8,7 +8,10 @@
 ///
 /// [kd]: https://github.com/crowsonkb/k-diffusion/blob/481677d114f6ea445aa009cf5bd7a9cdee909e47/k_diffusion/sampling.py#L72
 use super::{
-    schedulers::{betas_for_alpha_bar, BetaSchedule, PredictionType, TimestepSpacing},
+    schedulers::{
+        betas_for_alpha_bar, BetaSchedule, PredictionType, Scheduler, SchedulerConfig,
+        TimestepSpacing,
+    },
     utils::interp,
 };
 use candle::{bail, Error, Result, Tensor};
@@ -45,6 +48,15 @@ impl Default for EulerAncestralDiscreteSchedulerConfig {
             train_timesteps: 1000,
             timestep_spacing: TimestepSpacing::Trailing,
         }
+    }
+}
+
+impl SchedulerConfig for EulerAncestralDiscreteSchedulerConfig {
+    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler>> {
+        Ok(Box::new(EulerAncestralDiscreteScheduler::new(
+            inference_steps,
+            *self,
+        )?))
     }
 }
 
@@ -138,8 +150,10 @@ impl EulerAncestralDiscreteScheduler {
             config,
         })
     }
+}
 
-    pub fn timesteps(&self) -> &[usize] {
+impl Scheduler for EulerAncestralDiscreteScheduler {
+    fn timesteps(&self) -> &[usize] {
         self.timesteps.as_slice()
     }
 
@@ -147,7 +161,7 @@ impl EulerAncestralDiscreteScheduler {
     /// depending on the current timestep.
     ///
     /// Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the K-LMS algorithm
-    pub fn scale_model_input(&self, sample: Tensor, timestep: usize) -> Result<Tensor> {
+    fn scale_model_input(&self, sample: Tensor, timestep: usize) -> Result<Tensor> {
         let step_index = match self.timesteps.iter().position(|&t| t == timestep) {
             Some(i) => i,
             None => bail!("timestep out of this schedulers bounds: {timestep}"),
@@ -162,7 +176,7 @@ impl EulerAncestralDiscreteScheduler {
     }
 
     /// Performs a backward step during inference.
-    pub fn step(&self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
+    fn step(&self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
         let step_index = self
             .timesteps
             .iter()
@@ -197,7 +211,7 @@ impl EulerAncestralDiscreteScheduler {
         prev_sample + noise * sigma_up
     }
 
-    pub fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor> {
+    fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor> {
         let step_index = self
             .timesteps
             .iter()
@@ -212,7 +226,7 @@ impl EulerAncestralDiscreteScheduler {
         original + (noise * *sigma)?
     }
 
-    pub fn init_noise_sigma(&self) -> f64 {
+    fn init_noise_sigma(&self) -> f64 {
         match self.config.timestep_spacing {
             TimestepSpacing::Trailing | TimestepSpacing::Linspace => self.init_noise_sigma,
             TimestepSpacing::Leading => (self.init_noise_sigma.powi(2) + 1.0).sqrt(),
