@@ -245,7 +245,7 @@ impl StableDiffusionConfig {
         }
     }
 
-    fn sdxlturbo_(
+    fn sdxl_turbo_(
         sliced_attention_size: Option<usize>,
         height: Option<usize>,
         width: Option<usize>,
@@ -304,7 +304,7 @@ impl StableDiffusionConfig {
             512
         };
 
-        StableDiffusionConfig {
+        Self {
             width,
             height,
             clip: clip::Config::sdxl(),
@@ -329,12 +329,12 @@ impl StableDiffusionConfig {
         )
     }
 
-    pub fn sdxlturbo(
+    pub fn sdxl_turbo(
         sliced_attention_size: Option<usize>,
         height: Option<usize>,
         width: Option<usize>,
     ) -> Self {
-        Self::sdxlturbo_(
+        Self::sdxl_turbo_(
             sliced_attention_size,
             height,
             width,
@@ -397,7 +397,7 @@ impl StableDiffusionConfig {
             1024
         };
 
-        StableDiffusionConfig {
+        Self {
             width,
             height,
             clip: clip::Config::ssd1b(),

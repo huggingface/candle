@@ -61,8 +61,8 @@ struct Args {
     sliced_attention_size: Option<usize>,
 
     /// The number of steps to run the diffusion for.
-    #[arg(long, default_value_t = 30)]
-    n_steps: usize,
+    #[arg(long)]
+    n_steps: Option<usize>,
 
     /// The number of samples to generate.
     #[arg(long, default_value_t = 1)]
@@ -85,8 +85,8 @@ struct Args {
     #[arg(long)]
     use_f16: bool,
 
-    #[arg(long, default_value_t = 7.5)]
-    guidance_scale: f64,
+    #[arg(long)]
+    guidance_scale: Option<f64>,
 
     #[arg(long, value_name = "FILE")]
     img2img: Option<String>,
@@ -389,6 +389,24 @@ fn run(args: Args) -> Result<()> {
         None
     };
 
+    let guidance_scale = match guidance_scale {
+        Some(guidance_scale) => guidance_scale,
+        None => match sd_version {
+            StableDiffusionVersion::V1_5
+            | StableDiffusionVersion::V2_1
+            | StableDiffusionVersion::Xl => 7.5,
+            StableDiffusionVersion::Turbo => 0.,
+        },
+    };
+    let n_steps = match n_steps {
+        Some(n_steps) => n_steps,
+        None => match sd_version {
+            StableDiffusionVersion::V1_5
+            | StableDiffusionVersion::V2_1
+            | StableDiffusionVersion::Xl => 30,
+            StableDiffusionVersion::Turbo => 1,
+        },
+    };
     let dtype = if use_f16 { DType::F16 } else { DType::F32 };
     let sd_config = match sd_version {
         StableDiffusionVersion::V1_5 => {
@@ -400,9 +418,11 @@ fn run(args: Args) -> Result<()> {
         StableDiffusionVersion::Xl => {
             stable_diffusion::StableDiffusionConfig::sdxl(sliced_attention_size, height, width)
         }
-        StableDiffusionVersion::Turbo => {
-            stable_diffusion::StableDiffusionConfig::sdxlturbo(sliced_attention_size, height, width)
-        }
+        StableDiffusionVersion::Turbo => stable_diffusion::StableDiffusionConfig::sdxl_turbo(
+            sliced_attention_size,
+            height,
+            width,
+        ),
     };
 
     let scheduler = sd_config.build_scheduler(n_steps)?;
