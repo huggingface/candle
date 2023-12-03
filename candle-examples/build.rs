@@ -168,8 +168,16 @@ fn set_cuda_include_dir() -> Result<()> {
 
 #[allow(unused)]
 fn compute_cap() -> Result<usize> {
-    // Grab compute code from nvidia-smi
-    let mut compute_cap = {
+    println!("cargo:rerun-if-env-changed=CUDA_COMPUTE_CAP");
+
+    // Try to parse compute cap from env
+    let mut compute_cap = if let Ok(compute_cap_str) = std::env::var("CUDA_COMPUTE_CAP") {
+        println!("cargo:rustc-env=CUDA_COMPUTE_CAP={compute_cap_str}");
+        compute_cap_str
+            .parse::<usize>()
+            .context("Could not parse code")?
+    } else {
+        // Grab compute cap from nvidia-smi
         let out = std::process::Command::new("nvidia-smi")
                     .arg("--query-gpu=compute_cap")
                     .arg("--format=csv")
@@ -185,6 +193,7 @@ fn compute_cap() -> Result<usize> {
             .next()
             .context("missing line in stdout")?
             .replace('.', "");
+        println!("cargo:rustc-env=CUDA_COMPUTE_CAP={cap}");
         cap.parse::<usize>()
             .with_context(|| format!("cannot parse as int {cap}"))?
     };
