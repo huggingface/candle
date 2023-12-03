@@ -32,6 +32,8 @@ impl KernelDirectories {
         if should_compile {
             #[cfg(feature = "cuda")]
             {
+                let ccbin_env = std::env::var("CANDLE_NVCC_CCBIN");
+                println!("cargo:rerun-if-env-changed=CANDLE_NVCC_CCBIN");
                 let mut command = std::process::Command::new("nvcc");
                 let out_dir = ptx_file.parent().context("no parent for ptx file")?;
                 let include_dirs: Vec<String> =
@@ -44,6 +46,11 @@ impl KernelDirectories {
                     .arg(format!("-I/{}", self.kernel_dir))
                     .args(include_dirs)
                     .arg(cu_file);
+                if let Ok(ccbin_path) = &ccbin_env {
+                    command
+                        .arg("-allow-unsupported-compiler")
+                        .args(["-ccbin", ccbin_path]);
+                }
                 let output = command
                     .spawn()
                     .context("failed spawning nvcc")?
