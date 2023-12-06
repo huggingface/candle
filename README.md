@@ -150,6 +150,7 @@ And then head over to
 - [`candle-ext`](https://github.com/mokeyish/candle-ext): An extension library to Candle that provides PyTorch functions not currently available in Candle.
 - [`kalosm`](https://github.com/floneum/floneum/tree/master/interfaces/kalosm): A multi-modal meta-framework in Rust for interfacing with local pre-trained models with support for controlled generation, custom samplers, in-memory vector databases, audio transcription, and more.
 - [`candle-sampling`](https://github.com/EricLBuehler/candle-sampling): Sampling techniques for Candle.
+- [`ESRGAN-candle-rs`](https://github.com/joeyballentine/ESRGAN-candle-rs): ESRGAN implemented with candle.
 
 If you have an addition to this list, please submit a pull request.
 
