@@ -42,9 +42,14 @@ template <typename T> METAL_FUNC T erf(T in){
 
     return T(sign*y);
 }
-template <typename T> METAL_FUNC T id(T in){ return in; }
-template <typename T> METAL_FUNC T gelu_erf(T x){ return T(x * (1 + erf(x * M_SQRT1_2_F)) / 2); }
-template <typename T> METAL_FUNC T gelu(T x){
+template <typename T> METAL_FUNC T id(T in) { return in; }
+template <typename T> METAL_FUNC T gelu_erf(T x) {
+    return T(x * (1 + erf(x * M_SQRT1_2_F)) / 2);
+}
+template <typename T> METAL_FUNC T gelu(T x) {
+    if (x > 5) {
+        return x;
+    }
     T x_sq = x * x;
     T x_cube = x_sq * x;
     T alpha = x + static_cast<T>(0.044715) * x_cube;
