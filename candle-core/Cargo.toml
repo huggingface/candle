@@ -30,6 +30,7 @@ safetensors = { workspace = true }
 thiserror = { workspace = true }
 yoke = { workspace = true }
 zip = { workspace = true }
+lazy_static = "1.4.0"
 
 [dev-dependencies]
 anyhow = { workspace = true }

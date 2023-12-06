@@ -1,7 +1,10 @@
+use std::sync::{Mutex, MutexGuard};
+
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{DType, Error, IntDType, Layout, Result, Shape, WithDType};
 use half::{bf16, f16};
+use lazy_static::lazy_static;
 use rayon::prelude::*;
 
 const USE_IM2COL_CONV1D: bool = true;
@@ -18,6 +21,18 @@ pub enum CpuStorage {
     F16(Vec<f16>),
     F32(Vec<f32>),
     F64(Vec<f64>),
+}
+
+lazy_static! {
+    static ref MAX_ALLOCATED_CPU: Mutex<usize> = { Mutex::new(0) };
+}
+
+fn get_max_allocated<'a>() -> MutexGuard<'a, usize> {
+    loop {
+        if let Ok(res) = MAX_ALLOCATED_CPU.try_lock() {
+            return res;
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2701,6 +2716,7 @@ impl BackendDevice for CpuDevice {
                 for _i in 0..elem_count {
                     data.push(rng.sample::<bf16, _>(uniform))
                 }
+                *get_max_allocated() += elem_count * dtype.size_in_bytes();
                 Ok(CpuStorage::BF16(data))
             }
             DType::F16 => {
@@ -2710,6 +2726,7 @@ impl BackendDevice for CpuDevice {
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f16, _>(uniform))
                 }
+                *get_max_allocated() += elem_count * dtype.size_in_bytes();
                 Ok(CpuStorage::F16(data))
             }
             DType::F32 => {
@@ -2718,6 +2735,7 @@ impl BackendDevice for CpuDevice {
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f32, _>(uniform))
                 }
+                *get_max_allocated() += elem_count * dtype.size_in_bytes();
                 Ok(CpuStorage::F32(data))
             }
             DType::F64 => {
@@ -2726,6 +2744,7 @@ impl BackendDevice for CpuDevice {
                 for _i in 0..elem_count {
                     data.push(rng.sample::<f64, _>(uniform))
                 }
+                *get_max_allocated() += elem_count * dtype.size_in_bytes();
                 Ok(CpuStorage::F64(data))
             }
         }
@@ -2747,6 +2766,7 @@ impl BackendDevice for CpuDevice {
                 for _i in 0..elem_count {
                     data.push(normal.sample(&mut rng))
                 }
+                *get_max_allocated() += elem_count * dtype.size_in_bytes();
                 Ok(CpuStorage::BF16(data))
             }
             DType::F16 => {
@@ -2756,6 +2776,7 @@ impl BackendDevice for CpuDevice {
                 for _i in 0..elem_count {
                     data.push(normal.sample(&mut rng))
                 }
+                *get_max_allocated() += elem_count * dtype.size_in_bytes();
                 Ok(CpuStorage::F16(data))
             }
             DType::F32 => {
@@ -2765,6 +2786,7 @@ impl BackendDevice for CpuDevice {
                 for _i in 0..elem_count {
                     data.push(normal.sample(&mut rng))
                 }
+                *get_max_allocated() += elem_count * dtype.size_in_bytes();
                 Ok(CpuStorage::F32(data))
             }
             DType::F64 => {
@@ -2773,6 +2795,7 @@ impl BackendDevice for CpuDevice {
                 for _i in 0..elem_count {
                     data.push(normal.sample(&mut rng))
                 }
+                *get_max_allocated() += elem_count * dtype.size_in_bytes();
                 Ok(CpuStorage::F64(data))
             }
         }
@@ -2780,6 +2803,7 @@ impl BackendDevice for CpuDevice {
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<CpuStorage> {
         let elem_count = shape.elem_count();
+        *get_max_allocated() += elem_count * dtype.size_in_bytes();
         let storage = match dtype {
             DType::U8 => CpuStorage::U8(vec![1u8; elem_count]),
             DType::U32 => CpuStorage::U32(vec![1u32; elem_count]),
@@ -2794,6 +2818,7 @@ impl BackendDevice for CpuDevice {
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<CpuStorage> {
         let elem_count = shape.elem_count();
+        *get_max_allocated() += elem_count * dtype.size_in_bytes();
         let storage = match dtype {
             DType::U8 => CpuStorage::U8(vec![0u8; elem_count]),
             DType::U32 => CpuStorage::U32(vec![0u32; elem_count]),
@@ -2804,6 +2829,14 @@ impl BackendDevice for CpuDevice {
             DType::F64 => CpuStorage::F64(vec![0f64; elem_count]),
         };
         Ok(storage)
+    }
+
+    fn reset_peak_memory_stats(&mut self, _device: crate::Device) {
+        *get_max_allocated() = 0;
+    }
+
+    fn max_memory_allocated(&self, _device: crate::Device) -> usize {
+        *get_max_allocated()
     }
 }
 
