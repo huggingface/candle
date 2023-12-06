@@ -73,7 +73,7 @@ impl candle::Module for PReLU {
             }
             let mut s = vec![1; xs.rank()];
             s[1] = self.weight.elem_count();
-            self.weight.broadcast_as(s)?
+            self.weight.reshape(s)?
         } else {
             self.weight.clone()
         };
