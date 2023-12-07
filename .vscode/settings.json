@@ -9,6 +9,32 @@
   "files.associations": {
     "*.just": "just",
     "*.py": "python",
-    "*.tcc": "cpp"
+    "*.tcc": "cpp",
+    "optional": "cpp",
+    "ratio": "cpp",
+    "system_error": "cpp",
+    "array": "cpp",
+    "functional": "cpp",
+    "tuple": "cpp",
+    "type_traits": "cpp",
+    "utility": "cpp",
+    "variant": "cpp",
+    "istream": "cpp",
+    "ostream": "cpp",
+    "__bit_reference": "cpp",
+    "__functional_base": "cpp",
+    "__node_handle": "cpp",
+    "algorithm": "cpp",
+    "bitset": "cpp",
+    "chrono": "cpp",
+    "deque": "cpp",
+    "__memory": "cpp",
+    "filesystem": "cpp",
+    "iterator": "cpp",
+    "limits": "cpp",
+    "locale": "cpp",
+    "memory": "cpp",
+    "random": "cpp",
+    "vector": "cpp"
   }
 }
