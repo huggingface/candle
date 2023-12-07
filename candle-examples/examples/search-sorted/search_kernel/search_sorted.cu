@@ -90,17 +90,24 @@ std::ostream &operator<<(std::ostream &os, const std::vector<T> &v)
     return os;
 }
 
+template <typename T>
+void run_test(std::vector<T> ss, std::vector<T> vals, size_t innerdim_ss, size_t innerdim_vs, std::vector<int> expected)
+{
+    std::vector<int> output = search_sorted<T, int>(ss, innerdim_ss, vals, innerdim_vs, false);
+    if (output != expected)
+    {
+        std::cout << "Test failed" << std::endl;
+        std::cout << "Test 1-D ss: " << ss << "1-D values: " << vals << std::endl;
+        std::cout << "Expected: " << expected << " "
+                  << "Got: " << output << std::endl;
+    }
+    else
+    {
+        std::cout << "Test passed!" << std::endl;
+    }
+}
 int main()
 {
-
-    std::vector<float> ss = {1, 3, 5, 7, 9};
-    std::vector<float> vals = {3, 6, 9};
-    size_t innerdim_ss = 5;
-    size_t innerdim_vs = 3;
-    // ss_2d should be combined ss1_d and ss_1d_2
-
     // Test 1-D ss, 1-D values
-    std::vector<int> output = search_sorted<float, int>(ss, innerdim_ss, vals, innerdim_vs, false);
-    std::cout << "Test 1-D ss: " << ss << "1-D values: " << vals << "\noutput: " << output << std::endl;
-    return 0;
+    run_test<float>({1, 3, 5, 7, 9}, {3, 6, 9}, 5, 3, {1, 3, 4});
 }
