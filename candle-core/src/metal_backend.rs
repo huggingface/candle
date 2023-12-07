@@ -6,9 +6,11 @@ use candle_metal_kernels;
 use candle_metal_kernels::Kernels;
 use core::mem;
 use half::{bf16, f16};
+use lazy_static::lazy_static;
 use metal;
 use metal::{Buffer, CommandQueue, MTLResourceOptions, NSUInteger};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// Metal related errors
 #[derive(thiserror::Error, Debug)]
@@ -32,11 +34,24 @@ impl From<String> for MetalError {
     }
 }
 
+lazy_static! {
+    static ref MAX_ALLOCATED_METAL: Mutex<HashMap<usize, usize>> = Mutex::new(HashMap::new());
+}
+
+fn get_max_allocated<'a>() -> MutexGuard<'a, HashMap<usize, usize>> {
+    loop {
+        if let Ok(res) = MAX_ALLOCATED_METAL.try_lock() {
+            return res;
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct MetalDevice {
     device: metal::Device,
     command_queue: metal::CommandQueue,
     kernels: Arc<candle_metal_kernels::Kernels>,
+    ordinal: usize,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -722,10 +737,14 @@ impl BackendDevice for MetalDevice {
 
         let command_queue = device.new_command_queue();
         let kernels = Arc::new(Kernels::new());
+        if get_max_allocated().get(&ordinal).is_none() {
+            get_max_allocated().insert(ordinal, 0);
+        }
         Ok(Self {
             device,
             command_queue,
             kernels,
+            ordinal,
         })
     }
 
@@ -756,6 +775,19 @@ impl BackendDevice for MetalDevice {
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
+        let (n_elems, element_size) = match storage {
+            U8(storage) => (storage.len(), DType::U8.size_in_bytes()),
+            U32(storage) => (storage.len(), DType::U32.size_in_bytes()),
+            I64(storage) => (storage.len(), DType::I64.size_in_bytes()),
+            BF16(storage) => (storage.len(), 2), //BF16 is a 16 bit internally, so 2 bytes
+            F16(storage) => (storage.len(), DType::F16.size_in_bytes()),
+            F32(storage) => (storage.len(), DType::F32.size_in_bytes()),
+            F64(storage) => (storage.len(), DType::F64.size_in_bytes()),
+        };
+
+        // .unwrap okay because ordinal must be present in the table
+        *get_max_allocated().get_mut(&self.ordinal).unwrap() += n_elems * element_size;
+
         let option = metal::MTLResourceOptions::StorageModeManaged;
         let buffer = match storage {
             CpuStorage::U8(storage) => self.device.new_buffer_with_data(
