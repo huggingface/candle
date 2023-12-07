@@ -1,8 +1,8 @@
 use candle::{CpuStorage, CustomOp2, Layout, Result, Shape};
+use half::{bf16, f16};
 use rayon::prelude::*;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
-
 pub struct SearchSorted {
     pub right: bool,
 }
@@ -223,8 +223,6 @@ impl CustomOp2 for SearchSorted {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use half::{bf16, f16};
-
     use candle::{Device, Tensor};
 
     #[test]
@@ -496,15 +494,64 @@ mod tests {
     macro_rules! test_ss_2d_vals_diff_2d {
         ($t:ty, $ss:expr, $vals:expr) => {
             let device = Device::Cpu;
-
             let ss: Vec<$t> = $ss;
             let ss_shape = Shape::from_dims(&[2, 5]);
             let vals: Vec<$t> = $vals;
             let vals_shape = Shape::from_dims(&[2, 3]);
 
             // Test left
-            let t1 = Tensor::from_vec(ss.clone(), &ss_shape, &device).unwrap();
-            let t2 = Tensor::from_vec(vals.clone(), &vals_shape, &device).unwrap();
+            let t1 = Tensor::from_vec::<_, $t>(ss, &ss_shape, &device).unwrap();
+            let t2 = Tensor::from_vec::<_, $t>(vals, &vals_shape, &device).unwrap();
+            let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+
+            let expected_indices: Vec<i64> = vec![1, 3, 4, 0, 0, 1];
+            let expected_shape = Shape::from_dims(&[2, 3]);
+            let actual_shape = t3.shape();
+            let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+            assert!(
+                actual_indices == expected_indices,
+                "Expected {:?}, got {:?}",
+                expected_indices,
+                actual_indices
+            );
+            assert!(
+                actual_shape.dims() == expected_shape.dims(),
+                "Expected shape {:?}, got {:?}",
+                expected_shape,
+                actual_shape
+            );
+
+            let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
+            let expected_indices: Vec<i64> = vec![2, 3, 5, 0, 1, 1];
+            let expected_shape = Shape::from_dims(&[2, 3]);
+            let actual_shape = t3.shape();
+            let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+            assert!(
+                actual_indices == expected_indices,
+                "Expected {:?}, got {:?}",
+                expected_indices,
+                actual_indices
+            );
+            assert!(
+                actual_shape.dims() == expected_shape.dims(),
+                "Expected shape {:?}, got {:?}",
+                expected_shape,
+                actual_shape
+            );
+        };
+    }
+
+    macro_rules! test_ss_2d_vals_diff_2d_half {
+        ($t:ty, $ss:expr, $vals:expr) => {
+            let device = Device::Cpu;
+            let ss: Vec<$t> = $ss.iter().map(|x| <$t>::from_f32(*x)).collect();
+            let ss_shape = Shape::from_dims(&[2, 5]);
+            let vals: Vec<$t> = $vals.iter().map(|x| <$t>::from_f32(*x)).collect();
+            let vals_shape = Shape::from_dims(&[2, 3]);
+
+            // Test left
+            let t1 = Tensor::from_vec::<_, $t>(ss, &ss_shape, &device).unwrap();
+            let t2 = Tensor::from_vec::<_, $t>(vals, &vals_shape, &device).unwrap();
             let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
 
             let expected_indices: Vec<i64> = vec![1, 3, 4, 0, 0, 1];
@@ -571,6 +618,22 @@ mod tests {
     fn test_ss_2d_vals_diff_2d_fp64() {
         test_ss_2d_vals_diff_2d!(
             f32,
+            vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
+            vec![3., 6., 9., 1., 2., 3.]
+        );
+    }
+    #[test]
+    fn test_ss_2d_vals_diff_2d_f16() {
+        test_ss_2d_vals_diff_2d_half!(
+            f16,
+            vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
+            vec![3., 6., 9., 1., 2., 3.]
+        );
+    }
+    #[test]
+    fn test_ss_2d_vals_diff_2d_bf16() {
+        test_ss_2d_vals_diff_2d_half!(
+            bf16,
             vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
             vec![3., 6., 9., 1., 2., 3.]
         );
