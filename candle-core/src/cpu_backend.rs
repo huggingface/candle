@@ -24,7 +24,7 @@ pub enum CpuStorage {
 }
 
 lazy_static! {
-    static ref MAX_ALLOCATED_CPU: Mutex<usize> = { Mutex::new(0) };
+    static ref MAX_ALLOCATED_CPU: Mutex<usize> = Mutex::new(0);
 }
 
 fn get_max_allocated<'a>() -> MutexGuard<'a, usize> {

@@ -9,7 +9,9 @@ use cudarc::driver::{
     ValidAsZeroBits,
 };
 use half::{bf16, f16};
-use std::sync::{Arc, Mutex};
+use lazy_static::lazy_static;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// cudarc related errors
 #[derive(thiserror::Error, Debug)]
@@ -78,12 +80,25 @@ impl DeviceId {
 struct CudaRng(cudarc::curand::CudaRng);
 unsafe impl Send for CudaRng {}
 
+lazy_static! {
+    static ref MAX_ALLOCATED_GPU: Mutex<HashMap<usize, usize>> = Mutex::new(HashMap::new());
+}
+
+fn get_max_allocated<'a>() -> MutexGuard<'a, HashMap<usize, usize>> {
+    loop {
+        if let Ok(res) = MAX_ALLOCATED_GPU.try_lock() {
+            return res;
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct CudaDevice {
     id: DeviceId,
     device: Arc<cudarc::driver::CudaDevice>,
     blas: Arc<cudarc::cublas::CudaBlas>,
     curand: Arc<Mutex<CudaRng>>,
+    ordinal: usize,
 }
 
 impl std::fmt::Debug for CudaDevice {
@@ -215,11 +230,15 @@ impl BackendDevice for CudaDevice {
         let device = cudarc::driver::CudaDevice::new(ordinal).w()?;
         let blas = cudarc::cublas::CudaBlas::new(device.clone()).w()?;
         let curand = cudarc::curand::CudaRng::new(299792458, device.clone()).w()?;
+        if get_max_allocated().get(&ordinal).is_none() {
+            get_max_allocated().insert(ordinal, 0);
+        }
         Ok(Self {
             id: DeviceId::new(),
             device,
             blas: Arc::new(blas),
             curand: Arc::new(Mutex::new(CudaRng(curand))),
+            ordinal,
         })
     }
 
@@ -243,6 +262,8 @@ impl BackendDevice for CudaDevice {
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
+        // .unwrap okay because ordinal must be present in the table
+        *get_max_allocated().get_mut(&self.ordinal).unwrap() += dtype.size_in_bytes() * elem_count;
         let slice = match dtype {
             DType::U8 => {
                 let data = self.alloc_zeros::<u8>(elem_count).w()?;
@@ -294,11 +315,17 @@ impl BackendDevice for CudaDevice {
             }
             DType::F32 => {
                 let mut data = unsafe { self.alloc::<f32>(elem_count) }.w()?;
+                // .unwrap okay because ordinal must be present in the table
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() +=
+                    dtype.size_in_bytes() * elem_count;
                 curand.0.fill_with_uniform(&mut data).w()?;
                 CudaStorageSlice::F32(data)
             }
             DType::F64 => {
                 let mut data = unsafe { self.alloc::<f64>(elem_count) }.w()?;
+                // .unwrap okay because ordinal must be present in the table
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() +=
+                    dtype.size_in_bytes() * elem_count;
                 curand.0.fill_with_uniform(&mut data).w()?;
                 CudaStorageSlice::F64(data)
             }
@@ -337,6 +364,9 @@ impl BackendDevice for CudaDevice {
             }
             DType::F32 => {
                 let mut data = unsafe { self.alloc::<f32>(elem_count_round) }.w()?;
+                // .unwrap okay because ordinal must be present in the table
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() +=
+                    dtype.size_in_bytes() * elem_count;
                 curand
                     .0
                     .fill_with_normal(&mut data, mean as f32, std as f32)
@@ -345,6 +375,9 @@ impl BackendDevice for CudaDevice {
             }
             DType::F64 => {
                 let mut data = unsafe { self.alloc::<f64>(elem_count_round) }.w()?;
+                // .unwrap okay because ordinal must be present in the table
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() +=
+                    dtype.size_in_bytes() * elem_count;
                 curand.0.fill_with_normal(&mut data, mean, std).w()?;
                 CudaStorageSlice::F64(data)
             }
@@ -363,30 +396,51 @@ impl BackendDevice for CudaDevice {
         let slice = match storage {
             CpuStorage::U8(storage) => {
                 let data = self.htod_sync_copy(storage).w()?;
+                // .unwrap okay because ordinal must be present in the table
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() +=
+                    DType::U8.size_in_bytes() * storage.len();
                 CudaStorageSlice::U8(data)
             }
             CpuStorage::U32(storage) => {
                 let data = self.htod_sync_copy(storage).w()?;
+                // .unwrap okay because ordinal must be present in the table
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() +=
+                    DType::U32.size_in_bytes() * storage.len();
                 CudaStorageSlice::U32(data)
             }
             CpuStorage::I64(storage) => {
                 let data = self.htod_sync_copy(storage).w()?;
+                // .unwrap okay because ordinal must be present in the table
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() +=
+                    DType::I64.size_in_bytes() * storage.len();
                 CudaStorageSlice::I64(data)
             }
             CpuStorage::BF16(storage) => {
                 let data = self.htod_sync_copy(storage).w()?;
+                // .unwrap okay because ordinal must be present in the table
+                // BF16 is a 16 bit internally, so 2 bytes
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() += 2 * storage.len();
                 CudaStorageSlice::BF16(data)
             }
             CpuStorage::F16(storage) => {
                 let data = self.htod_sync_copy(storage).w()?;
+                // .unwrap okay because ordinal must be present in the table
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() +=
+                    DType::F16.size_in_bytes() * storage.len();
                 CudaStorageSlice::F16(data)
             }
             CpuStorage::F32(storage) => {
                 let data = self.htod_sync_copy(storage).w()?;
+                // .unwrap okay because ordinal must be present in the table
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() +=
+                    DType::F32.size_in_bytes() * storage.len();
                 CudaStorageSlice::F32(data)
             }
             CpuStorage::F64(storage) => {
                 let data = self.htod_sync_copy(storage).w()?;
+                // .unwrap okay because ordinal must be present in the table
+                *get_max_allocated().get_mut(&self.ordinal).unwrap() +=
+                    DType::F64.size_in_bytes() * storage.len();
                 CudaStorageSlice::F64(data)
             }
         };
@@ -394,6 +448,26 @@ impl BackendDevice for CudaDevice {
             slice,
             device: self.clone(),
         })
+    }
+
+    fn reset_peak_memory_stats(&mut self, device: crate::Device) {
+        if let crate::Device::Cuda(dev) = device {
+            // .unwrap okay because ordinal must be present in the table
+            *get_max_allocated().get_mut(&dev.ordinal).unwrap() = 0;
+        } else {
+            assert!(matches!(device, crate::Device::Cuda(_)));
+            unreachable!();
+        }
+    }
+
+    fn max_memory_allocated(&self, device: crate::Device) -> usize {
+        if let crate::Device::Cuda(dev) = device {
+            // .unwrap okay because ordinal must be present in the table
+            *get_max_allocated().get(&dev.ordinal).unwrap()
+        } else {
+            assert!(matches!(device, crate::Device::Cuda(_)));
+            unreachable!();
+        }
     }
 }
 
