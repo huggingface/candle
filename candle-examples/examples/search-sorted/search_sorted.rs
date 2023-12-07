@@ -218,3 +218,61 @@ impl CustomOp2 for SearchSorted {
         Ok((indices, output_shape))
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use half::{bf16, f16};
+
+    use candle::{Device, Tensor};
+
+    #[test]
+    fn test_ss_1d_vals_1d() {
+        let device = Device::Cpu;
+
+        let ss_evens: Vec<u32> = (2..=10).step_by(2).collect();
+        let ss_odds: Vec<u32> = (1..10).step_by(2).collect();
+        let ss_shape = Shape::from_dims(&[5]);
+
+        let vals: Vec<u32> = vec![3, 6, 9];
+        let val_shape = Shape::from_dims(&[3]);
+        // Apply custom op
+
+        // Matching ranks
+        let t1 = Tensor::from_vec(ss_evens, &ss_shape, &device).unwrap();
+        let t2 = Tensor::from_vec(vals.clone(), &val_shape, &device).unwrap();
+        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+        let expected: Vec<i64> = vec![1, 2, 4];
+        let actual_matches: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+        assert!(
+            actual_matches == expected,
+            "Expected {:?}, got {:?}",
+            expected,
+            actual_matches
+        );
+
+        let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
+        let actual_matches: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+        let expected: Vec<i64> = vec![1, 3, 4];
+        assert!(
+            actual_matches == expected,
+            "Expected {:?}, got {:?}",
+            expected,
+            actual_matches
+        );
+
+        let t1 = Tensor::from_vec(ss_odds, &ss_shape, &device).unwrap();
+        let t2 = Tensor::from_vec(vals.clone(), &val_shape, &device).unwrap();
+        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+        let actual_matches: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+        let expected: Vec<i64> = vec![1, 3, 4];
+        let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
+        let expected: Vec<i64> = vec![2, 3, 5];
+        let actual_matches: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+        assert!(
+            actual_matches == expected,
+            "Expected {:?}, got {:?}",
+            expected,
+            actual_matches
+        );
+    }
+}
