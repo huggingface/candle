@@ -384,4 +384,60 @@ mod tests {
             actual_shape
         );
     }
+
+    #[test]
+    fn test_ss_2d_vals_2d() {
+        let device = Device::Cpu;
+
+        let ss: Vec<u32> = [
+            (1..10).step_by(2).collect::<Vec<u32>>(),
+            (2..11).step_by(2).collect::<Vec<u32>>(),
+        ]
+        .concat();
+        let ss_shape = Shape::from_dims(&[2, 5]);
+
+        let vals: Vec<u32> = vec![3, 6, 9, 3, 6, 9];
+        let vals_shape = Shape::from_dims(&[2, 3]);
+
+        // Test left
+        let t1 = Tensor::from_vec(ss.clone(), &ss_shape, &device).unwrap();
+        let t2 = Tensor::from_vec(vals.clone(), &vals_shape, &device).unwrap();
+        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+        let expected_indices: Vec<i64> = vec![1, 3, 4, 1, 2, 4];
+        let expected_shape = Shape::from_dims(&[2, 3]);
+
+        let actual_shape = t3.shape();
+        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+        assert!(
+            actual_indices == expected_indices,
+            "Expected {:?}, got {:?}",
+            expected_indices,
+            actual_indices
+        );
+        assert!(
+            actual_shape.dims() == expected_shape.dims(),
+            "Expected shape {:?}, got {:?}",
+            expected_shape,
+            actual_shape
+        );
+
+        // Test right
+        let expected_indices: Vec<i64> = vec![2, 3, 5, 1, 3, 4];
+        let expected_shape = Shape::from_dims(&[2, 3]);
+        let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
+        let actual_shape = t3.shape();
+        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+        assert!(
+            actual_indices == expected_indices,
+            "Expected {:?}, got {:?}",
+            expected_indices,
+            actual_indices
+        );
+        assert!(
+            actual_shape.dims() == expected_shape.dims(),
+            "Expected shape {:?}, got {:?}",
+            expected_shape,
+            actual_shape
+        );
+    }
 }
