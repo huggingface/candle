@@ -23,33 +23,61 @@ macro_rules! match_cpu_storage {
         match $s1 {
             CpuStorage::U8(vs) => match $s2 {
                 CpuStorage::U8(values) => $code(vs, values),
-                _ => panic!("Unsupported data type"),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
             },
             CpuStorage::U32(vs) => match $s2 {
                 CpuStorage::U32(values) => $code(vs, values),
-                _ => panic!("Unsupported data type"),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
             },
             CpuStorage::I64(vs) => match $s2 {
                 CpuStorage::I64(values) => $code(vs, values),
-                _ => panic!("Unsupported data type"),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
             },
             CpuStorage::BF16(vs) => match $s2 {
                 CpuStorage::BF16(values) => $code(vs, values),
-                _ => panic!("Unsupported data type"),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
             },
             CpuStorage::F16(vs) => match $s2 {
                 CpuStorage::F16(values) => $code(vs, values),
-                _ => panic!("Unsupported data type"),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
             },
             CpuStorage::F32(vs) => match $s2 {
                 CpuStorage::F32(values) => $code(vs, values),
-                _ => panic!("Unsupported data type"),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
             },
             CpuStorage::F64(vs) => match $s2 {
                 CpuStorage::F64(values) => $code(vs, values),
-                _ => panic!("Unsupported data type"),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
             },
-            _ => panic!("Unsupported data type"),
+            _ => candle::bail!("Unsupported data type"),
         }
     };
 }
@@ -83,10 +111,6 @@ impl<T: PartialOrd + Debug + Sync + Send> Sortable<T> for Vec<T> {
         is_1d_vals: bool,
         right: bool,
     ) -> Vec<i64> {
-        // assert!(self.len() % innerdim_bd == 0);
-        // assert!(values.len() % innerdim_val == 0);
-        // let mut indices: Vec<i64> = Vec::new();
-
         let indices: Vec<i64> = match (is_1d_bd, is_1d_vals) {
             // 1-d sorted seq, n-d vals --> apply each "row" of vals to the sorted seq
             (true, false) => {
@@ -637,5 +661,22 @@ mod tests {
             vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
             vec![3., 6., 9., 1., 2., 3.]
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Incompatible dtypes")]
+    fn test_different_dtypes() {
+        let device = Device::Cpu;
+        let ss: Vec<u32> = vec![1, 2, 3, 4, 5];
+        let ss_shape = Shape::from_dims(&[5]);
+        let vals: Vec<i64> = vec![1, 2, 3];
+        let vals_shape = Shape::from_dims(&[3]);
+
+        // Test left
+        let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
+        let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
+
+        //Should panic
+        _ = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
     }
 }
