@@ -91,23 +91,43 @@ std::ostream &operator<<(std::ostream &os, const std::vector<T> &v)
 }
 
 template <typename T>
-void run_test(std::vector<T> ss, std::vector<T> vals, size_t innerdim_ss, size_t innerdim_vs, std::vector<int> expected)
+void run_test(std::string_view test_name, std::vector<T> ss, std::vector<T> vals, size_t innerdim_ss, size_t innerdim_vs, bool right, std::vector<int> expected)
 {
-    std::vector<int> output = search_sorted<T, int>(ss, innerdim_ss, vals, innerdim_vs, false);
+    std::vector<int> output = search_sorted<T, int>(ss, innerdim_ss, vals, innerdim_vs, right);
     if (output != expected)
     {
-        std::cout << "Test failed" << std::endl;
-        std::cout << "Test 1-D ss: " << ss << "1-D values: " << vals << std::endl;
+        std::cout << test_name << ": Failed!" << std::endl;
+        std::cout << "Test 1-D ss: " << ss << "1-D values: " << vals << " Right: " << right << std::endl;
         std::cout << "Expected: " << expected << " "
                   << "Got: " << output << std::endl;
     }
     else
     {
-        std::cout << "Test passed!" << std::endl;
+        std::cout << test_name << ": Passed!" << std::endl;
+        // std::cout << "Test 1-D ss: " << ss << "1-D values: " << vals << "Right: " << right << std::endl;
+        // std::cout << "Expected: " << expected << " "
+        //           << "Got: " << output << std::endl;
     }
 }
 int main()
 {
     // Test 1-D ss, 1-D values
-    run_test<float>({1, 3, 5, 7, 9}, {3, 6, 9}, 5, 3, {1, 3, 4});
+    run_test<float>("1-D ss, 1-D vals, left", {1, 3, 5, 7, 9}, {3, 6, 9}, 5, 3, false, {1, 3, 4});
+    run_test<float>("1-D ss, 1-D vals, right", {1, 3, 5, 7, 9}, {3, 6, 9}, 5, 3, true, {2, 3, 5});
+
+    // Test 1-D ss, 2-D values
+    run_test<float>("2-D ss, 1-D vals, left", {1, 3, 5, 7, 9}, {3, 6, 9, 3, 6, 9}, 5, 3, false, {1, 3, 4, 1, 3, 4});
+    run_test<float>("2-D ss, 1-D vals, right", {1, 3, 5, 7, 9}, {3, 6, 9, 3, 6, 9}, 5, 3, true, {2, 3, 5, 2, 3, 5});
+
+    // Test 2-D ss, 1-D values
+    run_test<float>("2-D ss, 1-D vals, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9}, 5, 3, false, {1, 3, 4, 1, 2, 4});
+    run_test<float>("2-D ss, 1-D vals, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9}, 5, 3, true, {2, 3, 5, 1, 3, 4});
+
+    // Test 2-D ss, 2-D values same
+    run_test<float>("2-D ss, 2-D vals same, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 3, 6, 9}, 5, 3, false, {1, 3, 4, 1, 2, 4});
+    run_test<float>("2-D ss, 2-D vals same, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 3, 6, 9}, 5, 3, true, {2, 3, 5, 1, 3, 4});
+
+    // Test 2-D ss, 2-D values diff
+    run_test<float>("2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+    run_test<float>("2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
 }
