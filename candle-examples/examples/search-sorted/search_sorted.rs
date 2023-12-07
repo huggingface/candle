@@ -130,6 +130,8 @@ impl<T: PartialOrd + Debug + Sync + Send> Sortable<T> for Vec<T> {
                 println!("matches: {:?}", matches);
                 matches
             }
+            // N-d sorted seq, N-d vals --> num "rows" of vals must be equal to the num "rows" of sorted seq
+            // each row of vals is applied to the corresponding row of sorted seq
             _ => {
                 assert!(self.len() / innerdim_bd == values.len() / innerdim_val);
 
@@ -229,50 +231,101 @@ mod tests {
     fn test_ss_1d_vals_1d() {
         let device = Device::Cpu;
 
-        let ss_evens: Vec<u32> = (2..=10).step_by(2).collect();
-        let ss_odds: Vec<u32> = (1..10).step_by(2).collect();
+        let ss_1d: Vec<u32> = (2..=10).step_by(2).collect();
         let ss_shape = Shape::from_dims(&[5]);
 
         let vals: Vec<u32> = vec![3, 6, 9];
-        let val_shape = Shape::from_dims(&[3]);
-        // Apply custom op
+        let vals_shape = Shape::from_dims(&[3]);
 
-        // Matching ranks
-        let t1 = Tensor::from_vec(ss_evens, &ss_shape, &device).unwrap();
-        let t2 = Tensor::from_vec(vals.clone(), &val_shape, &device).unwrap();
+        let t1 = Tensor::from_vec(ss_1d, &ss_shape, &device).unwrap();
+        let t2 = Tensor::from_vec(vals.clone(), &vals_shape, &device).unwrap();
+        let expected_indices: Vec<i64> = vec![1, 2, 4];
+        let expected_shape = Shape::from_dims(&[3]);
+        //Test left
         let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-        let expected: Vec<i64> = vec![1, 2, 4];
-        let actual_matches: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+        let actual_shape = t3.shape();
+        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
         assert!(
-            actual_matches == expected,
+            actual_indices == expected_indices,
             "Expected {:?}, got {:?}",
-            expected,
-            actual_matches
+            expected_indices,
+            actual_indices
+        );
+        assert!(
+            actual_shape.dims() == expected_shape.dims(),
+            "Expected shape {:?}, got {:?}",
+            expected_shape,
+            actual_shape
         );
 
+        //Test right
+        let expected_indices: Vec<i64> = vec![1, 3, 4];
+        let expected_shape = Shape::from_dims(&[3]);
         let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
-        let actual_matches: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        let expected: Vec<i64> = vec![1, 3, 4];
+        let actual_shape = t3.shape();
+        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
         assert!(
-            actual_matches == expected,
+            actual_indices == expected_indices,
             "Expected {:?}, got {:?}",
-            expected,
-            actual_matches
+            expected_indices,
+            actual_indices
+        );
+        assert!(
+            actual_shape.dims() == expected_shape.dims(),
+            "Expected shape {:?}, got {:?}",
+            expected_shape,
+            actual_shape
+        );
+    }
+    #[test]
+    fn test_ss_1d_vals_2d() {
+        let device = Device::Cpu;
+
+        let ss_1d: Vec<u32> = (1..10).step_by(2).collect();
+        let ss_shape = Shape::from_dims(&[5]);
+
+        let vals: Vec<u32> = vec![3, 6, 9, 3, 6, 9];
+        let vals_shape = Shape::from_dims(&[2, 3]);
+
+        // Test left
+        let t1 = Tensor::from_vec(ss_1d.clone(), &ss_shape, &device).unwrap();
+        let t2 = Tensor::from_vec(vals.clone(), &vals_shape, &device).unwrap();
+        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+        let expected_indices: Vec<i64> = vec![1, 3, 4, 1, 3, 4];
+        let expected_shape = Shape::from_dims(&[2, 3]);
+
+        let actual_shape = t3.shape();
+        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+        assert!(
+            actual_indices == expected_indices,
+            "Expected {:?}, got {:?}",
+            expected_indices,
+            actual_indices
+        );
+        assert!(
+            actual_shape.dims() == expected_shape.dims(),
+            "Expected shape {:?}, got {:?}",
+            expected_shape,
+            actual_shape
         );
 
-        let t1 = Tensor::from_vec(ss_odds, &ss_shape, &device).unwrap();
-        let t2 = Tensor::from_vec(vals.clone(), &val_shape, &device).unwrap();
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-        let actual_matches: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        let expected: Vec<i64> = vec![1, 3, 4];
+        // Test right
+        let expected_indices: Vec<i64> = vec![2, 3, 5, 2, 3, 5];
+        let expected_shape = Shape::from_dims(&[2, 3]);
         let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
-        let expected: Vec<i64> = vec![2, 3, 5];
-        let actual_matches: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
+        let actual_shape = t3.shape();
+        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
         assert!(
-            actual_matches == expected,
+            actual_indices == expected_indices,
             "Expected {:?}, got {:?}",
-            expected,
-            actual_matches
+            expected_indices,
+            actual_indices
+        );
+        assert!(
+            actual_shape.dims() == expected_shape.dims(),
+            "Expected shape {:?}, got {:?}",
+            expected_shape,
+            actual_shape
         );
     }
 }
