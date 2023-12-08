@@ -363,6 +363,16 @@ impl CustomOp2 for SearchSorted {
 
         let is_1d_bd = l1.shape().rank() == 1;
         let is_1d_vals = l2.shape().rank() == 1;
+        let slice_ss = s1.as_cuda_slice::<f32>()?;
+        let slice_ss = match l1.contiguous_offsets() {
+            None => candle::bail!("input has to be contiguous"),
+            Some((o1, o2)) => slice_ss.slice(o1..o2),
+        };
+        let slice_vals = s2.as_cuda_slice::<f32>()?;
+        let slice_vals = match l2.contiguous_offsets() {
+            None => candle::bail!("input has to be contiguous"),
+            Some((o1, o2)) => slice_vals.slice(o1..o2),
+        };
 
         let dev = s1.device().clone();
 
@@ -373,7 +383,6 @@ impl CustomOp2 for SearchSorted {
         let output_shape = Shape::from_dims(&output_dims);
         let output_slice = unsafe { dev.alloc::<i64>(output_shape.elem_count()) }.w()?;
 
-        let output = CudaStorage::wrap_cuda_slice(output_slice, dev.clone());
         let idim_in = *innerdim_val as u32;
         let idim_bd = *innerdim_bd as u32;
         let numel_in = numels_val as u32;
@@ -383,27 +392,39 @@ impl CustomOp2 for SearchSorted {
         // output_t *data_out,
         // const input_t *data_in,
         // const input_t *data_bd,
-        // int idim_in,
-        // int idim_bd,
-        // int numel_in,
-        // bool right,
-        // bool is_1d_boundaries,
-        // bool is_1d_values
+        // const int idim_in,
+        // const int idim_bd,
+        // const int numel_in,
+        // const bool right,
+        // const bool is_1d_boundaries,
+        // const bool is_1d_values
 
         //Allocate output
-
-        // let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
-        // let func = dev.get_or_load_func("rms_f32", cuda_kernels::LAYERNORM_KERNELS)?;
-        // let params = (&dst, &slice, self.eps, d1, d2);
-        // // let cfg = LaunchConfig {
-        //     grid_dim: (d1, 1, 1),
-        //     block_dim: (d2, 1, 1),
-        //     shared_mem_bytes: 0,
-        // };
-        // // unsafe { func.launch(cfg, params) }.w()?;
+        println!("Loaded kernel");
+        let params = (
+            &output_slice,
+            &slice_vals,
+            &slice_ss,
+            idim_in,
+            idim_bd,
+            numel_in,
+            self.right,
+            is_1d_bd,
+            is_1d_vals,
+        );
+        let threads_per_block = 256;
+        let num_blocks = (numel_in + threads_per_block - 1) / threads_per_block;
+        let cfg = LaunchConfig {
+            grid_dim: (num_blocks, 1, 1),
+            block_dim: (threads_per_block, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        println!("Launching kernel");
+        unsafe { func.launch(cfg, params) }.w()?;
+        let output = CudaStorage::wrap_cuda_slice(output_slice, dev.clone());
 
         // let dst = candle::CudaStorage::wrap_cuda_slice(&[1, 2, 3], dev);
-        Ok((output, l2.shape().clone()))
+        Ok((output, output_shape))
     }
 }
 #[cfg(test)]
@@ -415,10 +436,10 @@ mod tests {
     #[test]
     fn test_ss_cuda() {
         let device = Device::new_cuda(0).unwrap();
-        let ss: Vec<u32> = (1..10).step_by(2).collect();
+        let ss: Vec<f32> = vec![1., 3., 5., 7., 9.];
         let ss_shape = Shape::from_dims(&[5]);
 
-        let vals: Vec<u32> = vec![3, 6, 9];
+        let vals: Vec<f32> = vec![3., 6., 9.];
         let vals_shape = Shape::from_dims(&[3]);
         let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
         let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
