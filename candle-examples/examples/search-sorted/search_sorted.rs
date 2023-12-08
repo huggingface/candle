@@ -1,8 +1,11 @@
-use candle::{CpuStorage, CustomOp2, Layout, Result, Shape};
+use candle::{CpuStorage, CudaStorage, CustomOp2, Layout, Result, Shape};
 use half::{bf16, f16};
 use rayon::prelude::*;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
+
+use crate::cuda_kernels::SEARCH_SORTED_KERNEL;
+
 pub struct SearchSorted {
     pub right: bool,
 }
@@ -82,6 +85,69 @@ macro_rules! match_cpu_storage {
     };
 }
 
+macro_rules! match_cuda_storage {
+    ($s1:expr, $s2:expr, $code:expr) => {
+        match $s1 {
+            CpuStorage::U8(vs) => match $s2 {
+                CpuStorage::U8(values) => $code(vs, values),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
+            },
+            CpuStorage::U32(vs) => match $s2 {
+                CpuStorage::U32(values) => $code(vs, values),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
+            },
+            CpuStorage::I64(vs) => match $s2 {
+                CpuStorage::I64(values) => $code(vs, values),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
+            },
+            CpuStorage::BF16(vs) => match $s2 {
+                CpuStorage::BF16(values) => $code(vs, values),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
+            },
+            CpuStorage::F16(vs) => match $s2 {
+                CpuStorage::F16(values) => $code(vs, values),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
+            },
+            CpuStorage::F32(vs) => match $s2 {
+                CpuStorage::F32(values) => $code(vs, values),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
+            },
+            CpuStorage::F64(vs) => match $s2 {
+                CpuStorage::F64(values) => $code(vs, values),
+                _ => candle::bail!(
+                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                    $s1,
+                    $s2
+                ),
+            },
+            _ => candle::bail!("Unsupported data type"),
+        }
+    };
+}
 fn binary_search<T: PartialOrd>(slice: &[T], value: &T, right: bool) -> i64 {
     let mut start: usize = 0;
     let mut end: usize = slice.len();
@@ -220,6 +286,9 @@ impl CustomOp2 for SearchSorted {
 
         //Check that sorted seq is sorted
         //Check contiguity
+        if (l1.contiguous_offsets().is_none() | l2.contiguous_offsets().is_none()) {
+            candle::bail!("input has to be contiguous");
+        }
 
         let is_1d_bd = l1.shape().rank() == 1;
         let is_1d_vals = l2.shape().rank() == 1;
@@ -236,19 +305,127 @@ impl CustomOp2 for SearchSorted {
             CpuStorage::I64(indices)
         });
         let output_dims = match is_1d_bd {
-            true => [&leadingdims_val[..], &[*innerdim_val]].concat(),
-            false => [&leadingdims_bd[..], &[*innerdim_val]].concat(),
+            true => [leadingdims_val, &[*innerdim_val]].concat(),
+            false => [leadingdims_bd, &[*innerdim_val]].concat(),
         };
         let output_shape = Shape::from_dims(&output_dims);
 
         Ok((indices, output_shape))
     }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        s1: &candle::CudaStorage,
+        l1: &Layout,
+        s2: &candle::CudaStorage,
+        l2: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        use candle::cuda_backend::cudarc::driver::{LaunchAsync, LaunchConfig};
+        use candle::cuda_backend::WrapErr;
+
+        let rank_bd = l1.shape().rank();
+        let l1_dims = l1.shape().dims().to_vec();
+        let l2_dims = l2.shape().dims().to_vec();
+        let (innerdim_bd, leadingdims_bd) = l1_dims.split_last().unwrap();
+        let (innerdim_val, leadingdims_val) = l2_dims.split_last().unwrap();
+
+        // let innerdim_bd = l1.shape().dims()[rank_bd - 1];
+        let numels_bd = l1.shape().elem_count();
+        assert!(numels_bd % innerdim_bd == 0);
+        let num_rows_bd = numels_bd / innerdim_bd;
+
+        let rank_val = l2.shape().rank();
+        let numels_val = l2.shape().elem_count();
+        assert!(numels_val % innerdim_val == 0);
+        let num_rows_val = numels_val / innerdim_val;
+
+        if rank_bd != 1 && rank_val != 1 {
+            //Check that leading dims are the same
+            assert!(leadingdims_bd == leadingdims_val);
+        }
+        let dtype_bd = s1.dtype();
+        let dtype_val = s2.dtype();
+        if dtype_bd != dtype_val {
+            candle::bail!(
+                "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                dtype_bd,
+                dtype_val
+            );
+        }
+
+        //Check that sorted seq is sorted
+        //Check contiguity
+        if l1.contiguous_offsets().is_none() | l2.contiguous_offsets().is_none() {
+            candle::bail!("input has to be contiguous");
+        }
+
+        let is_1d_bd = l1.shape().rank() == 1;
+        let is_1d_vals = l2.shape().rank() == 1;
+
+        let dev = s1.device().clone();
+
+        let output_dims = match is_1d_bd {
+            true => [leadingdims_val, &[*innerdim_val]].concat(),
+            false => [leadingdims_bd, &[*innerdim_val]].concat(),
+        };
+        let output_shape = Shape::from_dims(&output_dims);
+        let output_slice = unsafe { dev.alloc::<i64>(output_shape.elem_count()) }.w()?;
+
+        let output = CudaStorage::wrap_cuda_slice(output_slice, dev.clone());
+        let idim_in = *innerdim_val as u32;
+        let idim_bd = *innerdim_bd as u32;
+        let numel_in = numels_val as u32;
+
+        let func = dev.get_or_load_func("search_sorted_f32", SEARCH_SORTED_KERNEL)?;
+        // //Expected args
+        // output_t *data_out,
+        // const input_t *data_in,
+        // const input_t *data_bd,
+        // int idim_in,
+        // int idim_bd,
+        // int numel_in,
+        // bool right,
+        // bool is_1d_boundaries,
+        // bool is_1d_values
+
+        //Allocate output
+
+        // let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+        // let func = dev.get_or_load_func("rms_f32", cuda_kernels::LAYERNORM_KERNELS)?;
+        // let params = (&dst, &slice, self.eps, d1, d2);
+        // // let cfg = LaunchConfig {
+        //     grid_dim: (d1, 1, 1),
+        //     block_dim: (d2, 1, 1),
+        //     shared_mem_bytes: 0,
+        // };
+        // // unsafe { func.launch(cfg, params) }.w()?;
+
+        // let dst = candle::CudaStorage::wrap_cuda_slice(&[1, 2, 3], dev);
+        Ok((output, l2.shape().clone()))
+    }
 }
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use candle::{Device, Tensor};
 
+    use super::*;
+    use candle::{CudaDevice, Device, Tensor};
+
+    #[test]
+    fn test_ss_cuda() {
+        let device = Device::new_cuda(0).unwrap();
+        let ss: Vec<u32> = (1..10).step_by(2).collect();
+        let ss_shape = Shape::from_dims(&[5]);
+
+        let vals: Vec<u32> = vec![3, 6, 9];
+        let vals_shape = Shape::from_dims(&[3]);
+        let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
+        let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
+        //Test left
+        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+        println!("t3: {:?}", t3);
+    }
     #[test]
     fn test_ss_1d_vals_1d() {
         let device = Device::Cpu;

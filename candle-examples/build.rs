@@ -9,11 +9,18 @@ struct KernelDirectories {
     include_dirs: &'static [&'static str],
 }
 
-const DIRS: [KernelDirectories; 1] = [KernelDirectories {
-    kernel_dir: "examples/custom-ops/kernels/",
-    rust_target: "examples/custom-ops/cuda_kernels.rs",
-    include_dirs: &[],
-}];
+const DIRS: [KernelDirectories; 2] = [
+    KernelDirectories {
+        kernel_dir: "examples/custom-ops/kernels/",
+        rust_target: "examples/custom-ops/cuda_kernels.rs",
+        include_dirs: &[],
+    },
+    KernelDirectories {
+        kernel_dir: "examples/search-sorted/kernels",
+        rust_target: "examples/search-sorted/cuda_kernels.rs",
+        include_dirs: &[],
+    },
+];
 
 impl KernelDirectories {
     fn maybe_build_ptx(

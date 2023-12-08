@@ -17,7 +17,7 @@ candle-nn = { path = "../candle-nn", version = "0.3.1" }
 candle-transformers = { path = "../candle-transformers", version = "0.3.1" }
 candle-flash-attn = { path = "../candle-flash-attn", version = "0.3.1", optional = true }
 candle-onnx = { path = "../candle-onnx", version = "0.3.1", optional = true }
-cudarc = { workspace = true, optional = true }
+cudarc = { workspace = true }                                                             #, optional = true }
 half = { workspace = true, optional = true }
 image = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -87,4 +87,4 @@ required-features = ["onnx"]
 
 [[example]]
 name = "search-sorted"
-required-features = ["cuda"]
+features = ["cuda"]

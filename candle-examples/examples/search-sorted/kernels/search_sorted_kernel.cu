@@ -38,16 +38,16 @@ __device__ int upper_bound(const input_t *data_ss, int64_t start, int64_t end, c
 }
 
 template <typename input_t, typename output_t>
-__global__ void searchsorted_cuda_kernel(
+__device__ void searchsorted_cuda_kernel(
     output_t *data_out,
     const input_t *data_in,
     const input_t *data_bd,
-    int idim_in,
-    int idim_bd,
-    int numel_in,
-    bool right,
-    bool is_1d_boundaries,
-    bool is_1d_values)
+    const u_int32_t idim_in,
+    const u_int32_t idim_bd,
+    const u_int32_t numel_in,
+    const bool right,
+    const bool is_1d_boundaries,
+    const bool is_1d_values)
 {
     // Define boundaries for sorted seq and values
     for (int tid = blockIdx.x * blockDim.x + threadIdx.x; tid < numel_in; tid += blockDim.x * gridDim.x)
@@ -62,4 +62,17 @@ __global__ void searchsorted_cuda_kernel(
 
         data_out[tid] = pos;
     }
+}
+extern "C" __global__ void search_sorted_f32(
+    int64_t *data_out,
+    const float *data_in,
+    const float *data_bd,
+    const u_int32_t idim_in,
+    const u_int32_t idim_bd,
+    const u_int32_t numel_in,
+    const bool right,
+    const bool is_1d_boundaries,
+    const bool is_1d_values)
+{
+    searchsorted_cuda_kernel(data_out, data_in, data_bd, idim_in, idim_bd, numel_in, right, is_1d_boundaries, is_1d_values);
 }

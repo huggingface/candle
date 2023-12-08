@@ -5,6 +5,7 @@
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
+mod cuda_kernels;
 
 use clap::Parser;
 
