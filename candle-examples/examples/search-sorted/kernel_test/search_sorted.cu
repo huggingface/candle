@@ -14,12 +14,12 @@ extern __global__ void searchsorted_cuda_kernel(
     output_t *data_out,
     const input_t *data_in,
     const input_t *data_bd,
-    int idim_in,
-    int idim_bd,
-    int numel_in,
-    bool right,
-    bool is_1d_boundaries,
-    bool is_1d_values);
+    const u_int32_t idim_in,
+    const u_int32_t idim_bd,
+    const u_int32_t numel_in,
+    const bool right,
+    const bool is_1d_boundaries,
+    const bool is_1d_values);
 
 inline int getMaxThreadsPerBlock()
 {
@@ -50,7 +50,7 @@ std::vector<output_t> search_sorted(std::vector<input_t> sorted_seq, int innerdi
     // Allocate device memory
     input_t *d_tensor;
     input_t *d_values;
-    int *d_output;
+    output_t *d_output;
     cudaMalloc(&d_tensor, sorted_seq.size() * sizeof(input_t));
     cudaMalloc(&d_values, values.size() * sizeof(input_t));
     cudaMalloc(&d_output, output.size() * sizeof(output_t));
@@ -105,15 +105,15 @@ std::ostream &operator<<(std::ostream &os, const std::vector<T> &v)
     return os;
 }
 
-template <typename T>
-void run_test(std::string_view test_name, std::vector<T> ss, std::vector<T> vals, size_t innerdim_ss, size_t innerdim_vs, bool right, std::vector<int> expected)
+template <typename input_t, typename output_t>
+void run_test(std::string_view test_name, std::vector<input_t> ss, std::vector<input_t> vals, size_t innerdim_ss, size_t innerdim_vs, bool right, std::vector<output_t> expected)
 {
-    std::vector<int> output = search_sorted<T, int>(ss, innerdim_ss, vals, innerdim_vs, right);
+    std::vector<output_t> output = search_sorted<input_t, output_t>(ss, innerdim_ss, vals, innerdim_vs, right);
     if (output != expected)
     {
         std::cout << test_name << ": Failed!" << std::endl;
-        std::cout << "Test 1-D ss: " << ss << "1-D values: " << vals << " Right: " << right << std::endl;
-        std::cout << "Expected: " << expected << " "
+        std::cout << "Test 1-D ss: " << ss << " | 1-D values: " << vals << " Right: " << right << std::endl;
+        std::cout << "Expected: " << expected << " -> "
                   << "Got: " << output << std::endl;
     }
     else
@@ -126,51 +126,87 @@ void run_test(std::string_view test_name, std::vector<T> ss, std::vector<T> vals
 }
 int main()
 {
+    using output_t = int;
     // Test 1-D ss, 1-D values
-    run_test<float>("Float 1-D ss, 1-D vals, left", {1, 3, 5, 7, 9}, {3, 6, 9}, 5, 3, false, {1, 3, 4});
-    run_test<float>("Float 1-D ss, 1-D vals, right", {1, 3, 5, 7, 9}, {3, 6, 9}, 5, 3, true, {2, 3, 5});
+    run_test<float, output_t>("Float 1-D ss, 1-D vals, left", {1, 3, 5, 7, 9}, {3, 6, 9}, 5, 3, false, {1, 3, 4});
+    run_test<float, output_t>("Float 1-D ss, 1-D vals, right", {1, 3, 5, 7, 9}, {3, 6, 9}, 5, 3, true, {2, 3, 5});
 
-    // // Test 1-D ss, 2-D values
-    // run_test<float>("Float 2-D ss, 1-D vals, left", {1, 3, 5, 7, 9}, {3, 6, 9, 3, 6, 9}, 5, 3, false, {1, 3, 4, 1, 3, 4});
-    // run_test<float>("Float 2-D ss, 1-D vals, right", {1, 3, 5, 7, 9}, {3, 6, 9, 3, 6, 9}, 5, 3, true, {2, 3, 5, 2, 3, 5});
+    // Test 1-D ss, 2-D values
+    run_test<float, output_t>("Float 2-D ss, 1-D vals, left", {1, 3, 5, 7, 9}, {3, 6, 9, 3, 6, 9}, 5, 3, false, {1, 3, 4, 1, 3, 4});
+    run_test<float, output_t>("Float 2-D ss, 1-D vals, right", {1, 3, 5, 7, 9}, {3, 6, 9, 3, 6, 9}, 5, 3, true, {2, 3, 5, 2, 3, 5});
 
-    // // Test 2-D ss, 1-D values
-    // run_test<float>("Float 2-D ss, 1-D vals, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9}, 5, 3, false, {1, 3, 4, 1, 2, 4});
-    // run_test<float>("Float 2-D ss, 1-D vals, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9}, 5, 3, true, {2, 3, 5, 1, 3, 4});
+    // Test 2-D ss, 1-D values
+    run_test<float, output_t>("Float 2-D ss, 1-D vals, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9}, 5, 3, false, {1, 3, 4, 1, 2, 4});
+    run_test<float, output_t>("Float 2-D ss, 1-D vals, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9}, 5, 3, true, {2, 3, 5, 1, 3, 4});
 
-    // // Test 2-D ss, 2-D values same
-    // run_test<float>("Float 2-D ss, 2-D vals same, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 3, 6, 9}, 5, 3, false, {1, 3, 4, 1, 2, 4});
-    // run_test<float>("Float 2-D ss, 2-D vals same, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 3, 6, 9}, 5, 3, true, {2, 3, 5, 1, 3, 4});
+    // Test 2-D ss, 2-D values same
+    run_test<float, output_t>("Float 2-D ss, 2-D vals same, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 3, 6, 9}, 5, 3, false, {1, 3, 4, 1, 2, 4});
+    run_test<float, output_t>("Float 2-D ss, 2-D vals same, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 3, 6, 9}, 5, 3, true, {2, 3, 5, 1, 3, 4});
 
-    // // Test 2-D ss, 2-D values diff
-    // run_test<float>("Float 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
-    // run_test<float>("Float 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+    // Test 2-D ss, 2-D values diff
+    run_test<float, output_t>("Float 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+    run_test<float, output_t>("Float 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
 
-    // // F64 Test 2-D ss, 2-D values diff
-    // run_test<double>("Float 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
-    // run_test<double>("Float 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+    // F64 Test 2-D ss, 2-D values diff
+    run_test<double, output_t>("Float 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+    run_test<double, output_t>("Float 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
 
-    // // Half Test 2-D ss, 2-D values diff
-    // run_test<half>("Half 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
-    // run_test<half>("Half 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+    // Half Test 2-D ss, 2-D values diff
+    run_test<half, output_t>("Half 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+    run_test<half, output_t>("Half 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
 
-    // // Half Test 2-D ss, 2-D values diff
-    // run_test<__half>("Half 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
-    // run_test<__half>("Half 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+    // Half Test 2-D ss, 2-D values diff
+    run_test<__half, output_t>("fp16 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+    run_test<__half, output_t>("fp16 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
 
-    // // Half Test 2-D ss, 2-D values diff
-    // run_test<__nv_bfloat16>("Half 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
-    // run_test<__nv_bfloat16>("Half 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+    // Half Test 2-D ss, 2-D values diff
+    run_test<__nv_bfloat16, output_t>("bf16 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+    run_test<__nv_bfloat16, output_t>("bf16 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
 
-    // // Int32 Test 2-D ss, 2-D values diff
-    // run_test<u_int8_t>("U8 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
-    // run_test<u_int8_t>("U8 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+    // Int32 Test 2-D ss, 2-D values diff
+    run_test<u_int8_t, output_t>("U8 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+    run_test<u_int8_t, output_t>("U8 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
 
-    // // Int64 Test 2-D ss, 2-D values diff
-    // run_test<u_int32_t>("U32 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
-    // run_test<u_int32_t>("U32 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+    // Int64 Test 2-D ss, 2-D values diff
+    run_test<u_int32_t, output_t>("U32 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+    run_test<u_int32_t, output_t>("U32 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
 
-    // // Int64 Test 2-D ss, 2-D values diff
-    // run_test<int64_t>("I64 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
-    // run_test<int64_t>("I64 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+    // Int64 Test 2-D ss, 2-D values diff
+    run_test<int64_t, output_t>("I64 2-D ss, 2-D vals diff, left", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+    run_test<int64_t, output_t>("I64 2-D ss, 2-D vals diff, right", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+
+    {
+        using output_t = int64_t;
+        // Test 2-D ss, 2-D values diff
+        run_test<float, output_t>("Float 2-D ss, 2-D vals diff, left, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+        run_test<float, output_t>("Float 2-D ss, 2-D vals diff, right, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+
+        // F64 Test 2-D ss, 2-D values diff
+        run_test<double, output_t>("Float 2-D ss, 2-D vals diff, left, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+        run_test<double, output_t>("Float 2-D ss, 2-D vals diff, right, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+
+        // Half Test 2-D ss, 2-D values diff
+        run_test<half, output_t>("Half 2-D ss, 2-D vals diff, left, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+        run_test<half, output_t>("Half 2-D ss, 2-D vals diff, right, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+
+        // Half Test 2-D ss, 2-D values diff
+        run_test<__half, output_t>("fp16 2-D ss, 2-D vals diff, left, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+        run_test<__half, output_t>("fp16 2-D ss, 2-D vals diff, right, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+
+        // Half Test 2-D ss, 2-D values diff
+        run_test<__nv_bfloat16, output_t>("bf16 2-D ss, 2-D vals diff, left, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+        run_test<__nv_bfloat16, output_t>("bf16 2-D ss, 2-D vals diff, right, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+
+        // Int32 Test 2-D ss, 2-D values diff
+        run_test<u_int8_t, output_t>("U8 2-D ss, 2-D vals diff, left, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+        run_test<u_int8_t, output_t>("U8 2-D ss, 2-D vals diff, right, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+
+        // Int64 Test 2-D ss, 2-D values diff
+        run_test<u_int32_t, output_t>("U32 2-D ss, 2-D vals diff, left, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+        run_test<u_int32_t, output_t>("U32 2-D ss, 2-D vals diff, right, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+
+        // Int64 Test 2-D ss, 2-D values diff
+        run_test<int64_t, output_t>("I64 2-D ss, 2-D vals diff, left, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, false, {1, 3, 4, 0, 0, 1});
+        run_test<int64_t, output_t>("I64 2-D ss, 2-D vals diff, right, Output i64", {1, 3, 5, 7, 9, 2, 4, 6, 8, 10}, {3, 6, 9, 1, 2, 3}, 5, 3, true, {2, 3, 5, 0, 1, 1});
+    }
 }
