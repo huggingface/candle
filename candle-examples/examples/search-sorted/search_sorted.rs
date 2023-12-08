@@ -321,6 +321,8 @@ impl CustomOp2 for SearchSorted {
         s2: &candle::CudaStorage,
         l2: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
+        use std::ffi::c_long;
+
         use candle::backend::BackendStorage;
         use candle::cuda_backend::cudarc::driver::{LaunchAsync, LaunchConfig};
         use candle::cuda_backend::WrapErr;
@@ -428,12 +430,36 @@ impl CustomOp2 for SearchSorted {
         match s1.dtype() {
             DType::U32 => dispatch_cuda!(u32),
             DType::F32 => dispatch_cuda!(f32),
-            // DType::U8 => dispatch_cuda!(u8),
+            DType::U8 => dispatch_cuda!(u8),
 
-            // DType::F64 => dispatch_cuda!(f64),
-            // DType::I64 => dispatch_cuda!(i64),
-            // DType::BF16 => dispatch_cuda!(bf16),
-            // DType::F16 => dispatch_cuda!(f16),
+            DType::F64 => dispatch_cuda!(f64),
+            DType::I64 => {
+                let slice_ss = s1.as_cuda_slice::<std::ffi::c_long>()?;
+                let slice_ss = match l1.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => slice_ss.slice(o1..o2),
+                };
+                let slice_vals = s2.as_cuda_slice::<std::ffi::c_long>()?;
+                let slice_vals = match l2.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => slice_vals.slice(o1..o2),
+                };
+                let params = (
+                    &output_slice,
+                    &slice_vals,
+                    &slice_ss,
+                    idim_in,
+                    idim_bd,
+                    numel_in,
+                    self.right,
+                    is_1d_bd,
+                    is_1d_vals,
+                );
+                println!("Launching kernel {:?}", params);
+                unsafe { func.launch(cfg, params) }.w()?;
+            }
+            DType::BF16 => dispatch_cuda!(bf16),
+            DType::F16 => dispatch_cuda!(f16),
             _ => candle::bail!("Unsupported data type"),
         }
         let output = CudaStorage::wrap_cuda_slice(output_slice, dev.clone());
@@ -448,34 +474,100 @@ mod tests {
     use super::*;
     use candle::{CudaDevice, Device, Tensor};
 
+    macro_rules! test_cuda_dispatch {
+        ($t:ty, $ss:expr, $vals:expr, $expected:expr) => {
+            let device = Device::new_cuda(0).unwrap();
+            let ss: Vec<$t> = $ss;
+            let ss_shape = Shape::from_dims(&[5]);
+
+            let vals: Vec<$t> = $vals;
+            let vals_shape = Shape::from_dims(&[3]);
+            let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
+            let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
+            //Test left
+            let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+            assert!(
+                t3.flatten_all().unwrap().to_vec1::<i64>().unwrap() == $expected,
+                "Expected {:?}, got {:?}",
+                $expected,
+                t3.flatten_all().unwrap().to_vec1::<i64>().unwrap()
+            );
+            println!("t3: {:?}", t3);
+        };
+    }
+    #[test]
+    fn test_cuda_ss1d_vals1d_u8() {
+        test_cuda_dispatch!(u8, vec![1, 3, 5, 7, 9], vec![3, 6, 9], vec![1, 3, 4]);
+    }
     #[test]
     fn test_cuda_ss1d_vals1d_u32() {
-        let device = Device::new_cuda(0).unwrap();
-        let ss: Vec<u32> = vec![1, 3, 5, 7, 9];
-        let ss_shape = Shape::from_dims(&[5]);
-
-        let vals: Vec<u32> = vec![3, 6, 9];
-        let vals_shape = Shape::from_dims(&[3]);
-        let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
-        let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
-        //Test left
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-        println!("t3: {:?}", t3);
+        test_cuda_dispatch!(u32, vec![1, 3, 5, 7, 9], vec![3, 6, 9], vec![1, 3, 4]);
+    }
+    #[test]
+    fn test_cuda_ss1d_vals1d_i64() {
+        test_cuda_dispatch!(i64, vec![1, 3, 5, 7, 9], vec![3, 6, 9], vec![1, 3, 4]);
     }
     #[test]
     fn test_cuda_ss1d_vals1d_f32() {
-        let device = Device::new_cuda(0).unwrap();
-        let ss: Vec<f32> = vec![1., 3., 5., 7., 9.];
-        let ss_shape = Shape::from_dims(&[5]);
-
-        let vals: Vec<f32> = vec![3., 6., 9.];
-        let vals_shape = Shape::from_dims(&[3]);
-        let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
-        let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
-        //Test left
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-        println!("t3: {:?}", t3);
+        test_cuda_dispatch!(
+            f32,
+            vec![1., 3., 5., 7., 9.],
+            vec![3., 6., 9.],
+            vec![1, 3, 4]
+        );
     }
+    #[test]
+    fn test_cuda_ss1d_vals1d_f64() {
+        test_cuda_dispatch!(
+            f32,
+            vec![1., 3., 5., 7., 9.],
+            vec![3., 6., 9.],
+            vec![1, 3, 4]
+        );
+    }
+
+    // #[test]
+    // fn test_cuda_ss1d_vals1d_u8() {
+    //     let device = Device::new_cuda(0).unwrap();
+    //     let ss: Vec<u8> = vec![1, 3, 5, 7, 9];
+    //     let ss_shape = Shape::from_dims(&[5]);
+
+    //     let vals: Vec<u8> = vec![3, 6, 9];
+    //     let vals_shape = Shape::from_dims(&[3]);
+    //     let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
+    //     let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
+    //     //Test left
+    //     let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+    //     println!("t3: {:?}", t3);
+    // }
+    // #[test]
+    // fn test_cuda_ss1d_vals1d_u32() {
+    //     let device = Device::new_cuda(0).unwrap();
+    //     let ss: Vec<u32> = vec![1, 3, 5, 7, 9];
+    //     let ss_shape = Shape::from_dims(&[5]);
+
+    //     let vals: Vec<u32> = vec![3, 6, 9];
+    //     let vals_shape = Shape::from_dims(&[3]);
+    //     let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
+    //     let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
+    //     //Test left
+    //     let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+    //     println!("t3: {:?}", t3);
+    // }
+    // #[test]
+    // fn test_cuda_ss1d_vals1d_f32() {
+    //     let device = Device::new_cuda(0).unwrap();
+    //     let ss: Vec<f32> = vec![1., 3., 5., 7., 9.];
+    //     let ss_shape = Shape::from_dims(&[5]);
+
+    //     let vals: Vec<f32> = vec![3., 6., 9.];
+    //     let vals_shape = Shape::from_dims(&[3]);
+    //     let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
+    //     let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
+    //     //Test left
+    //     let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+    //     println!("t3: {:?}", t3);
+    // }
     #[test]
     fn test_ss_1d_vals_1d() {
         let device = Device::Cpu;
