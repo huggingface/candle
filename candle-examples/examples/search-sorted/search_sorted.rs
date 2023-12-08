@@ -1,4 +1,4 @@
-use candle::{CpuStorage, CudaStorage, CustomOp2, Layout, Result, Shape};
+use candle::{CpuStorage, CudaStorage, CustomOp2, DType, Layout, Result, Shape};
 use half::{bf16, f16};
 use rayon::prelude::*;
 use std::fmt::Debug;
@@ -286,7 +286,7 @@ impl CustomOp2 for SearchSorted {
 
         //Check that sorted seq is sorted
         //Check contiguity
-        if (l1.contiguous_offsets().is_none() | l2.contiguous_offsets().is_none()) {
+        if l1.contiguous_offsets().is_none() | l2.contiguous_offsets().is_none() {
             candle::bail!("input has to be contiguous");
         }
 
@@ -363,17 +363,16 @@ impl CustomOp2 for SearchSorted {
 
         let is_1d_bd = l1.shape().rank() == 1;
         let is_1d_vals = l2.shape().rank() == 1;
-        let slice_ss = s1.as_cuda_slice::<f32>()?;
-        let slice_ss = match l1.contiguous_offsets() {
-            None => candle::bail!("input has to be contiguous"),
-            Some((o1, o2)) => slice_ss.slice(o1..o2),
-        };
-        let slice_vals = s2.as_cuda_slice::<f32>()?;
-        let slice_vals = match l2.contiguous_offsets() {
-            None => candle::bail!("input has to be contiguous"),
-            Some((o1, o2)) => slice_vals.slice(o1..o2),
-        };
 
+        let dtype_ss = s1.dtype();
+        let dtype_vals = s2.dtype();
+        if s1.dtype() != s2.dtype() {
+            candle::bail!(
+                "Sorted sequence and values must be of the same type: got {:?} and {:?}",
+                s1.dtype(),
+                s2.dtype()
+            );
+        };
         let dev = s1.device().clone();
 
         let output_dims = match is_1d_bd {
@@ -387,31 +386,6 @@ impl CustomOp2 for SearchSorted {
         let idim_bd = *innerdim_bd as u32;
         let numel_in = numels_val as u32;
 
-        let func = dev.get_or_load_func("search_sorted_f32", SEARCH_SORTED_KERNEL)?;
-        // //Expected args
-        // output_t *data_out,
-        // const input_t *data_in,
-        // const input_t *data_bd,
-        // const int idim_in,
-        // const int idim_bd,
-        // const int numel_in,
-        // const bool right,
-        // const bool is_1d_boundaries,
-        // const bool is_1d_values
-
-        //Allocate output
-        println!("Loaded kernel");
-        let params = (
-            &output_slice,
-            &slice_vals,
-            &slice_ss,
-            idim_in,
-            idim_bd,
-            numel_in,
-            self.right,
-            is_1d_bd,
-            is_1d_vals,
-        );
         let threads_per_block = 256;
         let num_blocks = (numel_in + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
@@ -419,8 +393,61 @@ impl CustomOp2 for SearchSorted {
             block_dim: (threads_per_block, 1, 1),
             shared_mem_bytes: 0,
         };
-        println!("Launching kernel");
-        unsafe { func.launch(cfg, params) }.w()?;
+
+        let func = dev.get_or_load_func("search_sorted_u32", SEARCH_SORTED_KERNEL)?;
+
+        //Dispatch based on dtype
+        match s1.dtype() {
+            DType::U32 => {
+                let slice_ss = s1.as_cuda_slice::<u32>()?;
+                let slice_ss = match l1.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => slice_ss.slice(o1..o2),
+                };
+                let slice_vals = s2.as_cuda_slice::<u32>()?;
+                let slice_vals = match l2.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => slice_vals.slice(o1..o2),
+                };
+                let params = (
+                    &output_slice,
+                    &slice_vals,
+                    &slice_ss,
+                    idim_in,
+                    idim_bd,
+                    numel_in,
+                    self.right,
+                    is_1d_bd,
+                    is_1d_vals,
+                );
+                unsafe { func.launch(cfg, params) }.w()?;
+            }
+            DType::F32 => {
+                let slice_ss = s1.as_cuda_slice::<f32>()?;
+                let slice_ss = match l1.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => slice_ss.slice(o1..o2),
+                };
+                let slice_vals = s2.as_cuda_slice::<f32>()?;
+                let slice_vals = match l2.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => slice_vals.slice(o1..o2),
+                };
+                let params = (
+                    &output_slice,
+                    &slice_vals,
+                    &slice_ss,
+                    idim_in,
+                    idim_bd,
+                    numel_in,
+                    self.right,
+                    is_1d_bd,
+                    is_1d_vals,
+                );
+                unsafe { func.launch(cfg, params) }.w()?;
+            }
+            _ => candle::bail!("Unsupported data type"),
+        }
         let output = CudaStorage::wrap_cuda_slice(output_slice, dev.clone());
 
         // let dst = candle::CudaStorage::wrap_cuda_slice(&[1, 2, 3], dev);
@@ -434,7 +461,20 @@ mod tests {
     use candle::{CudaDevice, Device, Tensor};
 
     #[test]
-    fn test_ss_cuda() {
+    fn test_cuda_ss1d_vals1d_u32() {
+        let device = Device::new_cuda(0).unwrap();
+        let ss: Vec<u32> = vec![1, 3, 5, 7, 9];
+        let ss_shape = Shape::from_dims(&[5]);
+
+        let vals: Vec<u32> = vec![3, 6, 9];
+        let vals_shape = Shape::from_dims(&[3]);
+        let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
+        let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
+        //Test left
+        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+        println!("t3: {:?}", t3);
+    }
+    fn test_ss_cuda_1d_vals_1d_f32() {
         let device = Device::new_cuda(0).unwrap();
         let ss: Vec<f32> = vec![1., 3., 5., 7., 9.];
         let ss_shape = Shape::from_dims(&[5]);

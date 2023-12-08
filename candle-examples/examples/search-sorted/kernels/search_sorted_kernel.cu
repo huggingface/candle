@@ -76,3 +76,16 @@ extern "C" __global__ void search_sorted_f32(
 {
     searchsorted_cuda_kernel(data_out, data_in, data_bd, idim_in, idim_bd, numel_in, right, is_1d_boundaries, is_1d_values);
 }
+extern "C" __global__ void search_sorted_u32(
+    int64_t *data_out,
+    const u_int32_t *data_in,
+    const u_int32_t *data_bd,
+    const u_int32_t idim_in,
+    const u_int32_t idim_bd,
+    const u_int32_t numel_in,
+    const bool right,
+    const bool is_1d_boundaries,
+    const bool is_1d_values)
+{
+    searchsorted_cuda_kernel(data_out, data_in, data_bd, idim_in, idim_bd, numel_in, right, is_1d_boundaries, is_1d_values);
+}
