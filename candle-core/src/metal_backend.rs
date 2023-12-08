@@ -795,7 +795,6 @@ impl BackendStorage for MetalStorage {
         rhs_l: &Layout,
     ) -> Result<Self> {
         // Create descriptors
-
         let (type_id, size) = match self.dtype {
             DType::F32 => (
                 metal::mps::MPS_FLOATBIT_ENCODING | 32,
