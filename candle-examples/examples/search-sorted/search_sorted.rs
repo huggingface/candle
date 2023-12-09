@@ -1,9 +1,15 @@
-use candle::{CpuStorage, CudaStorage, CustomOp2, DType, Layout, Result, Shape};
-use half::{bf16, f16};
+use candle::{CpuStorage, CustomOp2, Layout, Result, Shape};
 use rayon::prelude::*;
 use std::fmt::Debug;
 use std::marker::{Send, Sync};
 
+#[cfg(feature = "cuda")]
+use half::{bf16, f16};
+
+#[cfg(feature = "cuda")]
+use candle::{CudaStorage, DType};
+
+#[cfg(feature = "cuda")]
 use crate::cuda_kernels::SEARCH_SORTED_KERNEL;
 
 pub struct SearchSorted {
