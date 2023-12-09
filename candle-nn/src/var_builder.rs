@@ -49,7 +49,7 @@ pub trait Backend: Send + Sync {
     /// Retrieve a tensor with some target shape.
     fn get(
         &self,
-        s: Shape,
+        s: Option<Shape>,
         name: &str,
         h: Self::Hints,
         dtype: DType,
@@ -57,13 +57,15 @@ pub trait Backend: Send + Sync {
     ) -> Result<Tensor>;
 
     fn contains_tensor(&self, name: &str) -> bool;
+
+    fn keys(&self) -> Option<Vec<&str>>;
 }
 
 pub trait SimpleBackend: Send + Sync {
     /// Retrieve a tensor based on a target name and shape.
     fn get(
         &self,
-        s: Shape,
+        s: Option<Shape>,
         name: &str,
         h: crate::Init,
         dtype: DType,
@@ -71,13 +73,15 @@ pub trait SimpleBackend: Send + Sync {
     ) -> Result<Tensor>;
 
     fn contains_tensor(&self, name: &str) -> bool;
+
+    fn keys(&self) -> Option<Vec<&str>>;
 }
 
 impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
     type Hints = crate::Init;
     fn get(
         &self,
-        s: Shape,
+        s: Option<Shape>,
         name: &str,
         h: Self::Hints,
         dtype: DType,
@@ -88,6 +92,10 @@ impl<'a> Backend for Box<dyn SimpleBackend + 'a> {
 
     fn contains_tensor(&self, name: &str) -> bool {
         self.as_ref().contains_tensor(name)
+    }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        self.as_ref().keys()
     }
 }
 
@@ -103,6 +111,20 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
             path: vec![],
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    pub fn state_dict(&self) -> HashMap<String, Tensor> {
+        let binding = self.data.backend.keys().unwrap();
+        let keys = binding.iter();
+        let state_dict: HashMap<_, _> = keys
+            .map(|&name| {
+                (
+                    name.to_string(),
+                    self.get_without_shape(&name, Default::default()).unwrap(),
+                )
+            })
+            .collect();
+        state_dict
     }
 
     /// Returns the prefix of the `VarBuilder`.
@@ -179,9 +201,20 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         hints: B::Hints,
     ) -> Result<Tensor> {
         let path = self.path(name);
+        self.data.backend.get(
+            Some(s.into()),
+            &path,
+            hints,
+            self.data.dtype,
+            &self.data.device,
+        )
+    }
+
+    pub fn get_without_shape(&self, name: &str, hints: B::Hints) -> Result<Tensor> {
+        let path = self.path(name);
         self.data
             .backend
-            .get(s.into(), &path, hints, self.data.dtype, &self.data.device)
+            .get(None, &path, hints, self.data.dtype, &self.data.device)
     }
 
     /// Retrieve the tensor associated with the given name at the current path.
@@ -193,19 +226,31 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
 struct Zeros;
 
 impl SimpleBackend for Zeros {
-    fn get(&self, s: Shape, _: &str, _: crate::Init, dtype: DType, dev: &Device) -> Result<Tensor> {
-        Tensor::zeros(s, dtype, dev)
+    fn get(
+        &self,
+        s: Option<Shape>,
+        _: &str,
+        _: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        let shape = s.expect("s has to be defined");
+        Tensor::zeros(shape, dtype, dev)
     }
 
     fn contains_tensor(&self, _name: &str) -> bool {
         true
+    }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        None
     }
 }
 
 impl SimpleBackend for HashMap<String, Tensor> {
     fn get(
         &self,
-        s: Shape,
+        s: Option<Shape>,
         name: &str,
         _: crate::Init,
         dtype: DType,
@@ -220,10 +265,10 @@ impl SimpleBackend for HashMap<String, Tensor> {
                 .bt()
             })?
             .clone();
-        if tensor.shape() != &s {
+        if s.is_some() && tensor.shape() != &(s.clone().unwrap()) {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {name}"),
-                expected: s,
+                expected: s.clone().unwrap(),
                 got: tensor.shape().clone(),
             }
             .bt())?
@@ -234,22 +279,30 @@ impl SimpleBackend for HashMap<String, Tensor> {
     fn contains_tensor(&self, name: &str) -> bool {
         self.contains_key(name)
     }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        None
+    }
 }
 
 impl SimpleBackend for VarMap {
     fn get(
         &self,
-        s: Shape,
+        s: Option<Shape>,
         name: &str,
         h: crate::Init,
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
-        VarMap::get(self, s, name, h, dtype, dev)
+        VarMap::get(self, s.unwrap(), name, h, dtype, dev)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
         self.data().lock().unwrap().contains_key(name)
+    }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        None
     }
 }
 
@@ -261,7 +314,7 @@ struct SafeTensorWithRouting<'a> {
 impl<'a> SimpleBackend for SafeTensorWithRouting<'a> {
     fn get(
         &self,
-        s: Shape,
+        s: Option<Shape>,
         path: &str,
         _: crate::Init,
         dtype: DType,
@@ -277,10 +330,10 @@ impl<'a> SimpleBackend for SafeTensorWithRouting<'a> {
             .tensor(path)?
             .load(dev)?
             .to_dtype(dtype)?;
-        if tensor.shape() != &s {
+        if s.is_some() && tensor.shape() != &(s.clone().unwrap()) {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {path}"),
-                expected: s,
+                expected: s.unwrap(),
                 got: tensor.shape().clone(),
             }
             .bt())?
@@ -291,12 +344,16 @@ impl<'a> SimpleBackend for SafeTensorWithRouting<'a> {
     fn contains_tensor(&self, name: &str) -> bool {
         self.routing.contains_key(name)
     }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        Some(self.routing.keys().map(|s| &s[..]).collect())
+    }
 }
 
 impl SimpleBackend for candle::npy::NpzTensors {
     fn get(
         &self,
-        s: Shape,
+        s: Option<Shape>,
         path: &str,
         _: crate::Init,
         dtype: DType,
@@ -310,10 +367,10 @@ impl SimpleBackend for candle::npy::NpzTensors {
             Some(tensor) => tensor,
         };
         let tensor = tensor.to_device(dev)?.to_dtype(dtype)?;
-        if tensor.shape() != &s {
+        if s.is_some() && tensor.shape() != &(s.clone().unwrap()) {
             Err(candle::Error::UnexpectedShape {
                 msg: format!("shape mismatch for {path}"),
-                expected: s,
+                expected: s.clone().unwrap(),
                 got: tensor.shape().clone(),
             }
             .bt())?
@@ -323,6 +380,10 @@ impl SimpleBackend for candle::npy::NpzTensors {
 
     fn contains_tensor(&self, name: &str) -> bool {
         self.get(name).map_or(false, |v| v.is_some())
+    }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        None
     }
 }
 
@@ -535,7 +596,7 @@ impl Backend for ShardedSafeTensors {
 
     fn get(
         &self,
-        _target_shape: Shape, // The size is not checked for ShardedTensors
+        _target_shape: Option<Shape>, // The size is not checked for ShardedTensors
         path: &str,
         h: Self::Hints,
         dtype: DType,
@@ -590,5 +651,9 @@ impl Backend for ShardedSafeTensors {
 
     fn contains_tensor(&self, name: &str) -> bool {
         self.0.get(name).is_ok()
+    }
+
+    fn keys(&self) -> Option<Vec<&str>> {
+        None
     }
 }
