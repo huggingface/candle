@@ -579,6 +579,30 @@ mod tests {
         );
     }
     #[test]
+    fn test_cuda_ss1d_vals2d_f32() {
+        test_cuda_dispatch!(
+            f32,
+            vec![1., 3., 5., 7., 9.],
+            vec![3., 6., 9., 3., 6., 9.],
+            vec![5],
+            vec![2, 3],
+            false,
+            vec![1, 3, 4, 1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cuda_ss1d_vals2d_f32_right() {
+        test_cuda_dispatch!(
+            f32,
+            vec![1., 3., 5., 7., 9.],
+            vec![3., 6., 9., 3., 6., 9.],
+            vec![5],
+            vec![2, 3],
+            true,
+            vec![2, 3, 5, 2, 3, 5]
+        );
+    }
+    #[test]
     fn test_cuda_ss1d_vals1d_f64() {
         test_cuda_dispatch!(
             f32,
