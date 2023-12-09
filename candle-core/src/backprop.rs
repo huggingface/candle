@@ -114,7 +114,7 @@ impl Tensor {
                     | Op::Unary(_node, UnaryOp::Round) => nodes,
                     Op::Reshape(node)
                     | Op::UpsampleNearest1D(node)
-                    | Op::UpsampleNearest2D(node)
+                    | Op::UpsampleNearest2D { arg: node, .. }
                     | Op::AvgPool2D { arg: node, .. }
                     | Op::MaxPool2D { arg: node, .. }
                     | Op::Copy(node)

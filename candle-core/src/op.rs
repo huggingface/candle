@@ -132,7 +132,11 @@ pub enum Op {
     },
 
     UpsampleNearest1D(Tensor),
-    UpsampleNearest2D(Tensor),
+    UpsampleNearest2D {
+        arg: Tensor,
+        target_h: usize,
+        target_w: usize,
+    },
 
     Cat(Vec<Tensor>, usize),
 

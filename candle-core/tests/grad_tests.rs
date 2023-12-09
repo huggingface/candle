@@ -270,6 +270,33 @@ fn unary_grad(device: &Device) -> Result<()> {
         [0.7358, 2.0000, 0.2707, 1.0000]
     );
 
+    // Testing against
+    // x = torch.tensor([[[[3.0, 1.0], [4.0, 0.15]]]], requires_grad=True)
+    // upsample1 = torch.nn.Upsample(scale_factor=2, mode='nearest')
+    // print(x.shape)
+    // # print(x)
+    // # print(upsample1(x) )
+    // y = upsample1(x)
+    // print(x)
+    // print(y)
+    // loss = y.sum()
+    // loss.backward()
+    // print(x.grad)
+    let x = Var::new(&[[[[3f32, 1.], [4., 0.15]]]], device)?;
+    let y = x.upsample_nearest2d(4, 4)?.reshape((4, 4))?;
+    let loss = y.sum_all()?;
+    print!("{}", y);
+    assert_eq!(
+        test_utils::to_vec2_round(&y, 4)?,
+        [
+            [3.0, 3.0, 1.0, 1.0],
+            [3.0, 3.0, 1.0, 1.0],
+            [4.0, 4.0, 0.15, 0.15],
+            [4.0, 4.0, 0.15, 0.15]
+        ]
+    );
+    loss.backward()?;
+
     Ok(())
 }
 
