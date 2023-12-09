@@ -198,26 +198,22 @@ impl<T: PartialOrd + Debug + Sync + Send> Sortable<T> for Vec<T> {
             }
             // n-d sorted seq, 1-d vals --> search for vals in each row of sorted seq
             (false, true) => {
-                println!("Matched n-d sort, 1-d vals");
                 let num_it = self.len() / innerdim_bd;
                 let matches: Vec<i64> = (0..num_it)
                     .into_par_iter()
                     // .step_by(innerdim_bd)
                     .map(|i| {
                         let slice = &self[i * innerdim_bd..(i + 1) * innerdim_bd];
-                        println!("Slice: {:?}", slice);
                         let vals = &values[..];
                         let mut inner_vec: Vec<i64> = Vec::new();
                         for v in vals {
                             let found = binary_search(slice, v, right);
                             inner_vec.push(found as i64);
                         }
-                        println!("inner matches: {:?}", inner_vec);
                         inner_vec
                     })
                     .flatten()
                     .collect();
-                println!("matches: {:?}", matches);
                 matches
             }
             // N-d sorted seq, N-d vals --> num "rows" of vals must be equal to the num "rows" of sorted seq
@@ -233,8 +229,6 @@ impl<T: PartialOrd + Debug + Sync + Send> Sortable<T> for Vec<T> {
                         let mut inner_vec: Vec<i64> = Vec::new();
                         let slice = &self[i * innerdim_bd..(i + 1) * innerdim_bd];
                         let vals = &values[i * innerdim_val..(i + 1) * innerdim_val];
-                        println!("slice: {:?}", slice);
-                        println!("vals: {:?}", vals);
                         for v in vals {
                             let found = binary_search(slice, v, right);
                             inner_vec.push(found as i64);
@@ -246,7 +240,6 @@ impl<T: PartialOrd + Debug + Sync + Send> Sortable<T> for Vec<T> {
                 matches
             }
         };
-        println!("indices: {:?}", indices);
         indices
     }
 }
@@ -381,7 +374,6 @@ impl CustomOp2 for SearchSorted {
             true => [leadingdims_val, &[*innerdim_val]].concat(),
             false => [leadingdims_bd, &[*innerdim_val]].concat(),
         };
-        println!("output_dims: {:?}", output_dims);
         let output_shape = Shape::from_dims(&output_dims);
         let output_slice = unsafe { dev.alloc::<i64>(output_shape.elem_count()) }.w()?;
 
@@ -396,8 +388,6 @@ impl CustomOp2 for SearchSorted {
             block_dim: (threads_per_block, 1, 1),
             shared_mem_bytes: 0,
         };
-        println!("Launch config: {:?}", cfg);
-        // let func = dev.get_or_load_func("search_sorted_u32", SEARCH_SORTED_KERNEL)?;
 
         macro_rules! dispatch_cuda {
             ($t:ty, $kernel_name:expr) => {{
@@ -424,7 +414,6 @@ impl CustomOp2 for SearchSorted {
                 );
                 let func = dev.get_or_load_func($kernel_name, SEARCH_SORTED_KERNEL)?;
 
-                println!("Launching kernel {:?}", params);
                 unsafe { func.launch(cfg, params) }.w()?;
             }};
         }
@@ -469,7 +458,6 @@ mod tests {
                 $expected,
                 t3.flatten_all().unwrap().to_vec1::<i64>().unwrap()
             );
-            println!("\nDEBUG: t3: {:?}", t3);
         };
     }
     macro_rules! test_cuda_dispatch_half {
@@ -490,7 +478,6 @@ mod tests {
                 $expected,
                 t3.flatten_all().unwrap().to_vec1::<i64>().unwrap()
             );
-            println!("\nDEBUG: t3: {:?}", t3);
         };
     }
     #[test]
