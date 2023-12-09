@@ -309,6 +309,39 @@ fn unary_grad(device: &Device) -> Result<()> {
         [[18_f32, 26., 34.], [66., 74., 82.], [114., 122., 130.]]
     );
 
+    // manually checked: see comments
+    let x = Var::new(&[[[[1f32, 2.], [4., 5.]]]], device)?;
+    let y = x.interpolate2d(6, 6)?.reshape(36)?;
+
+    #[rustfmt::skip]
+    let z = Tensor::new(
+        &[
+            1_f32, 02., 03., 04., 05., 06.,
+            07.,   08., 09., 10., 11., 12.,
+            13.,   14., 15., 16., 17., 18.,
+            19.,   20., 21., 22., 23., 24.,
+            25.,   26., 27., 28., 29., 30.,
+            31.,   32., 33., 34., 35., 36.,
+        ],
+        device,
+    )?;
+    // gradient should be
+    // row 1
+    // 1+2+3+7+8+9+13+14+15 = 72
+    // 4+5+6+10+11+12+16+17+18 = 99
+    // row 2
+    // 19+20+21+25+26+27+31+32+33 = 234
+    // 22+23+24+28+29+30+34+35+36 = 243
+    let loss = y.unsqueeze(1)?.transpose(0, 1)?.matmul(&z.unsqueeze(1)?)?;
+
+    let grads = loss.backward()?;
+
+    let grad_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(
+        test_utils::to_vec2_round(&grad_x.flatten(0, 2)?, 4)?,
+        [[72_f32, 99.], [234., 261.]]
+    );
+
     Ok(())
 }
 
