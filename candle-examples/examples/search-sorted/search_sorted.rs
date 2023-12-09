@@ -707,6 +707,126 @@ mod tests {
         };
     }
     #[test]
+    fn test_cpu_ss2d_vals1d_u8() {
+        test_cpu_shapes!(
+            u8,
+            vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
+            vec![3, 6, 9],
+            vec![2, 5],
+            vec![3],
+            false,
+            vec![1, 3, 4, 1, 2, 4]
+        );
+    }
+    #[test]
+    fn test_cpu_ss2d_vals1d_u8_right() {
+        test_cpu_shapes!(
+            u8,
+            vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
+            vec![3, 6, 9],
+            vec![2, 5],
+            vec![3],
+            true,
+            vec![2, 3, 5, 1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cpu_ss1d_vals2d_u8() {
+        test_cpu_shapes!(
+            u8,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9, 3, 6, 9],
+            vec![5],
+            vec![2, 3],
+            false,
+            vec![1, 3, 4, 1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cpu_ss1d_vals2d_u8_right() {
+        test_cpu_shapes!(
+            u8,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9, 3, 6, 9],
+            vec![5],
+            vec![2, 3],
+            true,
+            vec![2, 3, 5, 2, 3, 5]
+        );
+    }
+    #[test]
+    fn test_cpu_ss2d_vals2d_u8() {
+        test_cpu_shapes!(
+            u8,
+            vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
+            vec![3, 6, 9, 1, 2, 3],
+            vec![2, 5],
+            vec![2, 3],
+            false,
+            vec![1, 3, 4, 0, 0, 1]
+        );
+    }
+    #[test]
+    fn test_cpu_ss2d_vals2d_u8_right() {
+        test_cpu_shapes!(
+            u8,
+            vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
+            vec![3, 6, 9, 1, 2, 3],
+            vec![2, 5],
+            vec![2, 3],
+            true,
+            vec![2, 3, 5, 0, 1, 1]
+        );
+    }
+    #[test]
+    fn test_cpu_ss2d_vals1d_u32() {
+        test_cpu_shapes!(
+            u32,
+            vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
+            vec![3, 6, 9],
+            vec![2, 5],
+            vec![3],
+            false,
+            vec![1, 3, 4, 1, 2, 4]
+        );
+    }
+    #[test]
+    fn test_cpu_ss2d_vals1d_u32_right() {
+        test_cpu_shapes!(
+            u32,
+            vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
+            vec![3, 6, 9],
+            vec![2, 5],
+            vec![3],
+            true,
+            vec![2, 3, 5, 1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cpu_ss2d_vals1d_i64() {
+        test_cpu_shapes!(
+            i64,
+            vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
+            vec![3, 6, 9],
+            vec![2, 5],
+            vec![3],
+            false,
+            vec![1, 3, 4, 1, 2, 4]
+        );
+    }
+    #[test]
+    fn test_cpu_ss2d_vals1d_i64_right() {
+        test_cpu_shapes!(
+            i64,
+            vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
+            vec![3, 6, 9],
+            vec![2, 5],
+            vec![3],
+            true,
+            vec![2, 3, 5, 1, 3, 4]
+        );
+    }
+    #[test]
     fn test_cpu_ss1d_vals1d_u8() {
         test_cpu_shapes!(
             u8,
