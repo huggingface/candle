@@ -342,6 +342,94 @@ fn unary_grad(device: &Device) -> Result<()> {
         [[72_f32, 99.], [234., 261.]]
     );
 
+    // manually checked: see comments
+    let x = Var::new(&[[[[1f32, 2.], [4., 5.]], [[6f32, 7.], [8., 9.]]]], device)?;
+
+    let y = x.interpolate2d(4, 4)?.reshape(32)?;
+
+    #[rustfmt::skip]
+    let z = Tensor::new(
+        &[
+            1_f32, 02., 03., 04.,
+            05.,   06., 07., 08.,
+            09.,   10., 11., 12.,
+            13.,   14., 15., 16.,
+            17.,   18., 19., 20.,
+            21.,   22., 23., 24.,
+            25.,   26., 27., 28.,
+            29.,   30., 31., 32.
+        ],
+        device,
+    )?;
+    // gradient should be
+    // m1r1
+    // 1+2+5+6=14
+    // 3+4+7+8=22
+    // m1r2
+    // 9+10+13+14=46
+    // 11+12+15+16=54
+    // m2r1
+    // 17+18+21+22=78
+    // 19+20+23+24=86
+    // m2r2
+    // 25+26+29+30=110
+    // 27+28+31+32=118
+    let loss = y.unsqueeze(1)?.transpose(0, 1)?.matmul(&z.unsqueeze(1)?)?;
+
+    let grads = loss.backward()?;
+
+    let grad_x = grads.get(&x).context("no grad for x")?;
+
+    assert_eq!(
+        test_utils::to_vec3_round(&grad_x.flatten(0, 1)?, 4)?,
+        [[[14_f32, 22.], [46., 54.]], [[78., 86.], [110., 118.]]]
+    );
+
+    // manually checked: see comments
+    let x = Var::new(
+        &[[[[1f32, 2.], [4., 5.]]], [[[6f32, 7.], [8., 9.]]]],
+        device,
+    )?;
+
+    let y = x.interpolate2d(4, 4)?.reshape(32)?;
+
+    #[rustfmt::skip]
+       let z = Tensor::new(
+           &[
+               1_f32, 02., 03., 04.,
+               05.,   06., 07., 08.,
+               09.,   10., 11., 12.,
+               13.,   14., 15., 16.,
+               17.,   18., 19., 20.,
+               21.,   22., 23., 24.,
+               25.,   26., 27., 28.,
+               29.,   30., 31., 32.
+           ],
+           device,
+       )?;
+    // gradient should be
+    // m1r1
+    // 1+2+5+6=14
+    // 3+4+7+8=22
+    // m1r2
+    // 9+10+13+14=46
+    // 11+12+15+16=54
+    // m2r1
+    // 17+18+21+22=78
+    // 19+20+23+24=86
+    // m2r2
+    // 25+26+29+30=110
+    // 27+28+31+32=118
+    let loss = y.unsqueeze(1)?.transpose(0, 1)?.matmul(&z.unsqueeze(1)?)?;
+
+    let grads = loss.backward()?;
+
+    let grad_x = grads.get(&x).context("no grad for x")?;
+
+    assert_eq!(
+        test_utils::to_vec3_round(&grad_x.flatten(0, 1)?, 4)?,
+        [[[14_f32, 22.], [46., 54.]], [[78., 86.], [110., 118.]]]
+    );
     Ok(())
 }
 
