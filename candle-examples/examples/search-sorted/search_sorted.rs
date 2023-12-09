@@ -603,6 +603,30 @@ mod tests {
         );
     }
     #[test]
+    fn test_cuda_ss2d_vals2d_f32() {
+        test_cuda_dispatch!(
+            f32,
+            vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
+            vec![3., 6., 9., 1., 2., 3.],
+            vec![2, 5],
+            vec![2, 3],
+            false,
+            vec![1, 3, 4, 0, 0, 1]
+        );
+    }
+    #[test]
+    fn test_cuda_ss2d_vals2d_f32_right() {
+        test_cuda_dispatch!(
+            f32,
+            vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
+            vec![3., 6., 9., 1., 2., 3.],
+            vec![2, 5],
+            vec![2, 3],
+            true,
+            vec![2, 3, 5, 0, 1, 1]
+        );
+    }
+    #[test]
     fn test_cuda_ss1d_vals1d_f64() {
         test_cuda_dispatch!(
             f32,
@@ -656,6 +680,98 @@ mod tests {
             bf16,
             vec![1., 3., 5., 7., 9.],
             vec![3., 6., 9.],
+            vec![5],
+            vec![3],
+            true,
+            vec![2, 3, 5]
+        );
+    }
+    macro_rules! test_cpu_shapes {
+        ($t:ty, $ss:expr, $vals:expr, $ss_shape:expr, $vals_shape:expr, $right:expr, $expected:expr) => {
+            let device = Device::Cpu;
+            let ss: Vec<$t> = $ss;
+            let ss_shape = Shape::from_dims(&$ss_shape[..]);
+
+            let vals: Vec<$t> = $vals;
+            let vals_shape = Shape::from_dims(&$vals_shape[..]);
+            let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
+            let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
+            //Test left
+            let t3 = t1.apply_op2(&t2, SearchSorted { right: $right }).unwrap();
+            assert!(
+                t3.flatten_all().unwrap().to_vec1::<i64>().unwrap() == $expected,
+                "Expected {:?}, got {:?}",
+                $expected,
+                t3.flatten_all().unwrap().to_vec1::<i64>().unwrap()
+            );
+        };
+    }
+    #[test]
+    fn test_cpu_ss1d_vals1d_u8() {
+        test_cpu_shapes!(
+            u8,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9],
+            vec![5],
+            vec![3],
+            false,
+            vec![1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cpu_ss1d_vals1d_u8_right() {
+        test_cpu_shapes!(
+            u8,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9],
+            vec![5],
+            vec![3],
+            true,
+            vec![2, 3, 5]
+        );
+    }
+    #[test]
+    fn test_cpu_ss1d_vals1d_u32() {
+        test_cpu_shapes!(
+            u32,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9],
+            vec![5],
+            vec![3],
+            false,
+            vec![1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cpu_ss1d_vals1d_u32_right() {
+        test_cpu_shapes!(
+            u32,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9],
+            vec![5],
+            vec![3],
+            true,
+            vec![2, 3, 5]
+        );
+    }
+    #[test]
+    fn test_cpu_ss1d_vals1d_i64() {
+        test_cpu_shapes!(
+            u32,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9],
+            vec![5],
+            vec![3],
+            false,
+            vec![1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cpu_ss1d_vals1d_i64_right() {
+        test_cpu_shapes!(
+            u32,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9],
             vec![5],
             vec![3],
             true,
@@ -929,6 +1045,8 @@ mod tests {
             actual_shape
         );
     }
+
+    //Macro for testing remaining types (CPU)
     macro_rules! test_ss_2d_vals_diff_2d {
         ($t:ty, $ss:expr, $vals:expr) => {
             let device = Device::Cpu;
