@@ -471,6 +471,27 @@ mod tests {
             println!("\nDEBUG: t3: {:?}", t3);
         };
     }
+    macro_rules! test_cuda_dispatch_half {
+        ($t:ty, $ss:expr, $vals:expr, $expected:expr) => {
+            let device = Device::new_cuda(0).unwrap();
+            let ss: Vec<$t> = $ss.into_iter().map(|x| <$t>::from_f32(x)).collect();
+            let ss_shape = Shape::from_dims(&[5]);
+
+            let vals: Vec<$t> = $vals.into_iter().map(|x| <$t>::from_f32(x)).collect();
+            let vals_shape = Shape::from_dims(&[3]);
+            let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
+            let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
+            //Test left
+            let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+            assert!(
+                t3.flatten_all().unwrap().to_vec1::<i64>().unwrap() == $expected,
+                "Expected {:?}, got {:?}",
+                $expected,
+                t3.flatten_all().unwrap().to_vec1::<i64>().unwrap()
+            );
+            println!("\nDEBUG: t3: {:?}", t3);
+        };
+    }
     #[test]
     fn test_cuda_ss1d_vals1d_u8() {
         test_cuda_dispatch!(u8, vec![1, 3, 5, 7, 9], vec![3, 6, 9], vec![1, 3, 4]);
@@ -501,7 +522,24 @@ mod tests {
             vec![1, 3, 4]
         );
     }
-
+    #[test]
+    fn test_cuda_ss1d_vals1d_f16() {
+        test_cuda_dispatch_half!(
+            f16,
+            vec![1., 3., 5., 7., 9.],
+            vec![3., 6., 9.],
+            vec![1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cuda_ss1d_vals1d_bf16() {
+        test_cuda_dispatch_half!(
+            bf16,
+            vec![1., 3., 5., 7., 9.],
+            vec![3., 6., 9.],
+            vec![1, 3, 4]
+        );
+    }
     // #[test]
     // fn test_cuda_ss1d_vals1d_u8() {
     //     let device = Device::new_cuda(0).unwrap();
