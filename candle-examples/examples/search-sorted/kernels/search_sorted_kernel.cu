@@ -63,7 +63,7 @@ __device__ void searchsorted_cuda_kernel(
         int pos = !right ? lower_bound<input_t>(data_bd, start_bd, end_bd, data_in[val_idx]) - start_bd : upper_bound<input_t>(data_bd, start_bd, end_bd, data_in[val_idx]) - start_bd;
 
         data_out[tid] = pos;
-        // printf("Thread id: %d, start_bd: %d, end_bd: %d val_idx: %d, val: %f, pos: %d\n", tid, start_bd, end_bd, val_idx, data_in[val_idx], pos);
+        printf("Thread id: %d, start_bd: %d, end_bd: %d val_idx: %d, val: %f, pos: %d\n", tid, start_bd, end_bd, val_idx, data_in[val_idx], pos);
     }
 }
 // extern "C" __global__ void search_sorted_f32(

@@ -381,21 +381,22 @@ impl CustomOp2 for SearchSorted {
             true => [leadingdims_val, &[*innerdim_val]].concat(),
             false => [leadingdims_bd, &[*innerdim_val]].concat(),
         };
+        println!("output_dims: {:?}", output_dims);
         let output_shape = Shape::from_dims(&output_dims);
         let output_slice = unsafe { dev.alloc::<i64>(output_shape.elem_count()) }.w()?;
 
         let idim_in = *innerdim_val as u32;
         let idim_bd = *innerdim_bd as u32;
-        let numel_in = numels_val as u32;
+        let numel_in = output_shape.elem_count() as u32;
 
-        let threads_per_block = 256;
+        let threads_per_block = std::cmp::min(1024, output_shape.elem_count() as u32);
         let num_blocks = (numel_in + threads_per_block - 1) / threads_per_block;
         let cfg = LaunchConfig {
             grid_dim: (num_blocks, 1, 1),
             block_dim: (threads_per_block, 1, 1),
             shared_mem_bytes: 0,
         };
-
+        println!("Launch config: {:?}", cfg);
         // let func = dev.get_or_load_func("search_sorted_u32", SEARCH_SORTED_KERNEL)?;
 
         macro_rules! dispatch_cuda {
@@ -451,17 +452,17 @@ mod tests {
     use candle::{CudaDevice, Device, Tensor};
 
     macro_rules! test_cuda_dispatch {
-        ($t:ty, $ss:expr, $vals:expr, $expected:expr) => {
+        ($t:ty, $ss:expr, $vals:expr, $ss_shape:expr, $vals_shape:expr, $right:expr, $expected:expr) => {
             let device = Device::new_cuda(0).unwrap();
             let ss: Vec<$t> = $ss;
-            let ss_shape = Shape::from_dims(&[5]);
+            let ss_shape = Shape::from_dims(&$ss_shape[..]);
 
             let vals: Vec<$t> = $vals;
-            let vals_shape = Shape::from_dims(&[3]);
+            let vals_shape = Shape::from_dims(&$vals_shape[..]);
             let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
             let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
             //Test left
-            let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+            let t3 = t1.apply_op2(&t2, SearchSorted { right: $right }).unwrap();
             assert!(
                 t3.flatten_all().unwrap().to_vec1::<i64>().unwrap() == $expected,
                 "Expected {:?}, got {:?}",
@@ -472,17 +473,17 @@ mod tests {
         };
     }
     macro_rules! test_cuda_dispatch_half {
-        ($t:ty, $ss:expr, $vals:expr, $expected:expr) => {
+        ($t:ty, $ss:expr, $vals:expr, $ss_shape:expr, $vals_shape:expr, $right:expr, $expected:expr) => {
             let device = Device::new_cuda(0).unwrap();
             let ss: Vec<$t> = $ss.into_iter().map(|x| <$t>::from_f32(x)).collect();
-            let ss_shape = Shape::from_dims(&[5]);
+            let ss_shape = Shape::from_dims(&$ss_shape[..]);
 
             let vals: Vec<$t> = $vals.into_iter().map(|x| <$t>::from_f32(x)).collect();
-            let vals_shape = Shape::from_dims(&[3]);
+            let vals_shape = Shape::from_dims(&$vals_shape[..]);
             let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
             let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
             //Test left
-            let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+            let t3 = t1.apply_op2(&t2, SearchSorted { right: $right }).unwrap();
             assert!(
                 t3.flatten_all().unwrap().to_vec1::<i64>().unwrap() == $expected,
                 "Expected {:?}, got {:?}",
@@ -494,15 +495,52 @@ mod tests {
     }
     #[test]
     fn test_cuda_ss1d_vals1d_u8() {
-        test_cuda_dispatch!(u8, vec![1, 3, 5, 7, 9], vec![3, 6, 9], vec![1, 3, 4]);
+        test_cuda_dispatch!(
+            u8,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9],
+            vec![5],
+            vec![3],
+            false,
+            vec![1, 3, 4]
+        );
     }
+
     #[test]
     fn test_cuda_ss1d_vals1d_u32() {
-        test_cuda_dispatch!(u32, vec![1, 3, 5, 7, 9], vec![3, 6, 9], vec![1, 3, 4]);
+        test_cuda_dispatch!(
+            u32,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9],
+            vec![5],
+            vec![3],
+            false,
+            vec![1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cuda_ss1d_vals1d_u32_right() {
+        test_cuda_dispatch!(
+            u32,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9],
+            vec![5],
+            vec![3],
+            true,
+            vec![2, 3, 5]
+        );
     }
     #[test]
     fn test_cuda_ss1d_vals1d_i64() {
-        test_cuda_dispatch!(i64, vec![1, 3, 5, 7, 9], vec![3, 6, 9], vec![1, 3, 4]);
+        test_cuda_dispatch!(
+            i64,
+            vec![1, 3, 5, 7, 9],
+            vec![3, 6, 9],
+            vec![5],
+            vec![3],
+            false,
+            vec![1, 3, 4]
+        );
     }
     #[test]
     fn test_cuda_ss1d_vals1d_f32() {
@@ -510,7 +548,34 @@ mod tests {
             f32,
             vec![1., 3., 5., 7., 9.],
             vec![3., 6., 9.],
+            vec![5],
+            vec![3],
+            false,
             vec![1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cuda_ss2d_vals1d_f32() {
+        test_cuda_dispatch!(
+            f32,
+            vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
+            vec![3., 6., 9.],
+            vec![2, 5],
+            vec![3],
+            false,
+            vec![1, 3, 4, 1, 2, 4]
+        );
+    }
+    #[test]
+    fn test_cuda_ss2d_vals1d_f32_right() {
+        test_cuda_dispatch!(
+            f32,
+            vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
+            vec![3., 6., 9.],
+            vec![2, 5],
+            vec![3],
+            true,
+            vec![2, 3, 5, 1, 3, 4]
         );
     }
     #[test]
@@ -519,6 +584,9 @@ mod tests {
             f32,
             vec![1., 3., 5., 7., 9.],
             vec![3., 6., 9.],
+            vec![5],
+            vec![3],
+            false,
             vec![1, 3, 4]
         );
     }
@@ -528,7 +596,22 @@ mod tests {
             f16,
             vec![1., 3., 5., 7., 9.],
             vec![3., 6., 9.],
+            vec![5],
+            vec![3],
+            false,
             vec![1, 3, 4]
+        );
+    }
+    #[test]
+    fn test_cuda_ss1d_vals1d_f16_right() {
+        test_cuda_dispatch_half!(
+            f16,
+            vec![1., 3., 5., 7., 9.],
+            vec![3., 6., 9.],
+            vec![5],
+            vec![3],
+            true,
+            vec![2, 3, 5]
         );
     }
     #[test]
@@ -537,55 +620,29 @@ mod tests {
             bf16,
             vec![1., 3., 5., 7., 9.],
             vec![3., 6., 9.],
+            vec![5],
+            vec![3],
+            false,
             vec![1, 3, 4]
         );
     }
-    // #[test]
-    // fn test_cuda_ss1d_vals1d_u8() {
-    //     let device = Device::new_cuda(0).unwrap();
-    //     let ss: Vec<u8> = vec![1, 3, 5, 7, 9];
-    //     let ss_shape = Shape::from_dims(&[5]);
-
-    //     let vals: Vec<u8> = vec![3, 6, 9];
-    //     let vals_shape = Shape::from_dims(&[3]);
-    //     let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
-    //     let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
-    //     //Test left
-    //     let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-    //     println!("t3: {:?}", t3);
-    // }
-    // #[test]
-    // fn test_cuda_ss1d_vals1d_u32() {
-    //     let device = Device::new_cuda(0).unwrap();
-    //     let ss: Vec<u32> = vec![1, 3, 5, 7, 9];
-    //     let ss_shape = Shape::from_dims(&[5]);
-
-    //     let vals: Vec<u32> = vec![3, 6, 9];
-    //     let vals_shape = Shape::from_dims(&[3]);
-    //     let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
-    //     let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
-    //     //Test left
-    //     let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-    //     println!("t3: {:?}", t3);
-    // }
-    // #[test]
-    // fn test_cuda_ss1d_vals1d_f32() {
-    //     let device = Device::new_cuda(0).unwrap();
-    //     let ss: Vec<f32> = vec![1., 3., 5., 7., 9.];
-    //     let ss_shape = Shape::from_dims(&[5]);
-
-    //     let vals: Vec<f32> = vec![3., 6., 9.];
-    //     let vals_shape = Shape::from_dims(&[3]);
-    //     let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
-    //     let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
-    //     //Test left
-    //     let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-    //     println!("t3: {:?}", t3);
-    // }
+    #[test]
+    fn test_cuda_ss1d_vals1d_bf16_right() {
+        test_cuda_dispatch_half!(
+            bf16,
+            vec![1., 3., 5., 7., 9.],
+            vec![3., 6., 9.],
+            vec![5],
+            vec![3],
+            true,
+            vec![2, 3, 5]
+        );
+    }
     #[test]
     fn test_ss_1d_vals_1d() {
         let device = Device::Cpu;
 
+        let v = vec![1, 3, 5, 7, 9];
         let ss: Vec<u32> = (2..=10).step_by(2).collect();
         let ss_shape = Shape::from_dims(&[5]);
 
