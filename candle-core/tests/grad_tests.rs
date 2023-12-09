@@ -270,32 +270,44 @@ fn unary_grad(device: &Device) -> Result<()> {
         [0.7358, 2.0000, 0.2707, 1.0000]
     );
 
-    // Testing against
-    // x = torch.tensor([[[[3.0, 1.0], [4.0, 0.15]]]], requires_grad=True)
-    // upsample1 = torch.nn.Upsample(scale_factor=2, mode='nearest')
-    // print(x.shape)
-    // # print(x)
-    // # print(upsample1(x) )
-    // y = upsample1(x)
-    // print(x)
-    // print(y)
-    // loss = y.sum()
-    // loss.backward()
-    // print(x.grad)
-    let x = Var::new(&[[[[3f32, 1.], [4., 0.15]]]], device)?;
-    let y = x.upsample_nearest2d(4, 4)?.reshape((4, 4))?;
-    let loss = y.sum_all()?;
-    print!("{}", y);
+    // manually checked: see comments
+    let x = Var::new(&[[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]]], device)?;
+    let y = x.interpolate2d(6, 6)?.reshape(36)?;
+
+    #[rustfmt::skip]
+    let z = Tensor::new(
+        &[
+            1_f32, 02., 03., 04., 05., 06.,
+            07.,   08., 09., 10., 11., 12.,
+            13.,   14., 15., 16., 17., 18.,
+            19.,   20., 21., 22., 23., 24.,
+            25.,   26., 27., 28., 29., 30.,
+            31.,   32., 33., 34., 35., 36.,
+        ],
+        device,
+    )?;
+    // gradient should be
+    // row 1
+    // 1+2+7+8 = 18
+    // 3+4+9+10 = 26
+    // 5+6+11+12 = 34
+    // row 2
+    // 13+14+19+20 = 66
+    // 15+16+21+22 = 74
+    // 17+18+23+24 = 82
+    // row 3
+    // 25+26+31+32 = 114
+    // 27+28+33+34 = 122
+    // 29+30+35+36 = 130
+    let loss = y.unsqueeze(1)?.transpose(0, 1)?.matmul(&z.unsqueeze(1)?)?;
+
+    let grads = loss.backward()?;
+
+    let grad_x = grads.get(&x).context("no grad for x")?;
     assert_eq!(
-        test_utils::to_vec2_round(&y, 4)?,
-        [
-            [3.0, 3.0, 1.0, 1.0],
-            [3.0, 3.0, 1.0, 1.0],
-            [4.0, 4.0, 0.15, 0.15],
-            [4.0, 4.0, 0.15, 0.15]
-        ]
+        test_utils::to_vec2_round(&grad_x.flatten(0, 2)?, 4)?,
+        [[18_f32, 26., 34.], [66., 74., 82.], [114., 122., 130.]]
     );
-    loss.backward()?;
 
     Ok(())
 }
