@@ -80,74 +80,10 @@ macro_rules! match_cpu_storage {
                     $s2
                 ),
             },
-            _ => candle::bail!("Unsupported data type"),
         }
     };
 }
 
-macro_rules! match_cuda_storage {
-    ($s1:expr, $s2:expr, $code:expr) => {
-        match $s1 {
-            CpuStorage::U8(vs) => match $s2 {
-                CpuStorage::U8(values) => $code(vs, values),
-                _ => candle::bail!(
-                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
-                    $s1,
-                    $s2
-                ),
-            },
-            CpuStorage::U32(vs) => match $s2 {
-                CpuStorage::U32(values) => $code(vs, values),
-                _ => candle::bail!(
-                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
-                    $s1,
-                    $s2
-                ),
-            },
-            CpuStorage::I64(vs) => match $s2 {
-                CpuStorage::I64(values) => $code(vs, values),
-                _ => candle::bail!(
-                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
-                    $s1,
-                    $s2
-                ),
-            },
-            CpuStorage::BF16(vs) => match $s2 {
-                CpuStorage::BF16(values) => $code(vs, values),
-                _ => candle::bail!(
-                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
-                    $s1,
-                    $s2
-                ),
-            },
-            CpuStorage::F16(vs) => match $s2 {
-                CpuStorage::F16(values) => $code(vs, values),
-                _ => candle::bail!(
-                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
-                    $s1,
-                    $s2
-                ),
-            },
-            CpuStorage::F32(vs) => match $s2 {
-                CpuStorage::F32(values) => $code(vs, values),
-                _ => candle::bail!(
-                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
-                    $s1,
-                    $s2
-                ),
-            },
-            CpuStorage::F64(vs) => match $s2 {
-                CpuStorage::F64(values) => $code(vs, values),
-                _ => candle::bail!(
-                    "Sorted sequence and values must be of the same type: got {:?} and {:?}",
-                    $s1,
-                    $s2
-                ),
-            },
-            _ => candle::bail!("Unsupported data type"),
-        }
-    };
-}
 fn binary_search<T: PartialOrd>(slice: &[T], value: &T, right: bool) -> i64 {
     let mut start: usize = 0;
     let mut end: usize = slice.len();
@@ -265,14 +201,14 @@ impl CustomOp2 for SearchSorted {
         // let innerdim_bd = l1.shape().dims()[rank_bd - 1];
         let numels_bd = l1.shape().elem_count();
         assert!(numels_bd % innerdim_bd == 0);
-        let num_rows_bd = numels_bd / innerdim_bd;
+        // let num_rows_bd = numels_bd / innerdim_bd;
 
         let rank_val = l2.shape().rank();
         let numels_val = l2.shape().elem_count();
         assert!(numels_val % innerdim_val == 0);
-        let num_rows_val = numels_val / innerdim_val;
+        // let num_rows_val = numels_val / innerdim_val;
 
-        if (rank_bd != 1 && rank_val != 1) {
+        if rank_bd != 1 && rank_val != 1 {
             //Check that leading dims are the same
             assert!(leadingdims_bd == leadingdims_val);
         }
@@ -314,8 +250,6 @@ impl CustomOp2 for SearchSorted {
         s2: &candle::CudaStorage,
         l2: &Layout,
     ) -> Result<(candle::CudaStorage, Shape)> {
-        use std::ffi::c_long;
-
         use candle::backend::BackendStorage;
         use candle::cuda_backend::cudarc::driver::{LaunchAsync, LaunchConfig};
         use candle::cuda_backend::WrapErr;
@@ -329,24 +263,22 @@ impl CustomOp2 for SearchSorted {
         // let innerdim_bd = l1.shape().dims()[rank_bd - 1];
         let numels_bd = l1.shape().elem_count();
         assert!(numels_bd % innerdim_bd == 0);
-        let num_rows_bd = numels_bd / innerdim_bd;
+        // let num_rows_bd = numels_bd / innerdim_bd;
 
         let rank_val = l2.shape().rank();
         let numels_val = l2.shape().elem_count();
         assert!(numels_val % innerdim_val == 0);
-        let num_rows_val = numels_val / innerdim_val;
+        // let num_rows_val = numels_val / innerdim_val;
 
         if rank_bd != 1 && rank_val != 1 {
             //Check that leading dims are the same
             assert!(leadingdims_bd == leadingdims_val);
         }
-        let dtype_bd = s1.dtype();
-        let dtype_val = s2.dtype();
-        if dtype_bd != dtype_val {
+        if s1.dtype() != s2.dtype() {
             candle::bail!(
                 "Sorted sequence and values must be of the same type: got {:?} and {:?}",
-                dtype_bd,
-                dtype_val
+                s1.dtype(),
+                s2.dtype()
             );
         }
 
@@ -359,15 +291,6 @@ impl CustomOp2 for SearchSorted {
         let is_1d_bd = l1.shape().rank() == 1;
         let is_1d_vals = l2.shape().rank() == 1;
 
-        let dtype_ss = s1.dtype();
-        let dtype_vals = s2.dtype();
-        if s1.dtype() != s2.dtype() {
-            candle::bail!(
-                "Sorted sequence and values must be of the same type: got {:?} and {:?}",
-                s1.dtype(),
-                s2.dtype()
-            );
-        };
         let dev = s1.device().clone();
 
         let output_dims = match is_1d_bd {
@@ -438,7 +361,7 @@ impl CustomOp2 for SearchSorted {
 mod tests {
 
     use super::*;
-    use candle::{CudaDevice, Device, Tensor};
+    use candle::{Device, Tensor};
 
     macro_rules! test_cuda_dispatch {
         ($t:ty, $ss:expr, $vals:expr, $ss_shape:expr, $vals_shape:expr, $right:expr, $expected:expr) => {
