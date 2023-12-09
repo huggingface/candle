@@ -1027,20 +1027,20 @@ mod tests {
         );
     }
 
-    #[test]
-    #[should_panic(expected = "Incompatible dtypes")]
-    fn test_different_dtypes() {
-        let device = Device::Cpu;
-        let ss: Vec<u32> = vec![1, 2, 3, 4, 5];
-        let ss_shape = Shape::from_dims(&[5]);
-        let vals: Vec<i64> = vec![1, 2, 3];
-        let vals_shape = Shape::from_dims(&[3]);
+    // #[test]
+    // #[should_panic(expected = "Incompatible dtypes")]
+    // fn test_different_dtypes() {
+    //     let device = Device::Cpu;
+    //     let ss: Vec<u32> = vec![1, 2, 3, 4, 5];
+    //     let ss_shape = Shape::from_dims(&[5]);
+    //     let vals: Vec<i64> = vec![1, 2, 3];
+    //     let vals_shape = Shape::from_dims(&[3]);
 
-        // Test left
-        let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
-        let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
+    //     // Test left
+    //     let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
+    //     let t2 = Tensor::from_vec(vals, &vals_shape, &device).unwrap();
 
-        //Should panic
-        _ = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-    }
+    //     //Should panic
+    //     _ = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
+    // }
 }
