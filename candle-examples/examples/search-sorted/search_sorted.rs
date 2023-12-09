@@ -898,276 +898,9 @@ mod tests {
             vec![2, 3, 5]
         );
     }
-    #[test]
-    fn test_ss_1d_vals_1d() {
-        let device = Device::Cpu;
-
-        let v = vec![1, 3, 5, 7, 9];
-        let ss: Vec<u32> = (2..=10).step_by(2).collect();
-        let ss_shape = Shape::from_dims(&[5]);
-
-        let vals: Vec<u32> = vec![3, 6, 9];
-        let vals_shape = Shape::from_dims(&[3]);
-
-        let t1 = Tensor::from_vec(ss, &ss_shape, &device).unwrap();
-        let t2 = Tensor::from_vec(vals.clone(), &vals_shape, &device).unwrap();
-        let expected_indices: Vec<i64> = vec![1, 2, 4];
-        let expected_shape = Shape::from_dims(&[3]);
-        //Test left
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-        let actual_shape = t3.shape();
-        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(
-            actual_indices == expected_indices,
-            "Expected {:?}, got {:?}",
-            expected_indices,
-            actual_indices
-        );
-        assert!(
-            actual_shape.dims() == expected_shape.dims(),
-            "Expected shape {:?}, got {:?}",
-            expected_shape,
-            actual_shape
-        );
-
-        //Test right
-        let expected_indices: Vec<i64> = vec![1, 3, 4];
-        let expected_shape = Shape::from_dims(&[3]);
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
-        let actual_shape = t3.shape();
-        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(
-            actual_indices == expected_indices,
-            "Expected {:?}, got {:?}",
-            expected_indices,
-            actual_indices
-        );
-        assert!(
-            actual_shape.dims() == expected_shape.dims(),
-            "Expected shape {:?}, got {:?}",
-            expected_shape,
-            actual_shape
-        );
-    }
-    #[test]
-    fn test_ss_1d_vals_2d() {
-        let device = Device::Cpu;
-
-        let ss: Vec<u32> = (1..10).step_by(2).collect();
-        let ss_shape = Shape::from_dims(&[5]);
-
-        let vals: Vec<u32> = vec![3, 6, 9, 3, 6, 9];
-        let vals_shape = Shape::from_dims(&[2, 3]);
-
-        // Test left
-        let t1 = Tensor::from_vec(ss.clone(), &ss_shape, &device).unwrap();
-        let t2 = Tensor::from_vec(vals.clone(), &vals_shape, &device).unwrap();
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-        let expected_indices: Vec<i64> = vec![1, 3, 4, 1, 3, 4];
-        let expected_shape = Shape::from_dims(&[2, 3]);
-
-        let actual_shape = t3.shape();
-        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(
-            actual_indices == expected_indices,
-            "Expected {:?}, got {:?}",
-            expected_indices,
-            actual_indices
-        );
-        assert!(
-            actual_shape.dims() == expected_shape.dims(),
-            "Expected shape {:?}, got {:?}",
-            expected_shape,
-            actual_shape
-        );
-
-        // Test right
-        let expected_indices: Vec<i64> = vec![2, 3, 5, 2, 3, 5];
-        let expected_shape = Shape::from_dims(&[2, 3]);
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
-        let actual_shape = t3.shape();
-        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(
-            actual_indices == expected_indices,
-            "Expected {:?}, got {:?}",
-            expected_indices,
-            actual_indices
-        );
-        assert!(
-            actual_shape.dims() == expected_shape.dims(),
-            "Expected shape {:?}, got {:?}",
-            expected_shape,
-            actual_shape
-        );
-    }
-
-    #[test]
-    fn test_ss_2d_vals_1d() {
-        let device = Device::Cpu;
-
-        let ss: Vec<u32> = [
-            (1..10).step_by(2).collect::<Vec<u32>>(),
-            (2..11).step_by(2).collect::<Vec<u32>>(),
-        ]
-        .concat();
-        let ss_shape = Shape::from_dims(&[2, 5]);
-
-        let vals: Vec<u32> = vec![3, 6, 9];
-        let vals_shape = Shape::from_dims(&[3]);
-
-        // Test left
-        let t1 = Tensor::from_vec(ss.clone(), &ss_shape, &device).unwrap();
-        let t2 = Tensor::from_vec(vals.clone(), &vals_shape, &device).unwrap();
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-        let expected_indices: Vec<i64> = vec![1, 3, 4, 1, 2, 4];
-        let expected_shape = Shape::from_dims(&[2, 3]);
-
-        let actual_shape = t3.shape();
-        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(
-            actual_indices == expected_indices,
-            "Expected {:?}, got {:?}",
-            expected_indices,
-            actual_indices
-        );
-        assert!(
-            actual_shape.dims() == expected_shape.dims(),
-            "Expected shape {:?}, got {:?}",
-            expected_shape,
-            actual_shape
-        );
-
-        // Test right
-        let expected_indices: Vec<i64> = vec![2, 3, 5, 1, 3, 4];
-        let expected_shape = Shape::from_dims(&[2, 3]);
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
-        let actual_shape = t3.shape();
-        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(
-            actual_indices == expected_indices,
-            "Expected {:?}, got {:?}",
-            expected_indices,
-            actual_indices
-        );
-        assert!(
-            actual_shape.dims() == expected_shape.dims(),
-            "Expected shape {:?}, got {:?}",
-            expected_shape,
-            actual_shape
-        );
-    }
-
-    #[test]
-    fn test_ss_2d_vals_same_2d() {
-        let device = Device::Cpu;
-
-        let ss: Vec<u32> = [
-            (1..10).step_by(2).collect::<Vec<u32>>(),
-            (2..11).step_by(2).collect::<Vec<u32>>(),
-        ]
-        .concat();
-        let ss_shape = Shape::from_dims(&[2, 5]);
-
-        let vals: Vec<u32> = vec![3, 6, 9, 3, 6, 9];
-        let vals_shape = Shape::from_dims(&[2, 3]);
-
-        // Test left
-        let t1 = Tensor::from_vec(ss.clone(), &ss_shape, &device).unwrap();
-        let t2 = Tensor::from_vec(vals.clone(), &vals_shape, &device).unwrap();
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-        let expected_indices: Vec<i64> = vec![1, 3, 4, 1, 2, 4];
-        let expected_shape = Shape::from_dims(&[2, 3]);
-
-        let actual_shape = t3.shape();
-        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(
-            actual_indices == expected_indices,
-            "Expected {:?}, got {:?}",
-            expected_indices,
-            actual_indices
-        );
-        assert!(
-            actual_shape.dims() == expected_shape.dims(),
-            "Expected shape {:?}, got {:?}",
-            expected_shape,
-            actual_shape
-        );
-
-        // Test right
-        let expected_indices: Vec<i64> = vec![2, 3, 5, 1, 3, 4];
-        let expected_shape = Shape::from_dims(&[2, 3]);
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
-        let actual_shape = t3.shape();
-        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(
-            actual_indices == expected_indices,
-            "Expected {:?}, got {:?}",
-            expected_indices,
-            actual_indices
-        );
-        assert!(
-            actual_shape.dims() == expected_shape.dims(),
-            "Expected shape {:?}, got {:?}",
-            expected_shape,
-            actual_shape
-        );
-    }
-    #[test]
-    fn test_ss_2d_vals_diff_2d() {
-        let device = Device::Cpu;
-
-        let ss: Vec<u32> = [
-            (1..10).step_by(2).collect::<Vec<u32>>(),
-            (2..11).step_by(2).collect::<Vec<u32>>(),
-        ]
-        .concat();
-        let ss_shape = Shape::from_dims(&[2, 5]);
-        let vals: Vec<u32> = vec![3, 6, 9, 1, 2, 3];
-        let vals_shape = Shape::from_dims(&[2, 3]);
-
-        // Test left
-        let t1 = Tensor::from_vec(ss.clone(), &ss_shape, &device).unwrap();
-        let t2 = Tensor::from_vec(vals.clone(), &vals_shape, &device).unwrap();
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: false }).unwrap();
-
-        let expected_indices: Vec<i64> = vec![1, 3, 4, 0, 0, 1];
-        let expected_shape = Shape::from_dims(&[2, 3]);
-        let actual_shape = t3.shape();
-        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(
-            actual_indices == expected_indices,
-            "Expected {:?}, got {:?}",
-            expected_indices,
-            actual_indices
-        );
-        assert!(
-            actual_shape.dims() == expected_shape.dims(),
-            "Expected shape {:?}, got {:?}",
-            expected_shape,
-            actual_shape
-        );
-
-        let t3 = t1.apply_op2(&t2, SearchSorted { right: true }).unwrap();
-        let expected_indices: Vec<i64> = vec![2, 3, 5, 0, 1, 1];
-        let expected_shape = Shape::from_dims(&[2, 3]);
-        let actual_shape = t3.shape();
-        let actual_indices: Vec<i64> = t3.flatten_all().unwrap().to_vec1().unwrap();
-        assert!(
-            actual_indices == expected_indices,
-            "Expected {:?}, got {:?}",
-            expected_indices,
-            actual_indices
-        );
-        assert!(
-            actual_shape.dims() == expected_shape.dims(),
-            "Expected shape {:?}, got {:?}",
-            expected_shape,
-            actual_shape
-        );
-    }
 
     //Macro for testing remaining types (CPU)
-    macro_rules! test_ss_2d_vals_diff_2d {
+    macro_rules! test_cpu_ss2d_vals2d {
         ($t:ty, $ss:expr, $vals:expr) => {
             let device = Device::Cpu;
             let ss: Vec<$t> = $ss;
@@ -1217,7 +950,7 @@ mod tests {
         };
     }
 
-    macro_rules! test_ss_2d_vals_diff_2d_half {
+    macro_rules! test_cpu_ss2d_vals2d_half {
         ($t:ty, $ss:expr, $vals:expr) => {
             let device = Device::Cpu;
             let ss: Vec<$t> = $ss.iter().map(|x| <$t>::from_f32(*x)).collect();
@@ -1267,48 +1000,40 @@ mod tests {
         };
     }
     #[test]
-    fn test_ss_2d_vals_diff_2d_u8() {
-        test_ss_2d_vals_diff_2d!(
-            u8,
-            vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
-            vec![3, 6, 9, 1, 2, 3]
-        );
-    }
-    #[test]
-    fn test_ss_2d_vals_diff_2d_u32() {
-        test_ss_2d_vals_diff_2d!(
+    fn test_cpu_ss2d_vals2d_u32() {
+        test_cpu_ss2d_vals2d!(
             u32,
             vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
             vec![3, 6, 9, 1, 2, 3]
         );
     }
     #[test]
-    fn test_ss_2d_vals_diff_2d_i64() {
-        test_ss_2d_vals_diff_2d!(
+    fn test_cpu_ss2d_vals2d_i64() {
+        test_cpu_ss2d_vals2d!(
             i64,
             vec![1, 3, 5, 7, 9, 2, 4, 6, 8, 10],
             vec![3, 6, 9, 1, 2, 3]
         );
     }
     #[test]
-    fn test_ss_2d_vals_diff_2d_fp64() {
-        test_ss_2d_vals_diff_2d!(
-            f32,
+    fn test_cpu_ss2d_vals2d_f64() {
+        test_cpu_ss2d_vals2d!(
+            f64,
             vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
             vec![3., 6., 9., 1., 2., 3.]
         );
     }
     #[test]
-    fn test_ss_2d_vals_diff_2d_f16() {
-        test_ss_2d_vals_diff_2d_half!(
+    fn test_cpu_ss2d_vals2d_f16() {
+        test_cpu_ss2d_vals2d_half!(
             f16,
             vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
             vec![3., 6., 9., 1., 2., 3.]
         );
     }
     #[test]
-    fn test_ss_2d_vals_diff_2d_bf16() {
-        test_ss_2d_vals_diff_2d_half!(
+    fn test_cpu_ss2d_vals2d_bf16() {
+        test_cpu_ss2d_vals2d_half!(
             bf16,
             vec![1., 3., 5., 7., 9., 2., 4., 6., 8., 10.],
             vec![3., 6., 9., 1., 2., 3.]
