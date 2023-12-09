@@ -92,32 +92,32 @@ __device__ void searchsorted_cuda_kernel(
 // {
 //     searchsorted_cuda_kernel(data_out, data_in, data_bd, idim_in, idim_bd, numel_in, right, is_1d_boundaries, is_1d_values);
 // }
-// #define SEARCH_SORTED_KERNEL(TYPE, TYPE_STR)                                                                                     \
-//     extern "C" __global__ void search_sorted_##TYPE_STR(                                                                         \
-//         int64_t *data_out,                                                                                                       \
-//         const TYPE *data_in,                                                                                                     \
-//         const TYPE *data_bd,                                                                                                     \
-//         const u_int32_t idim_in,                                                                                                 \
-//         const u_int32_t idim_bd,                                                                                                 \
-//         const u_int32_t numel_in,                                                                                                \
-//         const bool right,                                                                                                        \
-//         const bool is_1d_boundaries,                                                                                             \
-//         const bool is_1d_values)                                                                                                 \
-//     {                                                                                                                            \
-//         if (threadIdx.x == 0)                                                                                                    \
-//             printf("data_in: %f %f %f\n", data_in[0], data_in[1], data_in[2]);                                                   \
-//         if (threadIdx.x == 0)                                                                                                    \
-//             printf("data_bd: %f %f %f\n", data_bd[0], data_bd[1], data_bd[2]);                                                   \
-//         searchsorted_cuda_kernel(data_out, data_in, data_bd, idim_in, idim_bd, numel_in, right, is_1d_boundaries, is_1d_values); \
-//         int tid = threadIdx.x;                                                                                                   \
-//         if (tid < numel_in)                                                                                                      \
-//             printf("tid: %d data_out: %d", tid, data_out[tid]);                                                                  \
-//     }
+#define SEARCH_SORTED_KERNEL(TYPE, TYPE_STR)                                                                                     \
+    extern "C" __global__ void search_sorted_##TYPE_STR(                                                                         \
+        int64_t *data_out,                                                                                                       \
+        const TYPE *data_in,                                                                                                     \
+        const TYPE *data_bd,                                                                                                     \
+        const u_int32_t idim_in,                                                                                                 \
+        const u_int32_t idim_bd,                                                                                                 \
+        const u_int32_t numel_in,                                                                                                \
+        const bool right,                                                                                                        \
+        const bool is_1d_boundaries,                                                                                             \
+        const bool is_1d_values)                                                                                                 \
+    {                                                                                                                            \
+        if (threadIdx.x == 0)                                                                                                    \
+            printf("data_in: %f %f %f\n", data_in[0], data_in[1], data_in[2]);                                                   \
+        if (threadIdx.x == 0)                                                                                                    \
+            printf("data_bd: %f %f %f\n", data_bd[0], data_bd[1], data_bd[2]);                                                   \
+        searchsorted_cuda_kernel(data_out, data_in, data_bd, idim_in, idim_bd, numel_in, right, is_1d_boundaries, is_1d_values); \
+        int tid = threadIdx.x;                                                                                                   \
+        if (tid < numel_in)                                                                                                      \
+            printf("tid: %d data_out: %d", tid, data_out[tid]);                                                                  \
+    }
 
-// SEARCH_SORTED_KERNEL(u_int8_t, u8);
-// SEARCH_SORTED_KERNEL(u_int32_t, u32);
-// SEARCH_SORTED_KERNEL(float, f32);
-// SEARCH_SORTED_KERNEL(double, f64);
-// SEARCH_SORTED_KERNEL(int64_t, i64);
-// SEARCH_SORTED_KERNEL(__half, f16);
-// SEARCH_SORTED_KERNEL(__nv_bfloat16, bf16);
+SEARCH_SORTED_KERNEL(u_int8_t, u8);
+SEARCH_SORTED_KERNEL(u_int32_t, u32);
+SEARCH_SORTED_KERNEL(float, f32);
+SEARCH_SORTED_KERNEL(double, f64);
+SEARCH_SORTED_KERNEL(int64_t, i64);
+SEARCH_SORTED_KERNEL(__half, f16);
+SEARCH_SORTED_KERNEL(__nv_bfloat16, bf16);

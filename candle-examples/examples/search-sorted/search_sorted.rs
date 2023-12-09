@@ -396,10 +396,10 @@ impl CustomOp2 for SearchSorted {
             shared_mem_bytes: 0,
         };
 
-        let func = dev.get_or_load_func("search_sorted_u32", SEARCH_SORTED_KERNEL)?;
+        // let func = dev.get_or_load_func("search_sorted_u32", SEARCH_SORTED_KERNEL)?;
 
         macro_rules! dispatch_cuda {
-            ($t:ty) => {{
+            ($t:ty, $kernel_name:expr) => {{
                 let slice_ss = s1.as_cuda_slice::<$t>()?;
                 let slice_ss = match l1.contiguous_offsets() {
                     None => candle::bail!("input has to be contiguous"),
@@ -421,6 +421,8 @@ impl CustomOp2 for SearchSorted {
                     is_1d_bd,
                     is_1d_vals,
                 );
+                let func = dev.get_or_load_func($kernel_name, SEARCH_SORTED_KERNEL)?;
+
                 println!("Launching kernel {:?}", params);
                 unsafe { func.launch(cfg, params) }.w()?;
             }};
@@ -428,39 +430,13 @@ impl CustomOp2 for SearchSorted {
 
         //Dispatch based on dtype
         match s1.dtype() {
-            DType::U32 => dispatch_cuda!(u32),
-            DType::F32 => dispatch_cuda!(f32),
-            DType::U8 => dispatch_cuda!(u8),
-
-            DType::F64 => dispatch_cuda!(f64),
-            DType::I64 => {
-                let slice_ss = s1.as_cuda_slice::<std::ffi::c_long>()?;
-                let slice_ss = match l1.contiguous_offsets() {
-                    None => candle::bail!("input has to be contiguous"),
-                    Some((o1, o2)) => slice_ss.slice(o1..o2),
-                };
-                let slice_vals = s2.as_cuda_slice::<std::ffi::c_long>()?;
-                let slice_vals = match l2.contiguous_offsets() {
-                    None => candle::bail!("input has to be contiguous"),
-                    Some((o1, o2)) => slice_vals.slice(o1..o2),
-                };
-                let params = (
-                    &output_slice,
-                    &slice_vals,
-                    &slice_ss,
-                    idim_in,
-                    idim_bd,
-                    numel_in,
-                    self.right,
-                    is_1d_bd,
-                    is_1d_vals,
-                );
-                println!("Launching kernel {:?}", params);
-                unsafe { func.launch(cfg, params) }.w()?;
-            }
-            DType::BF16 => dispatch_cuda!(bf16),
-            DType::F16 => dispatch_cuda!(f16),
-            _ => candle::bail!("Unsupported data type"),
+            DType::U32 => dispatch_cuda!(u32, "search_sorted_u32"),
+            DType::F32 => dispatch_cuda!(f32, "search_sorted_f32"),
+            DType::U8 => dispatch_cuda!(u8, "search_sorted_u8"),
+            DType::F64 => dispatch_cuda!(f64, "search_sorted_f64"),
+            DType::I64 => dispatch_cuda!(i64, "search_sorted_i64"),
+            DType::BF16 => dispatch_cuda!(bf16, "search_sorted_bf16"),
+            DType::F16 => dispatch_cuda!(f16, "search_sorted_f16"),
         }
         let output = CudaStorage::wrap_cuda_slice(output_slice, dev.clone());
 
@@ -492,7 +468,7 @@ mod tests {
                 $expected,
                 t3.flatten_all().unwrap().to_vec1::<i64>().unwrap()
             );
-            println!("t3: {:?}", t3);
+            println!("\nDEBUG: t3: {:?}", t3);
         };
     }
     #[test]
