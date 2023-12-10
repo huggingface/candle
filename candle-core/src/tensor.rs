@@ -999,7 +999,6 @@ impl Tensor {
             target_h,
             target_w,
         });
-        // let op = BackpropOp::new1(self, Op::UpsampleNearest2D);
         let storage = self
             .storage()
             .upsample_nearest2d(self.layout(), target_h, target_w)?;
