@@ -994,7 +994,11 @@ impl Tensor {
     /// tensor also has four dimensions, `(batch, channels, target_h, target_w)`.
     pub fn interpolate2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
         let (n, c, _h, _w) = self.dims4()?;
-        let op = BackpropOp::new1(self, Op::UpsampleNearest2D);
+        let op = BackpropOp::new1(self, |arg| Op::UpsampleNearest2D {
+            arg,
+            target_h,
+            target_w,
+        });
         let storage = self
             .storage()
             .upsample_nearest2d(self.layout(), target_h, target_w)?;
