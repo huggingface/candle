@@ -889,6 +889,7 @@ impl BackendStorage for MetalStorage {
         command_buffer.set_label("matmul");
         drop(command_buffer);
         self.device.commit();
+        self.device.wait_until_completed();
 
         Ok(Self::new(out_buffer, self.device.clone(), self.dtype()))
     }
