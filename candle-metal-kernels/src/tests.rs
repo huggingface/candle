@@ -725,3 +725,66 @@ fn where_cond() {
     );
     assert_eq!(approx(results, 4), vec![-1.0f32, 2.0, -3.0, -4.0, 5.0, 6.0]);
 }
+
+fn run_gemm<T: Clone>(
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs: &[T],
+    lhs_stride: Vec<usize>,
+    rhs: &[T],
+    rhs_stride: Vec<usize>,
+) -> Vec<T> {
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let options = MTLResourceOptions::StorageModeManaged;
+
+    let lhs = device.new_buffer_with_data(
+        lhs.as_ptr() as *const core::ffi::c_void,
+        std::mem::size_of_val(lhs) as u64,
+        options,
+    );
+    let rhs = device.new_buffer_with_data(
+        rhs.as_ptr() as *const core::ffi::c_void,
+        std::mem::size_of_val(rhs) as u64,
+        options,
+    );
+    let length = b * m * n;
+    let output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
+    call_gemm(
+        &device,
+        command_buffer,
+        &kernels,
+        "sgemm",
+        (b, m, n, k),
+        &lhs_stride,
+        0,
+        &lhs,
+        &rhs_stride,
+        0,
+        &rhs,
+        &output,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    output.read_to_vec::<T>(length)
+}
+
+#[test]
+fn gemm() {
+    let (b, m, n, k) = (2, 2, 4, 3);
+    let lhs_stride = vec![m * k, k, 1];
+    let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
+    let rhs_stride = vec![n * k, n, 1];
+    let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
+    let results = run_gemm((b, m, n, k), &lhs, lhs_stride, &rhs, rhs_stride);
+    assert_eq!(
+        approx(results, 4),
+        vec![
+            20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0, 344.0, 365.0, 386.0, 407.0, 488.0,
+            518.0, 548.0, 578.0
+        ]
+    );
+}
