@@ -848,6 +848,12 @@ pub fn call_gemm(
         (21, Value::F32(beta)),
         (100, Value::Bool(batched)),
         (101, Value::Bool(fused_activation)),
+        // Garbage
+        (102, Value::Bool(false)),
+        (103, Value::Bool(false)),
+        (113, Value::Bool(false)),
+        (50_000, Value::Bool(false)),
+        // End garbage
         (200, Value::U16(m_simd)),
         (201, Value::U16(n_simd)),
         (202, Value::U16(k_simd)),
@@ -855,6 +861,7 @@ pub fn call_gemm(
         (211, Value::U16(n_splits)),
         (50_001, Value::Bool(fused_bias)),
     ]));
+    println!("Constants {constants:?}");
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Mfa, name, constants)?;
     let m_group = m_simd * m_splits;
     let n_group = n_simd * n_splits;
@@ -888,6 +895,7 @@ pub fn call_gemm(
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
+    println!("Threadgroup {block_bytes}");
     encoder.set_threadgroup_memory_length(block_bytes.into(), 0);
     encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
     encoder.set_buffer(1, Some(rhs_buffer), rhs_offset as NSUInteger);
@@ -895,19 +903,22 @@ pub fn call_gemm(
     // TODO Tensor D
 
     let grid_z = b;
-    let byte_stride_a: usize = *lhs_stride.get(lhs_stride.len() - 2).unwrap_or(&0);
-    let byte_stride_b = *rhs_stride.get(rhs_stride.len() - 2).unwrap_or(&0);
-    let byte_stride_c = m * n;
+    let byte_stride_a: usize = *lhs_stride.get(lhs_stride.len() - 3).unwrap_or(&0) * bytes as usize;
+    let byte_stride_b = *rhs_stride.get(rhs_stride.len() - 3).unwrap_or(&0) * bytes as usize;
+    let byte_stride_c = m * n * bytes as usize;
     // TODO byte_stride_d
-    let byte_stride_d = 1;
+    let byte_stride_d = 0;
 
-    let mut buffer = Vec::with_capacity(b * 4);
+    let mut buffer: Vec<u64> = Vec::with_capacity(b * 4);
     for i in 0..b {
-        buffer.push(i * byte_stride_a);
-        buffer.push(i * byte_stride_b);
-        buffer.push(i * byte_stride_c);
-        buffer.push(i * byte_stride_d);
+        buffer.push((i * byte_stride_a) as u64);
+        buffer.push((i * byte_stride_b) as u64);
+        buffer.push((i * byte_stride_c) as u64);
+        buffer.push((i * byte_stride_d) as u64);
     }
+    println!("A {:?}", lhs_buffer.read_to_vec::<f32>(12));
+    println!("B {:?}", rhs_buffer.read_to_vec::<f32>(24));
+    println!("buffer {:?}", buffer);
     encoder.set_bytes(
         10,
         buffer.len() as NSUInteger,
@@ -924,6 +935,7 @@ pub fn call_gemm(
         height: 1,
         depth: 1,
     };
+    println!("grid size {grid_size:?} group size {group_size:?}");
     encoder.dispatch_thread_groups(grid_size, group_size);
     encoder.end_encoding();
 
