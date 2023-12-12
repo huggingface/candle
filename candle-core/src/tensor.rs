@@ -2565,6 +2565,13 @@ impl Tensor {
         }
         mask.where_cond(/* on_true= */ &src, /* on_false= */ self)
     }
+
+    /// Returns log(sum(exp(tensor), dim)).
+    pub fn logsumexp<D: Dims>(&self, sum_dims: D) -> Result<Self> {
+        let exp = self.exp()?;
+        let sum = exp.sum(sum_dims)?;
+        sum.log()
+    }
 }
 
 macro_rules! bin_trait {

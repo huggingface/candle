@@ -1,4 +1,4 @@
-use candle_core::{test_device, test_utils, DType, Device, IndexOp, Result, Tensor};
+use candle_core::{test_device, test_utils, D, DType, Device, IndexOp, Result, Tensor};
 
 fn zeros(device: &Device) -> Result<()> {
     let tensor = Tensor::zeros((5, 2), DType::F32, device)?;
@@ -1219,5 +1219,30 @@ fn cumsum() -> Result<()> {
         t.cumsum(0)?.to_vec2::<f32>()?,
         [[3.0, 1.0, 4.0, 1.0, 5.0], [5.0, 2.0, 11.0, 9.0, 7.0]]
     );
+    Ok(())
+}
+
+/// A helper function for floating point comparison. Both a and b must be 1D Tensor and contains the same amount of data.
+/// Assertion passes if the difference of all pairs of a and b is smaller than epsilon.
+fn assert_close(a: &Tensor, b: &Tensor, epsilon: f64) {
+    let a_vec: Vec<f64> = a.to_vec1().unwrap();
+    let b_vec: Vec<f64> = b.to_vec1().unwrap();
+
+    assert_eq!(a_vec.len(), b_vec.len());
+    for (a, b) in a_vec.iter().zip(b_vec.iter()) {
+        assert!((a - b).abs() < epsilon);
+    }
+}
+
+#[test]
+fn logsumexp() -> Result<()> {
+    let input = Tensor::new(&[[1f32, 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
+    let output = input.logsumexp(D::Minus1)?;
+
+    // Expectation get from pytorch.
+    let expected = Tensor::new(&[3.4076, 6.4076], &Device::Cpu)?;
+
+    assert_close(&output, &expected, 0.00001);
+
     Ok(())
 }
