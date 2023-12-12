@@ -1864,7 +1864,7 @@ impl Tensor {
                 }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Metal(storage), Device::Cpu) => {
-                    println!("{storage:?} - {:?}", storage.to_cpu_storage()?);
+                    // println!("{storage:?} - {:?}", storage.to_cpu_storage()?);
                     Storage::Cpu(storage.to_cpu_storage()?)
                 }
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {

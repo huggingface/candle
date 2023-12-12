@@ -69,7 +69,7 @@ kernel void FN_NAME( \
     if (thread_position_in_grid >= dim) { \
         return; \
     } \
-    output[thread_position_in_grid] = TYPENAME(FN(input[thread_position_in_grid])); \
+    output[thread_position_in_grid] = TYPENAME(FN(float(input[thread_position_in_grid]))); \
 }\
 kernel void FN_NAME_STRIDED( \
     constant size_t &dim, \
@@ -83,7 +83,7 @@ kernel void FN_NAME_STRIDED( \
     if (thread_position_in_grid >= dim) { \
         return; \
     } \
-    output[thread_position_in_grid] = TYPENAME(FN(input[get_strided_index(thread_position_in_grid, num_dims, dims, strides)])); \
+    output[thread_position_in_grid] = TYPENAME(FN(float(input[get_strided_index(thread_position_in_grid, num_dims, dims, strides)]))); \
 }
 
 #define UNARY_OP(NAME) \
@@ -107,6 +107,7 @@ UNARY_OP(floor)
 UNARY_OP(round)
 UNARY_OP(gelu_erf)
 UNARY_OP(erf)
+UNARY_OP(tanh)
 UNARY(id, float, copy_float, copy_float_strided)
 UNARY(id, half, copy_half, copy_half_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
@@ -126,6 +127,7 @@ BFLOAT_UNARY_OP(floor)
 BFLOAT_UNARY_OP(round)
 BFLOAT_UNARY_OP(gelu_erf)
 BFLOAT_UNARY_OP(erf)
+BFLOAT_UNARY_OP(tanh)
 
 UNARY(id, bfloat, copy_bfloat, copy_bfloat_strided)
 #endif

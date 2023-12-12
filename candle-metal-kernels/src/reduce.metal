@@ -18,7 +18,7 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
-constant int THREADGROUP_SIZE = 1024;
+constant int THREADGROUP_SIZE = 2048;
 
 # define REDUCE(FN, NAME, T) \
 kernel void NAME( \

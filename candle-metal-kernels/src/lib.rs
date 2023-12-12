@@ -153,7 +153,7 @@ macro_rules! ops{
 }
 
 pub mod unary {
-    ops!(cos, sin, exp, sqr, sqrt, neg, log, gelu, ceil, floor, round, erf, gelu_erf);
+    ops!(cos, sin, exp, sqr, sqrt, neg, log, gelu, ceil, floor, round, erf, gelu_erf, tanh);
 }
 pub mod binary {
     ops!(add, sub, mul, div);
@@ -605,6 +605,130 @@ pub fn call_affine_strided(
             input_stride,
             mul,
             add,
+            (input, input_offset),
+            output
+        )
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_powf(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    size: usize,
+    input: &Buffer,
+    output: &Buffer,
+    mul: f32,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (size, mul, input, output));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_powf_strided(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    shape: &[usize],
+    input: &Buffer,
+    input_stride: &[usize],
+    input_offset: usize,
+    output: &Buffer,
+    mul: f32,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
+    let size: usize = shape.iter().product();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            size,
+            shape.len(),
+            shape,
+            input_stride,
+            mul,
+            (input, input_offset),
+            output
+        )
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_elu(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    size: usize,
+    input: &Buffer,
+    output: &Buffer,
+    mul: f32,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (size, mul, input, output));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_elu_strided(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    shape: &[usize],
+    input: &Buffer,
+    input_stride: &[usize],
+    input_offset: usize,
+    output: &Buffer,
+    mul: f32,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
+    let size: usize = shape.iter().product();
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            size,
+            shape.len(),
+            shape,
+            input_stride,
+            mul,
             (input, input_offset),
             output
         )
