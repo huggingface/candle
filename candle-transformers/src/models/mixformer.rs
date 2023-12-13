@@ -144,6 +144,7 @@ impl RotaryEmbedding {
         let freqs = t.matmul(&inv_freq)?;
         let sin = freqs.sin()?;
         let cos = freqs.cos()?;
+        // todo!("{}", sin);
         Ok(Self { sin, cos })
     }
 
@@ -272,10 +273,10 @@ impl MHA {
     }
 
     fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
-        let view = xs.to_string();
-        if view.contains("NaN") {
-            panic!("NaN");
-        }
+        // let view = xs.to_string();
+        // if view.contains("NaN") {
+        //     panic!("NaN");
+        // }
         let _enter = self.span.enter();
         let (b_size, seq_len, _n_embd) = xs.dims3()?;
         let qkv = self
