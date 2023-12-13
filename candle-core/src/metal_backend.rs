@@ -4,9 +4,7 @@ use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 use candle_metal_kernels;
 use candle_metal_kernels::Kernels;
-use half::f16;
 use metal;
-use metal::mps::matrix::{Matrix, MatrixDescriptor, MatrixMultiplication};
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::collections::HashMap;
 use std::path::Path;
@@ -115,7 +113,7 @@ impl MetalDevice {
     pub fn wait_until_completed(&self) {
         let command_buffers = self.command_buffers.try_write().unwrap();
         let index = self.command_buffer_index.try_write().unwrap();
-        let n = command_buffers.len();
+        // let n = command_buffers.len();
         // for i in 0..*index {
         //     let command_buffer = &command_buffers[i];
         //     println!("Command {i} / {n}: {:?}", command_buffer.status());
@@ -216,39 +214,6 @@ impl MetalDevice {
         real
     }
 
-    pub fn new_matrix(
-        &self,
-        (b, m, n): (NSUInteger, NSUInteger, NSUInteger),
-        size: NSUInteger,
-        type_id: u32,
-        dtype: DType,
-    ) -> Result<(Matrix, Arc<Buffer>)> {
-        let elem_count = (b * m * n) as usize;
-        let buffer = self.new_buffer(elem_count, dtype, "matrix");
-        let command_buffer = self.command_buffer();
-        command_buffer.set_label("zeros_matmul");
-        let blit = command_buffer.new_blit_command_encoder();
-        blit.fill_buffer(
-            &buffer,
-            metal::NSRange {
-                location: 0,
-                length: buffer.length(),
-            },
-            0,
-        );
-        blit.end_encoding();
-        command_buffer.commit();
-        buffer.did_modify_range(metal::NSRange::new(0, buffer.length()));
-
-        let result_descriptor =
-            MatrixDescriptor::init_multiple(m, n, b, n * size, m * n * size, type_id);
-        let result_matrix = Matrix::init_with_buffer_descriptor(&buffer, 0, &result_descriptor)
-            .ok_or_else(|| {
-                MetalError::from("Failed to create matrix multiplication kernel".to_string())
-            })?;
-        Ok((result_matrix, buffer))
-    }
-
     pub fn capture<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let capture = metal::CaptureManager::shared();
         let descriptor = metal::CaptureDescriptor::new();
@@ -266,22 +231,6 @@ impl MetalDevice {
 #[derive(Debug, Clone)]
 pub struct MetalStorage {
     buffer: Arc<metal::Buffer>,
-    matrices: Arc<
-        RwLock<
-            HashMap<
-                (
-                    NSUInteger,
-                    NSUInteger,
-                    NSUInteger,
-                    bool,
-                    NSUInteger,
-                    NSUInteger,
-                    u32,
-                ),
-                Matrix,
-            >,
-        >,
-    >,
     device: MetalDevice,
     dtype: DType,
 }
@@ -976,7 +925,6 @@ impl BackendStorage for MetalStorage {
     ) -> Result<Self> {
         crate::bail!("index_add metal")
     }
-
     fn matmul(
         &self,
         rhs: &Self,
@@ -985,104 +933,37 @@ impl BackendStorage for MetalStorage {
         rhs_l: &Layout,
     ) -> Result<Self> {
         // Create descriptors
-        let (type_id, size) = match self.dtype {
-            DType::F32 => (
-                metal::mps::MPS_FLOATBIT_ENCODING | 32,
-                core::mem::size_of::<f32>() as NSUInteger,
-            ),
-            DType::F16 => (
-                metal::mps::MPS_FLOATBIT_ENCODING | 16,
-                core::mem::size_of::<f16>() as NSUInteger,
-            ),
-            dtype => todo!("Dtype for matmul {dtype:?} is not supported"),
-        };
 
-        let lhs_stride = lhs_l.stride();
-        let rhs_stride = rhs_l.stride();
-        let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
-        let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
-        let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
-        let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
-        // The a tensor has dims batching, k, n (rhs)
-        let transpose_left = if lhs_m1 == 1 && lhs_m2 == k {
-            false
-        } else if lhs_m1 == m && lhs_m2 == 1 {
-            true
-        } else {
-            Err(MetalError::MatMulNonContiguous {
-                lhs_stride: lhs_stride.to_vec(),
-                rhs_stride: rhs_stride.to_vec(),
-                mnk: (m, n, k),
-            })?
+        let buffer = self.device.new_buffer(b * m * n, self.dtype, "matmul");
+        let name = match self.dtype {
+            DType::F32 => "sgemm",
+            DType::F16 => "hgemm",
+            dtype => {
+                return Err(MetalError::Message(format!("matmul doesn't support {dtype:?}")).into())
+            }
         };
-        let transpose_right = if rhs_m1 == 1 && rhs_m2 == n {
-            false
-        } else if rhs_m1 == k && rhs_m2 == 1 {
-            true
-        } else {
-            Err(MetalError::MatMulNonContiguous {
-                lhs_stride: lhs_stride.to_vec(),
-                rhs_stride: rhs_stride.to_vec(),
-                mnk: (m, n, k),
-            })?
-        };
-        let b = b as NSUInteger;
-        let m = m as NSUInteger;
-        let n = n as NSUInteger;
-        let k = k as NSUInteger;
-
-        let left_matrix = self.matrix(
-            (b, m, k),
-            transpose_left,
-            size,
-            lhs_l.start_offset() as NSUInteger * size,
-            type_id,
-        )?;
-        let right_matrix = rhs.matrix(
-            (b, k, n),
-            transpose_right,
-            size,
-            rhs_l.start_offset() as NSUInteger * size,
-            type_id,
-        )?;
-        let (result_matrix, out_buffer) =
-            self.device
-                .new_matrix((b, m, n), size, type_id, self.dtype)?;
 
         let command_buffer = self.device.command_buffer();
         command_buffer.set_label("matmul");
-
-        let alpha = 1.0f64;
-        // let beta = f64::MIN;
-        let beta = 1.0;
-        // Create kernel
-        let matrix_multiplication = MatrixMultiplication::init(
-            &self.device,
-            transpose_left,
-            transpose_right,
-            m,
-            n,
-            k,
-            alpha,
-            beta,
-        )
-        .ok_or_else(|| {
-            MetalError::from("Failed to create matrix multiplication kernel".to_string())
-        })?;
-        matrix_multiplication.set_batch_size(b);
-        matrix_multiplication.set_batch_start(0);
-
-        // Encode kernel to command buffer
-        matrix_multiplication.encode_to_command_buffer(
+        candle_metal_kernels::call_gemm(
+            &self.device.device,
             &command_buffer,
-            &left_matrix,
-            &right_matrix,
-            &result_matrix,
-        );
+            &self.device.kernels,
+            name,
+            (b, m, n, k),
+            &lhs_l.stride(),
+            lhs_l.start_offset(),
+            &self.buffer,
+            &rhs_l.stride(),
+            rhs_l.start_offset(),
+            &rhs.buffer,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+        // Create kernel
         command_buffer.commit();
-        out_buffer.did_modify_range(metal::NSRange::new(0, out_buffer.length()));
-        // println!("========= MATMUL {:?}", Arc::strong_count(&out_buffer));
-        Ok(Self::new(out_buffer, self.device.clone(), self.dtype()))
+
+        Ok(Self::new(buffer, self.device.clone(), self.dtype()))
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
@@ -1133,45 +1014,15 @@ impl BackendStorage for MetalStorage {
 
 impl MetalStorage {
     pub fn new(buffer: Arc<Buffer>, device: MetalDevice, dtype: DType) -> Self {
-        let matrices = Arc::new(RwLock::new(HashMap::new()));
         Self {
             buffer,
             device,
             dtype,
-            matrices,
         }
     }
 
     pub fn buffer(&self) -> &Buffer {
         &self.buffer
-    }
-
-    fn matrix(
-        &self,
-        (b, m, n): (NSUInteger, NSUInteger, NSUInteger),
-        transpose: bool,
-        size: NSUInteger,
-        offset: NSUInteger,
-        type_id: u32,
-    ) -> Result<Matrix> {
-        let key = (b, m, n, transpose, size, offset, type_id);
-
-        // let mut matrices = self.matrices.try_write().unwrap();
-        // if let Some(matrix) = matrices.get(&key) {
-        //     Ok(matrix.clone())
-        // } else {
-        let descriptor = if transpose {
-            MatrixDescriptor::init_multiple(n, m, b, m * size, m * n * size, type_id)
-        } else {
-            MatrixDescriptor::init_multiple(m, n, b, n * size, m * n * size, type_id)
-        };
-        let matrix = Matrix::init_with_buffer_descriptor(&self.buffer, offset, &descriptor)
-            .ok_or_else(|| {
-                MetalError::from("Failed to create matrix multiplication kernel".to_string())
-            })?;
-        // matrices.insert(key, matrix.clone());
-        Ok(matrix)
-        // }
     }
 }
 

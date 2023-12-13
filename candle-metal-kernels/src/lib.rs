@@ -1,6 +1,6 @@
 use metal::{
     Buffer, CommandBufferRef, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState,
-    Device, Function, Library, MTLSize,
+    Device, Function, FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -13,6 +13,7 @@ const BINARY: &str = include_str!("binary.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
 const REDUCE: &str = include_str!("reduce.metal");
+const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
 
 fn linear_split(pipeline: &ComputePipelineState, length: usize) -> (MTLSize, MTLSize) {
     let size = length as u64;
@@ -105,6 +106,7 @@ pub enum Source {
     Ternary,
     Cast,
     Reduce,
+    Mfa,
 }
 
 macro_rules! ops{
@@ -179,9 +181,8 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
     }
 }
 
-type KernelMap<T> = HashMap<&'static str, T>;
 type Libraries = HashMap<Source, Library>;
-type Pipelines = KernelMap<ComputePipelineState>;
+type Pipelines = HashMap<(&'static str, Option<ConstantValues>), ComputePipelineState>;
 
 #[derive(Debug, Default)]
 pub struct Kernels {
@@ -208,9 +209,9 @@ impl Kernels {
             Source::Indexing => INDEXING,
             Source::Cast => CAST,
             Source::Reduce => REDUCE,
+            Source::Mfa => panic!("Invalid lib"),
         }
     }
-
     pub fn load_library(
         &self,
         device: &Device,
@@ -220,10 +221,20 @@ impl Kernels {
         if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
-            let source_content = self.get_library_source(source);
-            let lib = device
-                .new_library_with_source(source_content, &CompileOptions::new())
-                .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?;
+            let lib = match source {
+                Source::Mfa => {
+                    let source_data = MFA;
+                    device
+                        .new_library_with_data(source_data)
+                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+                }
+                source => {
+                    let source_content = self.get_library_source(source);
+                    device
+                        .new_library_with_source(source_content, &CompileOptions::new())
+                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+                }
+            };
             libraries.insert(source, lib.clone());
             Ok(lib)
         }
@@ -234,19 +245,41 @@ impl Kernels {
         device: &Device,
         source: Source,
         name: &'static str,
+        constants: Option<FunctionConstantValues>,
     ) -> Result<Function, MetalKernelError> {
         let func = self
             .load_library(device, source)?
-            .get_function(name, None)
+            .get_function(name, constants)
             .map_err(|e| MetalKernelError::LoadFunctionError(e.to_string()))?;
         Ok(func)
-        // let mut funcs = self.funcs.write()?;
-        // if let Some(func) = funcs.get(name) {
-        //     Ok(func.clone())
-        // } else {
-        //     funcs.insert(name, func.clone());
-        //     Ok(func)
-        // }
+    }
+
+    fn load_pipeline_with_constants(
+        &self,
+        device: &Device,
+        source: Source,
+        name: &'static str,
+        constants: Option<ConstantValues>,
+    ) -> Result<ComputePipelineState, MetalKernelError> {
+        let mut pipelines = self.pipelines.write()?;
+        let key = (name, constants);
+        if let Some(pipeline) = pipelines.get(&key) {
+            Ok(pipeline.clone())
+        } else {
+            let (name, constants) = key;
+            let func = self.load_function(
+                device,
+                source,
+                name,
+                constants.as_ref().map(|c| c.function_constant_values()),
+            )?;
+            let pipeline = device
+                .new_compute_pipeline_state_with_function(&func)
+                .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
+            pipelines.insert((name, constants), pipeline.clone());
+
+            Ok(pipeline)
+        }
     }
 
     pub fn load_pipeline(
@@ -255,18 +288,7 @@ impl Kernels {
         source: Source,
         name: &'static str,
     ) -> Result<ComputePipelineState, MetalKernelError> {
-        let mut pipelines = self.pipelines.write()?;
-        if let Some(pipeline) = pipelines.get(name) {
-            Ok(pipeline.clone())
-        } else {
-            let func = self.load_function(device, source, name)?;
-            let pipeline = device
-                .new_compute_pipeline_state_with_function(&func)
-                .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
-            pipelines.insert(name, pipeline.clone());
-
-            Ok(pipeline)
-        }
+        self.load_pipeline_with_constants(device, source, name, None)
     }
 }
 
@@ -828,6 +850,250 @@ pub fn call_index_select(
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
     Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Value {
+    USize(usize),
+    Bool(bool),
+    F32(f32),
+    U16(u16),
+}
+
+impl std::hash::Hash for Value {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Value::F32(v) => v.to_bits().hash(state),
+            Value::USize(v) => v.hash(state),
+            Value::U16(v) => v.hash(state),
+            Value::Bool(v) => v.hash(state),
+        }
+    }
+}
+
+impl Value {
+    fn data_type(&self) -> MTLDataType {
+        match self {
+            Value::USize(_) => MTLDataType::UInt,
+            Value::F32(_) => MTLDataType::Float,
+            Value::U16(_) => MTLDataType::UShort,
+            Value::Bool(_) => MTLDataType::Bool,
+        }
+    }
+}
+
+/// Not true, good enough for our purposes.
+impl Eq for Value {}
+
+#[derive(Debug, Eq, PartialEq, Hash)]
+struct ConstantValues(Vec<(usize, Value)>);
+
+impl ConstantValues {
+    pub fn new(values: Vec<(usize, Value)>) -> Self {
+        Self(values)
+    }
+
+    fn function_constant_values(&self) -> FunctionConstantValues {
+        let f = FunctionConstantValues::new();
+        for (index, value) in &self.0 {
+            let ty = value.data_type();
+            match value {
+                Value::USize(v) => {
+                    f.set_constant_value_at_index(
+                        v as *const usize as *const c_void,
+                        ty,
+                        *index as u64,
+                    );
+                }
+                Value::F32(v) => {
+                    f.set_constant_value_at_index(
+                        v as *const f32 as *const c_void,
+                        ty,
+                        *index as u64,
+                    );
+                }
+                Value::U16(v) => {
+                    f.set_constant_value_at_index(
+                        v as *const u16 as *const c_void,
+                        ty,
+                        *index as u64,
+                    );
+                }
+                Value::Bool(v) => {
+                    f.set_constant_value_at_index(
+                        v as *const bool as *const c_void,
+                        ty,
+                        *index as u64,
+                    );
+                }
+            }
+        }
+        f
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_gemm(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs_stride: &[usize],
+    lhs_offset: usize,
+    lhs_buffer: &Buffer,
+    rhs_stride: &[usize],
+    rhs_offset: usize,
+    rhs_buffer: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    assert!(rhs_stride.len() >= 2);
+    assert!(lhs_stride.len() >= 2);
+    let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+    let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+    let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+    let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+    let a_trans = if lhs_m1 == 1 && lhs_m2 == k {
+        false
+    } else if lhs_m1 == m && lhs_m2 == 1 {
+        true
+    } else {
+        todo!();
+        // Err(MetalError::MatMulNonContiguous {
+        //     lhs_stride: lhs_stride.to_vec(),
+        //     rhs_stride: rhs_stride.to_vec(),
+        //     mnk: (m, n, k),
+        // })?
+    };
+    let b_trans = if rhs_m1 == 1 && rhs_m2 == n {
+        false
+    } else if rhs_m1 == k && rhs_m2 == 1 {
+        true
+    } else {
+        todo!();
+        // Err(MetalError::MatMulNonContiguous {
+        //     lhs_stride: lhs_stride.to_vec(),
+        //     rhs_stride: rhs_stride.to_vec(),
+        //     mnk: (m, n, k),
+        // })?
+    };
+    let d_trans = false;
+    let alpha = 1.0f32;
+    let beta = 0.0f32;
+    let batched = b > 1;
+    let fused_activation = false;
+    let fused_bias = false;
+    let m_simd = 16;
+    let n_simd = 16;
+    let k_simd = 16;
+    let m_splits = 2;
+    let n_splits = 2;
+    let constants = Some(ConstantValues::new(vec![
+        (0, Value::USize(m)),
+        (1, Value::USize(n)),
+        (2, Value::USize(k)),
+        (10, Value::Bool(a_trans)),
+        (11, Value::Bool(b_trans)),
+        (13, Value::Bool(d_trans)),
+        (20, Value::F32(alpha)),
+        (21, Value::F32(beta)),
+        (100, Value::Bool(batched)),
+        (101, Value::Bool(fused_activation)),
+        // Garbage
+        (102, Value::Bool(false)),
+        (103, Value::Bool(false)),
+        (113, Value::Bool(false)),
+        (50_000, Value::Bool(false)),
+        // End garbage
+        (200, Value::U16(m_simd)),
+        (201, Value::U16(n_simd)),
+        (202, Value::U16(k_simd)),
+        (210, Value::U16(m_splits)),
+        (211, Value::U16(n_splits)),
+        (50_001, Value::Bool(fused_bias)),
+    ]));
+    // println!("Constants {constants:?}");
+    let pipeline = kernels.load_pipeline_with_constants(device, Source::Mfa, name, constants)?;
+    let m_group = m_simd * m_splits;
+    let n_group = n_simd * n_splits;
+
+    let a_block_length = m_group * k_simd;
+    let b_block_length = k_simd * n_group;
+
+    let mut block_elements = a_block_length + b_block_length;
+    if (m % 8 != 0) && (n % 8 != 0) {
+        let c_block_length = m_group * n_group;
+        block_elements = std::cmp::max(c_block_length, block_elements)
+    }
+    if fused_bias {
+        if d_trans {
+            block_elements = std::cmp::max(block_elements, m_group);
+        } else {
+            block_elements = std::cmp::max(block_elements, n_group);
+        }
+    }
+    // TODO adapt for f16
+    let bytes = match name {
+        "sgemm" => 4,
+        "hgemm" => 2,
+        other => {
+            return Err(MetalKernelError::LoadLibraryError(format!(
+                "{other} is not a valid kernel for gemm"
+            )));
+        }
+    };
+    let block_bytes = block_elements * bytes;
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    // println!("Threadgroup {block_bytes}");
+    encoder.set_threadgroup_memory_length(0, block_bytes.into());
+    encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
+    encoder.set_buffer(1, Some(rhs_buffer), rhs_offset as NSUInteger);
+    encoder.set_buffer(2, Some(output), 0);
+    // TODO Tensor D
+
+    let grid_z = b;
+    if batched {
+        let byte_stride_a: usize = lhs_stride[lhs_stride.len() - 3] * bytes as usize;
+        let byte_stride_b: usize = rhs_stride[rhs_stride.len() - 3] * bytes as usize;
+        let byte_stride_c = m * n * bytes as usize;
+        // TODO byte_stride_d
+        let byte_stride_d = 0;
+
+        let mut buffer: Vec<u64> = Vec::with_capacity(b * 4);
+        for i in 0..b {
+            buffer.push((i * byte_stride_a) as u64);
+            buffer.push((i * byte_stride_b) as u64);
+            buffer.push((i * byte_stride_c) as u64);
+            buffer.push((i * byte_stride_d) as u64);
+        }
+        encoder.set_bytes(
+            10,
+            (buffer.len() * core::mem::size_of::<u64>()) as NSUInteger,
+            buffer.as_ptr() as *const NSUInteger as *const c_void,
+        );
+    }
+
+    let grid_size = MTLSize {
+        width: divide(n, n_group.into()),
+        height: divide(m, m_group.into()),
+        depth: grid_z as NSUInteger,
+    };
+    let group_size = MTLSize {
+        width: 32 * (m_splits as u64) * (n_splits as u64),
+        height: 1,
+        depth: 1,
+    };
+    // println!("grid size {grid_size:?} group size {group_size:?}");
+    encoder.dispatch_thread_groups(grid_size, group_size);
+    encoder.end_encoding();
+
+    Ok(())
+}
+
+fn divide(m: usize, b: usize) -> NSUInteger {
+    ((m + b - 1) / b) as NSUInteger
 }
 
 #[cfg(test)]
