@@ -144,7 +144,6 @@ impl RotaryEmbedding {
         let freqs = t.matmul(&inv_freq)?;
         let sin = freqs.sin()?;
         let cos = freqs.cos()?;
-        // todo!("{}", sin);
         Ok(Self { sin, cos })
     }
 
