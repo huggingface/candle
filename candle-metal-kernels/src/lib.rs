@@ -183,7 +183,7 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
 
 #[derive(Debug, PartialEq)]
 pub enum Value {
-    U32(u32),
+    USize(usize),
     Bool(bool),
     F32(f32),
     U16(u16),
@@ -193,7 +193,7 @@ impl std::hash::Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
             Value::F32(v) => v.to_bits().hash(state),
-            Value::U32(v) => v.hash(state),
+            Value::USize(v) => v.hash(state),
             Value::U16(v) => v.hash(state),
             Value::Bool(v) => v.hash(state),
         }
@@ -203,7 +203,7 @@ impl std::hash::Hash for Value {
 impl Value {
     fn data_type(&self) -> MTLDataType {
         match self {
-            Value::U32(_) => MTLDataType::UInt,
+            Value::USize(_) => MTLDataType::UInt,
             Value::F32(_) => MTLDataType::Float,
             Value::U16(_) => MTLDataType::UShort,
             Value::Bool(_) => MTLDataType::Bool,
@@ -227,9 +227,9 @@ impl ConstantValues {
         for (index, value) in &self.0 {
             let ty = value.data_type();
             match value {
-                Value::U32(v) => {
+                Value::USize(v) => {
                     f.set_constant_value_at_index(
-                        v as *const u32 as *const c_void,
+                        v as *const usize as *const c_void,
                         ty,
                         *index as u64,
                     );
@@ -824,11 +824,39 @@ pub fn call_gemm(
     rhs_buffer: &Buffer,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let a_trans = false;
-    let b_trans = false;
+    assert!(rhs_stride.len() >= 2);
+    assert!(lhs_stride.len() >= 2);
+    let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
+    let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
+    let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
+    let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
+    let a_trans = if lhs_m1 == 1 && lhs_m2 == k {
+        false
+    } else if lhs_m1 == m && lhs_m2 == 1 {
+        true
+    } else {
+        todo!();
+        // Err(MetalError::MatMulNonContiguous {
+        //     lhs_stride: lhs_stride.to_vec(),
+        //     rhs_stride: rhs_stride.to_vec(),
+        //     mnk: (m, n, k),
+        // })?
+    };
+    let b_trans = if rhs_m1 == 1 && rhs_m2 == n {
+        false
+    } else if rhs_m1 == k && rhs_m2 == 1 {
+        true
+    } else {
+        todo!();
+        // Err(MetalError::MatMulNonContiguous {
+        //     lhs_stride: lhs_stride.to_vec(),
+        //     rhs_stride: rhs_stride.to_vec(),
+        //     mnk: (m, n, k),
+        // })?
+    };
     let d_trans = false;
-    let alpha = 1.0;
-    let beta = 0.0;
+    let alpha = 1.0f32;
+    let beta = 0.0f32;
     let batched = b > 1;
     let fused_activation = false;
     let fused_bias = false;
@@ -838,9 +866,9 @@ pub fn call_gemm(
     let m_splits = 2;
     let n_splits = 2;
     let constants = Some(ConstantValues::new(vec![
-        (0, Value::U32(m as u32)),
-        (1, Value::U32(n as u32)),
-        (2, Value::U32(k as u32)),
+        (0, Value::USize(m)),
+        (1, Value::USize(n)),
+        (2, Value::USize(k)),
         (10, Value::Bool(a_trans)),
         (11, Value::Bool(b_trans)),
         (13, Value::Bool(d_trans)),
@@ -861,7 +889,7 @@ pub fn call_gemm(
         (211, Value::U16(n_splits)),
         (50_001, Value::Bool(fused_bias)),
     ]));
-    println!("Constants {constants:?}");
+    // println!("Constants {constants:?}");
     let pipeline = kernels.load_pipeline_with_constants(device, Source::Mfa, name, constants)?;
     let m_group = m_simd * m_splits;
     let n_group = n_simd * n_splits;
@@ -895,35 +923,34 @@ pub fn call_gemm(
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
-    println!("Threadgroup {block_bytes}");
-    encoder.set_threadgroup_memory_length(block_bytes.into(), 0);
+    // println!("Threadgroup {block_bytes}");
+    encoder.set_threadgroup_memory_length(0, block_bytes.into());
     encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
     encoder.set_buffer(1, Some(rhs_buffer), rhs_offset as NSUInteger);
     encoder.set_buffer(2, Some(output), 0);
     // TODO Tensor D
 
     let grid_z = b;
-    let byte_stride_a: usize = *lhs_stride.get(lhs_stride.len() - 3).unwrap_or(&0) * bytes as usize;
-    let byte_stride_b = *rhs_stride.get(rhs_stride.len() - 3).unwrap_or(&0) * bytes as usize;
-    let byte_stride_c = m * n * bytes as usize;
-    // TODO byte_stride_d
-    let byte_stride_d = 0;
+    if batched {
+        let byte_stride_a: usize = lhs_stride[lhs_stride.len() - 3] * bytes as usize;
+        let byte_stride_b: usize = rhs_stride[rhs_stride.len() - 3] * bytes as usize;
+        let byte_stride_c = m * n * bytes as usize;
+        // TODO byte_stride_d
+        let byte_stride_d = 0;
 
-    let mut buffer: Vec<u64> = Vec::with_capacity(b * 4);
-    for i in 0..b {
-        buffer.push((i * byte_stride_a) as u64);
-        buffer.push((i * byte_stride_b) as u64);
-        buffer.push((i * byte_stride_c) as u64);
-        buffer.push((i * byte_stride_d) as u64);
+        let mut buffer: Vec<u64> = Vec::with_capacity(b * 4);
+        for i in 0..b {
+            buffer.push((i * byte_stride_a) as u64);
+            buffer.push((i * byte_stride_b) as u64);
+            buffer.push((i * byte_stride_c) as u64);
+            buffer.push((i * byte_stride_d) as u64);
+        }
+        encoder.set_bytes(
+            10,
+            buffer.len() as NSUInteger * core::mem::size_of::<u64>(),
+            buffer.as_ptr() as *const NSUInteger as *const c_void,
+        );
     }
-    println!("A {:?}", lhs_buffer.read_to_vec::<f32>(12));
-    println!("B {:?}", rhs_buffer.read_to_vec::<f32>(24));
-    println!("buffer {:?}", buffer);
-    encoder.set_bytes(
-        10,
-        buffer.len() as NSUInteger,
-        buffer.as_ptr() as *const NSUInteger as *const c_void,
-    );
 
     let grid_size = MTLSize {
         width: divide(n, n_group.into()),
@@ -935,7 +962,7 @@ pub fn call_gemm(
         height: 1,
         depth: 1,
     };
-    println!("grid size {grid_size:?} group size {group_size:?}");
+    // println!("grid size {grid_size:?} group size {group_size:?}");
     encoder.dispatch_thread_groups(grid_size, group_size);
     encoder.end_encoding();
 

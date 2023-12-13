@@ -774,6 +774,16 @@ fn run_gemm<T: Clone>(
 
 #[test]
 fn gemm() {
+    let (b, m, n, k) = (1, 2, 4, 3);
+    let lhs_stride = vec![m * k, k, 1];
+    let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
+    let rhs_stride = vec![n * k, n, 1];
+    let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
+    let results = run_gemm((b, m, n, k), &lhs, lhs_stride, &rhs, rhs_stride);
+    assert_eq!(
+        approx(results, 4),
+        vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
+    );
     let (b, m, n, k) = (2, 2, 4, 3);
     let lhs_stride = vec![m * k, k, 1];
     let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();

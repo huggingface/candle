@@ -796,101 +796,37 @@ impl BackendStorage for MetalStorage {
     ) -> Result<Self> {
         // Create descriptors
 
-        let (type_id, size) = match self.dtype {
-            DType::F32 => (
-                metal::mps::MPS_FLOATBIT_ENCODING | 32,
-                core::mem::size_of::<f32>() as NSUInteger,
-            ),
-            DType::F16 => (
-                metal::mps::MPS_FLOATBIT_ENCODING | 16,
-                core::mem::size_of::<f16>() as NSUInteger,
-            ),
-            dtype => todo!("Dtype for matmul {dtype:?} is not supported"),
+        let buffer = self.device.new_buffer(b * m * n, self.dtype);
+        let name = match self.dtype {
+            DType::F32 => "sgemm",
+            DType::F16 => "hgemm",
+            dtype => {
+                return Err(MetalError::Message(format!("matmul doesn't support {dtype:?}")).into())
+            }
         };
-
-        let lhs_stride = lhs_l.stride();
-        let rhs_stride = rhs_l.stride();
-        let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
-        let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
-        let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
-        let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
-        // The a tensor has dims batching, k, n (rhs)
-        let transpose_left = if lhs_m1 == 1 && lhs_m2 == k {
-            false
-        } else if lhs_m1 == m && lhs_m2 == 1 {
-            true
-        } else {
-            Err(MetalError::MatMulNonContiguous {
-                lhs_stride: lhs_stride.to_vec(),
-                rhs_stride: rhs_stride.to_vec(),
-                mnk: (m, n, k),
-            })?
-        };
-        let transpose_right = if rhs_m1 == 1 && rhs_m2 == n {
-            false
-        } else if rhs_m1 == k && rhs_m2 == 1 {
-            true
-        } else {
-            Err(MetalError::MatMulNonContiguous {
-                lhs_stride: lhs_stride.to_vec(),
-                rhs_stride: rhs_stride.to_vec(),
-                mnk: (m, n, k),
-            })?
-        };
-        let b = b as NSUInteger;
-        let m = m as NSUInteger;
-        let n = n as NSUInteger;
-        let k = k as NSUInteger;
-
-        let left_matrix = self.matrix(
-            (b, m, k),
-            transpose_left,
-            size,
-            lhs_l.start_offset() as NSUInteger * size,
-            type_id,
-        )?;
-        let right_matrix = rhs.matrix(
-            (b, k, n),
-            transpose_right,
-            size,
-            rhs_l.start_offset() as NSUInteger * size,
-            type_id,
-        )?;
-        let (result_matrix, out_buffer) =
-            self.device
-                .new_matrix((b, m, n), size, type_id, self.dtype)?;
 
         let command_buffer = self.device.command_buffer();
-
-        let alpha = 1.0f64;
-        let beta = 0.0f64;
-        // Create kernel
-        let matrix_multiplication = MatrixMultiplication::init(
-            &self.device,
-            transpose_left,
-            transpose_right,
-            m,
-            n,
-            k,
-            alpha,
-            beta,
-        )
-        .ok_or_else(|| {
-            MetalError::from("Failed to create matrix multiplication kernel".to_string())
-        })?;
-
-        // Encode kernel to command buffer
-        matrix_multiplication.encode_to_command_buffer(
-            &command_buffer,
-            &left_matrix,
-            &right_matrix,
-            &result_matrix,
-        );
         command_buffer.set_label("matmul");
+        candle_metal_kernels::call_gemm(
+            &self.device.device,
+            &command_buffer,
+            &self.device.kernels,
+            name,
+            (b, m, n, k),
+            &lhs_l.stride(),
+            lhs_l.start_offset(),
+            &self.buffer,
+            &rhs_l.stride(),
+            rhs_l.start_offset(),
+            &rhs.buffer,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+        // Create kernel
         drop(command_buffer);
         self.device.commit();
 
-        Ok(Self::new(out_buffer, self.device.clone(), self.dtype()))
+        Ok(Self::new(buffer, self.device.clone(), self.dtype()))
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
