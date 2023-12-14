@@ -303,7 +303,10 @@ fn main() -> Result<()> {
     } else {
         let device = candle_examples::device(args.cpu)?;
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
-        let model = MixFormer::new(&config, vb)?;
+        let model = match args.model {
+            WhichModel::V2 => MixFormer::new_v2(&config, vb)?,
+            _ => MixFormer::new(&config, vb)?,
+        };
         (Model::MixFormer(model), device)
     };
     println!("loaded the model in {:?}", start.elapsed());
