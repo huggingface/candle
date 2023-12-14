@@ -57,6 +57,22 @@ impl Config {
         }
     }
 
+    pub fn v2() -> Self {
+        Self {
+            vocab_size: 51200,
+            n_positions: 2048,
+            n_embd: 2560,
+            n_layer: 32,
+            n_inner: None,
+            n_head: 32,
+            rotary_dim: usize::min(32, 2560 / 32),
+            activation_function: Activation::Gelu,
+            layer_norm_epsilon: 1e-5,
+            tie_word_embeddings: false,
+            pad_vocab_size_multiple: 64,
+        }
+    }
+
     // https://huggingface.co/teknium/Puffin-Phi-v2/blob/main/config.json
     pub fn puffin_phi_v2() -> Self {
         Self {
