@@ -14,6 +14,7 @@ pub mod llama2_c_weights;
 pub mod marian;
 pub mod mistral;
 pub mod mixformer;
+pub mod mixtral;
 pub mod mpt;
 pub mod persimmon;
 pub mod quantized_blip;
