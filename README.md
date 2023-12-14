@@ -54,7 +54,7 @@ These online demos run entirely in your browser:
 - [whisper](https://huggingface.co/spaces/lmz/candle-whisper): speech recognition.
 - [LLaMA2](https://huggingface.co/spaces/lmz/candle-llama2): text generation.
 - [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm): text generation.
-- [Phi-v1.5](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm): text generation.
+- [Phi-1.5, and Phi-2](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm): text generation.
 - [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm): Image segmentation.
 - [BLIP](https://huggingface.co/spaces/radames/Candle-BLIP-Image-Captioning): image captioning.
 
@@ -62,7 +62,7 @@ We also provide a some command line based examples using state of the art models
 
 - [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
-- [Phi-v1 and Phi-v1.5](./candle-examples/examples/phi/): a 1.3b general LLM with performance on par with LLaMA-v2 7b.
+- [Phi-1, Phi-1.5, and Phi-2](./candle-examples/examples/phi/): 1.3b and 2.7b general LLMs with performance on par with LLaMA-v2 7b.
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
   pre-trained on 1T tokens of English and code datasets.
 - [Mistral7b-v0.1](./candle-examples/examples/mistral/): a 7b general LLM with
@@ -122,7 +122,7 @@ There are also some wasm examples for whisper and
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
 [llama2](https://huggingface.co/spaces/lmz/candle-llama2),
 [T5](https://huggingface.co/spaces/radames/Candle-T5-Generation-Wasm),
-[Phi-v1.5](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm),
+[Phi-1.5, and Phi-2](https://huggingface.co/spaces/radames/Candle-Phi-1.5-Wasm),
 [Segment Anything Model](https://huggingface.co/spaces/radames/candle-segment-anything-wasm).
 
 For LLaMA2, run the following command to retrieve the weight files and start a
@@ -171,7 +171,7 @@ If you have an addition to this list, please submit a pull request.
         - LLaMA v1 and v2.
         - Falcon.
         - StarCoder.
-        - Phi v1.5.
+        - Phi 1, 1.5, and 2.
         - Mistral 7b v0.1.
         - StableLM-3B-4E1T.
         - Replit-code-v1.5-3B.
