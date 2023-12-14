@@ -1,14 +1,36 @@
-# candle-phi: 1.3b LLM with state of the art performance for <10b models.
+# candle-phi: 1.3b and 2.7b LLM with state of the art performance for <10b models.
 
-[Phi-1.5](https://huggingface.co/microsoft/phi-1_5) is a language model using
-only 1.3 billion parameters but with state of the art performance compared to
+[Phi-1.5](https://huggingface.co/microsoft/phi-1_5) and
+[Phi-2](https://huggingface.co/microsoft/phi-2) are language models using
+only 1.3 and 2.7 billion parameters but with state of the art performance compared to
 models with up to 10 billion parameters.
 
 The candle implementation provides both the standard version as well as a
 quantized variant.
 
-## Running some example
+## Running some examples
 
+For the v2 version.
+```bash
+$ cargo run --example phi --release cuda -- --prompt "def print_prime(n): " --model 2
+def print_prime(n):
+    if n <= 1:
+        print("Not a prime number")
+    else:
+        for i in range(2, int(n**0.5)+1):
+            if (n % i) == 0:
+                print("Not a prime number")
+                break
+        else:
+            print("Prime number")
+
+
+# Driver code
+n = 17
+print_prime(n)
+```
+
+For the v1.5 version.
 ```bash
 $ cargo run --example phi --release -- --prompt "def print_prime(n): "
 
