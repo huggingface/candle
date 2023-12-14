@@ -125,6 +125,8 @@ enum WhichModel {
     V1_5,
     PuffinPhiV2,
     PhiHermes,
+    #[value(name = "2")]
+    V2,
 }
 
 #[derive(Parser, Debug)]
@@ -228,6 +230,7 @@ fn main() -> Result<()> {
                     WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => {
                         "lmz/candle-quantized-phi".to_string()
                     }
+                    WhichModel::V2 => "SkunkworksAI/phi-2".to_string(),
                 }
             }
         }
@@ -241,6 +244,7 @@ fn main() -> Result<()> {
                 match args.model {
                     WhichModel::V1 => "refs/pr/2".to_string(),
                     WhichModel::V1_5 => "refs/pr/18".to_string(),
+                    WhichModel::V2 => "refs/pr/9".to_string(),
                     WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => "main".to_string(),
                 }
             }
@@ -250,27 +254,32 @@ fn main() -> Result<()> {
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => match args.model {
-            WhichModel::V1 | WhichModel::V1_5 => repo.get("tokenizer.json")?,
+            WhichModel::V1 | WhichModel::V1_5 | WhichModel::V2 => repo.get("tokenizer.json")?,
             WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => {
                 repo.get("tokenizer-puffin-phi-v2.json")?
             }
         },
     };
-    let filename = match args.weight_file {
-        Some(weight_file) => std::path::PathBuf::from(weight_file),
+    let filenames = match args.weight_file {
+        Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
         None => {
             if args.quantized {
                 match args.model {
-                    WhichModel::V1 => repo.get("model-v1-q4k.gguf")?,
-                    WhichModel::V1_5 => repo.get("model-q4k.gguf")?,
-                    WhichModel::PuffinPhiV2 => repo.get("model-puffin-phi-v2-q4k.gguf")?,
-                    WhichModel::PhiHermes => repo.get("model-phi-hermes-1_3B-q4k.gguf")?,
+                    WhichModel::V1 => vec![repo.get("model-v1-q4k.gguf")?],
+                    WhichModel::V1_5 => vec![repo.get("model-q4k.gguf")?],
+                    WhichModel::PuffinPhiV2 => vec![repo.get("model-puffin-phi-v2-q4k.gguf")?],
+                    WhichModel::PhiHermes => vec![repo.get("model-phi-hermes-1_3B-q4k.gguf")?],
+                    WhichModel::V2 => vec![repo.get("model-v2-q4k.gguf")?],
                 }
             } else {
                 match args.model {
-                    WhichModel::V1 | WhichModel::V1_5 => repo.get("model.safetensors")?,
-                    WhichModel::PuffinPhiV2 => repo.get("model-puffin-phi-v2.safetensors")?,
-                    WhichModel::PhiHermes => repo.get("model-phi-hermes-1_3B.safetensors")?,
+                    WhichModel::V1 | WhichModel::V1_5 => vec![repo.get("model.safetensors")?],
+                    WhichModel::PuffinPhiV2 => vec![repo.get("model-puffin-phi-v2.safetensors")?],
+                    WhichModel::PhiHermes => vec![repo.get("model-phi-hermes-1_3B.safetensors")?],
+                    WhichModel::V2 => vec![
+                        repo.get("model-00001-of-00002.safetensors")?,
+                        repo.get("model-00002-of-00002.safetensors")?,
+                    ],
                 }
             }
         }
@@ -282,16 +291,22 @@ fn main() -> Result<()> {
     let config = match args.model {
         WhichModel::V1 => Config::v1(),
         WhichModel::V1_5 => Config::v1_5(),
+        WhichModel::V2 => Config::v2(),
         WhichModel::PuffinPhiV2 => Config::puffin_phi_v2(),
         WhichModel::PhiHermes => Config::phi_hermes_1_3b(),
     };
     let (model, device) = if args.quantized {
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename)?;
+        if filenames.len() != 1 {
+            anyhow::bail!("quantized models must have a single weight file")
+        }
+        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filenames[0])?;
         let model = QMixFormer::new(&config, vb)?;
         (Model::Quantized(model), Device::Cpu)
     } else {
         let device = candle_examples::device(args.cpu)?;
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[filename], DType::F32, &device)? };
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(filenames.as_slice(), DType::F32, &device)?
+        };
         let model = MixFormer::new(&config, vb)?;
         (Model::MixFormer(model), device)
     };

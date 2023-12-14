@@ -1,11 +1,17 @@
-# candle-phi: 1.3b LLM with state of the art performance for <10b models.
+# candle-phi: 1.3b LLM with state of the art performance for <10b models
 
 [Phi-1.5](https://huggingface.co/microsoft/phi-1_5) is a language model using
 only 1.3 billion parameters but with state of the art performance compared to
 models with up to 10 billion parameters.
 
+[Phi-2](https://www.microsoft.com/en-us/research/blog/phi-2-the-surprising-power-of-small-language-models/) is
+a 2.7 billion-parameter with state-of-the-art performance among base language models with less than 13 billion parameters. On complex benchmarks Phi-2 matches or outperforms models up to 25x larger.
+
 The candle implementation provides both the standard version as well as a
 quantized variant.
+
+By default, we run the Phi-1.5 model. To run the Phi-2 model, use the
+`--model 2` flag.
 
 ## Running some example
 
@@ -44,6 +50,7 @@ def median(arr):
 
 This also supports the [Puffin Phi v2
 model](https://huggingface.co/teknium/Puffin-Phi-v2) for human interaction.
+
 ```
 $ cargo run --example phi --release  -- \
     --prompt "USER: What would you do on a sunny day in Paris?\nASSISTANT:" \
