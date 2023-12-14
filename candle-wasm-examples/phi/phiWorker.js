@@ -12,6 +12,20 @@ async function fetchArrayBuffer(url) {
   cache.put(url, res.clone());
   return new Uint8Array(await res.arrayBuffer());
 }
+async function concatenateArrayBuffers(urls) {
+  const arrayBuffers = await Promise.all(urls.map(url => fetchArrayBuffer(url)));
+
+  let totalLength = arrayBuffers.reduce((acc, arrayBuffer) => acc + arrayBuffer.byteLength, 0);
+  let concatenatedBuffer = new Uint8Array(totalLength);
+
+  let offset = 0;
+  arrayBuffers.forEach(buffer => {
+    concatenatedBuffer.set(new Uint8Array(buffer), offset);
+    offset += buffer.byteLength;
+  });
+  return concatenatedBuffer;
+}
+
 class Phi {
   static instance = {};
 
@@ -27,10 +41,9 @@ class Phi {
       await init();
 
       self.postMessage({ status: "loading", message: "Loading Model" });
-
       const [weightsArrayU8, tokenizerArrayU8, configArrayU8] =
         await Promise.all([
-          fetchArrayBuffer(weightsURL),
+          weightsURL instanceof Array ? concatenateArrayBuffers(weightsURL) : fetchArrayBuffer(weightsURL),
           fetchArrayBuffer(tokenizerURL),
           fetchArrayBuffer(configURL),
         ]);
