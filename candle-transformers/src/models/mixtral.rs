@@ -306,8 +306,35 @@ impl SparseMoeBlock {
 }
 
 impl Module for SparseMoeBlock {
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+        let xs = xs.reshape(((), hidden_dim))?;
+        let router_logits = xs.apply(&self.gate)?;
+        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        // TODO: extract topk
+        // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+        // routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+        // expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+
+        let mut ys = xs.zeros_like()?;
+        for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
+            // idx, top_x = torch.where(expert_mask[expert_idx])
+            // if top_x.shape[0] == 0:
+            //    continue
+            let top_x = xs.zeros_like()?; // TODO
+
+            // Index the correct hidden states and compute the expert hidden state for
+            // the current expert. We need to make sure to multiply the output hidden
+            // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+            let current_state = xs.index_select(&top_x, 1)?.reshape(((), hidden_dim))?;
+            // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
+            let current_hidden_states = expert_layer.forward(&current_state, &routing_weights)?;
+
+            ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
+        }
+
+        let xs = xs.reshape((b_size, seq_len, hidden_dim))?;
+        Ok(xs)
     }
 }
 
