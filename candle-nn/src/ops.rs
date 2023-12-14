@@ -238,8 +238,6 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             &mut output,
         )
         .unwrap();
-        command_buffer.commit();
-        output.did_modify_range(metal::NSRange::new(0, output.length()));
         let newstorage = candle::MetalStorage::new(output, device.clone(), storage.dtype());
         Ok((newstorage, layout.shape().clone()))
     }
