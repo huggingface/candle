@@ -268,7 +268,7 @@ fn main() -> Result<()> {
                 match args.model {
                     WhichModel::V1 => vec![repo.get("model-v1-q4k.gguf")?],
                     WhichModel::V1_5 => vec![repo.get("model-q4k.gguf")?],
-                    WhichModel::V2 => anyhow::bail!("phi-2 is not supported in quantized mode"),
+                    WhichModel::V2 => vec![repo.get("model-v2-q4k.gguf")?],
                     WhichModel::PuffinPhiV2 => vec![repo.get("model-puffin-phi-v2-q4k.gguf")?],
                     WhichModel::PhiHermes => vec![repo.get("model-phi-hermes-1_3B-q4k.gguf")?],
                 }
@@ -298,7 +298,10 @@ fn main() -> Result<()> {
     };
     let (model, device) = if args.quantized {
         let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filenames[0])?;
-        let model = QMixFormer::new(&config, vb)?;
+        let model = match args.model {
+            WhichModel::V2 => QMixFormer::new_v2(&config, vb)?,
+            _ => QMixFormer::new(&config, vb)?,
+        };
         (Model::Quantized(model), Device::Cpu)
     } else {
         let device = candle_examples::device(args.cpu)?;
