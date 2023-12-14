@@ -32,7 +32,7 @@ kernel void NAME( \
     uint block_dim [[ threads_per_threadgroup ]] \
 ) { \
      \
-   threadgroup float shared_memory[THREADGROUP_SIZE]; \
+   threadgroup T shared_memory[THREADGROUP_SIZE]; \
       \
    shared_memory[tid] = 0; \
    /* \
@@ -67,6 +67,7 @@ kernel void NAME( \
        threadgroup_barrier(mem_flags::mem_none); \
    } \
     \
+   threadgroup_barrier(mem_flags::mem_none); \
    dst[dst_id] = shared_memory[0]; \
 } \
 
@@ -95,10 +96,12 @@ kernel void NAME(                                                               
                                                                                   \
     threadgroup_barrier(mem_flags::mem_threadgroup);                              \
                                                                                   \
+    float tmp = 0; \
     while (idx < stop_idx) {                                                      \
-        shared_memory[tid] = MAX(shared_memory[tid], src[idx]);                   \
+        tmp = MAX(tmp, src[idx]);                   \
         idx += block_dim;                                                         \
     }                                                                             \
+    shared_memory[tid] = tmp; \
                                                                                   \
     threadgroup_barrier(mem_flags::mem_threadgroup);                              \
                                                                                   \
@@ -112,12 +115,13 @@ kernel void NAME(                                                               
                                                                                   \
     float _max = shared_memory[0];                                                    \
                                                                                   \
+    threadgroup_barrier(mem_flags::mem_threadgroup);                              \
     shared_memory[tid] = 0;                                                       \
                                                                                   \
     idx = start_idx + tid;                                                        \
     while (idx < stop_idx) {                                                      \
-        const T val = T(exp(src[idx] - _max));                                    \
-        dst[idx] = val;                                                           \
+        const float val = exp(float(src[idx]) - _max);                                    \
+        dst[idx] = T(val);                                                           \
         shared_memory[tid] += val;                                                \
         idx += block_dim;                                                         \
     }                                                                             \
@@ -125,10 +129,9 @@ kernel void NAME(                                                               
         if (tid < s) {                                                            \
             shared_memory[tid] += shared_memory[tid + s];                         \
         }                                                                         \
-        threadgroup_barrier(mem_flags::mem_threadgroup);                          \
     }                                                                             \
                                                                                   \
-    const T inv_acc = T(1/shared_memory[0]);                                         \
+    const T inv_acc = T(1.0/shared_memory[0]);                                         \
     idx = start_idx + tid;                                                        \
     while (idx < stop_idx) {                                                      \
         dst[idx] *= inv_acc;                                                      \

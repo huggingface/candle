@@ -126,7 +126,7 @@ impl MetalDevice {
         }
         let new_buffer = self.device.new_buffer(size as NSUInteger, option);
         let new_buffer = Arc::new(new_buffer);
-        // subbuffers.push(new_buffer.clone());
+        subbuffers.push(new_buffer.clone());
         // println!("Created tensor {size} {name}");
         for subbuffers in buffers.values_mut() {
             let newbuffers = subbuffers
