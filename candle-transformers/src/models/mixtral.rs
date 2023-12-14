@@ -285,3 +285,156 @@ impl BlockSparseTop2MLP {
         (lhs * rhs)?.apply(&self.w3)? * routing_weights
     }
 }
+
+#[derive(Debug, Clone)]
+struct SparseMoeBlock {
+    gate: Linear,
+    experts: Vec<BlockSparseTop2MLP>,
+}
+
+impl SparseMoeBlock {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let gate = linear_no_bias(cfg.hidden_size, cfg.num_local_experts, vb.pp("gate"))?;
+        let mut experts = Vec::with_capacity(cfg.num_local_experts);
+        let vb = vb.pp("experts");
+        for idx in 0..cfg.num_local_experts {
+            let expert = BlockSparseTop2MLP::new(cfg, vb.pp(idx))?;
+            experts.push(expert)
+        }
+        Ok(SparseMoeBlock { gate, experts })
+    }
+}
+
+impl Module for SparseMoeBlock {
+    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DecoderLayer {
+    self_attn: Attention,
+    block_sparse_moe: SparseMoeBlock,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
+}
+
+impl DecoderLayer {
+    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
+        let block_sparse_moe = SparseMoeBlock::new(cfg, vb.pp("block_sparse_moe"))?;
+        let input_layernorm =
+            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let post_attention_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb.pp("post_attention_layernorm"),
+        )?;
+        Ok(Self {
+            self_attn,
+            block_sparse_moe,
+            input_layernorm,
+            post_attention_layernorm,
+        })
+    }
+
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        attention_mask: Option<&Tensor>,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        let residual = xs;
+        let xs = self.input_layernorm.forward(xs)?;
+        let xs = self.self_attn.forward(&xs, attention_mask, seqlen_offset)?;
+        let xs = (xs + residual)?;
+        let residual = &xs;
+        let xs = xs
+            .apply(&self.post_attention_layernorm)?
+            .apply(&self.block_sparse_moe)?;
+        residual + xs
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Model {
+    embed_tokens: candle_nn::Embedding,
+    layers: Vec<DecoderLayer>,
+    norm: RmsNorm,
+    lm_head: Linear,
+    sliding_window: usize,
+    device: Device,
+    dtype: DType,
+}
+
+impl Model {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let vb_m = vb.pp("model");
+        let embed_tokens =
+            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        let vb_l = vb_m.pp("layers");
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            layers.push(layer)
+        }
+        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        Ok(Self {
+            embed_tokens,
+            layers,
+            norm,
+            lm_head,
+            sliding_window: cfg.sliding_window,
+            device: vb.device().clone(),
+            dtype: vb.dtype(),
+        })
+    }
+
+    fn prepare_decoder_attention_mask(
+        &self,
+        b_size: usize,
+        tgt_len: usize,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        // Sliding window mask?
+        let mask: Vec<_> = (0..tgt_len)
+            .flat_map(|i| {
+                (0..tgt_len).map(move |j| {
+                    if i < j || j + self.sliding_window < i {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.
+                    }
+                })
+            })
+            .collect();
+        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
+        let mask = if seqlen_offset > 0 {
+            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
+            Tensor::cat(&[&mask0, &mask], D::Minus1)?
+        } else {
+            mask
+        };
+        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
+            .to_dtype(self.dtype)
+    }
+
+    pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        let (b_size, seq_len) = input_ids.dims2()?;
+        let attention_mask = if seq_len <= 1 {
+            None
+        } else {
+            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
+            Some(mask)
+        };
+        let mut xs = self.embed_tokens.forward(input_ids)?;
+        for layer in self.layers.iter_mut() {
+            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
+        }
+        xs.narrow(1, seq_len - 1, 1)?
+            .apply(&self.norm)?
+            .apply(&self.lm_head)
+    }
+}
