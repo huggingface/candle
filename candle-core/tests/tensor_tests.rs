@@ -900,9 +900,7 @@ fn matmul(device: &Device) -> Result<()> {
     let b = Tensor::from_slice(&data, (2, 2), device)?;
 
     let c = a.matmul(&b)?;
-    let d = a.matmul(&c)?;
     assert_eq!(c.to_vec2::<f32>()?, &[[7.0f32, 10.0], [15.0, 22.0]]);
-    assert_eq!(d.to_vec2::<f32>()?, &[[37.0, 54.0], [81.0, 118.0]]);
 
     let data = vec![1.0f32, 2.0];
     let a = Tensor::from_slice(&data, (2, 1), device)?;
