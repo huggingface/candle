@@ -312,7 +312,7 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
         &device,
         command_buffer,
         &kernels,
-        "affine_float",
+        "affine_f32",
         size,
         &input,
         &output,
@@ -346,7 +346,7 @@ fn run_affine_strided<T: Clone>(
         &device,
         command_buffer,
         &kernels,
-        "affine_float_strided",
+        "affine_f32_strided",
         shape,
         &input,
         strides,
@@ -608,6 +608,7 @@ fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'sta
         v.len(),
         last_dim,
         &input,
+        0,
         &output,
     )
     .unwrap();
@@ -622,7 +623,7 @@ fn reduce_sum() {
     let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
     let out_length = 1;
 
-    let results = run_reduce(&v, out_length, "fast_sum_float");
+    let results = run_reduce(&v, out_length, "fast_sum_f32");
     assert_eq!(approx(results, 4), vec![21.0]);
 }
 
@@ -631,7 +632,7 @@ fn reduce_sum2() {
     let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
     let out_length = 2;
 
-    let results = run_reduce(&v, out_length, "fast_sum_float");
+    let results = run_reduce(&v, out_length, "fast_sum_f32");
     assert_eq!(approx(results, 4), vec![6.0, 15.0]);
 }
 
@@ -639,7 +640,7 @@ fn reduce_sum2() {
 fn softmax() {
     let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
     let last_dim = 6;
-    let results = run_softmax(&v, last_dim, "softmax_float");
+    let results = run_softmax(&v, last_dim, "softmax_f32");
     assert_eq!(
         approx(results, 4),
         vec![0.0043, 0.0116, 0.0315, 0.0858, 0.2331, 0.6337]
@@ -651,7 +652,7 @@ fn softmax() {
     for i in 0..n {
         v[i * last_dim] = 20.0;
     }
-    let results = run_softmax(&v, last_dim, "softmax_float");
+    let results = run_softmax(&v, last_dim, "softmax_f32");
     let results = approx(results, 4);
     println!("{results:?}");
     assert_eq!(
@@ -665,7 +666,7 @@ fn softmax() {
 
     let v = vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0];
     let last_dim = 6;
-    let results = run_softmax(&v, last_dim, "softmax_float");
+    let results = run_softmax(&v, last_dim, "softmax_f32");
     assert_eq!(
         approx(results, 4),
         vec![0.0043, 0.0116, 0.0315, 0.0858, 0.2331, 0.6337]
@@ -673,7 +674,7 @@ fn softmax() {
 
     let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
     let last_dim = 3;
-    let results = run_softmax(&v, last_dim, "softmax_float");
+    let results = run_softmax(&v, last_dim, "softmax_f32");
     assert_eq!(
         approx(results, 4),
         vec![0.0900, 0.2447, 0.6652, 0.0900, 0.2447, 0.6652]
@@ -684,7 +685,7 @@ fn softmax() {
         .map(|v| f16::from_f32(*v))
         .collect::<Vec<_>>();
     let last_dim = 6;
-    let results = run_softmax(&v, last_dim, "softmax_half");
+    let results = run_softmax(&v, last_dim, "softmax_f16");
     assert_eq!(
         approx_f16(results, 4),
         vec![0.0043, 0.0116, 0.0316, 0.0858, 0.2332, 0.6338]
@@ -695,7 +696,7 @@ fn softmax() {
         .map(|v| bf16::from_f32(*v))
         .collect::<Vec<_>>();
     let last_dim = 6;
-    let results = run_softmax(&v, last_dim, "softmax_bfloat");
+    let results = run_softmax(&v, last_dim, "softmax_bf16");
     assert_eq!(
         approx_bf16(results, 4),
         vec![0.0043, 0.0116, 0.0315, 0.0859, 0.2324, 0.6328]
