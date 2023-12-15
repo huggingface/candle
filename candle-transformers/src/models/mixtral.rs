@@ -278,11 +278,13 @@ impl BlockSparseTop2MLP {
             act_fn: cfg.hidden_act,
         })
     }
+}
 
-    fn forward(&self, xs: &Tensor, routing_weights: &Tensor) -> Result<Tensor> {
+impl Module for BlockSparseTop2MLP {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let lhs = xs.apply(&self.w1)?.apply(&self.act_fn)?;
         let rhs = xs.apply(&self.w3)?;
-        (lhs * rhs)?.apply(&self.w3)? * routing_weights
+        (lhs * rhs)?.apply(&self.w3)
     }
 }
 
@@ -290,6 +292,7 @@ impl BlockSparseTop2MLP {
 struct SparseMoeBlock {
     gate: Linear,
     experts: Vec<BlockSparseTop2MLP>,
+    num_experts_per_tok: usize,
 }
 
 impl SparseMoeBlock {
@@ -301,7 +304,11 @@ impl SparseMoeBlock {
             let expert = BlockSparseTop2MLP::new(cfg, vb.pp(idx))?;
             experts.push(expert)
         }
-        Ok(SparseMoeBlock { gate, experts })
+        Ok(SparseMoeBlock {
+            gate,
+            experts,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+        })
     }
 }
 
@@ -311,24 +318,40 @@ impl Module for SparseMoeBlock {
         let xs = xs.reshape(((), hidden_dim))?;
         let router_logits = xs.apply(&self.gate)?;
         let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
-        // TODO: extract topk
+
+        // In order to extract topk, we extract the data from the tensor and manipulate it
+        // directly. Maybe we will want to use some custom ops instead at some point.
+        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+
         // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+        let mut top_k = Vec::with_capacity(routing_weights.len());
+        let mut top_x = vec![vec![]; self.experts.len()];
+        for (row_idx, rw) in routing_weights.iter().enumerate() {
+            let mut dst = (0..rw.len() as u32).collect::<Vec<u32>>();
+            dst.sort_by(|&i, &j| rw[j as usize].total_cmp(&rw[i as usize]));
+            dst.truncate(self.num_experts_per_tok);
+            for expert_idx in dst.iter() {
+                top_x[*expert_idx as usize].push(row_idx as u32)
+            }
+            top_k.push(dst);
+        }
+
         // routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         // expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
 
         let mut ys = xs.zeros_like()?;
         for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
-            // idx, top_x = torch.where(expert_mask[expert_idx])
-            // if top_x.shape[0] == 0:
-            //    continue
-            let top_x = xs.zeros_like()?; // TODO
-
+            let top_x = &top_x[expert_idx];
+            if top_x.is_empty() {
+                continue;
+            }
+            let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
             // Index the correct hidden states and compute the expert hidden state for
             // the current expert. We need to make sure to multiply the output hidden
             // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-            let current_state = xs.index_select(&top_x, 1)?.reshape(((), hidden_dim))?;
+            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
             // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
-            let current_hidden_states = expert_layer.forward(&current_state, &routing_weights)?;
+            let current_hidden_states = expert_layer.forward(&current_state)?;
 
             ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
         }
