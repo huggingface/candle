@@ -12,7 +12,7 @@ quantized variant.
 
 For the v2 version.
 ```bash
-$ cargo run --example phi --release cuda -- --prompt "def print_prime(n): " --model 2
+$ cargo run --example phi --release -- --prompt "def print_prime(n): " --model 2
 def print_prime(n):
     if n <= 1:
         print("Not a prime number")
