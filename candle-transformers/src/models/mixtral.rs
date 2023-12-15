@@ -29,7 +29,7 @@ pub struct Config {
 
 impl Config {
     /// https://huggingface.co/mistralai/Mixtral-8x7B-v0.1/blob/main/config.json
-    pub fn v0_1_8x7b() -> Self {
+    pub fn v0_1_8x7b(use_flash_attn: bool) -> Self {
         Self {
             vocab_size: 32000,
             hidden_size: 4096,
@@ -44,7 +44,7 @@ impl Config {
             sliding_window: 4096,
             num_experts_per_tok: 2,
             num_local_experts: 8,
-            use_flash_attn: false,
+            use_flash_attn,
         }
     }
 }
