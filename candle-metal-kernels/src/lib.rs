@@ -243,9 +243,11 @@ impl Kernels {
             let lib = match source {
                 Source::Mfa => {
                     let source_data = MFA;
-                    device
-                        .new_library_with_data(source_data)
-                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+                    device.new_library_with_data(source_data).map_err(|e| {
+                        MetalKernelError::LoadLibraryError(format!(
+                            "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
+                        ))
+                    })?
                 }
                 source => {
                     let source_content = self.get_library_source(source);
