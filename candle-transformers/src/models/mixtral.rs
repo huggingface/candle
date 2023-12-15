@@ -284,7 +284,7 @@ impl Module for BlockSparseTop2MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let lhs = xs.apply(&self.w1)?.apply(&self.act_fn)?;
         let rhs = xs.apply(&self.w3)?;
-        (lhs * rhs)?.apply(&self.w3)
+        (lhs * rhs)?.apply(&self.w2)
     }
 }
 
