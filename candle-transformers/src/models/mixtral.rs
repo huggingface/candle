@@ -89,7 +89,7 @@ impl RotaryEmbedding {
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / 10000f32.powf(i as f32 / dim as f32))
+            .map(|i| 1f32 / (cfg.rope_theta as f32).powf(i as f32 / dim as f32))
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
