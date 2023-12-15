@@ -87,11 +87,11 @@ kernel void FN_NAME_STRIDED( \
 }
 
 #define UNARY_OP(NAME) \
-UNARY(NAME, float, NAME##_float, NAME##_float_strided); \
-UNARY(NAME, half, NAME##_half, NAME##_half_strided);
+UNARY(NAME, float, NAME##_f32, NAME##_f32_strided); \
+UNARY(NAME, half, NAME##_f16, NAME##_f16_strided);
 
 #define BFLOAT_UNARY_OP(NAME) \
-UNARY(NAME, bfloat, NAME##_bfloat, NAME##_bfloat_strided);
+UNARY(NAME, bfloat, NAME##_bf16, NAME##_bf16_strided);
 
 
 UNARY_OP(cos)
@@ -108,8 +108,8 @@ UNARY_OP(round)
 UNARY_OP(gelu_erf)
 UNARY_OP(erf)
 UNARY_OP(tanh)
-UNARY(id, float, copy_float, copy_float_strided)
-UNARY(id, half, copy_half, copy_half_strided)
+UNARY(id, float, copy_f32, copy_f32_strided)
+UNARY(id, half, copy_f16, copy_f16_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
 UNARY(id, uint32_t, copy_u32, copy_u32_strided)
 
@@ -129,5 +129,5 @@ BFLOAT_UNARY_OP(gelu_erf)
 BFLOAT_UNARY_OP(erf)
 BFLOAT_UNARY_OP(tanh)
 
-UNARY(id, bfloat, copy_bfloat, copy_bfloat_strided)
+UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
 #endif

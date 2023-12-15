@@ -109,16 +109,16 @@ kernel void FN_NAME##_strided( \
 } \
 
 
-AFFINE(affine_float, float)
-AFFINE(affine_half, half)
-POWF(powf_float, float)
-POWF(powf_half, half)
-ELU(elu_float, float)
-ELU(elu_half, half)
+AFFINE(affine_f32, float)
+AFFINE(affine_f16, half)
+POWF(powf_f32, float)
+POWF(powf_f16, half)
+ELU(elu_f32, float)
+ELU(elu_f16, half)
 
 
 #if __METAL_VERSION__ >= 310
-AFFINE(affine_bfloat, bfloat);
-POWF(powf_bfloat, bfloat);
-ELU(elu_bfloat, bfloat);
+AFFINE(affine_bf16, bfloat);
+POWF(powf_bf16, bfloat);
+ELU(elu_bf16, bfloat);
 #endif

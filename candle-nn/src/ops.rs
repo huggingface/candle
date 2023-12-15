@@ -213,9 +213,9 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         let command_buffer = device.command_buffer();
         let kernels = device.kernels();
         let name = match storage.dtype() {
-            DType::F32 => "softmax_float",
-            DType::F16 => "softmax_half",
-            DType::BF16 => "softmax_bfloat",
+            DType::F32 => "softmax_f32",
+            DType::F16 => "softmax_f16",
+            DType::BF16 => "softmax_bf16",
             dtype => candle::bail!("softmax-last-dim is not implemented for {dtype:?}"),
         };
 

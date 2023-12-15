@@ -71,9 +71,9 @@ kernel void NAME( \
 } \
 
 
-REDUCE(x + y, fast_sum_float, float)
-REDUCE(x * y, fast_mul_float, float)
-REDUCE(max(x, y), fast_max_float, float)
+REDUCE(x + y, fast_sum_f32, float)
+REDUCE(x * y, fast_mul_f32, float)
+REDUCE(max(x, y), fast_max_f32, float)
 
 #define SOFTMAX(NAME, T)                                                          \
 kernel void NAME(                                                                 \
@@ -142,8 +142,8 @@ kernel void NAME(                                                               
     }                                                                             \
 }                                                                                 \
 
-SOFTMAX(softmax_float, float)
-SOFTMAX(softmax_half, half)
+SOFTMAX(softmax_f32, float)
+SOFTMAX(softmax_f16, half)
 #if __METAL_VERSION__ >= 310
-SOFTMAX(softmax_bfloat, bfloat)
+SOFTMAX(softmax_bf16, bfloat)
 #endif

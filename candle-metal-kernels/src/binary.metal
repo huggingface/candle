@@ -52,11 +52,11 @@ kernel void FN_NAME_STRIDED( \
 }
 
 #define BINARY_OP(FN, NAME) \
-BINARY(FN, float, float, NAME##_float, NAME##_float_strided); \
-BINARY(FN, half, half, NAME##_half, NAME##_half_strided);
+BINARY(FN, float, float, NAME##_f32, NAME##_f32_strided); \
+BINARY(FN, half, half, NAME##_f16, NAME##_f16_strided);
 
 #define BFLOAT_BINARY_OP(FN, NAME) \
-BINARY(FN, bfloat, bfloat, NAME##_bfloat, NAME##_bfloat_strided);
+BINARY(FN, bfloat, bfloat, NAME##_bf16, NAME##_bf16_strided);
 
 
 BINARY_OP(x + y, add)
