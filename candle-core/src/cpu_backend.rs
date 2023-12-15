@@ -2153,7 +2153,7 @@ impl BackendStorage for CpuStorage {
         }
     }
 
-    fn reduce_op(&self, op: ReduceOp, layout: &Layout, reduce_dims: &[usize]) -> Result<Self> {
+    fn reduce(&self, op: ReduceOp, layout: &Layout, reduce_dims: &[usize]) -> Result<Self> {
         match op {
             ReduceOp::Sum => {
                 let src_dims = layout.dims();
@@ -2649,8 +2649,8 @@ impl BackendStorage for CpuStorage {
         MatMul(bmnk).map(self, lhs_l, rhs, rhs_l)
     }
 
-    fn device(&self) -> &Self::Device {
-        &CpuDevice
+    fn device(&self) -> Self::Device {
+        CpuDevice
     }
 
     fn try_clone(&self, _: &Layout) -> Result<Self> {
@@ -2664,10 +2664,9 @@ impl BackendStorage for CpuStorage {
 
 impl BackendDevice for CpuDevice {
     type Storage = CpuStorage;
+    type Location = ();
 
-    fn location(&self) -> crate::DeviceLocation {
-        crate::DeviceLocation::Cpu
-    }
+    fn location(&self) -> Self::Location {}
 
     fn same_device(&self, _: &Self) -> bool {
         true
@@ -2677,15 +2676,17 @@ impl BackendDevice for CpuDevice {
         Ok(s.clone())
     }
 
-    fn new(_: usize) -> Result<Self> {
-        Ok(Self)
-    }
-
     fn set_seed(&self, _seed: u64) -> Result<()> {
         crate::bail!("cannot seed the CPU rng with set_seed")
     }
 
-    fn rand_uniform(&self, shape: &Shape, dtype: DType, min: f64, max: f64) -> Result<CpuStorage> {
+    fn rand_uniform_f64(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        min: f64,
+        max: f64,
+    ) -> Result<CpuStorage> {
         use rand::prelude::*;
 
         let elem_count = shape.elem_count();
@@ -2731,7 +2732,13 @@ impl BackendDevice for CpuDevice {
         }
     }
 
-    fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<CpuStorage> {
+    fn rand_normal_f64(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        mean: f64,
+        std: f64,
+    ) -> Result<CpuStorage> {
         use rand::prelude::*;
 
         let elem_count = shape.elem_count();

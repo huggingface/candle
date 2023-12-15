@@ -319,7 +319,7 @@ pub trait CustomOp3 {
     }
 }
 
-pub trait UnaryOpT {
+pub trait UnaryOpT: 'static + Send + Sync {
     const NAME: &'static str;
     const KERNEL: &'static str;
     const V: Self;
@@ -343,7 +343,7 @@ pub trait UnaryOpT {
     fn f64_vec(_xs: &[f64], _ys: &mut [f64]) {}
 }
 
-pub trait BinaryOpT {
+pub trait BinaryOpT: 'static + Send + Sync {
     const NAME: &'static str;
     const KERNEL: &'static str;
     const V: Self;

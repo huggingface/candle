@@ -111,6 +111,18 @@ impl<O, E: Into<CudaError>> WrapErr<O> for std::result::Result<O, E> {
 }
 
 impl CudaDevice {
+    pub fn new(ordinal: usize) -> Result<Self> {
+        let device = cudarc::driver::CudaDevice::new(ordinal).w()?;
+        let blas = cudarc::cublas::CudaBlas::new(device.clone()).w()?;
+        let curand = cudarc::curand::CudaRng::new(299792458, device.clone()).w()?;
+        Ok(Self {
+            id: DeviceId::new(),
+            device,
+            blas: Arc::new(blas),
+            curand: Arc::new(Mutex::new(CudaRng(curand))),
+        })
+    }
+
     pub fn cuda_device(&self) -> Arc<cudarc::driver::CudaDevice> {
         self.device.clone()
     }
@@ -210,18 +222,7 @@ impl CudaDevice {
 
 impl BackendDevice for CudaDevice {
     type Storage = CudaStorage;
-
-    fn new(ordinal: usize) -> Result<Self> {
-        let device = cudarc::driver::CudaDevice::new(ordinal).w()?;
-        let blas = cudarc::cublas::CudaBlas::new(device.clone()).w()?;
-        let curand = cudarc::curand::CudaRng::new(299792458, device.clone()).w()?;
-        Ok(Self {
-            id: DeviceId::new(),
-            device,
-            blas: Arc::new(blas),
-            curand: Arc::new(Mutex::new(CudaRng(curand))),
-        })
-    }
+    type Location = usize;
 
     fn set_seed(&self, seed: u64) -> Result<()> {
         // We do not call set_seed but instead create a new curand object. This ensures that the
@@ -231,10 +232,8 @@ impl BackendDevice for CudaDevice {
         Ok(())
     }
 
-    fn location(&self) -> crate::DeviceLocation {
-        crate::DeviceLocation::Cuda {
-            gpu_id: self.device.ordinal(),
-        }
+    fn location(&self) -> Self::Location {
+        self.device.ordinal()
     }
 
     fn same_device(&self, rhs: &Self) -> bool {
@@ -279,7 +278,13 @@ impl BackendDevice for CudaDevice {
         })
     }
 
-    fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, up: f64) -> Result<CudaStorage> {
+    fn rand_uniform_f64(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        lo: f64,
+        up: f64,
+    ) -> Result<CudaStorage> {
         let elem_count = shape.elem_count();
         let curand = self.curand.lock().unwrap();
         let slice = match dtype {
@@ -315,7 +320,13 @@ impl BackendDevice for CudaDevice {
         })
     }
 
-    fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<CudaStorage> {
+    fn rand_normal_f64(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        mean: f64,
+        std: f64,
+    ) -> Result<CudaStorage> {
         // TODO: Add support for F16 and BF16 though this is likely to require some upstream
         // cudarc changes.
         let elem_count = shape.elem_count();
@@ -1564,7 +1575,7 @@ impl BackendStorage for CudaStorage {
     type Device = CudaDevice;
 
     fn try_clone(&self, layout: &Layout) -> Result<Self> {
-        let slice = Clone.map(&self.slice, self.device(), layout)?;
+        let slice = Clone.map(&self.slice, &self.device(), layout)?;
         let device = self.device.clone();
         Ok(Self { slice, device })
     }
@@ -1581,8 +1592,8 @@ impl BackendStorage for CudaStorage {
         }
     }
 
-    fn device(&self) -> &CudaDevice {
-        &self.device
+    fn device(&self) -> CudaDevice {
+        self.device.clone()
     }
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self> {
@@ -1677,7 +1688,7 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
-    fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
+    fn reduce(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
         let device = self.device().clone();
         let slice = FastReduce(sum_dims, op).map(&self.slice, &device, layout)?;
         Ok(Self { slice, device })

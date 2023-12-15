@@ -1,4 +1,4 @@
-use crate::{op::BackpropOp, op::Op, Error, Result, Tensor};
+use crate::{backend::BackendStorage, op::BackpropOp, op::Op, Error, Result, Tensor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamsConv1D {

@@ -25,7 +25,7 @@ impl crate::backend::BackendStorage for CudaStorage {
         fail!()
     }
 
-    fn device(&self) -> &Self::Device {
+    fn device(&self) -> Self::Device {
         fail!()
     }
 
@@ -45,7 +45,7 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn reduce_op(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
+    fn reduce(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
@@ -171,17 +171,21 @@ impl crate::backend::BackendStorage for CudaStorage {
     }
 }
 
-impl crate::backend::BackendDevice for CudaDevice {
-    type Storage = CudaStorage;
-    fn new(_: usize) -> Result<Self> {
+impl CudaDevice {
+    pub fn new(_: usize) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+}
+
+impl crate::backend::BackendDevice for CudaDevice {
+    type Storage = CudaStorage;
+    type Location = usize;
 
     fn set_seed(&self, _: u64) -> Result<()> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn location(&self) -> crate::DeviceLocation {
+    fn location(&self) -> Self::Location {
         fail!()
     }
 
@@ -201,11 +205,11 @@ impl crate::backend::BackendDevice for CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn rand_uniform_f64(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn rand_normal_f64(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 }
