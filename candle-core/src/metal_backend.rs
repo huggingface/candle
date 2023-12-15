@@ -113,21 +113,23 @@ impl MetalDevice {
         self._new_buffer(size, MTLResourceOptions::StorageModePrivate, name)
     }
 
-    fn _new_buffer(&self, size: NSUInteger, option: MTLResourceOptions, name: &str) -> Arc<Buffer> {
-        // println!("Creating new buffer {name}");
+    fn _new_buffer(
+        &self,
+        size: NSUInteger,
+        option: MTLResourceOptions,
+        _name: &str,
+    ) -> Arc<Buffer> {
         let mut buffers = self.buffers.try_write().unwrap();
         let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
 
         for sub in &mut *subbuffers {
             if Arc::strong_count(sub) == 1 {
-                // println!("Reusing tensor {size} {name}");
                 return sub.clone();
             }
         }
         let new_buffer = self.device.new_buffer(size as NSUInteger, option);
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
-        // println!("Created tensor {size} {name}");
         for subbuffers in buffers.values_mut() {
             let newbuffers = subbuffers
                 .iter()

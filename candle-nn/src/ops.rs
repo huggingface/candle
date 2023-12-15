@@ -220,7 +220,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         };
 
         let n = layout.stride().len();
-        if !(layout.stride()[n - 1] == 1 && layout.start_offset() == 0) {
+        if !(layout.is_contiguous() && layout.stride()[n - 1] == 1 && layout.start_offset() == 0) {
             candle::bail!("Non contiguous softmax-last-dim is not implemented");
         }
 
