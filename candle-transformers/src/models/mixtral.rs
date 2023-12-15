@@ -324,16 +324,24 @@ impl Module for SparseMoeBlock {
         let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
 
         // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        let mut top_k = Vec::with_capacity(routing_weights.len());
+        // top_x contains the row indexes to evaluate for each expert.
         let mut top_x = vec![vec![]; self.experts.len()];
+        let mut selected_rws = vec![vec![]; self.experts.len()];
         for (row_idx, rw) in routing_weights.iter().enumerate() {
             let mut dst = (0..rw.len() as u32).collect::<Vec<u32>>();
             dst.sort_by(|&i, &j| rw[j as usize].total_cmp(&rw[i as usize]));
-            dst.truncate(self.num_experts_per_tok);
-            for expert_idx in dst.iter() {
-                top_x[*expert_idx as usize].push(row_idx as u32)
+            let mut sum_routing_weights = 0f32;
+            for &expert_idx in dst.iter().take(self.num_experts_per_tok) {
+                let expert_idx = expert_idx as usize;
+                let routing_weight = rw[expert_idx];
+                sum_routing_weights += routing_weight;
+                top_x[expert_idx].push(row_idx as u32);
             }
-            top_k.push(dst);
+            for &expert_idx in dst.iter().take(self.num_experts_per_tok) {
+                let expert_idx = expert_idx as usize;
+                let routing_weight = rw[expert_idx];
+                selected_rws[expert_idx].push(routing_weight / sum_routing_weights)
+            }
         }
 
         // routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
@@ -346,13 +354,14 @@ impl Module for SparseMoeBlock {
                 continue;
             }
             let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
+            let selected_rws = Tensor::new(selected_rws[expert_idx].as_slice(), xs.device())?;
             // Index the correct hidden states and compute the expert hidden state for
             // the current expert. We need to make sure to multiply the output hidden
             // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
             let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
             // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
             let current_hidden_states = expert_layer.forward(&current_state)?;
-
+            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_rws)?;
             ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
         }
 
