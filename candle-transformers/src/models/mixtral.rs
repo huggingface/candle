@@ -1,9 +1,8 @@
-#![allow(unused)]
-use crate::models::with_tracing::{linear, linear_no_bias, Embedding as E, Linear};
+use crate::models::with_tracing::{linear_no_bias, Linear};
 /// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
 /// https://mistral.ai/news/mixtral-of-experts/
-use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -365,8 +364,8 @@ impl Module for SparseMoeBlock {
             ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
         }
 
-        let xs = xs.reshape((b_size, seq_len, hidden_dim))?;
-        Ok(xs)
+        let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
+        Ok(ys)
     }
 }
 
