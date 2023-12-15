@@ -1,14 +1,24 @@
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::cpu_backend::CpuDevice;
+use crate::custom_backend::CustomLocation;
 use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
+use std::any::{Any, TypeId};
 
 /// A `DeviceLocation` represents a physical device whereas multiple `Device`
 /// can live on the same location (typically for cuda devices).
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DeviceLocation {
     Cpu,
-    Cuda { gpu_id: usize },
-    Metal { gpu_id: usize },
+    Cuda {
+        gpu_id: usize,
+    },
+    Metal {
+        gpu_id: usize,
+    },
+    Custom {
+        type_id: TypeId,
+        custom_location: CustomLocation,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -16,6 +26,7 @@ pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
     Metal(crate::MetalDevice),
+    Custom(crate::CustomDevice),
 }
 
 pub trait NdArray {
@@ -164,6 +175,7 @@ impl BackendDevice for Device {
             Self::Cpu => Storage::Cpu(storage.clone()),
             Self::Cuda(device) => Storage::Cuda(device.storage_from_cpu_storage(storage)?),
             Self::Metal(device) => Storage::Metal(device.storage_from_cpu_storage(storage)?),
+            Self::Custom(device) => Storage::Custom(device.storage_from_cpu_storage(storage)?),
         })
     }
 
@@ -172,6 +184,7 @@ impl BackendDevice for Device {
             Self::Cpu => CpuDevice.set_seed(seed),
             Self::Cuda(c) => c.set_seed(seed),
             Self::Metal(m) => m.set_seed(seed),
+            Self::Custom(c) => c.set_seed(seed),
         }
     }
 
@@ -180,6 +193,7 @@ impl BackendDevice for Device {
             (Self::Cpu, Self::Cpu) => true,
             (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
             (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
+            (Self::Custom(lhs), Self::Custom(rhs)) => lhs.same_device(rhs),
             _ => false,
         }
     }
@@ -192,6 +206,10 @@ impl BackendDevice for Device {
             },
             Self::Metal(device) => DeviceLocation::Metal {
                 gpu_id: device.location(),
+            },
+            Self::Custom(device) => DeviceLocation::Custom {
+                type_id: device.type_id(),
+                custom_location: device.location(),
             },
         }
     }
@@ -216,6 +234,10 @@ impl BackendDevice for Device {
                 let storage = device.rand_uniform_f64(shape, dtype, lo, up)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Custom(device) => {
+                let storage = device.rand_uniform_f64(shape, dtype, lo, up)?;
+                Ok(Storage::Custom(storage))
+            }
         }
     }
 
@@ -239,6 +261,10 @@ impl BackendDevice for Device {
                 let storage = device.rand_normal_f64(shape, dtype, mean, std)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Custom(device) => {
+                let storage = device.rand_normal_f64(shape, dtype, mean, std)?;
+                Ok(Storage::Custom(storage))
+            }
         }
     }
 
@@ -256,6 +282,10 @@ impl BackendDevice for Device {
                 let storage = device.ones_impl(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Custom(device) => {
+                let storage = device.ones_impl(shape, dtype)?;
+                Ok(Storage::Custom(storage))
+            }
         }
     }
 
@@ -272,6 +302,10 @@ impl BackendDevice for Device {
             Device::Metal(device) => {
                 let storage = device.zeros_impl(shape, dtype)?;
                 Ok(Storage::Metal(storage))
+            }
+            Device::Custom(device) => {
+                let storage = device.zeros_impl(shape, dtype)?;
+                Ok(Storage::Custom(storage))
             }
         }
     }
@@ -317,6 +351,11 @@ impl Device {
                 let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Custom(device) => {
+                let storage = array.to_cpu_storage();
+                let storage = device.storage_from_cpu_storage(&storage)?;
+                Ok(Storage::Custom(storage))
+            }
         }
     }
 
@@ -332,6 +371,11 @@ impl Device {
                 let storage = S::to_cpu_storage_owned(data);
                 let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Metal(storage))
+            }
+            Device::Custom(device) => {
+                let storage = S::to_cpu_storage_owned(data);
+                let storage = device.storage_from_cpu_storage(&storage)?;
+                Ok(Storage::Custom(storage))
             }
         }
     }

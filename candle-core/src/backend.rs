@@ -1,4 +1,4 @@
-use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
+use crate::op::{BinaryOpPub, CmpOp, ReduceOp, UnaryOpPub};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 use std::{fmt::Debug, hash::Hash};
 
@@ -26,10 +26,14 @@ pub trait BackendStorage: 'static + Sized + Send + Sync + Debug {
 
     fn to_dtype(&self, layout: &Layout, dtype: DType) -> Result<Self>;
 
-    fn unary_impl<U: UnaryOpT>(&self, layout: &Layout) -> Result<Self>;
+    fn unary_impl<U: UnaryOpPub>(&self, layout: &Layout) -> Result<Self>;
 
-    fn binary_impl<B: BinaryOpT>(&self, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout)
-        -> Result<Self>;
+    fn binary_impl<B: BinaryOpPub>(
+        &self,
+        rhs: &Self,
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+    ) -> Result<Self>;
 
     fn where_cond(
         &self,

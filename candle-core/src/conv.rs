@@ -2,24 +2,24 @@ use crate::{backend::BackendStorage, op::BackpropOp, op::Op, Error, Result, Tens
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamsConv1D {
-    pub(crate) b_size: usize,
+    pub b_size: usize,
     // Maybe we should have a version without l_in as this bit depends on the input and not only on
     // the weights.
-    pub(crate) l_in: usize,
-    pub(crate) c_out: usize,
-    pub(crate) c_in: usize,
-    pub(crate) k_size: usize,
-    pub(crate) padding: usize,
-    pub(crate) stride: usize,
-    pub(crate) dilation: usize,
+    pub l_in: usize,
+    pub c_out: usize,
+    pub c_in: usize,
+    pub k_size: usize,
+    pub padding: usize,
+    pub stride: usize,
+    pub dilation: usize,
 }
 
 impl ParamsConv1D {
-    pub(crate) fn l_out(&self) -> usize {
+    pub fn l_out(&self) -> usize {
         (self.l_in + 2 * self.padding - self.dilation * (self.k_size - 1) - 1) / self.stride + 1
     }
 
-    pub(crate) fn out_dims(&self) -> Vec<usize> {
+    pub fn out_dims(&self) -> Vec<usize> {
         let l_out = self.l_out();
         vec![self.b_size, self.c_out, l_out]
     }
@@ -27,26 +27,26 @@ impl ParamsConv1D {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamsConvTranspose1D {
-    pub(crate) b_size: usize,
-    pub(crate) l_in: usize,
-    pub(crate) c_out: usize,
-    pub(crate) c_in: usize,
-    pub(crate) k_size: usize,
-    pub(crate) padding: usize,
-    pub(crate) output_padding: usize,
-    pub(crate) stride: usize,
-    pub(crate) dilation: usize,
+    pub b_size: usize,
+    pub l_in: usize,
+    pub c_out: usize,
+    pub c_in: usize,
+    pub k_size: usize,
+    pub padding: usize,
+    pub output_padding: usize,
+    pub stride: usize,
+    pub dilation: usize,
 }
 
 impl ParamsConvTranspose1D {
-    pub(crate) fn l_out(&self) -> usize {
+    pub fn l_out(&self) -> usize {
         (self.l_in - 1) * self.stride - 2 * self.padding
             + self.dilation * (self.k_size - 1)
             + self.output_padding
             + 1
     }
 
-    pub(crate) fn out_dims(&self) -> Vec<usize> {
+    pub fn out_dims(&self) -> Vec<usize> {
         let l_out = self.l_out();
         vec![self.b_size, self.c_out, l_out]
     }
@@ -67,60 +67,60 @@ pub enum CudnnFwdAlgo {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamsConv2D {
-    pub(crate) b_size: usize,
-    pub(crate) i_h: usize,
-    pub(crate) i_w: usize,
-    pub(crate) k_h: usize,
-    pub(crate) k_w: usize,
-    pub(crate) c_out: usize,
-    pub(crate) c_in: usize,
-    pub(crate) padding: usize,
-    pub(crate) stride: usize,
-    pub(crate) dilation: usize,
+    pub b_size: usize,
+    pub i_h: usize,
+    pub i_w: usize,
+    pub k_h: usize,
+    pub k_w: usize,
+    pub c_out: usize,
+    pub c_in: usize,
+    pub padding: usize,
+    pub stride: usize,
+    pub dilation: usize,
     pub cudnn_fwd_algo: Option<CudnnFwdAlgo>,
 }
 
 impl ParamsConv2D {
-    pub(crate) fn out_h(&self) -> usize {
+    pub fn out_h(&self) -> usize {
         (self.i_h + 2 * self.padding - self.dilation * (self.k_h - 1) - 1) / self.stride + 1
     }
 
-    pub(crate) fn out_w(&self) -> usize {
+    pub fn out_w(&self) -> usize {
         (self.i_w + 2 * self.padding - self.dilation * (self.k_w - 1) - 1) / self.stride + 1
     }
 
-    pub(crate) fn out_dims(&self) -> Vec<usize> {
+    pub fn out_dims(&self) -> Vec<usize> {
         vec![self.b_size, self.c_out, self.out_h(), self.out_w()]
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParamsConvTranspose2D {
-    pub(crate) b_size: usize,
-    pub(crate) i_h: usize,
-    pub(crate) i_w: usize,
-    pub(crate) k_h: usize,
-    pub(crate) k_w: usize,
-    pub(crate) c_out: usize,
-    pub(crate) c_in: usize,
-    pub(crate) padding: usize,
-    pub(crate) output_padding: usize,
-    pub(crate) stride: usize,
-    pub(crate) dilation: usize,
+    pub b_size: usize,
+    pub i_h: usize,
+    pub i_w: usize,
+    pub k_h: usize,
+    pub k_w: usize,
+    pub c_out: usize,
+    pub c_in: usize,
+    pub padding: usize,
+    pub output_padding: usize,
+    pub stride: usize,
+    pub dilation: usize,
 }
 
 impl ParamsConvTranspose2D {
-    pub(crate) fn out_h(&self) -> usize {
+    pub fn out_h(&self) -> usize {
         (self.i_h - 1) * self.stride + self.dilation * (self.k_h - 1) + self.output_padding + 1
             - 2 * self.padding
     }
 
-    pub(crate) fn out_w(&self) -> usize {
+    pub fn out_w(&self) -> usize {
         (self.i_w - 1) * self.stride + self.dilation * (self.k_w - 1) + self.output_padding + 1
             - 2 * self.padding
     }
 
-    pub(crate) fn out_dims(&self) -> Vec<usize> {
+    pub fn out_dims(&self) -> Vec<usize> {
         vec![self.b_size, self.c_out, self.out_h(), self.out_w()]
     }
 }

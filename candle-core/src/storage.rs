@@ -1,4 +1,5 @@
 use crate::backend::{BackendDevice, BackendStorage};
+use crate::custom_backend::CustomStorage;
 use crate::op::{self, CmpOp, CustomOp1, CustomOp2, CustomOp3, ReduceOp};
 use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
 
@@ -9,6 +10,7 @@ pub enum Storage {
     Cpu(CpuStorage),
     Cuda(CudaStorage),
     Metal(MetalStorage),
+    Custom(CustomStorage),
 }
 
 impl Storage {
@@ -47,6 +49,10 @@ impl BackendStorage for Storage {
                 let storage = storage.try_clone(layout)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Custom(storage) => {
+                let storage = storage.try_clone(layout)?;
+                Ok(Self::Custom(storage))
+            }
         }
     }
 
@@ -55,6 +61,7 @@ impl BackendStorage for Storage {
             Self::Cpu(_) => Device::Cpu,
             Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
             Self::Metal(storage) => Device::Metal(storage.device().clone()),
+            Self::Custom(storage) => Device::Custom(storage.device().clone()),
         }
     }
 
@@ -63,6 +70,7 @@ impl BackendStorage for Storage {
             Self::Cpu(storage) => storage.dtype(),
             Self::Cuda(storage) => storage.dtype(),
             Self::Metal(storage) => storage.dtype(),
+            Self::Custom(storage) => storage.dtype(),
         }
     }
 
@@ -71,6 +79,7 @@ impl BackendStorage for Storage {
             Storage::Cpu(storage) => storage.clone(),
             Self::Cuda(storage) => storage.to_cpu_storage()?,
             Self::Metal(storage) => storage.to_cpu_storage()?,
+            Self::Custom(storage) => storage.to_cpu_storage()?,
         })
     }
 
@@ -87,6 +96,10 @@ impl BackendStorage for Storage {
             Self::Metal(storage) => {
                 let storage = storage.affine(layout, mul, add)?;
                 Ok(Self::Metal(storage))
+            }
+            Self::Custom(storage) => {
+                let storage = storage.affine(layout, mul, add)?;
+                Ok(Self::Custom(storage))
             }
         }
     }
@@ -105,6 +118,10 @@ impl BackendStorage for Storage {
                 let storage = storage.powf(layout, alpha)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Custom(storage) => {
+                let storage = storage.powf(layout, alpha)?;
+                Ok(Self::Custom(storage))
+            }
         }
     }
 
@@ -121,6 +138,10 @@ impl BackendStorage for Storage {
             Self::Metal(storage) => {
                 let storage = storage.elu(layout, alpha)?;
                 Ok(Self::Metal(storage))
+            }
+            Self::Custom(storage) => {
+                let storage = storage.elu(layout, alpha)?;
+                Ok(Self::Custom(storage))
             }
         }
     }
@@ -140,6 +161,10 @@ impl BackendStorage for Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::Custom(lhs), Self::Custom(rhs)) => {
+                let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Custom(storage))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -168,6 +193,10 @@ impl BackendStorage for Storage {
                 let storage = storage.reduce(op, layout, s)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Custom(storage) => {
+                let storage = storage.reduce(op, layout, s)?;
+                Ok(Self::Custom(storage))
+            }
         }
     }
 
@@ -185,6 +214,10 @@ impl BackendStorage for Storage {
                 let storage = storage.to_dtype(layout, dtype)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Custom(storage) => {
+                let storage = storage.to_dtype(layout, dtype)?;
+                Ok(Self::Custom(storage))
+            }
         }
     }
 
@@ -201,6 +234,10 @@ impl BackendStorage for Storage {
             Self::Metal(storage) => {
                 let storage = storage.unary_impl::<B>(layout)?;
                 Ok(Self::Metal(storage))
+            }
+            Self::Custom(storage) => {
+                let storage = storage.unary_impl::<B>(layout)?;
+                Ok(Self::Custom(storage))
             }
         }
     }
@@ -225,6 +262,10 @@ impl BackendStorage for Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::Custom(lhs), Self::Custom(rhs)) => {
+                let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::Custom(storage))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -261,6 +302,10 @@ impl BackendStorage for Storage {
                 let s = inp.conv1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            (Storage::Custom(inp), Storage::Custom(kernel)) => {
+                let s = inp.conv1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Custom(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -291,6 +336,10 @@ impl BackendStorage for Storage {
             (Storage::Metal(inp), Storage::Metal(kernel)) => {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
+            }
+            (Storage::Custom(inp), Storage::Custom(kernel)) => {
+                let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Custom(s))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -323,6 +372,10 @@ impl BackendStorage for Storage {
                 let s = inp.conv2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            (Storage::Custom(inp), Storage::Custom(kernel)) => {
+                let s = inp.conv2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Custom(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -354,6 +407,10 @@ impl BackendStorage for Storage {
                 let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            (Storage::Custom(inp), Storage::Custom(kernel)) => {
+                let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
+                Ok(Self::Custom(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -382,6 +439,10 @@ impl BackendStorage for Storage {
                 let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Custom(storage) => {
+                let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::Custom(storage))
+            }
         }
     }
 
@@ -404,6 +465,10 @@ impl BackendStorage for Storage {
                 let storage = storage.max_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Custom(storage) => {
+                let storage = storage.max_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::Custom(storage))
+            }
         }
     }
 
@@ -421,6 +486,10 @@ impl BackendStorage for Storage {
                 let storage = storage.upsample_nearest1d(layout, sz)?;
                 Ok(Self::Metal(storage))
             }
+            Self::Custom(storage) => {
+                let storage = storage.upsample_nearest1d(layout, sz)?;
+                Ok(Self::Custom(storage))
+            }
         }
     }
 
@@ -437,6 +506,10 @@ impl BackendStorage for Storage {
             Self::Metal(storage) => {
                 let storage = storage.upsample_nearest2d(layout, h, w)?;
                 Ok(Self::Metal(storage))
+            }
+            Self::Custom(storage) => {
+                let storage = storage.upsample_nearest2d(layout, h, w)?;
+                Ok(Self::Custom(storage))
             }
         }
     }
@@ -465,6 +538,10 @@ impl BackendStorage for Storage {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::Custom(cond), Self::Custom(t), Self::Custom(f)) => {
+                let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
+                Ok(Self::Custom(storage))
+            }
             (_, lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -488,6 +565,10 @@ impl BackendStorage for Storage {
             (Self::Metal(s), Self::Metal(indexes)) => {
                 let storage = s.gather(l, indexes, indexes_l, d)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::Custom(s), Self::Custom(indexes)) => {
+                let storage = s.gather(l, indexes, indexes_l, d)?;
+                Ok(Self::Custom(storage))
             }
             _ => unreachable!(),
         }
@@ -517,6 +598,10 @@ impl BackendStorage for Storage {
                 let storage = s.scatter_add(l, indexes, indexes_l, source, source_l, d)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::Custom(s), Self::Custom(indexes), Self::Custom(source)) => {
+                let storage = s.scatter_add(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::Custom(storage))
+            }
             _ => unreachable!(),
         }
     }
@@ -545,6 +630,10 @@ impl BackendStorage for Storage {
                 let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::Custom(s), Self::Custom(indexes), Self::Custom(source)) => {
+                let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::Custom(storage))
+            }
             _ => unreachable!(),
         }
     }
@@ -563,6 +652,10 @@ impl BackendStorage for Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::Custom(lhs), Self::Custom(rhs)) => {
+                let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
+                Ok(Self::Custom(storage))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -595,6 +688,10 @@ impl BackendStorage for Storage {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::Custom(lhs), Self::Custom(rhs)) => {
+                let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
+                Ok(Self::Custom(storage))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -610,6 +707,9 @@ impl BackendStorage for Storage {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_strided_src(dst, dst_offset, src_l),
             (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
             (Self::Metal(src), Self::Metal(dst)) => {
+                Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
+            }
+            (Self::Custom(src), Self::Custom(dst)) => {
                 Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
@@ -637,6 +737,10 @@ impl Storage {
                 let (storage, shape) = c.metal_fwd(storage, l)?;
                 Ok((Self::Metal(storage), shape))
             }
+            Self::Custom(storage) => {
+                let (storage, shape) = c.custom_fwd(storage, l)?;
+                Ok((Self::Custom(storage), shape))
+            }
         }
     }
 
@@ -660,6 +764,10 @@ impl Storage {
             (Self::Metal(s1), Self::Metal(s2)) => {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
                 Ok((Self::Metal(s), shape))
+            }
+            (Self::Custom(s1), Self::Custom(s2)) => {
+                let (s, shape) = c.custom_fwd(s1, l1, s2, l2)?;
+                Ok((Self::Custom(s), shape))
             }
             _ => unreachable!(),
         }
@@ -688,6 +796,10 @@ impl Storage {
             (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
                 Ok((Self::Metal(s), shape))
+            }
+            (Self::Custom(s1), Self::Custom(s2), Self::Custom(s3)) => {
+                let (s, shape) = c.custom_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok((Self::Custom(s), shape))
             }
             _ => unreachable!(),
         }
