@@ -66,10 +66,8 @@ impl Module for Mlp {
 #[derive(Debug, Clone)]
 enum MlpOrMoe {
     Mlp(Mlp),
-    #[allow(unused)]
     MoE {
         n_expert_used: usize,
-        n_expert: usize,
         feed_forward_gate_inp: QMatMul,
         experts: Vec<Mlp>,
     },
@@ -78,7 +76,68 @@ enum MlpOrMoe {
 impl Module for MlpOrMoe {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Self::MoE { .. } => todo!(),
+            Self::MoE {
+                feed_forward_gate_inp,
+                experts,
+                n_expert_used,
+            } => {
+                let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+                let xs = xs.reshape(((), hidden_dim))?;
+                let router_logits = feed_forward_gate_inp.forward(&xs)?;
+                let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+
+                // In order to extract topk, we extract the data from the tensor and manipulate it
+                // directly. Maybe we will want to use some custom ops instead at some point.
+                let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+
+                // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+                // top_x contains the row indexes to evaluate for each expert.
+                let mut top_x = vec![vec![]; *n_expert_used];
+                let mut selected_rws = vec![vec![]; *n_expert_used];
+                for (row_idx, rw) in routing_weights.iter().enumerate() {
+                    let mut dst = (0..rw.len() as u32).collect::<Vec<u32>>();
+                    dst.sort_by(|&i, &j| rw[j as usize].total_cmp(&rw[i as usize]));
+                    let mut sum_routing_weights = 0f32;
+                    for &expert_idx in dst.iter().take(*n_expert_used) {
+                        let expert_idx = expert_idx as usize;
+                        let routing_weight = rw[expert_idx];
+                        sum_routing_weights += routing_weight;
+                        top_x[expert_idx].push(row_idx as u32);
+                    }
+                    for &expert_idx in dst.iter().take(*n_expert_used) {
+                        let expert_idx = expert_idx as usize;
+                        let routing_weight = rw[expert_idx];
+                        selected_rws[expert_idx].push(routing_weight / sum_routing_weights)
+                    }
+                }
+
+                // routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
+                // expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+
+                let mut ys = xs.zeros_like()?;
+                for (expert_idx, expert_layer) in experts.iter().enumerate() {
+                    let top_x = &top_x[expert_idx];
+                    if top_x.is_empty() {
+                        continue;
+                    }
+                    let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
+                    let selected_rws =
+                        Tensor::new(selected_rws[expert_idx].as_slice(), xs.device())?
+                            .reshape(((), 1))?;
+                    // Index the correct hidden states and compute the expert hidden state for
+                    // the current expert. We need to make sure to multiply the output hidden
+                    // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+                    let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
+                    // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
+                    let current_hidden_states = expert_layer.forward(&current_state)?;
+                    let current_hidden_states =
+                        current_hidden_states.broadcast_mul(&selected_rws)?;
+                    ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
+                }
+
+                let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
+                Ok(ys)
+            }
             Self::Mlp(mlp) => mlp.forward(xs),
         }
     }
@@ -363,7 +422,6 @@ impl ModelWeights {
                 }
                 MlpOrMoe::MoE {
                     n_expert_used,
-                    n_expert,
                     feed_forward_gate_inp: QMatMul::from_qtensor(feed_forward_gate_inp)?,
                     experts,
                 }
