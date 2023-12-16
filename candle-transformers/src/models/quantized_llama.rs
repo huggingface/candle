@@ -48,16 +48,21 @@ impl QMatMul {
 }
 
 #[derive(Debug, Clone)]
-enum Mlp {
-    Normal {
-        feed_forward_w1: QMatMul,
-        feed_forward_w2: QMatMul,
-        feed_forward_w3: QMatMul,
-    },
+struct Mlp {
+    feed_forward_w1: QMatMul,
+    feed_forward_w2: QMatMul,
+    feed_forward_w3: QMatMul,
+}
+
+#[derive(Debug, Clone)]
+enum MlpOrMoe {
+    Mlp(Mlp),
     #[allow(unused)]
     MoE {
         n_expert_used: usize,
         n_expert: usize,
+        feed_forward_gate_inp: QMatMul,
+        experts: Vec<Mlp>,
     },
 }
 
@@ -68,7 +73,7 @@ struct LayerWeights {
     attention_wv: QMatMul,
     attention_wo: QMatMul,
     attention_norm: RmsNorm,
-    mlp: Mlp,
+    mlp_or_moe: MlpOrMoe,
     ffn_norm: RmsNorm,
     n_head: usize,
     n_kv_head: usize,
@@ -224,15 +229,15 @@ impl ModelWeights {
             let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
             let attention_wv = ct.remove(&format!("{prefix}.attention.wv.weight"))?;
             let attention_wo = ct.remove(&format!("{prefix}.attention.wo.weight"))?;
-            let mlp = {
+            let mlp_or_moe = {
                 let feed_forward_w1 = ct.remove(&format!("{prefix}.feed_forward.w1.weight"))?;
                 let feed_forward_w2 = ct.remove(&format!("{prefix}.feed_forward.w2.weight"))?;
                 let feed_forward_w3 = ct.remove(&format!("{prefix}.feed_forward.w3.weight"))?;
-                Mlp::Normal {
+                MlpOrMoe::Mlp(Mlp {
                     feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
                     feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
                     feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
-                }
+                })
             };
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
             let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
@@ -245,7 +250,7 @@ impl ModelWeights {
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
                 attention_norm: RmsNorm::new(attention_norm, 1e-5)?,
-                mlp,
+                mlp_or_moe,
                 ffn_norm: RmsNorm::new(ffn_norm, 1e-5)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
@@ -312,19 +317,37 @@ impl ModelWeights {
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"))?;
             let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"))?;
             let attention_wo = ct.tensor(reader, &format!("{prefix}.attn_output.weight"))?;
-            let mlp = if n_expert_used == 0 {
+            let mlp_or_moe = if n_expert_used == 0 {
                 let feed_forward_w1 = ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"))?;
                 let feed_forward_w2 = ct.tensor(reader, &format!("{prefix}.ffn_down.weight"))?;
                 let feed_forward_w3 = ct.tensor(reader, &format!("{prefix}.ffn_up.weight"))?;
-                Mlp::Normal {
+                MlpOrMoe::Mlp(Mlp {
                     feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
                     feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
                     feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
-                }
+                })
             } else {
-                Mlp::MoE {
+                let feed_forward_gate_inp =
+                    ct.tensor(reader, &format!("{prefix}.ffn_gate_inp.weight"))?;
+                let mut experts = Vec::with_capacity(n_expert);
+                for i in 0..n_expert {
+                    let feed_forward_w1 =
+                        ct.tensor(reader, &format!("{prefix}.ffn_gate.{i}.weight"))?;
+                    let feed_forward_w2 =
+                        ct.tensor(reader, &format!("{prefix}.ffn_down.{i}.weight"))?;
+                    let feed_forward_w3 =
+                        ct.tensor(reader, &format!("{prefix}.ffn_up.{i}.weight"))?;
+                    experts.push(Mlp {
+                        feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
+                        feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
+                        feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                    })
+                }
+                MlpOrMoe::MoE {
                     n_expert_used,
                     n_expert,
+                    feed_forward_gate_inp: QMatMul::from_qtensor(feed_forward_gate_inp)?,
+                    experts,
                 }
             };
             let attention_norm = ct.tensor(reader, &format!("{prefix}.attn_norm.weight"))?;
@@ -338,7 +361,7 @@ impl ModelWeights {
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
                 attention_norm: RmsNorm::new(attention_norm, rms_norm_eps)?,
-                mlp,
+                mlp_or_moe,
                 ffn_norm: RmsNorm::new(ffn_norm, rms_norm_eps)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
@@ -393,16 +416,14 @@ impl ModelWeights {
             let _enter = layer.span_mlp.enter();
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
-            let x = match &layer.mlp {
-                Mlp::MoE { .. } => todo!(),
-                Mlp::Normal {
-                    feed_forward_w1,
-                    feed_forward_w2,
-                    feed_forward_w3,
-                } => {
-                    let w1 = feed_forward_w1.forward(&x)?;
-                    let w3 = feed_forward_w3.forward(&x)?;
-                    let mlp = feed_forward_w2.forward(&(candle_nn::ops::silu(&w1)? * w3)?)?;
+            let x = match &layer.mlp_or_moe {
+                MlpOrMoe::MoE { .. } => todo!(),
+                MlpOrMoe::Mlp(mlp) => {
+                    let w1 = mlp.feed_forward_w1.forward(&x)?;
+                    let w3 = mlp.feed_forward_w3.forward(&x)?;
+                    let mlp = mlp
+                        .feed_forward_w2
+                        .forward(&(candle_nn::ops::silu(&w1)? * w3)?)?;
                     (mlp + residual)?
                 }
             };
