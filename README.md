@@ -66,7 +66,10 @@ We also provide a some command line based examples using state of the art models
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
   pre-trained on 1T tokens of English and code datasets.
 - [Mistral7b-v0.1](./candle-examples/examples/mistral/): a 7b general LLM with
-  performance larger than all publicly available 13b models as of 2023-09-28.
+  better performance than all publicly available 13b models as of 2023-09-28.
+- [Mixtral8x7b-v0.1](./candle-examples/examples/mixtral/): a sparse mixture of
+  experts 8x7b general LLM with better performance than a Llama 2 70B model with
+  much faster inference.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
 - [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Yi-6B / Yi-34B](./candle-examples/examples/yi/): two bilingual
@@ -181,9 +184,9 @@ If you have an addition to this list, please submit a pull request.
     - Quantized LLMs.
         - Llama 7b, 13b, 70b, as well as the chat and code variants.
         - Mistral 7b, and 7b instruct.
-        - Zephyr 7b a and b (Mistral based).
-        - OpenChat 3.5 (Mistral based).
         - Mixtral 8x7b.
+        - Zephyr 7b a and b (Mistral-7b based).
+        - OpenChat 3.5 (Mistral-7b based).
     - Text to text.
         - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
