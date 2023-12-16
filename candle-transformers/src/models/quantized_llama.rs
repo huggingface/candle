@@ -75,6 +75,15 @@ enum MlpOrMoe {
     },
 }
 
+impl Module for MlpOrMoe {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::MoE { .. } => todo!(),
+            Self::Mlp(mlp) => mlp.forward(xs),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct LayerWeights {
     attention_wq: QMatMul,
@@ -425,13 +434,8 @@ impl ModelWeights {
             let _enter = layer.span_mlp.enter();
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
-            let x = match &layer.mlp_or_moe {
-                MlpOrMoe::MoE { .. } => todo!(),
-                MlpOrMoe::Mlp(mlp) => {
-                    let mlp = mlp.forward(&x)?;
-                    (mlp + residual)?
-                }
-            };
+            let x = layer.mlp_or_moe.forward(&x)?;
+            let x = (x + residual)?;
             layer_in = x
         }
         let x = self.norm.forward(&layer_in)?;
