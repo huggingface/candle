@@ -61,6 +61,8 @@ enum Which {
     OpenChat35,
     #[value(name = "7b-starling-a")]
     Starling7bAlpha,
+    #[value(name = "mixtral")]
+    Mixtral,
 }
 
 impl Which {
@@ -83,6 +85,7 @@ impl Which {
             | Self::Starling7bAlpha
             | Self::Zephyr7bAlpha
             | Self::Zephyr7bBeta
+            | Self::Mixtral
             | Self::Mistral7b
             | Self::Mistral7bInstruct => true,
         }
@@ -101,6 +104,7 @@ impl Which {
             | Self::L34bCode
             | Self::Leo7b
             | Self::Leo13b
+            | Self::Mixtral
             | Self::Mistral7b
             | Self::Mistral7bInstruct
             | Self::OpenChat35
@@ -122,6 +126,7 @@ impl Which {
             | Self::L34bCode
             | Self::Leo7b
             | Self::Leo13b
+            | Self::Mixtral
             | Self::Mistral7b
             | Self::Mistral7bInstruct
             | Self::Zephyr7bAlpha
@@ -143,6 +148,7 @@ impl Which {
             | Which::L34bCode => "hf-internal-testing/llama-tokenizer",
             Which::Leo7b => "LeoLM/leo-hessianai-7b",
             Which::Leo13b => "LeoLM/leo-hessianai-13b",
+            Which::Mixtral => "mistralai/Mixtral-8x7B-v0.1",
             Which::Mistral7b
             | Which::Mistral7bInstruct
             | Which::Zephyr7bAlpha
@@ -255,6 +261,10 @@ impl Args {
                     Which::Leo13b => (
                         "TheBloke/leo-hessianai-13B-GGUF",
                         "leo-hessianai-13b.Q4_K_M.gguf",
+                    ),
+                    Which::Mixtral => (
+                        "TheBloke/Mixtral-8x7B-v0.1-GGUF",
+                        "mixtral-8x7b-v0.1.Q4_K_M.gguf",
                     ),
                     Which::Mistral7b => (
                         "TheBloke/Mistral-7B-v0.1-GGUF",
@@ -374,7 +384,8 @@ fn main() -> anyhow::Result<()> {
                 | Which::L34bCode
                 | Which::Leo7b
                 | Which::Leo13b => 1,
-                Which::Mistral7b
+                Which::Mixtral
+                | Which::Mistral7b
                 | Which::Mistral7bInstruct
                 | Which::Zephyr7bAlpha
                 | Which::Zephyr7bBeta
