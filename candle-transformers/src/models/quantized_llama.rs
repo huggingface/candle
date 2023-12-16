@@ -287,10 +287,10 @@ impl ModelWeights {
         };
 
         // Parameter extraction from metadata.
-        let n_expert = md_get("llama.n_expert")
+        let n_expert = md_get("llama.expert_count")
             .and_then(|v| v.to_u32())
             .unwrap_or(0) as usize;
-        let n_expert_used = md_get("llama.n_expert_used")
+        let n_expert_used = md_get("llama.expert_used_count")
             .and_then(|v| v.to_u32())
             .unwrap_or(0) as usize;
         let head_count = md_get("llama.attention.head_count")?.to_u32()? as usize;
@@ -317,7 +317,7 @@ impl ModelWeights {
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"))?;
             let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"))?;
             let attention_wo = ct.tensor(reader, &format!("{prefix}.attn_output.weight"))?;
-            let mlp_or_moe = if n_expert_used == 0 {
+            let mlp_or_moe = if n_expert <= 1 {
                 let feed_forward_w1 = ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"))?;
                 let feed_forward_w2 = ct.tensor(reader, &format!("{prefix}.ffn_down.weight"))?;
                 let feed_forward_w3 = ct.tensor(reader, &format!("{prefix}.ffn_up.weight"))?;
