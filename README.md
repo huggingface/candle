@@ -173,6 +173,7 @@ If you have an addition to this list, please submit a pull request.
         - StarCoder.
         - Phi 1, 1.5, and 2.
         - Mistral 7b v0.1.
+        - Mixtral 8x7b v0.1.
         - StableLM-3B-4E1T.
         - Replit-code-v1.5-3B.
         - Bert.
@@ -182,6 +183,7 @@ If you have an addition to this list, please submit a pull request.
         - Mistral 7b, and 7b instruct.
         - Zephyr 7b a and b (Mistral based).
         - OpenChat 3.5 (Mistral based).
+        - Mixtral 8x7b.
     - Text to text.
         - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
