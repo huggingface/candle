@@ -48,15 +48,27 @@ impl QMatMul {
 }
 
 #[derive(Debug, Clone)]
+enum Mlp {
+    Normal {
+        feed_forward_w1: QMatMul,
+        feed_forward_w2: QMatMul,
+        feed_forward_w3: QMatMul,
+    },
+    #[allow(unused)]
+    MoE {
+        n_expert_used: usize,
+        n_expert: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
 struct LayerWeights {
     attention_wq: QMatMul,
     attention_wk: QMatMul,
     attention_wv: QMatMul,
     attention_wo: QMatMul,
     attention_norm: RmsNorm,
-    feed_forward_w1: QMatMul,
-    feed_forward_w2: QMatMul,
-    feed_forward_w3: QMatMul,
+    mlp: Mlp,
     ffn_norm: RmsNorm,
     n_head: usize,
     n_kv_head: usize,
@@ -212,9 +224,16 @@ impl ModelWeights {
             let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
             let attention_wv = ct.remove(&format!("{prefix}.attention.wv.weight"))?;
             let attention_wo = ct.remove(&format!("{prefix}.attention.wo.weight"))?;
-            let feed_forward_w1 = ct.remove(&format!("{prefix}.feed_forward.w1.weight"))?;
-            let feed_forward_w2 = ct.remove(&format!("{prefix}.feed_forward.w2.weight"))?;
-            let feed_forward_w3 = ct.remove(&format!("{prefix}.feed_forward.w3.weight"))?;
+            let mlp = {
+                let feed_forward_w1 = ct.remove(&format!("{prefix}.feed_forward.w1.weight"))?;
+                let feed_forward_w2 = ct.remove(&format!("{prefix}.feed_forward.w2.weight"))?;
+                let feed_forward_w3 = ct.remove(&format!("{prefix}.feed_forward.w3.weight"))?;
+                Mlp::Normal {
+                    feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
+                    feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
+                    feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                }
+            };
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
             let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
@@ -226,9 +245,7 @@ impl ModelWeights {
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
                 attention_norm: RmsNorm::new(attention_norm, 1e-5)?,
-                feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
-                feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
-                feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                mlp,
                 ffn_norm: RmsNorm::new(ffn_norm, 1e-5)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
@@ -265,6 +282,12 @@ impl ModelWeights {
         };
 
         // Parameter extraction from metadata.
+        let n_expert = md_get("llama.n_expert")
+            .and_then(|v| v.to_u32())
+            .unwrap_or(0) as usize;
+        let n_expert_used = md_get("llama.n_expert_used")
+            .and_then(|v| v.to_u32())
+            .unwrap_or(0) as usize;
         let head_count = md_get("llama.attention.head_count")?.to_u32()? as usize;
         let head_count_kv = md_get("llama.attention.head_count_kv")?.to_u32()? as usize;
         let block_count = md_get("llama.block_count")?.to_u32()? as usize;
@@ -289,9 +312,21 @@ impl ModelWeights {
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"))?;
             let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"))?;
             let attention_wo = ct.tensor(reader, &format!("{prefix}.attn_output.weight"))?;
-            let feed_forward_w1 = ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"))?;
-            let feed_forward_w2 = ct.tensor(reader, &format!("{prefix}.ffn_down.weight"))?;
-            let feed_forward_w3 = ct.tensor(reader, &format!("{prefix}.ffn_up.weight"))?;
+            let mlp = if n_expert_used == 0 {
+                let feed_forward_w1 = ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"))?;
+                let feed_forward_w2 = ct.tensor(reader, &format!("{prefix}.ffn_down.weight"))?;
+                let feed_forward_w3 = ct.tensor(reader, &format!("{prefix}.ffn_up.weight"))?;
+                Mlp::Normal {
+                    feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
+                    feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
+                    feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                }
+            } else {
+                Mlp::MoE {
+                    n_expert_used,
+                    n_expert,
+                }
+            };
             let attention_norm = ct.tensor(reader, &format!("{prefix}.attn_norm.weight"))?;
             let ffn_norm = ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"))?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
@@ -303,9 +338,7 @@ impl ModelWeights {
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
                 attention_norm: RmsNorm::new(attention_norm, rms_norm_eps)?,
-                feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
-                feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
-                feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
+                mlp,
                 ffn_norm: RmsNorm::new(ffn_norm, rms_norm_eps)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
@@ -360,12 +393,20 @@ impl ModelWeights {
             let _enter = layer.span_mlp.enter();
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
-            let w1 = layer.feed_forward_w1.forward(&x)?;
-            let w3 = layer.feed_forward_w3.forward(&x)?;
-            let mlp = layer
-                .feed_forward_w2
-                .forward(&(candle_nn::ops::silu(&w1)? * w3)?)?;
-            layer_in = (mlp + residual)?;
+            let x = match &layer.mlp {
+                Mlp::MoE { .. } => todo!(),
+                Mlp::Normal {
+                    feed_forward_w1,
+                    feed_forward_w2,
+                    feed_forward_w3,
+                } => {
+                    let w1 = feed_forward_w1.forward(&x)?;
+                    let w3 = feed_forward_w3.forward(&x)?;
+                    let mlp = feed_forward_w2.forward(&(candle_nn::ops::silu(&w1)? * w3)?)?;
+                    (mlp + residual)?
+                }
+            };
+            layer_in = x
         }
         let x = self.norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
