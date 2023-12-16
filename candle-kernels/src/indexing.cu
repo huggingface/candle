@@ -111,6 +111,42 @@ extern "C" __global__ void FN_NAME(  \
     const size_t right_size \
 ) { index_add(ids, ids_dim_size, inp, out, left_size, src_dim_size, dst_dim_size, right_size); } \
 
+
+template<typename T, typename I>
+__device__ void scatter_assign(
+    const I *ids,
+    const T *inp,
+    T *out,
+    const size_t left_size,
+    const size_t src_dim_size,
+    const size_t dst_dim_size,
+    const size_t right_size
+) {
+      const size_t numel = left_size * right_size;
+      for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
+          const size_t pre = i / right_size;
+          const size_t post = i % right_size;
+          for (unsigned int j = 0; j < src_dim_size; ++j) {
+              const size_t src_i = (pre * src_dim_size + j) * right_size + post;
+              const size_t idx = ids[src_i];
+              const size_t dst_i = (pre * dst_dim_size + idx) * right_size + post;
+              out[dst_i] = inp[src_i];
+          }
+      }
+}
+
+#define SCATTER_OP(TYPENAME, INDEX_TYPENAME, FN_NAME) \
+extern "C" __global__ void FN_NAME(  \
+    const INDEX_TYPENAME *ids, \
+    const TYPENAME *inp, \
+    TYPENAME *out, \
+    const size_t left_size, \
+    const size_t src_dim_size, \
+    const size_t dst_dim_size, \
+    const size_t right_size \
+) { scatter_assign(ids, inp, out, left_size, src_dim_size, dst_dim_size, right_size); } \
+
+
 template<typename T, typename I>
 __device__ void scatter_add(
     const I *ids,
@@ -245,3 +281,22 @@ SA_OP(double, uint8_t, sa_u8_f64)
 SA_OP(uint8_t, uint8_t, sa_u8_u8)
 SA_OP(uint32_t, uint8_t, sa_u8_u32)
 SA_OP(int64_t, uint8_t, sa_u8_i64)
+
+
+SCATTER_OP(float, int64_t, scatter_i64_f32)
+SCATTER_OP(double, int64_t, scatter_i64_f64)
+SCATTER_OP(uint8_t, int64_t, scatter_i64_u8)
+SCATTER_OP(int64_t, int64_t, scatter_i64_i64)
+SCATTER_OP(uint32_t, int64_t, scatter_i64_u32)
+
+SCATTER_OP(float, uint32_t, scatter_u32_f32)
+SCATTER_OP(double, uint32_t, scatter_u32_f64)
+SCATTER_OP(uint8_t, uint32_t, scatter_u32_u8)
+SCATTER_OP(int64_t, uint32_t, scatter_u32_i64)
+SCATTER_OP(uint32_t, uint32_t, scatter_u32_u32)
+
+SCATTER_OP(float, uint8_t, scatter_u8_f32)
+SCATTER_OP(double, uint8_t, scatter_u8_f64)
+SCATTER_OP(uint8_t, uint8_t, scatter_u8_u8)
+SCATTER_OP(uint32_t, uint8_t, scatter_u8_u32)
+SCATTER_OP(int64_t, uint8_t, scatter_u8_i64)

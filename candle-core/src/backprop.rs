@@ -52,6 +52,7 @@ impl Tensor {
             } else if let Some(op) = node.op() {
                 match op {
                     Op::IndexAdd(t1, t2, t3, _)
+                    | Op::Scatter(t1, t2, t3, _)
                     | Op::ScatterAdd(t1, t2, t3, _)
                     | Op::CustomOp3(t1, t2, t3, _)
                     | Op::WhereCond(t1, t2, t3) => {
@@ -383,6 +384,14 @@ impl Tensor {
                     Op::Gather(arg, indexes, dim) => {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.scatter_add(indexes, &grad, *dim)?;
+                    }
+                    Op::Scatter(init, indexes, src, dim) => {
+                        let init_sum_grad = grads.or_insert(init)?;
+                        *init_sum_grad = init_sum_grad.add(&grad)?;
+
+                        let src_grad = grad.gather(indexes, *dim)?;
+                        let src_sum_grad = grads.or_insert(src)?;
+                        *src_sum_grad = src_sum_grad.add(&src_grad)?;
                     }
                     Op::ScatterAdd(init, indexes, src, dim) => {
                         let init_sum_grad = grads.or_insert(init)?;

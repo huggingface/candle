@@ -1023,6 +1023,58 @@ impl<'a> Map2InPlace for IndexAdd<'a> {
     }
 }
 
+struct Scatter<'a>(&'a CudaStorage, &'a Layout, usize);
+
+impl<'a> Map2InPlace for Scatter<'a> {
+    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+        &self,
+        dst: &mut CudaSlice<T>,
+        dst_shape: &Shape,
+        src: &CudaSlice<T>,
+        src_l: &Layout,
+        dev: &CudaDevice,
+    ) -> Result<()> {
+        let ids = &self.0;
+        let ids_l = &self.1;
+        let dim = self.2;
+        let (ids_o1, ids_o2) = match ids_l.contiguous_offsets() {
+            Some(o12) => o12,
+            None => Err(crate::Error::RequiresContiguous { op: "scatter" }.bt())?,
+        };
+        let (name, ids) = match &ids.slice {
+            CudaStorageSlice::U32(slice) => {
+                ("scatter_u32", *slice.slice(ids_o1..ids_o2).device_ptr())
+            }
+            CudaStorageSlice::I64(slice) => {
+                ("scatter_i64", *slice.slice(ids_o1..ids_o2).device_ptr())
+            }
+            CudaStorageSlice::U8(slice) => {
+                ("scatter_u8", *slice.slice(ids_o1..ids_o2).device_ptr())
+            }
+            _ => Err(CudaError::UnexpectedDType {
+                msg: "scatter ids should be u8/u32/i64",
+                expected: DType::U32,
+                got: ids.dtype(),
+            })?,
+        };
+        let src = match src_l.contiguous_offsets() {
+            Some((o1, o2)) => src.slice(o1..o2),
+            None => Err(crate::Error::RequiresContiguous { op: "scatter" }.bt())?,
+        };
+        let left_sz: usize = src_l.dims()[..dim].iter().product();
+        let right_sz: usize = src_l.dims()[dim + 1..].iter().product();
+        let src_dim_sz = src_l.dims()[dim];
+        let dst_dim_sz = dst_shape.dims()[dim];
+        let cfg = LaunchConfig::for_num_elems((left_sz * right_sz) as u32);
+        let func = dev.get_or_load_func(&kernel_name::<T>(name), kernels::INDEXING)?;
+        // SAFETY: Set later by running the kernel.
+        let params = (ids, &src, dst, left_sz, src_dim_sz, dst_dim_sz, right_sz);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }.w()?;
+        Ok(())
+    }
+}
+
 struct ScatterAdd<'a>(&'a CudaStorage, &'a Layout, usize);
 impl<'a> Map2InPlace for ScatterAdd<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -1993,6 +2045,21 @@ impl BackendStorage for CudaStorage {
         let device = self.device().clone();
         let slice = Gather(ids, ids_l, dim).map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
+    }
+    fn scatter(
+        &self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<Self> {
+        let device = self.device().clone();
+        let mut acc = device.zeros_impl(l.shape(), self.dtype())?;
+        self.copy_strided_src(&mut acc, 0, l)?;
+        Scatter(ids, ids_l, dim).map(&mut acc.slice, l.shape(), &src.slice, src_l, &device)?;
+        Ok(acc)
     }
     fn scatter_add(
         &self,

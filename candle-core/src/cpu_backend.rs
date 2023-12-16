@@ -900,6 +900,63 @@ impl<'a, I: IntDType> Map1 for IndexSelect<'a, I> {
     }
 }
 
+struct Scatter<'a, I: IntDType> {
+    ids: &'a [I],
+    ids_l: &'a Layout,
+    dim: usize,
+}
+
+impl<'a, I: IntDType> Map2 for Scatter<'a, I> {
+    const OP: &'static str = "scatter";
+    fn f<T: WithDType>(&self, v1: &[T], l1: &Layout, src: &[T], src_l: &Layout) -> Result<Vec<T>> {
+        let dst_len = l1.shape().elem_count();
+        let mut dst = vec![T::zero(); dst_len];
+        copy_strided_src_(v1, &mut dst, 0, l1);
+        let src = match src_l.contiguous_offsets() {
+            None => Err(Error::RequiresContiguous { op: "scatter" }.bt())?,
+            Some((o1, o2)) => &src[o1..o2],
+        };
+
+        let dim = self.dim;
+        let ids_dims = self.ids_l.dims();
+        let dst_dims = l1.dims();
+        let dst_dim_len = dst_dims[dim];
+        let dst_right_len: usize = dst_dims[dim + 1..].iter().product();
+
+        let ids_left_len: usize = ids_dims[..dim].iter().product();
+        let ids_dim_len = ids_dims[dim];
+        let ids_right_len: usize = ids_dims[dim + 1..].iter().product();
+
+        let ids = match self.ids_l.contiguous_offsets() {
+            Some((a, b)) => &self.ids[a..b],
+            None => Err(Error::RequiresContiguous { op: "gather" }.bt())?,
+        };
+        for left_i in 0..ids_left_len {
+            let start_ids_idx = left_i * ids_right_len * ids_dim_len;
+            let start_dst_idx = left_i * dst_right_len * dst_dim_len;
+            for i in 0..ids_dim_len {
+                let start_ids_idx = start_ids_idx + i * ids_right_len;
+                for right_i in 0..dst_right_len {
+                    let ids_idx = start_ids_idx + right_i;
+                    let index = ids[ids_idx].as_usize();
+                    if index >= dst_dim_len {
+                        Err(Error::InvalidIndex {
+                            index,
+                            size: dst_dim_len,
+                            op: "gather",
+                        }
+                        .bt())?
+                    }
+                    let dst_idx = start_dst_idx + index * dst_right_len + right_i;
+                    dst[dst_idx] = src[ids_idx]
+                }
+            }
+        }
+
+        Ok(dst)
+    }
+}
+
 struct ScatterAdd<'a, I: IntDType> {
     ids: &'a [I],
     ids_l: &'a Layout,
@@ -2584,6 +2641,23 @@ impl BackendStorage for CpuStorage {
             Self::U32(ids) => Gather { ids, ids_l, dim }.map(self, l),
             Self::I64(ids) => Gather { ids, ids_l, dim }.map(self, l),
             _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "gather")),
+        }
+    }
+
+    fn scatter(
+        &self,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
+    ) -> Result<Self> {
+        match ids {
+            Self::U8(ids) => Scatter { ids, ids_l, dim }.map(self, l, src, src_l),
+            Self::U32(ids) => Scatter { ids, ids_l, dim }.map(self, l, src, src_l),
+            Self::I64(ids) => Scatter { ids, ids_l, dim }.map(self, l, src, src_l),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter")),
         }
     }
 
