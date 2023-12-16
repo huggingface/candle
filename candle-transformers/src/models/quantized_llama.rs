@@ -92,8 +92,8 @@ impl Module for MlpOrMoe {
 
                 // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
                 // top_x contains the row indexes to evaluate for each expert.
-                let mut top_x = vec![vec![]; *n_expert_used];
-                let mut selected_rws = vec![vec![]; *n_expert_used];
+                let mut top_x = vec![vec![]; experts.len()];
+                let mut selected_rws = vec![vec![]; experts.len()];
                 for (row_idx, rw) in routing_weights.iter().enumerate() {
                     let mut dst = (0..rw.len() as u32).collect::<Vec<u32>>();
                     dst.sort_by(|&i, &j| rw[j as usize].total_cmp(&rw[i as usize]));
