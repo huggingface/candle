@@ -54,6 +54,15 @@ struct Mlp {
     feed_forward_w3: QMatMul,
 }
 
+impl Module for Mlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let w1 = self.feed_forward_w1.forward(xs)?;
+        let w3 = self.feed_forward_w3.forward(xs)?;
+        self.feed_forward_w2
+            .forward(&(candle_nn::ops::silu(&w1)? * w3)?)
+    }
+}
+
 #[derive(Debug, Clone)]
 enum MlpOrMoe {
     Mlp(Mlp),
@@ -419,11 +428,7 @@ impl ModelWeights {
             let x = match &layer.mlp_or_moe {
                 MlpOrMoe::MoE { .. } => todo!(),
                 MlpOrMoe::Mlp(mlp) => {
-                    let w1 = mlp.feed_forward_w1.forward(&x)?;
-                    let w3 = mlp.feed_forward_w3.forward(&x)?;
-                    let mlp = mlp
-                        .feed_forward_w2
-                        .forward(&(candle_nn::ops::silu(&w1)? * w3)?)?;
+                    let mlp = mlp.forward(&x)?;
                     (mlp + residual)?
                 }
             };
