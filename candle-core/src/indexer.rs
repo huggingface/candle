@@ -64,7 +64,7 @@ impl Tensor {
 #[derive(Debug)]
 /// Generic structure used to index a slice of the tensor
 pub enum TensorIndexer {
-    /// This selects the elemnts for which an index has some specific value.
+    /// This selects the elements for which an index has some specific value.
     Select(usize),
     /// This is a regular slice, purely indexing a chunk of the tensor
     Narrow(Bound<usize>, Bound<usize>),
