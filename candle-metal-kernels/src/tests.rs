@@ -574,12 +574,16 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
 
     let options = MTLResourceOptions::StorageModeManaged;
     let output = device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
-    call_reduce_contiguous(
+    let num_dims = 1;
+    let dims = vec![v.len()];
+    let strides = vec![1];
+    call_reduce_strided(
         &device,
         command_buffer,
         &kernels,
         name,
-        v.len(),
+        &dims,
+        &strides,
         out_length,
         &input,
         0,
@@ -623,7 +627,7 @@ fn reduce_sum() {
     let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
     let out_length = 1;
 
-    let results = run_reduce(&v, out_length, "fast_sum_f32");
+    let results = run_reduce(&v, out_length, "fast_sum_f32_strided");
     assert_eq!(approx(results, 4), vec![21.0]);
 }
 
@@ -632,7 +636,7 @@ fn reduce_sum2() {
     let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
     let out_length = 2;
 
-    let results = run_reduce(&v, out_length, "fast_sum_f32");
+    let results = run_reduce(&v, out_length, "fast_sum_f32_strided");
     assert_eq!(approx(results, 4), vec![6.0, 15.0]);
 }
 

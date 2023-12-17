@@ -1,5 +1,8 @@
 #include <metal_stdlib>
 
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
 METAL_FUNC uint get_strided_index(
     uint idx,
     constant size_t &num_dims,
@@ -63,10 +66,14 @@ BINARY_OP(x + y, add)
 BINARY_OP(x - y, sub)
 BINARY_OP(x * y, mul)
 BINARY_OP(x / y, div)
+BINARY_OP(MIN(x, y), min)
+BINARY_OP(MAX(x, y), max)
 
 #if __METAL_VERSION__ >= 310
 BFLOAT_BINARY_OP(x + y, add)
 BFLOAT_BINARY_OP(x - y, sub)
 BFLOAT_BINARY_OP(x * y, mul)
 BFLOAT_BINARY_OP(x / y, div)
+BFLOAT_BINARY_OP(MIN(x, y), min)
+BFLOAT_BINARY_OP(MAX(x, y), max)
 #endif

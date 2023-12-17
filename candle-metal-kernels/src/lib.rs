@@ -166,7 +166,7 @@ pub mod unary {
     ops!(cos, sin, exp, sqr, sqrt, neg, log, gelu, ceil, floor, round, erf, gelu_erf, tanh);
 }
 pub mod binary {
-    ops!(add, sub, mul, div);
+    ops!(add, sub, mul, div, min, max);
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -571,6 +571,64 @@ pub fn call_reduce_contiguous(
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
         (elements_to_sum as u64 + 2 - 1) / 2,
+    )
+    .next_power_of_two();
+
+    let thread_group_size = MTLSize {
+        width,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.update_fence(&kernels.fence);
+    encoder.end_encoding();
+    Ok(())
+}
+
+pub fn call_reduce_strided(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    kernel_name: &'static str,
+    shape: &[usize],
+    strides: &[usize],
+    out_length: usize,
+    input: &Buffer,
+    input_offset: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let length: usize = shape.iter().product();
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let elements_to_sum = length / out_length;
+
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.wait_for_fence(&kernels.fence);
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            shape.len(),
+            shape,
+            strides,
+            elements_to_sum,
+            (input, input_offset),
+            output
+        )
+    );
+
+    let thread_group_count = MTLSize {
+        width: out_length as u64,
+        height: 1,
+        depth: 1,
+    };
+
+    let width = std::cmp::min(
+        pipeline.max_total_threads_per_threadgroup(),
+        elements_to_sum as u64,
     )
     .next_power_of_two();
 
