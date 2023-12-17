@@ -1010,6 +1010,56 @@ pub fn call_index_select(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn call_gather(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    shape: &[usize],
+    ids_size: usize,
+    dim: usize,
+    input: &Buffer,
+    ids: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let left_size: usize = shape[..dim].iter().product();
+    let right_size: usize = shape[dim + 1..].iter().product();
+    let src_dim_size = shape[dim];
+    let dst_el = ids_size * left_size * right_size;
+
+    let pipeline = kernels.load_pipeline(device, Source::Indexing, name)?;
+
+    let encoder = command_buffer.new_compute_command_encoder();
+
+    encoder.wait_for_fence(&kernels.fence);
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            dst_el,
+            left_size,
+            src_dim_size,
+            right_size,
+            ids_size,
+            input,
+            ids,
+            output
+        )
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
+
+    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(ids, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.update_fence(&kernels.fence);
+    encoder.end_encoding();
+    Ok(())
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Value {
     USize(usize),

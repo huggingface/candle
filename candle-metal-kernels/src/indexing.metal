@@ -1,6 +1,34 @@
 #include <metal_stdlib>
 using namespace metal;
 
+template<typename TYPENAME, typename INDEX_TYPENAME>
+METAL_FUNC void index( 
+    constant size_t &dst_size, 
+    constant size_t &left_size, 
+    constant size_t &src_dim_size, 
+    constant size_t &right_size, 
+    constant size_t &ids_size, 
+    const device TYPENAME *input, 
+    const device INDEX_TYPENAME *input_ids, 
+    device TYPENAME *output, 
+    uint tid [[ thread_position_in_grid ]] 
+) { 
+    if (tid >= dst_size) { 
+        return; 
+    } 
+    const size_t id_i = (tid / right_size) % ids_size; 
+    const INDEX_TYPENAME input_i = min(input_ids[id_i], (INDEX_TYPENAME)(src_dim_size - 1)); 
+    const size_t right_rank_i = tid % right_size; 
+    const size_t left_rank_i = tid / right_size / ids_size; 
+    /* 
+    // Force prevent out of bounds indexing 
+    // since there doesn't seem to be a good way to force crash 
+    // No need to check for zero we're only allowing unsized. 
+    */ 
+    const size_t src_i = left_rank_i * src_dim_size * right_size + input_i * right_size + right_rank_i; 
+    output[tid] = input[src_i]; 
+}
+
 # define INDEX_OP(NAME, INDEX_TYPENAME, TYPENAME) \
 kernel void NAME( \
     constant size_t &dst_size, \
@@ -11,22 +39,52 @@ kernel void NAME( \
     const device TYPENAME *input, \
     const device INDEX_TYPENAME *input_ids, \
     device TYPENAME *output, \
-    uint gid [[ thread_position_in_grid ]] \
+    uint tid [[ thread_position_in_grid ]] \
 ) { \
-    if (gid >= dst_size) { \
-        return; \
-    } \
-    const size_t id_i = (gid / right_size) % ids_size; \
-    const INDEX_TYPENAME input_i = min(input_ids[id_i], (INDEX_TYPENAME)(src_dim_size - 1)); \
-    const size_t right_rank_i = gid % right_size; \
-    const size_t left_rank_i = gid / right_size / ids_size; \
-    /* \
-    // Force prevent out of bounds indexing \
-    // since there doesn't seem to be a good way to force crash \
-    // No need to check for zero we're only allowing unsized. \
-    */ \
-    const size_t src_i = left_rank_i * src_dim_size * right_size + input_i * right_size + right_rank_i; \
-    output[gid] = input[src_i]; \
+    index<TYPENAME, INDEX_TYPENAME>(dst_size, left_size, src_dim_size, right_size, ids_size, input, input_ids, output, tid); \
+}
+
+
+template<typename TYPENAME, typename INDEX_TYPENAME>
+METAL_FUNC void gather( 
+    constant size_t &dst_size, 
+    constant size_t &left_size, 
+    constant size_t &src_dim_size, 
+    constant size_t &right_size, 
+    constant size_t &ids_size, 
+    const device TYPENAME *input, 
+    const device INDEX_TYPENAME *input_ids, 
+    device TYPENAME *output, 
+    uint tid [[ thread_position_in_grid ]] 
+) { 
+    if (tid >= dst_size) { 
+        return; 
+    } 
+    const INDEX_TYPENAME input_i = input_ids[tid]; 
+    const size_t right_rank_i = tid % right_size; 
+    const size_t left_rank_i = tid / right_size / ids_size; 
+    /* 
+    // Force prevent out of bounds indexing 
+    // since there doesn't seem to be a good way to force crash 
+    // No need to check for zero we're only allowing unsized. 
+    */ 
+    const size_t src_i = (left_rank_i * src_dim_size + input_i) * right_size + right_rank_i; 
+    output[tid] = input[src_i]; 
+}
+
+# define GATHER_OP(NAME, INDEX_TYPENAME, TYPENAME) \
+kernel void NAME( \
+    constant size_t &dst_size, \
+    constant size_t &left_size, \
+    constant size_t &src_dim_size, \
+    constant size_t &right_size, \
+    constant size_t &ids_size, \
+    const device TYPENAME *input, \
+    const device INDEX_TYPENAME *input_ids, \
+    device TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    gather<TYPENAME, INDEX_TYPENAME>(dst_size, left_size, src_dim_size, right_size, ids_size, input, input_ids, output, tid); \
 }
 
 
@@ -76,6 +134,8 @@ kernel void FN_NAME( \
 
 INDEX_OP(is_u32_f32, uint, float)
 INDEX_OP(is_u32_f16, uint, half)
+GATHER_OP(gather_u32_f32, uint, float)
+GATHER_OP(gather_u32_f16, uint, half)
 
 
 #if __METAL_VERSION__ >= 310
