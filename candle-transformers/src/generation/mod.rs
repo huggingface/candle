@@ -1,6 +1,7 @@
 use candle::{DType, Error, Result, Tensor};
 use rand::{distributions::Distribution, SeedableRng};
 
+#[derive(Clone)]
 pub struct LogitsProcessor {
     rng: rand::rngs::StdRng,
     temperature: Option<f64>,
