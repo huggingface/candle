@@ -17,7 +17,7 @@ candle-nn = { path = "../candle-nn", version = "0.3.1" }
 candle-transformers = { path = "../candle-transformers", version = "0.3.1" }
 candle-flash-attn = { path = "../candle-flash-attn", version = "0.3.1", optional = true }
 candle-onnx = { path = "../candle-onnx", version = "0.3.1", optional = true }
-cudarc = { workspace = true, optional = true }
+cudarc = { workspace = true }                                                             #, optional = true }
 half = { workspace = true, optional = true }
 image = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -33,7 +33,8 @@ tokenizers = { workspace = true, features = ["onig"] }
 anyhow = { workspace = true }
 byteorder = { workspace = true }
 clap = { workspace = true }
-hf-hub = { workspace = true, features=["tokio"]}
+half = { workspace = true }
+hf-hub = { workspace = true, features = ["tokio"] }
 imageproc = { workspace = true }
 memmap2 = { workspace = true }
 rand = { workspace = true }
@@ -50,11 +51,21 @@ anyhow = { workspace = true }
 
 [features]
 default = []
-accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+accelerate = [
+    "dep:accelerate-src",
+    "candle/accelerate",
+    "candle-nn/accelerate",
+    "candle-transformers/accelerate",
+]
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 cudnn = ["candle/cudnn"]
 flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
-mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
+mkl = [
+    "dep:intel-mkl-src",
+    "candle/mkl",
+    "candle-nn/mkl",
+    "candle-transformers/mkl",
+]
 nccl = ["cuda", "cudarc/nccl", "dep:half"]
 onnx = ["candle-onnx"]
 
@@ -73,3 +84,7 @@ required-features = ["onnx"]
 [[example]]
 name = "onnx_basics"
 required-features = ["onnx"]
+
+[[example]]
+name = "search-sorted"
+features = ["cuda"]
