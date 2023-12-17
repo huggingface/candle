@@ -19,7 +19,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Minimalist ML framework."
 repository = "https://github.com/huggingface/candle"
