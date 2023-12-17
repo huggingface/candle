@@ -74,7 +74,7 @@ def test_module_can_load_statedict():
     a.load_state_dict(statedict)
 
 
-def test_module_throws_on_shape_missmatch():
+def test_module_throws_on_shape_mismatch():
     class A(Module):
         def __init__(self):
             super().__init__()
@@ -121,7 +121,7 @@ def test_module_can_load_quantized_tensors():
     assert a.t.ggml_dtype == "Q4_0"
 
 
-def test_module_dequantizes_tensors_automaticaly():
+def test_module_dequantizes_tensors_automatically():
     class A(Module):
         def __init__(self):
             super().__init__()

@@ -463,7 +463,7 @@ impl Content {
     ) -> Result<QTensor> {
         let tensor_info = match self.tensor_infos.get(name) {
             Some(tensor_info) => tensor_info,
-            None => crate::bail!("cannot find tensor-infor for {name}"),
+            None => crate::bail!("cannot find tensor info for {name}"),
         };
         tensor_info.read(reader, self.tensor_data_offset)
     }

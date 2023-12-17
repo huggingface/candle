@@ -156,7 +156,7 @@ def pyi_file(obj, indent=""):
         string += function(obj, indent)
 
     elif inspect.isgetsetdescriptor(obj):
-        # TODO it would be interesing to add the setter maybe ?
+        # TODO it would be interesting to add the setter maybe ?
         string += f"{indent}@property\n"
         string += function(obj, indent, text_signature="(self)")
 

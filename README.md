@@ -144,8 +144,10 @@ And then head over to
 ## Useful External Resources
 - [`candle-tutorial`](https://github.com/ToluClassics/candle-tutorial): A
   very detailed tutorial showing how to convert a PyTorch model to Candle.
-- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): Efficient and ergonomic LoRA implemenation for Candle. `candle-lora` has      
-  out-of-the-box LoRA support for many models from Candle, which can be found [here](https://github.com/EricLBuehler/candle-lora/tree/master/candle-lora-transformers/examples).
+- [`candle-lora`](https://github.com/EricLBuehler/candle-lora): Efficient and
+  ergonomic LoRA implementation for Candle. `candle-lora` has      
+  out-of-the-box LoRA support for many models from Candle, which can be found
+  [here](https://github.com/EricLBuehler/candle-lora/tree/master/candle-lora-transformers/examples).
 - [`optimisers`](https://github.com/KGrewal1/optimisers): A collection of optimisers
   including SGD with momentum, AdaGrad, AdaDelta, AdaMax, NAdam, RAdam, and RMSprop.
 - [`candle-vllm`](https://github.com/EricLBuehler/candle-vllm): Efficient platform for inference and

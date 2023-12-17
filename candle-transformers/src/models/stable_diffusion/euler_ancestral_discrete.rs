@@ -1,6 +1,6 @@
 //! Ancestral sampling with Euler method steps.
 //!
-//! Reference implemenation in Rust:
+//! Reference implementation in Rust:
 //!
 //! https://github.com/pykeio/diffusers/blob/250b9ad1898af41e76a74c0d8d4292652823338a/src/schedulers/euler_ancestral_discrete.rs
 //!
@@ -135,7 +135,7 @@ impl EulerAncestralDiscreteScheduler {
         );
         sigmas_int.push(0.0);
 
-        // standard deviation of the inital noise distribution
+        // standard deviation of the initial noise distribution
         // f64 does not implement Ord such that there is no `max`, so we need to use this workaround
         let init_noise_sigma = *sigmas_int
             .iter()
