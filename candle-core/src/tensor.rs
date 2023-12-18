@@ -361,6 +361,8 @@ impl Tensor {
         Self::new_impl(array, shape, device, false)
     }
 
+    /// Returns a new tensor with all the elements having the same specified value. Note that
+    /// the tensor is not contiguous so you would have to call `.contiguous()` on it if needed.
     pub fn full<D: crate::WithDType, S: Into<Shape>>(
         value: D,
         shape: S,
