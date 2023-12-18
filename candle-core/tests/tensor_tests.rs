@@ -32,6 +32,14 @@ fn ones(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn full(device: &Device) -> Result<()> {
+    assert_eq!(
+        Tensor::full(42u32, (2, 3), device)?.to_vec2::<u32>()?,
+        [[42, 42, 42], [42, 42, 42]],
+    );
+    Ok(())
+}
+
 fn arange(device: &Device) -> Result<()> {
     assert_eq!(
         Tensor::arange(0u8, 5u8, device)?.to_vec1::<u8>()?,
@@ -1072,6 +1080,7 @@ fn randn(device: &Device) -> Result<()> {
 
 test_device!(zeros, zeros_cpu, zeros_gpu, zeros_metal);
 test_device!(ones, ones_cpu, ones_gpu, ones_metal);
+test_device!(full, full_cpu, full_gpu, full_metal);
 test_device!(arange, arange_cpu, arange_gpu, arange_metal);
 test_device!(add_mul, add_mul_cpu, add_mul_gpu, add_mul_metal);
 test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu, tensor_2d_metal);
