@@ -543,7 +543,6 @@ fn argmax(device: &Device) -> Result<()> {
     let t1 = tensor.reshape((190, 5, 4))?;
     let t2 = t1.transpose(0, 2)?.contiguous()?.transpose(0, 2)?;
     for tensor in [t1, t2] {
-        println!("{}", tensor.argmax_keepdim(0)?.argmax_keepdim(2)?);
         assert_eq!(
             tensor
                 .argmax_keepdim(0)?
