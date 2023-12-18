@@ -226,17 +226,17 @@ impl candle::CustomOp1 for SoftmaxLastDim {
 
         let last_dim = layout.dims()[layout.shape().rank() - 1];
         let elem_count = layout.shape().elem_count();
-        let mut output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
+        let output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
         candle_metal_kernels::call_last_softmax(
             device.metal_device(),
             &command_buffer,
-            &kernels,
+            kernels,
             name,
             elem_count,
             last_dim,
             storage.buffer(),
             layout.start_offset() * storage.dtype().size_in_bytes(),
-            &mut output,
+            &output,
         )
         .unwrap();
         let newstorage = candle::MetalStorage::new(output, device.clone(), storage.dtype());

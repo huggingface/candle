@@ -574,7 +574,6 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
 
     let options = MTLResourceOptions::StorageModeManaged;
     let output = device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
-    let num_dims = 1;
     let dims = vec![v.len()];
     let strides = vec![1];
     call_reduce_strided(
