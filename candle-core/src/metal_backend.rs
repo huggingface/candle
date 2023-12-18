@@ -45,6 +45,12 @@ pub enum MetalError {
     },
     #[error("{0:?}")]
     LockError(LockError),
+    #[error("{msg}, expected: {expected:?}, got: {got:?}")]
+    UnexpectedDType {
+        msg: &'static str,
+        expected: DType,
+        got: DType,
+    },
 }
 
 impl From<String> for MetalError {
@@ -827,12 +833,10 @@ impl BackendStorage for MetalStorage {
     }
 
     fn gather(&self, src_l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
-        let (ids_o1, ids_o2) = match ids_l.contiguous_offsets() {
+        let (ids_o1, _) = match ids_l.contiguous_offsets() {
             Some(o12) => o12,
             None => Err(crate::Error::RequiresContiguous { op: "gather" }.bt())?,
         };
-        let left_size: usize = src_l.dims()[..dim].iter().product();
-        let right_size: usize = src_l.dims()[dim + 1..].iter().product();
         let ids_el = ids_l.dims()[dim];
         let dst_el = ids_l.shape().elem_count();
         let dtype = self.dtype;
@@ -853,7 +857,9 @@ impl BackendStorage for MetalStorage {
             ids_el,
             dim,
             &self.buffer,
+            src_l.start_offset() * dtype.size_in_bytes(),
             &ids.buffer,
+            ids_o1 * ids.dtype.size_in_bytes(),
             &buffer,
         )
         .map_err(MetalError::from)?;
@@ -862,14 +868,48 @@ impl BackendStorage for MetalStorage {
 
     fn scatter_add(
         &self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: &Self,
-        _: &Layout,
-        _: usize,
+        l: &Layout,
+        ids: &Self,
+        ids_l: &Layout,
+        src: &Self,
+        src_l: &Layout,
+        dim: usize,
     ) -> Result<Self> {
-        crate::bail!("scatter_add metal")
+        let mut acc = self.device.zeros_impl(l.shape(), self.dtype())?;
+        self.copy_strided_src(&mut acc, 0, l)?;
+        let (ids_offset, _) = match ids_l.contiguous_offsets() {
+            Some(o12) => o12,
+            None => Err(crate::Error::RequiresContiguous { op: "scatter-add" }.bt())?,
+        };
+        let src_offset = match src_l.contiguous_offsets() {
+            Some((o1, _)) => o1,
+            None => Err(crate::Error::RequiresContiguous { op: "scatter-add" }.bt())?,
+        };
+        let name = match (ids.dtype, self.dtype) {
+            (DType::U32, DType::F32) => "sa_u32_f32",
+            _ => Err(MetalError::UnexpectedDType {
+                msg: "scatter-add ids should be u8/u32/i64",
+                expected: DType::U32,
+                got: ids.dtype(),
+            })?,
+        };
+        let command_buffer = self.device.command_buffer()?;
+        candle_metal_kernels::call_scatter_add(
+            &self.device.device,
+            &command_buffer,
+            &self.device.kernels,
+            name,
+            src_l.dims(),
+            l.dims(),
+            dim,
+            &src.buffer,
+            src_offset * src.dtype.size_in_bytes(),
+            &ids.buffer,
+            ids_offset * ids.dtype.size_in_bytes(),
+            &acc.buffer,
+        )
+        .map_err(MetalError::from)?;
+        Ok(acc)
     }
 
     fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
