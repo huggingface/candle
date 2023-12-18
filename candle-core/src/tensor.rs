@@ -361,6 +361,14 @@ impl Tensor {
         Self::new_impl(array, shape, device, false)
     }
 
+    pub fn full<D: crate::WithDType, S: Into<Shape>>(
+        value: D,
+        shape: S,
+        device: &Device,
+    ) -> Result<Self> {
+        Self::from_vec_impl(vec![value], (), device, false)?.broadcast_as(shape)
+    }
+
     /// Creates a new 1D tensor from an iterator.
     pub fn from_iter<D: crate::WithDType>(
         iter: impl IntoIterator<Item = D>,
