@@ -220,4 +220,10 @@ impl crate::backend::BackendDevice for MetalDevice {
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
+
+    fn reset_peak_memory_stats(&mut self, _device: crate::Device) {}
+
+    fn max_memory_allocated(&self, _device: crate::Device) -> usize {
+        usize::MAX
+    }
 }

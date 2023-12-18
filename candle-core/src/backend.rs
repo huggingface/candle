@@ -1,5 +1,5 @@
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
-use crate::{CpuStorage, DType, Layout, Result, Shape};
+use crate::{CpuStorage, DType, Device, Layout, Result, Shape};
 
 pub trait BackendStorage: Sized {
     type Device: BackendDevice;
@@ -121,4 +121,8 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
 
     fn set_seed(&self, _: u64) -> Result<()>;
+
+    fn reset_peak_memory_stats(&mut self, device: Device);
+
+    fn max_memory_allocated(&self, device: Device) -> usize;
 }

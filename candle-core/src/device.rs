@@ -179,6 +179,22 @@ impl Device {
         }
     }
 
+    pub fn reset_peak_memory_stats(&mut self, device: Device) {
+        match self {
+            Self::Cpu => CpuDevice.reset_peak_memory_stats(device),
+            Self::Cuda(cudadevice) => cudadevice.reset_peak_memory_stats(device),
+            Device::Metal(metaldevice) => metaldevice.reset_peak_memory_stats(device),
+        }
+    }
+
+    pub fn max_memory_allocated(&self, device: Device) -> usize {
+        match self {
+            Self::Cpu => CpuDevice.max_memory_allocated(device),
+            Self::Cuda(cudadevice) => cudadevice.max_memory_allocated(device),
+            Device::Metal(metaldevice) => metaldevice.max_memory_allocated(device),
+        }
+    }
+
     pub(crate) fn rand_uniform_f64(
         &self,
         lo: f64,
