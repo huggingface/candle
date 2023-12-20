@@ -40,7 +40,8 @@ impl Config {
     }
 
     // https://huggingface.co/Open-Orca/Mistral-7B-OpenOrca/blob/main/config.json
-    pub fn config_open_orca_chat_ml(use_flash_attn: bool) -> Self {
+    // https://huggingface.co/teknium/OpenHermes-2.5-Mistral-7B/blob/main/config.json
+    pub fn config_chat_ml(use_flash_attn: bool) -> Self {
         Self {
             vocab_size: 32002,
             hidden_size: 4096,
