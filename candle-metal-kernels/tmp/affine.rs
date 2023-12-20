@@ -50,6 +50,7 @@ fn run_affine_bench<T: Clone>(device: &Device, kernels: &Kernels, v: &[T]) {
                 &device,
                 command_buffer,
                 &kernels,
+                "affine_float",
                 v.len(),
                 &input,
                 &mut output,

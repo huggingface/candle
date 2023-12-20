@@ -201,10 +201,9 @@ impl Device {
                     Ok(Storage::Cuda(storage))
                 }
             }
-            Device::Metal(_device) => {
-                // let storage = device.rand_uniform(shape, dtype, lo, up)?;
-                // Ok(Storage::Metal(storage))
-                crate::bail!("Metal rand_uniform not implemented")
+            Device::Metal(device) => {
+                let storage = device.rand_uniform(shape, dtype, lo, up)?;
+                Ok(Storage::Metal(storage))
             }
         }
     }

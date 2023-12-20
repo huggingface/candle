@@ -1877,10 +1877,7 @@ impl Tensor {
                     Storage::Metal(metal.storage_from_cpu_storage(storage)?)
                 }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
-                (Storage::Metal(storage), Device::Cpu) => {
-                    println!("{storage:?} - {:?}", storage.to_cpu_storage()?);
-                    Storage::Cpu(storage.to_cpu_storage()?)
-                }
+                (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {
                     // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
                     // are the same.

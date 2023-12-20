@@ -1,5 +1,8 @@
 #include <metal_stdlib>
 
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
 METAL_FUNC uint get_strided_index(
     uint idx,
     constant size_t &num_dims,
@@ -22,15 +25,15 @@ kernel void FN_NAME( \
     constant size_t &dim, \
     device const TYPENAME *left,  \
     device const TYPENAME *right,  \
-    device TYPENAME *output, \
-    uint thread_position_in_grid [[ thread_position_in_grid ]] \
+    device OUT_TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
 ) { \
-    if (thread_position_in_grid >= dim) { \
+    if (tid >= dim) { \
         return; \
     } \
-    TYPENAME x = left[thread_position_in_grid]; \
-    TYPENAME y = right[thread_position_in_grid]; \
-    output[thread_position_in_grid] = OUT_TYPENAME(FN); \
+    TYPENAME x = left[tid]; \
+    TYPENAME y = right[tid]; \
+    output[tid] = OUT_TYPENAME(FN); \
 }\
 kernel void FN_NAME_STRIDED( \
     constant size_t &dim, \
@@ -40,33 +43,48 @@ kernel void FN_NAME_STRIDED( \
     constant size_t *right_strides, \
     device const TYPENAME *left,  \
     device const TYPENAME *right,  \
-    device TYPENAME *output, \
-    uint thread_position_in_grid [[ thread_position_in_grid ]] \
+    device OUT_TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
 ) { \
-    if (thread_position_in_grid >= dim) { \
+    if (tid >= dim) { \
         return; \
     } \
-    TYPENAME x = left[get_strided_index(thread_position_in_grid, num_dims, dims, left_strides)]; \
-    TYPENAME y = right[get_strided_index(thread_position_in_grid, num_dims, dims, right_strides)]; \
-    output[thread_position_in_grid] = OUT_TYPENAME(FN); \
+    TYPENAME x = left[get_strided_index(tid, num_dims, dims, left_strides)]; \
+    TYPENAME y = right[get_strided_index(tid, num_dims, dims, right_strides)]; \
+    output[tid] = OUT_TYPENAME(FN); \
 }
 
 #define BINARY_OP(FN, NAME) \
-BINARY(FN, float, float, NAME##_float, NAME##_float_strided); \
-BINARY(FN, half, half, NAME##_half, NAME##_half_strided);
+BINARY(FN, float, float, NAME##_f32, NAME##_f32_strided); \
+BINARY(FN, half, half, NAME##_f16, NAME##_f16_strided);
 
 #define BFLOAT_BINARY_OP(FN, NAME) \
-BINARY(FN, bfloat, bfloat, NAME##_bfloat, NAME##_bfloat_strided);
+BINARY(FN, bfloat, bfloat, NAME##_bf16, NAME##_bf16_strided);
+
+#define BINARY_OP_OUT(NAME, FN) \
+BINARY(FN, float, uint8_t, NAME##_f32, NAME##_f32_strided); \
+BINARY(FN, half, uint8_t, NAME##_f16, NAME##_f16_strided);
 
 
 BINARY_OP(x + y, add)
 BINARY_OP(x - y, sub)
 BINARY_OP(x * y, mul)
 BINARY_OP(x / y, div)
+BINARY_OP(MIN(x, y), min)
+BINARY_OP(MAX(x, y), max)
+
+BINARY_OP_OUT(eq, x == y)
+BINARY_OP_OUT(ne, x != y)
+BINARY_OP_OUT(le, x <= y)
+BINARY_OP_OUT(lt, x < y)
+BINARY_OP_OUT(ge, x >= y)
+BINARY_OP_OUT(gt, x > y)
 
 #if __METAL_VERSION__ >= 310
 BFLOAT_BINARY_OP(x + y, add)
 BFLOAT_BINARY_OP(x - y, sub)
 BFLOAT_BINARY_OP(x * y, mul)
 BFLOAT_BINARY_OP(x / y, div)
+BFLOAT_BINARY_OP(MIN(x, y), min)
+BFLOAT_BINARY_OP(MAX(x, y), max)
 #endif

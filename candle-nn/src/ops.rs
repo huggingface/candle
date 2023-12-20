@@ -201,6 +201,47 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         };
         Ok((dst, layout.shape().clone()))
     }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        storage: &candle::MetalStorage,
+        layout: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        use candle::{backend::BackendStorage, DType};
+        let device = storage.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+        let name = match storage.dtype() {
+            DType::F32 => "softmax_f32",
+            DType::F16 => "softmax_f16",
+            DType::BF16 => "softmax_bf16",
+            dtype => candle::bail!("softmax-last-dim is not implemented for {dtype:?}"),
+        };
+
+        let n = layout.stride().len();
+        if !(layout.is_contiguous() && layout.stride()[n - 1] == 1) {
+            candle::bail!("Non contiguous softmax-last-dim is not implemented");
+        }
+
+        let last_dim = layout.dims()[layout.shape().rank() - 1];
+        let elem_count = layout.shape().elem_count();
+        let output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
+        candle_metal_kernels::call_last_softmax(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            name,
+            elem_count,
+            last_dim,
+            storage.buffer(),
+            layout.start_offset() * storage.dtype().size_in_bytes(),
+            &output,
+        )
+        .unwrap();
+        let newstorage = candle::MetalStorage::new(output, device.clone(), storage.dtype());
+        Ok((newstorage, layout.shape().clone()))
+    }
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
