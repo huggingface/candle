@@ -34,6 +34,8 @@ zip = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+criterion = { workspace = true }
+
 
 [features]
 default = []
@@ -42,3 +44,8 @@ cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
 accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = ["dep:metal", "dep:candle-metal-kernels"]
+
+[[bench]]
+name = "matmul"
+harness = false
+

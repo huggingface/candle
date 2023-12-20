@@ -32,6 +32,7 @@ accelerate-src = { version = "0.3.2" }
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
 clap = { version = "4.2.4", features = ["derive"] }
+criterion = { version = "0.5.1", default-features=false }
 cudarc = { version = "0.9.14", features = ["f16"] }
 gemm = { version = "0.16.6", features = ["wasm-simd128-enable"] }
 hf-hub = "0.3.0"

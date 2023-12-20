@@ -1297,11 +1297,21 @@ pub fn call_gemm(
     let batched = b > 1;
     let fused_activation = false;
     let fused_bias = false;
-    let m_simd = 16;
-    let n_simd = 16;
-    let k_simd = 16;
-    let m_splits = 2;
-    let n_splits = 2;
+    let (m_simd, n_simd, k_simd, m_splits, n_splits) = if m == 1 {
+        let m_simd = 16;
+        let n_simd = 8;
+        let k_simd = 64;
+        let m_splits = 1;
+        let n_splits = 1;
+        (m_simd, n_simd, k_simd, m_splits, n_splits)
+    } else {
+        let m_simd = 40;
+        let n_simd = 40;
+        let k_simd = 8;
+        let m_splits = 1;
+        let n_splits = 1;
+        (m_simd, n_simd, k_simd, m_splits, n_splits)
+    };
     let constants = Some(ConstantValues::new(vec![
         (0, Value::USize(m)),
         (1, Value::USize(n)),
