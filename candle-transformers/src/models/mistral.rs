@@ -21,6 +21,7 @@ pub struct Config {
 }
 
 impl Config {
+    // https://huggingface.co/mistralai/Mistral-7B-v0.1/blob/main/config.json
     pub fn config_7b_v0_1(use_flash_attn: bool) -> Self {
         Self {
             vocab_size: 32000,
@@ -37,7 +38,9 @@ impl Config {
             use_flash_attn,
         }
     }
-    pub fn config_chat_ml(use_flash_attn: bool) -> Self {
+
+    // https://huggingface.co/Open-Orca/Mistral-7B-OpenOrca/blob/main/config.json
+    pub fn config_open_orca_chat_ml(use_flash_attn: bool) -> Self {
         Self {
             vocab_size: 32002,
             hidden_size: 4096,
