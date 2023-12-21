@@ -72,11 +72,8 @@ impl TextGeneration {
             None => anyhow::bail!("cannot find the </s> token"),
         };
         let start_gen = std::time::Instant::now();
-        for index in 0..sample_len {
-            let context_size = if index > 0 { 1 } else { tokens.len() };
-            let start_pos = tokens.len().saturating_sub(context_size);
-            let ctxt = &tokens[start_pos..];
-            let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
+        for _ in 0..sample_len {
+            let input = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
             let logits = self.model.forward(&input)?;
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
@@ -92,6 +89,7 @@ impl TextGeneration {
 
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
+            println!("{next_token}");
             generated_tokens += 1;
             if next_token == eos_token {
                 break;
@@ -144,7 +142,7 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 5000)]
     sample_len: usize,
 
-    #[arg(long, default_value = "state-spaces/mamba-370m")]
+    #[arg(long, default_value = "state-spaces/mamba-130m")]
     model_id: String,
 
     #[arg(long, default_value = "refs/pr/1")]

@@ -88,7 +88,7 @@ impl MambaBlock {
         let delta = x_dbl.narrow(D::Minus1, 0, self.dt_rank)?;
         let b = x_dbl.narrow(D::Minus1, self.dt_rank, n)?;
         let c = x_dbl.narrow(D::Minus1, self.dt_rank + n, n)?;
-        let delta = delta.apply(&self.dt_proj)?;
+        let delta = delta.contiguous()?.apply(&self.dt_proj)?;
         // softplus
         let delta = ((delta * 20.)?.exp()? + 1.)?.log()? / 20.;
         selective_scan(xs, &delta?, &a, &b, &c, &d)
@@ -109,7 +109,7 @@ fn selective_scan(
     let delta = delta.t()?.reshape((b_sz, d_in, l, 1))?; // b d_in l 1
     let delta_a = delta.broadcast_add(&a.reshape((1, d_in, 1, n))?)?;
     let delta_b_u = delta
-        .broadcast_add(&b.reshape((b_sz, l, 1, n))?)?
+        .broadcast_add(&b.reshape((b_sz, 1, l, n))?)?
         .broadcast_add(&u.t()?.reshape((b_sz, d_in, l, 1))?)?;
     let mut xs = Tensor::zeros((b_sz, d_in, n), delta_a.dtype(), delta_a.device())?;
     let mut ys = Vec::with_capacity(l);
@@ -119,7 +119,7 @@ fn selective_scan(
         ys.push(y)
     }
     let ys = Tensor::stack(ys.as_slice(), 1)?;
-    ys + u * d
+    ys + u.broadcast_mul(d)
 }
 
 impl Module for MambaBlock {
@@ -191,10 +191,13 @@ impl Model {
 
 impl Module for Model {
     fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+        let (_b_size, seq_len) = input_ids.dims2()?;
         let mut xs = self.embedding.forward(input_ids)?;
         for layer in self.layers.iter() {
             xs = layer.forward(&xs)?
         }
-        xs.apply(&self.norm_f)?.apply(&self.lm_head)
+        xs.narrow(1, seq_len - 1, 1)?
+            .apply(&self.norm_f)?
+            .apply(&self.lm_head)
     }
 }
