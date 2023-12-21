@@ -64,12 +64,12 @@ kernel void FN_NAME( \
     constant size_t &dim, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint thread_position_in_grid [[ thread_position_in_grid ]] \
+    uint tid [[ thread_position_in_grid ]] \
 ) { \
-    if (thread_position_in_grid >= dim) { \
+    if (tid >= dim) { \
         return; \
     } \
-    output[thread_position_in_grid] = TYPENAME(FN(float(input[thread_position_in_grid]))); \
+    output[tid] = TYPENAME(FN(float(input[tid]))); \
 }\
 kernel void FN_NAME_STRIDED( \
     constant size_t &dim, \
@@ -78,12 +78,12 @@ kernel void FN_NAME_STRIDED( \
     constant size_t *strides, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint thread_position_in_grid [[ thread_position_in_grid ]] \
+    uint tid [[ thread_position_in_grid ]] \
 ) { \
-    if (thread_position_in_grid >= dim) { \
+    if (tid >= dim) { \
         return; \
     } \
-    output[thread_position_in_grid] = TYPENAME(FN(float(input[get_strided_index(thread_position_in_grid, num_dims, dims, strides)]))); \
+    output[tid] = TYPENAME(FN(float(input[get_strided_index(tid, num_dims, dims, strides)]))); \
 }
 
 #define UNARY_OP(NAME) \
