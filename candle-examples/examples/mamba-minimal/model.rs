@@ -1,7 +1,7 @@
 /// This follows the lines of:
 /// https://github.com/johnma2006/mamba-minimal/blob/master/model.py
 /// Simple, minimal implementation of Mamba in one file of PyTorch.
-use candle::{Module, Result, Tensor, D};
+use candle::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::{RmsNorm, VarBuilder};
 
 use candle_transformers::models::with_tracing::{linear, linear_no_bias, Linear};
@@ -80,18 +80,6 @@ impl MambaBlock {
         })
     }
 
-    fn selective_scan(
-        &self,
-        _xs: &Tensor,
-        _delta: &Tensor,
-        _: &Tensor,
-        _: &Tensor,
-        _: &Tensor,
-        _: &Tensor,
-    ) -> Result<Tensor> {
-        todo!()
-    }
-
     fn ssm(&self, xs: &Tensor) -> Result<Tensor> {
         let (_d_in, n) = self.a_log.dims2()?;
         let a = self.a_log.to_dtype(candle::DType::F32)?.exp()?.neg()?;
@@ -101,9 +89,37 @@ impl MambaBlock {
         let b = x_dbl.narrow(D::Minus1, self.dt_rank, n)?;
         let c = x_dbl.narrow(D::Minus1, self.dt_rank + n, n)?;
         let delta = delta.apply(&self.dt_proj)?;
-        // TODO: softplus
-        self.selective_scan(xs, &delta, &a, &b, &c, &d)
+        // softplus
+        let delta = ((delta * 20.)?.exp()? + 1.)?.log()? / 20.;
+        selective_scan(xs, &delta?, &a, &b, &c, &d)
     }
+}
+
+// https://github.com/johnma2006/mamba-minimal/blob/61f01953ca153f8c4a850d7111beecbf4be9cee1/model.py#L275
+fn selective_scan(
+    u: &Tensor,
+    delta: &Tensor,
+    a: &Tensor,
+    b: &Tensor,
+    c: &Tensor,
+    d: &Tensor,
+) -> Result<Tensor> {
+    let (b_sz, l, d_in) = u.dims3()?;
+    let n = a.dim(1)?;
+    let delta = delta.t()?.reshape((b_sz, d_in, l, 1))?; // b d_in l 1
+    let delta_a = delta.broadcast_add(&a.reshape((1, d_in, 1, n))?)?;
+    let delta_b_u = delta
+        .broadcast_add(&b.reshape((b_sz, l, 1, n))?)?
+        .broadcast_add(&u.t()?.reshape((b_sz, d_in, l, 1))?)?;
+    let mut xs = Tensor::zeros((b_sz, d_in, n), delta_a.dtype(), delta_a.device())?;
+    let mut ys = Vec::with_capacity(l);
+    for i in 0..l {
+        xs = ((delta_a.i((.., .., i))? * xs)? + delta_b_u.i((.., .., i))?)?;
+        let y = xs.matmul(&c.i((.., i, ..))?.unsqueeze(2)?)?.squeeze(2)?;
+        ys.push(y)
+    }
+    let ys = Tensor::stack(ys.as_slice(), 1)?;
+    ys + u * d
 }
 
 impl Module for MambaBlock {
