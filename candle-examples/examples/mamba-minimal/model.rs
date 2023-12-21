@@ -1,8 +1,7 @@
-#![allow(unused)]
 /// This follows the lines of:
 /// https://github.com/johnma2006/mamba-minimal/blob/master/model.py
 /// Simple, minimal implementation of Mamba in one file of PyTorch.
-use candle::{Result, Tensor};
+use candle::{Module, Result, Tensor, D};
 use candle_nn::{RmsNorm, VarBuilder};
 
 use candle_transformers::models::with_tracing::{linear, linear_no_bias, Linear};
@@ -48,6 +47,7 @@ pub struct MambaBlock {
     a_log: Tensor,
     d: Tensor,
     out_proj: Linear,
+    dt_rank: usize,
 }
 
 impl MambaBlock {
@@ -76,7 +76,50 @@ impl MambaBlock {
             a_log,
             d,
             out_proj,
+            dt_rank,
         })
+    }
+
+    fn selective_scan(
+        &self,
+        _xs: &Tensor,
+        _delta: &Tensor,
+        _: &Tensor,
+        _: &Tensor,
+        _: &Tensor,
+        _: &Tensor,
+    ) -> Result<Tensor> {
+        todo!()
+    }
+
+    fn ssm(&self, xs: &Tensor) -> Result<Tensor> {
+        let (_d_in, n) = self.a_log.dims2()?;
+        let a = self.a_log.to_dtype(candle::DType::F32)?.exp()?.neg()?;
+        let d = self.d.to_dtype(candle::DType::F32)?;
+        let x_dbl = xs.apply(&self.x_proj)?;
+        let delta = x_dbl.narrow(D::Minus1, 0, self.dt_rank)?;
+        let b = x_dbl.narrow(D::Minus1, self.dt_rank, n)?;
+        let c = x_dbl.narrow(D::Minus1, self.dt_rank + n, n)?;
+        let delta = delta.apply(&self.dt_proj)?;
+        // TODO: softplus
+        self.selective_scan(xs, &delta, &a, &b, &c, &d)
+    }
+}
+
+impl Module for MambaBlock {
+    // https://github.com/johnma2006/mamba-minimal/blob/61f01953ca153f8c4a850d7111beecbf4be9cee1/model.py#L206
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (_b_sz, seq_len, _dim) = xs.dims3()?;
+        let xs_and_res = xs.apply(&self.in_proj)?.chunk(2, D::Minus1)?;
+        let (xs, res) = (&xs_and_res[0], &xs_and_res[1]);
+        let xs = xs
+            .t()?
+            .apply(&self.conv1d)?
+            .narrow(D::Minus1, 0, seq_len)?
+            .t()?;
+        let xs = candle_nn::ops::silu(&xs)?;
+        let ys = (self.ssm(&xs)? * candle_nn::ops::silu(res))?;
+        ys.apply(&self.out_proj)
     }
 }
 
@@ -92,6 +135,12 @@ impl ResidualBlock {
         let norm = candle_nn::rms_norm(cfg.d_model, 1e-5, vb.pp("norm"))?;
         let mixer = MambaBlock::new(cfg, vb.pp("mixer"))?;
         Ok(Self { mixer, norm })
+    }
+}
+
+impl Module for ResidualBlock {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.norm)?.apply(&self.mixer)? + xs
     }
 }
 
@@ -122,8 +171,14 @@ impl Model {
             lm_head,
         })
     }
+}
 
-    pub fn forward(&mut self, _input_ids: &Tensor, _seqlen_offset: usize) -> Result<Tensor> {
-        todo!()
+impl Module for Model {
+    fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
+        let mut xs = self.embedding.forward(input_ids)?;
+        for layer in self.layers.iter() {
+            xs = layer.forward(&xs)?
+        }
+        xs.apply(&self.norm_f)?.apply(&self.lm_head)
     }
 }
