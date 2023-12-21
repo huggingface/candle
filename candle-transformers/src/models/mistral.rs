@@ -297,6 +297,10 @@ impl Attention {
             .reshape((b_sz, q_len, self.hidden_size))?
             .apply(&self.o_proj)
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -339,6 +343,10 @@ impl DecoderLayer {
         let residual = &xs;
         let xs = xs.apply(&self.post_attention_layernorm)?.apply(&self.mlp)?;
         residual + xs
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attn.clear_kv_cache()
     }
 }
 
@@ -422,5 +430,11 @@ impl Model {
         xs.narrow(1, seq_len - 1, 1)?
             .apply(&self.norm)?
             .apply(&self.lm_head)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.clear_kv_cache()
+        }
     }
 }
