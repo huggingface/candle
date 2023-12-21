@@ -89,7 +89,6 @@ impl TextGeneration {
 
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
-            println!("{next_token}");
             generated_tokens += 1;
             if next_token == eos_token {
                 break;

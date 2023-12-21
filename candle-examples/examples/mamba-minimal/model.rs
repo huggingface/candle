@@ -89,9 +89,10 @@ impl MambaBlock {
         let b = x_dbl.narrow(D::Minus1, self.dt_rank, n)?;
         let c = x_dbl.narrow(D::Minus1, self.dt_rank + n, n)?;
         let delta = delta.contiguous()?.apply(&self.dt_proj)?;
-        // softplus
-        let delta = ((delta * 20.)?.exp()? + 1.)?.log()? / 20.;
-        selective_scan(xs, &delta?, &a, &b, &c, &d)
+        // softplus without threshold
+        let delta = (delta.exp()? + 1.)?.log()?;
+        let ss = selective_scan(xs, &delta, &a, &b, &c, &d)?;
+        Ok(ss)
     }
 }
 
