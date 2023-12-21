@@ -108,10 +108,10 @@ fn selective_scan(
     let (b_sz, l, d_in) = u.dims3()?;
     let n = a.dim(1)?;
     let delta = delta.t()?.reshape((b_sz, d_in, l, 1))?; // b d_in l 1
-    let delta_a = delta.broadcast_add(&a.reshape((1, d_in, 1, n))?)?;
+    let delta_a = delta.broadcast_mul(&a.reshape((1, d_in, 1, n))?)?.exp()?;
     let delta_b_u = delta
-        .broadcast_add(&b.reshape((b_sz, 1, l, n))?)?
-        .broadcast_add(&u.t()?.reshape((b_sz, d_in, l, 1))?)?;
+        .broadcast_mul(&b.reshape((b_sz, 1, l, n))?)?
+        .broadcast_mul(&u.t()?.reshape((b_sz, d_in, l, 1))?)?;
     let mut xs = Tensor::zeros((b_sz, d_in, n), delta_a.dtype(), delta_a.device())?;
     let mut ys = Vec::with_capacity(l);
     for i in 0..l {
