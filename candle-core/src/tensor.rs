@@ -2346,6 +2346,7 @@ impl Tensor {
     ///
     /// ## Panics
     /// - If the lock was poisoned
+    /// - If the lock is held by the current thread
     pub fn storage_mut_and_layout(&self) -> (std::sync::RwLockWriteGuard<'_, Storage>, &Layout) {
         let storage = self.storage.write().expect("Lock was poisoned");
         (storage, &self.layout)
