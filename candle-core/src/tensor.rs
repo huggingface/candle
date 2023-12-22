@@ -2341,12 +2341,13 @@ impl Tensor {
         self.storage.read().unwrap()
     }
 
-    // If we extend the visibility of this function to be usable outside of this crate, we should
-    // make it unsafe.
-    pub(crate) fn storage_mut_and_layout(
-        &self,
-    ) -> (std::sync::RwLockWriteGuard<'_, Storage>, &Layout) {
-        let storage = self.storage.write().unwrap();
+    /// The storage used by this tensor, together with the layout to use to access it safely.
+    /// This blocks if there are other references to the lock.
+    ///
+    /// ## Panics
+    /// - If the lock was poisoned
+    pub fn storage_mut_and_layout(&self) -> (std::sync::RwLockWriteGuard<'_, Storage>, &Layout) {
+        let storage = self.storage.write().expect("Lock was poisoned");
         (storage, &self.layout)
     }
 
