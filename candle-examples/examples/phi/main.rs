@@ -346,67 +346,75 @@ fn mmlu<P: AsRef<std::path::Path>>(
     device: &Device,
     mmlu_dir: P,
 ) -> anyhow::Result<()> {
-    for dir_entry in mmlu_dir.as_ref().read_dir()? {
-        if let Ok(dir_entry) = dir_entry {
-            let dir_entry = dir_entry.path();
-            let theme = match dir_entry.file_stem().and_then(|v| v.to_str()) {
-                None => "".to_string(),
-                Some(v) => match v.strip_suffix("_test") {
-                    None => v.replace('_', " "),
-                    Some(v) => v.replace('_', " "),
-                },
+    for dir_entry in mmlu_dir.as_ref().read_dir()?.flatten() {
+        let dir_entry = dir_entry.path();
+        let theme = match dir_entry.file_stem().and_then(|v| v.to_str()) {
+            None => "".to_string(),
+            Some(v) => match v.strip_suffix("_test") {
+                None => v.replace('_', " "),
+                Some(v) => v.replace('_', " "),
+            },
+        };
+        if dir_entry.extension().as_ref().and_then(|v| v.to_str()) != Some("csv") {
+            continue;
+        }
+        println!("reading {dir_entry:?}");
+        let dir_entry = std::fs::File::open(dir_entry)?;
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(dir_entry);
+        let token_a = tokenizer.token_to_id("A").unwrap();
+        let token_b = tokenizer.token_to_id("B").unwrap();
+        let token_c = tokenizer.token_to_id("C").unwrap();
+        let token_d = tokenizer.token_to_id("D").unwrap();
+        for row in reader.records() {
+            let row = match row {
+                Err(_) => continue,
+                Ok(row) => row,
             };
-            if dir_entry.extension().as_ref().and_then(|v| v.to_str()) != Some("csv") {
+            if row.len() < 5 {
                 continue;
             }
-            println!("reading {dir_entry:?}");
-            let dir_entry = std::fs::File::open(dir_entry)?;
-            let mut reader = csv::ReaderBuilder::new()
-                .has_headers(false)
-                .from_reader(dir_entry);
-            for row in reader.records() {
-                let row = match row {
-                    Err(_) => continue,
-                    Ok(row) => row,
-                };
-                if row.len() < 5 {
-                    continue;
-                }
-                let question = row.get(0).unwrap();
-                let answer_a = row.get(1).unwrap();
-                let answer_b = row.get(2).unwrap();
-                let answer_c = row.get(3).unwrap();
-                let answer_d = row.get(4).unwrap();
-                let answer = row.get(5).unwrap();
-                let prompt = format!(
+            let question = row.get(0).unwrap();
+            let answer_a = row.get(1).unwrap();
+            let answer_b = row.get(2).unwrap();
+            let answer_c = row.get(3).unwrap();
+            let answer_d = row.get(4).unwrap();
+            let answer = row.get(5).unwrap();
+            let prompt = format!(
                     "{} {theme}.\n{question}\nA. {answer_a}\nB. {answer_b}\nC. {answer_c}\nD. {answer_d}\nAnswer:\n",
                     "The following are multiple choice questions (with answers) about"
                 );
-                let tokens = tokenizer.encode(prompt.as_str(), true).map_err(E::msg)?;
-                let tokens = tokens.get_ids().to_vec();
-                let input = Tensor::new(tokens, device)?.unsqueeze(0)?;
-                let logits = match &mut model {
-                    Model::MixFormer(m) => {
-                        m.clear_kv_cache();
-                        m.forward(&input)?
-                    }
-                    Model::Quantized(m) => {
-                        m.clear_kv_cache();
-                        m.forward(&input)?
-                    }
-                };
-                let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
-                let logits_v: Vec<f32> = logits.to_vec1()?;
-                let next_token = logits_v
-                    .iter()
-                    .enumerate()
-                    .max_by(|(_, u), (_, v)| u.total_cmp(v))
-                    .map(|(i, _)| i as u32)
-                    .unwrap();
-                let model_answer = tokenizer.decode(&[next_token], true).map_err(E::msg)?;
+            let tokens = tokenizer.encode(prompt.as_str(), true).map_err(E::msg)?;
+            let tokens = tokens.get_ids().to_vec();
+            let input = Tensor::new(tokens, device)?.unsqueeze(0)?;
+            let logits = match &mut model {
+                Model::MixFormer(m) => {
+                    m.clear_kv_cache();
+                    m.forward(&input)?
+                }
+                Model::Quantized(m) => {
+                    m.clear_kv_cache();
+                    m.forward(&input)?
+                }
+            };
+            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+            let logits_v: Vec<f32> = logits.to_vec1()?;
+            let pr_a = logits_v[token_a as usize];
+            let pr_b = logits_v[token_b as usize];
+            let pr_c = logits_v[token_c as usize];
+            let pr_d = logits_v[token_d as usize];
+            let model_answer = if pr_a > pr_b && pr_a > pr_c && pr_a > pr_d {
+                "A"
+            } else if pr_b > pr_c && pr_b > pr_d {
+                "B"
+            } else if pr_c > pr_d {
+                "C"
+            } else {
+                "D"
+            };
 
-                println!("{prompt}\n -> {model_answer} vs {answer}");
-            }
+            println!("{prompt}\n -> {model_answer} vs {answer}");
         }
     }
     Ok(())
