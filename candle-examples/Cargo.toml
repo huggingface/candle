@@ -28,6 +28,7 @@ safetensors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokenizers = { workspace = true, features = ["onig"] }
+csv = "1.3.0"
 
 [dev-dependencies]
 anyhow = { workspace = true }
