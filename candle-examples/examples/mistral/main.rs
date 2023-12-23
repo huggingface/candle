@@ -155,7 +155,7 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 100)]
     sample_len: usize,
 
-    #[arg(long, default_value = "lmz/candle-mistral")]
+    #[arg(long, default_value = "mistralai/Mistral-7B-v0.1")]
     model_id: String,
 
     #[arg(long, default_value = "main")]
@@ -226,8 +226,8 @@ fn main() -> Result<()> {
                 vec![repo.get("model-q4k.gguf")?]
             } else {
                 vec![
-                    repo.get("pytorch_model-00001-of-00002.safetensors")?,
-                    repo.get("pytorch_model-00002-of-00002.safetensors")?,
+                    repo.get("model-00001-of-00002.safetensors")?,
+                    repo.get("model-00002-of-00002.safetensors")?,
                 ]
             }
         }
