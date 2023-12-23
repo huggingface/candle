@@ -6,6 +6,7 @@ members = [
     "candle-book",
     "candle-nn",
     "candle-pyo3",
+    "candle-test-macro",
     "candle-transformers",
     "candle-wasm-examples/*",
     "candle-wasm-tests",

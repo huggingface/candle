@@ -1,0 +1,26 @@
+[package]
+name = "candle-test-macro"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+[features]
+
+default = []
+
+cuda = ["candle/cuda"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+syn={ version = "2.0", features = ["full"]}
+
+[dev-dependencies]
+candle = { path = "../candle-core", version = "0.3.2", package = "candle-core" }

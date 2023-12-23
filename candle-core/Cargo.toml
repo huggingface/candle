@@ -14,6 +14,7 @@ accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { path = "../candle-kernels", version = "0.3.2", optional = true }
 candle-metal-kernels = { path = "../candle-metal-kernels", version = "0.3.2", optional = true }
+candle-test-macro = { path = "../candle-test-macro", version = "0.3.2" }
 metal = { workspace = true, optional = true}
 cudarc = { workspace = true, optional = true }
 gemm = { workspace = true }
@@ -38,7 +39,7 @@ criterion = { workspace = true }
 
 
 [features]
-default = []
+default = ["cuda"]
 cuda = ["cudarc", "dep:candle-kernels"]
 cudnn = ["cuda", "cudarc/cudnn"]
 mkl = ["dep:libc", "dep:intel-mkl-src"]
