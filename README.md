@@ -65,6 +65,8 @@ We also provide a some command line based examples using state of the art models
 - [Phi-1, Phi-1.5, and Phi-2](./candle-examples/examples/phi/): 1.3b and 2.7b general LLMs with performance on par with LLaMA-v2 7b.
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
   pre-trained on 1T tokens of English and code datasets.
+- [Minimal Mamba](./candle-examples/examples/minimal-mamba/): a minimal
+  implementation of the Mamba state space model.
 - [Mistral7b-v0.1](./candle-examples/examples/mistral/): a 7b general LLM with
   better performance than all publicly available 13b models as of 2023-09-28.
 - [Mixtral8x7b-v0.1](./candle-examples/examples/mixtral/): a sparse mixture of
@@ -177,6 +179,7 @@ If you have an addition to this list, please submit a pull request.
         - Falcon.
         - StarCoder.
         - Phi 1, 1.5, and 2.
+        - Minimal Mamba
         - Mistral 7b v0.1.
         - Mixtral 8x7b v0.1.
         - StableLM-3B-4E1T.
