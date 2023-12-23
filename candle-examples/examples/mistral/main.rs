@@ -208,7 +208,7 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let api = Api::new()?;
     let repo = api.repo(Repo::with_revision(
-        args.model_id,
+        args.model_id.clone(),
         RepoType::Model,
         args.revision,
     ));
@@ -236,7 +236,10 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = Config::config_7b_v0_1(args.use_flash_attn);
+    let config = match args.model_id.as_str() {
+        "DanielClough/Candle_Mistral-7B-OpenOrca" => Config::config_chat_ml(args.use_flash_attn),
+        _ => Config::config_7b_v0_1(args.use_flash_attn),
+    };
     let (model, device) = if args.quantized {
         let filename = &filenames[0];
         let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename)?;
