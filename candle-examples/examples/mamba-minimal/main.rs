@@ -145,8 +145,8 @@ impl Which {
             | Self::Mamba370m
             | Self::Mamba790m
             | Self::Mamba1_4b
-            | Self::Mamba2_8b
             | Self::Mamba2_8bSlimPj => "refs/pr/1",
+            Self::Mamba2_8b => "refs/pr/4",
         }
     }
 }
