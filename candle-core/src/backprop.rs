@@ -1,6 +1,6 @@
 use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
 use crate::{Error, Result, Tensor, TensorId};
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 
 // arg has been reduced to node via reduce_dims, expand it back to arg.
 // This has to handle keepdims.
@@ -673,12 +673,12 @@ impl Tensor {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GradStore(HashMap<TensorId, Tensor>);
 
 impl GradStore {
     fn new() -> Self {
-        GradStore(HashMap::new())
+        Self::default()
     }
 
     pub fn get_id(&self, id: TensorId) -> Option<&Tensor> {
@@ -698,7 +698,6 @@ impl GradStore {
     }
 
     fn or_insert(&mut self, tensor: &Tensor) -> Result<&mut Tensor> {
-        use std::collections::hash_map::Entry;
         let grad = match self.0.entry(tensor.id()) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
@@ -707,5 +706,28 @@ impl GradStore {
             }
         };
         Ok(grad)
+    }
+
+    pub fn extend(&mut self, other: Self) -> Result<()> {
+        for (id, grad) in other.0 {
+            match self.0.entry(id) {
+                Entry::Occupied(mut entry) => {
+                    let new_grad = entry.get().add(&grad)?;
+
+                    let do_not_detach = CANDLE_GRAD_DO_NOT_DETACH.with(|b| *b);
+                    let new_grad = if do_not_detach {
+                        new_grad
+                    } else {
+                        new_grad.detach()?
+                    };
+
+                    *entry.get_mut() = new_grad;
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(grad);
+                }
+            }
+        }
+        Ok(())
     }
 }
