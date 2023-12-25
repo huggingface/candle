@@ -278,10 +278,10 @@ fn main() -> Result<()> {
             } else {
                 match args.model {
                     WhichModel::V1 | WhichModel::V1_5 => vec![repo.get("model.safetensors")?],
-                    WhichModel::V2 => vec![
-                        repo.get("model-00001-of-00002.safetensors")?,
-                        repo.get("model-00002-of-00002.safetensors")?,
-                    ],
+                    WhichModel::V2 => candle_examples::hub_load_safetensors(
+                        &repo,
+                        "model.safetensors.index.json",
+                    )?,
                     WhichModel::PuffinPhiV2 => vec![repo.get("model-puffin-phi-v2.safetensors")?],
                     WhichModel::PhiHermes => vec![repo.get("model-phi-hermes-1_3B.safetensors")?],
                 }
