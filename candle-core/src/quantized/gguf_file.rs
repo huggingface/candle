@@ -41,7 +41,7 @@ impl VersionedMagic {
             (Magic::Gguf, 1) => Self::GgufV1,
             (Magic::Gguf, 2) => Self::GgufV2,
             (Magic::Gguf, 3) => Self::GgufV3,
-            _ => crate::bail!("ggml: unsupported magic/version {magic:?}/{version}"),
+            _ => crate::bail!("gguf: unsupported magic/version {magic:?}/{version}"),
         };
         Ok(versioned_magic)
     }
