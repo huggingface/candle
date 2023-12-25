@@ -235,10 +235,7 @@ fn main() -> Result<()> {
             if args.quantized {
                 vec![repo.get("model-q4k.gguf")?]
             } else {
-                vec![
-                    repo.get("model-00001-of-00002.safetensors")?,
-                    repo.get("model-00002-of-00002.safetensors")?,
-                ]
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
             }
         }
     };
