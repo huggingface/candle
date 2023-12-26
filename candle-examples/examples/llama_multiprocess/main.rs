@@ -143,14 +143,7 @@ fn main() -> Result<()> {
     let config_filename = api.get("config.json")?;
     let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
     let tokenizer_filename = api.get("tokenizer.json")?;
-    let mut filenames = vec![];
-    for rfilename in [
-        "model-00001-of-00002.safetensors",
-        "model-00002-of-00002.safetensors",
-    ] {
-        let filename = api.get(rfilename)?;
-        filenames.push(filename);
-    }
+    let filenames = candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?;
 
     if args.rank.is_none() {
         let children: Vec<_> = (0..args.num_shards)
