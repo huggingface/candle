@@ -56,7 +56,12 @@ template <typename T> METAL_FUNC T gelu(T x) {
     T beta =  (static_cast<T>(M_2_SQRTPI_F * M_SQRT1_2_F) * alpha);
     return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + T(tanh(beta)));
 }
-
+template <typename T> METAL_FUNC T relu(T in){
+    if (in < 0) {
+        return 0;
+    }
+    return in;
+}
 
 
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
@@ -94,19 +99,20 @@ UNARY(NAME, half, NAME##_f16, NAME##_f16_strided);
 UNARY(NAME, bfloat, NAME##_bf16, NAME##_bf16_strided);
 
 
+UNARY_OP(ceil)
 UNARY_OP(cos)
+UNARY_OP(erf)
+UNARY_OP(exp)
+UNARY_OP(floor)
+UNARY_OP(gelu_erf)
+UNARY_OP(gelu)
+UNARY_OP(log)
+UNARY_OP(neg)
+UNARY_OP(relu)
+UNARY_OP(round)
 UNARY_OP(sin)
 UNARY_OP(sqr)
 UNARY_OP(sqrt)
-UNARY_OP(neg)
-UNARY_OP(exp)
-UNARY_OP(log)
-UNARY_OP(gelu)
-UNARY_OP(ceil)
-UNARY_OP(floor)
-UNARY_OP(round)
-UNARY_OP(gelu_erf)
-UNARY_OP(erf)
 UNARY_OP(tanh)
 UNARY(id, float, copy_f32, copy_f32_strided)
 UNARY(id, half, copy_f16, copy_f16_strided)
@@ -114,19 +120,20 @@ UNARY(id, uint8_t, copy_u8, copy_u8_strided)
 UNARY(id, uint32_t, copy_u32, copy_u32_strided)
 
 #if __METAL_VERSION__ >= 310
+BFLOAT_UNARY_OP(ceil)
 BFLOAT_UNARY_OP(cos)
+BFLOAT_UNARY_OP(erf)
+BFLOAT_UNARY_OP(exp)
+BFLOAT_UNARY_OP(floor)
+BFLOAT_UNARY_OP(gelu_erf)
+BFLOAT_UNARY_OP(gelu)
+BFLOAT_UNARY_OP(log)
+BFLOAT_UNARY_OP(neg)
+BFLOAT_UNARY_OP(relu)
+BFLOAT_UNARY_OP(round)
 BFLOAT_UNARY_OP(sin)
 BFLOAT_UNARY_OP(sqr)
 BFLOAT_UNARY_OP(sqrt)
-BFLOAT_UNARY_OP(neg)
-BFLOAT_UNARY_OP(exp)
-BFLOAT_UNARY_OP(log)
-BFLOAT_UNARY_OP(gelu)
-BFLOAT_UNARY_OP(ceil)
-BFLOAT_UNARY_OP(floor)
-BFLOAT_UNARY_OP(round)
-BFLOAT_UNARY_OP(gelu_erf)
-BFLOAT_UNARY_OP(erf)
 BFLOAT_UNARY_OP(tanh)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
