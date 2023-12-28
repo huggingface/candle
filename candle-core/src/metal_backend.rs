@@ -665,7 +665,7 @@ impl BackendStorage for MetalStorage {
                 ("utanh", DType::F32) => contiguous::tanh::FLOAT,
                 ("urelu", DType::F16) => contiguous::relu::HALF,
                 ("urelu", DType::F32) => contiguous::relu::FLOAT,
-                (name, dtype) => crate::bail!("No unary kernel in metal for {name} - {dtype:?}"),
+                (name, dtype) => crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_unary_contiguous(
                 &device.device,
@@ -706,7 +706,7 @@ impl BackendStorage for MetalStorage {
                 ("usqr", DType::F32) => strided::sqr::FLOAT,
                 ("usqrt", DType::F16) => strided::sqrt::HALF,
                 ("usqrt", DType::F32) => strided::sqrt::FLOAT,
-                (name, dtype) => crate::bail!("No binary kernel in metal for {name} - {dtype:?}"),
+                (name, dtype) => crate::bail!("Metal strided unary {name} {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_unary_strided(
                 &device.device,
