@@ -557,8 +557,10 @@ fn main() -> Result<()> {
     println!("loaded mel: {:?}", mel.dims());
 
     let mut model = if args.quantized {
-        let vb =
-            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&weights_filename)?;
+        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
+            &weights_filename,
+            &device,
+        )?;
         Model::Quantized(m::quantized_model::Whisper::load(&vb, config)?)
     } else {
         let vb =

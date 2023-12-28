@@ -5,12 +5,12 @@ pub mod avx;
 pub mod ggml_file;
 pub mod gguf_file;
 pub mod k_quants;
+#[cfg(feature = "metal")]
+pub mod metal;
 #[cfg(target_feature = "neon")]
 pub mod neon;
 #[cfg(target_feature = "simd128")]
 pub mod simd128;
-#[cfg(feature = "metal")]
-pub mod metal;
 pub mod utils;
 
 pub use k_quants::GgmlType;
@@ -174,16 +174,10 @@ fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
 }
 
 impl QTensor {
-    pub fn new<S: Into<Shape>>(
-        data: Box<dyn QuantizedType>,
-        shape: S,
-    ) -> Result<Self> {
+    pub fn new<S: Into<Shape>>(data: Box<dyn QuantizedType>, shape: S) -> Result<Self> {
         let shape = shape.into();
         check_shape(&shape, data.block_size())?;
-        Ok(Self {
-            data,
-            shape,
-        })
+        Ok(Self { data, shape })
     }
 
     pub fn quantize<T: k_quants::GgmlType + Send + Sync + 'static>(src: &Tensor) -> Result<Self> {

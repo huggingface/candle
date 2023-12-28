@@ -30,7 +30,7 @@ impl VarBuilder {
         let content = candle::quantized::gguf_file::Content::read(&mut cursor)?;
         let mut data = std::collections::HashMap::new();
         for tensor_name in content.tensor_infos.keys() {
-            let tensor = content.tensor(&mut cursor, tensor_name,  device)?;
+            let tensor = content.tensor(&mut cursor, tensor_name, device)?;
             data.insert(tensor_name.to_string(), Arc::new(tensor));
         }
         Ok(Self {
