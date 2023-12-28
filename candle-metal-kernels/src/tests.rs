@@ -38,7 +38,7 @@ fn approx_bf16(v: Vec<bf16>, digits: i32) -> Vec<f32> {
 fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     let device = device();
     let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);

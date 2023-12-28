@@ -1367,7 +1367,7 @@ impl BackendDevice for MetalDevice {
         let command_buffer = Arc::new(RwLock::new(command_buffer));
         let command_buffer_index = Arc::new(RwLock::new(0));
         let fence = device.new_fence();
-        let kernels = Arc::new(Kernels::new(fence.clone()));
+        let kernels = Arc::new(Kernels::new());
         let buffers = Arc::new(RwLock::new(HashMap::new()));
         let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
             Ok(val) => val.parse()?,
