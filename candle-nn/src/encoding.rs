@@ -77,21 +77,21 @@ const INDEX_EXCEEDS_DEPTH_MSG: &str = "one_hot: Index value exceeds the depth va
 /// As an example, the following tensor will be encoded to a one-hot matrix:
 ///
 /// ```
-/// [[0., 2.], [1., -1.]]
+/// [[0i64, 2], [1, -1]]
 /// ```
 ///
 /// with a depth of 4 will be encoded to:
 ///
 /// ```
-/// [[[1., 0., 0., 0.], [0., 0., 1., 0.]], [[0., 1., 0., 0.], [0., 0., 0., 0.]]]
+/// [[[1, 0, 0, 0], [0, 0, 1, 0]], [[0, 1, 0, 0], [0, 0, 0, 0]]]
 /// ```
 ///
 /// When the input tensor index has a value of -1, the corresponding one-hot vector will be ignored,
 /// resulting in a vector of values set to the `off_value`.
 ///
 ///
-/// This method supports one-cold encoding by setting `on_value` to `0.0` and `off_value` to `1.0`.
-/// By default `on_value` is `1.0` and `off_value` is `0.0`.
+/// This method supports one-cold encoding by setting `on_value` to `0` and `off_value` to `1`.
+/// By default `on_value` is `1` and `off_value` is `0`.
 ///
 /// Other encoding values can be used by setting `on_value` and `off_value` to the desired values.
 ///
@@ -158,7 +158,6 @@ const INDEX_EXCEEDS_DEPTH_MSG: &str = "one_hot: Index value exceeds the depth va
 /// This method will bail if the index value is less than -1.
 ///
 /// This method will bail if the index value is greater than or equal to the depth value.
-///
 ///
 /// This method will bail if the input data type is `f64`.
 ///
@@ -235,47 +234,43 @@ pub fn one_hot<D: WithDType>(
                 i * depth * dim2 + j * depth
             };
 
+            let iter = (0..dim1).flat_map(|i| (0..dim2).map(move |j| (i, j)));
+
             match dtype {
                 DType::U8 => {
                     let index = indices.to_vec2::<u8>()?;
-                    for i in 0..dim1 {
-                        for j in 0..dim2 {
-                            set_uint_value(
-                                index[i][j] as usize,
-                                idx(i, j, depth, dim2),
-                                depth,
-                                &mut v,
-                                on_value,
-                            )?;
-                        }
+                    for (i, j) in iter {
+                        set_uint_value(
+                            index[i][j] as usize,
+                            idx(i, j, depth, dim2),
+                            depth,
+                            &mut v,
+                            on_value,
+                        )?;
                     }
                 }
                 DType::U32 => {
                     let index = indices.to_vec2::<u32>()?;
-                    for i in 0..dim1 {
-                        for j in 0..dim2 {
-                            set_uint_value(
-                                index[i][j] as usize,
-                                idx(i, j, depth, dim2),
-                                depth,
-                                &mut v,
-                                on_value,
-                            )?;
-                        }
+                    for (i, j) in iter {
+                        set_uint_value(
+                            index[i][j] as usize,
+                            idx(i, j, depth, dim2),
+                            depth,
+                            &mut v,
+                            on_value,
+                        )?;
                     }
                 }
                 DType::I64 => {
                     let index = indices.to_vec2::<i64>()?;
-                    for i in 0..dim1 {
-                        for j in 0..dim2 {
-                            set_int_value(
-                                index[i][j],
-                                idx(i, j, depth, dim2),
-                                depth,
-                                &mut v,
-                                on_value,
-                            )?;
-                        }
+                    for (i, j) in iter {
+                        set_int_value(
+                            index[i][j],
+                            idx(i, j, depth, dim2),
+                            depth,
+                            &mut v,
+                            on_value,
+                        )?;
                     }
                 }
                 d => unsupported_dtype(d)?,
@@ -292,53 +287,44 @@ pub fn one_hot<D: WithDType>(
                     i * depth * dim2 * dim3 + j * depth * dim3 + k * depth
                 };
 
+            let iter = (0..dim1)
+                .flat_map(|i| (0..dim2).flat_map(move |j| (0..dim3).map(move |k| (i, j, k))));
+
             match dtype {
                 DType::U8 => {
                     let index = indices.to_vec3::<u8>()?;
-                    for i in 0..dim1 {
-                        for j in 0..dim2 {
-                            for k in 0..dim3 {
-                                set_uint_value(
-                                    index[i][j][k] as usize,
-                                    idx(i, j, k, depth, dim2, dim3),
-                                    depth,
-                                    &mut v,
-                                    on_value,
-                                )?;
-                            }
-                        }
+                    for (i, j, k) in iter {
+                        set_uint_value(
+                            index[i][j][k] as usize,
+                            idx(i, j, k, depth, dim2, dim3),
+                            depth,
+                            &mut v,
+                            on_value,
+                        )?;
                     }
                 }
                 DType::U32 => {
                     let index = indices.to_vec3::<u32>()?;
-                    for i in 0..dim1 {
-                        for j in 0..dim2 {
-                            for k in 0..dim3 {
-                                set_uint_value(
-                                    index[i][j][k] as usize,
-                                    idx(i, j, k, depth, dim2, dim3),
-                                    depth,
-                                    &mut v,
-                                    on_value,
-                                )?;
-                            }
-                        }
+                    for (i, j, k) in iter {
+                        set_uint_value(
+                            index[i][j][k] as usize,
+                            idx(i, j, k, depth, dim2, dim3),
+                            depth,
+                            &mut v,
+                            on_value,
+                        )?;
                     }
                 }
                 DType::I64 => {
                     let index = indices.to_vec3::<i64>()?;
-                    for i in 0..dim1 {
-                        for j in 0..dim2 {
-                            for k in 0..dim3 {
-                                set_int_value(
-                                    index[i][j][k],
-                                    idx(i, j, k, depth, dim2, dim3),
-                                    depth,
-                                    &mut v,
-                                    on_value,
-                                )?;
-                            }
-                        }
+                    for (i, j, k) in iter {
+                        set_int_value(
+                            index[i][j][k],
+                            idx(i, j, k, depth, dim2, dim3),
+                            depth,
+                            &mut v,
+                            on_value,
+                        )?;
                     }
                 }
                 d => unsupported_dtype(d)?,
@@ -364,7 +350,7 @@ fn check_negative(value: i64) -> Result<()> {
 fn check_value_bounds(value: usize, depth: usize) -> Result<()> {
     if value >= depth {
         bail!(
-            "{} Index value, {}, exceeds the depth value, {}.",
+            "{} Index value, {}, must be less than the depth value, {}.",
             INDEX_EXCEEDS_DEPTH_MSG,
             value,
             depth
@@ -449,7 +435,7 @@ mod tests {
     use super::*;
 
     #[test]
-    pub fn test_f64_one_hot() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn test_i64_one_hot() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let device = candle::Device::Cpu;
 
         let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
@@ -475,7 +461,50 @@ mod tests {
     }
 
     #[test]
-    pub fn test_u8_one_cold() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn test_rank_3_one_hot() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let device = candle::Device::Cpu;
+
+        let indices = Tensor::new(
+            vec![
+                vec![vec![0i64, 1], vec![2, 3]],
+                vec![vec![3, 1], vec![1, -1]],
+            ],
+            &device,
+        )?;
+        let depth = 4;
+
+        let on_value = None;
+        let off_value = None;
+
+        let one_hot = one_hot::<f32>(indices, depth, on_value, off_value)?;
+
+        let expected_matrix = Tensor::new(
+            vec![
+                vec![
+                    vec![vec![1f32, 0., 0., 0.], vec![0., 1., 0., 0.]],
+                    vec![vec![0., 0., 1., 0.], vec![0., 0., 0., 1.]],
+                ],
+                vec![
+                    vec![vec![0., 0., 0., 1.], vec![0., 1., 0., 0.]],
+                    vec![vec![0., 1., 0., 0.], vec![0., 0., 0., 0.]],
+                ],
+            ],
+            &device,
+        )?;
+
+        assert_eq!(one_hot.shape(), expected_matrix.shape());
+        assert_eq!(one_hot.dims(), expected_matrix.dims());
+
+        let matrix = one_hot.get(1)?.to_vec3::<f32>()?;
+        let expected_matrix = expected_matrix.get(1)?.to_vec3::<f32>()?;
+
+        assert_eq!(matrix, expected_matrix);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_u8_one_cold() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let device = candle::Device::Cpu;
         let depth = 4;
         let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
@@ -493,6 +522,33 @@ mod tests {
         let matrix = one_cold.to_vec3::<u8>()?;
 
         assert_eq!(matrix, expected_matrix);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_iter() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let device = candle::Device::Cpu;
+        let depth = 4;
+        let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
+        let matrix = indices.to_vec2::<i64>()?;
+        let (dim1, dim2) = indices.dims2()?;
+
+        let iter = (0..dim1).flat_map(|i| (0..dim2).map(move |j| (i, j)));
+
+        let mut v = vec![0; depth * dim1 * dim2];
+
+        for (i, j) in iter {
+            let idx = i * depth * dim2 + j * depth;
+            v[idx] = matrix[i][j];
+        }
+
+        for i in 0..dim1 {
+            for j in 0..dim2 {
+                let idx = i * depth * dim2 + j * depth;
+                assert_eq!(v[idx], matrix[i][j]);
+            }
+        }
 
         Ok(())
     }
