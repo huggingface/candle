@@ -57,6 +57,24 @@ impl Config {
             use_flash_attn,
         }
     }
+
+    // https://huggingface.co/amazon/MistralLite/blob/main/config.json
+    pub fn config_amazon_mistral_lite(use_flash_attn: bool) -> Self {
+        Self {
+            vocab_size: 32003,
+            hidden_size: 4096,
+            intermediate_size: 14336,
+            num_hidden_layers: 32,
+            num_attention_heads: 32,
+            num_key_value_heads: 8,
+            hidden_act: Activation::Silu,
+            max_position_embeddings: 32768,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.,
+            sliding_window: 4096,
+            use_flash_attn,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
