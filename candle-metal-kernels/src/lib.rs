@@ -130,6 +130,7 @@ macro_rules! ops{
             pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_f32"));
             pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_f16"));
             pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16"));
+            pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64"));
         }
         )+
             pub mod copy {
@@ -150,6 +151,7 @@ macro_rules! ops{
             pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_f32_strided"));
             pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_f16_strided"));
             pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16_strided"));
+            pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64_strided"));
         }
         )+
             pub mod copy {

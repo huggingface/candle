@@ -281,6 +281,15 @@ ARGMAX(fast_argmax_u32_strided, uint, 0)
 
 SOFTMAX(softmax_f32, float)
 SOFTMAX(softmax_f16, half)
+
+#if __METAL_VERSION__ >= 220
+REDUCE(x + y, fast_sum_i64_strided, int64_t, 0)
+REDUCE(MIN(x, y), fast_min_i64_strided, int64_t, INT_MAX)
+REDUCE(MAX(x, y), fast_max_i64_strided, int64_t, INT_MIN)
+ARGMIN(fast_argmin_i64_strided, int64_t, INT_MAX)
+ARGMAX(fast_argmax_i64_strided, int64_t, INT_MIN)
+#endif
+
 #if __METAL_VERSION__ >= 310
 REDUCE(x + y, fast_sum_bf16, bfloat, 0)
 REDUCE(x * y, fast_mul_bf16, bfloat, 1)
