@@ -1143,7 +1143,7 @@ impl BackendStorage for MetalStorage {
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "ia_u32_f32",
             _ => Err(MetalError::UnexpectedDType {
-                msg: "index-add ids should be u8/u32/i64",
+                msg: "index-add ids should be u32",
                 expected: DType::U32,
                 got: ids.dtype(),
             })?,
