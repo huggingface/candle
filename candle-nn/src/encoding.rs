@@ -57,7 +57,7 @@
 //! ```
 //!
 
-use candle::{bail, Result, Tensor, WithDType};
+use candle::{bail, DType, Result, Tensor, WithDType};
 
 const INVALID_ONE_HOT_INDEX_MSG: &str =
     "one_hot: Invalid negative index value. Expected a positive index value or `-1` value to ignore.";
@@ -105,14 +105,13 @@ const INDEX_EXCEEDS_DEPTH_MSG: &str = "one_hot: Index value exceeds the depth va
 ///
 /// let device = candle::Device::Cpu;
 ///
-/// let indices = Tensor::new(vec![vec![0f32, 2.], vec![1., -1.]], &device)?;
+/// let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
 /// let depth = 4;
 ///
-/// let allow_f64 = true;
-/// let on_value = None; // defaults to 1.0
-/// let off_value = None; // defaults to 0.0
+/// let on_value = None; // defaults to 1.
+/// let off_value = None; // defaults to 0.
 ///
-/// let one_hot = one_hot::<f32, f32>(indices, depth, allow_f64, on_value, off_value)?;
+/// let one_hot = one_hot::<f32>(indices, depth, on_value, off_value)?;
 ///
 /// let expected_matrix = [
 ///     [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
@@ -134,13 +133,13 @@ const INDEX_EXCEEDS_DEPTH_MSG: &str = "one_hot: Index value exceeds the depth va
 ///
 /// let device = candle::Device::Cpu;
 /// let depth = 4;
-/// let indices = Tensor::new(vec![vec![0i64, 2], vec![1, 3]], &device)?;
+/// let indices = Tensor::new(vec![vec![0u8, 2], vec![1, 3]], &device)?;
 ///
-/// let allow_f64 = false;
-/// let on_value = Some(0);
+/// let on_value = Some(0u8);
 /// let off_value = Some(1);
 ///
-/// let one_cold = one_hot::<i64, u8>(indices, depth, allow_f64, on_value, off_value)?;
+/// // Note: the method does not require the turbofish operator, as the type is inferred from the `on_value` and `off_value`.
+/// let one_cold = one_hot(indices, depth, on_value, off_value)?;
 ///
 /// let expected_matrix = [[[0, 1, 1, 1], [1, 1, 0, 1]], [[1, 0, 1, 1], [1, 1, 1, 0]]];
 ///
@@ -160,141 +159,190 @@ const INDEX_EXCEEDS_DEPTH_MSG: &str = "one_hot: Index value exceeds the depth va
 ///
 /// This method will bail if the index value is greater than or equal to the depth value.
 ///
-/// This method will bail if the input data type does not equal the generic data type provided.
 ///
-/// This method will bail if the input data type is `f64` and `allow_f64` is false.
+/// This method will bail if the input data type is `f64`.
 ///
 /// # API Design
 ///
 /// The api design for this method is loosely based on the [TensorFlow One-Hot](https://www.tensorflow.org/api_docs/python/tf/one_hot) method.
-pub fn one_hot<I: WithDType, O: WithDType>(
+pub fn one_hot<D: WithDType>(
     indices: Tensor,
     depth: usize,
-    allow_f64: bool,
-    on_value: Option<O>,
-    off_value: Option<O>,
+    on_value: Option<D>,
+    off_value: Option<D>,
 ) -> Result<Tensor> {
-    let on_value = on_value.unwrap_or(O::from_f64(1.));
-    let off_value = off_value.unwrap_or(O::from_f64(0.));
+    let on_value = on_value.unwrap_or(D::from_f64(1.));
+    let off_value = off_value.unwrap_or(D::from_f64(0.));
 
-    if I::DTYPE != indices.dtype() {
-        bail!(
-            "one_hot: indices dtype {} does not match expected dtype {}",
-            indices.dtype().as_str(),
-            I::DTYPE.as_str()
-        )
-    }
-
-    if !allow_f64 && I::DTYPE.as_str() == "f64" {
-        bail!("one_hot: f64 is not supported")
-    }
-
+    let dtype = indices.dtype();
     let rank = indices.rank();
+
     match rank {
         0 => {
             let mut v = vec![off_value; depth];
-            let index = indices.to_vec0::<I>()?;
-            let vi = index.to_f64();
-
-            check_value(vi, depth)?;
-
-            if vi >= 0. {
-                v[vi as usize] = on_value;
-            }
+            let idx = 0;
+            match dtype {
+                DType::U8 => {
+                    let vi = indices.to_vec0::<u8>()?;
+                    set_uint_value(vi as usize, idx, depth, &mut v, on_value)?;
+                }
+                DType::U32 => {
+                    let vi = indices.to_vec0::<u32>()?;
+                    set_uint_value(vi as usize, idx, depth, &mut v, on_value)?;
+                }
+                DType::I64 => {
+                    let vi = indices.to_vec0::<i64>()?;
+                    set_int_value(vi, idx, depth, &mut v, on_value)?;
+                }
+                d => unsupported_dtype(d)?,
+            };
 
             Tensor::new(v, indices.device())
         }
         1 => {
             let dim1 = indices.dims1()?;
             let mut v = vec![off_value; depth * dim1];
-            let index = indices.to_vec1::<I>()?;
-            for i in 0..dim1 {
-                let vi = index[i].to_f64();
 
-                if vi == -1. {
-                    continue;
+            match dtype {
+                DType::U8 => {
+                    let index = indices.to_vec1::<u8>()?;
+                    for i in 0..dim1 {
+                        set_uint_value(index[i] as usize, i * depth, depth, &mut v, on_value)?;
+                    }
                 }
-
-                check_value(vi, depth)?;
-
-                let idx = i * depth + vi as usize;
-
-                if idx >= v.len() {
-                    bail!(
-                        "{} Expected index value, {}, to be less than {}.",
-                        INDEX_OUT_OF_BOUNDS_MSG,
-                        idx,
-                        v.len()
-                    );
+                DType::U32 => {
+                    let index = indices.to_vec1::<u32>()?;
+                    for i in 0..dim1 {
+                        set_uint_value(index[i] as usize, i * depth, depth, &mut v, on_value)?;
+                    }
                 }
-
-                v[idx] = on_value;
-            }
+                DType::I64 => {
+                    let index = indices.to_vec1::<i64>()?;
+                    for i in 0..dim1 {
+                        set_int_value(index[i], i * depth, depth, &mut v, on_value)?;
+                    }
+                }
+                d => unsupported_dtype(d)?,
+            };
 
             Tensor::new(v, indices.device())?.reshape(&[dim1, depth])
         }
         2 => {
             let (dim1, dim2) = indices.dims2()?;
             let mut v = vec![off_value; depth * dim1 * dim2];
-            let index = indices.to_vec2::<I>()?;
-            for i in 0..dim1 {
-                for j in 0..dim2 {
-                    let vij = index[i][j].to_f64();
 
-                    if vij == -1. {
-                        continue;
+            let idx = |i: usize, j: usize, depth: usize, dim2: usize| -> usize {
+                i * depth * dim2 + j * depth
+            };
+
+            match dtype {
+                DType::U8 => {
+                    let index = indices.to_vec2::<u8>()?;
+                    for i in 0..dim1 {
+                        for j in 0..dim2 {
+                            set_uint_value(
+                                index[i][j] as usize,
+                                idx(i, j, depth, dim2),
+                                depth,
+                                &mut v,
+                                on_value,
+                            )?;
+                        }
                     }
-
-                    check_value(vij, depth)?;
-
-                    let idx = i * depth * dim2 + j * depth + vij as usize;
-
-                    if idx >= v.len() {
-                        bail!(
-                            "{} Expected index value, {}, to be less than {}.",
-                            INDEX_OUT_OF_BOUNDS_MSG,
-                            idx,
-                            v.len()
-                        );
-                    }
-
-                    v[idx] = on_value;
                 }
-            }
+                DType::U32 => {
+                    let index = indices.to_vec2::<u32>()?;
+                    for i in 0..dim1 {
+                        for j in 0..dim2 {
+                            set_uint_value(
+                                index[i][j] as usize,
+                                idx(i, j, depth, dim2),
+                                depth,
+                                &mut v,
+                                on_value,
+                            )?;
+                        }
+                    }
+                }
+                DType::I64 => {
+                    let index = indices.to_vec2::<i64>()?;
+                    for i in 0..dim1 {
+                        for j in 0..dim2 {
+                            set_int_value(
+                                index[i][j],
+                                idx(i, j, depth, dim2),
+                                depth,
+                                &mut v,
+                                on_value,
+                            )?;
+                        }
+                    }
+                }
+                d => unsupported_dtype(d)?,
+            };
 
             Tensor::new(v, indices.device())?.reshape(&[dim1, dim2, depth])
         }
         3 => {
             let (dim1, dim2, dim3) = indices.dims3()?;
             let mut v = vec![off_value; depth * dim1 * dim2 * dim3];
-            let index = indices.to_vec3::<I>()?;
-            for i in 0..dim1 {
-                for j in 0..dim2 {
-                    for k in 0..dim3 {
-                        let vijk = index[i][j][k].to_f64();
 
-                        if vijk == -1. {
-                            continue;
+            let idx =
+                |i: usize, j: usize, k: usize, depth: usize, dim2: usize, dim3: usize| -> usize {
+                    i * depth * dim2 * dim3 + j * depth * dim3 + k * depth
+                };
+
+            match dtype {
+                DType::U8 => {
+                    let index = indices.to_vec3::<u8>()?;
+                    for i in 0..dim1 {
+                        for j in 0..dim2 {
+                            for k in 0..dim3 {
+                                set_uint_value(
+                                    index[i][j][k] as usize,
+                                    idx(i, j, k, depth, dim2, dim3),
+                                    depth,
+                                    &mut v,
+                                    on_value,
+                                )?;
+                            }
                         }
-
-                        check_value(vijk, depth)?; // bail on invalid index value
-
-                        let idx =
-                            i * depth * dim2 * dim3 + j * depth * dim3 + k * depth + vijk as usize;
-
-                        if idx >= v.len() {
-                            bail!(
-                                "{} Expected index value, {}, to be less than {}.",
-                                INDEX_OUT_OF_BOUNDS_MSG,
-                                idx,
-                                v.len()
-                            );
-                        }
-
-                        v[idx] = on_value;
                     }
                 }
-            }
+                DType::U32 => {
+                    let index = indices.to_vec3::<u32>()?;
+                    for i in 0..dim1 {
+                        for j in 0..dim2 {
+                            for k in 0..dim3 {
+                                set_uint_value(
+                                    index[i][j][k] as usize,
+                                    idx(i, j, k, depth, dim2, dim3),
+                                    depth,
+                                    &mut v,
+                                    on_value,
+                                )?;
+                            }
+                        }
+                    }
+                }
+                DType::I64 => {
+                    let index = indices.to_vec3::<i64>()?;
+                    for i in 0..dim1 {
+                        for j in 0..dim2 {
+                            for k in 0..dim3 {
+                                set_int_value(
+                                    index[i][j][k],
+                                    idx(i, j, k, depth, dim2, dim3),
+                                    depth,
+                                    &mut v,
+                                    on_value,
+                                )?;
+                            }
+                        }
+                    }
+                }
+                d => unsupported_dtype(d)?,
+            };
 
             Tensor::new(v, indices.device())?.reshape(&[dim1, dim2, dim3, depth])
         }
@@ -304,12 +352,17 @@ pub fn one_hot<I: WithDType, O: WithDType>(
     }
 }
 
-fn check_value(value: f64, depth: usize) -> Result<()> {
-    if value < -1. {
+// Bail if the value is less than -1.
+fn check_negative(value: i64) -> Result<()> {
+    if value < -1 {
         bail!("{}. Received {}", INVALID_ONE_HOT_INDEX_MSG, value);
     }
+    Ok(())
+}
 
-    if value as usize >= depth {
+// Bail if the value is greater than the depth.
+fn check_value_bounds(value: usize, depth: usize) -> Result<()> {
+    if value >= depth {
         bail!(
             "{} Index value, {}, exceeds the depth value, {}.",
             INDEX_EXCEEDS_DEPTH_MSG,
@@ -317,6 +370,74 @@ fn check_value(value: f64, depth: usize) -> Result<()> {
             depth
         )
     }
+
+    Ok(())
+}
+
+// Bail if the index is out of bounds.
+fn check_idx(idx: usize, len: usize) -> Result<()> {
+    if idx >= len {
+        bail!(
+            "{} Expected index value, {}, to be less than {}.",
+            INDEX_OUT_OF_BOUNDS_MSG,
+            idx,
+            len
+        );
+    }
+
+    Ok(())
+}
+
+// Bail if the data type is not supported.
+fn unsupported_dtype(dtype: DType) -> Result<()> {
+    bail!(
+        "one_hot: Unsupported data type. Expected U8, U32, or I64. Received {:?}",
+        dtype
+    );
+}
+
+// Set unsigned integer index values to the given value.
+fn set_uint_value<D: WithDType>(
+    value: usize,
+    idx: usize,
+    depth: usize,
+    v: &mut Vec<D>,
+    on_value: D,
+) -> Result<()> {
+    check_value_bounds(value, depth)?;
+
+    let idx = idx + value;
+
+    check_idx(idx, v.len())?;
+    v[idx] = on_value;
+
+    Ok(())
+}
+
+// Set signed integer index values to the given value.
+fn set_int_value<D: WithDType>(
+    value: i64,
+    idx: usize,
+    depth: usize,
+    v: &mut Vec<D>,
+    on_value: D,
+) -> Result<()> {
+    // Skip for an entire row of off_values
+    if value == -1 {
+        return Ok(());
+    }
+
+    // Bail if the index value is less than -1
+    check_negative(value)?;
+
+    // Bail if the index value is greater than or equal to the depth value.
+    check_value_bounds(value as usize, depth)?;
+
+    let idx = idx + value as usize;
+
+    check_idx(idx, v.len())?;
+
+    v[idx] = on_value;
 
     Ok(())
 }
@@ -331,18 +452,17 @@ mod tests {
     pub fn test_f64_one_hot() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let device = candle::Device::Cpu;
 
-        let indices = Tensor::new(vec![vec![0f32, 2.], vec![1., -1.]], &device)?;
+        let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
         let depth = 4;
 
-        let allow_f64 = true;
-        let on_value = None; // defaults to 1.0
-        let off_value = None; // defaults to 0.0
+        let on_value = None;
+        let off_value = None;
 
-        let one_hot = one_hot::<f32, f32>(indices, depth, allow_f64, on_value, off_value)?;
+        let one_hot = one_hot::<f32>(indices, depth, on_value, off_value)?;
 
         let expected_matrix = [
-            [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
-            [[0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
+            [[1., 0., 0., 0.], [0., 0., 1., 0.]],
+            [[0., 1., 0., 0.], [0., 0., 0., 0.]],
         ];
 
         assert_eq!(one_hot.shape(), &Shape::from((2, 2, depth)));
@@ -360,11 +480,11 @@ mod tests {
         let depth = 4;
         let indices = Tensor::new(vec![vec![0i64, 2], vec![1, -1]], &device)?;
 
-        let allow_f64 = false;
-        let on_value = Some(0);
+        let on_value = Some(0u8);
         let off_value = Some(1);
 
-        let one_cold = one_hot::<i64, u8>(indices, depth, allow_f64, on_value, off_value)?;
+        // Note that the method does not require the turbofish operator, as the type is inferred from the on_value.
+        let one_cold = one_hot(indices, depth, on_value, off_value)?;
 
         let expected_matrix = [[[0, 1, 1, 1], [1, 1, 0, 1]], [[1, 0, 1, 1], [1, 1, 1, 1]]];
 
