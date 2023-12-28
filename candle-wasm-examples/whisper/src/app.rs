@@ -42,8 +42,8 @@ pub enum Msg {
     Run(usize),
     UpdateStatus(String),
     SetDecoder(ModelData),
-    WorkerInMsg(WorkerInput),
-    WorkerOutMsg(Result<WorkerOutput, String>),
+    WorkerIn(WorkerInput),
+    WorkerOut(Result<WorkerOutput, String>),
 }
 
 pub struct CurrentDecode {
@@ -116,7 +116,7 @@ impl Component for App {
         let status = "loading weights".to_string();
         let cb = {
             let link = ctx.link().clone();
-            move |e| link.send_message(Self::Message::WorkerOutMsg(e))
+            move |e| link.send_message(Self::Message::WorkerOut(e))
         };
         let worker = Worker::bridge(std::rc::Rc::new(cb));
         Self {
@@ -165,18 +165,16 @@ impl Component for App {
                             Err(err) => {
                                 let output = Err(format!("decoding error: {err:?}"));
                                 // Mimic a worker output to so as to release current_decode
-                                Msg::WorkerOutMsg(output)
+                                Msg::WorkerOut(output)
                             }
-                            Ok(wav_bytes) => {
-                                Msg::WorkerInMsg(WorkerInput::DecodeTask { wav_bytes })
-                            }
+                            Ok(wav_bytes) => Msg::WorkerIn(WorkerInput::DecodeTask { wav_bytes }),
                         }
                     })
                 }
                 //
                 true
             }
-            Msg::WorkerOutMsg(output) => {
+            Msg::WorkerOut(output) => {
                 let dt = self.current_decode.as_ref().and_then(|current_decode| {
                     current_decode.start_time.and_then(|start_time| {
                         performance_now().map(|stop_time| stop_time - start_time)
@@ -198,7 +196,7 @@ impl Component for App {
                 }
                 true
             }
-            Msg::WorkerInMsg(inp) => {
+            Msg::WorkerIn(inp) => {
                 self.worker.send(inp);
                 true
             }
