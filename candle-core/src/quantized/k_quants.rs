@@ -1850,8 +1850,8 @@ pub fn matmul<T: GgmlType>(
         crate::bail!("unexpected lhs length {} {mkn:?}", lhs.len());
     }
 
-    let k_in_lhs_blocks = (k + T::BLCK_SIZE - 1) / T::BLCK_SIZE;
-    let k_in_rhs_blocks = (k + T::VecDotType::BLCK_SIZE - 1) / T::VecDotType::BLCK_SIZE;
+    let k_in_lhs_blocks = (k + T::VecDotType::BLCK_SIZE - 1) / T::VecDotType::BLCK_SIZE;
+    let k_in_rhs_blocks = (k + T::BLCK_SIZE - 1) / T::BLCK_SIZE;
     // TODO: Do not make this copy if the DotType is f32.
     // TODO: Pre-allocate this.
     let mut lhs_b = vec![T::VecDotType::zeros(); m * k_in_lhs_blocks];
