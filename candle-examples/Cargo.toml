@@ -11,12 +11,12 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { path = "../candle-core", version = "0.3.2", package = "candle-core" }
-candle-datasets = { path = "../candle-datasets", version = "0.3.2" }
-candle-nn = { path = "../candle-nn", version = "0.3.2" }
-candle-transformers = { path = "../candle-transformers", version = "0.3.2" }
-candle-flash-attn = { path = "../candle-flash-attn", version = "0.3.2", optional = true }
-candle-onnx = { path = "../candle-onnx", version = "0.3.2", optional = true }
+candle = { path = "../candle-core", version = "0.3.3", package = "candle-core" }
+candle-datasets = { path = "../candle-datasets", version = "0.3.3" }
+candle-nn = { path = "../candle-nn", version = "0.3.3" }
+candle-transformers = { path = "../candle-transformers", version = "0.3.3" }
+candle-flash-attn = { path = "../candle-flash-attn", version = "0.3.3", optional = true }
+candle-onnx = { path = "../candle-onnx", version = "0.3.3", optional = true }
 
 csv = "1.3.0"
 cudarc = { workspace = true, optional = true }
