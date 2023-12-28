@@ -184,7 +184,7 @@ impl Sam {
             let labels = Tensor::from_vec(labels, (1, n_points), img_embeddings.device())?;
             Some((points, labels))
         };
-        let points = points.as_ref().map(|(x, y)| (x, y));
+        let points = points.as_ref().map(|xy| (&xy.0, &xy.1));
         let (sparse_prompt_embeddings, dense_prompt_embeddings) =
             self.prompt_encoder.forward(points, None, None)?;
         self.mask_decoder.forward(
