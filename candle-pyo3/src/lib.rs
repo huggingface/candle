@@ -1278,13 +1278,19 @@ fn save_safetensors(
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike])")]
+#[pyo3(text_signature = "(path:Union[str,PathLike], device: Optional[Device] = None)")]
 /// Load a GGML file. Returns a tuple of three objects: a dictionary mapping tensor names to tensors,
 /// a dictionary mapping hyperparameter names to hyperparameter values, and a vocabulary.
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any], List[str]]
-fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObject)> {
+fn load_ggml(
+    path: &str,
+    device: Option<PyDevice>,
+    py: Python<'_>,
+) -> PyResult<(PyObject, PyObject, PyObject)> {
     let mut file = std::fs::File::open(path)?;
-    let ggml = ::candle::quantized::ggml_file::Content::read(&mut file).map_err(wrap_err)?;
+    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
+    let ggml =
+        ::candle::quantized::ggml_file::Content::read(&mut file, &device).map_err(wrap_err)?;
     let tensors = ggml
         .tensors
         .into_iter()
@@ -1313,11 +1319,16 @@ fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObje
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike])")]
+#[pyo3(text_signature = "(path:Union[str,PathLike], device: Optional[Device] = None)")]
 /// Loads a GGUF file. Returns a tuple of two dictionaries: the first maps tensor names to tensors,
 /// and the second maps metadata keys to metadata values.
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any]]
-fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+fn load_gguf(
+    path: &str,
+    device: Option<PyDevice>,
+    py: Python<'_>,
+) -> PyResult<(PyObject, PyObject)> {
+    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
     use ::candle::quantized::gguf_file;
     fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<PyObject> {
         let v: PyObject = match v {
@@ -1349,7 +1360,7 @@ fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
         .tensor_infos
         .keys()
         .map(|key| {
-            let qtensor = gguf.tensor(&mut file, key)?;
+            let qtensor = gguf.tensor(&mut file, key, &device)?;
             Ok((key, PyQTensor(Arc::new(qtensor)).into_py(py)))
         })
         .collect::<::candle::Result<Vec<_>>>()

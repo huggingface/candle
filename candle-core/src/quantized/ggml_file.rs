@@ -1,11 +1,11 @@
 //! Support for the GGML file format.
 
-use super::{k_quants, GgmlDType, QuantizedType};
-use crate::{Result, Device};
-use byteorder::{LittleEndian, ReadBytesExt};
-use std::collections::HashMap;
 #[cfg(feature = "metal")]
 use super::metal::load_quantized_metal;
+use super::{k_quants, GgmlDType, QuantizedType};
+use crate::{Device, Result};
+use byteorder::{LittleEndian, ReadBytesExt};
+use std::collections::HashMap;
 
 // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.h#L37
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,18 +123,20 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
     raw_data: &[u8],
     size_in_bytes: usize,
     dims: Vec<usize>,
-    device: &Device
+    device: &Device,
 ) -> Result<super::QTensor> {
     let raw_data_ptr = raw_data.as_ptr();
     let n_blocks = size_in_bytes / std::mem::size_of::<T>();
     let data = unsafe { std::slice::from_raw_parts(raw_data_ptr as *const T, n_blocks) };
-    let data: Box<dyn QuantizedType> = match device{
+    let data: Box<dyn QuantizedType> = match device {
         Device::Cpu => Box::new(data.to_vec()),
         #[cfg(feature = "metal")]
-        Device::Metal(metal) => {load_quantized_metal(metal, data)?},
+        Device::Metal(metal) => load_quantized_metal(metal, data)?,
         #[cfg(not(feature = "metal"))]
-        Device::Metal(metal) => {crate::bail!("Metal backend requires `metal` feature")},
-        device => unimplemented!("Implement quantized tensor for device {device:?}")
+        Device::Metal(_metal) => {
+            crate::bail!("Metal backend requires `metal` feature")
+        }
+        device => unimplemented!("Implement quantized tensor for device {device:?}"),
     };
     super::QTensor::new(data, dims)
 }
@@ -158,16 +160,36 @@ pub fn qtensor_from_ggml(
     match ggml_dtype {
         GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims, device),
         GgmlDType::F16 => from_raw_data::<half::f16>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q4_0 => from_raw_data::<k_quants::BlockQ4_0>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q4_1 => from_raw_data::<k_quants::BlockQ4_1>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q5_0 => from_raw_data::<k_quants::BlockQ5_0>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q5_1 => from_raw_data::<k_quants::BlockQ5_1>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q8_0 => from_raw_data::<k_quants::BlockQ8_0>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q2K => from_raw_data::<k_quants::BlockQ2K>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q3K => from_raw_data::<k_quants::BlockQ3K>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q4K => from_raw_data::<k_quants::BlockQ4K>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q5K => from_raw_data::<k_quants::BlockQ5K>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q6K => from_raw_data::<k_quants::BlockQ6K>(raw_data, size_in_bytes, dims, device),
+        GgmlDType::Q4_0 => {
+            from_raw_data::<k_quants::BlockQ4_0>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q4_1 => {
+            from_raw_data::<k_quants::BlockQ4_1>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q5_0 => {
+            from_raw_data::<k_quants::BlockQ5_0>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q5_1 => {
+            from_raw_data::<k_quants::BlockQ5_1>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q8_0 => {
+            from_raw_data::<k_quants::BlockQ8_0>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q2K => {
+            from_raw_data::<k_quants::BlockQ2K>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q3K => {
+            from_raw_data::<k_quants::BlockQ3K>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q4K => {
+            from_raw_data::<k_quants::BlockQ4K>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q5K => {
+            from_raw_data::<k_quants::BlockQ5K>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q6K => {
+            from_raw_data::<k_quants::BlockQ6K>(raw_data, size_in_bytes, dims, device)
+        }
         _ => crate::bail!("quantized type {ggml_dtype:?} is not supported yet"),
     }
 }
@@ -214,7 +236,10 @@ pub struct Content {
 }
 
 impl Content {
-    pub fn read<R: std::io::Seek + std::io::Read>(reader: &mut R, device: &Device) -> Result<Content> {
+    pub fn read<R: std::io::Seek + std::io::Read>(
+        reader: &mut R,
+        device: &Device,
+    ) -> Result<Content> {
         // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.cpp#L505
         let last_position = reader.seek(std::io::SeekFrom::End(0))?;
         reader.seek(std::io::SeekFrom::Start(0))?;
@@ -242,4 +267,3 @@ impl Content {
         }
     }
 }
-
