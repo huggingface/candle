@@ -353,7 +353,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "affine_f32",
                 DType::F16 => "affine_f16",
-                dtype => crate::bail!("Affine {dtype:?}"),
+                dtype => crate::bail!("Metal contiguous affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine(
                 &device.device,
@@ -371,7 +371,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "affine_f32_strided",
                 DType::F16 => "affine_f16_strided",
-                dtype => crate::bail!("Affine {dtype:?}"),
+                dtype => crate::bail!("Metal strided affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine_strided(
                 &device.device,
@@ -404,7 +404,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "powf_f32",
                 DType::F16 => "powf_f16",
-                dtype => crate::bail!("Powf {dtype:?}"),
+                dtype => crate::bail!("Metal contiguous powf {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_powf(
                 &device.device,
@@ -421,7 +421,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "powf_f32_strided",
                 DType::F16 => "powf_f16_strided",
-                dtype => crate::bail!("Powf {dtype:?}"),
+                dtype => crate::bail!("Metal strided powf {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_powf_strided(
                 &device.device,
@@ -453,7 +453,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "elu_f32",
                 DType::F16 => "elu_f16",
-                dtype => crate::bail!("Powf {dtype:?}"),
+                dtype => crate::bail!("Metal contiguous elu {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_elu(
                 &device.device,
@@ -470,7 +470,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "elu_f32_strided",
                 DType::F16 => "elu_f16_strided",
-                dtype => crate::bail!("Powf {dtype:?}"),
+                dtype => crate::bail!("Metal strided elu {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_elu_strided(
                 &device.device,
@@ -532,7 +532,7 @@ impl BackendStorage for MetalStorage {
             (ReduceOp::Max, DType::BF16) => ("fast_max_bf16_strided", true, false),
             (ReduceOp::ArgMin, DType::BF16) => ("fast_argmin_bf16_strided", true, true),
             (ReduceOp::ArgMax, DType::BF16) => ("fast_argmax_bf16_strided", true, true),
-            (k, dtype) => crate::bail!("Reduce op for non float {k:?} {dtype:?}"),
+            (k, dtype) => crate::bail!("Metal reduce op {k:?} {dtype:?} not implemented"),
         };
         if check_empty && layout.shape().elem_count() == 0 {
             Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
@@ -583,7 +583,9 @@ impl BackendStorage for MetalStorage {
                 (DType::U8, DType::F32) => "cast_u8_f32",
                 (DType::F32, DType::F16) => "cast_f32_f16",
                 (DType::F16, DType::F32) => "cast_f16_f32",
-                (left, right) => crate::bail!("to dtype {left:?} - {right:?}"),
+                (left, right) => {
+                    crate::bail!("Metal contiguous to_dtype {left:?} {right:?} not implemented")
+                }
             };
             candle_metal_kernels::call_cast_contiguous(
                 &device.device,
@@ -604,7 +606,9 @@ impl BackendStorage for MetalStorage {
                 (DType::U8, DType::F32) => "cast_u8_f32_strided",
                 (DType::F32, DType::F16) => "cast_f32_f16_strided",
                 (DType::F16, DType::F32) => "cast_f16_f32_strided",
-                (left, right) => crate::bail!("to dtype {left:?} - {right:?}"),
+                (left, right) => {
+                    crate::bail!("Metal strided to_dtype {left:?} {right:?} not implemented")
+                }
             };
             candle_metal_kernels::call_cast_strided(
                 &device.device,
@@ -663,7 +667,9 @@ impl BackendStorage for MetalStorage {
                 ("ufloor", DType::F16) => contiguous::floor::HALF,
                 ("uround", DType::F16) => contiguous::round::HALF,
                 ("utanh", DType::F16) => contiguous::tanh::HALF,
-                (name, dtype) => crate::bail!("Match {name} - {dtype:?}"),
+                (name, dtype) => {
+                    crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
+                }
             };
             candle_metal_kernels::call_unary_contiguous(
                 &device.device,
@@ -704,7 +710,9 @@ impl BackendStorage for MetalStorage {
                 ("uceil", DType::F16) => strided::ceil::HALF,
                 ("ufloor", DType::F16) => strided::floor::HALF,
                 ("uround", DType::F16) => strided::round::HALF,
-                (name, dtype) => crate::bail!("Match {name} - {dtype:?}"),
+                (name, dtype) => {
+                    crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
+                }
             };
             candle_metal_kernels::call_unary_strided(
                 &device.device,
@@ -757,7 +765,7 @@ impl BackendStorage for MetalStorage {
         let name = match (self.dtype, t.dtype()) {
             (DType::U8, DType::F32) => "where_u8_f32",
             (DType::U8, DType::F16) => "where_u8_f16",
-            (left, right) => crate::bail!("where {left:?} - {right:?} not implemented"),
+            (left, right) => crate::bail!("Metal where_cond {left:?} {right:?} not implemented"),
         };
         candle_metal_kernels::call_where_cond_strided(
             &device.device,
@@ -804,7 +812,7 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         let name = match self.dtype {
             DType::F32 => "im2col1d_f32",
-            dtype => crate::bail!("conv1d metal {dtype:?} not implemented"),
+            dtype => crate::bail!("Metal conv1d {dtype:?} not implemented"),
         };
         candle_metal_kernels::call_im2col1d_strided(
             &self.device.device,
@@ -857,7 +865,7 @@ impl BackendStorage for MetalStorage {
         _kernel_l: &Layout,
         _params: &ParamsConvTranspose1D,
     ) -> Result<Self> {
-        crate::bail!("conv_transpose1d metal")
+        crate::bail!("Metal conv_transpose1d not implemented")
     }
 
     fn conv2d(
@@ -888,7 +896,7 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         let name = match self.dtype {
             DType::F32 => "im2col_f32",
-            dtype => crate::bail!("conv1d metal {dtype:?} not implemented"),
+            dtype => crate::bail!("Metal conv2d {dtype:?} not implemented"),
         };
         candle_metal_kernels::call_im2col_strided(
             &self.device.device,
@@ -944,19 +952,19 @@ impl BackendStorage for MetalStorage {
         _kernel_l: &Layout,
         _params: &ParamsConvTranspose2D,
     ) -> Result<Self> {
-        crate::bail!("conv_tranpose2d metal")
+        crate::bail!("Metal conv_tranpose2d not implemented")
     }
 
     fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        crate::bail!("avg_pool2d metal")
+        crate::bail!("Metal avg_pool2d not implemented")
     }
 
     fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        crate::bail!("max_pool2d metal")
+        crate::bail!("Metal max_pool2d not implemented")
     }
 
     fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {
-        crate::bail!("upsample_nearest1d metal")
+        crate::bail!("Metal upsample_nearest1d not implemented")
     }
 
     fn upsample_nearest2d(&self, inp_l: &Layout, out_w: usize, out_h: usize) -> Result<Self> {
@@ -969,7 +977,7 @@ impl BackendStorage for MetalStorage {
         }
         let name = match self.dtype {
             DType::F32 => "upsample_nearest2d_f32",
-            dtype => crate::bail!("Not implemented {dtype:?} for upsample_nearest2d, metal"),
+            dtype => crate::bail!("Metal upsample_nearest2d {dtype:?} not implemented"),
         };
 
         let dst_el = out_w * out_h * dims[0] * dims[1];
@@ -1007,7 +1015,7 @@ impl BackendStorage for MetalStorage {
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "gather_u32_f32",
             (DType::U32, DType::F16) => "gather_u32_f16",
-            (left, right) => crate::bail!("gather metal {left:?} {right:?} not implemented"),
+            (left, right) => crate::bail!("Metal gather {left:?} {right:?} not implemented"),
         };
         let command_buffer = self.device.command_buffer()?;
         candle_metal_kernels::call_gather(
@@ -1080,7 +1088,7 @@ impl BackendStorage for MetalStorage {
             && ids_l.is_contiguous()
             && ids_l.start_offset() == 0)
         {
-            crate::bail!("Non contiguous index select not implemented");
+            crate::bail!("Metal strided index_select not implemented");
         }
         let left_size: usize = src_l.dims()[..dim].iter().product();
         let right_size: usize = src_l.dims()[dim + 1..].iter().product();
@@ -1092,7 +1100,9 @@ impl BackendStorage for MetalStorage {
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "is_u32_f32",
             (DType::U32, DType::F16) => "is_u32_f16",
-            (left, right) => crate::bail!("index select metal {left:?} {right:?}"),
+            (left, right) => {
+                crate::bail!("Metal contiguous index_select {left:?} {right:?} not implemented")
+            }
         };
         let command_buffer = self.device.command_buffer()?;
         candle_metal_kernels::call_index_select(
@@ -1133,7 +1143,7 @@ impl BackendStorage for MetalStorage {
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "ia_u32_f32",
             _ => Err(MetalError::UnexpectedDType {
-                msg: "index-add ids should be u8/u32/i64",
+                msg: "index-add ids should be u32",
                 expected: DType::U32,
                 got: ids.dtype(),
             })?,
@@ -1216,7 +1226,7 @@ impl BackendStorage for MetalStorage {
                 DType::BF16 => candle_metal_kernels::unary::strided::copy::BFLOAT,
                 DType::U32 => candle_metal_kernels::unary::strided::copy::U32,
                 DType::U8 => candle_metal_kernels::unary::strided::copy::U8,
-                dtype => crate::bail!("copy_strided not implemented for {dtype:?}"),
+                dtype => crate::bail!("Metal copy_strided {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_unary_strided(
                 &self.device.device,
@@ -1288,7 +1298,9 @@ impl MetalStorage {
                 ("lt", DType::F16) => (contiguous::lt::HALF, DType::U8),
                 ("ge", DType::F16) => (contiguous::ge::HALF, DType::U8),
                 ("gt", DType::F16) => (contiguous::gt::HALF, DType::U8),
-                (name, dtype) => crate::bail!("Binary {name} - {dtype:?} not implemented"),
+                (name, dtype) => {
+                    crate::bail!("Metal contiguous binary {name} {dtype:?} not implemented")
+                }
             };
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_contiguous(
@@ -1331,7 +1343,9 @@ impl MetalStorage {
                 ("lt", DType::F16) => (strided::lt::HALF, DType::U8),
                 ("ge", DType::F16) => (strided::ge::HALF, DType::U8),
                 ("gt", DType::F16) => (strided::gt::HALF, DType::U8),
-                (name, dtype) => crate::bail!("Binary strided {name} - {dtype:?} not implemented"),
+                (name, dtype) => {
+                    crate::bail!("Metal strided binary {name} {dtype:?} not implemented")
+                }
             };
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_strided(
@@ -1386,7 +1400,7 @@ impl BackendDevice for MetalDevice {
     }
 
     fn set_seed(&self, _seed: u64) -> Result<()> {
-        crate::bail!("set_seed")
+        crate::bail!("Metal set_seed not implemented")
     }
 
     fn location(&self) -> crate::DeviceLocation {
