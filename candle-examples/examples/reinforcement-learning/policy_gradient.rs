@@ -83,16 +83,13 @@ pub fn run() -> Result<()> {
             let step = env.step(action)?;
             steps.push(step.copy_with_obs(&state));
 
-            let done = step.terminated || step.truncated;
-
-            state = if done {
-                env.reset(rng.gen::<u64>())?
+            if step.terminated || step.truncated {
+                state = env.reset(rng.gen::<u64>())?;
+                if steps.len() > 5000 {
+                    break;
+                }
             } else {
-                step.state
-            };
-
-            if done && steps.len() > 5000 {
-                break;
+                state = step.state;
             }
         }
 
