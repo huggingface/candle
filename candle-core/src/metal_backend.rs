@@ -665,7 +665,7 @@ impl BackendStorage for MetalStorage {
                 ("uround", DType::F32) => contiguous::round::FLOAT,
                 ("urecip", DType::F32) => contiguous::recip::FLOAT,
                 ("utanh", DType::F32) => contiguous::tanh::FLOAT,
-                ("urelu", DType::F32) => contiguous::tanh::FLOAT,
+                ("urelu", DType::F32) => contiguous::relu::FLOAT,
                 ("ucos", DType::F16) => contiguous::cos::HALF,
                 ("usin", DType::F16) => contiguous::sin::HALF,
                 ("usqr", DType::F16) => contiguous::sqr::HALF,
@@ -681,7 +681,7 @@ impl BackendStorage for MetalStorage {
                 ("uround", DType::F16) => contiguous::round::HALF,
                 ("urecip", DType::F16) => contiguous::recip::HALF,
                 ("utanh", DType::F16) => contiguous::tanh::HALF,
-                ("urelu", DType::F16) => contiguous::tanh::HALF,
+                ("urelu", DType::F16) => contiguous::relu::HALF,
                 (name, dtype) => {
                     crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
                 }
@@ -711,7 +711,7 @@ impl BackendStorage for MetalStorage {
                 ("uerf", DType::F32) => strided::erf::FLOAT,
                 ("uceil", DType::F32) => strided::ceil::FLOAT,
                 ("ufloor", DType::F32) => strided::floor::FLOAT,
-                ("urelu", DType::F32) => strided::round::FLOAT,
+                ("urelu", DType::F32) => strided::relu::FLOAT,
                 ("uround", DType::F32) => strided::round::FLOAT,
                 ("ucoss", DType::F16) => strided::cos::HALF,
                 ("usin", DType::F16) => strided::sin::HALF,
@@ -725,7 +725,7 @@ impl BackendStorage for MetalStorage {
                 ("uerf", DType::F16) => strided::erf::HALF,
                 ("uceil", DType::F16) => strided::ceil::HALF,
                 ("ufloor", DType::F16) => strided::floor::HALF,
-                ("urelu", DType::F16) => strided::round::HALF,
+                ("urelu", DType::F16) => strided::relu::HALF,
                 ("uround", DType::F16) => strided::round::HALF,
                 (name, dtype) => {
                     crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
