@@ -40,6 +40,8 @@ jobs:
           profile: minimal
           toolchain: ${{ matrix.rust }}
           override: true
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
       - uses: actions-rs/cargo@v1
         with:
           command: test

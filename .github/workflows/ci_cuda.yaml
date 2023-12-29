@@ -8,6 +8,8 @@ jobs:
   start-runner:
     name: Start self-hosted EC2 runner
     runs-on: ubuntu-latest
+    # Don't run on forks, they won't have access to secrets anyway.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     env:
       AWS_REGION: us-east-1
       EC2_AMI_ID: ami-03cfed9ea28f4b002
