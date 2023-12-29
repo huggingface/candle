@@ -43,11 +43,11 @@ let mmap = unsafe { Mmap::map(&file).unwrap() };
 let weights = candle::safetensors::load_buffer(&mmap[..], &Device::Cpu).unwrap();
 // ANCHOR_END: book_hub_2
         assert_eq!(weights.len(), 206);
-    }
+    // }
 
-    #[rustfmt::skip]
-    #[test]
-    fn book_hub_3() {
+    // #[rustfmt::skip]
+    // #[test]
+    // fn book_hub_3() {
 // ANCHOR: book_hub_3
 use candle::{DType, Device, Tensor};
 use hf_hub::api::sync::Api;
