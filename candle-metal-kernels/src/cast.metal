@@ -52,5 +52,11 @@ CAST(cast_u8_f32, cast_u8_f32_strided, uint8_t, float)
 CAST(cast_f16_f32, cast_f16_f32_strided, half, float)
 CAST(cast_f32_f16, cast_f32_f16_strided, float, half)
 
+#if __METAL_VERSION__ >= 220
+CAST(cast_u8_i64, cast_u8_i64_strided, uint8_t, int64_t)
+CAST(cast_u32_i64, cast_u32_i64_strided, uint32_t, int64_t)
+CAST(cast_i64_f32, cast_i64_f32_strided, int64_t, float)
+#endif
+
 #if __METAL_VERSION__ >= 310
 #endif

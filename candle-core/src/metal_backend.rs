@@ -532,6 +532,11 @@ impl BackendStorage for MetalStorage {
             (ReduceOp::Max, DType::BF16) => ("fast_max_bf16_strided", true, false),
             (ReduceOp::ArgMin, DType::BF16) => ("fast_argmin_bf16_strided", true, true),
             (ReduceOp::ArgMax, DType::BF16) => ("fast_argmax_bf16_strided", true, true),
+            (ReduceOp::Sum, DType::I64) => ("fast_sum_i64_strided", false, false),
+            (ReduceOp::Min, DType::I64) => ("fast_min_i64_strided", true, false),
+            (ReduceOp::Max, DType::I64) => ("fast_max_i64_strided", true, false),
+            (ReduceOp::ArgMin, DType::I64) => ("fast_argmin_i64_strided", true, true),
+            (ReduceOp::ArgMax, DType::I64) => ("fast_argmax_i64_strided", true, true),
             (k, dtype) => crate::bail!("Metal reduce op {k:?} {dtype:?} not implemented"),
         };
         if check_empty && layout.shape().elem_count() == 0 {
@@ -579,10 +584,13 @@ impl BackendStorage for MetalStorage {
             let kernel_name = match (self.dtype, dtype) {
                 (DType::U32, DType::F32) => "cast_u32_f32",
                 (DType::U32, DType::U8) => "cast_u32_u8",
+                (DType::U32, DType::I64) => "cast_u32_i64",
                 (DType::U8, DType::U32) => "cast_u8_u32",
                 (DType::U8, DType::F32) => "cast_u8_f32",
+                (DType::U8, DType::I64) => "cast_u8_i64",
                 (DType::F32, DType::F16) => "cast_f32_f16",
                 (DType::F16, DType::F32) => "cast_f16_f32",
+                (DType::I64, DType::F32) => "cast_i64_f32",
                 (left, right) => {
                     crate::bail!("Metal contiguous to_dtype {left:?} {right:?} not implemented")
                 }
@@ -602,10 +610,13 @@ impl BackendStorage for MetalStorage {
             let kernel_name = match (self.dtype, dtype) {
                 (DType::U32, DType::F32) => "cast_u32_f32_strided",
                 (DType::U32, DType::U8) => "cast_u32_u8_strided",
+                (DType::U32, DType::I64) => "cast_u32_i64_strided",
                 (DType::U8, DType::U32) => "cast_u8_u32_strided",
                 (DType::U8, DType::F32) => "cast_u8_f32_strided",
+                (DType::U8, DType::I64) => "cast_u8_i64_strided",
                 (DType::F32, DType::F16) => "cast_f32_f16_strided",
                 (DType::F16, DType::F32) => "cast_f16_f32_strided",
+                (DType::I64, DType::F32) => "cast_i64_f32_strided",
                 (left, right) => {
                     crate::bail!("Metal strided to_dtype {left:?} {right:?} not implemented")
                 }
@@ -767,6 +778,7 @@ impl BackendStorage for MetalStorage {
         let name = match (self.dtype, t.dtype()) {
             (DType::U8, DType::F32) => "where_u8_f32",
             (DType::U8, DType::F16) => "where_u8_f16",
+            (DType::U8, DType::I64) => "where_u8_i64",
             (left, right) => crate::bail!("Metal where_cond {left:?} {right:?} not implemented"),
         };
         candle_metal_kernels::call_where_cond_strided(
@@ -1226,6 +1238,7 @@ impl BackendStorage for MetalStorage {
                 DType::F32 => candle_metal_kernels::unary::strided::copy::FLOAT,
                 DType::F16 => candle_metal_kernels::unary::strided::copy::HALF,
                 DType::BF16 => candle_metal_kernels::unary::strided::copy::BFLOAT,
+                DType::I64 => candle_metal_kernels::unary::strided::copy::I64,
                 DType::U32 => candle_metal_kernels::unary::strided::copy::U32,
                 DType::U8 => candle_metal_kernels::unary::strided::copy::U8,
                 dtype => crate::bail!("Metal copy_strided {dtype:?} not implemented"),
@@ -1300,6 +1313,16 @@ impl MetalStorage {
                 ("lt", DType::F16) => (contiguous::lt::HALF, DType::U8),
                 ("ge", DType::F16) => (contiguous::ge::HALF, DType::U8),
                 ("gt", DType::F16) => (contiguous::gt::HALF, DType::U8),
+                ("add", DType::I64) => (contiguous::add::I64, self.dtype),
+                ("sub", DType::I64) => (contiguous::sub::I64, self.dtype),
+                ("mul", DType::I64) => (contiguous::mul::I64, self.dtype),
+                ("div", DType::I64) => (contiguous::div::I64, self.dtype),
+                ("eq", DType::I64) => (contiguous::eq::I64, DType::U8),
+                ("ne", DType::I64) => (contiguous::ne::I64, DType::U8),
+                ("le", DType::I64) => (contiguous::le::I64, DType::U8),
+                ("lt", DType::I64) => (contiguous::lt::I64, DType::U8),
+                ("ge", DType::I64) => (contiguous::ge::I64, DType::U8),
+                ("gt", DType::I64) => (contiguous::gt::I64, DType::U8),
                 (name, dtype) => {
                     crate::bail!("Metal contiguous binary {name} {dtype:?} not implemented")
                 }
@@ -1345,6 +1368,18 @@ impl MetalStorage {
                 ("lt", DType::F16) => (strided::lt::HALF, DType::U8),
                 ("ge", DType::F16) => (strided::ge::HALF, DType::U8),
                 ("gt", DType::F16) => (strided::gt::HALF, DType::U8),
+                ("badd", DType::I64) => (strided::add::I64, self.dtype),
+                ("bsub", DType::I64) => (strided::sub::I64, self.dtype),
+                ("bmul", DType::I64) => (strided::mul::I64, self.dtype),
+                ("bdiv", DType::I64) => (strided::div::I64, self.dtype),
+                ("bminimum", DType::I64) => (strided::min::I64, self.dtype),
+                ("bmaximum", DType::I64) => (strided::max::I64, self.dtype),
+                ("eq", DType::I64) => (strided::eq::I64, DType::U8),
+                ("ne", DType::I64) => (strided::ne::I64, DType::U8),
+                ("le", DType::I64) => (strided::le::I64, DType::U8),
+                ("lt", DType::I64) => (strided::lt::I64, DType::U8),
+                ("ge", DType::I64) => (strided::ge::I64, DType::U8),
+                ("gt", DType::I64) => (strided::gt::I64, DType::U8),
                 (name, dtype) => {
                     crate::bail!("Metal strided binary {name} {dtype:?} not implemented")
                 }

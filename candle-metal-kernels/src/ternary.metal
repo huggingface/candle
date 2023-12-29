@@ -57,4 +57,7 @@ WHERE_OP(float, uint8_t, where_u8_f32)
 // WHERE_OP(double, uint8_t, where_u8_f64)
 // WHERE_OP(uint8_t, uint8_t, where_u8_u8)
 // WHERE_OP(uint32_t, uint8_t, where_u8_u32)
-// WHERE_OP(int64_t, uint8_t, where_u8_i64)
+
+#if __METAL_VERSION__ >= 220
+WHERE_OP(int64_t, uint8_t, where_u8_i64)
+#endif

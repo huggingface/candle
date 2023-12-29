@@ -115,6 +115,10 @@ UNARY(id, half, copy_f16, copy_f16_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
 UNARY(id, uint32_t, copy_u32, copy_u32_strided)
 
+#if __METAL_VERSION__ >= 220
+UNARY(id, int64_t, copy_i64, copy_i64_strided)
+#endif
+
 #if __METAL_VERSION__ >= 310
 BFLOAT_UNARY_OP(cos)
 BFLOAT_UNARY_OP(sin)
