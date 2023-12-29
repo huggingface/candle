@@ -140,6 +140,8 @@ BFLOAT_UNARY_OP(floor)
 BFLOAT_UNARY_OP(round)
 BFLOAT_UNARY_OP(gelu_erf)
 BFLOAT_UNARY_OP(erf)
+BFLOAT_UNARY_OP(tanh)
+BFLOAT_UNARY_OP(recip)
 BFLOAT_UNARY_OP(relu)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
