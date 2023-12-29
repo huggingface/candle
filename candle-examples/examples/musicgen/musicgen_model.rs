@@ -321,7 +321,7 @@ impl MusicgenDecoder {
         let positions = self.embed_positions.forward(&input)?.to_device(dev)?;
         let mut xs = inputs_embeds.broadcast_add(&positions)?;
         let attention_mask = self.prepare_decoder_attention_mask(b_sz, seq_len)?;
-        for (_layer_idx, decoder_layer) in self.layers.iter_mut().enumerate() {
+        for decoder_layer in self.layers.iter_mut() {
             xs = decoder_layer.forward(&xs, &attention_mask, None)?;
         }
         let xs = self.layer_norm.forward(&xs)?;

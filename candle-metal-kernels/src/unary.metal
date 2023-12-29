@@ -19,7 +19,9 @@ METAL_FUNC uint get_strided_index(
 }
 
 template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
+template <typename T> METAL_FUNC T recip(T in){ return T(1.0 / in); }
 template <typename T> METAL_FUNC T neg(T in){ return -in; }
+
 template <typename T> METAL_FUNC T erf(T in){
     float x = (float) in;
     // constants
@@ -62,7 +64,6 @@ template <typename T> METAL_FUNC T relu(T in){
     }
     return in;
 }
-
 
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
@@ -114,10 +115,16 @@ UNARY_OP(sin)
 UNARY_OP(sqr)
 UNARY_OP(sqrt)
 UNARY_OP(tanh)
+UNARY_OP(recip)
+
 UNARY(id, float, copy_f32, copy_f32_strided)
 UNARY(id, half, copy_f16, copy_f16_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
 UNARY(id, uint32_t, copy_u32, copy_u32_strided)
+
+#if __METAL_VERSION__ >= 220
+UNARY(id, int64_t, copy_i64, copy_i64_strided)
+#endif
 
 #if __METAL_VERSION__ >= 310
 BFLOAT_UNARY_OP(ceil)
@@ -135,6 +142,7 @@ BFLOAT_UNARY_OP(sin)
 BFLOAT_UNARY_OP(sqr)
 BFLOAT_UNARY_OP(sqrt)
 BFLOAT_UNARY_OP(tanh)
+BFLOAT_UNARY_OP(recip)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
 #endif
