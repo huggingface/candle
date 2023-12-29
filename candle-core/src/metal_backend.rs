@@ -713,7 +713,7 @@ impl BackendStorage for MetalStorage {
                 ("ufloor", DType::F32) => strided::floor::FLOAT,
                 ("urelu", DType::F32) => strided::relu::FLOAT,
                 ("uround", DType::F32) => strided::round::FLOAT,
-                ("ucoss", DType::F16) => strided::cos::HALF,
+                ("ucos", DType::F16) => strided::cos::HALF,
                 ("usin", DType::F16) => strided::sin::HALF,
                 ("usqr", DType::F16) => strided::sqr::HALF,
                 ("usqrt", DType::F16) => strided::sqrt::HALF,
