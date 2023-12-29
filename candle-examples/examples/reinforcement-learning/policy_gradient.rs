@@ -1,8 +1,8 @@
 use super::gym_env::{GymEnv, Step};
 use candle::{DType, Device, Error, Module, Result, Tensor};
 use candle_nn::{
-    func, linear, ops::log_softmax, ops::softmax, sequential::seq, Activation, AdamW, Optimizer,
-    ParamsAdamW, Sequential, VarBuilder, VarMap,
+    linear, ops::log_softmax, ops::softmax, sequential::seq, Activation, AdamW, Optimizer,
+    ParamsAdamW, VarBuilder, VarMap,
 };
 use rand::{distributions::Distribution, rngs::ThreadRng, Rng};
 
