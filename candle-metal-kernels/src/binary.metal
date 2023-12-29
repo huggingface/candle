@@ -57,6 +57,7 @@ kernel void FN_NAME_STRIDED( \
 #define BINARY_OP(FN, NAME) \
 BINARY(FN, float, float, NAME##_f32, NAME##_f32_strided); \
 BINARY(FN, half, half, NAME##_f16, NAME##_f16_strided); \
+BINARY(FN, uint32_t, uint32_t, NAME##_u32, NAME##_u32_strided); \
 BINARY(FN, uint8_t, uint8_t, NAME##_u8, NAME##_u8_strided);
 
 #define INT64_BINARY_OP(NAME, FN) \
@@ -68,6 +69,7 @@ BINARY(FN, bfloat, bfloat, NAME##_bf16, NAME##_bf16_strided);
 #define BINARY_OP_OUT(NAME, FN) \
 BINARY(FN, float, uint8_t, NAME##_f32, NAME##_f32_strided); \
 BINARY(FN, half, uint8_t, NAME##_f16, NAME##_f16_strided); \
+BINARY(FN, uint32_t, uint8_t, NAME##_u32, NAME##_u32_strided); \
 BINARY(FN, uint8_t, uint8_t, NAME##_u8, NAME##_u8_strided);
 
 #define INT64_BINARY_OP_OUT(NAME, FN) \
