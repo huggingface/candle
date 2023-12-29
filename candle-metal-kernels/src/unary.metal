@@ -19,7 +19,7 @@ METAL_FUNC uint get_strided_index(
 }
 
 template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
-template <typename T> METAL_FUNC T urecip(T in){ return T(1.0 / in); }
+template <typename T> METAL_FUNC T recip(T in){ return T(1.0 / in); }
 template <typename T> METAL_FUNC T neg(T in){ return -in; }
 
 template <typename T> METAL_FUNC T erf(T in){
@@ -108,7 +108,7 @@ UNARY_OP(round)
 UNARY_OP(gelu_erf)
 UNARY_OP(erf)
 UNARY_OP(tanh)
-UNARY_OP(urecip)
+UNARY_OP(recip)
 
 UNARY(id, float, copy_f32, copy_f32_strided)
 UNARY(id, half, copy_f16, copy_f16_strided)
@@ -130,7 +130,7 @@ BFLOAT_UNARY_OP(round)
 BFLOAT_UNARY_OP(gelu_erf)
 BFLOAT_UNARY_OP(erf)
 BFLOAT_UNARY_OP(tanh)
-BFLOAT_UNARY_OP(urecip)
+BFLOAT_UNARY_OP(recip)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
 #endif
