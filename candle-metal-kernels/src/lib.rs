@@ -5,6 +5,7 @@ use metal::{
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::marker::PhantomData;
 use std::sync::RwLock;
 
 const AFFINE: &str = include_str!("affine.metal");
@@ -180,6 +181,8 @@ pub mod binary {
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
+    #[error("Invalid usage of kernel: {0}")]
+    InvalidUsage(String),
     #[error("Could not lock kernel map: {0}")]
     LockError(String),
     #[error("Error while loading library: {0}")]
@@ -1575,7 +1578,77 @@ fn divide(m: usize, b: usize) -> NSUInteger {
     ((m + b - 1) / b) as NSUInteger
 }
 
-pub fn call_fill<D: EncoderParam>(
+pub struct Fill<T> {
+    _marker: PhantomData<T>,
+}
+
+pub trait CallFill<T> {
+    const KERNEL_NAME: &'static str;
+
+    fn call_fill(
+        device: &Device,
+        command_buffer: &CommandBufferRef,
+        kernels: &Kernels,
+        elem_count: usize,
+        buffer: &Buffer,
+        value: T,
+    ) -> Result<(), MetalKernelError>;
+}
+
+macro_rules ! impl_call_fill {
+    ($($t:ty),*) => {
+        $(
+            impl CallFill<$t> for Fill<$t> {
+                const KERNEL_NAME: &'static str = concat!("fill_", stringify!($t));
+
+                fn call_fill(device: &Device, command_buffer: &CommandBufferRef, kernels: &Kernels, elem_count: usize, buffer: &Buffer, value: $t) -> Result<(), MetalKernelError> {
+                    _call_fill(device, command_buffer, kernels, Self::KERNEL_NAME, elem_count, buffer, value)
+                }
+            }
+        )*
+    };
+}
+impl_call_fill!(u32, i64, f16, bf16, f32);
+
+impl CallFill<u8> for Fill<u8> {
+    const KERNEL_NAME: &'static str = "";
+
+    fn call_fill(
+        _: &Device,
+        command_buffer: &CommandBufferRef,
+        kernels: &Kernels,
+        elem_count: usize,
+        buffer: &Buffer,
+        value: u8,
+    ) -> Result<(), MetalKernelError> {
+        _call_blit_fill(command_buffer, kernels, elem_count, buffer, value)
+    }
+}
+
+fn _call_blit_fill(
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    elem_count: usize,
+    buffer: &Buffer,
+    value: u8,
+) -> Result<(), MetalKernelError> {
+    let blit = command_buffer.new_blit_command_encoder();
+    blit.wait_for_fence(&kernels.fence);
+    blit.fill_buffer(
+        &buffer,
+        metal::NSRange {
+            location: 0,
+            length: elem_count as NSUInteger,
+        },
+        value,
+    );
+    blit.update_fence(&kernels.fence);
+    blit.end_encoding();
+
+    Ok(())
+}
+
+fn _call_fill<D: EncoderParam>(
     device: &Device,
     command_buffer: &CommandBufferRef,
     kernels: &Kernels,

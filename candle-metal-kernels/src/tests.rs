@@ -590,7 +590,6 @@ fn softmax() {
     }
     let results = run_softmax(&v, last_dim, "softmax_f32");
     let results = approx(results, 4);
-    println!("{results:?}");
     assert_eq!(
         results.iter().map(|&s| s.round() as usize).sum::<usize>(),
         n
@@ -807,22 +806,20 @@ fn gemm() {
     );
 }
 
-fn run_fill<T: EncoderParam + Clone>(
-    elem_count: usize,
-    value: T,
-    kernel_name: &'static str,
-) -> Vec<T> {
+fn run_fill<T: EncoderParam + Clone>(elem_count: usize, value: T) -> Vec<T>
+where
+    Fill<T>: CallFill<T>,
+{
     let device = device();
     let fence = device.new_fence();
     let kernels = Kernels::new(fence);
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let buffer = new_buffer(&device, &vec![0.0f32; elem_count]);
-    call_fill(
+    Fill::<T>::call_fill(
         &device,
         command_buffer,
         &kernels,
-        kernel_name,
         elem_count,
         &buffer,
         value,
@@ -836,18 +833,18 @@ fn run_fill<T: EncoderParam + Clone>(
 
 #[test]
 fn fill() {
-    fn assert_fill<T: EncoderParam + Copy + std::fmt::Debug + PartialEq>(
-        value: T,
-        name: &'static str,
-    ) {
+    fn assert_fill<T: EncoderParam + Copy + std::fmt::Debug + PartialEq>(value: T)
+    where
+        Fill<T>: CallFill<T>,
+    {
         for i in 0..4 {
-            assert_eq!(run_fill(8 ^ i, value, name), vec![value; 8 ^ i]);
+            assert_eq!(run_fill(8 ^ i, value), vec![value; 8 ^ i]);
         }
     }
-    assert_fill(123u8, "fill_u8");
-    assert_fill(456u32, "fill_u32");
-    assert_fill(789i64, "fill_i64");
-    assert_fill(f16::from_f32(1.23), "fill_f16");
-    assert_fill(bf16::from_f32(4.56), "fill_bf16");
-    assert_fill(7.89f32, "fill_f32");
+    assert_fill(123u8);
+    assert_fill(456u32);
+    assert_fill(789i64);
+    assert_fill(f16::from_f32(1.23));
+    assert_fill(bf16::from_f32(4.56));
+    assert_fill(7.89f32);
 }
