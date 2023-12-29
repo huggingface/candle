@@ -172,7 +172,7 @@ pub mod unary {
     ops!(cos, sin, exp, sqr, sqrt, neg, log, gelu, ceil, floor, relu, round, erf, gelu_erf, tanh, recip);
 }
 pub mod binary {
-    ops!(add, div, eq, ge, gt, le, lt, max, min, mul, ne, sub);
+    ops!(add, sub, mul, div, min, max, eq, ne, le, lt, ge, gt);
 }
 
 #[derive(thiserror::Error, Debug)]
