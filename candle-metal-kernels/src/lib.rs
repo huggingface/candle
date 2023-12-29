@@ -165,7 +165,7 @@ macro_rules! ops{
 }
 
 pub mod unary {
-    ops!(cos, sin, exp, sqr, sqrt, neg, log, gelu, ceil, floor, round, erf, gelu_erf, tanh);
+    ops!(cos, sin, exp, sqr, sqrt, neg, log, gelu, ceil, floor, round, erf, gelu_erf, tanh, recip);
 }
 pub mod binary {
     ops!(add, sub, mul, div, min, max, eq, ne, le, lt, ge, gt);
