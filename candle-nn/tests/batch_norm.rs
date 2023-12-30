@@ -16,6 +16,8 @@ input = torch.randn(2, 5, 3, 4)
 output = m(input)
 print(input.flatten())
 print(output.flatten())
+print(m.running_mean)
+print(m.running_var)
 */
 #[test]
 fn batch_norm() -> Result<()> {
@@ -71,5 +73,14 @@ fn batch_norm() -> Result<()> {
     let diff2 = ((output2 - (output * 0.5)?)? + 1.5)?.sqr()?;
     let sum_diff2 = diff2.sum_keepdim(0)?;
     assert_eq!(test_utils::to_vec1_round(&sum_diff2, 4)?, &[0f32]);
+
+    assert_eq!(
+        test_utils::to_vec1_round(bn.running_mean(), 4)?,
+        &[-0.0133, 0.0197, -0.0153, -0.0073, -0.0020]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(bn.running_var(), 4)?,
+        &[0.9972, 0.9842, 0.9956, 0.9866, 0.9898]
+    );
     Ok(())
 }
