@@ -238,6 +238,29 @@ impl MetalDevice {
         Ok(real)
     }
 
+    pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
+        let buffer = self.allocate_buffer(
+            size_in_bytes as NSUInteger,
+            MTLResourceOptions::StorageModePrivate,
+            "allocate_zeros",
+        )?;
+        let command_buffer = self.command_buffer()?;
+        command_buffer.set_label("zeros");
+        let blit = command_buffer.new_blit_command_encoder();
+        blit.wait_for_fence(&self.fence);
+        blit.fill_buffer(
+            &buffer,
+            metal::NSRange {
+                location: 0,
+                length: buffer.length(),
+            },
+            0,
+        );
+        blit.update_fence(&self.fence);
+        blit.end_encoding();
+        Ok(buffer)
+    }
+
     /// The critical allocator algorithm
     fn allocate_buffer(
         &self,
@@ -308,35 +331,14 @@ impl BackendStorage for MetalStorage {
     }
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        let length = self.buffer.length() as usize;
-        let size = self.dtype.size_in_bytes();
-        if length % size != 0 {
-            crate::bail!(
-                "The Metal buffer length is not aligned with dtype {:?}",
-                self.dtype
-            );
-        }
-        let buffer = self.device.new_buffer_managed(self.buffer.length())?;
-        {
-            let command_buffer = self.device.command_buffer()?;
-            command_buffer.set_label("to_cpu");
-            let blit = command_buffer.new_blit_command_encoder();
-            blit.set_label("blit_to_cpu");
-            blit.wait_for_fence(&self.device.fence);
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
-            blit.update_fence(&self.device.fence);
-            blit.end_encoding();
-        }
-        self.device.wait_until_completed()?;
-
         match self.dtype {
-            DType::U8 => Ok(CpuStorage::U8(read_to_vec(&buffer, length / size))),
-            DType::U32 => Ok(CpuStorage::U32(read_to_vec(&buffer, length / size))),
-            DType::I64 => Ok(CpuStorage::I64(read_to_vec(&buffer, length / size))),
-            DType::F16 => Ok(CpuStorage::F16(read_to_vec(&buffer, length / size))),
-            DType::BF16 => Ok(CpuStorage::BF16(read_to_vec(&buffer, length / size))),
-            DType::F32 => Ok(CpuStorage::F32(read_to_vec(&buffer, length / size))),
-            DType::F64 => Ok(CpuStorage::F64(read_to_vec(&buffer, length / size))),
+            DType::U8 => Ok(CpuStorage::U8(self.to_cpu()?)),
+            DType::U32 => Ok(CpuStorage::U32(self.to_cpu()?)),
+            DType::I64 => Ok(CpuStorage::I64(self.to_cpu()?)),
+            DType::F16 => Ok(CpuStorage::F16(self.to_cpu()?)),
+            DType::BF16 => Ok(CpuStorage::BF16(self.to_cpu()?)),
+            DType::F32 => Ok(CpuStorage::F32(self.to_cpu()?)),
+            DType::F64 => Ok(CpuStorage::F64(self.to_cpu()?)),
         }
     }
 
@@ -1354,6 +1356,30 @@ impl MetalStorage {
         command_buffer.set_label("binary");
         Ok(Self::new(buffer, device.clone(), dtype))
     }
+
+    fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
+        let length = self.buffer.length() as usize;
+        let size = self.dtype.size_in_bytes();
+        if length % size != 0 {
+            crate::bail!(
+                "The Metal buffer length is not aligned with dtype {:?}",
+                self.dtype
+            );
+        }
+        let buffer = self.device.new_buffer_managed(self.buffer.length())?;
+        {
+            let command_buffer = self.device.command_buffer()?;
+            command_buffer.set_label("to_cpu");
+            let blit = command_buffer.new_blit_command_encoder();
+            blit.set_label("blit_to_cpu");
+            blit.wait_for_fence(&self.device.fence);
+            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+            blit.update_fence(&self.device.fence);
+            blit.end_encoding();
+        }
+        self.device.wait_until_completed()?;
+        Ok(read_to_vec(&buffer, length / size))
+    }
 }
 
 impl BackendDevice for MetalDevice {
@@ -1400,21 +1426,8 @@ impl BackendDevice for MetalDevice {
     }
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-        let buffer = self.new_buffer(shape.elem_count(), dtype, "zeros")?;
-        let command_buffer = self.command_buffer()?;
-        command_buffer.set_label("zeros");
-        let blit = command_buffer.new_blit_command_encoder();
-        blit.wait_for_fence(&self.fence);
-        blit.fill_buffer(
-            &buffer,
-            metal::NSRange {
-                location: 0,
-                length: buffer.length(),
-            },
-            0,
-        );
-        blit.update_fence(&self.fence);
-        blit.end_encoding();
+        let size = shape.elem_count() * dtype.size_in_bytes();
+        let buffer = self.allocate_zeros(size)?;
         Ok(MetalStorage::new(buffer, self.clone(), dtype))
     }
 

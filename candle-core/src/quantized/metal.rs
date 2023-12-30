@@ -1,37 +1,30 @@
-use super::{GgmlDType, QuantizedType};
+use super::{GgmlDType, QStorage, QuantizedType};
 use crate::{MetalDevice, Result};
+use metal::Buffer;
+use std::sync::Arc;
 
-pub struct QStorage;
+pub struct QMetalStorage {
+    dtype: GgmlDType,
+    buffer: Arc<Buffer>,
+}
 
-impl QuantizedType for QStorage {
-    fn dtype(&self) -> GgmlDType {
-        todo!();
+impl QMetalStorage {
+    pub fn dtype(&self) -> GgmlDType {
+        self.dtype
     }
-
-    fn matmul_t(&self, _mkn: (usize, usize, usize), _lhs: &[f32], _dst: &mut [f32]) -> Result<()> {
-        todo!();
-    }
-
-    fn to_float(&self, _ys: &mut [f32]) -> Result<()> {
-        todo!();
-    }
-
-    fn storage_size_in_bytes(&self) -> usize {
-        todo!();
-    }
-
-    fn as_ptr(&self) -> *const u8 {
-        todo!();
-    }
-
-    fn block_size(&self) -> usize {
-        todo!();
+    pub fn new(buffer: Arc<Buffer>, dtype: GgmlDType) -> Self {
+        Self { buffer, dtype }
     }
 }
 
-pub fn load_quantized_metal<T: super::GgmlType + Send + Sync + 'static>(
-    _device: &MetalDevice,
-    _data: &[T],
-) -> Result<Box<QStorage>> {
-    todo!("Implement the load");
-}
+// pub fn load_quantized_metal<T: super::GgmlType + Send + Sync + 'static>(
+//     device: &MetalDevice,
+//     data: &[T],
+// ) -> Result<QStorage> {
+//     let buffer = device.new_buffer_with_data(data)?;
+//     Ok(QStorage::Metal(QMetalStorage {
+//         dtype: T::DTYPE,
+//         block_size: T::BLCK_SIZE,
+//         buffer,
+//     }))
+// }

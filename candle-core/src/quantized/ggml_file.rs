@@ -1,8 +1,8 @@
 //! Support for the GGML file format.
 
-#[cfg(feature = "metal")]
-use super::metal::load_quantized_metal;
-use super::{k_quants, GgmlDType, QuantizedType};
+// #[cfg(feature = "metal")]
+// use super::metal::load_quantized_metal;
+use super::{k_quants, GgmlDType, QStorage, QuantizedType};
 use crate::{Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
@@ -128,10 +128,13 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
     let raw_data_ptr = raw_data.as_ptr();
     let n_blocks = size_in_bytes / std::mem::size_of::<T>();
     let data = unsafe { std::slice::from_raw_parts(raw_data_ptr as *const T, n_blocks) };
-    let data: Box<dyn QuantizedType> = match device {
-        Device::Cpu => Box::new(data.to_vec()),
+    let data: QStorage = match device {
+        Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
+        // Device::Metal(metal) => load_quantized_metal(metal, data)?,
         #[cfg(feature = "metal")]
-        Device::Metal(metal) => load_quantized_metal(metal, data)?,
+        Device::Metal(_metal) => {
+            crate::bail!("Metal backend load")
+        }
         #[cfg(not(feature = "metal"))]
         Device::Metal(_metal) => {
             crate::bail!("Metal backend requires `metal` feature")
