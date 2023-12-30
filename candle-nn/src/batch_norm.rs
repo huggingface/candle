@@ -58,7 +58,7 @@ pub struct BatchNorm {
 }
 
 impl BatchNorm {
-    fn check_validity(&self) -> Result<()> {
+    fn check_validity(&self, num_features: usize) -> Result<()> {
         if self.eps < 0. {
             candle::bail!("batch-norm eps cannot be negative {}", self.eps)
         }
@@ -68,31 +68,28 @@ impl BatchNorm {
                 self.momentum
             )
         }
-        if self.running_mean.rank() != 1 {
+        if self.running_mean.dims() != [num_features] {
             candle::bail!(
-                "batch-norm running mean must have rank 1, has rank {}",
-                self.running_mean.rank()
+                "batch-norm running mean has unexpected shape {:?} should have shape [{num_features}]",
+                self.running_mean.shape(),
             )
         }
-        if self.running_mean.dims() != self.running_var.dims() {
+        if self.running_var.dims() != [num_features] {
             candle::bail!(
-                "batch-norm running mean shape {:?} does not match running variance shape {:?}",
-                self.running_mean.shape(),
+                "batch-norm running variance has unexpected shape {:?} should have shape [{num_features}]",
                 self.running_var.shape(),
             )
         }
         if let Some((ref weight, ref bias)) = self.weight_and_bias.as_ref() {
-            if self.running_mean.dims() != weight.dims() {
+            if weight.dims() != [num_features] {
                 candle::bail!(
-                    "batch-norm running mean shape {:?} does not match weight shape {:?}",
-                    self.running_mean.shape(),
+                    "batch-norm weight has unexpected shape {:?} should have shape [{num_features}]",
                     weight.shape(),
                 )
             }
-            if self.running_mean.dims() != bias.dims() {
+            if bias.dims() != [num_features] {
                 candle::bail!(
-                    "batch-norm running mean shape {:?} does not match bias shape {:?}",
-                    self.running_mean.shape(),
+                    "batch-norm weight has unexpected shape {:?} should have shape [{num_features}]",
                     bias.shape(),
                 )
             }
@@ -102,6 +99,7 @@ impl BatchNorm {
     }
 
     pub fn new(
+        num_features: usize,
         running_mean: Tensor,
         running_var: Tensor,
         weight: Tensor,
@@ -116,11 +114,11 @@ impl BatchNorm {
             eps,
             momentum: 0.1,
         };
-        out.check_validity()?;
+        out.check_validity(num_features)?;
         Ok(out)
     }
 
-    pub fn new_no_bias(running_mean: Tensor, running_var: Tensor, eps: f64) -> Result<Self> {
+    pub fn new_no_bias(num_features: usize, running_mean: Tensor, running_var: Tensor, eps: f64) -> Result<Self> {
         let out = Self {
             running_mean: Var::from_tensor(&running_mean)?,
             running_var: Var::from_tensor(&running_var)?,
@@ -129,11 +127,12 @@ impl BatchNorm {
             eps,
             momentum: 0.1,
         };
-        out.check_validity()?;
+        out.check_validity(num_features)?;
         Ok(out)
     }
 
     pub fn new_with_momentum(
+        num_features: usize,
         running_mean: Tensor,
         running_var: Tensor,
         weight: Tensor,
@@ -149,11 +148,12 @@ impl BatchNorm {
             eps,
             momentum,
         };
-        out.check_validity()?;
+        out.check_validity(num_features)?;
         Ok(out)
     }
 
     pub fn new_no_bias_with_momentum(
+        num_features: usize,
         running_mean: Tensor,
         running_var: Tensor,
         eps: f64,
@@ -167,7 +167,7 @@ impl BatchNorm {
             eps,
             momentum,
         };
-        out.check_validity()?;
+        out.check_validity(num_features)?;
         Ok(out)
     }
 
