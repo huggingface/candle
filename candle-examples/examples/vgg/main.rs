@@ -5,7 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::{DType, IndexOp, D};
-use candle_nn::{ModuleT, VarBuilder};
+use candle_nn::{Module, VarBuilder};
 use candle_transformers::models::vgg::{Models, Vgg};
 use clap::{Parser, ValueEnum};
 
