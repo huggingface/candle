@@ -63,7 +63,10 @@ impl BatchNorm {
             candle::bail!("batch-norm eps cannot be negative {}", self.eps)
         }
         if !(0.0..=1.0).contains(&self.momentum) {
-            candle::bail!("batch-norm momentum must be between 0 and 1, is {}", self.momentum)
+            candle::bail!(
+                "batch-norm momentum must be between 0 and 1, is {}",
+                self.momentum
+            )
         }
         if self.running_mean.rank() != 1 {
             candle::bail!(
@@ -117,11 +120,7 @@ impl BatchNorm {
         Ok(out)
     }
 
-    pub fn new_no_bias(
-        running_mean: Tensor,
-        running_var: Tensor,
-        eps: f64,
-    ) -> Result<Self> {
+    pub fn new_no_bias(running_mean: Tensor, running_var: Tensor, eps: f64) -> Result<Self> {
         let out = Self {
             running_mean: Var::from_tensor(&running_mean)?,
             running_var: Var::from_tensor(&running_var)?,

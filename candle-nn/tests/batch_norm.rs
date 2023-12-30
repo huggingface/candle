@@ -73,7 +73,13 @@ fn batch_norm() -> Result<()> {
     let sum_diff2 = diff2.sum_keepdim(0)?;
     assert_eq!(test_utils::to_vec1_round(&sum_diff2, 4)?, &[0f32]);
 
-    assert_eq!(test_utils::to_vec1_round(bn.running_mean(), 4)?, &[-0.0133,  0.0197, -0.0153, -0.0073, -0.0020]);
-    assert_eq!(test_utils::to_vec1_round(bn.running_var(), 4)?, &[0.9972, 0.9842, 0.9956, 0.9866, 0.9898]);
+    assert_eq!(
+        test_utils::to_vec1_round(bn.running_mean(), 4)?,
+        &[-0.0133, 0.0197, -0.0153, -0.0073, -0.0020]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(bn.running_var(), 4)?,
+        &[0.9972, 0.9842, 0.9956, 0.9866, 0.9898]
+    );
     Ok(())
 }
