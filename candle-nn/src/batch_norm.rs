@@ -40,9 +40,7 @@ impl From<f64> for BatchNormConfig {
     fn from(eps: f64) -> Self {
         Self {
             eps,
-            remove_mean: true,
-            affine: true,
-            momentum: 0.1,
+            ..Default::default()
         }
     }
 }
@@ -118,7 +116,12 @@ impl BatchNorm {
         Ok(out)
     }
 
-    pub fn new_no_bias(num_features: usize, running_mean: Tensor, running_var: Tensor, eps: f64) -> Result<Self> {
+    pub fn new_no_bias(
+        num_features: usize,
+        running_mean: Tensor,
+        running_var: Tensor,
+        eps: f64,
+    ) -> Result<Self> {
         let out = Self {
             running_mean: Var::from_tensor(&running_mean)?,
             running_var: Var::from_tensor(&running_var)?,
