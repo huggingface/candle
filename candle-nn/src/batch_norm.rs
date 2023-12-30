@@ -7,8 +7,8 @@
 //! running stats.
 //!
 //! [`Batch Normalization`]: https://arxiv.org/abs/1502.03167
-use candle::{DType, Module, Result, Tensor, Var};
 use crate::Init;
+use candle::{DType, Module, Result, Tensor, Var};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BatchNormConfig {
@@ -69,10 +69,30 @@ impl BatchNorm {
         if eps < 0. {
             candle::bail!("batch-norm eps cannot be negative {eps}")
         }
-        if weight.dims() != bias.dims() {
+        if running_mean.dims().len() != 1 {
             candle::bail!(
-                "batch-norm weight shape {:?} does not match bias shape {:?}",
+                "batch-norm running mean must have 1 dimension, has {}",
+                running_mean.dims().len()
+            )
+        }
+        if running_mean.dims() != running_var.dims() {
+            candle::bail!(
+                "batch-norm running mean shape {:?} does not match running variance shape {:?}",
+                running_mean.shape(),
+                running_var.shape(),
+            )
+        }
+        if running_mean.dims() != weight.dims() {
+            candle::bail!(
+                "batch-norm running mean shape {:?} does not match weight shape {:?}",
+                running_mean.shape(),
                 weight.shape(),
+            )
+        }
+        if running_mean.dims() != bias.dims() {
+            candle::bail!(
+                "batch-norm running mean shape {:?} does not match bias shape {:?}",
+                running_mean.shape(),
                 bias.shape(),
             )
         }
@@ -94,6 +114,19 @@ impl BatchNorm {
     ) -> Result<Self> {
         if eps < 0. {
             candle::bail!("batch-norm eps cannot be negative {eps}")
+        }
+        if running_mean.dims().len() != 1 {
+            candle::bail!(
+                "batch-norm running mean must have 1 dimension, has {}",
+                running_mean.dims().len()
+            )
+        }
+        if running_mean.dims() != running_var.dims() {
+            candle::bail!(
+                "batch-norm running mean shape {:?} does not match running variance shape {:?}",
+                running_mean.shape(),
+                running_var.shape(),
+            )
         }
         Ok(Self {
             running_mean: Var::from_tensor(&running_mean)?,
@@ -152,7 +185,7 @@ impl BatchNorm {
         let x = if self.remove_mean {
             let mean_x = x.mean_keepdim(1)?;
             {
-                // Update running mean 
+                // Update running mean
                 let new_mean = ((self.running_mean.as_tensor() * (1.0 - self.momentum))?
                     + (mean_x.reshape(((),))? * self.momentum)?)?;
 
