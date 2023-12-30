@@ -47,7 +47,7 @@ impl From<f64> for BatchNormConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BatchNorm {
     running_mean: Var,
     running_var: Var,
@@ -69,7 +69,7 @@ impl BatchNorm {
         if eps < 0. {
             candle::bail!("batch-norm eps cannot be negative {eps}")
         }
-        if running_mean.dims().len() != 1 {
+        if running_mean.rank() != 1 {
             candle::bail!(
                 "batch-norm running mean must have 1 dimension, has {}",
                 running_mean.dims().len()
@@ -187,7 +187,7 @@ impl BatchNorm {
             {
                 // Update running mean
                 let new_mean = ((self.running_mean.as_tensor() * (1.0 - self.momentum))?
-                    + (mean_x.reshape(((),))? * self.momentum)?)?;
+                    + (mean_x.flatten_all()? * self.momentum)?)?;
 
                 self.running_mean.set(&new_mean)?;
             }
@@ -198,11 +198,12 @@ impl BatchNorm {
         let norm_x = x.sqr()?.mean_keepdim(1)?;
         {
             // Update running variance
+            let batch_size = x.dim(1)? as f64;
             let running_var_weight = 1.0 - self.momentum;
-            let norm_x_weight = self.momentum * num_features as f64 / (num_features as f64 - 1.0);
+            let norm_x_weight = self.momentum * batch_size / (batch_size - 1.0);
 
             let new_var = ((self.running_var.as_tensor() * running_var_weight)?
-                + (&norm_x.reshape(((),))? * norm_x_weight)?)?;
+                + (&norm_x.flatten_all()? * norm_x_weight)?)?;
 
             self.running_var.set(&new_var)?;
         }
