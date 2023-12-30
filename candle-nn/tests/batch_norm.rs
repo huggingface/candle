@@ -16,12 +16,14 @@ input = torch.randn(2, 5, 3, 4)
 output = m(input)
 print(input.flatten())
 print(output.flatten())
+print(m.running_mean)
+print(m.running_var)
 */
 #[test]
 fn batch_norm() -> Result<()> {
     let running_mean = Tensor::zeros(5, DType::F32, &Device::Cpu)?;
     let running_var = Tensor::ones(5, DType::F32, &Device::Cpu)?;
-    let bn = BatchNorm::new_no_bias(5, running_mean.clone(), running_var.clone(), 1e-8)?;
+    let bn = BatchNorm::new_no_bias(running_mean.clone(), running_var.clone(), 1e-8)?;
     let input: [f32; 120] = [
         -0.7493, -1.0410, 1.6977, -0.6579, 1.7982, -0.0087, 0.2812, -0.1190, 0.2908, -0.5975,
         -0.0278, -0.2138, -1.3130, -1.6048, -2.2028, 0.9452, 0.4002, 0.0831, 1.0004, 0.1860,
@@ -58,7 +60,6 @@ fn batch_norm() -> Result<()> {
         ]
     );
     let bn2 = BatchNorm::new(
-        5,
         running_mean,
         running_var,
         Tensor::new(&[0.5f32], &Device::Cpu)?.broadcast_as(5)?,
@@ -71,5 +72,8 @@ fn batch_norm() -> Result<()> {
     let diff2 = ((output2 - (output * 0.5)?)? + 1.5)?.sqr()?;
     let sum_diff2 = diff2.sum_keepdim(0)?;
     assert_eq!(test_utils::to_vec1_round(&sum_diff2, 4)?, &[0f32]);
+
+    assert_eq!(test_utils::to_vec1_round(bn.running_mean(), 4)?, &[-0.0133,  0.0197, -0.0153, -0.0073, -0.0020]);
+    assert_eq!(test_utils::to_vec1_round(bn.running_var(), 4)?, &[0.9972, 0.9842, 0.9956, 0.9866, 0.9898]);
     Ok(())
 }

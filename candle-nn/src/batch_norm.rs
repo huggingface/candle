@@ -62,6 +62,9 @@ impl BatchNorm {
         if self.eps < 0. {
             candle::bail!("batch-norm eps cannot be negative {}", self.eps)
         }
+        if !(0.0..=1.0).contains(&self.momentum) {
+            candle::bail!("batch-norm momentum must be between 0 and 1, is {}", self.momentum)
+        }
         if self.running_mean.rank() != 1 {
             candle::bail!(
                 "batch-norm running mean must have rank 1, has rank {}",
