@@ -34,4 +34,4 @@ pub use sequential::{seq, Sequential};
 pub use var_builder::VarBuilder;
 pub use var_map::VarMap;
 
-pub use candle::{Module, ModuleT};
+pub use candle::Module;

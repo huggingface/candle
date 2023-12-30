@@ -2339,7 +2339,7 @@ impl Tensor {
     }
 
     /// Run the `forward` method of `m` on `self`.
-    pub fn apply_t<M: crate::ModuleT>(&self, m: &M, train: bool) -> Result<Self> {
+    pub fn apply_t<M: crate::Module>(&self, m: &M, train: bool) -> Result<Self> {
         m.forward_t(self, train)
     }
 

@@ -57,7 +57,7 @@ where
     FuncT { f: Arc::new(f) }
 }
 
-impl<'a> super::ModuleT for FuncT<'a> {
+impl<'a> super::Module for FuncT<'a> {
     fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
         (*self.f)(xs, train)
     }

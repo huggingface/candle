@@ -94,7 +94,7 @@ impl Dropout {
     }
 }
 
-impl candle::ModuleT for Dropout {
+impl candle::Module for Dropout {
     fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
         self.forward(xs, train)
     }
