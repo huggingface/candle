@@ -3,9 +3,6 @@
 //! This layer applies Batch Normalization over a mini-batch of inputs as described in [`Batch
 //! Normalization`]. The input is expected to have at least three dimensions.
 //!
-//! Note that this implementation is for inference only, there is no possibility to track the
-//! running stats.
-//!
 //! [`Batch Normalization`]: https://arxiv.org/abs/1502.03167
 use candle::{DType, Module, Result, Tensor, Var};
 
@@ -192,6 +189,31 @@ impl BatchNorm {
         self.momentum
     }
 
+    pub fn forward_inference(&self, x: &Tensor) -> Result<Tensor> {
+        let target_shape: Vec<usize> = x
+            .dims()
+            .iter()
+            .enumerate()
+            .map(|(idx, v)| if idx == 1 { *v } else { 1 })
+            .collect();
+        let target_shape = target_shape.as_slice();
+
+        let x = x
+            .broadcast_sub(&self.running_mean.as_tensor().reshape(target_shape)?)?
+            .broadcast_div(
+                &(self.running_var.as_tensor().reshape(target_shape)? + self.eps)?.sqrt()?,
+            )?;
+
+        match &self.weight_and_bias {
+            None => Ok(x),
+            Some((weight, bias)) => {
+                let weight = weight.reshape(target_shape)?;
+                let bias = bias.reshape(target_shape)?;
+                x.broadcast_mul(&weight)?.broadcast_add(&bias)
+            }
+        }
+    }
+
     pub fn forward_learning(&self, x: &Tensor) -> Result<Tensor> {
         let num_features = self.running_mean.as_tensor().dim(0)?;
         let x_dtype = x.dtype();
@@ -251,39 +273,14 @@ impl BatchNorm {
         };
         x.reshape(x_dims_post_transpose)?.transpose(0, 1)
     }
-
-    pub fn forward_t(&self, x: &Tensor, train: bool) -> Result<Tensor> {
-        if train {
-            self.forward_learning(x)
-        } else {
-            self.forward(x)
-        }
-    }
 }
 
 impl Module for BatchNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let target_shape: Vec<usize> = x
-            .dims()
-            .iter()
-            .enumerate()
-            .map(|(idx, v)| if idx == 1 { *v } else { 1 })
-            .collect();
-        let target_shape = target_shape.as_slice();
-
-        let x = x
-            .broadcast_sub(&self.running_mean.as_tensor().reshape(target_shape)?)?
-            .broadcast_div(
-                &(self.running_var.as_tensor().reshape(target_shape)? + self.eps)?.sqrt()?,
-            )?;
-
-        match &self.weight_and_bias {
-            None => Ok(x),
-            Some((weight, bias)) => {
-                let weight = weight.reshape(target_shape)?;
-                let bias = bias.reshape(target_shape)?;
-                x.broadcast_mul(&weight)?.broadcast_add(&bias)
-            }
+    fn forward_t(&self, x: &Tensor, train: bool) -> Result<Tensor> {
+        if train {
+            self.forward_learning(x)
+        } else {
+            self.forward_inference(x)
         }
     }
 }
