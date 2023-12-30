@@ -118,12 +118,20 @@ impl ToUsize2 for (usize, usize) {
     }
 }
 
-// A simple trait defining a module with forward method using a single argument.
+/// A module that takes a single tensor as input and produces a resultant tensor as output.
+///
+/// Note that you must override at least one of the two `forward` methods. Otherwise, both
+/// methods will recursively call each other, leading to an infinite loop.
 pub trait Module {
+    /// Applies the module to the input tensor `xs` in a non-training mode. By default, this method
+    /// calls the `forward_t` method with `train` set to false.
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self.forward_t(xs, false)
     }
 
+    /// This is a more generic version of the `forward` method that allows for distinguishing
+    /// between training and non-training modes. By default, this method simply calls the `forward`
+    /// method.
     fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
         self.forward(xs)
     }
