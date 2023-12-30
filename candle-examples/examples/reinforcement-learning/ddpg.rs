@@ -6,7 +6,6 @@ use candle_nn::{
     func, linear, sequential::seq, Activation, AdamW, Optimizer, ParamsAdamW, Sequential,
     VarBuilder, VarMap,
 };
-use clap::Parser;
 use rand::{distributions::Uniform, thread_rng, Rng};
 
 use super::gym_env::GymEnv;
