@@ -58,7 +58,80 @@ pub struct BatchNorm {
 }
 
 impl BatchNorm {
+    fn check_validity(&self) -> Result<()> {
+        if self.eps < 0. {
+            candle::bail!("batch-norm eps cannot be negative {}", self.eps)
+        }
+        if self.running_mean.rank() != 1 {
+            candle::bail!(
+                "batch-norm running mean must have rank 1, has rank {}",
+                self.running_mean.rank()
+            )
+        }
+        if self.running_mean.dims() != self.running_var.dims() {
+            candle::bail!(
+                "batch-norm running mean shape {:?} does not match running variance shape {:?}",
+                self.running_mean.shape(),
+                self.running_var.shape(),
+            )
+        }
+        if let Some((ref weight, ref bias)) = self.weight_and_bias.as_ref() {
+            if self.running_mean.dims() != weight.dims() {
+                candle::bail!(
+                    "batch-norm running mean shape {:?} does not match weight shape {:?}",
+                    self.running_mean.shape(),
+                    weight.shape(),
+                )
+            }
+            if self.running_mean.dims() != bias.dims() {
+                candle::bail!(
+                    "batch-norm running mean shape {:?} does not match bias shape {:?}",
+                    self.running_mean.shape(),
+                    bias.shape(),
+                )
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn new(
+        running_mean: Tensor,
+        running_var: Tensor,
+        weight: Tensor,
+        bias: Tensor,
+        eps: f64,
+    ) -> Result<Self> {
+        let out = Self {
+            running_mean: Var::from_tensor(&running_mean)?,
+            running_var: Var::from_tensor(&running_var)?,
+            weight_and_bias: Some((weight, bias)),
+            remove_mean: true,
+            eps,
+            momentum: 0.1,
+        };
+        out.check_validity()?;
+        Ok(out)
+    }
+
+    pub fn new_no_bias(
+        running_mean: Tensor,
+        running_var: Tensor,
+        eps: f64,
+    ) -> Result<Self> {
+        let out = Self {
+            running_mean: Var::from_tensor(&running_mean)?,
+            running_var: Var::from_tensor(&running_var)?,
+            weight_and_bias: None,
+            remove_mean: true,
+            eps,
+            momentum: 0.1,
+        };
+        out.check_validity()?;
+        Ok(out)
+    }
+
+    pub fn new_with_momentum(
         running_mean: Tensor,
         running_var: Tensor,
         weight: Tensor,
@@ -66,76 +139,34 @@ impl BatchNorm {
         eps: f64,
         momentum: f64,
     ) -> Result<Self> {
-        if eps < 0. {
-            candle::bail!("batch-norm eps cannot be negative {eps}")
-        }
-        if running_mean.rank() != 1 {
-            candle::bail!(
-                "batch-norm running mean must have 1 dimension, has {}",
-                running_mean.dims().len()
-            )
-        }
-        if running_mean.dims() != running_var.dims() {
-            candle::bail!(
-                "batch-norm running mean shape {:?} does not match running variance shape {:?}",
-                running_mean.shape(),
-                running_var.shape(),
-            )
-        }
-        if running_mean.dims() != weight.dims() {
-            candle::bail!(
-                "batch-norm running mean shape {:?} does not match weight shape {:?}",
-                running_mean.shape(),
-                weight.shape(),
-            )
-        }
-        if running_mean.dims() != bias.dims() {
-            candle::bail!(
-                "batch-norm running mean shape {:?} does not match bias shape {:?}",
-                running_mean.shape(),
-                bias.shape(),
-            )
-        }
-        Ok(Self {
+        let out = Self {
             running_mean: Var::from_tensor(&running_mean)?,
             running_var: Var::from_tensor(&running_var)?,
             weight_and_bias: Some((weight, bias)),
             remove_mean: true,
             eps,
             momentum,
-        })
+        };
+        out.check_validity()?;
+        Ok(out)
     }
 
-    pub fn new_no_bias(
+    pub fn new_no_bias_with_momentum(
         running_mean: Tensor,
         running_var: Tensor,
         eps: f64,
         momentum: f64,
     ) -> Result<Self> {
-        if eps < 0. {
-            candle::bail!("batch-norm eps cannot be negative {eps}")
-        }
-        if running_mean.dims().len() != 1 {
-            candle::bail!(
-                "batch-norm running mean must have 1 dimension, has {}",
-                running_mean.dims().len()
-            )
-        }
-        if running_mean.dims() != running_var.dims() {
-            candle::bail!(
-                "batch-norm running mean shape {:?} does not match running variance shape {:?}",
-                running_mean.shape(),
-                running_var.shape(),
-            )
-        }
-        Ok(Self {
+        let out = Self {
             running_mean: Var::from_tensor(&running_mean)?,
             running_var: Var::from_tensor(&running_var)?,
             weight_and_bias: None,
             remove_mean: true,
             eps,
             momentum,
-        })
+        };
+        out.check_validity()?;
+        Ok(out)
     }
 
     pub fn running_mean(&self) -> &Tensor {
