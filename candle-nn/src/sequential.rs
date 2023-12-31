@@ -24,10 +24,10 @@ impl Sequential {
 }
 
 impl Module for Sequential {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward_t(&self, xs: &Tensor, train: bool) -> Result<Tensor> {
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
-            xs = layer.forward(&xs)?
+            xs = layer.forward_t(&xs, train)?;
         }
         Ok(xs)
     }
