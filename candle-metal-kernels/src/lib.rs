@@ -1573,19 +1573,19 @@ pub fn call_upsample_nearest_2d(
     Ok(())
 }
 
-#[inline]
+#[inline(always)]
 fn divide(m: usize, b: usize) -> NSUInteger {
     ((m + b - 1) / b) as NSUInteger
 }
 
-pub struct Fill<T> {
+pub struct Unary<T> {
     _marker: PhantomData<T>,
 }
 
-pub trait CallFill<T> {
-    const KERNEL_NAME: &'static str;
+pub trait FillOp<T> {
+    const FILL_KERNEL: &'static str;
 
-    fn call_fill(
+    fn fill(
         device: &Device,
         command_buffer: &CommandBufferRef,
         kernels: &Kernels,
@@ -1598,11 +1598,26 @@ pub trait CallFill<T> {
 macro_rules ! impl_call_fill {
     ($($t:ty),*) => {
         $(
-            impl CallFill<$t> for Fill<$t> {
-                const KERNEL_NAME: &'static str = concat!("fill_", stringify!($t));
+            impl FillOp<$t> for Unary<$t> {
+                const FILL_KERNEL: &'static str = concat!("fill_", stringify!($t));
 
-                fn call_fill(device: &Device, command_buffer: &CommandBufferRef, kernels: &Kernels, elem_count: usize, buffer: &Buffer, value: $t) -> Result<(), MetalKernelError> {
-                    _call_fill(device, command_buffer, kernels, Self::KERNEL_NAME, elem_count, buffer, value)
+                #[inline(always)]
+                fn fill(device: &Device, command_buffer: &CommandBufferRef, kernels: &Kernels, elem_count: usize, buffer: &Buffer, value: $t) -> Result<(), MetalKernelError> {
+                    let pipeline = kernels.load_pipeline(device, Source::Fill, Self::FILL_KERNEL)?;
+                    let encoder = command_buffer.new_compute_command_encoder();
+                    encoder.wait_for_fence(&kernels.fence);
+                    encoder.set_compute_pipeline_state(&pipeline);
+                    encoder.set_threadgroup_memory_length(0, elem_count as NSUInteger);
+
+                    set_params!(encoder, (buffer, value, elem_count));
+
+                    let (thread_group_count, thread_group_size) = linear_split(&pipeline, elem_count);
+                    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+                    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
+                    encoder.update_fence(&kernels.fence);
+                    encoder.end_encoding();
+
+                    Ok(())
                 }
             }
         )*
@@ -1610,10 +1625,11 @@ macro_rules ! impl_call_fill {
 }
 impl_call_fill!(u32, i64, f16, bf16, f32);
 
-impl CallFill<u8> for Fill<u8> {
-    const KERNEL_NAME: &'static str = "";
+impl FillOp<u8> for Unary<u8> {
+    const FILL_KERNEL: &'static str = "";
 
-    fn call_fill(
+    #[inline(always)]
+    fn fill(
         _: &Device,
         command_buffer: &CommandBufferRef,
         kernels: &Kernels,
@@ -1621,57 +1637,21 @@ impl CallFill<u8> for Fill<u8> {
         buffer: &Buffer,
         value: u8,
     ) -> Result<(), MetalKernelError> {
-        _call_blit_fill(command_buffer, kernels, elem_count, buffer, value)
+        let blit = command_buffer.new_blit_command_encoder();
+        blit.wait_for_fence(&kernels.fence);
+        blit.fill_buffer(
+            &buffer,
+            metal::NSRange {
+                location: 0,
+                length: elem_count as NSUInteger,
+            },
+            value,
+        );
+        blit.update_fence(&kernels.fence);
+        blit.end_encoding();
+
+        Ok(())
     }
-}
-
-fn _call_blit_fill(
-    command_buffer: &CommandBufferRef,
-    kernels: &Kernels,
-    elem_count: usize,
-    buffer: &Buffer,
-    value: u8,
-) -> Result<(), MetalKernelError> {
-    let blit = command_buffer.new_blit_command_encoder();
-    blit.wait_for_fence(&kernels.fence);
-    blit.fill_buffer(
-        &buffer,
-        metal::NSRange {
-            location: 0,
-            length: elem_count as NSUInteger,
-        },
-        value,
-    );
-    blit.update_fence(&kernels.fence);
-    blit.end_encoding();
-
-    Ok(())
-}
-
-fn _call_fill<D: EncoderParam>(
-    device: &Device,
-    command_buffer: &CommandBufferRef,
-    kernels: &Kernels,
-    kernel_name: &'static str,
-    elem_count: usize,
-    buffer: &Buffer,
-    value: D,
-) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Fill, kernel_name)?;
-    let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
-    encoder.set_compute_pipeline_state(&pipeline);
-    encoder.set_threadgroup_memory_length(0, elem_count as NSUInteger);
-
-    set_params!(encoder, (buffer, value, elem_count));
-
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, elem_count);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
-    encoder.update_fence(&kernels.fence);
-    encoder.end_encoding();
-
-    Ok(())
 }
 
 #[cfg(test)]

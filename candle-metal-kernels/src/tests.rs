@@ -808,7 +808,7 @@ fn gemm() {
 
 fn run_fill<T: EncoderParam + Clone>(elem_count: usize, value: T) -> Vec<T>
 where
-    Fill<T>: CallFill<T>,
+    Unary<T>: FillOp<T>,
 {
     let device = device();
     let fence = device.new_fence();
@@ -816,7 +816,7 @@ where
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let buffer = new_buffer(&device, &vec![0.0f32; elem_count]);
-    Fill::<T>::call_fill(
+    Unary::<T>::fill(
         &device,
         command_buffer,
         &kernels,
@@ -835,7 +835,7 @@ where
 fn fill() {
     fn assert_fill<T: EncoderParam + Copy + std::fmt::Debug + PartialEq>(value: T)
     where
-        Fill<T>: CallFill<T>,
+        Unary<T>: FillOp<T>,
     {
         for i in 0..4 {
             assert_eq!(run_fill(8 ^ i, value), vec![value; 8 ^ i]);

@@ -3,7 +3,7 @@ use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvT
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 use candle_metal_kernels;
-use candle_metal_kernels::{CallFill, Fill, Kernels};
+use candle_metal_kernels::{FillOp, Unary, Kernels};
 use half::{bf16, f16};
 use metal;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
@@ -1405,9 +1405,9 @@ impl BackendDevice for MetalDevice {
         let command_buffer = self.command_buffer()?;
         command_buffer.set_label("zeros");
 
-        // This assumes the specific zero type DType is equal to 0x00u8
+        // This assumes the zero value of this DType is equal to 0x00u8
         // (which is true for all current types)
-        Fill::call_fill(
+        Unary::fill(
             &self.device,
             &command_buffer,
             &self.kernels,
@@ -1421,13 +1421,13 @@ impl BackendDevice for MetalDevice {
     }
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
-        let buffer = self.new_buffer(shape.elem_count(), dtype, "zeros")?;
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "ones")?;
         let command_buffer = self.command_buffer()?;
         command_buffer.set_label("ones");
 
         macro_rules! fill {
             ($value:expr) => {
-                Fill::call_fill(
+                Unary::fill(
                     &self.device,
                     &command_buffer,
                     &self.kernels,
