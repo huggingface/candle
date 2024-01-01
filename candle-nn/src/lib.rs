@@ -2,6 +2,7 @@ pub mod activation;
 pub mod batch_norm;
 pub mod conv;
 pub mod embedding;
+pub mod encoding;
 pub mod func;
 pub mod group_norm;
 pub mod init;
