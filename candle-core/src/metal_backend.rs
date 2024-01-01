@@ -3,7 +3,7 @@ use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvT
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
 use candle_metal_kernels;
-use candle_metal_kernels::{FillOp, Unary, Kernels};
+use candle_metal_kernels::Kernels;
 use half::{bf16, f16};
 use metal;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
@@ -1405,15 +1405,14 @@ impl BackendDevice for MetalDevice {
         let command_buffer = self.command_buffer()?;
         command_buffer.set_label("zeros");
 
-        // This assumes the zero value of this DType is equal to 0x00u8
+        // This kernel assumes the zero value of this DType is equal to 0x00u8
         // (which is true for all current types)
-        Unary::fill(
-            &self.device,
+        candle_metal_kernels::call_fill_u8(
             &command_buffer,
             &self.kernels,
             shape.elem_count(),
             &buffer,
-            0u8,
+            0,
         )
         .map_err(MetalError::from)?;
 
@@ -1427,7 +1426,7 @@ impl BackendDevice for MetalDevice {
 
         macro_rules! fill {
             ($value:expr) => {
-                Unary::fill(
+                candle_metal_kernels::call_fill(
                     &self.device,
                     &command_buffer,
                     &self.kernels,
@@ -1439,7 +1438,14 @@ impl BackendDevice for MetalDevice {
             };
         }
         match dtype {
-            DType::U8 => fill!(1u8),
+            DType::U8 => candle_metal_kernels::call_fill_u8(
+                &command_buffer,
+                &self.kernels,
+                shape.elem_count(),
+                &buffer,
+                1u8,
+            )
+            .map_err(MetalError::from)?,
             DType::U32 => fill!(1u32),
             DType::I64 => fill!(1i64),
             DType::BF16 => fill!(bf16::ONE),

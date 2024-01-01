@@ -20,7 +20,3 @@ num-traits = "0.2.17"
 [dev-dependencies]
 rand = "0.8.5"
 criterion = "0.5.1"
-
-[[bench]]
-name = "fill"
-harness = false

@@ -22,7 +22,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         bencher.iter_custom(|iters| {
             let start = Instant::now();
             for _i in 0..iters {
-                run(black_box((b, rows, columns)), black_box(DType::U8), black_box(&device1));
+                run(
+                    black_box((b, rows, columns)),
+                    black_box(DType::U8),
+                    black_box(&device1),
+                );
             }
             if let Device::Metal(device) = &device1 {
                 device.wait_until_completed().unwrap();
@@ -35,12 +39,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     group.finish();
 
     let mut group = c.benchmark_group("fill_metal_f32");
-    group.throughput(Throughput::Bytes((flops * DType::F32.size_in_bytes()) as u64));
+    group.throughput(Throughput::Bytes(
+        (flops * DType::F32.size_in_bytes()) as u64,
+    ));
     group.bench_function("iter", move |bencher| {
         bencher.iter_custom(|iters| {
             let start = Instant::now();
             for _i in 0..iters {
-                run(black_box((b, rows, columns)), black_box(DType::F32), black_box(&device2));
+                run(
+                    black_box((b, rows, columns)),
+                    black_box(DType::F32),
+                    black_box(&device2),
+                );
             }
             if let Device::Metal(device) = &device2 {
                 device.wait_until_completed().unwrap();
