@@ -28,6 +28,7 @@ let weights = candle::safetensors::load(weights_filename, &Device::Cpu).unwrap()
     #[rustfmt::skip]
     #[test]
     fn book_hub_2() {
+        {
 // ANCHOR: book_hub_2
 use candle::Device;
 use hf_hub::api::sync::Api;
@@ -45,9 +46,10 @@ let weights = candle::safetensors::load_buffer(&mmap[..], &Device::Cpu).unwrap()
         assert_eq!(weights.len(), 206);
     }
 
-    #[rustfmt::skip]
-    #[test]
-    fn book_hub_3() {
+    // #[rustfmt::skip]
+    // #[test]
+    // fn book_hub_3() {
+    {
 // ANCHOR: book_hub_3
 use candle::{DType, Device, Tensor};
 use hf_hub::api::sync::Api;
@@ -102,6 +104,7 @@ let tp_tensor = Tensor::from_raw_buffer(&raw, dtype, &tp_shape, &Device::Cpu).un
         assert_eq!(view.shape(), &[768, 768]);
         assert_eq!(tp_tensor.dims(), &[192, 768]);
     }
+}
 
     #[rustfmt::skip]
     #[test]

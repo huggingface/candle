@@ -155,8 +155,8 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 100)]
     sample_len: usize,
 
-    #[arg(long, default_value = "mistralai/Mistral-7B-v0.1")]
-    model_id: String,
+    #[arg(long)]
+    model_id: Option<String>,
 
     #[arg(long, default_value = "main")]
     revision: String,
@@ -207,8 +207,18 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
+    let model_id = match args.model_id {
+        Some(model_id) => model_id,
+        None => {
+            if args.quantized {
+                "lmz/candle-mistral".to_string()
+            } else {
+                "mistralai/Mistral-7B-v0.1".to_string()
+            }
+        }
+    };
     let repo = api.repo(Repo::with_revision(
-        args.model_id,
+        model_id,
         RepoType::Model,
         args.revision,
     ));
@@ -225,10 +235,7 @@ fn main() -> Result<()> {
             if args.quantized {
                 vec![repo.get("model-q4k.gguf")?]
             } else {
-                vec![
-                    repo.get("model-00001-of-00002.safetensors")?,
-                    repo.get("model-00002-of-00002.safetensors")?,
-                ]
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
             }
         }
     };

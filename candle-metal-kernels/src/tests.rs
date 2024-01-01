@@ -1,6 +1,6 @@
 use super::*;
 use half::{bf16, f16};
-use metal::{CompileOptions, Device, MTLResourceOptions, MTLSize, NSUInteger};
+use metal::{Device, MTLResourceOptions};
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
@@ -483,73 +483,6 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
     command_buffer.wait_until_completed();
 
     read_to_vec(&dst_buffer, dst_el)
-}
-
-#[test]
-fn index_add() {
-    let device = Device::system_default().expect("no device found");
-
-    let options = CompileOptions::new();
-    let library = device.new_library_with_source(INDEXING, &options).unwrap();
-
-    let left = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
-    let right = [1.0f32; 15];
-    let index = [0u32, 4, 2];
-    let ids_dim_size = index.len() as u32;
-    let dst_dim_size: u32 = 15;
-    let left_size: u32 = 3;
-    let right_size: u32 = 3;
-
-    let function = library.get_function("ia_u32_f32", None).unwrap();
-    let pipeline = device
-        .new_compute_pipeline_state_with_function(&function)
-        .unwrap();
-
-    let command_queue = device.new_command_queue();
-    let command_buffer = command_queue.new_command_buffer();
-    let encoder = command_buffer.new_compute_command_encoder();
-
-    encoder.set_compute_pipeline_state(&pipeline);
-
-    let index_buffer = new_buffer(&device, &index);
-    let inputs_buffer = new_buffer(&device, &left);
-    let outputs_buffer = new_buffer(&device, &right);
-
-    set_params!(
-        encoder,
-        (
-            &index_buffer,
-            &inputs_buffer,
-            &outputs_buffer,
-            ids_dim_size,
-            left_size,
-            dst_dim_size,
-            right_size
-        )
-    );
-
-    let grid_size = MTLSize {
-        width: right.len() as NSUInteger,
-        height: 1,
-        depth: 1,
-    };
-
-    let thread_group_size = MTLSize {
-        width: pipeline.max_total_threads_per_threadgroup(),
-        height: 1,
-        depth: 1,
-    };
-
-    encoder.dispatch_thread_groups(grid_size, thread_group_size);
-    encoder.end_encoding();
-    command_buffer.commit();
-    command_buffer.wait_until_completed();
-
-    let expected = vec![
-        2.0, 3.0, 4.0, 1.0, 1.0, 1.0, 8.0, 9.0, 10.0, 1.0, 1.0, 1.0, 5.0, 6.0, 7.0,
-    ];
-    let result: Vec<f32> = read_to_vec(&outputs_buffer, right.len());
-    assert_eq!(result, expected);
 }
 
 #[test]

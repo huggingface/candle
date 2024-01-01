@@ -60,7 +60,8 @@ These online demos run entirely in your browser:
 
 We also provide a some command line based examples using state of the art models:
 
-- [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM.
+- [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM, includes
+  the SOLAR-10.7B variant.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
 - [Phi-1, Phi-1.5, and Phi-2](./candle-examples/examples/phi/): 1.3b and 2.7b general LLMs with performance on par with LLaMA-v2 7b.
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
@@ -175,7 +176,7 @@ If you have an addition to this list, please submit a pull request.
     - WASM support, run your models in a browser.
 - Included models.
     - Language Models.
-        - LLaMA v1 and v2.
+        - LLaMA v1 and v2 with variants such as SOLAR-10.7B.
         - Falcon.
         - StarCoder.
         - Phi 1, 1.5, and 2.
