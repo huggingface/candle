@@ -98,19 +98,19 @@ pub fn one_hot<D: WithDType>(
         DType::U8 => {
             let indices = indices.to_vec1::<u8>()?;
             for (i, &index) in indices.iter().enumerate() {
-                set_usize_value(index as usize, i * depth, depth, &mut out, on_value)?;
+                set_at_index(index, i * depth, depth, &mut out, on_value)?;
             }
         }
         DType::U32 => {
             let indices = indices.to_vec1::<u32>()?;
             for (i, &index) in indices.iter().enumerate() {
-                set_usize_value(index as usize, i * depth, depth, &mut out, on_value)?;
+                set_at_index(index, i * depth, depth, &mut out, on_value)?;
             }
         }
         DType::I64 => {
             let indices = indices.to_vec1::<i64>()?;
             for (i, &index) in indices.iter().enumerate() {
-                set_int64_value(index, i * depth, depth, &mut out, on_value)?;
+                set_at_index(index, i * depth, depth, &mut out, on_value)?;
             }
         }
         dtype => {
@@ -120,37 +120,14 @@ pub fn one_hot<D: WithDType>(
     Tensor::from_vec(out, target_shape, indices.device())
 }
 
-// Set unsigned usize index values to the given value.
-fn set_usize_value<D: WithDType>(
-    value: usize,
-    idx: usize,
+fn set_at_index<D: WithDType, I: Into<i64>>(
+    value: I,
+    offset: usize,
     depth: usize,
     v: &mut Vec<D>,
     on_value: D,
 ) -> Result<()> {
-    if value >= depth {
-        bail!("one_hot: index value {value} exceeds depth {depth}")
-    }
-    let idx = idx + value;
-    if idx >= v.len() {
-        bail!("one_hot: index out of bounds {idx}, len {}", v.len());
-    }
-    v[idx] = on_value;
-    Ok(())
-}
-
-// Set signed integer index values to the given value.
-// Signed integer values are only permitted for `-1` values.
-// Otherwise, the value must be positive for unsigned usize values.
-// This method will only case i64 values to usize values if the value is positive,
-// otherwise the method will bail.
-fn set_int64_value<D: WithDType>(
-    value: i64,
-    idx: usize,
-    depth: usize,
-    v: &mut Vec<D>,
-    on_value: D,
-) -> Result<()> {
+    let value = value.into();
     // Skip for an entire row of off_values
     if value == -1 {
         return Ok(());
@@ -160,5 +137,14 @@ fn set_int64_value<D: WithDType>(
             "one_hot: invalid negative index value {value}, expected a positive index value or -1"
         );
     }
-    set_usize_value(value as usize, idx, depth, v, on_value)
+    let value = value as usize;
+    if value >= depth {
+        bail!("one_hot: index value {value} exceeds depth {depth}")
+    }
+    let idx = offset + value;
+    if idx >= v.len() {
+        bail!("one_hot: index out of bounds {idx}, len {}", v.len());
+    }
+    v[idx] = on_value;
+    Ok(())
 }
