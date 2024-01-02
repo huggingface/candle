@@ -117,6 +117,7 @@ pub enum Op {
         output_padding: usize,
         stride: usize,
         dilation: usize,
+        groups: usize,
     },
 
     AvgPool2D {
