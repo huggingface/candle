@@ -21,7 +21,7 @@ impl VarBuilder {
         Ok(Self {
             data: Arc::new(data),
             path: Vec::new(),
-            device: Device::Cpu,
+            device: device.clone(),
         })
     }
 
