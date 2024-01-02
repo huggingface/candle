@@ -41,7 +41,7 @@ fn w(res: PyErr) -> candle::Error {
 
 impl GymEnv {
     /// Creates a new session of the specified OpenAI Gym environment.
-    pub fn new(name: &str, video_folder: Option<&str>, num_processes: usize) -> Result<GymEnv> {
+    pub fn new(name: &str, num_processes: usize, video_folder: Option<&str>) -> Result<GymEnv> {
         Python::with_gil(|py| {
             let sys = py.import("sys")?;
             let path = sys.getattr("path")?;
