@@ -29,7 +29,7 @@ impl<A: Copy> Step<A> {
 }
 
 /// An OpenAI Gym session.
-pub struct GymEnv {
+pub struct VecGymEnv {
     env: PyObject,
     action_space: usize,
     observation_space: Vec<usize>,
@@ -39,9 +39,9 @@ fn w(res: PyErr) -> candle::Error {
     candle::Error::wrap(res)
 }
 
-impl GymEnv {
+impl VecGymEnv {
     /// Creates a new session of the specified OpenAI Gym environment.
-    pub fn new(name: &str, num_processes: usize, video_folder: Option<&str>) -> Result<GymEnv> {
+    pub fn new(name: &str, num_processes: usize, video_folder: Option<&str>) -> Result<VecGymEnv> {
         Python::with_gil(|py| {
             let sys = py.import("sys")?;
             let path = sys.getattr("path")?;
@@ -63,7 +63,7 @@ impl GymEnv {
             let observation_space: Vec<usize> = observation_space.getattr("shape")?.extract()?;
             let observation_space =
                 [vec![num_processes].as_slice(), observation_space.as_slice()].concat();
-            Ok(GymEnv {
+            Ok(VecGymEnv {
                 env: env.into(),
                 action_space,
                 observation_space,
