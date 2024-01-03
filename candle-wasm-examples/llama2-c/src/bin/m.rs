@@ -31,10 +31,13 @@ impl Model {
 
         let next_token = self.logits_processor.sample(&logits)?;
         self.tokens.push(next_token);
-        let text = match self.inner.tokenizer.id_to_token(next_token) {
-            Some(text) => text.replace('▁', " ").replace("<0x0A>", "\n"),
-            None => "".to_string(),
-        };
+        let text = self
+            .inner
+            .tokenizer
+            .id_to_token(next_token)
+            .map_or(String::new(), |text| {
+                text.replace('▁', " ").replace("<0x0A>", "\n")
+            });
         Ok(text)
     }
 }
