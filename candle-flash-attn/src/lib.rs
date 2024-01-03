@@ -87,30 +87,46 @@ impl FlashAttn {
             candle::bail!("number of k/v heads {num_heads_k} must divide number of heads in query {num_heads}")
         }
 
-        let (alibi_slopes_ptr, alibi_slopes_batch_stride) = if let Some(alibi_slopes) = &self.alibi_slopes {
-            let (alibi_slopes, alibi_slopes_layout) = alibi_slopes.storage_and_layout();
+        let (alibi_slopes_ptr, alibi_slopes_batch_stride) =
+            if let Some(alibi_slopes) = &self.alibi_slopes {
+                let (alibi_slopes, alibi_slopes_layout) = alibi_slopes.storage_and_layout();
 
-            if b_sz != alibi_slopes_layout.shape().dims1()? {
-                candle::bail!("shape mismatch alibi_slopes {:?}, expected {:?}", alibi_slopes_layout.shape(), (b_sz));
-            }
+                if b_sz != alibi_slopes_layout.shape().dims1()? {
+                    candle::bail!(
+                        "shape mismatch alibi_slopes {:?}, expected {:?}",
+                        alibi_slopes_layout.shape(),
+                        (b_sz)
+                    );
+                }
 
-            let alibi_slopes = match &*alibi_slopes {
-                candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-                _ => candle::bail!("seqlens_q must be a cuda tensor"),
+                let alibi_slopes = match &*alibi_slopes {
+                    candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+                    _ => candle::bail!("seqlens_q must be a cuda tensor"),
+                };
+
+                let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
+
+                (
+                    *alibi_slopes.device_ptr() as *const core::ffi::c_void,
+                    alibi_slopes_layout.stride()[0] as u32,
+                )
+            } else {
+                (std::ptr::null(), 0_u32)
             };
 
-            let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
-
-            (*alibi_slopes.device_ptr() as *const core::ffi::c_void, alibi_slopes_layout.stride()[0] as u32)
-        } else {
-            (std::ptr::null(), 0_u32)
-        };
-
         // if window_size_left > self.max_seqlen_k or None => -1
-        let window_size_left = self.window_size_left.filter(|v| v <= &seqlen_k).map(|v| v as i32).unwrap_or(-1);
+        let window_size_left = self
+            .window_size_left
+            .filter(|v| v <= &seqlen_k)
+            .map(|v| v as i32)
+            .unwrap_or(-1);
 
         // if window_size_right > self.max_seqlen_k or None => -1
-        let window_size_right = self.window_size_right.filter(|v| v <= &seqlen_k).map(|v| v as i32).unwrap_or(-1);
+        let window_size_right = self
+            .window_size_right
+            .filter(|v| v <= &seqlen_k)
+            .map(|v| v as i32)
+            .unwrap_or(-1);
 
         let head_size = round_multiple(head_size_og, 8);
         let head_size_rounded = round_multiple(head_size, 32);
@@ -460,30 +476,46 @@ impl FlashAttnVarLen {
 
         let batch_size = nseqlens_q - 1;
 
-        let (alibi_slopes_ptr, alibi_slopes_batch_stride) = if let Some(alibi_slopes) = &self.alibi_slopes {
-            let (alibi_slopes, alibi_slopes_layout) = alibi_slopes.storage_and_layout();
+        let (alibi_slopes_ptr, alibi_slopes_batch_stride) =
+            if let Some(alibi_slopes) = &self.alibi_slopes {
+                let (alibi_slopes, alibi_slopes_layout) = alibi_slopes.storage_and_layout();
 
-            if batch_size != alibi_slopes_layout.shape().dims1()? {
-                candle::bail!("shape mismatch alibi_slopes {:?}, expected {:?}", alibi_slopes_layout.shape(), (batch_size));
-            }
+                if batch_size != alibi_slopes_layout.shape().dims1()? {
+                    candle::bail!(
+                        "shape mismatch alibi_slopes {:?}, expected {:?}",
+                        alibi_slopes_layout.shape(),
+                        (batch_size)
+                    );
+                }
 
-            let alibi_slopes = match &*alibi_slopes {
-                candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-                _ => candle::bail!("seqlens_q must be a cuda tensor"),
+                let alibi_slopes = match &*alibi_slopes {
+                    candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+                    _ => candle::bail!("seqlens_q must be a cuda tensor"),
+                };
+
+                let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
+
+                (
+                    *alibi_slopes.device_ptr() as *const core::ffi::c_void,
+                    alibi_slopes_layout.stride()[0] as u32,
+                )
+            } else {
+                (std::ptr::null(), 0_u32)
             };
 
-            let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
-
-            (*alibi_slopes.device_ptr() as *const core::ffi::c_void, alibi_slopes_layout.stride()[0] as u32)
-        } else {
-            (std::ptr::null(), 0_u32)
-        };
-
         // if window_size_left > self.max_seqlen_k or None => -1
-        let window_size_left = self.window_size_left.filter(|v| v <= &self.max_seqlen_k).map(|v| v as i32).unwrap_or(-1);
+        let window_size_left = self
+            .window_size_left
+            .filter(|v| v <= &self.max_seqlen_k)
+            .map(|v| v as i32)
+            .unwrap_or(-1);
 
         // if window_size_right > self.max_seqlen_k or None => -1
-        let window_size_right = self.window_size_right.filter(|v| v <= &self.max_seqlen_k).map(|v| v as i32).unwrap_or(-1);
+        let window_size_right = self
+            .window_size_right
+            .filter(|v| v <= &self.max_seqlen_k)
+            .map(|v| v as i32)
+            .unwrap_or(-1);
 
         let head_size = round_multiple(head_size_og, 8);
         let head_size_rounded = round_multiple(head_size, 32);
