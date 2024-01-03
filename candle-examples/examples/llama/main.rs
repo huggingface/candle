@@ -184,7 +184,9 @@ fn main() -> Result<()> {
                 &tokens[start_at..],
             )?
         };
-        index_pos += ctxt.len();
+        if cache.use_kv_cache {
+            index_pos += ctxt.len();
+        }
 
         let next_token = logits_processor.sample(&logits)?;
         token_generated += 1;
