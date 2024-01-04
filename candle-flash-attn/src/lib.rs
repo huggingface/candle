@@ -91,17 +91,17 @@ impl FlashAttn {
             if let Some(alibi_slopes) = &self.alibi_slopes {
                 let (alibi_slopes, alibi_slopes_layout) = alibi_slopes.storage_and_layout();
 
-                if b_sz != alibi_slopes_layout.shape().dims1()? {
+                if num_heads != alibi_slopes_layout.shape().dims1()? {
                     candle::bail!(
                         "shape mismatch alibi_slopes {:?}, expected {:?}",
                         alibi_slopes_layout.shape(),
-                        (b_sz)
+                        (num_heads)
                     );
                 }
 
                 let alibi_slopes = match &*alibi_slopes {
                     candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-                    _ => candle::bail!("seqlens_q must be a cuda tensor"),
+                    _ => candle::bail!("alibi_slopes must be a cuda tensor"),
                 };
 
                 let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
@@ -302,7 +302,7 @@ pub fn flash_attn_windowed(
 /// * `q` - Query tensor with shape `(batch, seq_len_q, num_heads_q, head_size)`.
 /// * `k` - Key tensor with shape `(batch, seq_len_kv, num_heads_kv, head_size)`.
 /// * `v` - Value tensor with shape `(batch, seq_len_kv, num_heads_kv, head_size)`.
-/// * `alibi_slopes` - Alibi slopes tensor with shape `(batch)`.
+/// * `alibi_slopes` - Alibi slopes tensor with shape `(num_heads_q)`.
 ///
 /// The resulting tensor has dimensions `(batch, seq_len_q, num_heads_q, head_size)`.
 pub fn flash_attn_alibi(
@@ -336,7 +336,7 @@ pub fn flash_attn_alibi(
 /// * `q` - Query tensor with shape `(batch, seq_len_q, num_heads_q, head_size)`.
 /// * `k` - Key tensor with shape `(batch, seq_len_kv, num_heads_kv, head_size)`.
 /// * `v` - Value tensor with shape `(batch, seq_len_kv, num_heads_kv, head_size)`.
-/// * `alibi_slopes` - Alibi slopes tensor with shape `(batch)`.
+/// * `alibi_slopes` - Alibi slopes tensor with shape `(num_heads_q)`.
 /// * `window_size_left` - Limit left attention to value tokens.
 /// * `window_size_right` - Limit right attention to value tokens.
 ///
@@ -480,17 +480,17 @@ impl FlashAttnVarLen {
             if let Some(alibi_slopes) = &self.alibi_slopes {
                 let (alibi_slopes, alibi_slopes_layout) = alibi_slopes.storage_and_layout();
 
-                if batch_size != alibi_slopes_layout.shape().dims1()? {
+                if num_heads != alibi_slopes_layout.shape().dims1()? {
                     candle::bail!(
                         "shape mismatch alibi_slopes {:?}, expected {:?}",
                         alibi_slopes_layout.shape(),
-                        (batch_size)
+                        (num_heads)
                     );
                 }
 
                 let alibi_slopes = match &*alibi_slopes {
                     candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
-                    _ => candle::bail!("seqlens_q must be a cuda tensor"),
+                    _ => candle::bail!("alibi_slopes must be a cuda tensor"),
                 };
 
                 let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
@@ -728,7 +728,7 @@ pub fn flash_attn_varlen_windowed(
 /// * `q` - Query tensor with shape `(total_q, num_heads_q, head_size)`.
 /// * `k` - Key tensor with shape `(total_kv, num_heads_kv, head_size)`.
 /// * `v` - Value tensor with shape `(total_kv, num_heads_kv, head_size)`.
-/// * `alibi_slopes` - Alibi slopes tensor with shape `(batch)`.
+/// * `alibi_slopes` - Alibi slopes tensor with shape `(num_heads_q)`.
 /// * `seqlens_q` - The cumulative lengths of the sequences in the batch, used to index in q.
 /// * `seqlens_k` - The cumulative lengths of the sequences in the batch, used to index in k and v.
 /// * `max_seqlen_q` - The maximum query sequence length for q in the batch.
@@ -778,7 +778,7 @@ pub fn flash_attn_varlen_alibi(
 /// * `q` - Query tensor with shape `(total_q, num_heads_q, head_size)`.
 /// * `k` - Key tensor with shape `(total_kv, num_heads_kv, head_size)`.
 /// * `v` - Value tensor with shape `(total_kv, num_heads_kv, head_size)`.
-/// * `alibi_slopes` - Alibi slopes tensor with shape `(batch)`.
+/// * `alibi_slopes` - Alibi slopes tensor with shape `(num_heads_q)`.
 /// * `seqlens_q` - The cumulative lengths of the sequences in the batch, used to index in q.
 /// * `seqlens_k` - The cumulative lengths of the sequences in the batch, used to index in k and v.
 /// * `max_seqlen_q` - The maximum query sequence length for q in the batch.
