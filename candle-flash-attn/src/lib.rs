@@ -87,40 +87,36 @@ impl FlashAttn {
             candle::bail!("number of k/v heads {num_heads_k} must divide number of heads in query {num_heads}")
         }
 
-        let (alibi_slopes_ptr, alibi_slopes_batch_stride) =
-            if let Some(alibi_slopes) = &self.alibi_slopes {
-                if alibi_slopes.dtype() != DType::F32 {
-                    candle::bail!(
-                        "DType mismatch alibi_slopes {:?}, expected {:?}",
-                        alibi_slopes.dtype(),
-                        DType::F32
-                    );
-                }
+        let alibi_slopes_ptr = if let Some(alibi_slopes) = &self.alibi_slopes {
+            if alibi_slopes.dtype() != DType::F32 {
+                candle::bail!(
+                    "DType mismatch alibi_slopes {:?}, expected {:?}",
+                    alibi_slopes.dtype(),
+                    DType::F32
+                );
+            }
 
-                let (alibi_slopes, alibi_slopes_layout) = alibi_slopes.storage_and_layout();
+            let (alibi_slopes, alibi_slopes_layout) = alibi_slopes.storage_and_layout();
 
-                if num_heads != alibi_slopes_layout.shape().dims1()? {
-                    candle::bail!(
-                        "shape mismatch alibi_slopes {:?}, expected {:?}",
-                        alibi_slopes_layout.shape(),
-                        (num_heads)
-                    );
-                }
+            if num_heads != alibi_slopes_layout.shape().dims1()? {
+                candle::bail!(
+                    "shape mismatch alibi_slopes {:?}, expected {:?}",
+                    alibi_slopes_layout.shape(),
+                    (num_heads)
+                );
+            }
 
-                let alibi_slopes = match &*alibi_slopes {
-                    candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-                    _ => candle::bail!("alibi_slopes must be a cuda tensor"),
-                };
-
-                let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
-
-                (
-                    *alibi_slopes.device_ptr() as *const core::ffi::c_void,
-                    alibi_slopes_layout.stride()[0] as u32,
-                )
-            } else {
-                (std::ptr::null(), 0_u32)
+            let alibi_slopes = match &*alibi_slopes {
+                candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+                _ => candle::bail!("alibi_slopes must be a cuda tensor"),
             };
+
+            let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
+
+            *alibi_slopes.device_ptr() as *const core::ffi::c_void
+        } else {
+            std::ptr::null()
+        };
 
         // if window_size_left > self.max_seqlen_k or None => -1
         let mut window_size_left = self
@@ -180,7 +176,7 @@ impl FlashAttn {
                 /* k_batch_stride */ k_stride[0] as u32,
                 /* v_batch_stride */ v_stride[0] as u32,
                 /* o_batch_stride */ o_stride[0] as u32,
-                /* alibi_slopes_batch_stride */ alibi_slopes_batch_stride,
+                /* alibi_slopes_batch_stride */ 0,
                 /* q_row_stride   */ q_stride[q_rank - 3] as u32,
                 /* k_row_stride   */ k_stride[k_rank - 3] as u32,
                 /* v_row_stride   */ v_stride[v_rank - 3] as u32,
@@ -499,40 +495,36 @@ impl FlashAttnVarLen {
 
         let batch_size = nseqlens_q - 1;
 
-        let (alibi_slopes_ptr, alibi_slopes_batch_stride) =
-            if let Some(alibi_slopes) = &self.alibi_slopes {
-                if alibi_slopes.dtype() != DType::F32 {
-                    candle::bail!(
-                        "DType mismatch alibi_slopes {:?}, expected {:?}",
-                        alibi_slopes.dtype(),
-                        DType::F32
-                    );
-                }
+        let alibi_slopes_ptr = if let Some(alibi_slopes) = &self.alibi_slopes {
+            if alibi_slopes.dtype() != DType::F32 {
+                candle::bail!(
+                    "DType mismatch alibi_slopes {:?}, expected {:?}",
+                    alibi_slopes.dtype(),
+                    DType::F32
+                );
+            }
 
-                let (alibi_slopes, alibi_slopes_layout) = alibi_slopes.storage_and_layout();
+            let (alibi_slopes, alibi_slopes_layout) = alibi_slopes.storage_and_layout();
 
-                if num_heads != alibi_slopes_layout.shape().dims1()? {
-                    candle::bail!(
-                        "shape mismatch alibi_slopes {:?}, expected {:?}",
-                        alibi_slopes_layout.shape(),
-                        (num_heads)
-                    );
-                }
+            if num_heads != alibi_slopes_layout.shape().dims1()? {
+                candle::bail!(
+                    "shape mismatch alibi_slopes {:?}, expected {:?}",
+                    alibi_slopes_layout.shape(),
+                    (num_heads)
+                );
+            }
 
-                let alibi_slopes = match &*alibi_slopes {
-                    candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-                    _ => candle::bail!("alibi_slopes must be a cuda tensor"),
-                };
-
-                let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
-
-                (
-                    *alibi_slopes.device_ptr() as *const core::ffi::c_void,
-                    alibi_slopes_layout.stride()[0] as u32,
-                )
-            } else {
-                (std::ptr::null(), 0_u32)
+            let alibi_slopes = match &*alibi_slopes {
+                candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+                _ => candle::bail!("alibi_slopes must be a cuda tensor"),
             };
+
+            let alibi_slopes = alibi_slopes.slice(alibi_slopes_layout.start_offset()..);
+
+            *alibi_slopes.device_ptr() as *const core::ffi::c_void
+        } else {
+            std::ptr::null()
+        };
 
         // if window_size_left > self.max_seqlen_k or None => -1
         let mut window_size_left = self
@@ -596,7 +588,7 @@ impl FlashAttnVarLen {
                 /* k_batch_stride */ 0,
                 /* v_batch_stride */ 0,
                 /* o_batch_stride */ 0,
-                /* alibi_slopes_batch_stride */ alibi_slopes_batch_stride,
+                /* alibi_slopes_batch_stride */ 0,
                 /* q_row_stride   */ q_stride[q_rank - 3] as u32,
                 /* k_row_stride   */ k_stride[k_rank - 3] as u32,
                 /* v_row_stride   */ v_stride[v_rank - 3] as u32,
