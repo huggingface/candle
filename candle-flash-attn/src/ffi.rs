@@ -41,6 +41,7 @@ extern "C" {
         seqlen_k_rounded: u32,
 
         is_bf16: c_int,
+        is_causal: c_int,
 
         window_size_left: c_int,
         window_size_right: c_int,

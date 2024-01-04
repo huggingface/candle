@@ -52,6 +52,7 @@ extern "C" void run_mha(
     uint32_t seqlen_k_rounded,
 
     int is_bf16,
+    int is_causal,
 
     int window_size_left,
     int window_size_right
@@ -111,12 +112,7 @@ extern "C" void run_mha(
     params.p_ptr = nullptr; // used for `return_softmax`.
     params.seqused_k = nullptr;
 
-    // Causal is the special case where window_size_right == 0 and window_size_left < 0.
-    // Local is the more general case where window_size_right >= 0 or window_size_left >= 0.
-    params.is_causal = window_size_left < 0 && window_size_right == 0;
-
-    if (window_size_left < 0 && window_size_right >= 0) { window_size_left = seqlen_k; }
-    if (window_size_left >= 0 && window_size_right < 0) { window_size_right = seqlen_k; }
+    params.is_causal = is_causal;
     params.window_size_left = window_size_left;
     params.window_size_right = window_size_right;
 
