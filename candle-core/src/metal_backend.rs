@@ -596,6 +596,8 @@ impl BackendStorage for MetalStorage {
                 (DType::F32, DType::F16) => "cast_f32_f16",
                 (DType::F16, DType::F32) => "cast_f16_f32",
                 (DType::I64, DType::F32) => "cast_i64_f32",
+                (DType::F32, DType::BF16) => "cast_f32_bf16",
+                (DType::BF16, DType::F32) => "cast_bf16_f32",
                 (left, right) => {
                     crate::bail!("Metal contiguous to_dtype {left:?} {right:?} not implemented")
                 }
@@ -622,6 +624,8 @@ impl BackendStorage for MetalStorage {
                 (DType::F32, DType::F16) => "cast_f32_f16_strided",
                 (DType::F16, DType::F32) => "cast_f16_f32_strided",
                 (DType::I64, DType::F32) => "cast_i64_f32_strided",
+                (DType::F32, DType::BF16) => "cast_f32_bf16_strided",
+                (DType::BF16, DType::F32) => "cast_bf16_f32_strided",
                 (left, right) => {
                     crate::bail!("Metal strided to_dtype {left:?} {right:?} not implemented")
                 }
