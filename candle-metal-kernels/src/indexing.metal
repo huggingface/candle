@@ -174,6 +174,9 @@ SCATTER_ADD_OP(sa_u32_f16, uint, half)
 
 
 #if __METAL_VERSION__ >= 310
+INDEX_OP(is_u32_bf16, uint32_t, bfloat)
+INDEX_OP(is_u8_bf16, uint8_t, bfloat)
+
 INDEX_ADD_OP(ia_i64_bf16, int64_t, bfloat)
 INDEX_ADD_OP(ia_u32_bf16, uint32_t, bfloat)
 INDEX_ADD_OP(ia_u8_bf16, uint8_t, bfloat)
