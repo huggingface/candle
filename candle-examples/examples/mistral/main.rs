@@ -250,7 +250,7 @@ fn main() -> Result<()> {
         let vb =
             candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
         let model = QMistral::new(&config, vb)?;
-        (Model::Quantized(model), Device::Cpu)
+        (Model::Quantized(model), device)
     } else {
         let dtype = if device.is_cuda() {
             DType::BF16
