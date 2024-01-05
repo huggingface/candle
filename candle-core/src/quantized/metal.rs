@@ -32,9 +32,7 @@ impl QMetalStorage {
         command_buffer.set_label("to_cpu");
         let blit = command_buffer.new_blit_command_encoder();
         blit.set_label("blit_to_cpu");
-        // blit.wait_for_fence(&self.device.fence());
         blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
-        // blit.update_fence(&self.device.fence());
         blit.end_encoding();
         self.device.wait_until_completed()?;
         let mut out = vec![0.0; elem_count];
