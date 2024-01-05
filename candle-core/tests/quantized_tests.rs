@@ -632,7 +632,17 @@ fn quantized_matmul_q4k() -> Result<()> {
 
     let rhs = quantized::QTensor::quantize::<BlockQ4K>(&rhs)?;
     let rhs = quantized::QMatMul::from_qtensor(rhs)?;
-    let mm = rhs.forward(&lhs)?;
+    let qmm = rhs.forward(&lhs)?;
+
+    let error: f32 = ((&mm - &qmm)?.abs()? / &mm.abs()?)?
+        .sum_all()?
+        .to_scalar()?;
+    let error = error / (m * n) as f32;
+
+    assert!(
+        error < 0.01,
+        "{error} is too big, shouldn't exceed a few percent. \nGot:{qmm}\nExpected:\n{mm} "
+    );
 
     assert_eq!(mm.dims(), [m, n]);
     let dst = mm.flatten_all()?.to_vec1::<f32>()?;
