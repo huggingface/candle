@@ -11,13 +11,7 @@ enum QuantizationMode {
 }
 
 impl QuantizationMode {
-    fn quantize(
-        &self,
-        name: &str,
-        tensor: QTensor,
-        dtype: GgmlDType,
-        // default: fn(&Tensor) -> Result<QTensor>,
-    ) -> Result<QTensor> {
+    fn quantize(&self, name: &str, tensor: QTensor, dtype: GgmlDType) -> Result<QTensor> {
         match self {
             Self::Llama => {
                 // Same behavior as the llama.cpp quantization.
@@ -28,7 +22,6 @@ impl QuantizationMode {
                         QTensor::quantize(&tensor, GgmlDType::Q6K)
                     } else {
                         QTensor::quantize(&tensor, dtype)
-                        // default(&tensor)
                     }
                 } else {
                     Ok(tensor)
@@ -270,22 +263,6 @@ fn run_quantize_safetensors(
     println!("tensors: {}", tensors.len());
 
     let dtype = q.dtype();
-    // let quantize_fn = match q {
-    //     Quantization::Q4_0 => QTensor::quantize::<k_quants::BlockQ4_0>,
-    //     Quantization::Q4_1 => QTensor::quantize::<k_quants::BlockQ4_1>,
-    //     Quantization::Q5_0 => QTensor::quantize::<k_quants::BlockQ5_0>,
-    //     Quantization::Q5_1 => QTensor::quantize::<k_quants::BlockQ5_1>,
-    //     Quantization::Q8_0 => QTensor::quantize::<k_quants::BlockQ8_0>,
-    //     Quantization::Q8_1 => QTensor::quantize::<k_quants::BlockQ8_1>,
-    //     Quantization::Q2k => QTensor::quantize::<k_quants::BlockQ2K>,
-    //     Quantization::Q3k => QTensor::quantize::<k_quants::BlockQ3K>,
-    //     Quantization::Q4k => QTensor::quantize::<k_quants::BlockQ4K>,
-    //     Quantization::Q5k => QTensor::quantize::<k_quants::BlockQ5K>,
-    //     Quantization::Q6k => QTensor::quantize::<k_quants::BlockQ6K>,
-    //     Quantization::Q8k => QTensor::quantize::<k_quants::BlockQ8K>,
-    //     Quantization::F16 => QTensor::quantize::<half::f16>,
-    //     Quantization::F32 => QTensor::quantize::<f32>,
-    // };
     let block_size = dtype.block_size();
 
     let qtensors = tensors
