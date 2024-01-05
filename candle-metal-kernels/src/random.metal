@@ -33,29 +33,34 @@ static constexpr constant uint64_t PHI[16] = {
 // Combined Tausworthe and LCG Random Number Generator.
 // https://developer.nvidia.com/gpugems/gpugems3/part-vi-gpu-computing/chapter-37-efficient-random-number-generation-and-application
 // https://indico.cern.ch/event/93877/contributions/2118070/attachments/1104200/1575343/acat3_revised_final.pdf
-class HybridTaus {
-private:
-    thread float seed;
+struct HybridTaus {
+
+    float state;
+
+    HybridTaus() thread = default;
+    HybridTaus() threadgroup = default;
+    HybridTaus() device = default;
+    HybridTaus() constant = default;
 
     // Generate seeds for each thread.
-    thread uint4 seed_per_thread(const ulong4 seeds) {
+    METAL_FUNC static uint4 seed_per_thread(const ulong4 seeds) {
         return uint4(ulong4(seeds) * ulong4(PHI[0], PHI[1], PHI[2], PHI[3]) * ulong4(1099087573UL));
     }
 
     // Tausworthe generator.
-    thread uint taus(const uint z, const int3 s, const uint M) {
+    METAL_FUNC static uint taus(const uint z, const int3 s, const uint M) {
         uint b = (((z << s.x) ^ z) >> s.y);
         return (((z & M) << s.z) ^ b);
     }
 
     // LCG generator.
-    thread uint lcg(const uint z) {
+    METAL_FUNC static uint lcg(const uint z) {
         return (1664525 * z + 1013904223UL);
     }
 
-public:
-    thread HybridTaus(const ulong4 seeds) {
-        uint4 seed = this->seed_per_thread(seeds);
+    // Initialize the RNG state.
+    METAL_FUNC static HybridTaus init(const ulong4 seeds) {
+        uint4 seed = seed_per_thread(seeds);
 
         // Seed #1
         uint z1 = taus(seed.x, S1, 4294967294UL);
@@ -84,52 +89,96 @@ public:
         z3 = taus(r1, S3, 429496280UL);
         z4 = lcg(r1);
 
-        this->seed = (z1^z2^z3^z4) * UNIF01_INV32;
+        HybridTaus rng;
+        rng.state = (z1^z2^z3^z4) * UNIF01_INV32;
+        return rng;
     }
 
-    thread float rand() {
-        uint seed = this->seed * UNIF01_NORM32;
+    METAL_FUNC float rand() {
+        uint seed = this->state * UNIF01_NORM32;
         uint z1 = taus(seed, S1, 429496729UL);
         uint z2 = taus(seed, S2, 4294967288UL);
         uint z3 = taus(seed, S3, 429496280UL);
         uint z4 = lcg(seed);
 
-        thread float old_seed = this->seed;
-        this->seed = (z1^z2^z3^z4) * UNIF01_INV32;
-        return old_seed;
+        thread float result = this->state;
+        this->state = (z1^z2^z3^z4) * UNIF01_INV32;
+        return result;
     }
 };
 
 template<typename T> METAL_FUNC void rand_uniform(
-    constant size_t &elem_count,
+    constant size_t &size,
     constant ulong &seed,
     constant float &min,
     constant float &max,
     device T *out,
     uint tid [[thread_position_in_grid]]
 ) {
-    if (tid >= elem_count) {
+    if (tid >= size) {
         return;
     }
     float diff = max - min;
-    HybridTaus rng = HybridTaus({seed, tid, 1, 1});
+    HybridTaus rng = HybridTaus::init({seed, tid, 1, 1});
     out[tid] = static_cast<T>(rng.rand() * diff + min);
+    out[size - tid] = static_cast<T>(rng.rand() * diff + min);
 }
 
-#define UNIFORM_OP(NAME, T)                                 \
-kernel void rand_uniform_##NAME(                            \
-    constant size_t &elem_count,                            \
-    constant ulong &seed,                                   \
-    constant float &min,                                    \
-    constant float &max,                                    \
-    device T *out,                                          \
-    uint tid [[thread_position_in_grid]]                    \
-) {                                                         \
-    rand_uniform<T>(elem_count, seed, min, max, out, tid);  \
-}                                                           \
+// Create Gaussian normal distribution using Box-Muller transform:
+// https://en.wikipedia.org/wiki/Box–Muller_transform
+template<typename T> METAL_FUNC void normal(
+    constant size_t &size,
+    constant ulong &seed,
+    constant float &mean,
+    constant float &stddev,
+    device T *out,
+    uint tid [[thread_position_in_grid]]
+) {
+    if (tid >= size) {
+        return;
+    }
+    HybridTaus rng = HybridTaus::init({seed, tid, 1, 1});
+    float u1 = rng.rand();
+    float u2 = rng.rand();
+
+    float cosval;
+    float sinval = sincos(u1 * TWO_PI, cosval);
+    float mag = stddev * sqrt(-2.0 * log(u1));
+    float z0  = mag * cosval + mean;
+    float z1  = mag * sinval + mean;
+
+    out[tid] = static_cast<T>(z0);
+    out[size - tid] = static_cast<T>(z1);
+}
+
+#define UNIFORM_OP(NAME, T)                             \
+kernel void rand_uniform_##NAME(                        \
+    constant size_t &size,                              \
+    constant ulong &seed,                               \
+    constant float &min,                                \
+    constant float &max,                                \
+    device T *out,                                      \
+    uint tid [[thread_position_in_grid]]                \
+) {                                                     \
+    rand_uniform<T>(size, seed, min, max, out, tid);    \
+}                                                       \
+
+#define NORMAL_OP(NAME, T)                              \
+kernel void rand_normal_##NAME(                         \
+    constant size_t &size,                              \
+    constant ulong &seed,                               \
+    constant float &mean,                               \
+    constant float &stddev,                             \
+    device T *out,                                      \
+    uint tid [[thread_position_in_grid]]                \
+) {                                                     \
+    normal<T>(size, seed, mean, stddev, out, tid);      \
+}                                                       \
+
 
 #define RANDOM_OPS(NAME, T) \
 UNIFORM_OP(NAME, T)         \
+NORMAL_OP(NAME, T)          \
 
 RANDOM_OPS(f32, float)
 RANDOM_OPS(f16, half)
