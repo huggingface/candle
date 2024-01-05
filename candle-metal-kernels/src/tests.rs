@@ -11,7 +11,7 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
 
 fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
     let options = MTLResourceOptions::StorageModeManaged;
-    let ptr = data.as_ptr() as *const core::ffi::c_void;
+    let ptr = data.as_ptr() as *const c_void;
     let size = (data.len() * std::mem::size_of::<T>()) as u64;
     device.new_buffer_with_data(ptr, size, options)
 }
@@ -590,7 +590,6 @@ fn softmax() {
     }
     let results = run_softmax(&v, last_dim, "softmax_f32");
     let results = approx(results, 4);
-    println!("{results:?}");
     assert_eq!(
         results.iter().map(|&s| s.round() as usize).sum::<usize>(),
         n
@@ -805,4 +804,57 @@ fn gemm() {
         approx(results, 4),
         vec![56.0, 59.0, 62.0, 65.0, 200.0, 212.0, 224.0, 236.0]
     );
+}
+
+fn run_random<T: Clone>(seed: u64, shape: &[usize], name: &'static str, min: f32, max: f32) -> Vec<T> {
+    let device = device();
+    let fence = device.new_fence();
+    let kernels = Kernels::new(fence);
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let options = MTLResourceOptions::StorageModeManaged;
+    let length = shape.iter().product::<usize>();
+    let output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
+
+    call_random_uniform(
+        &device,
+        command_buffer,
+        &kernels,
+        name,
+        seed,
+        min,
+        max,
+        length,
+        &output,
+    )
+    .unwrap();
+
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    read_to_vec(&output, length)
+}
+
+#[test]
+fn random() {
+    use std::fs::File;
+    use std::io::prelude::*;
+
+    let shape = vec![1024, 4];
+    let seed = 299792458;
+    let min = -30.0;
+    let max = 30.0;
+    let results = run_random::<f32>(seed, &shape, "rand_uniform_f32", min, max);
+    for &v in &results {
+        assert!(v >= min && v <= max);
+    }
+
+    // Writing bytes to file for testing with ENT
+    // https://www.fourmilab.ch/random/
+    // TODO: Remove before merge
+    let (head, body, tail) = unsafe { results.align_to::<u8>() };
+    assert!(head.is_empty());
+    assert!(tail.is_empty());
+    let mut file = File::create("test").unwrap();
+    file.write_all(body).unwrap();
 }

@@ -12,8 +12,9 @@ const UNARY: &str = include_str!("unary.metal");
 const BINARY: &str = include_str!("binary.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
-const REDUCE: &str = include_str!("reduce.metal");
 const CONV: &str = include_str!("conv.metal");
+const REDUCE: &str = include_str!("reduce.metal");
+const RANDOM: &str = include_str!("random.metal");
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
 
 /// Most kernels apply similarly across the tensors
@@ -45,7 +46,7 @@ fn set_param<P: EncoderParam>(encoder: &ComputeCommandEncoderRef, position: u64,
 /// Helper functions to create the various objects on the compute command encoder
 /// on a single line.
 /// Prevents getting wrong some arguments number and mixing length and size in bytes.
-trait EncoderParam {
+pub trait EncoderParam {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self);
 }
 macro_rules! primitive {
@@ -61,8 +62,10 @@ macro_rules! primitive {
         }
     };
 }
+primitive!(bool);
 primitive!(usize);
 primitive!(u32);
+primitive!(u64);
 primitive!(f32);
 
 impl<T> EncoderParam for &[T] {
@@ -117,6 +120,7 @@ pub enum Source {
     Reduce,
     Mfa,
     Conv,
+    Random,
 }
 
 macro_rules! ops{
@@ -228,6 +232,7 @@ impl Kernels {
             Source::Cast => CAST,
             Source::Reduce => REDUCE,
             Source::Conv => CONV,
+            Source::Random => RANDOM,
             Source::Mfa => panic!("Invalid lib"),
         }
     }
@@ -1564,6 +1569,70 @@ pub fn call_upsample_nearest_2d(
 
 fn divide(m: usize, b: usize) -> NSUInteger {
     ((m + b - 1) / b) as NSUInteger
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_random_uniform(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    seed: u64,
+    min: f32,
+    max: f32,
+    length: usize,
+    buffer: &Buffer,
+) -> Result<(), MetalKernelError> {
+    if min >= max {
+        return Err(MetalKernelError::LoadLibraryError(
+            "min must be less than max".to_string(),
+        ));
+    }
+
+    let size: usize = match name {
+        "rand_uniform_f32" => 4,
+        "rand_uniform_f16" | "rand_uniform_bf16" => 2,
+        _ => Err(MetalKernelError::LoadLibraryError(format!(
+            "{name} is not a valid kernel for random"
+        )))?,
+    };
+
+    let elems_per_key = length;
+    let bytes_per_key = size * elems_per_key;
+
+    let out_per_key = (bytes_per_key + 4 - 1) / 4;
+    let half_size = out_per_key / 2;
+    let odd = length % 2 != 0;
+
+    let pipeline = kernels.load_pipeline(device, Source::Random, name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+
+    let thread_group_count = MTLSize {
+        width: length as u64,
+        height: half_size as u64 + odd as u64,
+        depth: 1,
+    };
+    let threads = std::cmp::min(
+        (half_size + odd as usize) as NSUInteger,
+        pipeline.max_total_threads_per_threadgroup(),
+    );
+    let thread_group_size = MTLSize {
+        width: threads,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.wait_for_fence(&kernels.fence);
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, seed, min, max, buffer));
+
+    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.update_fence(&kernels.fence);
+    encoder.end_encoding();
+
+    Ok(())
 }
 
 #[cfg(test)]
