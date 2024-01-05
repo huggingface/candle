@@ -88,7 +88,7 @@ pub struct MetalDevice {
     /// execution order to be linear.
     /// It could be relaxed in some circumstances, by managing ourselves the dependencies in the
     /// compute graph.
-    fence: metal::Fence,
+    // fence: metal::Fence,
     /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
     /// Heavily used by [`candle_metal_kernels`], both fences need to match
     kernels: Arc<candle_metal_kernels::Kernels>,
@@ -131,9 +131,9 @@ impl MetalDevice {
         &self.device
     }
 
-    pub(crate) fn fence(&self) -> &metal::Fence {
-        &self.fence
-    }
+    // pub(crate) fn fence(&self) -> &metal::Fence {
+    //     &self.fence
+    // }
 
     pub fn command_queue(&self) -> &CommandQueue {
         &self.command_queue
@@ -225,10 +225,10 @@ impl MetalDevice {
         let command_buffer = self.command_buffer()?;
         command_buffer.set_label("with_data");
         let blit = command_buffer.new_blit_command_encoder();
-        blit.wait_for_fence(&self.fence);
+        // blit.wait_for_fence(&self.fence);
         blit.set_label("with_data_blit");
         blit.copy_from_buffer(&tmp, 0, &real, 0, tmp.length());
-        blit.update_fence(&self.fence);
+        // blit.update_fence(&self.fence);
         blit.end_encoding();
 
         // This is necessary, for mmaped safetensors
@@ -251,7 +251,7 @@ impl MetalDevice {
         let command_buffer = self.command_buffer()?;
         command_buffer.set_label("zeros");
         let blit = command_buffer.new_blit_command_encoder();
-        blit.wait_for_fence(&self.fence);
+        // blit.wait_for_fence(&self.fence);
         blit.fill_buffer(
             &buffer,
             metal::NSRange {
@@ -260,7 +260,7 @@ impl MetalDevice {
             },
             0,
         );
-        blit.update_fence(&self.fence);
+        // blit.update_fence(&self.fence);
         blit.end_encoding();
         Ok(buffer)
     }
@@ -1543,9 +1543,9 @@ impl MetalStorage {
             command_buffer.set_label("to_cpu");
             let blit = command_buffer.new_blit_command_encoder();
             blit.set_label("blit_to_cpu");
-            blit.wait_for_fence(&self.device.fence);
+            // blit.wait_for_fence(&self.device.fence);
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
-            blit.update_fence(&self.device.fence);
+            // blit.update_fence(&self.device.fence);
             blit.end_encoding();
         }
         self.device.wait_until_completed()?;
@@ -1563,16 +1563,16 @@ impl BackendDevice for MetalDevice {
         command_buffer.enqueue();
         let command_buffer = Arc::new(RwLock::new(command_buffer));
         let command_buffer_index = Arc::new(RwLock::new(0));
-        let fence = device.new_fence();
-        let kernels = Arc::new(Kernels::new(fence.clone()));
+        // let fence = device.new_fence();
+        let kernels = Arc::new(Kernels::new());
         let buffers = Arc::new(RwLock::new(HashMap::new()));
         let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
             Ok(val) => val.parse()?,
-            _ => 20,
+            _ => 10,
         };
         Ok(Self {
             device,
-            fence,
+            // fence,
             command_queue,
             command_buffer,
             command_buffer_index,
