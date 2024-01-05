@@ -681,7 +681,6 @@ impl BackendStorage for MetalStorage {
                 ("uround", DType::F32) => contiguous::round::FLOAT,
                 ("urecip", DType::F32) => contiguous::recip::FLOAT,
                 ("utanh", DType::F32) => contiguous::tanh::FLOAT,
-                ("uabs", DType::F32) => contiguous::abs::FLOAT,
                 ("ucos", DType::F16) => contiguous::cos::HALF,
                 ("usin", DType::F16) => contiguous::sin::HALF,
                 ("usqr", DType::F16) => contiguous::sqr::HALF,
@@ -698,7 +697,6 @@ impl BackendStorage for MetalStorage {
                 ("uround", DType::F16) => contiguous::round::HALF,
                 ("urecip", DType::F16) => contiguous::recip::HALF,
                 ("utanh", DType::F16) => contiguous::tanh::HALF,
-                ("uabs", DType::F16) => contiguous::abs::HALF,
                 (name, dtype) => {
                     crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
                 }
@@ -730,7 +728,6 @@ impl BackendStorage for MetalStorage {
                 ("uceil", DType::F32) => strided::ceil::FLOAT,
                 ("ufloor", DType::F32) => strided::floor::FLOAT,
                 ("uround", DType::F32) => strided::round::FLOAT,
-                ("uabs", DType::F32) => strided::abs::FLOAT,
                 ("ucos", DType::F16) => strided::cos::HALF,
                 ("usin", DType::F16) => strided::sin::HALF,
                 ("usqr", DType::F16) => strided::sqr::HALF,
@@ -745,7 +742,6 @@ impl BackendStorage for MetalStorage {
                 ("uceil", DType::F16) => strided::ceil::HALF,
                 ("ufloor", DType::F16) => strided::floor::HALF,
                 ("uround", DType::F16) => strided::round::HALF,
-                ("uabs", DType::F16) => strided::abs::HALF,
                 (name, dtype) => {
                     crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
                 }
