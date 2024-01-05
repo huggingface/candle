@@ -370,7 +370,7 @@ fn main() -> anyhow::Result<()> {
             for (_, tensor) in model.tensor_infos.iter() {
                 let elem_count = tensor.shape.elem_count();
                 total_size_in_bytes +=
-                    elem_count * tensor.ggml_dtype.type_size() / tensor.ggml_dtype.blck_size();
+                    elem_count * tensor.ggml_dtype.type_size() / tensor.ggml_dtype.block_size();
             }
             println!(
                 "loaded {:?} tensors ({}) in {:.2}s",
@@ -387,7 +387,7 @@ fn main() -> anyhow::Result<()> {
             for (_, tensor) in model.tensors.iter() {
                 let elem_count = tensor.shape().elem_count();
                 total_size_in_bytes +=
-                    elem_count * tensor.dtype().type_size() / tensor.dtype().blck_size();
+                    elem_count * tensor.dtype().type_size() / tensor.dtype().block_size();
             }
             println!(
                 "loaded {:?} tensors ({}) in {:.2}s",
