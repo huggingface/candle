@@ -48,4 +48,3 @@ metal = ["dep:metal", "dep:candle-metal-kernels"]
 [[bench]]
 name = "bench_main"
 harness = false
-
