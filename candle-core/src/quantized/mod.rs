@@ -29,14 +29,12 @@ impl Device {
     fn qzeros(&self, elem_count: usize, dtype: GgmlDType) -> Result<QStorage> {
         match self {
             Device::Cpu => {
-                let storage = dtype.zeros(elem_count);
+                let storage = dtype.cpu_zeros(elem_count);
                 Ok(QStorage::Cpu(storage))
             }
             #[cfg(feature = "metal")]
             Device::Metal(metal) => {
                 let size = elem_count * dtype.type_size() / dtype.block_size();
-                // let cpu_storage = dtype.zeros(elem_count);
-                // assert_eq!(size, cpu_storage.size());
                 let buffer = metal.allocate_zeros(size)?;
                 Ok(QStorage::Metal(metal::QMetalStorage::new(
                     buffer,
@@ -182,7 +180,7 @@ impl GgmlDType {
     }
 
     /// The block dtype
-    pub fn zeros(&self, elem_count: usize) -> Box<dyn QuantizedType> {
+    pub fn cpu_zeros(&self, elem_count: usize) -> Box<dyn QuantizedType> {
         match self {
             Self::F32 => Box::new(vec![f32::zeros(); elem_count]),
             Self::F16 => Box::new(vec![f16::zeros(); elem_count]),

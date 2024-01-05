@@ -131,7 +131,7 @@ impl MetalDevice {
         &self.device
     }
 
-    pub fn fence(&self) -> &metal::Fence {
+    pub(crate) fn fence(&self) -> &metal::Fence {
         &self.fence
     }
 
