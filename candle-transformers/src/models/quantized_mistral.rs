@@ -165,9 +165,13 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let (query_states, key_states) =
-            self.rotary_emb
-                .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
+        // let (query_states1, key_states1) =
+        //     self.rotary_emb
+        //         .apply_rotary_emb_qkv(&query_states, &key_states, seqlen_offset)?;
+        // println!("{query_states:?} {query_states1:?}");
+        // println!("{key_states:?} {key_states1:?}");
+        let query_states = query_states.contiguous()?;
+        let key_states = key_states.contiguous()?;
 
         let (key_states, value_states) = match &self.kv_cache {
             None => (key_states, value_states),
