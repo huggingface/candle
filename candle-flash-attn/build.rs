@@ -104,8 +104,9 @@ fn main() -> Result<()> {
         cu_files
             .par_iter()
             .map(|(cu_file, obj_file)| {
-                let mut command = std::process::Command::new("nvcc");
+                let mut command = std::process::Command::new("ccache");
                 command
+                    .arg("nvcc")
                     .arg("-std=c++17")
                     .arg("-O3")
                     .arg("-U__CUDA_NO_HALF_OPERATORS__")
