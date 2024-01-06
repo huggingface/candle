@@ -14,7 +14,7 @@ accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { path = "../candle-kernels", version = "0.3.3", optional = true }
 candle-metal-kernels = { path = "../candle-metal-kernels", version = "0.3.3", optional = true }
-metal = { workspace = true, optional = true}
+metal = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 gemm = { workspace = true }
 half = { workspace = true }
@@ -48,4 +48,4 @@ metal = ["dep:metal", "dep:candle-metal-kernels"]
 [[bench]]
 name = "matmul"
 harness = false
-
+required-features = ["metal"]
