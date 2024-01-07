@@ -51,15 +51,8 @@ pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) ->
             let v1_0l = vld1q_s8(y0.qs.as_ptr());
             let v1_0h = vld1q_s8(y0.qs.as_ptr().add(16));
 
-            // TODO: Support dotprod when it's available outside of nightly.
-            let pl0l = vmull_s8(vget_low_s8(v0_0ls), vget_low_s8(v1_0l));
-            let pl0h = vmull_s8(vget_high_s8(v0_0ls), vget_high_s8(v1_0l));
-            let ph0l = vmull_s8(vget_low_s8(v0_0hs), vget_low_s8(v1_0h));
-            let ph0h = vmull_s8(vget_high_s8(v0_0hs), vget_high_s8(v1_0h));
-
-            let pl0 = vaddq_s32(vpaddlq_s16(pl0l), vpaddlq_s16(pl0h));
-            let ph0 = vaddq_s32(vpaddlq_s16(ph0l), vpaddlq_s16(ph0h));
-
+            let pl0 = vdotq_s32(v0_0ls, v1_0l);
+            let ph0 = vdotq_s32(v0_0hs, v1_0h);
             sumv0 = vmlaq_n_f32(
                 sumv0,
                 vcvtq_f32_s32(vaddq_s32(pl0, ph0)),
@@ -90,14 +83,8 @@ pub(crate) fn vec_dot_q8_0_q8_0(n: usize, xs: &[BlockQ8_0], ys: &[BlockQ8_0]) ->
             let y0_0 = vld1q_s8(y0.qs.as_ptr());
             let y0_1 = vld1q_s8(y0.qs.as_ptr().add(16));
 
-            // TODO dotprod once this is the intrinsics are.
-            let p0_0 = vmull_s8(vget_low_s8(x0_0), vget_low_s8(y0_0));
-            let p0_1 = vmull_s8(vget_high_s8(x0_0), vget_high_s8(y0_0));
-            let p0_2 = vmull_s8(vget_low_s8(x0_1), vget_low_s8(y0_1));
-            let p0_3 = vmull_s8(vget_high_s8(x0_1), vget_high_s8(y0_1));
-
-            let p0 = vaddq_s32(vpaddlq_s16(p0_0), vpaddlq_s16(p0_1));
-            let p1 = vaddq_s32(vpaddlq_s16(p0_2), vpaddlq_s16(p0_3));
+            let p0 = vdotq_s32(x0_0, y0_0);
+            let p1 = vdotq_s32(x0_1, y0_1);
 
             sumv0 = vmlaq_n_f32(
                 sumv0,
@@ -126,10 +113,7 @@ pub(crate) fn vec_dot_q8k_q8k(n: usize, xs: &[BlockQ8K], ys: &[BlockQ8K]) -> Res
             for i in (0..QK_K).step_by(16) {
                 let xs = vld1q_s8(xs.add(i));
                 let ys = vld1q_s8(ys.add(i));
-                let xy_lo = vmull_s8(vget_low_s8(xs), vget_low_s8(ys));
-                let xy_up = vmull_s8(vget_high_s8(xs), vget_high_s8(ys));
-
-                let xy = vaddq_s32(vpaddlq_s16(xy_lo), vpaddlq_s16(xy_up));
+                let xy = vdotq_s32(xs, ys);
                 sum_i = vaddq_s32(sum_i, xy)
             }
             sumf += vaddvq_s32(sum_i) as f32 * scale
