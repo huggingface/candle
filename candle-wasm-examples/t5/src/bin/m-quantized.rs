@@ -31,7 +31,7 @@ impl ModelConditionalGeneration {
     ) -> Result<ModelConditionalGeneration, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let vb = VarBuilder::from_gguf_buffer(&weights)?;
+        let vb = VarBuilder::from_gguf_buffer(&weights,&Device::Cpu)?;
         let mut config: Config = serde_json::from_slice(&config)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
@@ -128,7 +128,7 @@ impl ModelEncoder {
     ) -> Result<ModelEncoder, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let vb = VarBuilder::from_gguf_buffer(&weights)?;
+        let vb = VarBuilder::from_gguf_buffer(&weights,&Device::Cpu)?;
         let mut config: Config = serde_json::from_slice(&config)?;
         config.use_cache = false;
         let tokenizer =

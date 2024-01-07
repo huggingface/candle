@@ -300,7 +300,7 @@ fn main() -> Result<()> {
         WhichModel::PhiHermes => Config::phi_hermes_1_3b(),
     };
     let (model, device) = if args.quantized {
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filenames[0])?;
+        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filenames[0],&Device::Cpu)?;
         let model = match args.model {
             WhichModel::V2 => QMixFormer::new_v2(&config, vb)?,
             _ => QMixFormer::new(&config, vb)?,

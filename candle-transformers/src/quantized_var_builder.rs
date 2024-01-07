@@ -10,7 +10,7 @@ pub struct VarBuilder {
 }
 
 impl VarBuilder {
-    pub fn from_gguf<P: AsRef<std::path::Path>>(p: P) -> Result<Self> {
+    pub fn from_gguf<P: AsRef<std::path::Path>>(p: P,dev: &Device) -> Result<Self> {
         let mut file = std::fs::File::open(p)?;
         let content = candle::quantized::gguf_file::Content::read(&mut file)?;
         let mut data = std::collections::HashMap::new();
@@ -21,11 +21,11 @@ impl VarBuilder {
         Ok(Self {
             data: Arc::new(data),
             path: Vec::new(),
-            device: Device::Cpu,
+            device: dev.clone(),
         })
     }
 
-    pub fn from_gguf_buffer(buffer: &[u8]) -> Result<Self> {
+    pub fn from_gguf_buffer(buffer: &[u8],dev: &Device) -> Result<Self> {
         let mut cursor = std::io::Cursor::new(buffer);
         let content = candle::quantized::gguf_file::Content::read(&mut cursor)?;
         let mut data = std::collections::HashMap::new();
@@ -36,7 +36,7 @@ impl VarBuilder {
         Ok(Self {
             data: Arc::new(data),
             path: Vec::new(),
-            device: Device::Cpu,
+            device: dev.clone(),
         })
     }
 

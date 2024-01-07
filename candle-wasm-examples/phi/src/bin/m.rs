@@ -51,7 +51,7 @@ impl Model {
         console_log!("weights len: {:?}", weights.len());
         let model = if quantized {
             let vb =
-                candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(&weights)?;
+                candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(&weights,&Device::Cpu)?;
             console_log!("weights loaded");
             if name._name_or_path == "microsoft/phi-2" {
                 let model = QMixFormer::new_v2(&config, vb)?;

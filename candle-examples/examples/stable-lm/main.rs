@@ -236,7 +236,7 @@ fn main() -> Result<()> {
     let config = Config::stablelm_3b_4e1t(args.use_flash_attn);
     let (model, device) = if args.quantized {
         let filename = &filenames[0];
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename)?;
+        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename,&Device::Cpu)?;
         let model = QStableLM::new(&config, vb)?;
         (Model::Quantized(model), Device::Cpu)
     } else {

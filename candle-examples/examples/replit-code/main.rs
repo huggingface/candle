@@ -238,7 +238,7 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let config = Config::replit_code_v1_5_3b();
     let (model, device) = if args.quantized {
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename)?;
+        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&filename,&Device::Cpu)?;
         let model = Model::Q(Q::new(&config, vb.pp("transformer"))?);
         (model, Device::Cpu)
     } else {

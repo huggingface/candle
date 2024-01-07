@@ -48,4 +48,4 @@ metal = ["dep:metal", "dep:candle-metal-kernels"]
 [[bench]]
 name = "matmul"
 harness = false
-
+required-features= ["metal"]
