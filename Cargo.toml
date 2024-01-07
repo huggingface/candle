@@ -31,6 +31,14 @@ license = "MIT OR Apache-2.0"
 accelerate-src = { version = "0.3.2" }
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
+candle = { path = "./candle-core", package = "candle-core" }
+candle-datasets = { path = "./candle-datasets" }
+candle-flash-attn = { path = "./candle-flash-attn" }
+candle-kernels = { path = "./candle-kernels" }
+candle-metal-kernels = { path = "./candle-metal-kernels" }
+candle-nn = { path = "./candle-nn" }
+candle-onnx = { path = "./candle-onnx" }
+candle-transformers = { path = "./candle-transformers" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.5.1", default-features=false }
 cudarc = { version = "0.9.14", features = ["f16"] }
