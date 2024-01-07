@@ -2583,6 +2583,47 @@ impl Tensor {
         let sum = exp.sum(sum_dims)?;
         sum.log()
     }
+
+    /// Returns a tensor with the k largest values from the `self` tensor along the given dimension.
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// * `self` - The input tensor
+    /// * `k` - the k in "top-k"
+    /// * `dim` - the dimension along which to find the top-k
+    ///
+    /// A tuple of (values, indicies) is returned with the values and indicies of the largest `k` values
+    /// in `self` along the given dimension.
+    ///
+    /// ```rust
+    /// use candle_core::{Tensor, Device, D};
+    ///
+    /// let a = Tensor::new(&[[0f32, 1., -3., 0.3], [1., 0., 9., 0.1]], &Device::Cpu)?;
+    ///
+    /// let (topk, indexes) = a.topk(2, 1, None)?;
+    ///
+    ///
+    /// assert_eq!(topk.to_vec2::<f32>()?, &[[1.0000, 0.3000], [9.0000, 1.0000]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn topk<D: Dim>(&self, k: usize, dim: D, largest: Option<bool>) -> Result<(Self, Self)> {
+        let dim: usize = dim.to_index(self.shape(), "topk")?;
+        let mut dims = self.dims().to_vec();
+        dims[dim] = k;
+
+        let largest = largest.unwrap_or(true);
+        let storage = self.storage().topk(self.layout(), k, dim, largest)?;
+        let op = BackpropOp::new1(self, |arg| Op::TopK {
+            arg,
+            k,
+            dim,
+            largest,
+        });
+        let indexes = from_storage(storage, dims, op, false);
+        let topk = self.gather(&indexes, dim)?;
+        Ok((topk, indexes))
+    }
 }
 
 macro_rules! bin_trait {

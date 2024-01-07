@@ -697,4 +697,27 @@ impl Storage {
             .bt()),
         }
     }
+
+    pub(crate) fn topk(
+        &self,
+        layout: &Layout,
+        k: usize,
+        dim: usize,
+        largest: bool,
+    ) -> Result<Self> {
+        match self {
+            Storage::Cpu(storage) => {
+                let storage = storage.topk(layout, k, dim, largest)?;
+                Ok(Self::Cpu(storage))
+            }
+            Self::Cuda(storage) => {
+                let storage = storage.topk(layout, k, dim, largest)?;
+                Ok(Self::Cuda(storage))
+            }
+            Self::Metal(storage) => {
+                let storage = storage.topk(layout, k, dim, largest)?;
+                Ok(Self::Metal(storage))
+            }
+        }
+    }
 }

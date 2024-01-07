@@ -2194,4 +2194,8 @@ impl BackendStorage for CudaStorage {
         }
         Ok(())
     }
+
+    fn topk(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
+        crate::bail!("topk is not supported on cuda")
+    }
 }

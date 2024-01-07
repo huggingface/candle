@@ -98,6 +98,8 @@ pub trait BackendStorage: Sized {
     ) -> Result<Self>;
 
     fn copy_strided_src(&self, _: &mut Self, _: usize, _: &Layout) -> Result<()>;
+
+    fn topk(&self, _: &Layout, _: usize, _: usize, _: bool) -> Result<Self>;
 }
 
 pub trait BackendDevice: Sized + std::fmt::Debug + Clone {

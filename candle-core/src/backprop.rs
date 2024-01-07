@@ -128,7 +128,8 @@ impl Tensor {
                     | Op::Unary(node, _)
                     | Op::Elu(node, _)
                     | Op::Powf(node, _)
-                    | Op::CustomOp1(node, _) => {
+                    | Op::CustomOp1(node, _)
+                    | Op::TopK { arg: node, .. } => {
                         let (tg, nodes) = walk(node, nodes, already_seen);
                         track_grad |= tg;
                         nodes
@@ -666,6 +667,7 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
+                    Op::TopK { .. } => Err(Error::BackwardNotSupported { op: "topk" })?,
                 };
             }
         }

@@ -1846,6 +1846,209 @@ fn elu<T: num_traits::Float>(v: T, alpha: T) -> T {
     }
 }
 
+struct TopK {
+    k: usize,
+    dim: usize,
+    largest: bool,
+}
+
+impl TopK {
+    fn heap_insert<T, U, F>(s: (T, U), heap: &mut Vec<(T, U)>, f: F)
+    where
+        T: Clone + Copy,
+        U: Clone + Copy,
+        F: Fn(T, T) -> bool,
+    {
+        heap.push(s);
+        let mut i = heap.len() - 1;
+        while i > 0 {
+            let p_i = (i - 1) / 2;
+            let (cur, parent) = unsafe { (heap.get_unchecked(i), heap.get_unchecked(p_i)) };
+            if f(cur.0, parent.0) {
+                heap.swap(i, p_i);
+                i = p_i;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn heap_pop<T, U, F>(heap: &mut Vec<(T, U)>, f: F) -> Option<(T, U)>
+    where
+        T: Clone + Copy,
+        U: Clone + Copy,
+        F: Fn(T, T) -> bool,
+    {
+        match heap.len() {
+            0 => None,
+            1 => Some(unsafe { heap.pop().unwrap_unchecked() }),
+            _ => {
+                let last = heap.len() - 1;
+                heap.swap(0, last);
+                let popped = unsafe { heap.pop().unwrap_unchecked() };
+
+                let mut i: usize = 0;
+                loop {
+                    let mut cur = i;
+                    let l_i = 2 * i + 1;
+                    let r_i = 2 * i + 2;
+
+                    if l_i < heap.len()
+                        && f(unsafe { heap.get_unchecked(l_i).0 }, unsafe {
+                            heap.get_unchecked(cur).0
+                        })
+                    {
+                        cur = l_i;
+                    } else {
+                        cur = i;
+                    }
+
+                    if r_i < heap.len()
+                        && f(unsafe { heap.get_unchecked(r_i).0 }, unsafe {
+                            heap.get_unchecked(cur).0
+                        })
+                    {
+                        cur = r_i;
+                    }
+
+                    if cur != i {
+                        heap.swap(i, cur);
+                        i = cur;
+                    } else {
+                        break;
+                    }
+                }
+                Some(popped)
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn find_topk<T, U, F, G>(&self, src: &[T], layout: &Layout, f: F, g: G) -> Result<Vec<U>>
+    where
+        T: Clone + Copy,
+        U: Clone + Copy,
+        F: Fn(T, T) -> bool,
+        G: Fn(usize) -> U,
+    {
+        let reduce_dim_size = layout.dims()[self.dim];
+        let reduce_dim_stride = layout.stride()[self.dim];
+        let dst_len: usize = layout
+            .dims()
+            .iter()
+            .enumerate()
+            .map(|(i, x)| if i == self.dim { self.k } else { *x })
+            .product();
+
+        let mut dst: Vec<U> = Vec::with_capacity(dst_len);
+        let dst_to_set = dst.spare_capacity_mut();
+        let dst_to_set = unsafe { std::mem::transmute::<_, &mut [U]>(dst_to_set) };
+
+        match layout.contiguous_offsets() {
+            Some((o1, o2)) => {
+                let src = &src[o1..o2];
+                if reduce_dim_stride == 1 {
+                    for start_src_i in 0..dst_len / self.k {
+                        let dst_start = start_src_i;
+                        let start_src_i = start_src_i * reduce_dim_size;
+                        let src = &src[start_src_i..start_src_i + reduce_dim_size];
+
+                        let mut heap: Vec<(T, usize)> = Vec::with_capacity(self.k);
+                        for (src_i, &s) in src.iter().enumerate() {
+                            Self::heap_insert((s, src_i), &mut heap, &f);
+                        }
+                        for k_offset in 0..self.k {
+                            let (_, index) =
+                                unsafe { Self::heap_pop(&mut heap, &f).unwrap_unchecked() };
+                            let dst_idx =
+                                ((dst_start / reduce_dim_stride) * reduce_dim_stride * self.k)
+                                    + (dst_start % reduce_dim_stride)
+                                    + (k_offset * reduce_dim_stride);
+
+                            dst_to_set[dst_idx] = g(index);
+                        }
+                    }
+                } else {
+                    for start_src_i in 0..dst_len / self.k {
+                        let dst_start = start_src_i;
+                        let (p, q) = (
+                            start_src_i / reduce_dim_stride,
+                            start_src_i % reduce_dim_stride,
+                        );
+
+                        let start_src_i = p * reduce_dim_stride * reduce_dim_size + q;
+                        let src = &src[start_src_i..];
+
+                        let mut heap: Vec<(T, usize)> = Vec::with_capacity(self.k);
+                        for src_i in 0..reduce_dim_size {
+                            let s = src[src_i * reduce_dim_stride];
+
+                            Self::heap_insert((s, src_i), &mut heap, &f);
+                        }
+
+                        for k_offset in 0..self.k {
+                            let (_, index) =
+                                unsafe { Self::heap_pop(&mut heap, &f).unwrap_unchecked() };
+                            let dst_idx =
+                                ((dst_start / reduce_dim_stride) * reduce_dim_stride * self.k)
+                                    + (dst_start % reduce_dim_stride)
+                                    + (k_offset * reduce_dim_stride);
+
+                            dst_to_set[dst_idx] = g(index);
+                        }
+                    }
+                }
+            }
+            None => {
+                // needs testing...
+                let l = layout.narrow(self.dim, 0, 1)?;
+                for (_, src_index) in l.strided_index().enumerate() {
+                    let dst_start = src_index;
+                    let src = &src[src_index..];
+
+                    let mut heap: Vec<(T, usize)> = Vec::with_capacity(self.k);
+                    for src_i in 0..reduce_dim_size {
+                        let s = src[src_i * reduce_dim_stride];
+                        Self::heap_insert((s, src_i), &mut heap, &f);
+                    }
+                    for k_offset in 0..self.k {
+                        let (_, index) =
+                            unsafe { Self::heap_pop(&mut heap, &f).unwrap_unchecked() };
+                        let dst_idx =
+                            ((dst_start / reduce_dim_stride) * reduce_dim_stride * self.k)
+                                + (dst_start % reduce_dim_stride)
+                                + (k_offset * reduce_dim_stride);
+
+                        dst_to_set[dst_idx] = g(index);
+                    }
+                }
+            }
+        }
+        unsafe { dst.set_len(dst_len) };
+        Ok(dst)
+    }
+}
+
+impl Map1Any for TopK {
+    #[inline(always)]
+    fn f<T: WithDType, W: Fn(Vec<T>) -> CpuStorage>(
+        &self,
+        src: &[T],
+        layout: &Layout,
+        _: W,
+    ) -> Result<CpuStorage> {
+        let dst = match self.largest {
+            false => {
+                CpuStorage::U32(self.find_topk(src, layout, |x, y| x < y, |x: usize| x as u32)?)
+            }
+            true => {
+                CpuStorage::U32(self.find_topk(src, layout, |x, y| x > y, |x: usize| x as u32)?)
+            }
+        };
+        Ok(dst)
+    }
+}
+
 impl CpuStorage {
     pub fn as_slice<D: WithDType>(&self) -> Result<&[D]> {
         D::cpu_storage_as_slice(self)
@@ -2659,6 +2862,10 @@ impl BackendStorage for CpuStorage {
 
     fn to_cpu_storage(&self) -> Result<CpuStorage> {
         Ok(self.clone())
+    }
+
+    fn topk(&self, layout: &Layout, k: usize, dim: usize, largest: bool) -> Result<Self> {
+        TopK { k, dim, largest }.map(self, layout)
     }
 }
 

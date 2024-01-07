@@ -1271,6 +1271,10 @@ impl BackendStorage for MetalStorage {
         }
         Ok(())
     }
+
+    fn topk(&self, _: &Layout, _: usize, _: usize) -> Result<Self> {
+        crate::bail!("Metal topk not implemented")
+    }
 }
 
 impl MetalStorage {

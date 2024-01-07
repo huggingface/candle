@@ -146,6 +146,14 @@ pub enum Op {
         mul: f64,
         add: f64,
     },
+
+    TopK {
+        arg: Tensor,
+        k: usize,
+        dim: usize,
+        largest: bool,
+    },
+
     ToDType(Tensor),
     Copy(Tensor),
     Broadcast(Tensor),
