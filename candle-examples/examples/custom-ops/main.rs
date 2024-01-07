@@ -6,6 +6,7 @@
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+#[rustfmt::skip]
 #[cfg(feature = "cuda")]
 mod cuda_kernels;
 
