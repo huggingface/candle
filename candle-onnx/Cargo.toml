@@ -20,4 +20,3 @@ prost-build = "0.12.1"
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
 clap = { version = "4.2.4", features = ["derive"] }
-
