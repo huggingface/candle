@@ -15,9 +15,9 @@ candle = { path = "../candle-core", features = ["cuda"], package = "candle-core"
 half = { version = "2.3.1", features = ["num-traits"] }
 
 [build-dependencies]
+bindgen_cuda = "0.1.1"
 anyhow = { version = "1", features = ["backtrace"] }
-num_cpus = "1.15.0"
-rayon = "1.7.0"
+
 
 [dev-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
