@@ -384,7 +384,6 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
             for j in 0..QK_K / 64 {
                 let q4bits = vld1q_u8_x2(q4);
                 q4 = q4.add(32);
-                // TODO: dotprod
                 let q8bytes = vld1q_s8_x2(q8);
                 q8 = q8.add(32);
                 let q4bytes = int8x16x2_t(
@@ -624,14 +623,7 @@ unsafe fn multiply_accum_with_scale(
     q2bytes: int8x16x2_t,
     q8bytes: int8x16x2_t,
 ) -> i32 {
-    let p1 = vaddq_s16(
-        vmull_s8(vget_low_s8(q2bytes.0), vget_low_s8(q8bytes.0)),
-        vmull_s8(vget_high_s8(q2bytes.0), vget_high_s8(q8bytes.0)),
-    );
-    let p2 = vaddq_s16(
-        vmull_s8(vget_low_s8(q2bytes.1), vget_low_s8(q8bytes.1)),
-        vmull_s8(vget_high_s8(q2bytes.1), vget_high_s8(q8bytes.1)),
-    );
-    vaddvq_s16(p1) as i32 * aux[is + index] as i32
-        + vaddvq_s16(p2) as i32 * aux[is + 1 + index] as i32
+    let p1 = vdotq_s32(q2bytes.0, q8bytes.0);
+    let p2 = vdotq_s32(q2bytes.1, q8bytes.1);
+    vaddvq_s32(p1) * aux[is + index] as i32 + vaddvq_s32(p2) * aux[is + 1 + index] as i32
 }
