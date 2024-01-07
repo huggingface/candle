@@ -120,7 +120,7 @@ UNARY(id, uint32_t, copy_u32, copy_u32_strided)
 UNARY(id, int64_t, copy_i64, copy_i64_strided)
 #endif
 
-#if __METAL_VERSION__ >= 310
+#if defined(__HAVE_BFLOAT__)
 BFLOAT_UNARY_OP(cos)
 BFLOAT_UNARY_OP(sin)
 BFLOAT_UNARY_OP(sqr)
