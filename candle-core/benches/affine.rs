@@ -11,14 +11,13 @@ fn run(a: &Tensor) {
 
 fn run_affine_benchmark(c: &mut Criterion, dtype: DType, name: &str) {
     let b = 1;
-    let m = 1;
-    let n = 2048;
-    let k = 2048;
+    let m = 1024;
+    let k = 1024;
 
     let device = device().unwrap();
     let tensor = Tensor::zeros((b, m, k), dtype, &device).unwrap();
 
-    let flops = b * m * n * k;
+    let flops = b * m * k * dtype.size_in_bytes();
 
     let mut group = c.benchmark_group(bench_name(name));
     group.throughput(Throughput::Bytes(flops as u64));
