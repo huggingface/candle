@@ -105,7 +105,7 @@ INT64_BINARY_OP_OUT(ge, x >= y)
 INT64_BINARY_OP_OUT(gt, x > y)
 #endif
 
-#if __METAL_VERSION__ >= 310
+#if defined(__HAVE_BFLOAT__)
 BFLOAT_BINARY_OP(x + y, add)
 BFLOAT_BINARY_OP(x - y, sub)
 BFLOAT_BINARY_OP(x * y, mul)

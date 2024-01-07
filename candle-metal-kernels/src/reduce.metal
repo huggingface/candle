@@ -295,7 +295,7 @@ ARGMIN(fast_argmin_i64_strided, int64_t, INT_MAX)
 ARGMAX(fast_argmax_i64_strided, int64_t, INT_MIN)
 #endif
 
-#if __METAL_VERSION__ >= 310
+#if defined(__HAVE_BFLOAT__)
 REDUCE(x + y, fast_sum_bf16, bfloat, 0)
 REDUCE(x * y, fast_mul_bf16, bfloat, 1)
 REDUCE(MAX(x, y), fast_max_bf16, bfloat, -HUGE_VALBF)
