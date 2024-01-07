@@ -49,3 +49,7 @@ metal = ["dep:metal", "dep:candle-metal-kernels"]
 name = "matmul"
 harness = false
 
+[[bench]]
+name = "affine"
+harness = false
+

@@ -5,36 +5,40 @@ use candle_core::{DType, Tensor};
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use std::time::Instant;
 
-fn run(a: &Tensor, b: &Tensor) {
-    a.matmul(&b.t().unwrap()).unwrap();
+fn run(a: &Tensor) {
+    a.affine(12.34, 56.78).unwrap();
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn run_affine_benchmark(c: &mut Criterion, dtype: DType, name: &str) {
     let b = 1;
     let m = 1;
     let n = 2048;
     let k = 2048;
 
     let device = device().unwrap();
-    let dtype = DType::F32;
-    let lhs = Tensor::zeros((b, m, k), dtype, &device).unwrap();
-    let rhs = Tensor::zeros((b, n, k), dtype, &device).unwrap();
+    let tensor = Tensor::zeros((b, m, k), dtype, &device).unwrap();
 
     let flops = b * m * n * k;
 
-    let mut group = c.benchmark_group(bench_name("matmul"));
+    let mut group = c.benchmark_group(bench_name(name));
     group.throughput(Throughput::Bytes(flops as u64));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {
             let start = Instant::now();
             for _i in 0..iters {
-                run(black_box(&lhs), black_box(&rhs));
+                run(black_box(&tensor));
             }
             device.sync().unwrap();
             start.elapsed()
         })
     });
     group.finish();
+}
+
+fn criterion_benchmark(c: &mut Criterion) {
+    run_affine_benchmark(c, DType::F32, "affine_f32");
+    run_affine_benchmark(c, DType::F16, "affine_f16");
+    run_affine_benchmark(c, DType::BF16, "affine_bf16");
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -17,19 +17,19 @@ METAL_FUNC uint get_strided_index(
 
 using namespace metal;
 
-#define AFFINE(FN_NAME, TYPENAME) \
+#define AFFINE(FN_NAME, T) \
 kernel void FN_NAME( \
     constant size_t &dim, \
     constant float &mul, \
     constant float &add, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
+    device const T *input,  \
+    device T *output, \
     uint id [[ thread_position_in_grid ]] \
 ) { \
     if (id >= dim) { \
         return; \
     } \
-    output[id] = TYPENAME(float(input[id]) * mul + add); \
+    output[id] = T(fma(float(input[id]), mul, add)); \
 } \
 kernel void FN_NAME##_strided( \
     constant size_t &dim, \
@@ -38,14 +38,14 @@ kernel void FN_NAME##_strided( \
     constant size_t *strides, \
     constant float &mul, \
     constant float &add, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
+    device const T *input,  \
+    device T *output, \
     uint id [[ thread_position_in_grid ]] \
 ) { \
     if (id >= dim) { \
         return; \
     } \
-    output[id] = TYPENAME(float(input[get_strided_index(id, num_dims, dims, strides)]) * mul + add); \
+    output[id] = T(fma(float(input[get_strided_index(id, num_dims, dims, strides)]), mul, add)); \
 }
 
 #define POWF(FN_NAME, TYPENAME) \
