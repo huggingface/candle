@@ -37,8 +37,7 @@ fn approx_bf16(v: Vec<bf16>, digits: i32) -> Vec<f32> {
 
 fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
@@ -60,8 +59,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
 
 fn run_binary<T: Clone>(x: &[T], y: &[T], name: binary::contiguous::Kernel) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let options = MTLResourceOptions::StorageModeManaged;
@@ -96,8 +94,7 @@ fn run_strided<T: Clone>(
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     call_unary_strided(
         &device,
         command_buffer,
@@ -250,8 +247,7 @@ fn binary_add_f32() {
 
 fn cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
@@ -298,8 +294,7 @@ fn cast_u32_f32() {
 
 fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
 
@@ -334,8 +329,7 @@ fn run_affine_strided<T: Clone>(
     add: f64,
 ) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
 
@@ -463,8 +457,7 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
         _ => unimplemented!(),
     };
 
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     call_index_select(
         &device,
         &command_buffer,
@@ -499,8 +492,7 @@ fn cos_f16() {
 
 fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
@@ -530,8 +522,7 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
 
 fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'static str) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
@@ -650,8 +641,7 @@ fn run_where_cond<I: Clone, T: Clone>(
     name: &'static str,
 ) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let options = MTLResourceOptions::StorageModeManaged;
@@ -727,8 +717,7 @@ fn run_gemm<T: Clone>(
     rhs_offset: usize,
 ) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let options = MTLResourceOptions::StorageModeManaged;

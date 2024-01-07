@@ -234,13 +234,14 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let config = Config::stablelm_3b_4e1t(args.use_flash_attn);
+    let device = candle_examples::device(args.cpu)?;
     let (model, device) = if args.quantized {
         let filename = &filenames[0];
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename)?;
+        let vb =
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
         let model = QStableLM::new(&config, vb)?;
         (Model::Quantized(model), Device::Cpu)
     } else {
-        let device = candle_examples::device(args.cpu)?;
         let dtype = if device.is_cuda() {
             DType::BF16
         } else {
