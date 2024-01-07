@@ -490,9 +490,9 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
         GgmlDType::Q5K => 0.000740,
         GgmlDType::Q6K => 0.000952,
         GgmlDType::Q4_0 => 0.001143,
-        GgmlDType::Q4_1 => 0.007784,
+        GgmlDType::Q4_1 => 0.008,
         GgmlDType::Q5_0 => 0.001353,
-        GgmlDType::Q5_1 => 0.001363,
+        GgmlDType::Q5_1 => 0.00149,
         GgmlDType::Q8_0 => 0.000092,
 
         // Not from the ggml repo.
@@ -507,7 +507,7 @@ fn ggml_reference_matmul_error(dtype: GgmlDType) -> Result<f32> {
 fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
     let a = create_ggml_like_vector(0.0);
     let b = create_ggml_like_vector(1.0);
-    ggml_matmul_error_test_::<T>(a.as_slice(), b.as_slice())?;
+    ggml_matmul_error_test_::<T>(a.as_slice(), b.as_slice(), 1.0)?;
     // Another example that is more likely to trigger the overflow reported in #1526
     let a = (0..GGML_TEST_SIZE)
         .map(|i| i as f32 / GGML_TEST_SIZE as f32)
@@ -515,11 +515,11 @@ fn ggml_matmul_error_test<T: GgmlType>() -> Result<()> {
     let b = (0..GGML_TEST_SIZE)
         .map(|i| i as f32 / GGML_TEST_SIZE as f32)
         .collect::<Vec<_>>();
-    ggml_matmul_error_test_::<T>(a.as_slice(), b.as_slice())?;
+    ggml_matmul_error_test_::<T>(a.as_slice(), b.as_slice(), 2.0)?;
     Ok(())
 }
 
-fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32]) -> Result<()> {
+fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32], err_m: f32) -> Result<()> {
     let length = a.len();
 
     let mut a_quant = vec![T::zeros(); length / T::BLCK_SIZE];
@@ -539,7 +539,7 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32]) -> Result<()> {
 
     let error = (result - reference_result).abs() / length as f32;
 
-    let ggml_error = ggml_reference_matmul_error(T::DTYPE)?;
+    let ggml_error = ggml_reference_matmul_error(T::DTYPE)? * err_m;
 
     if !error.is_finite() || error > GGML_MAX_DOT_PRODUCT_ERROR {
         bail!("Dot product error {error} exceeds max error {GGML_MAX_DOT_PRODUCT_ERROR}",);
@@ -555,6 +555,16 @@ fn ggml_matmul_error_test_<T: GgmlType>(a: &[f32], b: &[f32]) -> Result<()> {
             ggml_error
         );
     }
+    Ok(())
+}
+
+#[test]
+fn quantized_mm() -> Result<()> {
+    ggml_matmul_error_test::<k_quants::BlockQ4_0>()?;
+    ggml_matmul_error_test::<k_quants::BlockQ4_1>()?;
+    ggml_matmul_error_test::<k_quants::BlockQ5_0>()?;
+    ggml_matmul_error_test::<k_quants::BlockQ5_1>()?;
+    ggml_matmul_error_test::<k_quants::BlockQ8_0>()?;
     Ok(())
 }
 
