@@ -199,29 +199,16 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
                 let q6bytes_2 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.2, m4b), q6h_2));
                 let q6bytes_3 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.3, m4b), q6h_3));
 
-                // TODO: dotprod
-                let p0 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q6bytes_0), vget_low_s8(q8bytes.0)),
-                    vmull_s8(vget_high_s8(q6bytes_0), vget_high_s8(q8bytes.0)),
-                );
-                let p1 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q6bytes_1), vget_low_s8(q8bytes.1)),
-                    vmull_s8(vget_high_s8(q6bytes_1), vget_high_s8(q8bytes.1)),
-                );
+                let p0 = vdotq_s32(q6bytes_0, q8bytes.0);
+                let p1 = vdotq_s32(q6bytes_1, q8bytes.1);
                 let (scale0, scale1) = (*scale as i32, *scale.add(1) as i32);
-                isum += vaddvq_s16(p0) as i32 * scale0 + vaddvq_s16(p1) as i32 * scale1;
+                isum += vaddvq_s32(p0) * scale0 + vaddvq_s32(p1) * scale1;
                 scale = scale.add(2);
 
-                let p2 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q6bytes_2), vget_low_s8(q8bytes.2)),
-                    vmull_s8(vget_high_s8(q6bytes_2), vget_high_s8(q8bytes.2)),
-                );
-                let p3 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q6bytes_3), vget_low_s8(q8bytes.3)),
-                    vmull_s8(vget_high_s8(q6bytes_3), vget_high_s8(q8bytes.3)),
-                );
+                let p2 = vdotq_s32(q6bytes_2, q8bytes.2);
+                let p3 = vdotq_s32(q6bytes_3, q8bytes.3);
                 let (scale0, scale1) = (*scale as i32, *scale.add(1) as i32);
-                isum += vaddvq_s16(p2) as i32 * scale0 + vaddvq_s16(p3) as i32 * scale1;
+                isum += vaddvq_s32(p2) * scale0 + vaddvq_s32(p3) * scale1;
                 scale = scale.add(2);
 
                 let q8bytes = vld1q_s8_x4(q8);
@@ -241,29 +228,16 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
                 let q6bytes_2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.2, 4), q6h_2));
                 let q6bytes_3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6bits.3, 4), q6h_3));
 
-                // TODO: dotprod case.
-                let p0 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q6bytes_0), vget_low_s8(q8bytes.0)),
-                    vmull_s8(vget_high_s8(q6bytes_0), vget_high_s8(q8bytes.0)),
-                );
-                let p1 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q6bytes_1), vget_low_s8(q8bytes.1)),
-                    vmull_s8(vget_high_s8(q6bytes_1), vget_high_s8(q8bytes.1)),
-                );
+                let p0 = vdotq_s32(q6bytes_0, q8bytes.0);
+                let p1 = vdotq_s32(q6bytes_1, q8bytes.1);
                 let (scale0, scale1) = (*scale as i32, *scale.add(1) as i32);
-                isum += vaddvq_s16(p0) as i32 * scale0 + vaddvq_s16(p1) as i32 * scale1;
+                isum += vaddvq_s32(p0) * scale0 + vaddvq_s32(p1) * scale1;
                 scale = scale.add(2);
 
-                let p2 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q6bytes_2), vget_low_s8(q8bytes.2)),
-                    vmull_s8(vget_high_s8(q6bytes_2), vget_high_s8(q8bytes.2)),
-                );
-                let p3 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q6bytes_3), vget_low_s8(q8bytes.3)),
-                    vmull_s8(vget_high_s8(q6bytes_3), vget_high_s8(q8bytes.3)),
-                );
+                let p2 = vdotq_s32(q6bytes_2, q8bytes.2);
+                let p3 = vdotq_s32(q6bytes_3, q8bytes.3);
                 let (scale0, scale1) = (*scale as i32, *scale.add(1) as i32);
-                isum += vaddvq_s16(p2) as i32 * scale0 + vaddvq_s16(p3) as i32 * scale1;
+                isum += vaddvq_s32(p2) * scale0 + vaddvq_s32(p3) * scale1;
                 scale = scale.add(2);
             }
             sum += d_all * y.d * ((isum - 32 * isum_mins) as f32);
