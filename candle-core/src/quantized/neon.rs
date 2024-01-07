@@ -13,6 +13,14 @@ use core::arch::arm::*;
 use core::arch::aarch64::*;
 
 #[inline(always)]
+unsafe fn vdotq_s32(a: int8x16_t, b: int8x16_t) -> int32x4_t {
+    // TODO: dotprod
+    let p0 = vmull_s8(vget_low_s8(a), vget_low_s8(b));
+    let p1 = vmull_s8(vget_high_s8(a), vget_high_s8(b));
+    vaddq_s32(vpaddlq_s16(p0), vpaddlq_s16(p1))
+}
+
+#[inline(always)]
 pub(crate) fn vec_dot_q4_0_q8_0(n: usize, xs: &[BlockQ4_0], ys: &[BlockQ8_0]) -> Result<f32> {
     let qk = QK8_0;
     let nb = n / qk;
@@ -192,7 +200,6 @@ pub(crate) fn vec_dot_q6k_q8k(n: usize, xs: &[BlockQ6K], ys: &[BlockQ8K]) -> Res
                 let q6bytes_3 = vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6bits.3, m4b), q6h_3));
 
                 // TODO: dotprod
-
                 let p0 = vaddq_s16(
                     vmull_s8(vget_low_s8(q6bytes_0), vget_low_s8(q8bytes.0)),
                     vmull_s8(vget_high_s8(q6bytes_0), vget_high_s8(q8bytes.0)),
@@ -333,28 +340,14 @@ pub(crate) fn vec_dot_q5k_q8k(n: usize, xs: &[BlockQ5K], ys: &[BlockQ8K]) -> Res
                 let q5bytes_2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q5bits.0, 4), q5h_2));
                 let q5bytes_3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q5bits.1, 4), q5h_3));
 
-                // TODO: dotprod
-
-                let p0 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q5bytes_0), vget_low_s8(q8bytes.0)),
-                    vmull_s8(vget_high_s8(q5bytes_0), vget_high_s8(q8bytes.0)),
-                );
-                let p1 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q5bytes_1), vget_low_s8(q8bytes.1)),
-                    vmull_s8(vget_high_s8(q5bytes_1), vget_high_s8(q8bytes.1)),
-                );
-                sumi += vaddvq_s16(vaddq_s16(p0, p1)) as i32 * *scales as i32;
+                let p0 = vdotq_s32(q5bytes_0, q8bytes.0);
+                let p1 = vdotq_s32(q5bytes_1, q8bytes.1);
+                sumi += vaddvq_s32(vaddq_s32(p0, p1)) * *scales as i32;
                 scales = scales.add(1);
 
-                let p2 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q5bytes_2), vget_low_s8(q8bytes.2)),
-                    vmull_s8(vget_high_s8(q5bytes_2), vget_high_s8(q8bytes.2)),
-                );
-                let p3 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q5bytes_3), vget_low_s8(q8bytes.3)),
-                    vmull_s8(vget_high_s8(q5bytes_3), vget_high_s8(q8bytes.3)),
-                );
-                sumi += vaddvq_s16(vaddq_s16(p2, p3)) as i32 * *scales as i32;
+                let p2 = vdotq_s32(q5bytes_2, q8bytes.2);
+                let p3 = vdotq_s32(q5bytes_3, q8bytes.3);
+                sumi += vaddvq_s32(vaddq_s32(p2, p3)) * *scales as i32;
                 scales = scales.add(1);
             }
             sumf += d * sumi as f32 - dmin * sumi_mins as f32;
@@ -424,14 +417,8 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
                     vreinterpretq_s8_u8(vandq_u8(q4bits.0, m4b)),
                     vreinterpretq_s8_u8(vandq_u8(q4bits.1, m4b)),
                 );
-                let p0 = vaddq_s32(
-                    vpaddlq_s16(vmull_s8(vget_low_s8(q4bytes.0), vget_low_s8(q8bytes.0))),
-                    vpaddlq_s16(vmull_s8(vget_high_s8(q4bytes.0), vget_high_s8(q8bytes.0))),
-                );
-                let p1 = vaddq_s32(
-                    vpaddlq_s16(vmull_s8(vget_low_s8(q4bytes.1), vget_low_s8(q8bytes.1))),
-                    vpaddlq_s16(vmull_s8(vget_high_s8(q4bytes.1), vget_high_s8(q8bytes.1))),
-                );
+                let p0 = vdotq_s32(q4bytes.0, q8bytes.0);
+                let p1 = vdotq_s32(q4bytes.1, q8bytes.1);
                 sumi1 += vaddvq_s32(vaddq_s32(p0, p1)) * scales[2 * j] as i32;
 
                 let q8bytes = vld1q_s8_x2(q8);
@@ -440,14 +427,8 @@ pub(crate) fn vec_dot_q4k_q8k(n: usize, xs: &[BlockQ4K], ys: &[BlockQ8K]) -> Res
                     vreinterpretq_s8_u8(vshrq_n_u8(q4bits.0, 4)),
                     vreinterpretq_s8_u8(vshrq_n_u8(q4bits.1, 4)),
                 );
-                let p2 = vaddq_s32(
-                    vpaddlq_s16(vmull_s8(vget_low_s8(q4bytes.0), vget_low_s8(q8bytes.0))),
-                    vpaddlq_s16(vmull_s8(vget_high_s8(q4bytes.0), vget_high_s8(q8bytes.0))),
-                );
-                let p3 = vaddq_s32(
-                    vpaddlq_s16(vmull_s8(vget_low_s8(q4bytes.1), vget_low_s8(q8bytes.1))),
-                    vpaddlq_s16(vmull_s8(vget_high_s8(q4bytes.1), vget_high_s8(q8bytes.1))),
-                );
+                let p2 = vdotq_s32(q4bytes.0, q8bytes.0);
+                let p3 = vdotq_s32(q4bytes.1, q8bytes.1);
                 sumi2 += vaddvq_s32(vaddq_s32(p2, p3)) * scales[2 * j + 1] as i32;
             }
             sumf += d * (sumi1 + sumi2) as f32;
@@ -526,27 +507,14 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
                     vreinterpretq_s8_u8(q3h_3),
                 );
 
-                // TODO: dotprod
-                let p0 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q3bytes_0), vget_low_s8(q8bytes_1.0)),
-                    vmull_s8(vget_high_s8(q3bytes_0), vget_high_s8(q8bytes_1.0)),
-                );
-                let p1 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q3bytes_1), vget_low_s8(q8bytes_1.1)),
-                    vmull_s8(vget_high_s8(q3bytes_1), vget_high_s8(q8bytes_1.1)),
-                );
-                let p2 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q3bytes_2), vget_low_s8(q8bytes_1.2)),
-                    vmull_s8(vget_high_s8(q3bytes_2), vget_high_s8(q8bytes_1.2)),
-                );
-                let p3 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q3bytes_3), vget_low_s8(q8bytes_1.3)),
-                    vmull_s8(vget_high_s8(q3bytes_3), vget_high_s8(q8bytes_1.3)),
-                );
-                isum += vaddvq_s16(p0) as i32 * *scale as i32
-                    + vaddvq_s16(p1) as i32 * *scale.add(1) as i32
-                    + vaddvq_s16(p2) as i32 * *scale.add(2) as i32
-                    + vaddvq_s16(p3) as i32 * *scale.add(3) as i32;
+                let p0 = vdotq_s32(q3bytes_0, q8bytes_1.0);
+                let p1 = vdotq_s32(q3bytes_1, q8bytes_1.1);
+                let p2 = vdotq_s32(q3bytes_2, q8bytes_1.2);
+                let p3 = vdotq_s32(q3bytes_3, q8bytes_1.3);
+                isum += vaddvq_s32(p0) * *scale as i32
+                    + vaddvq_s32(p1) * *scale.add(1) as i32
+                    + vaddvq_s32(p2) * *scale.add(2) as i32
+                    + vaddvq_s32(p3) * *scale.add(3) as i32;
                 scale = scale.add(4);
 
                 let q3h_0 = vbicq_u8(m2, qhbits.0);
@@ -571,27 +539,14 @@ pub(crate) fn vec_dot_q3k_q8k(n: usize, xs: &[BlockQ3K], ys: &[BlockQ8K]) -> Res
                     vreinterpretq_s8_u8(q3h_3),
                 );
 
-                // TODO: dotprod
-                let p0 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q3bytes_0), vget_low_s8(q8bytes_2.0)),
-                    vmull_s8(vget_high_s8(q3bytes_0), vget_high_s8(q8bytes_2.0)),
-                );
-                let p1 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q3bytes_1), vget_low_s8(q8bytes_2.1)),
-                    vmull_s8(vget_high_s8(q3bytes_1), vget_high_s8(q8bytes_2.1)),
-                );
-                let p2 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q3bytes_2), vget_low_s8(q8bytes_2.2)),
-                    vmull_s8(vget_high_s8(q3bytes_2), vget_high_s8(q8bytes_2.2)),
-                );
-                let p3 = vaddq_s16(
-                    vmull_s8(vget_low_s8(q3bytes_3), vget_low_s8(q8bytes_2.3)),
-                    vmull_s8(vget_high_s8(q3bytes_3), vget_high_s8(q8bytes_2.3)),
-                );
-                isum += vaddvq_s16(p0) as i32 * *scale as i32
-                    + vaddvq_s16(p1) as i32 * *scale.add(1) as i32
-                    + vaddvq_s16(p2) as i32 * *scale.add(2) as i32
-                    + vaddvq_s16(p3) as i32 * *scale.add(3) as i32;
+                let p0 = vdotq_s32(q3bytes_0, q8bytes_2.0);
+                let p1 = vdotq_s32(q3bytes_1, q8bytes_2.1);
+                let p2 = vdotq_s32(q3bytes_2, q8bytes_2.2);
+                let p3 = vdotq_s32(q3bytes_3, q8bytes_2.3);
+                isum += vaddvq_s32(p0) * *scale as i32
+                    + vaddvq_s32(p1) * *scale.add(1) as i32
+                    + vaddvq_s32(p2) * *scale.add(2) as i32
+                    + vaddvq_s32(p3) * *scale.add(3) as i32;
                 scale = scale.add(4);
 
                 if j == 0 {
@@ -649,7 +604,6 @@ pub(crate) fn vec_dot_q2k_q8k(n: usize, xs: &[BlockQ2K], ys: &[BlockQ8K]) -> Res
             let mut is = 0usize;
 
             // TODO: dotprod
-
             for _j in 0..QK_K / 128 {
                 let q2bits = vld1q_u8_x2(q2);
                 q2 = q2.add(32);
