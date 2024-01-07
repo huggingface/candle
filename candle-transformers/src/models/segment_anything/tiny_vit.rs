@@ -28,7 +28,7 @@ impl Conv2dBN {
 impl Module for Conv2dBN {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        xs.apply(&self.c)?.apply(&self.bn)
+        xs.apply(&self.c)?.apply_t(&self.bn, false)
     }
 }
 

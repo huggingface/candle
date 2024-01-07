@@ -29,7 +29,7 @@ e.g.:
 
 ```bash
 cargo run --example stable-diffusion --release --features=cuda,cudnn \
-    -- --prompt "a cosmonaut on a horse (hd, realistic, high-def) --sd-version turbo"
+    -- --prompt "a cosmonaut on a horse (hd, realistic, high-def)" --sd-version turbo
 ```
 
 The default scheduler for the v1.5, v2.1 and XL 1.0 version is the Denoising

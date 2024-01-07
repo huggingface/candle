@@ -263,24 +263,38 @@ kernel void NAME(                                                               
 REDUCE(x + y, fast_sum_f32_strided, float, 0)
 REDUCE(x + y, fast_sum_u32_strided, uint, 0)
 REDUCE(x + y, fast_sum_f16_strided, half, 0)
+REDUCE(x + y, fast_sum_u8_strided, uint8_t, 0)
 REDUCE(x * y, fast_mul_f32_strided, float, 1)
 REDUCE(x * y, fast_mul_u32_strided, uint, 1)
 REDUCE(x * y, fast_mul_f16_strided, half, 1)
 REDUCE(MAX(x, y), fast_max_f32_strided, float, -HUGE_VALF)
 REDUCE(MAX(x, y), fast_max_u32_strided, uint, 0)
 REDUCE(MAX(x, y), fast_max_f16_strided, half, -HUGE_VALH)
+REDUCE(MAX(x, y), fast_max_u8_strided, uint8_t, 0)
 REDUCE(MIN(x, y), fast_min_f32_strided, float, HUGE_VALF)
 REDUCE(MIN(x, y), fast_min_u32_strided, uint, 0xFFFFFFFF)
 REDUCE(MIN(x, y), fast_min_f16_strided, half, HUGE_VALH)
+REDUCE(MIN(x, y), fast_min_u8_strided, uint8_t, 0xFF)
 ARGMIN(fast_argmin_f32_strided, float, HUGE_VALF)
 ARGMIN(fast_argmin_f16_strided, half, HUGE_VALH)
 ARGMIN(fast_argmin_u32_strided, uint, 0xFFFFFFFF)
+ARGMIN(fast_argmin_u8_strided, uint8_t, 0xFF)
 ARGMAX(fast_argmax_f32_strided, float, -HUGE_VALF)
 ARGMAX(fast_argmax_f16_strided, half, -HUGE_VALH)
 ARGMAX(fast_argmax_u32_strided, uint, 0)
+ARGMAX(fast_argmax_u8_strided, uint8_t, 0)
 
 SOFTMAX(softmax_f32, float)
 SOFTMAX(softmax_f16, half)
+
+#if __METAL_VERSION__ >= 220
+REDUCE(x + y, fast_sum_i64_strided, int64_t, 0)
+REDUCE(MIN(x, y), fast_min_i64_strided, int64_t, INT_MAX)
+REDUCE(MAX(x, y), fast_max_i64_strided, int64_t, INT_MIN)
+ARGMIN(fast_argmin_i64_strided, int64_t, INT_MAX)
+ARGMAX(fast_argmax_i64_strided, int64_t, INT_MIN)
+#endif
+
 #if __METAL_VERSION__ >= 310
 REDUCE(x + y, fast_sum_bf16, bfloat, 0)
 REDUCE(x * y, fast_mul_bf16, bfloat, 1)
