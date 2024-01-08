@@ -40,6 +40,7 @@ impl LlamaConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct Config {
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -310,6 +311,11 @@ impl CausalSelfAttention {
             span_rot,
         })
     }
+
+    fn clear_cache(&mut self, config: &Config) {
+        self.cache.masks = Arc::new(Mutex::new(HashMap::new()));
+        self.cache.kvs = Arc::new(Mutex::new(vec![None; config.num_hidden_layers]));
+    }
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
@@ -393,6 +399,7 @@ pub struct Llama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Linear,
+    cfg: Config,
 }
 
 impl Llama {
@@ -421,6 +428,17 @@ impl Llama {
             blocks,
             ln_f,
             lm_head,
+            cfg: cfg.clone(),
         })
+    }
+
+    pub fn clear_cache(&mut self, config: &Config) {
+        for block in &mut self.blocks {
+            block.attn.clear_cache(config);
+        }
+    }
+
+    pub fn get_config(&self) -> &Config {
+        &self.cfg
     }
 }
