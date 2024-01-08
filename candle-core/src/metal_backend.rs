@@ -8,7 +8,7 @@ use metal;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, RwLock, TryLockError};
+use std::sync::{Arc, Mutex, RwLock, TryLockError};
 
 /// Simple way to catch lock error without
 /// depending on T
@@ -106,6 +106,8 @@ pub struct MetalDevice {
     /// Whenever we actually allocate a new buffer, we make a full sweep to cleanup unused buffers
     /// (strong_count = 1).
     buffers: AllocatedBuffers,
+    /// Seed for random number generation.
+    seed: Arc<Mutex<u64>>,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -1483,6 +1485,7 @@ impl BackendDevice for MetalDevice {
             Ok(val) => val.parse()?,
             _ => 20,
         };
+        let seed = Arc::new(Mutex::new(299792458));
         Ok(Self {
             device,
             fence,
@@ -1492,11 +1495,8 @@ impl BackendDevice for MetalDevice {
             compute_per_buffer,
             buffers,
             kernels,
+            seed,
         })
-    }
-
-    fn set_seed(&self, _seed: u64) -> Result<()> {
-        crate::bail!("Metal set_seed not implemented")
     }
 
     fn location(&self) -> crate::DeviceLocation {
@@ -1551,12 +1551,31 @@ impl BackendDevice for MetalDevice {
         &self,
         shape: &Shape,
         dtype: DType,
-        mean: f64,
-        stddev: f64,
+        min: f64,
+        max: f64,
     ) -> Result<Self::Storage> {
-        // TODO is there a better way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.rand_uniform(shape, dtype, mean, stddev)?;
-        self.storage_from_cpu_storage(&cpu_storage)
+        let name = match dtype {
+            DType::F32 => "rand_uniform_f32",
+            DType::F16 => "rand_uniform_f16",
+            DType::BF16 => "rand_uniform_bf16",
+            dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
+        };
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_uniform")?;
+        let command_buffer = self.command_buffer()?;
+        candle_metal_kernels::call_random_uniform(
+            &self.device,
+            &command_buffer,
+            &self.kernels,
+            name,
+            *self.seed.lock().unwrap(),
+            min as f32,
+            max as f32,
+            shape.elem_count(),
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(Self::Storage::new(buffer, self.clone(), dtype))
     }
 
     fn rand_normal(
@@ -1566,9 +1585,34 @@ impl BackendDevice for MetalDevice {
         mean: f64,
         stddev: f64,
     ) -> Result<Self::Storage> {
-        // TODO is there a better way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.rand_normal(shape, dtype, mean, stddev)?;
-        self.storage_from_cpu_storage(&cpu_storage)
+        let name = match dtype {
+            DType::F32 => "rand_normal_f32",
+            DType::F16 => "rand_normal_f16",
+            DType::BF16 => "rand_normal_bf16",
+            dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
+        };
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_normal")?;
+        let command_buffer = self.command_buffer()?;
+        candle_metal_kernels::call_random_normal(
+            &self.device,
+            &command_buffer,
+            &self.kernels,
+            name,
+            *self.seed.lock().unwrap(),
+            mean as f32,
+            stddev as f32,
+            shape.elem_count(),
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(Self::Storage::new(buffer, self.clone(), dtype))
+    }
+
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        let mut s = self.seed.try_lock().map_err(MetalError::from)?;
+        *s = seed;
+        Ok(())
     }
 }
 

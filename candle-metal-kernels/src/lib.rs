@@ -12,8 +12,9 @@ const UNARY: &str = include_str!("unary.metal");
 const BINARY: &str = include_str!("binary.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
-const REDUCE: &str = include_str!("reduce.metal");
 const CONV: &str = include_str!("conv.metal");
+const REDUCE: &str = include_str!("reduce.metal");
+const RANDOM: &str = include_str!("random.metal");
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
 
 /// Most kernels apply similarly across the tensors
@@ -45,7 +46,7 @@ fn set_param<P: EncoderParam>(encoder: &ComputeCommandEncoderRef, position: u64,
 /// Helper functions to create the various objects on the compute command encoder
 /// on a single line.
 /// Prevents getting wrong some arguments number and mixing length and size in bytes.
-trait EncoderParam {
+pub trait EncoderParam {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self);
 }
 macro_rules! primitive {
@@ -61,8 +62,10 @@ macro_rules! primitive {
         }
     };
 }
+primitive!(bool);
 primitive!(usize);
 primitive!(u32);
+primitive!(u64);
 primitive!(f32);
 
 impl<T> EncoderParam for &[T] {
@@ -117,6 +120,7 @@ pub enum Source {
     Reduce,
     Mfa,
     Conv,
+    Random,
 }
 
 macro_rules! ops{
@@ -239,6 +243,7 @@ impl Kernels {
             Source::Cast => CAST,
             Source::Reduce => REDUCE,
             Source::Conv => CONV,
+            Source::Random => RANDOM,
             Source::Mfa => panic!("Invalid lib"),
         }
     }
@@ -1421,7 +1426,6 @@ pub fn call_gemm(
         height: 1,
         depth: 1,
     };
-    // println!("grid size {grid_size:?} group size {group_size:?}");
     encoder.use_resource(lhs_buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(rhs_buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
@@ -1575,6 +1579,73 @@ pub fn call_upsample_nearest_2d(
 
 fn divide(m: usize, b: usize) -> NSUInteger {
     ((m + b - 1) / b) as NSUInteger
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_random_uniform(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    seed: u64,
+    min: f32,
+    max: f32,
+    length: usize,
+    buffer: &Buffer,
+) -> Result<(), MetalKernelError> {
+    if min >= max {
+        return Err(MetalKernelError::LoadLibraryError(
+            "min must be less than max".to_string(),
+        ));
+    }
+    let pipeline = kernels.load_pipeline(device, Source::Random, name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+
+    let odd = (length % 2 != 0) as usize;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length / 2 + odd);
+
+    encoder.wait_for_fence(&kernels.fence);
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, seed, min, max, buffer));
+
+    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.update_fence(&kernels.fence);
+    encoder.end_encoding();
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_random_normal(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    seed: u64,
+    mean: f32,
+    stddev: f32,
+    length: usize,
+    buffer: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Random, name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+
+    let odd = (length % 2 != 0) as usize;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length / 2 + odd);
+
+    encoder.wait_for_fence(&kernels.fence);
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, seed, mean, stddev, buffer));
+
+    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.update_fence(&kernels.fence);
+    encoder.end_encoding();
+
+    Ok(())
 }
 
 #[cfg(test)]
