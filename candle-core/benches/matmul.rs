@@ -1,10 +1,9 @@
-mod bench_utils;
+mod utils;
 
-use crate::bench_utils::bench_name;
-use bench_utils::{device, BenchDevice};
 use candle_core::{DType, Tensor};
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use std::time::Instant;
+use utils::{bench_name, device, BenchDevice};
 
 fn run(a: &Tensor, b: &Tensor) {
     a.matmul(&b.t().unwrap()).unwrap();
