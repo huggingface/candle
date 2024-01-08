@@ -25,13 +25,13 @@ impl BenchDevice for Device {
 }
 
 pub(crate) fn device() -> Result<Device> {
-    return if cfg!(feature = "metal") {
+    if cfg!(feature = "metal") {
         Device::new_metal(0)
     } else if cfg!(feature = "cuda") {
         Device::new_cuda(0)
     } else {
         Ok(Device::Cpu)
-    };
+    }
 }
 
 pub(crate) fn bench_name<S: Into<String>>(name: S) -> String {
@@ -39,7 +39,7 @@ pub(crate) fn bench_name<S: Into<String>>(name: S) -> String {
 }
 
 const fn device_variant() -> &'static str {
-    return if cfg!(feature = "metal") {
+    if cfg!(feature = "metal") {
         "metal"
     } else if cfg!(feature = "cuda") {
         "cuda"
@@ -49,5 +49,5 @@ const fn device_variant() -> &'static str {
         "mkl"
     } else {
         "cpu"
-    };
+    }
 }
