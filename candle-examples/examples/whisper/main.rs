@@ -558,7 +558,7 @@ fn main() -> Result<()> {
 
     let mut model = if args.quantized {
         let vb =
-            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&weights_filename)?;
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&weights_filename,&Device::Cpu)?;
         Model::Quantized(m::quantized_model::Whisper::load(&vb, config)?)
     } else {
         let vb =

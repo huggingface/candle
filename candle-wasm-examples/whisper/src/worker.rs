@@ -315,6 +315,7 @@ impl Decoder {
         let model = if md.quantized {
             let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(
                 &md.weights,
+                &Device::Cpu
             )?;
             Model::Quantized(m::quantized_model::Whisper::load(&vb, config)?)
         } else {

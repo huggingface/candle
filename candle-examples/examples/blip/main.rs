@@ -111,7 +111,7 @@ pub fn main() -> anyhow::Result<()> {
         let image = load_image(args.image)?.to_device(&device)?;
         println!("loaded image {image:?}");
 
-        let vb = quantized_blip::VarBuilder::from_gguf(model_file)?;
+        let vb = quantized_blip::VarBuilder::from_gguf(model_file,&Device::Cpu)?;
         let model = quantized_blip::BlipForConditionalGeneration::new(&config, vb)?;
         let image_embeds = image.unsqueeze(0)?.apply(model.vision_model())?;
         (image_embeds, device, Model::Q(model))

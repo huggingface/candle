@@ -262,7 +262,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
         .extension()
         .map_or(false, |v| v == "safetensors");
     let (model, config) = if is_gguf {
-        let vb = qmodel::VarBuilder::from_gguf(config_path)?;
+        let vb = qmodel::VarBuilder::from_gguf(config_path,&candle::Device::Cpu)?;
         let (_vocab_size, dim) = vb
             .get_no_shape("model.embed_tokens.weight")?
             .shape()
