@@ -2,7 +2,7 @@
 // weights and being modified by gradient descent.
 // We do not expose a public way to create variables as this would break the invariant that the
 // tensor within a variable is actually with `is_variable` set to `true`.
-use crate::{DType, Device, Error, Result, Shape, Tensor};
+use crate::{backend::BackendStorage, DType, Device, Error, Result, Shape, Tensor};
 
 /// A variable is a wrapper around a tensor, however variables can have their content modified
 /// whereas tensors are immutable.

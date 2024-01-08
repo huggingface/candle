@@ -1,7 +1,8 @@
 #![allow(clippy::redundant_closure_call)]
-use crate::{CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
+use crate::{CpuStorage, CudaStorage, CustomStorage, Layout, MetalStorage, Result, Shape, Tensor};
 use half::{bf16, f16};
 use num_traits::float::Float;
+use std::any::{Any, TypeId};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CmpOp {
@@ -36,7 +37,7 @@ impl ReduceOp {
 
 // These ops return the same type as their input type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinaryOp {
+pub(crate) enum BinaryOp {
     Add,
     Mul,
     Sub,
@@ -47,7 +48,7 @@ pub enum BinaryOp {
 
 // Unary ops with no argument
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnaryOp {
+pub(crate) enum UnaryOp {
     Exp,
     Log,
     Sin,
@@ -68,7 +69,7 @@ pub enum UnaryOp {
 }
 
 #[derive(Clone)]
-pub enum Op {
+pub(crate) enum Op {
     Binary(Tensor, Tensor, BinaryOp),
     Unary(Tensor, UnaryOp),
     Cmp(Tensor, CmpOp),
@@ -200,6 +201,16 @@ pub trait CustomOp1 {
         ))
     }
 
+    fn custom_fwd(
+        &self,
+        _storage: &CustomStorage,
+        _layout: &Layout,
+    ) -> Result<(CustomStorage, Shape)> {
+        Err(crate::Error::Metal(
+            format!("no custom implementation for {}", self.name()).into(),
+        ))
+    }
+
     /// This function takes as argument the argument `arg` used in the forward pass, the result
     /// produced by the forward operation `res` and the gradient of the result `grad_res`.
     /// The function should return the gradient of the argument.
@@ -246,6 +257,18 @@ pub trait CustomOp2 {
     ) -> Result<(MetalStorage, Shape)> {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+
+    fn custom_fwd(
+        &self,
+        _: &CustomStorage,
+        _: &Layout,
+        _: &CustomStorage,
+        _: &Layout,
+    ) -> Result<(CustomStorage, Shape)> {
+        Err(crate::Error::Metal(
+            format!("no custom implementation for {}", self.name()).into(),
         ))
     }
 
@@ -307,6 +330,20 @@ pub trait CustomOp3 {
         ))
     }
 
+    fn custom_fwd(
+        &self,
+        _: &CustomStorage,
+        _: &Layout,
+        _: &CustomStorage,
+        _: &Layout,
+        _: &CustomStorage,
+        _: &Layout,
+    ) -> Result<(CustomStorage, Shape)> {
+        Err(crate::Error::Metal(
+            format!("no custom implementation for {}", self.name()).into(),
+        ))
+    }
+
     fn bwd(
         &self,
         _arg1: &Tensor,
@@ -319,7 +356,7 @@ pub trait CustomOp3 {
     }
 }
 
-pub trait UnaryOpT {
+pub trait UnaryOpT: 'static + Send + Sync {
     const NAME: &'static str;
     const KERNEL: &'static str;
     const V: Self;
@@ -343,7 +380,7 @@ pub trait UnaryOpT {
     fn f64_vec(_xs: &[f64], _ys: &mut [f64]) {}
 }
 
-pub trait BinaryOpT {
+pub trait BinaryOpT: 'static + Send + Sync {
     const NAME: &'static str;
     const KERNEL: &'static str;
     const V: Self;
@@ -371,29 +408,29 @@ pub trait BinaryOpT {
     fn i64_vec(_xs1: &[i64], _xs2: &[i64], _ys: &mut [i64]) {}
 }
 
-pub(crate) struct Add;
-pub(crate) struct Div;
-pub(crate) struct Mul;
-pub(crate) struct Sub;
-pub(crate) struct Maximum;
-pub(crate) struct Minimum;
-pub(crate) struct Exp;
-pub(crate) struct Log;
-pub(crate) struct Sin;
-pub(crate) struct Cos;
-pub(crate) struct Abs;
-pub(crate) struct Neg;
-pub(crate) struct Recip;
-pub(crate) struct Sqr;
-pub(crate) struct Sqrt;
-pub(crate) struct Gelu;
-pub(crate) struct GeluErf;
-pub(crate) struct Erf;
-pub(crate) struct Relu;
-pub(crate) struct Tanh;
-pub(crate) struct Floor;
-pub(crate) struct Ceil;
-pub(crate) struct Round;
+pub struct Add;
+pub struct Div;
+pub struct Mul;
+pub struct Sub;
+pub struct Maximum;
+pub struct Minimum;
+pub struct Exp;
+pub struct Log;
+pub struct Sin;
+pub struct Cos;
+pub struct Abs;
+pub struct Neg;
+pub struct Recip;
+pub struct Sqr;
+pub struct Sqrt;
+pub struct Gelu;
+pub struct GeluErf;
+pub struct Erf;
+pub struct Relu;
+pub struct Tanh;
+pub struct Floor;
+pub struct Ceil;
+pub struct Round;
 
 macro_rules! bin_op {
     ($op:ident, $name: literal, $e: expr, $f32_vec: ident, $f64_vec: ident) => {
@@ -931,7 +968,7 @@ impl UnaryOpT for Relu {
 /// `BackpropOp` is a wrapper around `Option<Op>`. The main goal is to ensure that dependencies are
 /// properly checked when creating a new value
 #[derive(Clone)]
-pub struct BackpropOp(Option<Op>);
+pub(crate) struct BackpropOp(Option<Op>);
 
 impl BackpropOp {
     pub(crate) fn none() -> Self {
@@ -989,5 +1026,103 @@ impl std::ops::Deref for BackpropOp {
     type Target = Option<Op>;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+pub trait UnaryOpPub: UnaryOpT {
+    fn name(&self) -> &'static str;
+}
+pub(crate) trait UnaryOpDyn: Any {
+    fn name(&self) -> &'static str;
+}
+
+pub trait BinaryOpPub: BinaryOpT {
+    fn name(&self) -> &'static str;
+}
+pub(crate) trait BinaryOpDyn: Any {
+    fn name(&self) -> &'static str;
+}
+
+pub(crate) trait UnaryVisitor<R> {
+    fn visit<U: UnaryOpPub>(self, op: U) -> R;
+}
+pub(crate) trait BinaryVisitor<R> {
+    fn visit<B: BinaryOpPub>(self, op: B) -> R;
+}
+
+macro_rules! downcast_and_visit {
+    ($dyn_op:ident, $op_type:ty, $vis:ident) => {
+        if let Some(op) = $dyn_op.downcast::<$op_type>() {
+            return $vis.visit(op);
+        }
+    };
+}
+
+impl<U: UnaryOpT> UnaryOpPub for U {
+    fn name(&self) -> &'static str {
+        Self::NAME
+    }
+}
+impl<U: UnaryOpPub> UnaryOpDyn for U {
+    fn name(&self) -> &'static str {
+        Self::NAME
+    }
+}
+impl dyn UnaryOpDyn {
+    pub fn downcast<U: UnaryOpPub>(&self) -> Option<U> {
+        if Any::type_id(self) == TypeId::of::<U>() {
+            Some(U::V)
+        } else {
+            None
+        }
+    }
+    pub fn visit<R, V: UnaryVisitor<R>>(&self, vis: V) -> R {
+        downcast_and_visit!(self, Exp, vis);
+        downcast_and_visit!(self, Log, vis);
+        downcast_and_visit!(self, Sin, vis);
+        downcast_and_visit!(self, Cos, vis);
+        downcast_and_visit!(self, Abs, vis);
+        downcast_and_visit!(self, Neg, vis);
+        downcast_and_visit!(self, Recip, vis);
+        downcast_and_visit!(self, Sqr, vis);
+        downcast_and_visit!(self, Sqrt, vis);
+        downcast_and_visit!(self, Gelu, vis);
+        downcast_and_visit!(self, GeluErf, vis);
+        downcast_and_visit!(self, Erf, vis);
+        downcast_and_visit!(self, Relu, vis);
+        downcast_and_visit!(self, Tanh, vis);
+        downcast_and_visit!(self, Floor, vis);
+        downcast_and_visit!(self, Ceil, vis);
+        downcast_and_visit!(self, Round, vis);
+        unreachable!()
+    }
+}
+
+impl<B: BinaryOpT> BinaryOpPub for B {
+    fn name(&self) -> &'static str {
+        Self::NAME
+    }
+}
+impl<B: BinaryOpPub> BinaryOpDyn for B {
+    fn name(&self) -> &'static str {
+        Self::NAME
+    }
+}
+impl dyn BinaryOpDyn {
+    pub fn downcast<B: BinaryOpPub>(&self) -> Option<B> {
+        if Any::type_id(self) == TypeId::of::<B>() {
+            Some(B::V)
+        } else {
+            None
+        }
+    }
+    pub fn visit<R, V: BinaryVisitor<R>>(&self, vis: V) -> R {
+        downcast_and_visit!(self, Add, vis);
+        downcast_and_visit!(self, Div, vis);
+        downcast_and_visit!(self, Mul, vis);
+        downcast_and_visit!(self, Sub, vis);
+        downcast_and_visit!(self, Maximum, vis);
+        downcast_and_visit!(self, Minimum, vis);
+        unreachable!()
     }
 }
