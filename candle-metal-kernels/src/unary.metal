@@ -58,6 +58,12 @@ template <typename T> METAL_FUNC T gelu(T x) {
     T beta =  (static_cast<T>(M_2_SQRTPI_F * M_SQRT1_2_F) * alpha);
     return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + T(tanh(beta)));
 }
+template <typename T> METAL_FUNC T relu(T in){
+    if (in < 0) {
+        return 0;
+    }
+    return in;
+}
 
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
@@ -110,6 +116,7 @@ UNARY_OP(gelu_erf)
 UNARY_OP(erf)
 UNARY_OP(tanh)
 UNARY_OP(recip)
+UNARY_OP(relu)
 
 UNARY(id, float, copy_f32, copy_f32_strided)
 UNARY(id, half, copy_f16, copy_f16_strided)
@@ -136,6 +143,7 @@ BFLOAT_UNARY_OP(gelu_erf)
 BFLOAT_UNARY_OP(erf)
 BFLOAT_UNARY_OP(tanh)
 BFLOAT_UNARY_OP(recip)
+BFLOAT_UNARY_OP(relu)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
 #endif
