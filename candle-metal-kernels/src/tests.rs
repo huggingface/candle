@@ -11,7 +11,7 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
 
 fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
     let options = MTLResourceOptions::StorageModeManaged;
-    let ptr = data.as_ptr() as *const core::ffi::c_void;
+    let ptr = data.as_ptr() as *const c_void;
     let size = (data.len() * std::mem::size_of::<T>()) as u64;
     device.new_buffer_with_data(ptr, size, options)
 }
@@ -590,7 +590,6 @@ fn softmax() {
     }
     let results = run_softmax(&v, last_dim, "softmax_f32");
     let results = approx(results, 4);
-    println!("{results:?}");
     assert_eq!(
         results.iter().map(|&s| s.round() as usize).sum::<usize>(),
         n
@@ -805,4 +804,47 @@ fn gemm() {
         approx(results, 4),
         vec![56.0, 59.0, 62.0, 65.0, 200.0, 212.0, 224.0, 236.0]
     );
+}
+
+fn run_fill<T: EncoderParam + Clone>(elem_count: usize, value: T) -> Vec<T>
+where
+    Unary<T>: FillOp<T>,
+{
+    let device = device();
+    let fence = device.new_fence();
+    let kernels = Kernels::new(fence);
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let buffer = new_buffer(&device, &vec![0.0f32; elem_count]);
+    Unary::<T>::fill(
+        &device,
+        command_buffer,
+        &kernels,
+        elem_count,
+        &buffer,
+        value,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    read_to_vec(&buffer, elem_count)
+}
+
+#[test]
+fn fill() {
+    fn assert_fill<T: EncoderParam + Copy + std::fmt::Debug + PartialEq>(value: T)
+    where
+        Unary<T>: FillOp<T>,
+    {
+        for i in 0..4 {
+            assert_eq!(run_fill(8 ^ i, value), vec![value; 8 ^ i]);
+        }
+    }
+    assert_fill(123u8);
+    assert_fill(456u32);
+    assert_fill(789i64);
+    assert_fill(f16::from_f32(1.23));
+    assert_fill(bf16::from_f32(4.56));
+    assert_fill(7.89f32);
 }
