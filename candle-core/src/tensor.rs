@@ -940,6 +940,29 @@ impl Tensor {
         Ok(from_storage(storage, shape.dims(), op, false))
     }
 
+    /// This function checks if self and rhs satisfy this condition:
+    /// `|input - other| < tolerance`.
+    ///
+    /// The returned tensor has the same shape as the original tensors and uses `u8` elements.
+    /// The returned tensor uses value 1 where the condition holds and 0 otherwise.
+    pub fn allclose<T: TensorOrScalar>(&self, rhs: T, tolerance: f64) -> Result<bool> {
+        let rhs = match rhs.to_tensor_scalar()? {
+            crate::scalar::TensorScalar::Tensor(rhs) => rhs,
+            crate::scalar::TensorScalar::Scalar(rhs) => rhs
+                .to_dtype(self.dtype())?
+                .to_device(self.device())?
+                .broadcast_as(self.shape())?,
+        };
+        let shape = self.same_shape_binary_op(&rhs, "allclose")?;
+        let all = self
+            .sub(&rhs)?
+            .abs()?
+            .le(tolerance)?
+            .to_dtype(DType::U32)?
+            .sum_all()?;
+        Ok(all.to_scalar::<u32>()? == shape.elem_count() as u32)
+    }
+
     /// Element-wise equality.
     pub fn eq<T: TensorOrScalar>(&self, rhs: T) -> Result<Self> {
         self.cmp(rhs, CmpOp::Eq)
