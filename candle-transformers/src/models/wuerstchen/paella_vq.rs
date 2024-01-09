@@ -185,7 +185,7 @@ impl PaellaVQ {
             xs = xs.apply(&down_block.1)?
         }
         xs.apply(&self.down_blocks_conv)?
-            .apply(&self.down_blocks_bn)
+            .apply_t(&self.down_blocks_bn, false)
     }
 
     pub fn decode(&self, xs: &Tensor) -> Result<Tensor> {

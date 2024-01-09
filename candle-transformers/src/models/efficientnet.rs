@@ -169,8 +169,7 @@ impl ConvNormActivation {
 
 impl Module for ConvNormActivation {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = self.conv2d.forward(xs)?;
-        let xs = self.bn2d.forward(&xs)?;
+        let xs = self.conv2d.forward(xs)?.apply_t(&self.bn2d, false)?;
         if self.activation {
             swish(&xs)
         } else {
