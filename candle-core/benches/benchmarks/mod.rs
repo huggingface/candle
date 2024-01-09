@@ -1,4 +1,5 @@
 pub(crate) mod matmul;
+pub(crate) mod random;
 
 use candle_core::{Device, Result};
 
