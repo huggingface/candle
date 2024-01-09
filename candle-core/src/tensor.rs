@@ -942,9 +942,6 @@ impl Tensor {
 
     /// This function checks if self and rhs satisfy this condition:
     /// `|input - other| < tolerance`.
-    ///
-    /// The returned tensor has the same shape as the original tensors and uses `u8` elements.
-    /// The returned tensor uses value 1 where the condition holds and 0 otherwise.
     pub fn allclose<T: TensorOrScalar>(&self, rhs: T, tolerance: f64) -> Result<bool> {
         let rhs = match rhs.to_tensor_scalar()? {
             crate::scalar::TensorScalar::Tensor(rhs) => rhs,
