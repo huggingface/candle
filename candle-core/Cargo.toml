@@ -46,10 +46,6 @@ accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = ["dep:metal", "dep:candle-metal-kernels"]
 
 [[bench]]
-name = "matmul"
-harness = false
-
-[[bench]]
-name = "affine"
+name = "bench_main"
 harness = false
 

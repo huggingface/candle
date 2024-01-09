@@ -1,3 +1,6 @@
+pub(crate) mod affine;
+pub(crate) mod matmul;
+
 use candle_core::{Device, Result};
 
 pub(crate) trait BenchDevice {
@@ -24,25 +27,22 @@ impl BenchDevice for Device {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn device() -> Result<Device> {
-    return if cfg!(feature = "metal") {
+    if cfg!(feature = "metal") {
         Device::new_metal(0)
     } else if cfg!(feature = "cuda") {
         Device::new_cuda(0)
     } else {
         Ok(Device::Cpu)
-    };
+    }
 }
 
-#[allow(dead_code)]
 pub(crate) fn bench_name<S: Into<String>>(name: S) -> String {
     format!("{}_{}", device_variant(), name.into())
 }
 
-#[allow(dead_code)]
 const fn device_variant() -> &'static str {
-    return if cfg!(feature = "metal") {
+    if cfg!(feature = "metal") {
         "metal"
     } else if cfg!(feature = "cuda") {
         "cuda"
@@ -52,5 +52,5 @@ const fn device_variant() -> &'static str {
         "mkl"
     } else {
         "cpu"
-    };
+    }
 }

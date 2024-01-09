@@ -1,8 +1,6 @@
-mod bench_utils;
-
-use bench_utils::{bench_name, device, BenchDevice};
+use crate::benchmarks::{bench_name, device, BenchDevice};
 use candle_core::{DType, Tensor};
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{black_box, criterion_group, Criterion, Throughput};
 use std::time::Instant;
 
 fn run(a: &Tensor) {
@@ -41,4 +39,3 @@ fn criterion_benchmark(c: &mut Criterion) {
 }
 
 criterion_group!(benches, criterion_benchmark);
-criterion_main!(benches);
