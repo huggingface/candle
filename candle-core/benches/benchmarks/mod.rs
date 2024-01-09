@@ -1,3 +1,5 @@
+pub(crate) mod matmul;
+
 use candle_core::{Device, Result};
 
 pub(crate) trait BenchDevice {
