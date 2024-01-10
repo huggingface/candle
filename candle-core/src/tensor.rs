@@ -942,7 +942,7 @@ impl Tensor {
 
     /// This function checks if self and rhs satisfy this condition:
     /// `|input - other| < tolerance`.
-    pub fn allclose<T: TensorOrScalar>(&self, rhs: T, tolerance: f64) -> Result<bool> {
+    pub fn all_close<T: TensorOrScalar>(&self, rhs: T, tolerance: f64) -> Result<bool> {
         let rhs = match rhs.to_tensor_scalar()? {
             crate::scalar::TensorScalar::Tensor(rhs) => rhs,
             crate::scalar::TensorScalar::Scalar(rhs) => rhs
@@ -950,7 +950,7 @@ impl Tensor {
                 .to_device(self.device())?
                 .broadcast_as(self.shape())?,
         };
-        let shape = self.same_shape_binary_op(&rhs, "allclose")?;
+        let shape = self.same_shape_binary_op(&rhs, "all_close")?;
         let all = self
             .sub(&rhs)?
             .abs()?
