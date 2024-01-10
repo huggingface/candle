@@ -23,12 +23,17 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_plain = { workspace = true }
 tracing = { workspace = true }
-wav = { workspace = true }
+wav = { workspace = true, optional = true }
+realfft = { version = "3.3.0", optional = true }
+
+[dev-dependencies]
+hf-hub = { workspace = true }
 
 [features]
-default = []
+default = ["audio"]
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl"]
 metal = ["candle/metal", "candle-nn/metal"]
+audio = ["dep:wav", "dep:realfft"]

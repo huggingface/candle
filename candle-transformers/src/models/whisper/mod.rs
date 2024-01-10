@@ -27,6 +27,7 @@ pub const DTYPE: candle::DType = candle::DType::F32;
 // Audio parameters.
 pub const SAMPLE_RATE: usize = 16000;
 pub const N_FFT: usize = 400;
+pub const FFT_PAD: usize = N_FFT / 2;
 pub const HOP_LENGTH: usize = 160;
 pub const CHUNK_LENGTH: usize = 30;
 pub const N_SAMPLES: usize = CHUNK_LENGTH * SAMPLE_RATE; // 480000 samples in a 30-second chunk

@@ -1,213 +1,203 @@
-// Audio processing code, adapted from whisper.cpp
-// https://github.com/ggerganov/whisper.cpp
+#![cfg(feature = "audio")]
+//Adapted from: https://github.com/tanmayb123/OpenAI-Whisper-CoreML
 
-pub trait Float: num_traits::Float + num_traits::FloatConst + num_traits::NumAssign {}
+use std::sync::Arc;
+
+use candle::{Device, Tensor, WithDType};
+use realfft::{num_complex::Complex, RealFftPlanner, RealToComplex};
+
+use super::*;
+
+pub trait Float:
+    num_traits::Float
+    + num_traits::FloatConst
+    + num_traits::NumAssign
+    + std::fmt::Debug
+    + realfft::FftNum
+    + WithDType
+{
+}
 
 impl Float for f32 {}
 impl Float for f64 {}
 
-// https://github.com/ggerganov/whisper.cpp/blob/4774d2feb01a772a15de81ffc34b34a1f294f020/whisper.cpp#L2357
-fn fft<T: Float>(inp: &[T]) -> Vec<T> {
-    let n = inp.len();
-    let zero = T::zero();
-    if n == 1 {
-        return vec![inp[0], zero];
-    }
-    if n % 2 == 1 {
-        return dft(inp);
-    }
-    let mut out = vec![zero; n * 2];
+pub struct SpectrogramGenerator<F: Float> {
+    fft_plan: Arc<dyn RealToComplex<F>>,
+    hann_window: Vec<F>,
+    mels: Tensor,
+}
 
-    let mut even = Vec::with_capacity(n / 2);
-    let mut odd = Vec::with_capacity(n / 2);
-
-    for (i, &inp) in inp.iter().enumerate() {
-        if i % 2 == 0 {
-            even.push(inp)
-        } else {
-            odd.push(inp);
+impl<F: Float> SpectrogramGenerator<F> {
+    pub fn new(mels: Vec<F>, n_mels: usize) -> Self {
+        let mut planner = RealFftPlanner::new();
+        Self {
+            fft_plan: planner.plan_fft_forward(N_FFT),
+            hann_window: Self::hann_window(),
+            mels: Tensor::from_vec(mels, (n_mels, N_FFT / 2 + 1), &candle::Device::Cpu).unwrap(),
         }
     }
 
-    let even_fft = fft(&even);
-    let odd_fft = fft(&odd);
+    fn hann_window() -> Vec<F> {
+        let two_pi = F::PI() + F::PI();
+        let half = F::from(0.5).unwrap();
+        let one = F::from(1.0).unwrap();
+        let fft_size_t = F::from(N_FFT).unwrap();
 
-    let two_pi = T::PI() + T::PI();
-    let n_t = T::from(n).unwrap();
-    for k in 0..n / 2 {
-        let k_t = T::from(k).unwrap();
-        let theta = two_pi * k_t / n_t;
-        let re = theta.cos();
-        let im = -theta.sin();
-
-        let re_odd = odd_fft[2 * k];
-        let im_odd = odd_fft[2 * k + 1];
-
-        out[2 * k] = even_fft[2 * k] + re * re_odd - im * im_odd;
-        out[2 * k + 1] = even_fft[2 * k + 1] + re * im_odd + im * re_odd;
-
-        out[2 * (k + n / 2)] = even_fft[2 * k] - re * re_odd + im * im_odd;
-        out[2 * (k + n / 2) + 1] = even_fft[2 * k + 1] - re * im_odd - im * re_odd;
+        (0..N_FFT)
+            .map(|i| half * (one - ((two_pi * F::from(i).unwrap()) / fft_size_t).cos()))
+            .collect()
     }
-    out
-}
 
-// https://github.com/ggerganov/whisper.cpp/blob/4774d2feb01a772a15de81ffc34b34a1f294f020/whisper.cpp#L2337
-fn dft<T: Float>(inp: &[T]) -> Vec<T> {
-    let zero = T::zero();
-    let n = inp.len();
-    let two_pi = T::PI() + T::PI();
+    fn fft(&self, audio: &[F]) -> Vec<Complex<F>> {
+        let mut input = audio.to_vec();
 
-    let mut out = Vec::with_capacity(2 * n);
-    let n_t = T::from(n).unwrap();
-    for k in 0..n {
-        let k_t = T::from(k).unwrap();
-        let mut re = zero;
-        let mut im = zero;
-
-        for (j, &inp) in inp.iter().enumerate() {
-            let j_t = T::from(j).unwrap();
-            let angle = two_pi * k_t * j_t / n_t;
-            re += inp * angle.cos();
-            im -= inp * angle.sin();
+        for i in 0..N_FFT {
+            input[i] *= self.hann_window[i];
         }
 
-        out.push(re);
-        out.push(im);
+        let mut spectrum = self.fft_plan.make_output_vec();
+        self.fft_plan
+            .process(input.as_mut_slice(), &mut spectrum)
+            .unwrap();
+        spectrum
     }
-    out
-}
 
-#[allow(clippy::too_many_arguments)]
-// https://github.com/ggerganov/whisper.cpp/blob/4774d2feb01a772a15de81ffc34b34a1f294f020/whisper.cpp#L2414
-fn log_mel_spectrogram_w<T: Float>(
-    ith: usize,
-    hann: &[T],
-    samples: &[T],
-    filters: &[T],
-    fft_size: usize,
-    fft_step: usize,
-    speed_up: bool,
-    n_len: usize,
-    n_mel: usize,
-    n_threads: usize,
-) -> Vec<T> {
-    let n_fft = if speed_up {
-        1 + fft_size / 4
-    } else {
-        1 + fft_size / 2
-    };
+    fn mel_spectrogram(&self, audio: &[F]) -> Vec<F> {
+        let f4 = F::from(4.0).unwrap();
+        let f8 = F::from(8.0).unwrap();
 
-    let zero = T::zero();
-    let half = T::from(0.5).unwrap();
-    let mut fft_in = vec![zero; fft_size];
-    let mut mel = vec![zero; n_len * n_mel];
+        let n_frames = (audio.len() - N_FFT) / HOP_LENGTH;
+        let right_padding = N_SAMPLES + FFT_PAD; //padding is all 0s, so we can ignore it
 
-    for i in (ith..n_len).step_by(n_threads) {
-        let offset = i * fft_step;
-
-        // apply Hanning window
-        for j in 0..fft_size {
-            fft_in[j] = if offset + j < samples.len() {
-                hann[j] * samples[offset + j]
-            } else {
-                zero
+        let mut spectrogram = vec![vec![F::zero(); n_frames]; N_FFT / 2 + 1];
+        for i in (0..audio.len() - right_padding).step_by(HOP_LENGTH) {
+            if i / HOP_LENGTH >= n_frames {
+                break;
+            }
+            let fft = self.fft(&audio[i..i + N_FFT]);
+            let spectrogram_col = fft.iter().map(|c| c.norm_sqr()).collect::<Vec<F>>();
+            for (j, v) in spectrogram_col.iter().enumerate() {
+                spectrogram[j][i / HOP_LENGTH] = *v;
             }
         }
 
-        // FFT -> mag^2
-        let mut fft_out: Vec<T> = fft(&fft_in);
+        let flattened = spectrogram.iter().flatten().map(|v| *v).collect::<Vec<F>>();
+        let spec_t = Tensor::from_vec(flattened, (N_FFT / 2 + 1, n_frames), &Device::Cpu).unwrap();
 
-        for j in 0..fft_size {
-            fft_out[j] = fft_out[2 * j] * fft_out[2 * j] + fft_out[2 * j + 1] * fft_out[2 * j + 1];
-        }
-        for j in 1..fft_size / 2 {
-            let v = fft_out[fft_size - j];
-            fft_out[j] += v;
-        }
+        let mel_spec = self.mels.matmul(&spec_t).unwrap();
 
-        if speed_up {
-            // scale down in the frequency domain results in a speed up in the time domain
-            for j in 0..n_fft {
-                fft_out[j] = half * (fft_out[2 * j] + fft_out[2 * j + 1]);
-            }
+        //Moving the below to tensor operations would be optimal
+        let mut mel_spec_v = mel_spec.flatten_all().unwrap().to_vec1::<F>().unwrap();
+        for v in mel_spec_v.iter_mut() {
+            *v = <F as num_traits::Float>::max(*v, F::from(1e-10).unwrap()).log10();
         }
-
-        // mel spectrogram
-        for j in 0..n_mel {
-            let mut sum = zero;
-            for k in 0..n_fft {
-                sum += fft_out[k] * filters[j * n_fft + k];
-            }
-            mel[j * n_len + i] = T::max(sum, T::from(1e-10).unwrap()).log10();
+        let max = mel_spec_v
+            .iter()
+            .fold(F::min_value(), |a, &b| <F as num_traits::Float>::max(a, b));
+        for v in mel_spec_v.iter_mut() {
+            *v = (<F as num_traits::Float>::max(max - f8, *v) + f4) / f4;
         }
+        mel_spec_v
     }
-    mel
+
+    pub fn generate(&self, audio: Vec<F>) -> Vec<F> {
+        if audio.is_empty() {
+            panic!("Audio is empty");
+        }
+        let padded = Self::pad_audio(audio, N_SAMPLES);
+        self.mel_spectrogram(&padded)
+    }
+
+    //The padding done by OAI is as follows:
+    //1. First explicitly pad with (CHUNK_LENGTH * SAMPLE_RATE) (480,000) zeros
+    //2. Perform a reflection padding of FFT_PAD (200) samples, this is done internally in `torch.stft`
+    pub fn pad_audio(samples: Vec<F>, padding: usize) -> Vec<F> {
+        let padded_len = FFT_PAD + samples.len() + padding + FFT_PAD;
+        let mut padded_samples = vec![F::zero(); padded_len];
+
+        let mut reflect_padding = vec![F::zero(); FFT_PAD];
+        for i in 0..FFT_PAD {
+            reflect_padding[i] = samples[FFT_PAD - i];
+        }
+
+        padded_samples[0..FFT_PAD].copy_from_slice(&reflect_padding);
+        padded_samples[FFT_PAD..(FFT_PAD + samples.len())].copy_from_slice(&samples);
+        padded_samples
+    }
 }
 
-fn log_mel_spectrogram_<T: Float + std::fmt::Display>(
-    samples: &[T],
-    filters: &[T],
-    fft_size: usize,
-    fft_step: usize,
-    n_mel: usize,
-    speed_up: bool,
-) -> Vec<T> {
-    let zero = T::zero();
-    let two_pi = T::PI() + T::PI();
-    let half = T::from(0.5).unwrap();
-    let one = T::from(1.0).unwrap();
-    let four = T::from(4.0).unwrap();
-    let fft_size_t = T::from(fft_size).unwrap();
-
-    let hann: Vec<T> = (0..fft_size)
-        .map(|i| half * (one - ((two_pi * T::from(i).unwrap()) / fft_size_t).cos()))
-        .collect();
-    let n_len = samples.len() / fft_step;
-
-    // pad audio with at least one extra chunk of zeros
-    let pad = 100 * super::CHUNK_LENGTH / 2;
-    let n_len = if n_len % pad != 0 {
-        (n_len / pad + 1) * pad
-    } else {
-        n_len
-    };
-    let n_len = n_len + pad;
-    let samples = {
-        let mut samples_padded = samples.to_vec();
-        let to_add = n_len * fft_step - samples.len();
-        samples_padded.extend(std::iter::repeat(zero).take(to_add));
-        samples_padded
-    };
-
-    // Use a single thread for now.
-    let mut mel = log_mel_spectrogram_w(
-        0, &hann, &samples, filters, fft_size, fft_step, speed_up, n_len, n_mel, 1,
-    );
-    let mmax = mel
-        .iter()
-        .max_by(|&u, &v| u.partial_cmp(v).unwrap_or(std::cmp::Ordering::Greater))
-        .copied()
-        .unwrap_or(zero)
-        - T::from(8).unwrap();
-    for m in mel.iter_mut() {
-        let v = T::max(*m, mmax);
-        *m = v / four + one
-    }
-    mel
+pub fn pcm_to_mel<F: Float>(cfg: &super::Config, samples: &[F], filters: &[F]) -> Vec<F> {
+    let generator = SpectrogramGenerator::new(filters.to_vec(), cfg.num_mel_bins);
+    generator.generate(samples.to_vec())
 }
 
-pub fn pcm_to_mel<T: Float + std::fmt::Display>(
-    cfg: &super::Config,
-    samples: &[T],
-    filters: &[T],
-) -> Vec<T> {
-    log_mel_spectrogram_(
-        samples,
-        filters,
-        super::N_FFT,
-        super::HOP_LENGTH,
-        cfg.num_mel_bins,
-        false,
-    )
+#[cfg(test)]
+mod tests {
+    use hf_hub::{
+        api::sync::{Api, ApiRepo},
+        Repo, RepoType,
+    };
+    use std::path::Path;
+
+    use candle::{Result, Tensor};
+
+    use super::*;
+
+    fn load_mels() -> Vec<f32> {
+        let mel_bytes = include_bytes!("melfilters.bytes").as_slice();
+        let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
+        <byteorder::LittleEndian as byteorder::ByteOrder>::read_f32_into(
+            mel_bytes,
+            &mut mel_filters,
+        );
+        mel_filters
+    }
+
+    fn load_audio(dataset: ApiRepo) -> Result<Vec<f32>> {
+        let mut input = std::fs::File::open(dataset.get("samples_gb0.wav").unwrap())?;
+        let (header, data) = wav::read(&mut input)?;
+        if header.sampling_rate != SAMPLE_RATE as u32 {
+            panic!("wav file must have a {} sampling rate", SAMPLE_RATE)
+        }
+        let data = data.as_sixteen().expect("expected 16 bit wav file");
+        let pcm_data: Vec<_> = data[..data.len() / header.channel_count as usize]
+            .iter()
+            .map(|v| *v as f32 / 32768.)
+            .collect();
+        Ok(pcm_data)
+    }
+
+    #[test]
+    fn test_log_mel() -> Result<()> {
+        let mel_filters = load_mels();
+
+        let api = Api::new().unwrap();
+        let dataset = api.dataset("Narsil/candle-examples".to_string());
+        let repo = api.repo(Repo::with_revision(
+            String::from("openai/whisper-tiny.en"),
+            RepoType::Model,
+            String::from("refs/pr/15"),
+        ));
+        let pcm_data = load_audio(dataset).unwrap();
+
+        let config: Config = serde_json::from_str(
+            &std::fs::read_to_string(repo.get("config.json").unwrap()).unwrap(),
+        )
+        .unwrap();
+
+        let mel = pcm_to_mel(&config, &pcm_data, &mel_filters);
+        let mel_len = mel.len();
+        let mel = Tensor::from_vec(
+            mel,
+            (1, config.num_mel_bins, mel_len / config.num_mel_bins),
+            &candle::Device::Cpu,
+        )
+        .unwrap();
+        let ground = Tensor::read_npy(Path::new("./src/models/whisper/ground.npy"))
+            .unwrap()
+            .unsqueeze(0)
+            .unwrap();
+        assert!(mel.all_close(&ground, 1e-4).unwrap());
+        Ok(())
+    }
 }
