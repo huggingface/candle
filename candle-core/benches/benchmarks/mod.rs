@@ -45,12 +45,19 @@ impl BenchDevice for Device {
     }
 }
 
-pub(crate) fn device() -> Result<Device> {
-    if cfg!(feature = "metal") {
-        Device::new_metal(0)
-    } else if cfg!(feature = "cuda") {
-        Device::new_cuda(0)
-    } else {
-        Ok(Device::Cpu)
+struct BenchDeviceHandler {
+    devices: Vec<Device>,
+}
+
+impl BenchDeviceHandler {
+    pub fn new() -> Result<Self> {
+        let mut devices = Vec::new();
+        if cfg!(feature = "metal") {
+            devices.push(Device::new_metal(0)?);
+        } else if cfg!(feature = "cuda") {
+            devices.push(Device::new_cuda(0)?);
+        }
+        devices.push(Device::Cpu);
+        Ok(Self { devices })
     }
 }
