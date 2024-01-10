@@ -1,4 +1,4 @@
-use crate::benchmarks::{bench_name, device, BenchDevice};
+use crate::benchmarks::{device, BenchDevice};
 use candle_core::{DType, Tensor};
 use criterion::{black_box, criterion_group, Criterion, Throughput};
 use std::time::Instant;
@@ -20,7 +20,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let flops = b * m * n * k;
 
-    let mut group = c.benchmark_group(bench_name("matmul"));
+    let mut group = c.benchmark_group(device.bench_name("matmul"));
     group.throughput(Throughput::Bytes(flops as u64));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {

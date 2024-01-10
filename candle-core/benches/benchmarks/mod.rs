@@ -4,6 +4,8 @@ use candle_core::{Device, Result};
 
 pub(crate) trait BenchDevice {
     fn sync(&self) -> Result<()>;
+
+    fn bench_name<S: Into<String>>(&self, name: S) -> String;
 }
 
 impl BenchDevice for Device {
@@ -24,6 +26,23 @@ impl BenchDevice for Device {
             }
         }
     }
+
+    fn bench_name<S: Into<String>>(&self, name: S) -> String {
+        match self {
+            Device::Cpu => {
+                let cpu_type = if cfg!(feature = "accelerate") {
+                    "accelerate"
+                } else if cfg!(feature = "mkl") {
+                    "mkl"
+                } else {
+                    "cpu"
+                };
+                format!("{}_{}", cpu_type, name.into())
+            }
+            Device::Cuda(_) => format!("cuda_{}", name.into()),
+            Device::Metal(_) => format!("metal_{}", name.into()),
+        }
+    }
 }
 
 pub(crate) fn device() -> Result<Device> {
@@ -33,23 +52,5 @@ pub(crate) fn device() -> Result<Device> {
         Device::new_cuda(0)
     } else {
         Ok(Device::Cpu)
-    }
-}
-
-pub(crate) fn bench_name<S: Into<String>>(name: S) -> String {
-    format!("{}_{}", device_variant(), name.into())
-}
-
-const fn device_variant() -> &'static str {
-    if cfg!(feature = "metal") {
-        "metal"
-    } else if cfg!(feature = "cuda") {
-        "cuda"
-    } else if cfg!(feature = "accelerate") {
-        "accelerate"
-    } else if cfg!(feature = "mkl") {
-        "mkl"
-    } else {
-        "cpu"
     }
 }
