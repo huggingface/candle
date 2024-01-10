@@ -18,6 +18,8 @@ struct RepVGGConfig {
     stages: [usize; 4],
 }
 
+const CHANNELS_PER_STAGE: [usize; 5] = [64, 64, 128, 256, 512];
+
 #[rustfmt::skip]
 fn repvgg_config(cfg: &str) -> RepVGGConfig {
     let configs = HashMap::from([
@@ -134,12 +136,12 @@ fn repvgg_layer(
 
 // Get the number of output channels per stage taking into account the multipliers
 fn output_channels_per_stage(a: f32, b: f32, stage: usize) -> usize {
-    let chans = [64, 64, 128, 256, 512][stage] as f32;
+    let channels = CHANNELS_PER_STAGE[stage] as f32;
 
     match stage {
-        0 => std::cmp::min(64, (chans * a) as usize),
-        4 => (chans * b) as usize,
-        _ => (chans * a) as usize,
+        0 => std::cmp::min(64, (channels * a) as usize),
+        4 => (channels * b) as usize,
+        _ => (channels * a) as usize,
     }
 }
 
