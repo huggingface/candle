@@ -3,8 +3,6 @@
 //! See "RepVGG: Making VGG-style ConvNets Great Again" Ding et al. 2021
 //! https://arxiv.org/abs/2101.03697
 
-use std::collections::HashMap;
-
 use candle::{Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d_no_bias, linear, BatchNorm, Conv2d, Conv2dConfig, Func, VarBuilder,
@@ -22,20 +20,19 @@ const CHANNELS_PER_STAGE: [usize; 5] = [64, 64, 128, 256, 512];
 
 #[rustfmt::skip]
 fn repvgg_config(cfg: &str) -> RepVGGConfig {
-    let configs = HashMap::from([
-        ( "A0", RepVGGConfig { a: 0.75, b: 2.5, groups: 1, stages: [2, 4, 14, 1]}),
-        ( "A1", RepVGGConfig { a: 1.0, b: 2.5, groups:1, stages: [2, 4, 14, 1]}),
-        ( "A2", RepVGGConfig { a: 1.5, b: 2.75, groups:1, stages: [2, 4, 14, 1]}),
-        ( "B0", RepVGGConfig { a: 1.0, b: 2.5, groups:1, stages: [4, 6, 16, 1]}),
-        ( "B1", RepVGGConfig { a: 2.0, b: 4.0, groups:1, stages: [4, 6, 16, 1]}),
-        ( "B2", RepVGGConfig { a: 2.5, b: 5.0, groups:1, stages: [4, 6, 16, 1]}),
-        ( "B3", RepVGGConfig { a: 3.0, b: 5.0, groups:1, stages: [4, 6, 16, 1]}),
-        ( "B1G4", RepVGGConfig { a: 2.0, b: 4.0, groups:4, stages: [4, 6, 16, 1]}),
-        ( "B2G4", RepVGGConfig { a: 2.5, b: 5.0, groups:4, stages: [4, 6, 16, 1]}),
-        ( "B3G4", RepVGGConfig { a: 3.0, b: 5.0, groups:4, stages: [4, 6, 16, 1]}),
-    ]);
-
-    configs[cfg].clone()
+    match cfg {
+        "A0" => RepVGGConfig { a: 0.75, b: 2.5, groups: 1, stages: [2, 4, 14, 1]},
+        "A1" => RepVGGConfig { a: 1.0, b: 2.5, groups:1, stages: [2, 4, 14, 1]},
+        "A2" => RepVGGConfig { a: 1.5, b: 2.75, groups:1, stages: [2, 4, 14, 1]},
+        "B0" => RepVGGConfig { a: 1.0, b: 2.5, groups:1, stages: [4, 6, 16, 1]},
+        "B1" => RepVGGConfig { a: 2.0, b: 4.0, groups:1, stages: [4, 6, 16, 1]},
+        "B2" => RepVGGConfig { a: 2.5, b: 5.0, groups:1, stages: [4, 6, 16, 1]},
+        "B3" => RepVGGConfig { a: 3.0, b: 5.0, groups:1, stages: [4, 6, 16, 1]},
+        "B1G4" => RepVGGConfig { a: 2.0, b: 4.0, groups:4, stages: [4, 6, 16, 1]},
+        "B2G4" => RepVGGConfig { a: 2.5, b: 5.0, groups:4, stages: [4, 6, 16, 1]},
+        "B3G4" => RepVGGConfig { a: 3.0, b: 5.0, groups:4, stages: [4, 6, 16, 1]},
+        _ => RepVGGConfig { a: 0.75, b: 2.5, groups: 1, stages: [2, 4, 14, 1]},
+    }
 }
 
 // fuses a convolutional kernel and a batchnorm layer into a convolutional layer
