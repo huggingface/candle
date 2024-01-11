@@ -11,12 +11,12 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { path = "../candle-core", version = "0.3.3", package = "candle-core" }
-candle-datasets = { path = "../candle-datasets", version = "0.3.3" }
-candle-nn = { path = "../candle-nn", version = "0.3.3" }
-candle-transformers = { path = "../candle-transformers", version = "0.3.3" }
-candle-flash-attn = { path = "../candle-flash-attn", version = "0.3.3", optional = true }
-candle-onnx = { path = "../candle-onnx", version = "0.3.3", optional = true }
+candle = { workspace = true }
+candle-datasets = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+candle-flash-attn = { workspace = true, optional = true }
+candle-onnx = { workspace = true, optional = true }
 
 csv = "1.3.0"
 cudarc = { workspace = true, optional = true }
@@ -49,11 +49,12 @@ tokio = "1.29.1"
 
 [build-dependencies]
 anyhow = { workspace = true }
+bindgen_cuda = { version = "0.1.1", optional = true }
 
 [features]
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
-cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda", "dep:bindgen_cuda"]
 cudnn = ["candle/cudnn"]
 flash-attn = ["cuda", "candle-transformers/flash-attn", "dep:candle-flash-attn"]
 mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
