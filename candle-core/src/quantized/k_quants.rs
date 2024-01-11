@@ -1545,13 +1545,13 @@ impl GgmlType for BlockQ5K {
                 let d2 = d * sc as f32;
                 let m2 = min * m as f32;
                 for (ql, qh) in ql.iter().zip(qh) {
-                    let to_add = if qh & u1 != 0 { 16 } else { 1 };
-                    y[ys_index] = d1 * ((ql & 0xF) + to_add) as f32 - m1;
+                    let to_add = if qh & u1 != 0 { 16f32 } else { 0f32 };
+                    y[ys_index] = d1 * ((ql & 0xF) as f32 + to_add) - m1;
                     ys_index += 1;
                 }
                 for (ql, qh) in ql.iter().zip(qh) {
-                    let to_add = if qh & u2 != 0 { 16 } else { 1 };
-                    y[ys_index] = d2 * ((ql >> 4) + to_add) as f32 - m2;
+                    let to_add = if qh & u2 != 0 { 16f32 } else { 0f32 };
+                    y[ys_index] = d2 * ((ql >> 4) as f32 + to_add) - m2;
                     ys_index += 1;
                 }
                 is += 2;

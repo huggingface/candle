@@ -407,7 +407,7 @@ fn quantize_q5k() -> Result<()> {
     let dst = round_vector(&dst);
     assert_eq!(
         [dst[0], dst[128], dst[256], dst[512], dst[800], dst[1023]],
-        [-0.499, -0.372, -0.249, 0.001, 0.279, 0.499]
+        [-0.5, -0.373, -0.25, 0.0, 0.279, 0.499]
     );
 
     let (src_big, mut dst_big) = get_test_vector(128.0, 1024);
