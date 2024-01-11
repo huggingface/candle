@@ -86,10 +86,8 @@ CAST(cast_i64_f32, cast_i64_f32_strided, int64_t, float)
 #endif
 
 #if defined(__HAVE_BFLOAT__)
-#if __METAL_VERSION__ >= 310
 CAST(cast_bf16_u32, cast_bf16_u32_strided, bfloat, uint32_t)
 CAST(cast_bf16_f32, cast_bf16_f32_strided, bfloat, float)
-
 CAST(cast_u8_bf16, cast_u8_bf16_strided, uint8_t, bfloat)
 CAST(cast_u32_bf16, cast_u32_bf16_strided, uint32_t, bfloat)
 CAST(cast_f32_bf16, cast_f32_bf16_strided, float, bfloat)
