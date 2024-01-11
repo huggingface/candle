@@ -7,7 +7,7 @@ probabilities for the top-5 classes.
 ## Running an example
 
 ```
-$ cargo run --example repvgg --release -- --image bike.jpg
+$ cargo run --example repvgg --release -- --image candle-examples/examples/yolo-v8/assets/bike.jpg
 
 loaded image Tensor[dims 3, 224, 224; f32]
 model built

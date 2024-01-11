@@ -8,30 +8,105 @@ use candle_nn::{
     batch_norm, conv2d_no_bias, linear, BatchNorm, Conv2d, Conv2dConfig, Func, VarBuilder,
 };
 
+const CHANNELS_PER_STAGE: [usize; 5] = [64, 64, 128, 256, 512];
+
 #[derive(Clone)]
-struct RepVGGConfig {
+pub struct Config {
     a: f32,
     b: f32,
     groups: usize,
     stages: [usize; 4],
 }
 
-const CHANNELS_PER_STAGE: [usize; 5] = [64, 64, 128, 256, 512];
+impl Config {
+    pub fn a0() -> Self {
+        Self {
+            a: 0.75,
+            b: 2.5,
+            groups: 1,
+            stages: [2, 4, 14, 1],
+        }
+    }
 
-#[rustfmt::skip]
-fn repvgg_config(cfg: &str) -> RepVGGConfig {
-    match cfg {
-        "A0" => RepVGGConfig { a: 0.75, b: 2.5, groups: 1, stages: [2, 4, 14, 1]},
-        "A1" => RepVGGConfig { a: 1.0, b: 2.5, groups:1, stages: [2, 4, 14, 1]},
-        "A2" => RepVGGConfig { a: 1.5, b: 2.75, groups:1, stages: [2, 4, 14, 1]},
-        "B0" => RepVGGConfig { a: 1.0, b: 2.5, groups:1, stages: [4, 6, 16, 1]},
-        "B1" => RepVGGConfig { a: 2.0, b: 4.0, groups:1, stages: [4, 6, 16, 1]},
-        "B2" => RepVGGConfig { a: 2.5, b: 5.0, groups:1, stages: [4, 6, 16, 1]},
-        "B3" => RepVGGConfig { a: 3.0, b: 5.0, groups:1, stages: [4, 6, 16, 1]},
-        "B1G4" => RepVGGConfig { a: 2.0, b: 4.0, groups:4, stages: [4, 6, 16, 1]},
-        "B2G4" => RepVGGConfig { a: 2.5, b: 5.0, groups:4, stages: [4, 6, 16, 1]},
-        "B3G4" => RepVGGConfig { a: 3.0, b: 5.0, groups:4, stages: [4, 6, 16, 1]},
-        _ => RepVGGConfig { a: 0.75, b: 2.5, groups: 1, stages: [2, 4, 14, 1]},
+    pub fn a1() -> Self {
+        Self {
+            a: 1.0,
+            b: 2.5,
+            groups: 1,
+            stages: [2, 4, 14, 1],
+        }
+    }
+
+    pub fn a2() -> Self {
+        Self {
+            a: 1.5,
+            b: 2.75,
+            groups: 1,
+            stages: [2, 4, 14, 1],
+        }
+    }
+
+    pub fn b0() -> Self {
+        Self {
+            a: 1.0,
+            b: 2.5,
+            groups: 1,
+            stages: [4, 6, 16, 1],
+        }
+    }
+
+    pub fn b1() -> Self {
+        Self {
+            a: 2.0,
+            b: 4.0,
+            groups: 1,
+            stages: [4, 6, 16, 1],
+        }
+    }
+
+    pub fn b2() -> Self {
+        Self {
+            a: 2.5,
+            b: 5.0,
+            groups: 1,
+            stages: [4, 6, 16, 1],
+        }
+    }
+
+    pub fn b3() -> Self {
+        Self {
+            a: 3.0,
+            b: 5.0,
+            groups: 1,
+            stages: [4, 6, 16, 1],
+        }
+    }
+
+    pub fn b1g4() -> Self {
+        Self {
+            a: 2.0,
+            b: 4.0,
+            groups: 4,
+            stages: [4, 6, 16, 1],
+        }
+    }
+
+    pub fn b2g4() -> Self {
+        Self {
+            a: 2.5,
+            b: 5.0,
+            groups: 4,
+            stages: [4, 6, 16, 1],
+        }
+    }
+
+    pub fn b3g4() -> Self {
+        Self {
+            a: 3.0,
+            b: 5.0,
+            groups: 4,
+            stages: [4, 6, 16, 1],
+        }
     }
 }
 
@@ -61,7 +136,7 @@ fn repvgg_layer(
     out_channels: usize,
     groups: usize,
     vb: VarBuilder,
-) -> Result<Func> {
+) -> Result<Func<'static>> {
     let conv2d_cfg = Conv2dConfig {
         stride,
         groups,
@@ -147,12 +222,12 @@ fn output_channels_per_stage(a: f32, b: f32, stage: usize) -> usize {
 // The G4 variants have a groupwise convolution instead of a dense one on odd layers
 // counted across stage boundaries, so we keep track of which layer we are in the
 // full model.
-fn repvgg_stage(config: RepVGGConfig, idx: usize, vb: VarBuilder) -> Result<Func> {
-    let nlayers = config.stages[idx - 1];
+fn repvgg_stage(cfg: &Config, idx: usize, vb: VarBuilder) -> Result<Func<'static>> {
+    let nlayers = cfg.stages[idx - 1];
     let mut layers = Vec::with_capacity(nlayers);
-    let prev_layers: usize = config.stages[..idx - 1].iter().sum();
-    let out_channels_prev = output_channels_per_stage(config.a, config.b, idx - 1);
-    let out_channels = output_channels_per_stage(config.a, config.b, idx);
+    let prev_layers: usize = cfg.stages[..idx - 1].iter().sum();
+    let out_channels_prev = output_channels_per_stage(cfg.a, cfg.b, idx - 1);
+    let out_channels = output_channels_per_stage(cfg.a, cfg.b, idx);
 
     for layer_idx in 0..nlayers {
         let (has_identity, stride, in_channels) = if layer_idx == 0 {
@@ -162,7 +237,7 @@ fn repvgg_stage(config: RepVGGConfig, idx: usize, vb: VarBuilder) -> Result<Func
         };
 
         let groups = if (prev_layers + layer_idx) % 2 == 1 {
-            config.groups
+            cfg.groups
         } else {
             1
         };
@@ -188,8 +263,7 @@ fn repvgg_stage(config: RepVGGConfig, idx: usize, vb: VarBuilder) -> Result<Func
 }
 
 // Build a RepVGG model for a given configuration.
-fn repvgg_model(cfg: String, nclasses: Option<usize>, vb: VarBuilder) -> Result<Func> {
-    let config = repvgg_config(&cfg);
+fn repvgg_model(config: &Config, nclasses: Option<usize>, vb: VarBuilder) -> Result<Func<'static>> {
     let cls = match nclasses {
         None => None,
         Some(nclasses) => {
@@ -202,10 +276,10 @@ fn repvgg_model(cfg: String, nclasses: Option<usize>, vb: VarBuilder) -> Result<
     let stem_dim = output_channels_per_stage(config.a, config.b, 0);
     let stem = repvgg_layer(false, stem_dim, 2, 3, stem_dim, 1, vb.pp("stem"))?;
     let vb = vb.pp("stages");
-    let stage1 = repvgg_stage(config.clone(), 1, vb.pp(0))?;
-    let stage2 = repvgg_stage(config.clone(), 2, vb.pp(1))?;
-    let stage3 = repvgg_stage(config.clone(), 3, vb.pp(2))?;
-    let stage4 = repvgg_stage(config.clone(), 4, vb.pp(3))?;
+    let stage1 = repvgg_stage(config, 1, vb.pp(0))?;
+    let stage2 = repvgg_stage(config, 2, vb.pp(1))?;
+    let stage3 = repvgg_stage(config, 3, vb.pp(2))?;
+    let stage4 = repvgg_stage(config, 4, vb.pp(3))?;
 
     Ok(Func::new(move |xs| {
         let xs = xs
@@ -223,10 +297,10 @@ fn repvgg_model(cfg: String, nclasses: Option<usize>, vb: VarBuilder) -> Result<
     }))
 }
 
-pub fn repvgg(cfg: String, nclasses: usize, vb: VarBuilder) -> Result<Func> {
+pub fn repvgg(cfg: &Config, nclasses: usize, vb: VarBuilder) -> Result<Func<'static>> {
     repvgg_model(cfg, Some(nclasses), vb)
 }
 
-pub fn repvgg_no_final_layer(cfg: String, vb: VarBuilder) -> Result<Func> {
+pub fn repvgg_no_final_layer(cfg: &Config, vb: VarBuilder) -> Result<Func<'static>> {
     repvgg_model(cfg, None, vb)
 }
