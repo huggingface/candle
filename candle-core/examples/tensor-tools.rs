@@ -295,7 +295,7 @@ fn run_quantize_safetensors(
 }
 
 fn run_dequantize(in_file: std::path::PathBuf, out_file: std::path::PathBuf) -> Result<()> {
-    let mut in_file = std::fs::File::open(&in_file)?;
+    let mut in_file = std::fs::File::open(in_file)?;
     let content = gguf_file::Content::read(&mut in_file)?;
     let mut tensors = std::collections::HashMap::new();
     for (tensor_name, _) in content.tensor_infos.iter() {
