@@ -89,7 +89,6 @@ CAST(cast_i64_f32, cast_i64_f32_strided, int64_t, float)
 #if __METAL_VERSION__ >= 310
 CAST(cast_bf16_u32, cast_bf16_u32_strided, bfloat, uint32_t)
 CAST(cast_bf16_f32, cast_bf16_f32_strided, bfloat, float)
-
 CAST(cast_u8_bf16, cast_u8_bf16_strided, uint8_t, bfloat)
 CAST(cast_u32_bf16, cast_u32_bf16_strided, uint32_t, bfloat)
 CAST(cast_f32_bf16, cast_f32_bf16_strided, float, bfloat)
@@ -97,4 +96,5 @@ CAST(cast_f32_bf16, cast_f32_bf16_strided, float, bfloat)
 CAST_THROUGH(cast_bf16_u8, cast_bf16_u8_strided, bfloat, uint8_t, float)
 CAST_THROUGH(cast_bf16_f16, cast_bf16_f16_strided, bfloat, half, float)
 CAST_THROUGH(cast_f16_bf16, cast_f16_bf16_strided, half, bfloat, float)
+#endif
 #endif
