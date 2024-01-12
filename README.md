@@ -109,6 +109,9 @@ We also provide a some command line based examples using state of the art models
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
   using self-supervision (can be used for imagenet classification, depth
   evaluation, segmentation).
+- [VGG](./candle-examples/examples/vgg/),
+  [RepVGG](./candle-examples/examples/repvgg): computer vision models.
+- [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
 - [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
   generate captions for an image.
 - [Marian-MT](./candle-examples/examples/marian-mt/): neural machine translation
@@ -204,7 +207,7 @@ If you have an addition to this list, please submit a pull request.
     - Image to text.
         - BLIP.
     - Computer Vision Models.
-        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT.
+        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG.
         - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
