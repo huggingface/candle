@@ -1,6 +1,6 @@
 use super::with_tracing::{linear_no_bias as linear, Linear};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, Module, VarBuilder};
+use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -134,11 +134,6 @@ impl Cache {
             Ok(mask)
         }
     }
-}
-
-fn embedding(cfg: &Config, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((cfg.vocab_size, cfg.hidden_size), "weight")?;
-    Ok(Embedding::new(embeddings, cfg.hidden_size))
 }
 
 struct RmsNorm {
@@ -409,7 +404,7 @@ impl Llama {
     }
 
     pub fn load(vb: VarBuilder, cache: &Cache, cfg: &Config) -> Result<Self> {
-        let wte = embedding(cfg, vb.pp("model.embed_tokens"))?;
+        let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         let ln_f = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)

@@ -1,5 +1,5 @@
-use crate::benchmarks::{bench_name, device, BenchDevice};
-use candle_core::{DType, Tensor};
+use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
+use candle_core::{DType, Device, Tensor};
 use criterion::{black_box, criterion_group, Criterion, Throughput};
 use std::time::Instant;
 
@@ -24,8 +24,7 @@ const SIZE: usize = B * M * K;
 
 const DATA: [u8; SIZE] = create_cond_arr::<SIZE>();
 
-fn run_where_cond_benchmark(c: &mut Criterion, dtype: DType, name: &str) {
-    let device = device().unwrap();
+fn run_where_cond_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
     let tensor = Tensor::from_slice(DATA.as_slice(), (B, M, K), &device).unwrap();
     let on_true = Tensor::ones((B, M, K), dtype, &device).unwrap();
     let on_false = Tensor::zeros((B, M, K), dtype, &device).unwrap();
@@ -34,7 +33,7 @@ fn run_where_cond_benchmark(c: &mut Criterion, dtype: DType, name: &str) {
     // E.g. 2 f32 tensors + 1 u8 tensor
     let flops = (2 * elements * dtype.size_in_bytes()) + elements;
 
-    let mut group = c.benchmark_group(bench_name(name));
+    let mut group = c.benchmark_group(device.bench_name(name));
     group.throughput(Throughput::Bytes(flops as u64));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {
@@ -54,9 +53,12 @@ fn run_where_cond_benchmark(c: &mut Criterion, dtype: DType, name: &str) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    run_where_cond_benchmark(c, DType::F32, "where_cond_f32");
-    run_where_cond_benchmark(c, DType::BF16, "where_cond_bf16");
-    run_where_cond_benchmark(c, DType::F16, "where_cond_f16");
+    let device = BenchDeviceHandler::new().unwrap();
+    for d in device.devices {
+        run_where_cond_benchmark(c, &d, DType::F32, "where_cond_f32");
+        run_where_cond_benchmark(c, &d, DType::BF16, "where_cond_bf16");
+        run_where_cond_benchmark(c, &d, DType::F16, "where_cond_f16");
+    }
 }
 
 criterion_group!(benches, criterion_benchmark);

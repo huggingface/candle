@@ -117,7 +117,7 @@ ELU(elu_f32, float)
 ELU(elu_f16, half)
 
 
-#if __METAL_VERSION__ >= 310
+#if defined(__HAVE_BFLOAT__)
 AFFINE(affine_bf16, bfloat);
 POWF(powf_bf16, bfloat);
 ELU(elu_bf16, bfloat);
