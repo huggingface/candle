@@ -1,3 +1,4 @@
+pub(crate) mod affine;
 pub(crate) mod matmul;
 pub(crate) mod where_cond;
 
