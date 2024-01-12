@@ -5,6 +5,8 @@ use candle_core::{Device, Result};
 
 pub(crate) trait BenchDevice {
     fn sync(&self) -> Result<()>;
+
+    fn bench_name<S: Into<String>>(&self, name: S) -> String;
 }
 
 impl BenchDevice for Device {
@@ -25,32 +27,38 @@ impl BenchDevice for Device {
             }
         }
     }
-}
 
-pub(crate) fn device() -> Result<Device> {
-    if cfg!(feature = "metal") {
-        Device::new_metal(0)
-    } else if cfg!(feature = "cuda") {
-        Device::new_cuda(0)
-    } else {
-        Ok(Device::Cpu)
+    fn bench_name<S: Into<String>>(&self, name: S) -> String {
+        match self {
+            Device::Cpu => {
+                let cpu_type = if cfg!(feature = "accelerate") {
+                    "accelerate"
+                } else if cfg!(feature = "mkl") {
+                    "mkl"
+                } else {
+                    "cpu"
+                };
+                format!("{}_{}", cpu_type, name.into())
+            }
+            Device::Cuda(_) => format!("cuda_{}", name.into()),
+            Device::Metal(_) => format!("metal_{}", name.into()),
+        }
     }
 }
 
-pub(crate) fn bench_name<S: Into<String>>(name: S) -> String {
-    format!("{}_{}", device_variant(), name.into())
+struct BenchDeviceHandler {
+    devices: Vec<Device>,
 }
 
-const fn device_variant() -> &'static str {
-    if cfg!(feature = "metal") {
-        "metal"
-    } else if cfg!(feature = "cuda") {
-        "cuda"
-    } else if cfg!(feature = "accelerate") {
-        "accelerate"
-    } else if cfg!(feature = "mkl") {
-        "mkl"
-    } else {
-        "cpu"
+impl BenchDeviceHandler {
+    pub fn new() -> Result<Self> {
+        let mut devices = Vec::new();
+        if cfg!(feature = "metal") {
+            devices.push(Device::new_metal(0)?);
+        } else if cfg!(feature = "cuda") {
+            devices.push(Device::new_cuda(0)?);
+        }
+        devices.push(Device::Cpu);
+        Ok(Self { devices })
     }
 }
