@@ -178,8 +178,8 @@ macro_rules! ops{
 
 pub mod unary {
     ops!(
-        cos, sin, exp, sqr, sqrt, neg, log, gelu, abs, ceil, floor, round, erf, gelu_erf, tanh,
-        recip
+        cos, sin, exp, sqr, sqrt, neg, log, gelu, abs, ceil, floor, relu, round, erf, gelu_erf,
+        tanh, recip
     );
 }
 pub mod binary {
