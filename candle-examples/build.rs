@@ -27,11 +27,5 @@ fn main() -> Result<()> {
             bindings.write(kdir.rust_target).unwrap()
         }
     }
-    #[cfg(not(feature = "cuda"))]
-    {
-        for kdir in KERNEL_DIRS.iter() {
-            let _file = std::fs::File::create(kdir.rust_target)?;
-        }
-    }
     Ok(())
 }

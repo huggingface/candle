@@ -169,7 +169,7 @@ struct Args {
     #[arg(long)]
     model_id: Option<String>,
 
-    #[arg(long, default_value = "1.5")]
+    #[arg(long, default_value = "2")]
     model: WhichModel,
 
     #[arg(long)]
@@ -247,9 +247,8 @@ fn main() -> Result<()> {
                 match args.model {
                     WhichModel::V1 => "refs/pr/2".to_string(),
                     WhichModel::V1_5 => "refs/pr/18".to_string(),
-                    WhichModel::V2 | WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => {
-                        "main".to_string()
-                    }
+                    WhichModel::V2 => "834565c23f9b28b96ccbeabe614dd906b6db551a".to_string(),
+                    WhichModel::PuffinPhiV2 | WhichModel::PhiHermes => "main".to_string(),
                 }
             }
         }
