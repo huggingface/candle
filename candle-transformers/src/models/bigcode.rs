@@ -1,5 +1,5 @@
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder};
+use candle_nn::{embedding, Embedding, LayerNorm, Linear, Module, VarBuilder};
 
 fn linear(size1: usize, size2: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
     let weight = vb.get((size2, size1), "weight")?;
@@ -9,11 +9,6 @@ fn linear(size1: usize, size2: usize, bias: bool, vb: VarBuilder) -> Result<Line
         None
     };
     Ok(Linear::new(weight, bias))
-}
-
-fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
-    Ok(Embedding::new(embeddings, hidden_size))
 }
 
 fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
