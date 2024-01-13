@@ -104,6 +104,13 @@ struct Attention {
     span: tracing::Span,
 }
 
+fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+    let mask: Vec<_> = (0..size)
+        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
+        .collect();
+    Tensor::from_slice(&mask, (size, size), device)
+}
+
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
     let shape = mask.shape();
     let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
@@ -201,6 +208,34 @@ struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
     input_layernorm: LayerNorm,
+    span: tracing::Span,
+}
+
+impl DecoderLayer {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let self_attn = Attention::new(cfg, vb.pp("self_attn"))?;
+        let mlp = MLP::new(cfg, vb.pp("mlp"))?;
+        let input_layernorm = layer_norm(
+            cfg.hidden_size,
+            cfg.layer_norm_eps,
+            vb.pp("input_layernorm"),
+        )?;
+        Ok(Self {
+            self_attn,
+            mlp,
+            input_layernorm,
+            span: tracing::span!(tracing::Level::TRACE, "block"),
+        })
+    }
+
+    fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let residual = xs;
+        let xs = xs.apply(&self.input_layernorm)?;
+        let attn_outputs = self.self_attn.forward(&xs, mask)?;
+        let feed_forward_hidden_states = self.mlp.forward(&xs)?;
+        attn_outputs + feed_forward_hidden_states + residual
+    }
 }
 
 #[derive(Clone)]
@@ -209,4 +244,49 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
     lm_head: Linear,
+    span: tracing::Span,
+}
+
+impl Model {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let vb_m = vb.pp("model");
+        let embed_tokens =
+            Embedding::new(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let final_layernorm = layer_norm(
+            cfg.hidden_size,
+            cfg.layer_norm_eps,
+            vb_m.pp("final_layernorm"),
+        )?;
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        let vb_m = vb_m.pp("layers");
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let layer = DecoderLayer::new(cfg, vb_m.pp(layer_idx))?;
+            layers.push(layer)
+        }
+        let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        Ok(Self {
+            embed_tokens,
+            layers,
+            final_layernorm,
+            lm_head,
+            span: tracing::span!(tracing::Level::TRACE, "model"),
+        })
+    }
+
+    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let (_b_size, seq_len) = xs.dims2()?;
+        let mut xs = xs.apply(&self.embed_tokens)?;
+        let mask = if seq_len <= 1 {
+            None
+        } else {
+            Some(get_mask(seq_len, xs.device())?)
+        };
+        for layer in self.layers.iter_mut() {
+            xs = layer.forward(&xs, mask.as_ref())?
+        }
+        xs.narrow(1, seq_len - 1, 1)?
+            .apply(&self.lm_head)?
+            .squeeze(1)
+    }
 }
