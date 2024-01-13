@@ -23,7 +23,7 @@ pub struct Config {
     pub(crate) tie_word_embeddings: bool,
     pub(crate) rope_theta: f32,
     pub(crate) partial_rotary_factor: f64,
-    pub(crate) qk_layer_norm: bool,
+    pub(crate) qk_layernorm: bool,
 }
 
 impl Config {
@@ -149,7 +149,7 @@ impl Attention {
         let dense = linear(num_heads * head_dim, cfg.hidden_size, vb.pp("dense"))?;
         // Alternative rope scalings are not supported.
         let rotary_emb = RotaryEmbedding::new(cfg, vb.device())?;
-        let (q_layernorm, k_layernorm) = if cfg.qk_layer_norm {
+        let (q_layernorm, k_layernorm) = if cfg.qk_layernorm {
             let q_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("q_layernorm"))?;
             let k_layernorm = layer_norm(head_dim, cfg.layer_norm_eps, vb.pp("k_layernorm"))?;
             (Some(q_layernorm), Some(k_layernorm))
