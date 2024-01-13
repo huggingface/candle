@@ -61,6 +61,26 @@ impl RotaryEmbedding {
             cos: freqs.cos()?,
         })
     }
+
+    fn apply_rotary_emb(&self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        let (_b_size, seqlen, _, _headdim) = xs.dims4()?;
+        let (_rotary_seqlen, rotary_dim) = self.cos.dims2()?;
+        let rotary_dim = rotary_dim * 2;
+        let xs_rot = xs.i((.., .., .., ..rotary_dim))?;
+        let xs_pass = xs.i((.., .., .., rotary_dim..))?;
+        let xs12 = xs_rot.chunk(2, D::Minus1)?;
+        let (xs1, xs2) = (&xs12[0], &xs12[1]);
+        let c = self.cos.narrow(0, seqlen_offset, seqlen)?.unsqueeze(1)?;
+        let s = self.sin.narrow(0, seqlen_offset, seqlen)?.unsqueeze(1)?;
+        let xs_rot = Tensor::cat(
+            &[
+                (xs1.broadcast_mul(&c)? - xs2.broadcast_mul(&s)?)?,
+                (xs1.broadcast_mul(&s)? + xs2.broadcast_mul(&c)?)?,
+            ],
+            D::Minus1,
+        )?;
+        Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -197,7 +217,12 @@ impl Attention {
             None => 0,
             Some((prev_k, _)) => prev_k.dim(1)?,
         };
-        // TODO: rotary embeddings.
+        let query_states = self
+            .rotary_emb
+            .apply_rotary_emb(&query_states, seqlen_offset)?;
+        let key_states = self
+            .rotary_emb
+            .apply_rotary_emb(&key_states, seqlen_offset)?;
 
         // KV cache.
         let (key_states, value_states) = match &self.kv_cache {
