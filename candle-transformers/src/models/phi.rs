@@ -121,6 +121,7 @@ struct Attention {
     softmax_scale: f64,
     num_heads: usize,
     num_kv_heads: usize,
+    head_dim: usize,
     span: tracing::Span,
 }
 
@@ -169,6 +170,7 @@ impl Attention {
             softmax_scale,
             num_heads,
             num_kv_heads,
+            head_dim,
             span: tracing::span!(tracing::Level::TRACE, "attention"),
         })
     }
@@ -202,13 +204,13 @@ impl Attention {
         };
 
         let query_states = query_states
-            .reshape((b_size, seq_len, self.num_heads))?
+            .reshape((b_size, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
         let key_states = key_states
-            .reshape((b_size, seq_len, self.num_kv_heads))?
+            .reshape((b_size, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
         let value_states = value_states
-            .reshape((b_size, seq_len, self.num_kv_heads))?
+            .reshape((b_size, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
         // Rotary embeddings.
@@ -227,26 +229,27 @@ impl Attention {
         let (key_states, value_states) = match &self.kv_cache {
             None => (key_states, value_states),
             Some((prev_k, prev_v)) => {
-                let k = Tensor::cat(&[prev_k, &key_states], 1)?;
-                let v = Tensor::cat(&[prev_v, &value_states], 1)?;
+                let k = Tensor::cat(&[prev_k, &key_states], 2)?;
+                let v = Tensor::cat(&[prev_v, &value_states], 2)?;
                 (k, v)
             }
         };
         self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
         // Repeat kv.
-        let key_states = self.repeat_kv(key_states)?;
-        let value_states = self.repeat_kv(value_states)?;
+        let key_states = self.repeat_kv(key_states)?.contiguous()?;
+        let value_states = self.repeat_kv(value_states)?.contiguous()?;
 
         let attn_weights = (query_states
             .to_dtype(DType::F32)?
+            .contiguous()?
             .matmul(&key_states.to_dtype(DType::F32)?.t()?)?
             * self.softmax_scale)?;
         let attn_weights = match mask {
             None => attn_weights,
             Some(mask) => masked_fill(
                 &attn_weights,
-                &mask.broadcast_left(b_size * self.num_heads)?,
+                &mask.broadcast_left((b_size, self.num_heads))?,
                 f32::NEG_INFINITY,
             )?,
         };
