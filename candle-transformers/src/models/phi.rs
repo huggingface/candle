@@ -214,7 +214,7 @@ impl Attention {
         // Rotary embeddings.
         let seqlen_offset = match &self.kv_cache {
             None => 0,
-            Some((prev_k, _)) => prev_k.dim(1)?,
+            Some((prev_k, _)) => prev_k.dim(2)?,
         };
         let query_states = self
             .rotary_emb
