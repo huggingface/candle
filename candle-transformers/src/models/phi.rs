@@ -1,4 +1,3 @@
-#![allow(unused)]
 use crate::models::with_tracing::{layer_norm, linear, Embedding, LayerNorm, Linear};
 /// Phi model.
 /// https://huggingface.co/microsoft/phi-2
@@ -351,7 +350,8 @@ impl Model {
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, mask.as_ref())?
         }
-        xs.narrow(1, seq_len - 1, 1)?
+        xs.apply(&self.final_layernorm)?
+            .narrow(1, seq_len - 1, 1)?
             .apply(&self.lm_head)?
             .squeeze(1)
     }
