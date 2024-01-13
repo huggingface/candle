@@ -6,7 +6,7 @@ use crate::op::{
 };
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims};
-use crate::{bail, storage::Storage, DType, Device, Error, Layout, Result, Shape};
+use crate::{storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
 
 /// Unique identifier for tensors.
@@ -271,7 +271,7 @@ impl Tensor {
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_uniform_f64(lo, up, &s, dtype)?;
+        let storage = device.rand_uniform_f64(&s, dtype, lo, up)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
@@ -312,7 +312,7 @@ impl Tensor {
         is_variable: bool,
     ) -> Result<Self> {
         let s = s.into();
-        let storage = device.rand_normal_f64(mean, std, &s, dtype)?;
+        let storage = device.rand_normal_f64(&s, dtype, mean, std)?;
         let none = BackpropOp::none();
         Ok(from_storage(storage, s, none, is_variable))
     }
@@ -540,6 +540,7 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Custom(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -769,7 +770,7 @@ impl Tensor {
 
     fn reduce_impl<D: Dim>(&self, dim: D, keepdim: bool, op: ReduceOp) -> Result<Self> {
         let dim = dim.to_index(self.shape(), op.name())?;
-        let storage = self.storage().reduce_op(op, self.layout(), &[dim])?;
+        let storage = self.storage().reduce(op, self.layout(), &[dim])?;
         let mut dims = self.dims().to_vec();
         dims[dim] = 1;
         let op = match op {
@@ -790,7 +791,7 @@ impl Tensor {
         let sum_dims = sum_dims.to_indexes(self.shape(), "sum")?;
         let storage = self
             .storage()
-            .reduce_op(ReduceOp::Sum, self.layout(), &sum_dims)?;
+            .reduce(ReduceOp::Sum, self.layout(), &sum_dims)?;
         let mut dims = self.dims().to_vec();
         for &sum_dim in sum_dims.iter() {
             dims[sum_dim] = 1
@@ -1490,6 +1491,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Custom(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1521,6 +1523,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Custom(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1562,6 +1565,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Custom(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1876,23 +1880,20 @@ impl Tensor {
             Ok(self.clone())
         } else {
             let storage = match (&*self.storage(), device) {
-                (Storage::Cpu(storage), Device::Cuda(cuda)) => {
-                    Storage::Cuda(cuda.storage_from_cpu_storage(storage)?)
+                (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
+                (Storage::Cpu(storage), any_device) => {
+                    any_device.storage_from_cpu_storage(storage)?
                 }
-                (Storage::Cpu(storage), Device::Metal(metal)) => {
-                    Storage::Metal(metal.storage_from_cpu_storage(storage)?)
-                }
-                (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
-                (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                (any_storage, Device::Cpu) => Storage::Cpu(any_storage.to_cpu_storage()?),
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {
                     // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
                     // are the same.
                     let cpu_storage = storage.to_cpu_storage()?;
                     Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
                 }
-                (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
-                _ => {
-                    bail!("not implemented yet")
+                (any_storage, any_device) => {
+                    let cpu_storage = any_storage.to_cpu_storage()?;
+                    any_device.storage_from_cpu_storage(&cpu_storage)?
                 }
             };
             let op = BackpropOp::new1(self, Op::ToDevice);

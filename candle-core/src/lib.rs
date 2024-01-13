@@ -37,7 +37,7 @@
 mod accelerate;
 pub mod backend;
 pub mod backprop;
-mod conv;
+pub mod conv;
 mod convert;
 pub mod cpu;
 pub mod cpu_backend;
@@ -45,6 +45,7 @@ pub mod cpu_backend;
 pub mod cuda_backend;
 #[cfg(feature = "cudnn")]
 pub mod cudnn;
+mod custom_backend;
 mod device;
 pub mod display;
 mod dtype;
@@ -58,7 +59,7 @@ pub mod metal_backend;
 #[cfg(feature = "mkl")]
 mod mkl;
 pub mod npy;
-mod op;
+pub mod op;
 pub mod pickle;
 pub mod quantized;
 pub mod safetensors;
@@ -72,6 +73,7 @@ pub mod utils;
 mod variable;
 
 pub use cpu_backend::CpuStorage;
+pub use custom_backend::{CustomDevice, CustomStorage};
 pub use device::{Device, DeviceLocation};
 pub use dtype::{DType, FloatDType, IntDType, WithDType};
 pub use error::{Error, Result};

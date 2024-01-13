@@ -1,14 +1,24 @@
-use crate::backend::BackendDevice;
+use crate::backend::{BackendDevice, BackendStorage};
 use crate::cpu_backend::CpuDevice;
+use crate::custom_backend::CustomLocation;
 use crate::{CpuStorage, DType, Result, Shape, Storage, WithDType};
+use std::any::{Any, TypeId};
 
 /// A `DeviceLocation` represents a physical device whereas multiple `Device`
 /// can live on the same location (typically for cuda devices).
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DeviceLocation {
     Cpu,
-    Cuda { gpu_id: usize },
-    Metal { gpu_id: usize },
+    Cuda {
+        gpu_id: usize,
+    },
+    Metal {
+        gpu_id: usize,
+    },
+    Custom {
+        type_id: TypeId,
+        custom_location: CustomLocation,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -16,6 +26,7 @@ pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
     Metal(crate::MetalDevice),
+    Custom(crate::CustomDevice),
 }
 
 pub trait NdArray {
@@ -134,31 +145,6 @@ impl Device {
         Ok(Self::Metal(crate::MetalDevice::new(ordinal)?))
     }
 
-    pub fn set_seed(&self, seed: u64) -> Result<()> {
-        match self {
-            Self::Cpu => CpuDevice.set_seed(seed),
-            Self::Cuda(c) => c.set_seed(seed),
-            Self::Metal(m) => m.set_seed(seed),
-        }
-    }
-
-    pub fn same_device(&self, rhs: &Self) -> bool {
-        match (self, rhs) {
-            (Self::Cpu, Self::Cpu) => true,
-            (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
-            (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
-            _ => false,
-        }
-    }
-
-    pub fn location(&self) -> DeviceLocation {
-        match self {
-            Self::Cpu => DeviceLocation::Cpu,
-            Self::Cuda(device) => device.location(),
-            Device::Metal(device) => device.location(),
-        }
-    }
-
     pub fn is_cpu(&self) -> bool {
         matches!(self, Self::Cpu)
     }
@@ -178,84 +164,111 @@ impl Device {
             Ok(Self::Cpu)
         }
     }
+}
 
-    pub(crate) fn rand_uniform_f64(
-        &self,
-        lo: f64,
-        up: f64,
-        shape: &Shape,
-        dtype: DType,
-    ) -> Result<Storage> {
+impl BackendDevice for Device {
+    type Storage = Storage;
+    type Location = DeviceLocation;
+
+    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
+        Ok(match self {
+            Self::Cpu => Storage::Cpu(storage.clone()),
+            Self::Cuda(device) => Storage::Cuda(device.storage_from_cpu_storage(storage)?),
+            Self::Metal(device) => Storage::Metal(device.storage_from_cpu_storage(storage)?),
+            Self::Custom(device) => Storage::Custom(device.storage_from_cpu_storage(storage)?),
+        })
+    }
+
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        match self {
+            Self::Cpu => CpuDevice.set_seed(seed),
+            Self::Cuda(c) => c.set_seed(seed),
+            Self::Metal(m) => m.set_seed(seed),
+            Self::Custom(c) => c.set_seed(seed),
+        }
+    }
+
+    fn same_device(&self, rhs: &Self) -> bool {
+        match (self, rhs) {
+            (Self::Cpu, Self::Cpu) => true,
+            (Self::Cuda(lhs), Self::Cuda(rhs)) => lhs.same_device(rhs),
+            (Self::Metal(lhs), Self::Metal(rhs)) => lhs.same_device(rhs),
+            (Self::Custom(lhs), Self::Custom(rhs)) => lhs.same_device(rhs),
+            _ => false,
+        }
+    }
+
+    fn location(&self) -> DeviceLocation {
+        match self {
+            Self::Cpu => DeviceLocation::Cpu,
+            Self::Cuda(device) => DeviceLocation::Cuda {
+                gpu_id: device.location(),
+            },
+            Self::Metal(device) => DeviceLocation::Metal {
+                gpu_id: device.location(),
+            },
+            Self::Custom(device) => DeviceLocation::Custom {
+                type_id: device.type_id(),
+                custom_location: device.location(),
+            },
+        }
+    }
+
+    fn rand_uniform_f64(&self, shape: &Shape, dtype: DType, lo: f64, up: f64) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = CpuDevice.rand_uniform(shape, dtype, lo, up)?;
+                let storage = CpuDevice.rand_uniform_f64(shape, dtype, lo, up)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
                 // TODO: Remove the special case if we start supporting generating f16/bf16 directly.
                 if dtype == DType::F16 || dtype == DType::BF16 {
-                    let storage = device.rand_uniform(shape, DType::F32, lo, up)?;
+                    let storage = device.rand_uniform_f64(shape, DType::F32, lo, up)?;
                     Storage::Cuda(storage).to_dtype(&crate::Layout::contiguous(shape), dtype)
                 } else {
-                    let storage = device.rand_uniform(shape, dtype, lo, up)?;
+                    let storage = device.rand_uniform_f64(shape, dtype, lo, up)?;
                     Ok(Storage::Cuda(storage))
                 }
             }
             Device::Metal(device) => {
-                let storage = device.rand_uniform(shape, dtype, lo, up)?;
+                let storage = device.rand_uniform_f64(shape, dtype, lo, up)?;
                 Ok(Storage::Metal(storage))
+            }
+            Device::Custom(device) => {
+                let storage = device.rand_uniform_f64(shape, dtype, lo, up)?;
+                Ok(Storage::Custom(storage))
             }
         }
     }
 
-    pub(crate) fn rand_uniform<T: crate::FloatDType>(
-        &self,
-        lo: T,
-        up: T,
-        shape: &Shape,
-    ) -> Result<Storage> {
-        self.rand_uniform_f64(lo.to_f64(), up.to_f64(), shape, T::DTYPE)
-    }
-
-    pub(crate) fn rand_normal_f64(
-        &self,
-        mean: f64,
-        std: f64,
-        shape: &Shape,
-        dtype: DType,
-    ) -> Result<Storage> {
+    fn rand_normal_f64(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = CpuDevice.rand_normal(shape, dtype, mean, std)?;
+                let storage = CpuDevice.rand_normal_f64(shape, dtype, mean, std)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
                 // TODO: Remove the special case if we start supporting generating f16/bf16 directly.
                 if dtype == DType::F16 || dtype == DType::BF16 {
-                    let storage = device.rand_normal(shape, DType::F32, mean, std)?;
+                    let storage = device.rand_normal_f64(shape, DType::F32, mean, std)?;
                     Storage::Cuda(storage).to_dtype(&crate::Layout::contiguous(shape), dtype)
                 } else {
-                    let storage = device.rand_normal(shape, dtype, mean, std)?;
+                    let storage = device.rand_normal_f64(shape, dtype, mean, std)?;
                     Ok(Storage::Cuda(storage))
                 }
             }
             Device::Metal(device) => {
-                let storage = device.rand_normal(shape, dtype, mean, std)?;
+                let storage = device.rand_normal_f64(shape, dtype, mean, std)?;
                 Ok(Storage::Metal(storage))
+            }
+            Device::Custom(device) => {
+                let storage = device.rand_normal_f64(shape, dtype, mean, std)?;
+                Ok(Storage::Custom(storage))
             }
         }
     }
 
-    pub(crate) fn rand_normal<T: crate::FloatDType>(
-        &self,
-        mean: T,
-        std: T,
-        shape: &Shape,
-    ) -> Result<Storage> {
-        self.rand_normal_f64(mean.to_f64(), std.to_f64(), shape, T::DTYPE)
-    }
-
-    pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {
                 let storage = CpuDevice.ones_impl(shape, dtype)?;
@@ -269,10 +282,14 @@ impl Device {
                 let storage = device.ones_impl(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Custom(device) => {
+                let storage = device.ones_impl(shape, dtype)?;
+                Ok(Storage::Custom(storage))
+            }
         }
     }
 
-    pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
         match self {
             Device::Cpu => {
                 let storage = CpuDevice.zeros_impl(shape, dtype)?;
@@ -286,7 +303,39 @@ impl Device {
                 let storage = device.zeros_impl(shape, dtype)?;
                 Ok(Storage::Metal(storage))
             }
+            Device::Custom(device) => {
+                let storage = device.zeros_impl(shape, dtype)?;
+                Ok(Storage::Custom(storage))
+            }
         }
+    }
+}
+
+impl Device {
+    pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+        self.ones_impl(shape, dtype)
+    }
+
+    pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+        self.zeros_impl(shape, dtype)
+    }
+
+    pub(crate) fn rand_uniform<T: crate::FloatDType>(
+        &self,
+        lo: T,
+        up: T,
+        shape: &Shape,
+    ) -> Result<Storage> {
+        self.rand_uniform_f64(shape, T::DTYPE, lo.to_f64(), up.to_f64())
+    }
+
+    pub(crate) fn rand_normal<T: crate::FloatDType>(
+        &self,
+        mean: T,
+        std: T,
+        shape: &Shape,
+    ) -> Result<Storage> {
+        self.rand_normal_f64(shape, T::DTYPE, mean.to_f64(), std.to_f64())
     }
 
     pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
@@ -301,6 +350,11 @@ impl Device {
                 let storage = array.to_cpu_storage();
                 let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Metal(storage))
+            }
+            Device::Custom(device) => {
+                let storage = array.to_cpu_storage();
+                let storage = device.storage_from_cpu_storage(&storage)?;
+                Ok(Storage::Custom(storage))
             }
         }
     }
@@ -317,6 +371,11 @@ impl Device {
                 let storage = S::to_cpu_storage_owned(data);
                 let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Metal(storage))
+            }
+            Device::Custom(device) => {
+                let storage = S::to_cpu_storage_owned(data);
+                let storage = device.storage_from_cpu_storage(&storage)?;
+                Ok(Storage::Custom(storage))
             }
         }
     }

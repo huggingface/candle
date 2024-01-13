@@ -37,7 +37,7 @@ impl crate::backend::BackendStorage for MetalStorage {
         fail!()
     }
 
-    fn device(&self) -> &Self::Device {
+    fn device(&self) -> Self::Device {
         fail!()
     }
 
@@ -57,7 +57,7 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn reduce_op(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
+    fn reduce(&self, _: ReduceOp, _: &Layout, _: &[usize]) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
@@ -183,17 +183,21 @@ impl crate::backend::BackendStorage for MetalStorage {
     }
 }
 
-impl crate::backend::BackendDevice for MetalDevice {
-    type Storage = MetalStorage;
-    fn new(_: usize) -> Result<Self> {
+impl MetalDevice {
+    pub fn new(_: usize) -> Result<Self> {
         Err(Error::NotCompiledWithMetalSupport)
     }
+}
+
+impl crate::backend::BackendDevice for MetalDevice {
+    type Storage = MetalStorage;
+    type Location = usize;
 
     fn set_seed(&self, _: u64) -> Result<()> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn location(&self) -> crate::DeviceLocation {
+    fn location(&self) -> Self::Location {
         fail!()
     }
 
@@ -213,11 +217,11 @@ impl crate::backend::BackendDevice for MetalDevice {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn rand_uniform_f64(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
+    fn rand_normal_f64(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 }

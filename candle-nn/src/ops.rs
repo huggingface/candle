@@ -193,12 +193,9 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         }
 
         use candle::backend::BackendStorage;
-        let dev = storage.device();
-        let slice = S.map(&storage.slice, dev, layout)?;
-        let dst = candle::cuda_backend::CudaStorage {
-            slice,
-            device: dev.clone(),
-        };
+        let device = storage.device();
+        let slice = S.map(&storage.slice, &device, layout)?;
+        let dst = candle::cuda_backend::CudaStorage { slice, device };
         Ok((dst, layout.shape().clone()))
     }
 

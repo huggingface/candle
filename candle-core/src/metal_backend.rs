@@ -123,6 +123,32 @@ impl std::ops::Deref for MetalDevice {
 }
 
 impl MetalDevice {
+    pub fn new(ordinal: usize) -> Result<Self> {
+        let device = metal::Device::all().swap_remove(ordinal);
+        let command_queue = device.new_command_queue();
+        let command_buffer = command_queue.new_command_buffer().to_owned();
+        command_buffer.enqueue();
+        let command_buffer = Arc::new(RwLock::new(command_buffer));
+        let command_buffer_index = Arc::new(RwLock::new(0));
+        let fence = device.new_fence();
+        let kernels = Arc::new(Kernels::new(fence.clone()));
+        let buffers = Arc::new(RwLock::new(HashMap::new()));
+        let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
+            Ok(val) => val.parse()?,
+            _ => 20,
+        };
+        Ok(Self {
+            device,
+            fence,
+            command_queue,
+            command_buffer,
+            command_buffer_index,
+            compute_per_buffer,
+            buffers,
+            kernels,
+        })
+    }
+
     pub fn id(&self) -> NSUInteger {
         self.registry_id()
     }
@@ -172,8 +198,8 @@ impl MetalDevice {
         &self.kernels
     }
 
-    pub fn device(&self) -> &metal::Device {
-        &self.device
+    pub fn device(&self) -> metal::Device {
+        self.device.clone()
     }
 
     /// Creates a new buffer (not necessarily zeroed).
@@ -303,7 +329,7 @@ impl BackendStorage for MetalStorage {
         self.dtype
     }
 
-    fn device(&self) -> &Self::Device {
+    fn device(&self) -> Self::Device {
         &self.device
     }
 
@@ -341,7 +367,7 @@ impl BackendStorage for MetalStorage {
     }
 
     fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {
-        let device = self.device().clone();
+        let device = self.device();
 
         let shape = layout.shape();
         let el = shape.elem_count();
@@ -491,7 +517,7 @@ impl BackendStorage for MetalStorage {
         Ok(Self::new(buffer, device.clone(), dtype))
     }
 
-    fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
+    fn reduce(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
         let device = self.device.clone();
         let src_stride = layout.stride();
         let src_dims = layout.shape().dims();
@@ -1525,41 +1551,14 @@ impl MetalStorage {
 
 impl BackendDevice for MetalDevice {
     type Storage = MetalStorage;
-
-    fn new(ordinal: usize) -> Result<Self> {
-        let device = metal::Device::all().swap_remove(ordinal);
-        let command_queue = device.new_command_queue();
-        let command_buffer = command_queue.new_command_buffer().to_owned();
-        command_buffer.enqueue();
-        let command_buffer = Arc::new(RwLock::new(command_buffer));
-        let command_buffer_index = Arc::new(RwLock::new(0));
-        let fence = device.new_fence();
-        let kernels = Arc::new(Kernels::new(fence.clone()));
-        let buffers = Arc::new(RwLock::new(HashMap::new()));
-        let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
-            Ok(val) => val.parse()?,
-            _ => 20,
-        };
-        Ok(Self {
-            device,
-            fence,
-            command_queue,
-            command_buffer,
-            command_buffer_index,
-            compute_per_buffer,
-            buffers,
-            kernels,
-        })
-    }
+    type Location = usize;
 
     fn set_seed(&self, _seed: u64) -> Result<()> {
         crate::bail!("Metal set_seed not implemented")
     }
 
-    fn location(&self) -> crate::DeviceLocation {
-        crate::DeviceLocation::Metal {
-            gpu_id: self.registry_id() as usize,
-        }
+    fn location(&self) -> Self::Location {
+        self.registry_id() as usize
     }
 
     fn same_device(&self, rhs: &Self) -> bool {
@@ -1604,7 +1603,7 @@ impl BackendDevice for MetalDevice {
         Ok(Self::Storage::new(buffer, self.clone(), storage.dtype()))
     }
 
-    fn rand_uniform(
+    fn rand_uniform_f64(
         &self,
         shape: &Shape,
         dtype: DType,
@@ -1612,11 +1611,12 @@ impl BackendDevice for MetalDevice {
         stddev: f64,
     ) -> Result<Self::Storage> {
         // TODO is there a better way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.rand_uniform(shape, dtype, mean, stddev)?;
+        let cpu_storage =
+            crate::cpu_backend::CpuDevice.rand_uniform_f64(shape, dtype, mean, stddev)?;
         self.storage_from_cpu_storage(&cpu_storage)
     }
 
-    fn rand_normal(
+    fn rand_normal_f64(
         &self,
         shape: &Shape,
         dtype: DType,
@@ -1624,7 +1624,8 @@ impl BackendDevice for MetalDevice {
         stddev: f64,
     ) -> Result<Self::Storage> {
         // TODO is there a better way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.rand_normal(shape, dtype, mean, stddev)?;
+        let cpu_storage =
+            crate::cpu_backend::CpuDevice.rand_normal_f64(shape, dtype, mean, stddev)?;
         self.storage_from_cpu_storage(&cpu_storage)
     }
 }
