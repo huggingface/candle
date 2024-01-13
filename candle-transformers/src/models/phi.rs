@@ -93,9 +93,9 @@ impl MLP {
         Ok(Self {
             fc1,
             fc2,
-            // Bypass the config activation for now to be in line with the mixformers
-            // implementation
-            act: Activation::Gelu,
+            // This does not match the mixformers implementation where Gelu is used rather than
+            // GeluNew.
+            act: cfg.hidden_act,
         })
     }
 }
