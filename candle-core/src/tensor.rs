@@ -2578,10 +2578,20 @@ impl Tensor {
     }
 
     /// Returns log(sum(exp(tensor), dim)).
-    pub fn logsumexp<D: Dims>(&self, sum_dims: D) -> Result<Self> {
+    pub fn log_sum_exp<D: Dims>(&self, sum_dims: D) -> Result<Self> {
         let exp = self.exp()?;
         let sum = exp.sum(sum_dims)?;
         sum.log()
+    }
+
+    /// Pointwise pow operation.
+    pub fn pow(&self, rhs: &Tensor) -> Result<Self> {
+        rhs.mul(&self.log()?)?.exp()
+    }
+
+    /// Broadcasting version of `pow`.
+    pub fn broadcast_pow(&self, rhs: &Tensor) -> Result<Self> {
+        rhs.broadcast_mul(&self.log()?)?.exp()
     }
 }
 
