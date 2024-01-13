@@ -93,7 +93,9 @@ impl MLP {
         Ok(Self {
             fc1,
             fc2,
-            act: cfg.hidden_act,
+            // Bypass the config activation for now to be in line with the mixformers
+            // implementation
+            act: Activation::Gelu,
         })
     }
 }
@@ -347,7 +349,7 @@ impl Model {
             Some(get_mask(seq_len, xs.device())?)
         };
         for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, mask.as_ref())?
+            xs = layer.forward(&xs, mask.as_ref())?;
         }
         xs.apply(&self.final_layernorm)?
             .narrow(1, seq_len - 1, 1)?
