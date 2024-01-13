@@ -95,6 +95,7 @@ struct Attention {
     k_proj: Linear,
     v_proj: Linear,
     dense: Linear,
+    kv_cache: Option<(Tensor, Tensor)>,
     q_layernorm: Option<LayerNorm>,
     k_layernorm: Option<LayerNorm>,
     rotary_emb: RotaryEmbedding,
@@ -142,6 +143,7 @@ impl Attention {
             k_proj,
             v_proj,
             dense,
+            kv_cache: None,
             q_layernorm,
             k_layernorm,
             rotary_emb,
@@ -150,6 +152,18 @@ impl Attention {
             num_kv_heads,
             span: tracing::span!(tracing::Level::TRACE, "attention"),
         })
+    }
+
+    fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
+        let n_rep = self.num_heads / self.num_kv_heads;
+        if n_rep == 1 {
+            Ok(xs)
+        } else {
+            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
+            xs.unsqueeze(2)?
+                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
+                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
+        }
     }
 
     fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
@@ -178,9 +192,28 @@ impl Attention {
             .reshape((b_size, seq_len, self.num_kv_heads))?
             .transpose(1, 2)?;
 
+        // Rotary embeddings.
+        let seqlen_offset = match &self.kv_cache {
+            None => 0,
+            Some((prev_k, _)) => prev_k.dim(1)?,
+        };
         // TODO: rotary embeddings.
-        // TODO: KV cache
-        // TODO: repeat kv.
+
+        // KV cache.
+        let (key_states, value_states) = match &self.kv_cache {
+            None => (key_states, value_states),
+            Some((prev_k, prev_v)) => {
+                let k = Tensor::cat(&[prev_k, &key_states], 1)?;
+                let v = Tensor::cat(&[prev_v, &value_states], 1)?;
+                (k, v)
+            }
+        };
+        self.kv_cache = Some((key_states.clone(), value_states.clone()));
+
+        // Repeat kv.
+        let key_states = self.repeat_kv(key_states)?;
+        let value_states = self.repeat_kv(value_states)?;
+
         let attn_weights = (query_states
             .to_dtype(DType::F32)?
             .matmul(&key_states.to_dtype(DType::F32)?.t()?)?
@@ -200,6 +233,10 @@ impl Attention {
             .transpose(1, 2)?
             .reshape((b_size, seq_len, ()))?;
         attn_output.apply(&self.dense)
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None
     }
 }
 
@@ -235,6 +272,10 @@ impl DecoderLayer {
         let attn_outputs = self.self_attn.forward(&xs, mask)?;
         let feed_forward_hidden_states = self.mlp.forward(&xs)?;
         attn_outputs + feed_forward_hidden_states + residual
+    }
+
+    fn clear_kv_cache(&mut self) {
+        self.self_attn.clear_kv_cache()
     }
 }
 
@@ -288,5 +329,9 @@ impl Model {
         xs.narrow(1, seq_len - 1, 1)?
             .apply(&self.lm_head)?
             .squeeze(1)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.layers.iter_mut().for_each(|b| b.clear_kv_cache())
     }
 }
