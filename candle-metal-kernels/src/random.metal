@@ -1,4 +1,7 @@
 #include <metal_stdlib>
+#include <metal_integer>
+#include <metal_atomic>
+
 using namespace metal;
 
 // Constants
@@ -107,72 +110,85 @@ struct HybridTaus {
     }
 };
 
+METAL_FUNC float absdiff(float x, float y) {
+    return abs(x - y);
+}
+
 template<typename T> METAL_FUNC void rand_uniform(
     constant size_t &size,
-    constant ulong &seed,
     constant float &min,
     constant float &max,
+    device atomic_uint *seed,
     device T *out,
     uint tid [[thread_position_in_grid]]
 ) {
     if (tid >= size) {
         return;
     }
-    float diff = max - min;
-    HybridTaus rng = HybridTaus::init({seed, tid, 1, 1});
+
+    float diff = absdiff(min, max);
+    HybridTaus rng = HybridTaus::init({ulong(seed), tid, 1, 1});
     out[tid] = static_cast<T>(rng.rand() * diff + min);
     out[size - tid] = static_cast<T>(rng.rand() * diff + min);
+
+    if (tid == 0) {
+        atomic_store_explicit(seed, uint(rng.rand() * UNIF01_NORM32), memory_order_relaxed);
+    }
 }
 
 // Create Gaussian normal distribution using Box-Muller transform:
 // https://en.wikipedia.org/wiki/Box–Muller_transform
 template<typename T> METAL_FUNC void normal(
     constant size_t &size,
-    constant ulong &seed,
     constant float &mean,
     constant float &stddev,
+    device atomic_uint *seed,
     device T *out,
     uint tid [[thread_position_in_grid]]
 ) {
     if (tid >= size) {
         return;
     }
-    HybridTaus rng = HybridTaus::init({seed, tid, 1, 1});
+    HybridTaus rng = HybridTaus::init({ulong(seed), tid, 1, 1});
     float u1 = rng.rand();
     float u2 = rng.rand();
 
     float cosval;
-    float sinval = sincos(u1 * TWO_PI, cosval);
+    float sinval = sincos(TWO_PI * u2, cosval);
     float mag = stddev * sqrt(-2.0 * log(u1));
     float z0  = mag * cosval + mean;
     float z1  = mag * sinval + mean;
 
     out[tid] = static_cast<T>(z0);
     out[size - tid] = static_cast<T>(z1);
+
+    if (tid == 0) {
+        atomic_store_explicit(seed, uint(rng.rand() * UNIF01_NORM32), memory_order_relaxed);
+    }
 }
 
 #define UNIFORM_OP(NAME, T)                             \
 kernel void rand_uniform_##NAME(                        \
     constant size_t &size,                              \
-    constant ulong &seed,                               \
     constant float &min,                                \
     constant float &max,                                \
+    device atomic_uint *seed,                           \
     device T *out,                                      \
     uint tid [[thread_position_in_grid]]                \
 ) {                                                     \
-    rand_uniform<T>(size, seed, min, max, out, tid);    \
+    rand_uniform<T>(size, min, max, seed, out, tid);    \
 }                                                       \
 
 #define NORMAL_OP(NAME, T)                              \
 kernel void rand_normal_##NAME(                         \
     constant size_t &size,                              \
-    constant ulong &seed,                               \
     constant float &mean,                               \
     constant float &stddev,                             \
+    device atomic_uint *seed,                           \
     device T *out,                                      \
     uint tid [[thread_position_in_grid]]                \
 ) {                                                     \
-    normal<T>(size, seed, mean, stddev, out, tid);      \
+    normal<T>(size, mean, stddev, seed, out, tid);      \
 }                                                       \
 
 
