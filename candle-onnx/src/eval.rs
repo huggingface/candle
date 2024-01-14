@@ -254,6 +254,12 @@ pub fn simple_eval(
                 let output = input0.broadcast_div(input1)?;
                 values.insert(node.output[0].clone(), output);
             }
+            "Pow" => {
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[1])?;
+                let output = input0.broadcast_pow(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
             "Equal" => {
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?;
