@@ -97,7 +97,7 @@ fn squeeze_and_excitation(
         let xs = xs.mean_keepdim(D::Minus2)?.mean_keepdim(D::Minus1)?;
         let xs = sigmoid(&xs.apply(&fc1)?.relu()?.apply(&fc2)?)?;
 
-        Ok(residual.broadcast_mul(&xs)?)
+        residual.broadcast_mul(&xs)
     }))
 }
 
@@ -119,6 +119,7 @@ fn fuse_conv_bn(weights: &Tensor, bn: BatchNorm) -> Result<(Tensor, Tensor)> {
 // The latter is a simple and efficient equivalent transformation of the former
 // realized by a structural reparameterization technique, where convolutions
 // along with identity branches and batchnorm layers are fused into a single convolution.
+#[allow(clippy::too_many_arguments)]
 fn mobileone_block(
     has_identity: bool,
     k: usize,
@@ -134,7 +135,7 @@ fn mobileone_block(
     let conv2d_cfg = Conv2dConfig {
         stride,
         padding,
-        groups: groups,
+        groups,
         ..Default::default()
     };
 
@@ -181,7 +182,7 @@ fn mobileone_block(
     }
 
     // Use SE blocks if present (last layers of the s4 variant)
-    let se = squeeze_and_excitation(out_channels, (out_channels / 16) as usize, vb.pp("attn"));
+    let se = squeeze_and_excitation(out_channels, out_channels / 16, vb.pp("attn"));
 
     // read and reparameterize the identity bn into wi and bi
     if has_identity {
@@ -189,7 +190,7 @@ fn mobileone_block(
 
         let mut weights: Vec<f32> = vec![0.0; w.elem_count()];
 
-        let id = (in_channels / groups) as usize;
+        let id = in_channels / groups;
         // See https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/byobnet.py#L809
         for i in 0..in_channels {
             if kernel > 1 {
@@ -235,10 +236,10 @@ fn mobileone_stage(cfg: &Config, idx: usize, vb: VarBuilder) -> Result<Func<'sta
     let nblocks = STAGES[idx].blocks;
     let mut blocks = Vec::with_capacity(nblocks);
 
-    let mut in_channels = output_channels_per_stage(&cfg, idx - 1);
+    let mut in_channels = output_channels_per_stage(cfg, idx - 1);
 
     for block_idx in 0..nblocks {
-        let out_channels = output_channels_per_stage(&cfg, idx);
+        let out_channels = output_channels_per_stage(cfg, idx);
         let (has_identity, stride) = if block_idx == 0 {
             (false, 2)
         } else {
