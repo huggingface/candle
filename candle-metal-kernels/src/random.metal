@@ -14,6 +14,7 @@ static constexpr constant int3 S1 = {13, 19, 12};
 static constexpr constant int3 S2 = {2, 25, 4};
 static constexpr constant int3 S3 = {3, 11, 17};
 
+// Used to prevent bad seeds.
 static constexpr constant uint64_t PHI[16] = {
     0x9E3779B97F4A7C15,
     0xF39CC0605CEDC834,
@@ -110,10 +111,6 @@ struct HybridTaus {
     }
 };
 
-METAL_FUNC float absdiff(float x, float y) {
-    return abs(x - y);
-}
-
 template<typename T> METAL_FUNC void rand_uniform(
     constant size_t &size,
     constant float &min,
@@ -126,14 +123,16 @@ template<typename T> METAL_FUNC void rand_uniform(
         return;
     }
 
-    float diff = absdiff(min, max);
+    float diff = abs(min - max);
     HybridTaus rng = HybridTaus::init({ulong(seed), tid, 1, 1});
     out[tid] = static_cast<T>(rng.rand() * diff + min);
-    out[size - tid] = static_cast<T>(rng.rand() * diff + min);
-
     if (tid == 0) {
         atomic_store_explicit(seed, uint(rng.rand() * UNIF01_NORM32), memory_order_relaxed);
+        // Return early if tid == 0, otherwise we will write to out[size].
+        return;
     }
+    // Use symmetry to fill the other half of the array.
+    out[size - tid] = static_cast<T>(rng.rand() * diff + min);
 }
 
 // Create Gaussian normal distribution using Box-Muller transform:
@@ -160,11 +159,14 @@ template<typename T> METAL_FUNC void normal(
     float z1  = mag * sinval + mean;
 
     out[tid] = static_cast<T>(z0);
-    out[size - tid] = static_cast<T>(z1);
 
     if (tid == 0) {
         atomic_store_explicit(seed, uint(rng.rand() * UNIF01_NORM32), memory_order_relaxed);
+        // Return early if tid == 0, otherwise we will write to out[size].
+        return;
     }
+    // Use symmetry to fill the other half of the array.
+    out[size - tid] = static_cast<T>(z1);
 }
 
 #define UNIFORM_OP(NAME, T)                             \
