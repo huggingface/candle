@@ -149,7 +149,6 @@ fn mobileone_block(
     // k is the training-time overparameterization factor, larger than 1 only in the s0 variant
     for i in 0..k {
         let conv_kxk_bn = batch_norm(dim, 1e-5, vb.pp(format!("conv_kxk.{i}.bn")))?;
-        // println!("{in_channels} {out_channels} {kernel} {conv2d_cfg:?}");
         let conv_kxk = conv2d_no_bias(
             in_channels,
             out_channels,
