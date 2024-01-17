@@ -72,7 +72,7 @@ pub mod utils;
 mod variable;
 
 pub use cpu_backend::CpuStorage;
-pub use device::{Device, DeviceLocation};
+pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, FloatDType, IntDType, WithDType};
 pub use error::{Error, Result};
 pub use indexer::IndexOp;

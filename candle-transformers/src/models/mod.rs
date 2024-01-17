@@ -15,6 +15,7 @@ pub mod marian;
 pub mod mistral;
 pub mod mixformer;
 pub mod mixtral;
+pub mod mobileone;
 pub mod mpt;
 pub mod persimmon;
 pub mod phi;
