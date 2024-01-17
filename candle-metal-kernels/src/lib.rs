@@ -47,7 +47,7 @@ fn set_param<P: EncoderParam>(encoder: &ComputeCommandEncoderRef, position: u64,
 /// Helper functions to create the various objects on the compute command encoder
 /// on a single line.
 /// Prevents getting wrong some arguments number and mixing length and size in bytes.
-pub trait EncoderParam {
+trait EncoderParam {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self);
 }
 macro_rules! primitive {
