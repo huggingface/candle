@@ -41,6 +41,7 @@ impl Model {
     ) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
+        let device = Device::Cpu;
         let name: ModelName = serde_json::from_slice(&config)?;
         let config: Config = serde_json::from_slice(&config)?;
 
@@ -50,8 +51,9 @@ impl Model {
         let start = Date::now();
         console_log!("weights len: {:?}", weights.len());
         let model = if quantized {
-            let vb =
-                candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(&weights)?;
+            let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(
+                &weights, &device,
+            )?;
             console_log!("weights loaded");
             if name._name_or_path == "microsoft/phi-2" {
                 let model = QMixFormer::new_v2(&config, vb)?;
