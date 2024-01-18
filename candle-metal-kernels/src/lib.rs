@@ -17,6 +17,7 @@ const FILL: &str = include_str!("fill.metal");
 const REDUCE: &str = include_str!("reduce.metal");
 const CONV: &str = include_str!("conv.metal");
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
+const QUANTIZED: &str = include_str!("quantized.metal");
 
 /// Most kernels apply similarly across the tensors
 /// This creates a strategy that uses the maximum amount of threads per threadgroup (capped at the
@@ -66,6 +67,7 @@ macro_rules! primitive {
 primitive!(usize);
 primitive!(u8);
 primitive!(u32);
+primitive!(i32);
 primitive!(i64);
 primitive!(f16);
 primitive!(bf16);
@@ -124,6 +126,7 @@ pub enum Source {
     Mfa,
     Conv,
     Fill,
+    Quantized,
 }
 
 macro_rules! ops{
@@ -224,17 +227,15 @@ type Pipelines = HashMap<(&'static str, Option<ConstantValues>), ComputePipeline
 pub struct Kernels {
     libraries: RwLock<Libraries>,
     pipelines: RwLock<Pipelines>,
-    fence: metal::Fence,
 }
 
 impl Kernels {
-    pub fn new(fence: metal::Fence) -> Self {
+    pub fn new() -> Self {
         let libraries = RwLock::new(Libraries::new());
         let pipelines = RwLock::new(Pipelines::new());
         Self {
             libraries,
             pipelines,
-            fence,
         }
     }
 
@@ -249,6 +250,7 @@ impl Kernels {
             Source::Reduce => REDUCE,
             Source::Fill => FILL,
             Source::Conv => CONV,
+            Source::Quantized => QUANTIZED,
             Source::Mfa => panic!("Invalid lib"),
         }
     }
@@ -355,7 +357,6 @@ pub fn call_unary_contiguous(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (length, input, output));
@@ -364,7 +365,6 @@ pub fn call_unary_contiguous(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -386,7 +386,6 @@ pub fn call_unary_strided(
 
     let num_dims: usize = shape.len();
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     let length: usize = shape.iter().product();
@@ -408,7 +407,6 @@ pub fn call_unary_strided(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -427,7 +425,6 @@ pub fn call_binary_contiguous(
     let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.0)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (length, left, right, output));
@@ -438,7 +435,6 @@ pub fn call_binary_contiguous(
     encoder.use_resource(right, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -463,7 +459,6 @@ pub fn call_binary_strided(
     let num_dims: usize = shape.len();
     let encoder = command_buffer.new_compute_command_encoder();
     let width: usize = shape.iter().product();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     let length: usize = shape.iter().product();
@@ -488,7 +483,6 @@ pub fn call_binary_strided(
     encoder.use_resource(right_input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -507,7 +501,6 @@ pub fn call_cast_contiguous(
     let pipeline = kernels.load_pipeline(device, Source::Cast, kernel_name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (length, (input, input_offset), output));
@@ -516,7 +509,6 @@ pub fn call_cast_contiguous(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -536,7 +528,6 @@ pub fn call_cast_strided(
     let pipeline = kernels.load_pipeline(device, Source::Cast, kernel_name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     let length: usize = shape.iter().product();
@@ -558,7 +549,6 @@ pub fn call_cast_strided(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -578,7 +568,6 @@ pub fn call_reduce_contiguous(
     let elements_to_sum = length / out_length;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -607,7 +596,6 @@ pub fn call_reduce_contiguous(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -629,7 +617,6 @@ pub fn call_reduce_strided(
     let elements_to_sum = length / out_length;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -665,7 +652,6 @@ pub fn call_reduce_strided(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -684,7 +670,6 @@ pub fn call_last_softmax(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -715,7 +700,6 @@ pub fn call_last_softmax(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -735,7 +719,6 @@ pub fn call_affine(
     let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (size, mul, add, input, output));
@@ -744,7 +727,6 @@ pub fn call_affine(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -767,7 +749,6 @@ pub fn call_affine_strided(
     let size: usize = shape.iter().product();
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -788,7 +769,6 @@ pub fn call_affine_strided(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -807,7 +787,6 @@ pub fn call_powf(
     let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (size, mul, input, output));
@@ -816,7 +795,6 @@ pub fn call_powf(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -838,7 +816,6 @@ pub fn call_powf_strided(
     let size: usize = shape.iter().product();
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -858,7 +835,6 @@ pub fn call_powf_strided(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -877,7 +853,6 @@ pub fn call_elu(
     let pipeline = kernels.load_pipeline(device, Source::Affine, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(encoder, (size, mul, input, output));
@@ -886,7 +861,6 @@ pub fn call_elu(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -908,7 +882,6 @@ pub fn call_elu_strided(
     let size: usize = shape.iter().product();
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -928,7 +901,6 @@ pub fn call_elu_strided(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -950,7 +922,6 @@ pub fn call_where_cond_strided(
     let pipeline = kernels.load_pipeline(device, Source::Ternary, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     let size: usize = shape.iter().product();
@@ -979,7 +950,6 @@ pub fn call_where_cond_strided(
     encoder.use_resource(right, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -1006,7 +976,6 @@ pub fn call_index_select(
 
     let encoder = command_buffer.new_compute_command_encoder();
 
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -1029,7 +998,6 @@ pub fn call_index_select(
     encoder.use_resource(ids, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -1058,7 +1026,6 @@ pub fn call_gather(
 
     let encoder = command_buffer.new_compute_command_encoder();
 
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -1081,7 +1048,6 @@ pub fn call_gather(
     encoder.use_resource(ids, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -1110,7 +1076,6 @@ pub fn call_scatter_add(
 
     let encoder = command_buffer.new_compute_command_encoder();
 
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -1133,7 +1098,6 @@ pub fn call_scatter_add(
     encoder.use_resource(ids, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -1163,7 +1127,6 @@ pub fn call_index_add(
     let pipeline = kernels.load_pipeline(device, Source::Indexing, name)?;
     let encoder = command_buffer.new_compute_command_encoder();
 
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -1187,7 +1150,6 @@ pub fn call_index_add(
     encoder.use_resource(ids, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -1391,7 +1353,6 @@ pub fn call_gemm(
     let block_bytes = block_elements * bytes;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
     encoder.set_threadgroup_memory_length(0, block_bytes.into());
     encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
@@ -1431,12 +1392,10 @@ pub fn call_gemm(
         height: 1,
         depth: 1,
     };
-    // println!("grid size {grid_size:?} group size {group_size:?}");
     encoder.use_resource(lhs_buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(rhs_buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(grid_size, group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
 
     Ok(())
@@ -1461,7 +1420,6 @@ pub fn call_im2col1d_strided(
 
     let encoder = command_buffer.new_compute_command_encoder();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
@@ -1481,7 +1439,6 @@ pub fn call_im2col1d_strided(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
 
     Ok(())
@@ -1511,7 +1468,6 @@ pub fn call_im2col_strided(
 
     let encoder = command_buffer.new_compute_command_encoder();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
@@ -1533,7 +1489,6 @@ pub fn call_im2col_strided(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
 
     Ok(())
@@ -1559,7 +1514,6 @@ pub fn call_upsample_nearest_2d(
     let scale_h = shape[3] as f32 / out_h as f32;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
@@ -1577,7 +1531,176 @@ pub fn call_upsample_nearest_2d(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
+    encoder.end_encoding();
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum GgmlDType {
+    Q4_0,
+    Q4_1,
+    Q5_0,
+    Q5_1,
+    Q8_0,
+    Q8_1,
+    Q2K,
+    Q3K,
+    Q4K,
+    Q5K,
+    Q6K,
+    Q8K,
+    F16,
+    F32,
+}
+
+pub fn call_quantized_matmul_t(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    dtype: GgmlDType,
+    (b, m, n, k): (usize, usize, usize, usize),
+    lhs: &Buffer,
+    lhs_offset: usize,
+    rhs: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    // Everything is in reverse
+    let ne00 = k as i64;
+    let ne01 = n as i64;
+    let ne02 = b as i64;
+    let ne03 = 1 as i64;
+
+    let nb00 = 0i64;
+    let nb01 = 0 as i64;
+    let nb02 = 0 as i64;
+
+    let ne10 = k as i64;
+    let ne11 = m as i64;
+    let ne12 = b as i64;
+    let ne13 = 1 as i64;
+
+    let nb10 = 0i64;
+    let nb11 = 0i64;
+    let nb12 = 0i64;
+
+    let ne0 = n as i64;
+    let ne1 = m as i64;
+    let r2: u32 = (ne12 / ne02) as u32;
+    let r3: u32 = (ne13 / ne03) as u32;
+
+    let (nth0, nth1, align) = match dtype {
+        GgmlDType::Q4_0
+        | GgmlDType::Q4_1
+        | GgmlDType::Q5_0
+        | GgmlDType::Q5_1
+        | GgmlDType::Q8_0
+        | GgmlDType::Q8_1 => {
+            let nth0 = 8;
+            let nth1 = 8;
+            let align = 8;
+            (nth0, nth1, align)
+        }
+        GgmlDType::Q2K => {
+            // Fixing a bug in Metal for GGML
+            let nth0 = 4;
+            let nth1 = 8;
+            let align = 4;
+            (nth0, nth1, align)
+        }
+        GgmlDType::Q4K => {
+            let nth0 = 4;
+            let nth1 = 8;
+            let align = 4;
+            (nth0, nth1, align)
+        }
+        GgmlDType::Q3K | GgmlDType::Q5K => {
+            let nth0 = 2;
+            let nth1 = 32;
+            let align = 4;
+            (nth0, nth1, align)
+        }
+        GgmlDType::Q6K => {
+            let nth0 = 2;
+            let nth1 = 32;
+            let align = 2;
+            (nth0, nth1, align)
+        }
+        GgmlDType::F16 | GgmlDType::Q8K => {
+            // Original implem uses rows
+            let nth0 = 32;
+            let nth1 = 1;
+            let align = 8;
+            (nth0, nth1, align)
+        }
+        GgmlDType::F32 => {
+            let nth0 = 32;
+            let nth1 = 1;
+            let align = 8;
+            (nth0, nth1, align)
+        }
+    };
+    let thread_groups_count = MTLSize {
+        width: divide(ne01 as usize, align),
+        height: ne11 as u64,
+        depth: (ne12 * ne13) as u64,
+    };
+    let threads_per_threadgroup = MTLSize {
+        width: nth0,
+        height: nth1,
+        depth: 1,
+    };
+    let name = match dtype {
+        GgmlDType::Q4_0 => "kernel_mul_mv_q4_0_f32",
+        GgmlDType::Q4_1 => "kernel_mul_mv_q4_1_f32",
+        GgmlDType::Q5_0 => "kernel_mul_mv_q5_0_f32",
+        GgmlDType::Q5_1 => "kernel_mul_mv_q5_1_f32",
+        GgmlDType::Q8_0 => "kernel_mul_mv_q8_0_f32",
+        GgmlDType::Q8_1 => "kernel_mul_mv_q8_1_f32",
+        GgmlDType::Q2K => "kernel_mul_mv_q2_K_f32",
+        GgmlDType::Q3K => "kernel_mul_mv_q3_K_f32",
+        GgmlDType::Q4K => "kernel_mul_mv_q4_K_f32",
+        GgmlDType::Q5K => "kernel_mul_mv_q5_K_f32",
+        GgmlDType::Q6K => "kernel_mul_mv_q6_K_f32",
+        GgmlDType::Q8K => "kernel_mul_mv_q8_K_f32",
+        GgmlDType::F16 => "kernel_mul_mv_f16_f32",
+        GgmlDType::F32 => "kernel_mul_mv_f32_f32",
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            rhs,
+            (lhs, lhs_offset),
+            output,
+            ne00,
+            ne01,
+            ne02,
+            nb00,
+            nb01,
+            nb02,
+            ne10,
+            ne11,
+            ne12,
+            nb10,
+            nb11,
+            nb12,
+            ne0,
+            ne1,
+            r2,
+            r3
+        )
+    );
+    encoder.set_threadgroup_memory_length(0, 8192);
+    encoder.use_resource(lhs, metal::MTLResourceUsage::Read);
+    encoder.use_resource(rhs, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     encoder.end_encoding();
 
     Ok(())
@@ -1598,7 +1721,6 @@ pub fn call_fill<T: FillOp>(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Fill, T::FILL_KERNEL)?;
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
     encoder.set_threadgroup_memory_length(0, elem_count as NSUInteger);
 
@@ -1607,7 +1729,6 @@ pub fn call_fill<T: FillOp>(
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, elem_count);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
 
     Ok(())
@@ -1615,13 +1736,11 @@ pub fn call_fill<T: FillOp>(
 
 pub fn call_fill_u8(
     command_buffer: &CommandBufferRef,
-    kernels: &Kernels,
     elem_count: usize,
     buffer: &Buffer,
     value: u8,
 ) -> Result<(), MetalKernelError> {
     let blit = command_buffer.new_blit_command_encoder();
-    blit.wait_for_fence(&kernels.fence);
     blit.fill_buffer(
         buffer,
         metal::NSRange {
@@ -1630,7 +1749,6 @@ pub fn call_fill_u8(
         },
         value,
     );
-    blit.update_fence(&kernels.fence);
     blit.end_encoding();
 
     Ok(())

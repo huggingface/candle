@@ -1,7 +1,9 @@
 //! Support for the GGML file format.
 
-use super::{k_quants, GgmlDType};
-use crate::Result;
+#[cfg(feature = "metal")]
+use super::metal::load_quantized_metal;
+use super::{k_quants, GgmlDType, QStorage};
+use crate::{Device, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 
@@ -121,11 +123,22 @@ fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
     raw_data: &[u8],
     size_in_bytes: usize,
     dims: Vec<usize>,
+    device: &Device,
 ) -> Result<super::QTensor> {
     let raw_data_ptr = raw_data.as_ptr();
     let n_blocks = size_in_bytes / std::mem::size_of::<T>();
     let data = unsafe { std::slice::from_raw_parts(raw_data_ptr as *const T, n_blocks) };
-    super::QTensor::new(data.to_vec(), dims)
+    let data: QStorage = match device {
+        Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
+        #[cfg(feature = "metal")]
+        Device::Metal(metal) => load_quantized_metal(metal, data)?,
+        #[cfg(not(feature = "metal"))]
+        Device::Metal(_metal) => {
+            crate::bail!("Metal backend requires `metal` feature")
+        }
+        device => unimplemented!("Implement quantized tensor for device {device:?}"),
+    };
+    super::QTensor::new(data, dims)
 }
 
 /// Creates a [Tensor] from a raw GGML tensor.
@@ -133,29 +146,50 @@ pub fn qtensor_from_ggml(
     ggml_dtype: GgmlDType,
     raw_data: &[u8],
     dims: Vec<usize>,
+    device: &Device,
 ) -> Result<super::QTensor> {
     let tensor_elems = dims.iter().product::<usize>();
-    let blck_size = ggml_dtype.blck_size();
-    if tensor_elems % blck_size != 0 {
+    let block_size = ggml_dtype.block_size();
+    if tensor_elems % block_size != 0 {
         crate::bail!(
-            "the number of elements {tensor_elems} is not divisible by the block size {blck_size}"
+            "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
         )
     }
-    let size_in_bytes = tensor_elems / blck_size * ggml_dtype.type_size();
+    let size_in_bytes = tensor_elems / block_size * ggml_dtype.type_size();
 
     match ggml_dtype {
-        GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims),
-        GgmlDType::F16 => from_raw_data::<half::f16>(raw_data, size_in_bytes, dims),
-        GgmlDType::Q4_0 => from_raw_data::<k_quants::BlockQ4_0>(raw_data, size_in_bytes, dims),
-        GgmlDType::Q4_1 => from_raw_data::<k_quants::BlockQ4_1>(raw_data, size_in_bytes, dims),
-        GgmlDType::Q5_0 => from_raw_data::<k_quants::BlockQ5_0>(raw_data, size_in_bytes, dims),
-        GgmlDType::Q5_1 => from_raw_data::<k_quants::BlockQ5_1>(raw_data, size_in_bytes, dims),
-        GgmlDType::Q8_0 => from_raw_data::<k_quants::BlockQ8_0>(raw_data, size_in_bytes, dims),
-        GgmlDType::Q2K => from_raw_data::<k_quants::BlockQ2K>(raw_data, size_in_bytes, dims),
-        GgmlDType::Q3K => from_raw_data::<k_quants::BlockQ3K>(raw_data, size_in_bytes, dims),
-        GgmlDType::Q4K => from_raw_data::<k_quants::BlockQ4K>(raw_data, size_in_bytes, dims),
-        GgmlDType::Q5K => from_raw_data::<k_quants::BlockQ5K>(raw_data, size_in_bytes, dims),
-        GgmlDType::Q6K => from_raw_data::<k_quants::BlockQ6K>(raw_data, size_in_bytes, dims),
+        GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims, device),
+        GgmlDType::F16 => from_raw_data::<half::f16>(raw_data, size_in_bytes, dims, device),
+        GgmlDType::Q4_0 => {
+            from_raw_data::<k_quants::BlockQ4_0>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q4_1 => {
+            from_raw_data::<k_quants::BlockQ4_1>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q5_0 => {
+            from_raw_data::<k_quants::BlockQ5_0>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q5_1 => {
+            from_raw_data::<k_quants::BlockQ5_1>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q8_0 => {
+            from_raw_data::<k_quants::BlockQ8_0>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q2K => {
+            from_raw_data::<k_quants::BlockQ2K>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q3K => {
+            from_raw_data::<k_quants::BlockQ3K>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q4K => {
+            from_raw_data::<k_quants::BlockQ4K>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q5K => {
+            from_raw_data::<k_quants::BlockQ5K>(raw_data, size_in_bytes, dims, device)
+        }
+        GgmlDType::Q6K => {
+            from_raw_data::<k_quants::BlockQ6K>(raw_data, size_in_bytes, dims, device)
+        }
         _ => crate::bail!("quantized type {ggml_dtype:?} is not supported yet"),
     }
 }
@@ -163,6 +197,7 @@ pub fn qtensor_from_ggml(
 fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     reader: &mut R,
     magic: VersionedMagic,
+    device: &Device,
 ) -> Result<(String, super::QTensor)> {
     let n_dims = reader.read_u32::<LittleEndian>()?;
     let name_len = reader.read_u32::<LittleEndian>()?;
@@ -183,11 +218,11 @@ fn read_one_tensor<R: std::io::Seek + std::io::Read>(
     }
     let dims = dims.iter().map(|&u| u as usize).collect::<Vec<_>>();
     let tensor_elems = dims.iter().product::<usize>();
-    let size_in_bytes = tensor_elems * ggml_dtype.type_size() / ggml_dtype.blck_size();
+    let size_in_bytes = tensor_elems * ggml_dtype.type_size() / ggml_dtype.block_size();
     // TODO: Mmap version to avoid copying the data around?
     let mut raw_data = vec![0u8; size_in_bytes];
     reader.read_exact(&mut raw_data)?;
-    match qtensor_from_ggml(ggml_dtype, &raw_data, dims) {
+    match qtensor_from_ggml(ggml_dtype, &raw_data, dims, device) {
         Ok(tensor) => Ok((name, tensor)),
         Err(e) => crate::bail!("Error creating tensor {name}: {e}"),
     }
@@ -201,7 +236,10 @@ pub struct Content {
 }
 
 impl Content {
-    pub fn read<R: std::io::Seek + std::io::Read>(reader: &mut R) -> Result<Content> {
+    pub fn read<R: std::io::Seek + std::io::Read>(
+        reader: &mut R,
+        device: &Device,
+    ) -> Result<Content> {
         // https://github.com/ggerganov/llama.cpp/blob/468ea24fb4633a0d681f7ac84089566c1c6190cb/llama.cpp#L505
         let last_position = reader.seek(std::io::SeekFrom::End(0))?;
         reader.seek(std::io::SeekFrom::Start(0))?;
@@ -211,7 +249,7 @@ impl Content {
         let mut tensors = HashMap::new();
 
         while reader.stream_position()? != last_position {
-            let (name, tensor) = read_one_tensor(reader, magic)?;
+            let (name, tensor) = read_one_tensor(reader, magic, device)?;
             tensors.insert(name, tensor);
         }
         Ok(Self {

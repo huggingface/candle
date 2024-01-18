@@ -1,5 +1,7 @@
+pub(crate) mod affine;
 pub(crate) mod fill;
 pub(crate) mod matmul;
+pub(crate) mod where_cond;
 
 use candle_core::{Device, Result};
 
