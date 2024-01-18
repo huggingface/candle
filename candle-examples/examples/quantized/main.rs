@@ -14,7 +14,7 @@ use candle_transformers::generation::LogitsProcessor;
 
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_transformers::models::quantized_llama as model;
-use model::ModelWeights;
+use model::{ModelConfig, ModelWeights};
 
 const DEFAULT_PROMPT: &str = "My favorite theorem is ";
 
@@ -371,6 +371,8 @@ fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
 
+    let config = ModelConfig::default();
+
     let mut model = match model_path.extension().and_then(|v| v.to_str()) {
         Some("gguf") => {
             let model = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(model_path))?;
@@ -386,7 +388,7 @@ fn main() -> anyhow::Result<()> {
                 &format_size(total_size_in_bytes),
                 start.elapsed().as_secs_f32(),
             );
-            ModelWeights::from_gguf(model, &mut file, &device)?
+            ModelWeights::from_gguf(model, &mut file, &device, &config)?
         }
         Some("ggml" | "bin") | Some(_) | None => {
             let model = ggml_file::Content::read(&mut file, &device)
@@ -426,7 +428,7 @@ fn main() -> anyhow::Result<()> {
                 | Which::OpenChat35
                 | Which::Starling7bAlpha => 8,
             };
-            ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa))?
+            ModelWeights::from_ggml(model, args.gqa.unwrap_or(default_gqa), &config)?
         }
     };
     println!("model built");
@@ -485,8 +487,8 @@ fn main() -> anyhow::Result<()> {
 
         let prompt_tokens = [&pre_prompt_tokens, tokens.get_ids()].concat();
         let to_sample = args.sample_len.saturating_sub(1);
-        let prompt_tokens = if prompt_tokens.len() + to_sample > model::MAX_SEQ_LEN - 10 {
-            let to_remove = prompt_tokens.len() + to_sample + 10 - model::MAX_SEQ_LEN;
+        let prompt_tokens = if prompt_tokens.len() + to_sample > config.max_seq_len - 10 {
+            let to_remove = prompt_tokens.len() + to_sample + 10 - config.max_seq_len;
             prompt_tokens[prompt_tokens.len().saturating_sub(to_remove)..].to_vec()
         } else {
             prompt_tokens

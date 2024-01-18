@@ -5,8 +5,6 @@ use candle::quantized::{ggml_file, gguf_file};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Module};
 
-pub const MAX_SEQ_LEN: usize = 4096;
-
 #[derive(Debug, Clone)]
 struct RmsNorm {
     inner: candle_nn::LayerNorm,
@@ -265,6 +263,17 @@ impl LayerWeights {
 }
 
 #[derive(Debug, Clone)]
+pub struct ModelConfig {
+    pub max_seq_len: usize,
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self { max_seq_len: 4096 }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
@@ -279,15 +288,16 @@ fn precomput_freqs_cis(
     head_dim: usize,
     freq_base: f32,
     device: &Device,
+    model_config: &ModelConfig,
 ) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
         .collect();
     let theta = Tensor::new(theta.as_slice(), device)?;
-    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
+    let idx_theta = Tensor::arange(0, model_config.max_seq_len as u32, device)?
         .to_dtype(DType::F32)?
-        .reshape((MAX_SEQ_LEN, 1))?
+        .reshape((model_config.max_seq_len, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
     let cos = idx_theta.cos()?;
     let sin = idx_theta.sin()?;
@@ -295,9 +305,13 @@ fn precomput_freqs_cis(
 }
 
 impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
+    pub fn from_ggml(
+        mut ct: ggml_file::Content,
+        gqa: usize,
+        model_config: &ModelConfig,
+    ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
+        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device, model_config)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, &ct.device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
@@ -362,6 +376,7 @@ impl ModelWeights {
         ct: gguf_file::Content,
         reader: &mut R,
         device: &Device,
+        model_config: &ModelConfig,
     ) -> Result<Self> {
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
@@ -386,7 +401,7 @@ impl ModelWeights {
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
-        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
+        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device, model_config)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
