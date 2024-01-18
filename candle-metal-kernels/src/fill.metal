@@ -22,10 +22,13 @@ kernel void FN_NAME(                        \
 
 FILL_OP(uint8_t, fill_u8)
 FILL_OP(uint32_t, fill_u32)
-FILL_OP(int64_t, fill_i64)
 FILL_OP(half, fill_f16)
 FILL_OP(float, fill_f32)
 
-#if __METAL_VERSION__ >= 310
+#if __METAL_VERSION__ >= 220
+FILL_OP(int64_t, fill_i64)
+#endif
+
+#if defined(__HAVE_BFLOAT__)
 FILL_OP(bfloat, fill_bf16)
 #endif
