@@ -1369,11 +1369,12 @@ pub fn call_gemm(
         }
 
         let matrix_offsets = device.new_buffer_with_data(
-            buffer.as_ptr() as *const NSUInteger as *const c_void,
+            buffer.as_ptr() as *const c_void,
             (buffer.len() * core::mem::size_of::<u64>()) as NSUInteger,
-            MTLResourceOptions::StorageModePrivate,
+            MTLResourceOptions::StorageModeManaged,
         );
         encoder.set_buffer(10, Some(&matrix_offsets), 0);
+        encoder.use_resource(&matrix_offsets, metal::MTLResourceUsage::Read);
     }
 
     let grid_size = MTLSize {
