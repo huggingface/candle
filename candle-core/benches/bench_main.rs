@@ -1,4 +1,4 @@
 mod benchmarks;
 
 use criterion::criterion_main;
-criterion_main!(benchmarks::matmul::benches);
+criterion_main!(benchmarks::reduce::benches);

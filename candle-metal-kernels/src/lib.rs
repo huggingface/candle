@@ -568,7 +568,6 @@ pub fn call_reduce_contiguous(
     let elements_to_sum = length / out_length;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -597,7 +596,6 @@ pub fn call_reduce_contiguous(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }
@@ -619,7 +617,6 @@ pub fn call_reduce_strided(
     let elements_to_sum = length / out_length;
 
     let encoder = command_buffer.new_compute_command_encoder();
-    encoder.wait_for_fence(&kernels.fence);
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
@@ -630,7 +627,8 @@ pub fn call_reduce_strided(
             strides,
             elements_to_sum,
             (input, input_offset),
-            output
+            output,
+            out_length
         )
     );
 
@@ -655,7 +653,6 @@ pub fn call_reduce_strided(
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.update_fence(&kernels.fence);
     encoder.end_encoding();
     Ok(())
 }

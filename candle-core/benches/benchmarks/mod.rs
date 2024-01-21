@@ -1,4 +1,5 @@
 pub(crate) mod matmul;
+pub(crate) mod reduce;
 
 use candle_core::{Device, Result};
 
