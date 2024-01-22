@@ -8,8 +8,9 @@ use half::{bf16, f16};
 use metal;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::path::Path;
-use std::sync::{Arc, RwLock, TryLockError};
+use std::sync::{Arc, Mutex, RwLock, TryLockError};
 
 /// Simple way to catch lock error without
 /// depending on T
@@ -102,6 +103,8 @@ pub struct MetalDevice {
     /// Whenever we actually allocate a new buffer, we make a full sweep to cleanup unused buffers
     /// (strong_count = 1).
     buffers: AllocatedBuffers,
+    /// Seed for random number generation.
+    seed: Arc<Mutex<Buffer>>,
 }
 
 impl std::fmt::Debug for MetalDevice {
@@ -226,7 +229,7 @@ impl MetalDevice {
         // The slice might not live long enough for metal
         // To actually fill the GPU buffer.
         // Putting this wait forces the GPU buffer to be filled
-        // with the actual data allowing the CPU storage todo
+        // with the actual data allowing the CPU storage to do
         // deallocate properly.
         self.wait_until_completed()?;
         Ok(real)
@@ -1555,6 +1558,11 @@ impl BackendDevice for MetalDevice {
             Ok(val) => val.parse()?,
             _ => 10,
         };
+        let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
+            [299792458].as_ptr() as *const c_void,
+            4,
+            MTLResourceOptions::StorageModeManaged,
+        )));
         Ok(Self {
             device,
             command_queue,
@@ -1563,11 +1571,8 @@ impl BackendDevice for MetalDevice {
             compute_per_buffer,
             buffers,
             kernels,
+            seed,
         })
-    }
-
-    fn set_seed(&self, _seed: u64) -> Result<()> {
-        crate::bail!("Metal set_seed not implemented")
     }
 
     fn location(&self) -> crate::DeviceLocation {
@@ -1618,7 +1623,7 @@ impl BackendDevice for MetalDevice {
             DType::F16 => fill!(f16::ONE),
             DType::F32 => fill!(1f32),
             DType::F64 => {
-                return Err(MetalError::Message(format!("metal doesn't support double")).into())
+                return Err(MetalError::Message("Metal doesn't support double".to_string()).into())
             }
         }
         Ok(MetalStorage::new(buffer, self.clone(), dtype))
@@ -1641,12 +1646,31 @@ impl BackendDevice for MetalDevice {
         &self,
         shape: &Shape,
         dtype: DType,
-        mean: f64,
-        stddev: f64,
+        min: f64,
+        max: f64,
     ) -> Result<Self::Storage> {
-        // TODO is there a better way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.rand_uniform(shape, dtype, mean, stddev)?;
-        self.storage_from_cpu_storage(&cpu_storage)
+        let name = match dtype {
+            DType::F32 => "rand_uniform_f32",
+            DType::F16 => "rand_uniform_f16",
+            DType::BF16 => "rand_uniform_bf16",
+            dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
+        };
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_uniform")?;
+        let command_buffer = self.command_buffer()?;
+        candle_metal_kernels::call_random_uniform(
+            &self.device,
+            &command_buffer,
+            &self.kernels,
+            name,
+            min as f32,
+            max as f32,
+            shape.elem_count(),
+            &*self.seed.lock().unwrap(),
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(Self::Storage::new(buffer, self.clone(), dtype))
     }
 
     fn rand_normal(
@@ -1656,9 +1680,43 @@ impl BackendDevice for MetalDevice {
         mean: f64,
         stddev: f64,
     ) -> Result<Self::Storage> {
-        // TODO is there a better way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.rand_normal(shape, dtype, mean, stddev)?;
-        self.storage_from_cpu_storage(&cpu_storage)
+        let name = match dtype {
+            DType::F32 => "rand_normal_f32",
+            DType::F16 => "rand_normal_f16",
+            DType::BF16 => "rand_normal_bf16",
+            dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
+        };
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_normal")?;
+        let command_buffer = self.command_buffer()?;
+        candle_metal_kernels::call_random_normal(
+            &self.device,
+            &command_buffer,
+            &self.kernels,
+            name,
+            mean as f32,
+            stddev as f32,
+            shape.elem_count(),
+            &*self.seed.lock().unwrap(),
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(Self::Storage::new(buffer, self.clone(), dtype))
+    }
+
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        let seed: u32 = seed.try_into().map_err(|_| {
+            MetalError::Message("Metal seed must be less than or equal to u32::MAX".to_string())
+        })?;
+
+        let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
+        let contents = seed_buffer.contents();
+        unsafe {
+            std::ptr::copy([seed].as_ptr(), contents as *mut u32, 4);
+        }
+        seed_buffer.did_modify_range(metal::NSRange::new(0, 4));
+
+        Ok(())
     }
 }
 

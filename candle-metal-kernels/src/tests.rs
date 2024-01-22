@@ -927,17 +927,13 @@ fn gemm() {
     );
 }
 
-fn run_fill<T: EncoderParam + Clone>(elem_count: usize, value: T) -> Vec<T>
-where
-    Unary<T>: FillOp<T>,
-{
+fn run_fill<T: FillOp + Clone>(elem_count: usize, value: T) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let buffer = new_buffer(&device, &vec![0.0f32; elem_count]);
-    Unary::<T>::fill(
+    call_fill(
         &device,
         command_buffer,
         &kernels,
@@ -954,10 +950,7 @@ where
 
 #[test]
 fn fill() {
-    fn assert_fill<T: EncoderParam + Copy + std::fmt::Debug + PartialEq>(value: T)
-    where
-        Unary<T>: FillOp<T>,
-    {
+    fn assert_fill<T: FillOp + Copy + std::fmt::Debug + PartialEq>(value: T) {
         for i in 0..4 {
             assert_eq!(run_fill(8 ^ i, value), vec![value; 8 ^ i]);
         }
@@ -968,4 +961,125 @@ fn fill() {
     assert_fill(f16::from_f32(1.23));
     assert_fill(bf16::from_f32(4.56));
     assert_fill(7.89f32);
+}
+
+fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b: f32) -> Vec<T> {
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+
+    let options = MTLResourceOptions::StorageModeManaged;
+    let output = device.new_buffer((length * core::mem::size_of::<T>()) as NSUInteger, options);
+
+    let seed = device.new_buffer_with_data(
+        &seed as *const u32 as *const core::ffi::c_void,
+        std::mem::size_of::<u32>() as NSUInteger,
+        options,
+    );
+
+    if name.starts_with("rand_uniform") {
+        call_random_uniform(
+            &device,
+            command_buffer,
+            &kernels,
+            name,
+            a,
+            b,
+            length,
+            &seed,
+            &output,
+        )
+        .unwrap();
+    } else {
+        call_random_normal(
+            &device,
+            command_buffer,
+            &kernels,
+            name,
+            a,
+            b,
+            length,
+            &seed,
+            &output,
+        )
+        .unwrap();
+    }
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    read_to_vec(&output, length)
+}
+
+#[test]
+fn random() {
+    fn calc_mean(data: &[f32]) -> f32 {
+        let sum = data.iter().sum::<f32>() as f32;
+        let count = data.len();
+        assert!(count > 0);
+        sum / count as f32
+    }
+
+    fn calc_stddev(data: &[f32]) -> f32 {
+        let mean = calc_mean(data);
+        let count = data.len();
+        assert!(count > 0);
+
+        let variance = data
+            .iter()
+            .map(|value| {
+                let diff = mean - (*value as f32);
+                diff * diff
+            })
+            .sum::<f32>()
+            / count as f32;
+
+        variance.sqrt()
+    }
+
+    let shape = vec![1024, 10];
+
+    let length = shape.iter().product::<usize>();
+    let seed = 299792458;
+
+    let min = -30.0;
+    let max = 30.0;
+    let mean = 100.0;
+    let stddev = 50.0;
+
+    macro_rules! validate_random {
+        ($type:ty) => {
+            let results: Vec<f32> = run_random::<$type>(
+                concat!("rand_uniform_", stringify!($type)),
+                seed,
+                length,
+                min,
+                max,
+            )
+            .into_iter()
+            .map(f32::from)
+            .collect();
+            results.iter().for_each(|v| {
+                assert!(*v >= min && *v <= max);
+            });
+            assert!(calc_mean(&results) > -1.0 && calc_mean(&results) < 1.0);
+
+            let results: Vec<f32> = run_random::<$type>(
+                concat!("rand_normal_", stringify!($type)),
+                seed,
+                length,
+                mean,
+                stddev,
+            )
+            .into_iter()
+            .map(f32::from)
+            .collect();
+            assert!((calc_mean(&results) - mean).abs() < mean / 10.0);
+            assert!((calc_stddev(&results) - stddev).abs() < stddev / 10.0);
+        };
+    }
+
+    validate_random!(f32);
+    validate_random!(f16);
+    validate_random!(bf16);
 }

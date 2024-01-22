@@ -14,8 +14,9 @@ const BINARY: &str = include_str!("binary.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
 const FILL: &str = include_str!("fill.metal");
-const REDUCE: &str = include_str!("reduce.metal");
 const CONV: &str = include_str!("conv.metal");
+const REDUCE: &str = include_str!("reduce.metal");
+const RANDOM: &str = include_str!("random.metal");
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
 const QUANTIZED: &str = include_str!("quantized.metal");
 
@@ -48,9 +49,10 @@ fn set_param<P: EncoderParam>(encoder: &ComputeCommandEncoderRef, position: u64,
 /// Helper functions to create the various objects on the compute command encoder
 /// on a single line.
 /// Prevents getting wrong some arguments number and mixing length and size in bytes.
-pub trait EncoderParam {
+pub trait EncoderParam: private::Sealed {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self);
 }
+
 macro_rules! primitive {
     ($type:ty) => {
         impl EncoderParam for $type {
@@ -64,14 +66,14 @@ macro_rules! primitive {
         }
     };
 }
-primitive!(usize);
-primitive!(u8);
-primitive!(u32);
-primitive!(i32);
-primitive!(i64);
-primitive!(f16);
-primitive!(bf16);
-primitive!(f32);
+macro_rules! primitives {
+    ($($type:ty),+) => {
+        $(
+            primitive!($type);
+        )+
+    };
+}
+primitives!(bool, usize, u8, u32, u64, i32, i64, f16, bf16, f32);
 
 impl<T> EncoderParam for &[T] {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
@@ -114,6 +116,38 @@ macro_rules! set_params {
     );
 }
 
+// Seal the trait so that only the types we want can implement it
+mod private {
+    use super::*;
+
+    pub trait Sealed {}
+
+    macro_rules! sealed {
+        ($($type:ty),+) => {
+            $(
+                impl Sealed for $type {}
+            )+
+        };
+    }
+    sealed!(
+        usize,
+        u8,
+        u32,
+        u64,
+        i32,
+        i64,
+        f16,
+        bf16,
+        f32,
+        bool,
+        &Buffer,
+        (&Buffer, usize),
+        &mut Buffer,
+        (&mut Buffer, usize)
+    );
+    impl<T> Sealed for &[T] {}
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     Affine,
@@ -126,6 +160,7 @@ pub enum Source {
     Mfa,
     Conv,
     Fill,
+    Random,
     Quantized,
 }
 
@@ -250,6 +285,7 @@ impl Kernels {
             Source::Reduce => REDUCE,
             Source::Fill => FILL,
             Source::Conv => CONV,
+            Source::Random => RANDOM,
             Source::Quantized => QUANTIZED,
             Source::Mfa => panic!("Invalid lib"),
         }
@@ -1536,6 +1572,73 @@ pub fn call_upsample_nearest_2d(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn call_random_uniform(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    min: f32,
+    max: f32,
+    length: usize,
+    seed: &Buffer,
+    buffer: &Buffer,
+) -> Result<(), MetalKernelError> {
+    if min >= max {
+        return Err(MetalKernelError::LoadLibraryError(
+            "min must be less than max".to_string(),
+        ));
+    }
+    let pipeline = kernels.load_pipeline(device, Source::Random, name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+
+    let odd = (length % 2 != 0) as usize;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length / 2 + odd);
+
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, min, max, seed, buffer));
+
+    encoder.use_resource(seed, metal::MTLResourceUsage::Read);
+    encoder.use_resource(seed, metal::MTLResourceUsage::Write);
+    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_random_normal(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    mean: f32,
+    stddev: f32,
+    length: usize,
+    seed: &Buffer,
+    buffer: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Random, name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+
+    let odd = (length % 2 != 0) as usize;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length / 2 + odd);
+
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, mean, stddev, seed, buffer));
+
+    encoder.use_resource(seed, metal::MTLResourceUsage::Read);
+    encoder.use_resource(seed, metal::MTLResourceUsage::Write);
+    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum GgmlDType {
     Q4_0,
@@ -1767,7 +1870,7 @@ macro_rules ! impl_call_fill {
         )*
     };
 }
-impl_call_fill!(u32, i64, f16, bf16, f32);
+impl_call_fill!(u8, u32, i64, f16, bf16, f32);
 
 #[cfg(test)]
 mod tests;
