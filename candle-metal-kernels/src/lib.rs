@@ -12,8 +12,9 @@ const UNARY: &str = include_str!("unary.metal");
 const BINARY: &str = include_str!("binary.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
-const REDUCE: &str = include_str!("reduce.metal");
 const CONV: &str = include_str!("conv.metal");
+const REDUCE: &str = include_str!("reduce.metal");
+const RANDOM: &str = include_str!("random.metal");
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
 const QUANTIZED: &str = include_str!("quantized.metal");
 
@@ -62,10 +63,12 @@ macro_rules! primitive {
         }
     };
 }
+primitive!(bool);
 primitive!(usize);
-primitive!(i64);
 primitive!(i32);
+primitive!(i64);
 primitive!(u32);
+primitive!(u64);
 primitive!(f32);
 
 impl<T> EncoderParam for &[T] {
@@ -120,6 +123,7 @@ pub enum Source {
     Reduce,
     Mfa,
     Conv,
+    Random,
     Quantized,
 }
 
@@ -241,6 +245,7 @@ impl Kernels {
             Source::Cast => CAST,
             Source::Reduce => REDUCE,
             Source::Conv => CONV,
+            Source::Random => RANDOM,
             Source::Quantized => QUANTIZED,
             Source::Mfa => panic!("Invalid lib"),
         }
@@ -1521,6 +1526,73 @@ pub fn call_upsample_nearest_2d(
     );
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_random_uniform(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    min: f32,
+    max: f32,
+    length: usize,
+    seed: &Buffer,
+    buffer: &Buffer,
+) -> Result<(), MetalKernelError> {
+    if min >= max {
+        return Err(MetalKernelError::LoadLibraryError(
+            "min must be less than max".to_string(),
+        ));
+    }
+    let pipeline = kernels.load_pipeline(device, Source::Random, name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+
+    let odd = (length % 2 != 0) as usize;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length / 2 + odd);
+
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, min, max, seed, buffer));
+
+    encoder.use_resource(seed, metal::MTLResourceUsage::Read);
+    encoder.use_resource(seed, metal::MTLResourceUsage::Write);
+    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_random_normal(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    mean: f32,
+    stddev: f32,
+    length: usize,
+    seed: &Buffer,
+    buffer: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Random, name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+
+    let odd = (length % 2 != 0) as usize;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length / 2 + odd);
+
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, mean, stddev, seed, buffer));
+
+    encoder.use_resource(seed, metal::MTLResourceUsage::Read);
+    encoder.use_resource(seed, metal::MTLResourceUsage::Write);
+    encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
 
