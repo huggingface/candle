@@ -633,7 +633,7 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
     let output = device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
     let dims = vec![v.len()];
     let strides = vec![1];
-    let result = call_reduce_strided(
+    call_reduce_strided(
         &device,
         command_buffer,
         &kernels,
@@ -644,7 +644,8 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
         &input,
         0,
         &output,
-    ).unwrap();
+    )
+    .unwrap();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
