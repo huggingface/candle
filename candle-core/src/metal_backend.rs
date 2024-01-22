@@ -545,8 +545,8 @@ impl BackendStorage for MetalStorage {
             if check_empty && layout.shape().elem_count() == 0 {
                 Err(crate::Error::EmptyTensor { op: "reduce" }.bt())?
             }
-
-            let buffer = device.new_buffer(1, self.dtype, "reduce")?;
+            let dtype = if return_index { DType::U32 } else { self.dtype };
+            let buffer = device.new_buffer(dst_el, dtype, "reduce")?;
             let command_buffer = self.device.command_buffer()?;
             candle_metal_kernels::call_reduce_contiguous(
                 &device.device,

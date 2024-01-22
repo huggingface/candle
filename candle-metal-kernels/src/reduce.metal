@@ -74,7 +74,7 @@ METAL_FUNC void load_from_global(
         shared[tid] = op(shared[tid], src[strided_i]);
         idx += block_dim;
     }
-    threadgroup_barrier(mem_flags::mem_none);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 }
 
 // Load strided elements from global memory into shared memory with indices.
@@ -107,7 +107,7 @@ METAL_FUNC void load_from_global(
         }
         idx += block_dim;
     }
-    threadgroup_barrier(mem_flags::mem_none);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 }
 
 // Load contiguous elements from global memory into shared memory.
@@ -131,7 +131,7 @@ METAL_FUNC void load_from_global(
         shared[tid] = op(shared[tid], src[idx]);
         idx += block_dim;
     }
-    threadgroup_barrier(mem_flags::mem_none);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 }
 
 // Load contiguous elements from global memory into shared memory with indices.
@@ -162,15 +162,15 @@ METAL_FUNC void load_from_global(
         }
         idx += block_dim;
     }
-    threadgroup_barrier(mem_flags::mem_none);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 }
 
 #define reduce_threadgroup(SIZE)                                \
 if (BLOCKSIZE >= SIZE) {                                        \
     if (block_dim >= SIZE) {                                    \
         shared[tid] = op(shared[tid], shared[tid + SIZE / 2]);  \
-        threadgroup_barrier(mem_flags::mem_none);               \
     }                                                           \
+    threadgroup_barrier(mem_flags::mem_threadgroup);            \
 }
 
 template<typename T, typename ReductionOp, uint BLOCKSIZE>
@@ -196,8 +196,8 @@ if (BLOCKSIZE >= SIZE) {                                        \
     ) {                                                         \
         shared_indices[tid] = shared_indices[tid + SIZE / 2];   \
         shared[tid] = shared[tid + SIZE / 2];                   \
-        threadgroup_barrier(mem_flags::mem_none);               \
     }                                                           \
+    threadgroup_barrier(mem_flags::mem_threadgroup);            \
 }
 
 template<typename T, typename ArgReductionOp, uint BLOCKSIZE>
@@ -221,8 +221,8 @@ METAL_FUNC void threadgroup_reduce(
 if (BLOCKSIZE >= SIZE) {                                        \
     if (tid < SIZE / 2 && block_dim >= SIZE) {                  \
         shared[tid] = op(shared[tid], shared[tid + SIZE / 2]);  \
-        threadgroup_barrier(mem_flags::mem_none);               \
     }                                                           \
+    threadgroup_barrier(mem_flags::mem_threadgroup);            \
 }                                                               \
 
 // Inspired by "Optimizing Parallel Reduction in CUDA" by Mark Harris
@@ -282,8 +282,8 @@ METAL_FUNC void block_reduce(
 
     if (tid < 32) {
         threadgroup_reduce<T, ReductionOp, BLOCKSIZE>(shared, tid, block_dim);
-        threadgroup_barrier(mem_flags::mem_none);
     }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     if (tid == 0) {
         dst[dst_id] = shared[tid];
     }
@@ -358,8 +358,8 @@ if (BLOCKSIZE >= SIZE) {                                        \
     ) {                                                         \
         shared_indices[tid] = shared_indices[tid + SIZE / 2];   \
         shared[tid] = shared[tid + SIZE / 2];                   \
-        threadgroup_barrier(mem_flags::mem_none);               \
     }                                                           \
+    threadgroup_barrier(mem_flags::mem_threadgroup);            \
 }                                                               \
 
 template<
@@ -420,7 +420,7 @@ METAL_FUNC void arg_block_reduce(
 
     if (tid < 32) {
         threadgroup_reduce<T, ArgReductionOp, BLOCKSIZE>(shared, shared_indices, tid, block_dim);
-        threadgroup_barrier(mem_flags::mem_none);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
     if (tid == 0) {
@@ -491,71 +491,121 @@ kernel void NAME##_strided(                                 \
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 
-#define SOFTMAX(NAME, T)                                                          \
-kernel void NAME(                                                                 \
-    constant size_t &src_numel,                                                   \
-    constant size_t &el_to_sum_per_block,                                         \
-    device const T *src,                                                          \
-    device T *dst,                                                                \
-                                                                                  \
-    uint id [[ thread_position_in_grid ]],                                        \
-    uint tid [[ thread_index_in_threadgroup ]],                                   \
-    uint dst_id [[ threadgroup_position_in_grid ]],                               \
-    uint block_dim [[ threads_per_threadgroup ]]                                  \
-) {                                                                               \
-    threadgroup float shared_memory[THREADGROUP_SIZE];                                \
-    shared_memory[tid] = -INFINITY;                                            \
-    size_t start_idx = dst_id * el_to_sum_per_block;                              \
-    size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);            \
-    size_t idx = start_idx + tid;                                                 \
-                                                                                  \
-                                                                                  \
-    float tmp = -INFINITY; \
-    while (idx < stop_idx) {                                                      \
-        tmp = MAX(tmp, float(src[idx]));                   \
-        idx += block_dim;                                                         \
-    }                                                                             \
-    shared_memory[tid] = tmp; \
-                                                                                  \
-    threadgroup_barrier(mem_flags::mem_threadgroup);                              \
-                                                                                  \
-    for (uint s = block_dim / 2; s > 0; s >>= 1) {                                \
-        if (tid < s) {                                                            \
-            shared_memory[tid] = MAX(shared_memory[tid], shared_memory[tid + s]); \
-        }                                                                         \
-        threadgroup_barrier(mem_flags::mem_threadgroup);                              \
-    }                                                                             \
-                                                                                  \
-    /* wait for shared_memory[0] to be filled */ \
-    threadgroup_barrier(mem_flags::mem_threadgroup);                              \
-                                                                                  \
-    float _max = shared_memory[0];                                                    \
-                                                                                  \
-    /* prevent tid=0 from overwriting _max before other threads have written it */ \
-    threadgroup_barrier(mem_flags::mem_threadgroup);                              \
-    shared_memory[tid] = 0;                                                       \
-                                                                                  \
-    idx = start_idx + tid;                                                        \
-    while (idx < stop_idx) {                                                      \
-        const float val = exp(float(src[idx]) - _max);                                    \
-        dst[idx] = T(val);                                                           \
-        shared_memory[tid] += val;                                                \
-        idx += block_dim;                                                         \
-    }                                                                             \
-    threadgroup_barrier(mem_flags::mem_threadgroup);                              \
-    for (uint s = block_dim / 2; s > 0; s >>= 1) {                                \
-        if (tid < s) {                                                            \
-            shared_memory[tid] += shared_memory[tid + s];                         \
-        }                                                                         \
-        threadgroup_barrier(mem_flags::mem_threadgroup);                              \
-    }                                                                             \
-                                                                                  \
-    const T inv_acc = T(1.0/shared_memory[0]);                                         \
-    idx = start_idx + tid;                                                        \
-    while (idx < stop_idx) {                                                      \
-        dst[idx] *= inv_acc;                                                      \
-        idx += block_dim;                                                         \
-    }                                                                             \
+
+#define softmax_max_block(SIZE)                                     \
+if (BLOCKSIZE >= SIZE) {                                            \
+    if (tid < SIZE / 2 && block_dim >= SIZE) {                      \
+        shared[tid] = max_op(shared[tid], shared[tid + SIZE / 2]);  \
+    }                                                               \
+    threadgroup_barrier(mem_flags::mem_threadgroup);                \
+}
+
+#define softmax_acc_block(SIZE)                                     \
+if (BLOCKSIZE >= SIZE) {                                            \
+    if (tid < SIZE / 2 && block_dim >= SIZE) {                      \
+        shared[tid] += shared[tid + SIZE / 2];                      \
+    }                                                               \
+    threadgroup_barrier(mem_flags::mem_threadgroup);                \
+}
+
+template<
+    typename T,
+    typename ACC,
+    uint BLOCKSIZE
+>
+METAL_FUNC void softmax(
+    constant size_t &src_numel,
+    constant size_t &el_to_sum_per_block,
+    device const T *src,
+    device T *dst,
+    threadgroup ACC shared[BLOCKSIZE],
+
+    uint id [[ thread_position_in_grid ]],
+    uint tid [[ thread_index_in_threadgroup ]],
+    uint dst_id [[ threadgroup_position_in_grid ]],
+    uint block_dim [[ threads_per_threadgroup ]]
+) {
+    Max<ACC> max_op;
+
+    shared[tid] = numeric_limits<ACC>::min();
+    ACC tmp = numeric_limits<ACC>::min();
+
+    size_t start_idx = dst_id * el_to_sum_per_block;
+    size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);
+    size_t idx = start_idx + tid;
+
+    while (idx < stop_idx) {
+        tmp = max_op(tmp, static_cast<ACC>(src[idx]));
+        idx += block_dim;
+    }
+    shared[tid] = tmp;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    softmax_max_block(1024);
+    softmax_max_block(512);
+    softmax_max_block(256);
+    softmax_max_block(128);
+    if (tid < 32) {
+        threadgroup_reduce<ACC, Max<ACC>, BLOCKSIZE>(shared, tid, block_dim);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    ACC _max = shared[0];
+
+    // prevent tid 0 from overwriting _max before other threads have written
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    shared[tid] = 0;
+
+    idx = start_idx + tid;
+    while (idx < stop_idx) {
+        const ACC val = exp(static_cast<ACC>(src[idx]) - _max);
+        dst[idx] = static_cast<T>(val);
+        shared[tid] += val;
+
+        idx += block_dim;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    softmax_acc_block(1024);
+    softmax_acc_block(512);
+    softmax_acc_block(256);
+    softmax_acc_block(128);
+    if (tid < 32) {
+        threadgroup_reduce<ACC, Sum<ACC>, BLOCKSIZE>(shared, tid, block_dim);
+        threadgroup_barrier(mem_flags::mem_none);
+    }
+
+    const T inv_acc = T(1.0/shared[0]);
+    idx = start_idx + tid;
+    while (idx < stop_idx) {
+        dst[idx] *= inv_acc;
+        idx += block_dim;
+    }
+}
+
+
+#define SOFTMAX(NAME, T, ACC)                       \
+kernel void NAME(                                   \
+    constant size_t &src_numel,                     \
+    constant size_t &el_to_sum_per_block,           \
+    device const T *src,                            \
+    device T *dst,                                  \
+                                                    \
+    uint id [[ thread_position_in_grid ]],          \
+    uint tid [[ thread_index_in_threadgroup ]],     \
+    uint dst_id [[ threadgroup_position_in_grid ]], \
+    uint block_dim [[ threads_per_threadgroup ]]    \
+) {                                                 \
+    threadgroup ACC shared_memory[BLOCKSIZE];       \
+    softmax<T, ACC, BLOCKSIZE>(                     \
+        src_numel,                                  \
+        el_to_sum_per_block,                        \
+        src,                                        \
+        dst,                                        \
+        shared_memory,                              \
+        id,                                         \
+        tid,                                        \
+        dst_id,                                     \
+        block_dim);                                 \
 }
 
 REDUCE(Sum, fast_sum_f32, float)
@@ -588,8 +638,8 @@ ARG_REDUCE(ArgMax, fast_argmax_f16, half)
 ARG_REDUCE(ArgMax, fast_argmax_u32, uint)
 ARG_REDUCE(ArgMax, fast_argmax_u8, uint8_t)
 
-SOFTMAX(softmax_f32, float)
-SOFTMAX(softmax_f16, half)
+SOFTMAX(softmax_f32, float, float)
+SOFTMAX(softmax_f16, half, float)
 
 #if __METAL_VERSION__ >= 220
 REDUCE(Sum, fast_sum_i64, int64_t)
@@ -611,5 +661,5 @@ REDUCE(Min, fast_min_bf16, bfloat)
 ARG_REDUCE(ArgMin, fast_argmin_bf16, bfloat)
 ARG_REDUCE(ArgMax, fast_argmax_bf16, bfloat)
 
-SOFTMAX(softmax_bf16, bfloat)
+SOFTMAX(softmax_bf16, bfloat, float)
 #endif

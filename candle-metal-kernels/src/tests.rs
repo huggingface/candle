@@ -529,7 +529,7 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
         Err(e) => {
             println!("Error: {}", e);
             panic!("damn!");
-        },
+        }
     }
 
     read_to_vec(&output, out_length)
@@ -597,7 +597,6 @@ fn softmax() {
     }
     let results = run_softmax(&v, last_dim, "softmax_f32");
     let results = approx(results, 4);
-    println!("{results:?}");
     assert_eq!(
         results.iter().map(|&s| s.round() as usize).sum::<usize>(),
         n
