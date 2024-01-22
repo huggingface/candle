@@ -53,23 +53,18 @@ pub trait EncoderParam: private::Sealed {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self);
 }
 
-macro_rules! primitive {
-    ($type:ty) => {
-        impl EncoderParam for $type {
-            fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
-                encoder.set_bytes(
-                    position,
-                    core::mem::size_of::<$type>() as u64,
-                    &data as *const $type as *const c_void,
-                );
-            }
-        }
-    };
-}
 macro_rules! primitives {
     ($($type:ty),+) => {
         $(
-            primitive!($type);
+            impl EncoderParam for $type {
+                fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+                    encoder.set_bytes(
+                        position,
+                        core::mem::size_of::<$type>() as u64,
+                        &data as *const $type as *const c_void,
+                    );
+                }
+            }
         )+
     };
 }
@@ -116,7 +111,7 @@ macro_rules! set_params {
     );
 }
 
-// Seal the trait so that only the types we want can implement it
+// Seal for EncoderParam so that only the types we want can implement it
 mod private {
     use super::*;
 
@@ -124,27 +119,11 @@ mod private {
 
     macro_rules! sealed {
         ($($type:ty),+) => {
-            $(
-                impl Sealed for $type {}
-            )+
+            $(impl Sealed for $type {})+
         };
     }
-    sealed!(
-        usize,
-        u8,
-        u32,
-        u64,
-        i32,
-        i64,
-        f16,
-        bf16,
-        f32,
-        bool,
-        &Buffer,
-        (&Buffer, usize),
-        &mut Buffer,
-        (&mut Buffer, usize)
-    );
+    sealed!(usize, u8, u32, u64, i32, i64, f16, bf16, f32, bool);
+    sealed!(&Buffer, (&Buffer, usize), &mut Buffer, (&mut Buffer, usize));
     impl<T> Sealed for &[T] {}
 }
 
