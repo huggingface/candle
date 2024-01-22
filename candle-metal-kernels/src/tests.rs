@@ -1,6 +1,6 @@
 use super::*;
 use half::{bf16, f16};
-use metal::{Device, MTLResourceOptions};
+use metal::{Buffer, Device, MTLResourceOptions};
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
@@ -11,7 +11,7 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
 
 fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
     let options = MTLResourceOptions::StorageModeManaged;
-    let ptr = data.as_ptr() as *const core::ffi::c_void;
+    let ptr = data.as_ptr() as *const c_void;
     let size = (data.len() * std::mem::size_of::<T>()) as u64;
     device.new_buffer_with_data(ptr, size, options)
 }
@@ -37,8 +37,7 @@ fn approx_bf16(v: Vec<bf16>, digits: i32) -> Vec<f32> {
 
 fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
@@ -60,8 +59,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
 
 fn run_binary<T: Clone>(x: &[T], y: &[T], name: binary::contiguous::Kernel) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let options = MTLResourceOptions::StorageModeManaged;
@@ -96,8 +94,7 @@ fn run_strided<T: Clone>(
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     call_unary_strided(
         &device,
         command_buffer,
@@ -248,10 +245,37 @@ fn binary_add_f32() {
     assert_eq!(approx(expected, 4), vec![3.0f32, 5.1, 7.2]);
 }
 
+#[test]
+fn binary_ops_bf16() {
+    let lhs: Vec<bf16> = [1.1f32, 2.2, 3.3].into_iter().map(bf16::from_f32).collect();
+    let rhs: Vec<bf16> = [4.2f32, 5.5f32, 6.91f32]
+        .into_iter()
+        .map(bf16::from_f32)
+        .collect();
+
+    macro_rules! binary_op {
+        ($opname:ident, $opexpr:expr) => {{
+            let results = run_binary(&lhs, &rhs, binary::contiguous::$opname::BFLOAT);
+            let expected: Vec<bf16> = lhs
+                .iter()
+                .zip(rhs.iter())
+                .map(|(x, y): (&bf16, &bf16)| $opexpr(*x, *y))
+                .collect();
+            assert_eq!(results, expected);
+        }};
+    }
+
+    binary_op!(add, |x, y| x + y);
+    binary_op!(sub, |x, y| x - y);
+    binary_op!(mul, |x, y| x * y);
+    binary_op!(div, |x, y| x / y);
+    binary_op!(min, |x: bf16, y| x.min(y));
+    binary_op!(max, |x: bf16, y| x.max(y));
+}
+
 fn cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
@@ -296,10 +320,92 @@ fn cast_u32_f32() {
     assert_eq!(results, vec![1.0f32; 10_000]);
 }
 
+#[test]
+fn it_cast_bf16_u32() {
+    let input: Vec<bf16> = (1..=3).map(|v| bf16::from_f32(v as f32)).collect();
+
+    let output: Vec<u32> = cast(&input, "cast_bf16_u32");
+    let expected: Vec<u32> = (1..=3).map(|v| v as u32).collect();
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn it_cast_bf16_f32() {
+    let input: Vec<bf16> = (1..=3).map(|v| bf16::from_f32(v as f32)).collect();
+
+    let output: Vec<f32> = cast(&input, "cast_bf16_f32");
+    let expected: Vec<f32> = (1..=3).map(|v| v as f32).collect();
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn it_cast_u8_bf16() {
+    let input: Vec<u8> = (1..=3).map(|v| v as u8).collect();
+
+    let output: Vec<bf16> = cast(&input, "cast_u8_bf16");
+    let expected: Vec<bf16> = input
+        .iter()
+        .map(|v| bf16::from_f32(*v as f32))
+        .collect::<Vec<_>>();
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn it_cast_u32_bf16() {
+    let input: Vec<u32> = (1..=3).map(|v| v as u32).collect();
+
+    let output: Vec<bf16> = cast(&input, "cast_u32_bf16");
+    let expected: Vec<bf16> = input.iter().map(|v| bf16::from_f32(*v as f32)).collect();
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn it_cast_f32_bf16() {
+    let input: Vec<f32> = (1..=3).map(|v| v as f32).collect();
+
+    let output: Vec<bf16> = cast(&input, "cast_f32_bf16");
+    let expected: Vec<bf16> = input.iter().map(|v| bf16::from_f32(*v as f32)).collect();
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn it_cast_bf16_u8() {
+    let input: Vec<bf16> = (1..=3).map(|v| bf16::from_f32(v as f32)).collect();
+
+    let output: Vec<u8> = cast(&input, "cast_bf16_u8");
+    let expected: Vec<u8> = input.iter().map(|v| v.to_f32() as u8).collect();
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn it_cast_bf16_f16() {
+    let input: Vec<bf16> = (1..=3).map(|v| bf16::from_f32(v as f32)).collect();
+
+    let output: Vec<f16> = cast(&input, "cast_bf16_f16");
+    let expected: Vec<f16> = input.iter().map(|v| f16::from_f32(v.to_f32())).collect();
+
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn it_cast_f16_bf16() {
+    let input: Vec<f16> = (1..=3).map(|v| f16::from_f32(v as f32)).collect();
+
+    let output: Vec<bf16> = cast(&input, "cast_f16_bf16");
+    let expected: Vec<bf16> = input.iter().map(|v| bf16::from_f32(v.to_f32())).collect();
+
+    assert_eq!(output, expected);
+}
+
 fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
 
@@ -334,8 +440,7 @@ fn run_affine_strided<T: Clone>(
     add: f64,
 ) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
 
@@ -396,14 +501,14 @@ fn index_select() {
     let shape = [5, 2];
     let ids = [0u32, 4, 2];
     let dim = 0;
-    let result = run_index_select(&embedding, &shape, &ids, dim);
+    let result = run_index_select(&embedding, &shape, &ids, dim, "is_u32_f32");
     assert_eq!(result, vec![1.0f32, 2.0, 9.0, 10.0, 5.0, 6.0]);
 
     let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
     let shape = [2, 5];
     let ids = [0u32, 1, 0];
     let dim = 0;
-    let result = run_index_select(&embedding, &shape, &ids, dim);
+    let result = run_index_select(&embedding, &shape, &ids, dim, "is_u32_f32");
     assert_eq!(
         result,
         vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 1.0f32, 2.0, 3.0, 4.0, 5.0]
@@ -419,9 +524,35 @@ fn index_select_f16() {
     let shape = [5, 2];
     let ids = [0u32, 4, 2];
     let dim = 0;
-    let result = run_index_select(&embedding, &shape, &ids, dim);
+    let result = run_index_select(&embedding, &shape, &ids, dim, "is_u32_f16");
     assert_eq!(
         approx_f16(result, 4),
+        vec![1.0f32, 2.0, 9.0, 10.0, 5.0, 6.0]
+    );
+}
+
+#[test]
+fn index_select_is_u32_bf16() {
+    let embedding: Vec<bf16> = (1..=10).map(|x| bf16::from_f32(x as f32)).collect();
+    let shape = [5, 2];
+    let ids = [0u32, 4, 2];
+    let dim = 0;
+    let result = run_index_select(&embedding, &shape, &ids, dim, "is_u32_bf16");
+    assert_eq!(
+        approx_bf16(result, 4),
+        vec![1.0f32, 2.0, 9.0, 10.0, 5.0, 6.0]
+    );
+}
+
+#[test]
+fn index_select_is_u8_bf16() {
+    let embedding: Vec<bf16> = (1..=10).map(|x| bf16::from_f32(x as f32)).collect();
+    let shape = [5, 2];
+    let ids = [0u8, 4, 2];
+    let dim = 0;
+    let result = run_index_select(&embedding, &shape, &ids, dim, "is_u8_bf16");
+    assert_eq!(
+        approx_bf16(result, 4),
         vec![1.0f32, 2.0, 9.0, 10.0, 5.0, 6.0]
     );
 }
@@ -432,7 +563,7 @@ fn index_select_dim1() {
     let shape = [5, 2];
     let ids = [0u32, 1, 0];
     let dim = 1;
-    let result = run_index_select(&embedding, &shape, &ids, dim);
+    let result = run_index_select(&embedding, &shape, &ids, dim, "is_u32_f32");
     assert_eq!(
         result,
         vec![1.0f32, 2.0, 1.0, 3.0, 4.0, 3.0, 5.0, 6.0, 5.0, 7.0, 8.0f32, 7.0, 9.0, 10.0, 9.0]
@@ -444,6 +575,7 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
     shape: &[usize],
     ids: &[I],
     dim: usize,
+    name: &'static str,
 ) -> Vec<T> {
     let device = Device::system_default().expect("no device found");
 
@@ -457,14 +589,7 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
     let dst_el = ids.len() * left_size * right_size;
     let dst_buffer = new_buffer(&device, &vec![0.0f32; dst_el]);
 
-    let name = match core::mem::size_of::<T>() {
-        4 => "is_u32_f32",
-        2 => "is_u32_f16",
-        _ => unimplemented!(),
-    };
-
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     call_index_select(
         &device,
         &command_buffer,
@@ -499,8 +624,7 @@ fn cos_f16() {
 
 fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
@@ -520,25 +644,16 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
         &input,
         0,
         &output,
-    );
-    match result {
-        Ok(_) => {
-            command_buffer.commit();
-            command_buffer.wait_until_completed();
-        }
-        Err(e) => {
-            println!("Error: {}", e);
-            panic!("damn!");
-        }
-    }
+    ).unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
 
     read_to_vec(&output, out_length)
 }
 
 fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'static str) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
@@ -656,8 +771,7 @@ fn run_where_cond<I: Clone, T: Clone>(
     name: &'static str,
 ) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let options = MTLResourceOptions::StorageModeManaged;
@@ -733,8 +847,7 @@ fn run_gemm<T: Clone>(
     rhs_offset: usize,
 ) -> Vec<T> {
     let device = device();
-    let fence = device.new_fence();
-    let kernels = Kernels::new(fence);
+    let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let options = MTLResourceOptions::StorageModeManaged;
@@ -811,4 +924,125 @@ fn gemm() {
         approx(results, 4),
         vec![56.0, 59.0, 62.0, 65.0, 200.0, 212.0, 224.0, 236.0]
     );
+}
+
+fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b: f32) -> Vec<T> {
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+
+    let options = MTLResourceOptions::StorageModeManaged;
+    let output = device.new_buffer((length * core::mem::size_of::<T>()) as NSUInteger, options);
+
+    let seed = device.new_buffer_with_data(
+        &seed as *const u32 as *const core::ffi::c_void,
+        std::mem::size_of::<u32>() as NSUInteger,
+        options,
+    );
+
+    if name.starts_with("rand_uniform") {
+        call_random_uniform(
+            &device,
+            command_buffer,
+            &kernels,
+            name,
+            a,
+            b,
+            length,
+            &seed,
+            &output,
+        )
+        .unwrap();
+    } else {
+        call_random_normal(
+            &device,
+            command_buffer,
+            &kernels,
+            name,
+            a,
+            b,
+            length,
+            &seed,
+            &output,
+        )
+        .unwrap();
+    }
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    read_to_vec(&output, length)
+}
+
+#[test]
+fn random() {
+    fn calc_mean(data: &[f32]) -> f32 {
+        let sum = data.iter().sum::<f32>() as f32;
+        let count = data.len();
+        assert!(count > 0);
+        sum / count as f32
+    }
+
+    fn calc_stddev(data: &[f32]) -> f32 {
+        let mean = calc_mean(data);
+        let count = data.len();
+        assert!(count > 0);
+
+        let variance = data
+            .iter()
+            .map(|value| {
+                let diff = mean - (*value as f32);
+                diff * diff
+            })
+            .sum::<f32>()
+            / count as f32;
+
+        variance.sqrt()
+    }
+
+    let shape = vec![1024, 10];
+
+    let length = shape.iter().product::<usize>();
+    let seed = 299792458;
+
+    let min = -30.0;
+    let max = 30.0;
+    let mean = 100.0;
+    let stddev = 50.0;
+
+    macro_rules! validate_random {
+        ($type:ty) => {
+            let results: Vec<f32> = run_random::<$type>(
+                concat!("rand_uniform_", stringify!($type)),
+                seed,
+                length,
+                min,
+                max,
+            )
+            .into_iter()
+            .map(f32::from)
+            .collect();
+            results.iter().for_each(|v| {
+                assert!(*v >= min && *v <= max);
+            });
+            assert!(calc_mean(&results) > -1.0 && calc_mean(&results) < 1.0);
+
+            let results: Vec<f32> = run_random::<$type>(
+                concat!("rand_normal_", stringify!($type)),
+                seed,
+                length,
+                mean,
+                stddev,
+            )
+            .into_iter()
+            .map(f32::from)
+            .collect();
+            assert!((calc_mean(&results) - mean).abs() < mean / 10.0);
+            assert!((calc_stddev(&results) - stddev).abs() < stddev / 10.0);
+        };
+    }
+
+    validate_random!(f32);
+    validate_random!(f16);
+    validate_random!(bf16);
 }

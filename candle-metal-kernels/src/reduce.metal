@@ -649,10 +649,9 @@ REDUCE(Max, fast_max_i64, int64_t)
 
 ARG_REDUCE(ArgMin, fast_argmin_i64, int64_t)
 ARG_REDUCE(ArgMax, fast_argmax_i64, int64_t)
-
 #endif
 
-#if __METAL_VERSION__ >= 310
+#if defined(__HAVE_BFLOAT__)
 REDUCE(Sum, fast_sum_bf16, bfloat)
 REDUCE(Mul, fast_mul_bf16, bfloat)
 REDUCE(Max, fast_max_bf16, bfloat)

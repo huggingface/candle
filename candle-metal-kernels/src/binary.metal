@@ -73,7 +73,7 @@ BINARY(FN, uint32_t, uint8_t, NAME##_u32, NAME##_u32_strided); \
 BINARY(FN, uint8_t, uint8_t, NAME##_u8, NAME##_u8_strided);
 
 #define INT64_BINARY_OP_OUT(NAME, FN) \
-BINARY(FN, int64_t, int8_t, NAME##_i64, NAME##_i64_strided);
+BINARY(FN, int64_t, uint8_t, NAME##_i64, NAME##_i64_strided);
 
 BINARY_OP(x + y, add)
 BINARY_OP(x - y, sub)
@@ -105,7 +105,7 @@ INT64_BINARY_OP_OUT(ge, x >= y)
 INT64_BINARY_OP_OUT(gt, x > y)
 #endif
 
-#if __METAL_VERSION__ >= 310
+#if defined(__HAVE_BFLOAT__)
 BFLOAT_BINARY_OP(x + y, add)
 BFLOAT_BINARY_OP(x - y, sub)
 BFLOAT_BINARY_OP(x * y, mul)

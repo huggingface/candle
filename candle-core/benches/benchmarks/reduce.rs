@@ -1,4 +1,4 @@
-use crate::benchmarks::{bench_name, device, BenchDevice};
+use crate::benchmarks::{BenchDevice, BenchDeviceHandler};
 use candle_core::{DType, Device, Storage, Tensor};
 use criterion::{black_box, criterion_group, Criterion, Throughput};
 use half::{bf16, f16};
@@ -12,6 +12,7 @@ fn run_arg_min(a: &Tensor) {
     a.argmin(2).unwrap();
 }
 
+// TODO: Remove before merging. Softmax impls live in candle-nn, so this is a temporary workaround.
 fn softmax(a: &Tensor) -> candle_core::Result<()> {
     use candle_core::{backend::BackendStorage, DType};
     let (storage, layout) = a.storage_and_layout();
@@ -53,20 +54,21 @@ fn softmax(a: &Tensor) -> candle_core::Result<()> {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let device = device().unwrap();
-
+    let handler = BenchDeviceHandler::new().unwrap();
     let (lo, up) = (-1000.0f32, 1000.0f32);
-    run_softmax(c, &device, (lo, up));
-    run_softmax(c, &device, (f16::from_f32(lo), f16::from_f32(up)));
-    run_softmax(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)));
+    for device in handler.devices {
+        run_softmax(c, &device, (lo, up));
+        run_softmax(c, &device, (f16::from_f32(lo), f16::from_f32(up)));
+        run_softmax(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)));
 
-    run_reduce(c, &device, (lo, up));
-    run_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)));
-    run_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)));
+        run_reduce(c, &device, (lo, up));
+        run_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)));
+        run_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)));
 
-    run_arg_reduce(c, &device, (lo, up));
-    run_arg_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)));
-    run_arg_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)));
+        run_arg_reduce(c, &device, (lo, up));
+        run_arg_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)));
+        run_arg_reduce(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)));
+    }
 }
 
 fn run_softmax<T: candle_core::FloatDType>(c: &mut Criterion, device: &Device, (lo, up): (T, T)) {
@@ -75,8 +77,8 @@ fn run_softmax<T: candle_core::FloatDType>(c: &mut Criterion, device: &Device, (
     }
 
     let b = 1;
-    let m = 2048;
-    let k = 2048;
+    let m = 1024;
+    let k = 1024;
     let a = Tensor::rand(lo, up, (b, m, k), &device).unwrap();
 
     let flops = b * m * k * T::DTYPE.size_in_bytes();
@@ -88,7 +90,7 @@ fn run_softmax<T: candle_core::FloatDType>(c: &mut Criterion, device: &Device, (
         _ => "softmax",
     };
 
-    let mut group = c.benchmark_group(bench_name(name));
+    let mut group = c.benchmark_group(device.bench_name(name));
     group.throughput(Throughput::Bytes(flops as u64));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {
@@ -105,8 +107,8 @@ fn run_softmax<T: candle_core::FloatDType>(c: &mut Criterion, device: &Device, (
 
 fn run_reduce<T: candle_core::FloatDType>(c: &mut Criterion, device: &Device, (lo, up): (T, T)) {
     let b = 1;
-    let m = 2048;
-    let k = 2048;
+    let m = 1024;
+    let k = 1024;
 
     let a = Tensor::rand(lo, up, (b, m, k), &device).unwrap();
 
@@ -119,7 +121,7 @@ fn run_reduce<T: candle_core::FloatDType>(c: &mut Criterion, device: &Device, (l
         _ => "reduce",
     };
 
-    let mut group = c.benchmark_group(bench_name(name));
+    let mut group = c.benchmark_group(device.bench_name(name));
     group.throughput(Throughput::Bytes(flops as u64));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {
@@ -140,8 +142,8 @@ fn run_arg_reduce<T: candle_core::FloatDType>(
     (lo, up): (T, T),
 ) {
     let b = 1;
-    let m = 2048;
-    let k = 2048;
+    let m = 1024;
+    let k = 1024;
 
     let a = Tensor::rand(lo, up, (b, m, k), &device).unwrap();
 
@@ -154,7 +156,7 @@ fn run_arg_reduce<T: candle_core::FloatDType>(
         _ => "reduce",
     };
 
-    let mut group = c.benchmark_group(bench_name(name));
+    let mut group = c.benchmark_group(device.bench_name(name));
     group.throughput(Throughput::Bytes(flops as u64));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {
