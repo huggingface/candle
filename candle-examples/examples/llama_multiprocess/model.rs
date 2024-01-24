@@ -93,19 +93,27 @@ fn shard(dim: usize, rank: usize, world_size: usize) -> candle_nn::var_builder::
 }
 
 impl TensorParallelColumnLinear {
-    fn load(vb: VarBuilder, comm: Rc<Comm>) -> Result<Self> {
+    fn load(vb: VarBuilder, comm: Rc<Comm>, shape: (usize, usize)) -> Result<Self> {
         let rank = comm.rank();
         let size = comm.world_size();
-        let weight = vb.get_with_hints((), "weight", shard(0, rank, size))?;
+        let weight = vb.get_with_hints(shape, "weight", shard(0, rank, size))?;
         Ok(Self::new(Linear::new(weight, None)))
     }
 
-    fn load_multi(vb: VarBuilder, prefixes: &[&str], comm: Rc<Comm>) -> Result<Self> {
+    fn load_multi(
+        vb: VarBuilder,
+        prefixes: &[&str],
+        comm: Rc<Comm>,
+        shape: (usize, usize),
+    ) -> Result<Self> {
         let rank = comm.rank();
         let size = comm.world_size();
         let weights: Vec<_> = prefixes
             .iter()
-            .map(|p| vb.pp(p).get_with_hints((), "weight", shard(0, rank, size)))
+            .map(|p| {
+                vb.pp(p)
+                    .get_with_hints(shape, "weight", shard(0, rank, size))
+            })
             .collect::<Result<Vec<_>>>()?;
         let weight = Tensor::cat(&weights, 0)?;
         Ok(Self::new(Linear::new(weight, None)))
@@ -113,10 +121,10 @@ impl TensorParallelColumnLinear {
 }
 
 impl TensorParallelRowLinear {
-    fn load(vb: VarBuilder, comm: Rc<Comm>) -> Result<Self> {
+    fn load(vb: VarBuilder, comm: Rc<Comm>, shape: (usize, usize)) -> Result<Self> {
         let rank = comm.rank();
         let size = comm.world_size();
-        let weight = vb.get_with_hints((), "weight", shard(1, rank, size))?;
+        let weight = vb.get_with_hints(shape, "weight", shard(1, rank, size))?;
         Ok(Self::new(Linear::new(weight, None), comm))
     }
 }
@@ -295,8 +303,13 @@ impl CausalSelfAttention {
             vb.clone(),
             &["q_proj", "k_proj", "v_proj"],
             comm.clone(),
+            (cfg.hidden_size, cfg.hidden_size),
         )?;
-        let o_proj = TensorParallelRowLinear::load(vb.pp("o_proj"), comm.clone())?;
+        let o_proj = TensorParallelRowLinear::load(
+            vb.pp("o_proj"),
+            comm.clone(),
+            (cfg.hidden_size, cfg.hidden_size),
+        )?;
         Ok(Self {
             qkv_proj,
             o_proj,
@@ -332,10 +345,22 @@ impl Mlp {
         self.c_proj.forward(&x)
     }
 
-    fn load(vb: VarBuilder, _cfg: &Config, comm: Rc<Comm>) -> Result<Self> {
-        let c_fc1 = TensorParallelColumnLinear::load(vb.pp("gate_proj"), comm.clone())?;
-        let c_fc2 = TensorParallelColumnLinear::load(vb.pp("up_proj"), comm.clone())?;
-        let c_proj = TensorParallelRowLinear::load(vb.pp("down_proj"), comm)?;
+    fn load(vb: VarBuilder, cfg: &Config, comm: Rc<Comm>) -> Result<Self> {
+        let c_fc1 = TensorParallelColumnLinear::load(
+            vb.pp("gate_proj"),
+            comm.clone(),
+            (cfg.intermediate_size, cfg.hidden_size),
+        )?;
+        let c_fc2 = TensorParallelColumnLinear::load(
+            vb.pp("up_proj"),
+            comm.clone(),
+            (cfg.intermediate_size, cfg.hidden_size),
+        )?;
+        let c_proj = TensorParallelRowLinear::load(
+            vb.pp("down_proj"),
+            comm,
+            (cfg.hidden_size, cfg.intermediate_size),
+        )?;
         Ok(Self::new(c_fc1, c_fc2, c_proj))
     }
 }
