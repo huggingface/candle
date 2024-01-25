@@ -100,7 +100,7 @@ impl TensorParallelColumnLinear {
         Ok(Self::new(Linear::new(weight, None)))
     }
 
-    fn load_multi(
+    fn _load_multi(
         vb: VarBuilder,
         prefixes: &[&str],
         comm: Rc<Comm>,
@@ -195,7 +195,9 @@ fn embedding(cfg: &Config, vb: VarBuilder) -> Result<Embedding> {
 }
 
 struct CausalSelfAttention {
-    qkv_proj: TensorParallelColumnLinear,
+    q_proj: TensorParallelColumnLinear,
+    k_proj: TensorParallelColumnLinear,
+    v_proj: TensorParallelColumnLinear,
     o_proj: TensorParallelRowLinear,
     num_attention_heads: usize,
     num_key_value_heads: usize,
@@ -220,23 +222,11 @@ impl CausalSelfAttention {
     fn forward(&self, x: &Tensor, index_pos: usize, block_idx: usize) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.shape().dims3()?;
 
-        let qkv = self.qkv_proj.forward(x)?;
-        let hidden_size = self.num_attention_heads * self.head_dim;
+        let q = self.q_proj.forward(x)?;
+        let k = self.k_proj.forward(x)?;
+        let v = self.v_proj.forward(x)?;
 
-        let q = qkv.i((.., .., ..self.num_attention_heads * self.head_dim))?;
-        let k = qkv.i((
-            ..,
-            ..,
-            self.num_attention_heads * self.head_dim
-                ..self.num_attention_heads * self.head_dim
-                    + self.num_key_value_heads * self.head_dim,
-        ))?;
-        let v = qkv.i((
-            ..,
-            ..,
-            self.num_attention_heads * self.head_dim + self.num_key_value_heads * self.head_dim..,
-        ))?;
-        // todo!("Q {:?} K {:?} V {:?} - x {:?}", q.shape(), k.shape(), v.shape(), x.shape());
+        let hidden_size = self.num_attention_heads * self.head_dim;
 
         let q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
@@ -293,17 +283,27 @@ impl CausalSelfAttention {
             let x = x
                 .unsqueeze(2)?
                 .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head, n_rep, seq_len, head_dim))?;
+                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
             Ok(x)
         }
     }
 
     fn load(vb: VarBuilder, cache: &Cache, cfg: &Config, comm: Rc<Comm>) -> Result<Self> {
-        let qkv_proj = TensorParallelColumnLinear::load_multi(
-            vb.clone(),
-            &["q_proj", "k_proj", "v_proj"],
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let q_proj = TensorParallelColumnLinear::load(
+            vb.pp("q_proj"),
             comm.clone(),
-            (cfg.hidden_size, cfg.hidden_size),
+            (cfg.hidden_size, cfg.num_attention_heads * head_dim),
+        )?;
+        let k_proj = TensorParallelColumnLinear::load(
+            vb.pp("k_proj"),
+            comm.clone(),
+            (cfg.num_key_value_heads * head_dim, cfg.hidden_size),
+        )?;
+        let v_proj = TensorParallelColumnLinear::load(
+            vb.pp("v_proj"),
+            comm.clone(),
+            (cfg.num_key_value_heads * head_dim, cfg.hidden_size),
         )?;
         let o_proj = TensorParallelRowLinear::load(
             vb.pp("o_proj"),
@@ -311,7 +311,9 @@ impl CausalSelfAttention {
             (cfg.hidden_size, cfg.hidden_size),
         )?;
         Ok(Self {
-            qkv_proj,
+            q_proj,
+            k_proj,
+            v_proj,
             o_proj,
             num_attention_heads: cfg.num_attention_heads / comm.world_size(),
             num_key_value_heads: cfg.num_key_value_heads / comm.world_size(),
