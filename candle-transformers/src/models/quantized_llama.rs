@@ -14,9 +14,9 @@ struct RmsNorm {
 }
 
 impl RmsNorm {
-    fn new(scale: QTensor, eps: f32) -> Result<Self> {
+    fn new(scale: QTensor, eps: f32, device: &Device) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let scale = scale.dequantize(&Device::Cpu)?;
+        let scale = scale.dequantize(device)?;
         let inner = candle_nn::LayerNorm::rms_norm(scale, eps as f64);
         Ok(Self { inner, span })
     }
@@ -273,15 +273,20 @@ pub struct ModelWeights {
     masks: HashMap<usize, Tensor>,
     span: tracing::Span,
     span_output: tracing::Span,
+    device: Device,
 }
 
-fn precomput_freqs_cis(head_dim: usize, freq_base: f32) -> Result<(Tensor, Tensor)> {
+fn precomput_freqs_cis(
+    head_dim: usize,
+    freq_base: f32,
+    device: &Device,
+) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
         .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
         .collect();
-    let theta = Tensor::new(theta.as_slice(), &Device::Cpu)?;
-    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, &Device::Cpu)?
+    let theta = Tensor::new(theta.as_slice(), device)?;
+    let idx_theta = Tensor::arange(0, MAX_SEQ_LEN as u32, device)?
         .to_dtype(DType::F32)?
         .reshape((MAX_SEQ_LEN, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
@@ -291,13 +296,12 @@ fn precomput_freqs_cis(head_dim: usize, freq_base: f32) -> Result<(Tensor, Tenso
 }
 
 impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
-        let cpu = &Device::Cpu;
+    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize, device: &Device) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let (cos, sin) = precomput_freqs_cis(head_dim, 10000.)?;
+        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
-        let tok_embeddings = tok_embeddings.dequantize(cpu)?;
-        let norm = RmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
+        let tok_embeddings = tok_embeddings.dequantize(device)?;
+        let norm = RmsNorm::new(ct.remove("norm.weight")?, 1e-5, device)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
         for layer_idx in 0..ct.hparams.n_layer {
@@ -326,9 +330,9 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::new(attention_norm, 1e-5)?,
+                attention_norm: RmsNorm::new(attention_norm, 1e-5, device)?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::new(ffn_norm, 1e-5)?,
+                ffn_norm: RmsNorm::new(ffn_norm, 1e-5, device)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
@@ -350,6 +354,7 @@ impl ModelWeights {
             masks: HashMap::new(),
             span,
             span_output,
+            device: device.clone(),
         })
     }
 
@@ -358,7 +363,6 @@ impl ModelWeights {
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
-        let cpu = &Device::Cpu;
         let md_get = |s: &str| match ct.metadata.get(s) {
             None => candle::bail!("cannot find {s} in metadata"),
             Some(v) => Ok(v),
@@ -382,13 +386,14 @@ impl ModelWeights {
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
             .unwrap_or(10000f32);
-        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base)?;
+        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
-        let tok_embeddings = tok_embeddings.dequantize(cpu)?;
+        let tok_embeddings = tok_embeddings.dequantize(device)?;
         let norm = RmsNorm::new(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
+            device,
         )?;
         let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
@@ -445,9 +450,9 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::new(attention_norm, rms_norm_eps)?,
+                attention_norm: RmsNorm::new(attention_norm, rms_norm_eps, device)?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::new(ffn_norm, rms_norm_eps)?,
+                ffn_norm: RmsNorm::new(ffn_norm, rms_norm_eps, device)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
@@ -469,6 +474,7 @@ impl ModelWeights {
             masks: HashMap::new(),
             span,
             span_output,
+            device: device.clone(),
         })
     }
 
@@ -479,7 +485,7 @@ impl ModelWeights {
             let mask: Vec<_> = (0..t)
                 .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
                 .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), &Device::Cpu)?;
+            let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
             self.masks.insert(t, mask.clone());
             Ok(mask)
         }
