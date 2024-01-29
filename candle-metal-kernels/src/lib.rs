@@ -1364,13 +1364,12 @@ pub fn call_gemm(
         // TODO byte_stride_d
         let byte_stride_d = 0;
 
-        let mut buffer: Vec<u64> = Vec::with_capacity(b * 4);
-        for i in 0..b {
-            buffer.push((i * byte_stride_a) as u64);
-            buffer.push((i * byte_stride_b) as u64);
-            buffer.push((i * byte_stride_c) as u64);
-            buffer.push((i * byte_stride_d) as u64);
-        }
+        let buffer: Vec<u64> = vec![
+            byte_stride_a as _,
+            byte_stride_b as _,
+            byte_stride_c as _,
+            byte_stride_d as _,
+        ];
         encoder.set_bytes(
             10,
             (buffer.len() * core::mem::size_of::<u64>()) as NSUInteger,
