@@ -18,6 +18,8 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: usize,
     pub(crate) use_flash_attn: bool,
+    pub(crate) has_lm_head: bool,
+    pub(crate) vb_prefix: Option<String>
 }
 
 impl Config {
@@ -36,6 +38,8 @@ impl Config {
             rope_theta: 10_000.,
             sliding_window: 4096,
             use_flash_attn,
+            has_lm_head: true,
+            vb_prefix: Some("model".to_owned())
         }
     }
 
@@ -55,6 +59,8 @@ impl Config {
             rope_theta: 10_000.,
             sliding_window: 4096,
             use_flash_attn,
+            has_lm_head: true,
+            vb_prefix: Some("model".to_owned())
         }
     }
 
@@ -73,6 +79,28 @@ impl Config {
             rope_theta: 10_000.,
             sliding_window: 4096,
             use_flash_attn,
+            has_lm_head: true,
+            vb_prefix: Some("model".to_owned())
+        }
+    }
+
+    // https://huggingface.co/intfloat/e5-mistral-7b-instruct/blob/main/config.json 
+    pub fn config_e5_mistral_7b(use_flash_attn: bool) -> Self {
+        Self {
+            vocab_size: 32000,
+            hidden_size: 4096,
+            intermediate_size: 14336,
+            num_hidden_layers: 32,
+            num_attention_heads: 32,
+            num_key_value_heads: 8,
+            hidden_act: Activation::Silu,
+            max_position_embeddings: 32768,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.,
+            sliding_window: 4096,
+            use_flash_attn,
+            has_lm_head: false,
+            vb_prefix: None
         }
     }
 }
@@ -373,7 +401,7 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: Option<Linear>,
     sliding_window: usize,
     device: Device,
     dtype: DType,
@@ -381,7 +409,10 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let vb_m = vb.pp("model");
+        let vb_m = match &cfg.vb_prefix {
+            None => vb.root(),
+            Some(prefix) => vb.pp(prefix),
+        };
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
         let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
@@ -392,7 +423,11 @@ impl Model {
             layers.push(layer)
         }
         let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
-        let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        let lm_head = if cfg.has_lm_head {
+            Some(linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?)
+        } else {
+            None
+        };
         Ok(Self {
             embed_tokens,
             layers,
@@ -445,9 +480,13 @@ impl Model {
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
-        xs.narrow(1, seq_len - 1, 1)?
-            .apply(&self.norm)?
-            .apply(&self.lm_head)
+
+        let xs_ = xs.narrow(1, seq_len - 1, 1)?.apply(&self.norm);
+
+        match &self.lm_head {
+            None => xs_,
+            Some(lm_head) => xs_?.apply(lm_head),
+        }
     }
 
     pub fn clear_kv_cache(&mut self) {
