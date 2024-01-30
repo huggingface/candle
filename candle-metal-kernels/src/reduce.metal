@@ -2,6 +2,9 @@
 #include <metal_limits>
 using namespace metal;
 
+// TODO: Load multiple values per thread to improve memory bandwidth utilization
+// static constant constexpr uint VALUES_PER_THREAD = 1;
+
 METAL_FUNC uint get_strided_index(
     uint idx,
     constant const size_t &num_dims,
@@ -18,647 +21,637 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
-#define impl_reduction_op(name, op, init_val)                                       \
-template<typename T, typename R = T>                                                \
+template <typename V>
+struct Indexed {
+    uint i;
+    V val;
+    typedef V type;
+
+    constexpr Indexed<V>() thread = default;
+    constexpr Indexed<V>() threadgroup = default;
+    constexpr Indexed<V>() device = default;
+    constexpr Indexed<V>() constant = default;
+
+    constexpr Indexed<V>(uint _i, V _val) : i(_i), val(_val) {}
+
+    template <typename U, typename = typename enable_if<is_convertible_v<U, V>>::type>
+    constexpr Indexed<V>(uint _i, U _val) : i(_i), val(static_cast<U>(_val)) {}
+
+    template <typename U>
+    constexpr Indexed<V>(const thread Indexed<U> &iv): Indexed<V>(iv.i, iv.val) {}
+
+    template <typename U>
+    constexpr Indexed<V>(const threadgroup Indexed<V> &iv): Indexed<V>(iv.i, iv.val) {}
+
+    Indexed<V> operator=(const thread Indexed<V> &iv) thread {
+        this->i = iv.i;
+        this->val = iv.val;
+        return *this;
+    }
+    Indexed<V> operator=(const thread Indexed<V> &iv) threadgroup {
+        this->i = iv.i;
+        this->val = iv.val;
+        return *this;
+    }
+};
+
+template<typename V>
+constexpr METAL_FUNC bool operator<(Indexed<V> lhs, Indexed<V> rhs) {
+    return lhs.val < rhs.val || (lhs.val == rhs.val && lhs.i < rhs.i);
+}
+
+template<typename V>
+constexpr METAL_FUNC bool operator>(Indexed<V> lhs, Indexed<V> rhs) {
+    return lhs.val > rhs.val || (lhs.val == rhs.val && lhs.i > rhs.i);
+}
+
+template<typename T>
+struct _numeric_limits_impl<Indexed<T>> {
+    static constexpr Indexed<T> lowest() {
+        return Indexed<T>(0, numeric_limits<T>::lowest());
+    }
+
+    static constexpr Indexed<T> max() {
+        return Indexed<T>(0, numeric_limits<T>::max());
+    }
+};
+
+#if defined(__HAVE_BFLOAT__)
+// Metal does not have simd_shuffle_down for bfloat16
+// TODO: Check if volatile threadgroup memory reduction is faster than simd_shuffle_down for bfloat
+bfloat simd_shuffle_down(bfloat value, ushort delta) {
+    return static_cast<bfloat>(__metal_simd_shuffle_down(static_cast<float>(value), delta));
+}
+#endif
+
+template <typename V>
+Indexed<V> simd_shuffle_down(Indexed<V> iv, ushort delta) {
+    return Indexed<V>(
+        simd_shuffle_down(iv.i, delta),
+        simd_shuffle_down(iv.val, delta)
+    );
+}
+
+#define impl_reduction_op_helper(name, op, init_val, __result_type__)  \
+template<typename T, typename R = __result_type__>                                  \
 struct name {                                                                       \
-                                                                                    \
-    static constexpr constant T init = init_val;                                    \
-                                                                                    \
-    METAL_FUNC R operator()(thread const T &a, thread const T &b) const {           \
-        return op;                                                                  \
+    static constexpr T init() {                                                     \
+        return init_val;                                                            \
     }                                                                               \
-                                                                                    \
-    METAL_FUNC R operator()(threadgroup const T &a, threadgroup const T &b) const { \
-        return op;                                                                  \
-    }                                                                               \
-                                                                                    \
-    METAL_FUNC R operator()(device const T &a, device const T &b) const {           \
-        return op;                                                                  \
-    }                                                                               \
-                                                                                    \
     METAL_FUNC R operator()(T a, T b) {                                             \
+        return op;                                                                  \
+    }                                                                               \
+    METAL_FUNC R operator()(thread const T& a, thread const T& b) const {           \
+        return op;                                                                  \
+    }                                                                               \
+    METAL_FUNC R operator()(threadgroup const T& a, threadgroup const T& b) const { \
         return op;                                                                  \
     }                                                                               \
 }                                                                                   \
 
+#define impl_reduction_op(name, op, init_val) \
+impl_reduction_op_helper(name, op, init_val, T);
+
+#define impl_arg_reduction_op(name, op, init_val) \
+impl_reduction_op_helper(name, op, init_val, tuple<bool, Indexed<T>>);
+
 impl_reduction_op(Sum, a + b, 0);
 impl_reduction_op(Mul, a * b, 1);
 impl_reduction_op(Min, a < b ? a : b, numeric_limits<T>::max());
-impl_reduction_op(Max, a > b ? a : b, numeric_limits<T>::min());
-impl_reduction_op(ArgMin, a < b, numeric_limits<T>::max());
-impl_reduction_op(ArgMax, a > b, numeric_limits<T>::min());
+impl_reduction_op(Max, a > b ? a : b, numeric_limits<T>::lowest());
 #undef impl_reduction_op
 
-static constant constexpr int THREADGROUP_SIZE = 2048;
+// These are used when loading elements from global memory into shared memory.
+// They let us use the same code for both indexed and non-indexed types.
+template<typename Op, typename T, typename U>
+METAL_FUNC T apply_operator(Op op, size_t _idx, T a, U b) {
+    return op(a, static_cast<T>(b));
+}
 
-// Load strided elements from global memory into shared memory.
-template<typename T, typename ReductionOp, uint BLOCKSIZE>
-METAL_FUNC void load_from_global(
+template<typename Op, typename T, typename U>
+METAL_FUNC Indexed<T> apply_operator(Op op, size_t idx, Indexed<T> a, U b) {
+    return op(a, Indexed<T>(idx, b));
+}
+
+// Load elements from global memory into shared memory.
+// Handles both indexed and non-indexed types by using apply_operator.
+template<
+    typename T,
+    typename R,
+    typename ReductionOp,
+    ushort BLOCKSIZE,
+    bool STRIDED = false
+>
+METAL_FUNC R load_from_global(
+    R value,
+    constant size_t &num_elements,
     constant size_t &num_dims,
     constant size_t *dims,
     constant size_t *strides,
     constant size_t &el_to_sum_per_block,
-    device const T *src,
-    threadgroup T shared[BLOCKSIZE],
-    uint tid [[ thread_index_in_threadgroup ]],
-    uint dst_id [[ threadgroup_position_in_grid ]],
-    uint block_dim [[ threads_per_threadgroup ]]
+    const device T *src,
+    const ushort offset,
+    threadgroup R shared[BLOCKSIZE],
+    const ushort tid
 ) {
     ReductionOp op;
 
-    size_t start_idx = dst_id * el_to_sum_per_block;
-    size_t stop_idx = start_idx + el_to_sum_per_block;
-    size_t idx = start_idx + tid;
-    while (idx < stop_idx) {
-        size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
-        shared[tid] = op(shared[tid], src[strided_i]);
-        idx += block_dim;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-}
+    size_t stop_idx = offset + el_to_sum_per_block;
+    size_t idx = offset + tid;
 
-// Load strided elements from global memory into shared memory with indices.
-template<typename T, typename ArgReductionOp, uint BLOCKSIZE>
-METAL_FUNC void load_from_global(
-    constant size_t &num_dims,
-    constant size_t *dims,
-    constant size_t *strides,
-    constant size_t &el_to_sum_per_block,
-    device const T *src,
-    threadgroup T shared[BLOCKSIZE],
-    threadgroup uint shared_indices[BLOCKSIZE],
-    uint tid [[ thread_index_in_threadgroup ]],
-    uint dst_id [[ threadgroup_position_in_grid ]],
-    uint block_dim [[ threads_per_threadgroup ]]
-) {
-    ArgReductionOp op;
-    bool notset = true;
-
-    size_t start_idx = dst_id * el_to_sum_per_block;
-    size_t stop_idx = start_idx + el_to_sum_per_block;
-    size_t idx = start_idx + tid;
     while (idx < stop_idx) {
-        size_t strided_i = get_strided_index(idx, num_dims, dims, strides);
-        if (notset || op(src[strided_i], shared[tid])) {
-            shared[tid] = src[strided_i];
-            // Assume that the reduction takes place over the last dimension which is contiguous.
-            shared_indices[tid] = idx % dims[num_dims - 1];
-            notset = false;
+        if (STRIDED) {
+            idx = get_strided_index(idx, num_dims, dims, strides);
         }
-        idx += block_dim;
+        value = apply_operator(op, idx, value, src[idx]);
+        idx += BLOCKSIZE;
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    return value;
 }
 
-// Load contiguous elements from global memory into shared memory.
-template<typename T, typename ReductionOp, uint BLOCKSIZE>
-METAL_FUNC void load_from_global(
-    constant size_t &num_dims,
-    constant size_t *dims,
+
+// Convenience function for when we don't need to sum over multiple dimensions.
+template<
+    typename T,
+    typename R,
+    typename ReductionOp,
+    ushort BLOCKSIZE
+>
+METAL_FUNC R load_from_global(
+    R value,
+    constant size_t &num_elements,
     constant size_t &el_to_sum_per_block,
-    device const T *src,
+    const device T *src,
+    const size_t offset,
+    threadgroup R shared[BLOCKSIZE],
+    const ushort tid
+) {
+    return load_from_global<T, R, ReductionOp, BLOCKSIZE, false>(
+        value,
+        num_elements,
+        // Dummy values for num_dims, dims, and strides
+        num_elements,
+        nullptr,
+        nullptr,
+        // end dummy values
+        el_to_sum_per_block,
+        src,
+        offset,
+        shared,
+        tid
+    );
+}
+
+// Since we are using simd_shuffle_down with a BLOCKSIZE guard we don't need any barriers.
+template<typename ReductionOp, ushort BLOCKSIZE, typename T>
+METAL_FUNC T simdgroup_reduce(T value) {
+    ReductionOp op;
+    if (BLOCKSIZE >= 32) value = op(value, simd_shuffle_down(value, 16));
+    if (BLOCKSIZE >= 16) value = op(value, simd_shuffle_down(value,  8));
+    if (BLOCKSIZE >=  8) value = op(value, simd_shuffle_down(value,  4));
+    if (BLOCKSIZE >=  4) value = op(value, simd_shuffle_down(value,  2));
+    if (BLOCKSIZE >=  2) value = op(value, simd_shuffle_down(value,  1));
+    return value;
+}
+
+template<
+   typename ReductionOp,
+   ushort BLOCKSIZE,
+   typename T
+>
+METAL_FUNC T threadgroup_reduce(
     threadgroup T shared[BLOCKSIZE],
-    uint tid [[ thread_index_in_threadgroup ]],
-    uint dst_id [[ threadgroup_position_in_grid ]],
-    uint block_dim [[ threads_per_threadgroup ]]
+    ushort tid [[ thread_index_in_threadgroup ]]
 ) {
     ReductionOp op;
 
-    size_t start_idx = dst_id * el_to_sum_per_block;
-    size_t stop_idx = start_idx + el_to_sum_per_block;
-    size_t idx = start_idx + tid;
-    while (idx < stop_idx) {
-        shared[tid] = op(shared[tid], src[idx]);
-        idx += block_dim;
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-}
-
-// Load contiguous elements from global memory into shared memory with indices.
-template<typename T, typename ArgReductionOp, uint BLOCKSIZE>
-METAL_FUNC void load_from_global(
-    constant size_t &num_dims,
-    constant size_t *dims,
-    constant size_t &el_to_sum_per_block,
-    device const T *src,
-    threadgroup T shared[BLOCKSIZE],
-    threadgroup uint shared_indices[BLOCKSIZE],
-    uint tid [[ thread_index_in_threadgroup ]],
-    uint dst_id [[ threadgroup_position_in_grid ]],
-    uint block_dim [[ threads_per_threadgroup ]]
-) {
-    ArgReductionOp op;
-    bool notset = true;
-
-    size_t start_idx = dst_id * el_to_sum_per_block;
-    size_t stop_idx = start_idx + el_to_sum_per_block;
-    size_t idx = start_idx + tid;
-    while (idx < stop_idx) {
-        if (notset || op(src[idx], shared[tid])) {
-            shared[tid] = src[idx];
-            // Assume that the reduction takes place over the last dimension which is contiguous.
-            shared_indices[tid] = idx % dims[num_dims - 1];
-            notset = false;
+    // Fully unrolled reduction loop from BLOCKSIZE down to 64.
+    #pragma clang loop unroll(full)
+    for (uint s = BLOCKSIZE / 2; s >= 64; s >>= 1) {
+        if (tid < s) {
+            shared[tid] = op(shared[tid], shared[tid + s]);
         }
-        idx += block_dim;
+        threadgroup_barrier(mem_flags::mem_none);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-}
 
-#define reduce_threadgroup(SIZE)                                \
-if (BLOCKSIZE >= SIZE) {                                        \
-    if (block_dim >= SIZE) {                                    \
-        shared[tid] = op(shared[tid], shared[tid + SIZE / 2]);  \
-    }                                                           \
-    threadgroup_barrier(mem_flags::mem_threadgroup);            \
-}
+    if (tid < 32) {
+        // Last shared memory reduce can be done without tid < s check.
+        if (BLOCKSIZE >= 64) {
+            shared[tid] = op(shared[tid], shared[tid + 32]);
+            simdgroup_barrier(mem_flags::mem_none);
+        }
+        // Remaining 32 threads can be reduced with simdgroup_reduce.
+        shared[tid] = simdgroup_reduce<ReductionOp, BLOCKSIZE>(shared[tid]);
+    }
 
-template<typename T, typename ReductionOp, uint BLOCKSIZE>
-METAL_FUNC void threadgroup_reduce(
-    threadgroup T shared[BLOCKSIZE],
-    uint tid [[thread_index_in_threadgroup]],
-    uint block_dim [[ threads_per_threadgroup ]]
-) {
-    ReductionOp op;
-    reduce_threadgroup(64);
-    reduce_threadgroup(32);
-    reduce_threadgroup(16);
-    reduce_threadgroup(8);
-    reduce_threadgroup(4);
-    reduce_threadgroup(2);
+    return shared[tid];
 }
-#undef reduce_threadgroup
-
-#define arg_reduce_threadgroup(SIZE)                            \
-if (BLOCKSIZE >= SIZE) {                                        \
-    if (block_dim >= SIZE &&                                    \
-        op(shared[tid], shared[tid + SIZE / 2])                 \
-    ) {                                                         \
-        shared_indices[tid] = shared_indices[tid + SIZE / 2];   \
-        shared[tid] = shared[tid + SIZE / 2];                   \
-    }                                                           \
-    threadgroup_barrier(mem_flags::mem_threadgroup);            \
-}
-
-template<typename T, typename ArgReductionOp, uint BLOCKSIZE>
-METAL_FUNC void threadgroup_reduce(
-    threadgroup T shared[BLOCKSIZE],
-    threadgroup uint shared_indices[BLOCKSIZE],
-    uint tid [[thread_index_in_threadgroup]],
-    uint block_dim [[ threads_per_threadgroup ]]
-) {
-    ArgReductionOp op;
-    arg_reduce_threadgroup(64);
-    arg_reduce_threadgroup(32);
-    arg_reduce_threadgroup(16);
-    arg_reduce_threadgroup(8);
-    arg_reduce_threadgroup(4);
-    arg_reduce_threadgroup(2);
-}
-#undef arg_reduce_threadgroup
-
-#define reduce_block(SIZE)                                      \
-if (BLOCKSIZE >= SIZE) {                                        \
-    if (tid < SIZE / 2 && block_dim >= SIZE) {                  \
-        shared[tid] = op(shared[tid], shared[tid + SIZE / 2]);  \
-    }                                                           \
-    threadgroup_barrier(mem_flags::mem_threadgroup);            \
-}                                                               \
 
 // Inspired by "Optimizing Parallel Reduction in CUDA" by Mark Harris
 template<
     typename T,
+    typename R,
     typename ReductionOp,
-    uint BLOCKSIZE,
-    bool STRIDED
+    ushort BLOCKSIZE,
+    bool STRIDED = false
 >
-METAL_FUNC void block_reduce(
+METAL_FUNC void reduce(
     constant size_t &num_dims,
     constant size_t *dims,
     constant size_t *strides,
     constant size_t &el_to_sum_per_block,
     device const T *src,
-    device T *dst,
-    constant uint &num_elements,
+    device R *dst,
+    constant size_t &num_elements,
     threadgroup T shared[BLOCKSIZE],
-    uint id [[ thread_position_in_grid ]],
-    uint tid [[ thread_index_in_threadgroup ]],
-    uint dst_id [[ threadgroup_position_in_grid ]],
-    uint block_dim [[ threads_per_threadgroup ]]
+    ushort tid [[ thread_index_in_threadgroup ]],
+    ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
-    ReductionOp op;
+    // Initialize shared memory for current thread to correct value for reduction operation
+    shared[tid] = ReductionOp::init();
 
-    shared[tid] = ReductionOp::init;
+    // Calcluate offset for the threadgroup of current thread
+    ushort offset = dst_id * el_to_sum_per_block;
+    R initial = ReductionOp::init();
+    // Load with reduction from global memory into shared memory
+    shared[tid] = load_from_global<T, R, ReductionOp, BLOCKSIZE, STRIDED>(
+        initial,
+        num_elements,
+        num_dims,
+        dims,
+        strides,
+        el_to_sum_per_block,
+        src,
+        offset,
+        shared,
+        tid
+    );
+    // Threadgroup barrier is needed to ensure that all threads have written to shared memory
+    // Memory space is not shared between threadgroups so we can use the mem_none flag for all threadgroup barriers.
+    threadgroup_barrier(mem_flags::mem_none);
 
-    if (STRIDED) {
-        load_from_global<T, ReductionOp, BLOCKSIZE>(
-            num_dims,
-            dims,
-            strides,
-            el_to_sum_per_block,
-            src,
-            shared,
-            tid,
-            dst_id,
-            block_dim
-        );
-    } else {
-        load_from_global<T, ReductionOp, BLOCKSIZE>(
-            num_dims,
-            dims,
-            el_to_sum_per_block,
-            src,
-            shared,
-            tid,
-            dst_id,
-            block_dim
-        );
-    }
+    // Complete reduction
+    R value = threadgroup_reduce<ReductionOp, BLOCKSIZE>(shared, tid);
 
-    reduce_block(1024);
-    reduce_block(512);
-    reduce_block(256);
-    reduce_block(128);
-
-    if (tid < 32) {
-        threadgroup_reduce<T, ReductionOp, BLOCKSIZE>(shared, tid, block_dim);
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (tid == 0) {
-        dst[dst_id] = shared[tid];
-    }
+    if (tid == 0) dst[dst_id] = value;
 }
-#undef reduce_block
 
-static constant constexpr int BLOCKSIZE = 2048;
 
-#define REDUCE(OP, NAME, T)                         \
-kernel void NAME(                                   \
-    constant size_t &num_dims,                      \
-    constant size_t *dims,                          \
-    constant size_t *strides,                       \
-    constant size_t &el_to_sum_per_block,           \
-    device const T *src,                            \
-    device T *dst,                                  \
-    constant uint &num_elements,                    \
-    uint id [[ thread_position_in_grid ]],          \
-    uint tid [[ thread_index_in_threadgroup ]],     \
-    uint dst_id [[ threadgroup_position_in_grid ]], \
-    uint block_dim [[ threads_per_threadgroup ]]    \
-) {                                                 \
-    threadgroup T shared[BLOCKSIZE];                \
-    block_reduce<T, OP<T>, BLOCKSIZE, false>(       \
-        num_dims,                                   \
-        dims,                                       \
-        strides,                                    \
-        el_to_sum_per_block,                        \
-        src,                                        \
-        dst,                                        \
-        num_elements,                               \
-        shared,                                     \
-        id,                                         \
-        tid,                                        \
-        dst_id,                                     \
-        block_dim);                                 \
-}                                                   \
-kernel void NAME##_strided(                         \
-    constant size_t &num_dims,                      \
-    constant size_t *dims,                          \
-    constant size_t *strides,                       \
-    constant size_t &el_to_sum_per_block,           \
-    device const T *src,                            \
-    device T *dst,                                  \
-    constant uint &num_elements,                    \
-    uint id [[ thread_position_in_grid ]],          \
-    uint tid [[ thread_index_in_threadgroup ]],     \
-    uint dst_id [[ threadgroup_position_in_grid ]], \
-    uint block_dim [[ threads_per_threadgroup ]]    \
-) {                                                 \
-    threadgroup T shared[BLOCKSIZE];                \
-    block_reduce<T, OP<T>, BLOCKSIZE, false>(       \
-        num_dims,                                   \
-        dims,                                       \
-        strides,                                    \
-        el_to_sum_per_block,                        \
-        src,                                        \
-        dst,                                        \
-        num_elements,                               \
-        shared,                                     \
-        id,                                         \
-        tid,                                        \
-        dst_id,                                     \
-        block_dim);                                 \
-}                                                   \
+#define reduce_case(OP, T, R, N)                        \
+case N: {                                               \
+    threadgroup R shared[N];                            \
+    reduce<T, R, OP<R>, N, STRIDED>(                    \
+        num_dims,                                       \
+        dims,                                           \
+        strides,                                        \
+        el_to_sum_per_block,                            \
+        src,                                            \
+        dst,                                            \
+        num_elements,                                   \
+        shared,                                         \
+        tid,                                            \
+        dst_id);                                        \
+    break;                                              \
+}
 
-#define arg_reduce_block(SIZE)                                  \
-if (BLOCKSIZE >= SIZE) {                                        \
-    if (tid < SIZE / 2                                          \
-        && block_dim >= SIZE                                    \
-        && arg_op(shared[tid], shared[tid + SIZE / 2])          \
-    ) {                                                         \
-        shared_indices[tid] = shared_indices[tid + SIZE / 2];   \
-        shared[tid] = shared[tid + SIZE / 2];                   \
-    }                                                           \
-    threadgroup_barrier(mem_flags::mem_threadgroup);            \
-}                                                               \
+#define impl_reduce(OP, NAME, T)                        \
+kernel void NAME(                                       \
+    constant size_t &num_dims,                          \
+    constant size_t &el_to_sum_per_block,               \
+    device const T *src,                                \
+    device T *dst,                                      \
+    constant size_t &num_elements,                      \
+    ushort tid [[ thread_index_in_threadgroup ]],       \
+    ushort dst_id [[ threadgroup_position_in_grid ]],   \
+    ushort block_dim [[ threads_per_threadgroup ]]      \
+) {                                                     \
+    constant size_t *dims = {};                         \
+    constant size_t *strides = {};                      \
+    const bool STRIDED = false;                         \
+    switch (block_dim) {                                \
+        reduce_case(OP, T, T, 2048);                    \
+        reduce_case(OP, T, T, 1024);                    \
+        reduce_case(OP, T, T, 512);                     \
+        reduce_case(OP, T, T, 256);                     \
+        reduce_case(OP, T, T, 128);                     \
+        reduce_case(OP, T, T, 64);                      \
+        reduce_case(OP, T, T, 32);                      \
+        reduce_case(OP, T, T, 16);                      \
+        reduce_case(OP, T, T, 8);                       \
+        reduce_case(OP, T, T, 4);                       \
+        reduce_case(OP, T, T, 2);                       \
+        reduce_case(OP, T, T, 1);                       \
+    }                                                   \
+}                                                       \
+kernel void NAME##_strided(                             \
+    constant size_t &num_dims,                          \
+    constant size_t *dims,                              \
+    constant size_t *strides,                           \
+    constant size_t &el_to_sum_per_block,               \
+    device const T *src,                                \
+    device T *dst,                                      \
+    constant size_t &num_elements,                      \
+    ushort tid [[ thread_index_in_threadgroup ]],       \
+    ushort dst_id [[ threadgroup_position_in_grid ]],   \
+    ushort block_dim [[ threads_per_threadgroup ]]      \
+) {                                                     \
+    const bool STRIDED = true;                          \
+    switch (block_dim) {                                \
+        reduce_case(OP, T, T, 2048);                    \
+        reduce_case(OP, T, T, 1024);                    \
+        reduce_case(OP, T, T, 512);                     \
+        reduce_case(OP, T, T, 256);                     \
+        reduce_case(OP, T, T, 128);                     \
+        reduce_case(OP, T, T, 64);                      \
+        reduce_case(OP, T, T, 32);                      \
+        reduce_case(OP, T, T, 16);                      \
+        reduce_case(OP, T, T, 8);                       \
+        reduce_case(OP, T, T, 4);                       \
+        reduce_case(OP, T, T, 2);                       \
+        reduce_case(OP, T, T, 1);                       \
+    }                                                   \
+}
 
 template<
     typename T,
-    typename ArgReductionOp,
-    uint BLOCKSIZE,
+    typename ReductionOp,
+    ushort BLOCKSIZE,
     bool STRIDED
 >
-METAL_FUNC void arg_block_reduce(
+METAL_FUNC void reduce(
     constant size_t &num_dims,
     constant size_t *dims,
     constant size_t *strides,
     constant size_t &el_to_sum_per_block,
     device const T *src,
     device uint *dst,
-    threadgroup T shared[BLOCKSIZE],
-    threadgroup uint shared_indices[BLOCKSIZE],
-    uint id [[ thread_position_in_grid ]],
-    uint tid [[ thread_index_in_threadgroup ]],
-    uint dst_id [[ threadgroup_position_in_grid ]],
-    uint block_dim [[ threads_per_threadgroup ]]
+    constant size_t &num_elements,
+    threadgroup Indexed<T> shared[BLOCKSIZE],
+    ushort tid [[ thread_index_in_threadgroup ]],
+    ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
-    ArgReductionOp arg_op;
+    // Initialize shared memory for current thread to correct value for reduction operation
+    shared[tid] = ReductionOp::init();
 
-    shared[tid] = ArgReductionOp::init;
-    shared_indices[tid] = numeric_limits<uint>::max();
+    // Calcluate offset for the threadgroup of current thread
+    ushort offset = dst_id * el_to_sum_per_block;
+    Indexed<T> initial = ReductionOp::init();
+    // Load with reduction from global memory into shared memory
+    shared[tid] = load_from_global<T, Indexed<T>, ReductionOp, BLOCKSIZE, STRIDED>(
+        initial,
+        num_elements,
+        num_dims,
+        dims,
+        strides,
+        el_to_sum_per_block,
+        src,
+        offset,
+        shared,
+        tid
+    );
+    // Threadgroup barrier is needed to ensure that all threads have written to shared memory
+    // Memory space is not shared between threadgroups so we can use the mem_none flag for all threadgroup barriers.
+    threadgroup_barrier(mem_flags::mem_none);
 
-    if (STRIDED) {
-        load_from_global<T, ArgReductionOp, BLOCKSIZE>(
-            num_dims,
-            dims,
-            strides,
-            el_to_sum_per_block,
-            src,
-            shared,
-            shared_indices,
-            tid,
-            dst_id,
-            block_dim
-        );
-    } else {
-        load_from_global<T, ArgReductionOp, BLOCKSIZE>(
-            num_dims,
-            dims,
-            el_to_sum_per_block,
-            src,
-            shared,
-            shared_indices,
-            tid,
-            dst_id,
-            block_dim
-        );
-    }
-    arg_reduce_block(1024);
-    arg_reduce_block(512);
-    arg_reduce_block(256);
-    arg_reduce_block(128);
+    // Complete reduction
+    Indexed<T> value = threadgroup_reduce<ReductionOp, BLOCKSIZE, Indexed<T>>(shared, tid);
 
-    if (tid < 32) {
-        threadgroup_reduce<T, ArgReductionOp, BLOCKSIZE>(shared, shared_indices, tid, block_dim);
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-
-    if (tid == 0) {
-        dst[dst_id] = shared_indices[0];
-    }
-}
-#undef arg_reduce_block
-
-#define ARG_REDUCE(OP, NAME, T)                             \
-kernel void NAME(                                           \
-    constant size_t &num_dims,                              \
-    constant size_t *dims,                                  \
-    constant size_t *strides,                               \
-    constant size_t &el_to_sum_per_block,                   \
-    device const T *src,                                    \
-    device uint *dst,                                       \
-    uint id [[ thread_position_in_grid ]],                  \
-    uint tid [[ thread_index_in_threadgroup ]],             \
-    uint dst_id [[ threadgroup_position_in_grid ]],         \
-    uint block_dim [[ threads_per_threadgroup ]]            \
-) {                                                         \
-    threadgroup T shared[BLOCKSIZE];                        \
-    threadgroup uint shared_indices[BLOCKSIZE];             \
-    arg_block_reduce<T, OP<T, bool>, BLOCKSIZE, false>(     \
-        num_dims,                                           \
-        dims,                                               \
-        strides,                                            \
-        el_to_sum_per_block,                                \
-        src,                                                \
-        dst,                                                \
-        shared,                                             \
-        shared_indices,                                     \
-        id,                                                 \
-        tid,                                                \
-        dst_id,                                             \
-        block_dim);                                         \
-}                                                           \
-kernel void NAME##_strided(                                 \
-    constant size_t &num_dims,                              \
-    constant size_t *dims,                                  \
-    constant size_t *strides,                               \
-    constant size_t &el_to_sum_per_block,                   \
-    device const T *src,                                    \
-    device uint *dst,                                       \
-    uint id [[ thread_position_in_grid ]],                  \
-    uint tid [[ thread_index_in_threadgroup ]],             \
-    uint dst_id [[ threadgroup_position_in_grid ]],         \
-    uint block_dim [[ threads_per_threadgroup ]]            \
-) {                                                         \
-    threadgroup T shared[BLOCKSIZE];                        \
-    threadgroup uint shared_indices[BLOCKSIZE];             \
-    arg_block_reduce<T, OP<T, bool>, BLOCKSIZE, true>(      \
-        num_dims,                                           \
-        dims,                                               \
-        strides,                                            \
-        el_to_sum_per_block,                                \
-        src,                                                \
-        dst,                                                \
-        shared,                                             \
-        shared_indices,                                     \
-        id,                                                 \
-        tid,                                                \
-        dst_id,                                             \
-        block_dim);                                         \
+    // Return index of reduce result
+    if (tid == 0) dst[dst_id] = value.i;
 }
 
-
-#define MAX(x, y) ((x) > (y) ? (x) : (y))
-#define MIN(x, y) ((x) < (y) ? (x) : (y))
-
-
-#define softmax_max_block(SIZE)                                     \
-if (BLOCKSIZE >= SIZE) {                                            \
-    if (tid < SIZE / 2 && block_dim >= SIZE) {                      \
-        shared[tid] = max_op(shared[tid], shared[tid + SIZE / 2]);  \
-    }                                                               \
-    threadgroup_barrier(mem_flags::mem_threadgroup);                \
+#define arg_reduce_case(OP, T, N)                       \
+case N: {                                               \
+    threadgroup Indexed<T> shared[N];                   \
+    reduce<T, OP<Indexed<T>>, N, STRIDED>(              \
+        num_dims,                                       \
+        dims,                                           \
+        strides,                                        \
+        el_to_sum_per_block,                            \
+        src,                                            \
+        dst,                                            \
+        num_elements,                                   \
+        shared,                                         \
+        tid,                                            \
+        dst_id);                                        \
+    break;                                              \
 }
 
-#define softmax_acc_block(SIZE)                                     \
-if (BLOCKSIZE >= SIZE) {                                            \
-    if (tid < SIZE / 2 && block_dim >= SIZE) {                      \
-        shared[tid] += shared[tid + SIZE / 2];                      \
-    }                                                               \
-    threadgroup_barrier(mem_flags::mem_threadgroup);                \
+#define impl_arg_reduce(OP, NAME, T)                    \
+kernel void NAME(                                       \
+    constant size_t &num_dims,                          \
+    constant size_t &el_to_sum_per_block,               \
+    device const T *src,                                \
+    device uint *dst,                                   \
+    constant size_t &num_elements,                      \
+    ushort tid [[ thread_index_in_threadgroup ]],       \
+    ushort dst_id [[ threadgroup_position_in_grid ]],   \
+    ushort block_dim [[ threads_per_threadgroup ]]      \
+) {                                                     \
+    constant size_t *dims = {};                         \
+    constant size_t *strides = {};                      \
+    const bool STRIDED = false;                         \
+    switch (block_dim) {                                \
+        arg_reduce_case(OP, T, 2048);                   \
+        arg_reduce_case(OP, T, 1024);                   \
+        arg_reduce_case(OP, T, 512);                    \
+        arg_reduce_case(OP, T, 256);                    \
+        arg_reduce_case(OP, T, 128);                    \
+        arg_reduce_case(OP, T, 64);                     \
+        arg_reduce_case(OP, T, 32);                     \
+        arg_reduce_case(OP, T, 16);                     \
+        arg_reduce_case(OP, T, 8);                      \
+        arg_reduce_case(OP, T, 4);                      \
+        arg_reduce_case(OP, T, 2);                      \
+        arg_reduce_case(OP, T, 1);                      \
+    }                                                   \
+}                                                       \
+kernel void NAME##_strided(                             \
+    constant size_t &num_dims,                          \
+    constant size_t *dims,                              \
+    constant size_t *strides,                           \
+    constant size_t &el_to_sum_per_block,               \
+    device const T *src,                                \
+    device uint *dst,                                   \
+    constant size_t &num_elements,                      \
+    ushort tid [[ thread_index_in_threadgroup ]],       \
+    ushort dst_id [[ threadgroup_position_in_grid ]],   \
+    ushort block_dim [[ threads_per_threadgroup ]]      \
+) {                                                     \
+    const bool STRIDED = true;                          \
+    switch (block_dim) {                                \
+        arg_reduce_case(OP, T, 2048);                   \
+        arg_reduce_case(OP, T, 1024);                   \
+        arg_reduce_case(OP, T, 512);                    \
+        arg_reduce_case(OP, T, 256);                    \
+        arg_reduce_case(OP, T, 128);                    \
+        arg_reduce_case(OP, T, 64);                     \
+        arg_reduce_case(OP, T, 32);                     \
+        arg_reduce_case(OP, T, 16);                     \
+        arg_reduce_case(OP, T, 8);                      \
+        arg_reduce_case(OP, T, 4);                      \
+        arg_reduce_case(OP, T, 2);                      \
+        arg_reduce_case(OP, T, 1);                      \
+    }                                                   \
 }
 
 template<
     typename T,
-    typename ACC,
-    uint BLOCKSIZE
+    typename ACC = float,
+    ushort BLOCKSIZE
 >
 METAL_FUNC void softmax(
     constant size_t &src_numel,
     constant size_t &el_to_sum_per_block,
-    device const T *src,
+    const device T *src,
     device T *dst,
     threadgroup ACC shared[BLOCKSIZE],
 
-    uint id [[ thread_position_in_grid ]],
-    uint tid [[ thread_index_in_threadgroup ]],
-    uint dst_id [[ threadgroup_position_in_grid ]],
-    uint block_dim [[ threads_per_threadgroup ]]
+    ushort tid [[ thread_index_in_threadgroup ]],
+    ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
-    Max<ACC> max_op;
+    // Initialize shared memory for current thread to lowest value
+    shared[tid] = numeric_limits<ACC>::lowest();
 
-    shared[tid] = numeric_limits<ACC>::min();
-    ACC tmp = numeric_limits<ACC>::min();
+    // Calcluate offset for the threadgroup of current thread
+    size_t offset = dst_id * el_to_sum_per_block;
+    ACC initial = numeric_limits<ACC>::lowest();
+    // Load with reduction from global memory into shared memory
+    shared[tid] = load_from_global<T, ACC, Max<ACC>, BLOCKSIZE>(
+        initial,
+        src_numel,
+        el_to_sum_per_block,
+        src,
+        offset,
+        shared,
+        tid
+    );
+    // Threadgroup barrier is needed to ensure that all threads have written to shared memory
+    // Memory space is not shared between threadgroups so we can use the mem_none flag for all threadgroup barriers.
+    threadgroup_barrier(mem_flags::mem_none);
 
-    size_t start_idx = dst_id * el_to_sum_per_block;
-    size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);
-    size_t idx = start_idx + tid;
+    // Reduce shared memory to find max value
+    threadgroup_reduce<Max<ACC>, BLOCKSIZE>(shared, tid);
+    ACC max_result = shared[0];
 
-    while (idx < stop_idx) {
-        tmp = max_op(tmp, static_cast<ACC>(src[idx]));
-        idx += block_dim;
-    }
-    shared[tid] = tmp;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    softmax_max_block(1024);
-    softmax_max_block(512);
-    softmax_max_block(256);
-    softmax_max_block(128);
-    if (tid < 32) {
-        threadgroup_reduce<ACC, Max<ACC>, BLOCKSIZE>(shared, tid, block_dim);
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    ACC _max = shared[0];
-
-    // prevent tid 0 from overwriting _max before other threads have written
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // Ensure all threads have max_result = shared[0] before we set shared[0] = 0.
+    threadgroup_barrier(mem_flags::mem_none);
     shared[tid] = 0;
 
-    idx = start_idx + tid;
+    // Calculate softmax values
+    size_t stop_idx = min(offset + el_to_sum_per_block, src_numel);
+    size_t idx = offset + tid;
     while (idx < stop_idx) {
-        const ACC val = exp(static_cast<ACC>(src[idx]) - _max);
-        dst[idx] = static_cast<T>(val);
+        const ACC val = exp(ACC(src[idx]) - max_result);
+        dst[idx] = T(val);
         shared[tid] += val;
-
-        idx += block_dim;
+        idx += BLOCKSIZE;
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup_barrier(mem_flags::mem_none);
 
-    softmax_acc_block(1024);
-    softmax_acc_block(512);
-    softmax_acc_block(256);
-    softmax_acc_block(128);
-    if (tid < 32) {
-        threadgroup_reduce<ACC, Sum<ACC>, BLOCKSIZE>(shared, tid, block_dim);
-        threadgroup_barrier(mem_flags::mem_none);
-    }
+    threadgroup_reduce<Sum<ACC>, BLOCKSIZE>(shared, tid);
+    threadgroup_barrier(mem_flags::mem_none);
 
     const T inv_acc = T(1.0/shared[0]);
-    idx = start_idx + tid;
+    idx = offset + tid;
     while (idx < stop_idx) {
         dst[idx] *= inv_acc;
-        idx += block_dim;
+        idx += BLOCKSIZE;
     }
 }
 
-
-#define SOFTMAX(NAME, T, ACC)                       \
-kernel void NAME(                                   \
-    constant size_t &src_numel,                     \
-    constant size_t &el_to_sum_per_block,           \
-    device const T *src,                            \
-    device T *dst,                                  \
-                                                    \
-    uint id [[ thread_position_in_grid ]],          \
-    uint tid [[ thread_index_in_threadgroup ]],     \
-    uint dst_id [[ threadgroup_position_in_grid ]], \
-    uint block_dim [[ threads_per_threadgroup ]]    \
-) {                                                 \
-    threadgroup ACC shared_memory[BLOCKSIZE];       \
-    softmax<T, ACC, BLOCKSIZE>(                     \
-        src_numel,                                  \
-        el_to_sum_per_block,                        \
-        src,                                        \
-        dst,                                        \
-        shared_memory,                              \
-        id,                                         \
-        tid,                                        \
-        dst_id,                                     \
-        block_dim);                                 \
+#define softmax_case(T, ACC, N)                         \
+case N: {                                               \
+    threadgroup ACC shared[N];                          \
+    softmax<T, ACC, N>(                                 \
+        src_numel,                                      \
+        el_to_sum_per_block,                            \
+        src,                                            \
+        dst,                                            \
+        shared,                                         \
+        tid,                                            \
+        dst_id);                                        \
+    break;                                              \
 }
 
-REDUCE(Sum, fast_sum_f32, float)
-REDUCE(Sum, fast_sum_u32, uint)
-REDUCE(Sum, fast_sum_f16, half)
-REDUCE(Sum, fast_sum_u8, uint8_t)
+#define impl_softmax(NAME, T, ACC)                      \
+kernel void NAME(                                       \
+    constant size_t &src_numel,                         \
+    constant size_t &el_to_sum_per_block,               \
+    device const T *src,                                \
+    device T *dst,                                      \
+                                                        \
+    ushort tid [[ thread_index_in_threadgroup ]],       \
+    ushort dst_id [[ threadgroup_position_in_grid ]],   \
+    ushort block_dim [[ threads_per_threadgroup ]]      \
+) {                                                     \
+    switch (block_dim) {                                \
+        softmax_case(T, ACC, 2048);                     \
+        softmax_case(T, ACC, 1024);                     \
+        softmax_case(T, ACC, 512);                      \
+        softmax_case(T, ACC, 256);                      \
+        softmax_case(T, ACC, 128);                      \
+        softmax_case(T, ACC, 64);                       \
+        softmax_case(T, ACC, 32);                       \
+        softmax_case(T, ACC, 16);                       \
+        softmax_case(T, ACC, 8);                        \
+        softmax_case(T, ACC, 4);                        \
+        softmax_case(T, ACC, 2);                        \
+        softmax_case(T, ACC, 1);                        \
+    }                                                   \
+}
 
-REDUCE(Mul, fast_mul_f32, float)
-REDUCE(Mul, fast_mul_u32, uint)
-REDUCE(Mul, fast_mul_f16, half)
-REDUCE(Mul, fast_mul_u8, uint8_t)
+impl_reduce(Sum, fast_sum_f32, float)
+impl_reduce(Sum, fast_sum_u32, uint)
+impl_reduce(Sum, fast_sum_f16, half)
+impl_reduce(Sum, fast_sum_u8, uint8_t)
 
-REDUCE(Max, fast_max_f32, float)
-REDUCE(Max, fast_max_u32, uint)
-REDUCE(Max, fast_max_f16, half)
-REDUCE(Max, fast_max_u8, uint8_t)
+impl_reduce(Mul, fast_mul_f32, float)
+impl_reduce(Mul, fast_mul_u32, uint)
+impl_reduce(Mul, fast_mul_f16, half)
+impl_reduce(Mul, fast_mul_u8, uint8_t)
 
-REDUCE(Min, fast_min_f32, float)
-REDUCE(Min, fast_min_u32, uint)
-REDUCE(Min, fast_min_f16, half)
-REDUCE(Min, fast_min_u8, uint8_t)
+impl_reduce(Max, fast_max_f32, float)
+impl_reduce(Max, fast_max_u32, uint)
+impl_reduce(Max, fast_max_f16, half)
+impl_reduce(Max, fast_max_u8, uint8_t)
 
-ARG_REDUCE(ArgMin, fast_argmin_f32, float)
-ARG_REDUCE(ArgMin, fast_argmin_f16, half)
-ARG_REDUCE(ArgMin, fast_argmin_u32, uint)
-ARG_REDUCE(ArgMin, fast_argmin_u8, uint8_t)
+impl_reduce(Min, fast_min_f32, float)
+impl_reduce(Min, fast_min_u32, uint)
+impl_reduce(Min, fast_min_f16, half)
+impl_reduce(Min, fast_min_u8, uint8_t)
 
-ARG_REDUCE(ArgMax, fast_argmax_f32, float)
-ARG_REDUCE(ArgMax, fast_argmax_f16, half)
-ARG_REDUCE(ArgMax, fast_argmax_u32, uint)
-ARG_REDUCE(ArgMax, fast_argmax_u8, uint8_t)
+impl_arg_reduce(Min, fast_argmin_f32, float)
+impl_arg_reduce(Min, fast_argmin_f16, half)
+impl_arg_reduce(Min, fast_argmin_u32, uint)
+impl_arg_reduce(Min, fast_argmin_u8, uint8_t)
 
-SOFTMAX(softmax_f32, float, float)
-SOFTMAX(softmax_f16, half, float)
+impl_arg_reduce(Max, fast_argmax_f32, float)
+impl_arg_reduce(Max, fast_argmax_f16, half)
+impl_arg_reduce(Max, fast_argmax_u32, uint)
+impl_arg_reduce(Max, fast_argmax_u8, uint8_t)
+
+impl_softmax(softmax_f32, float, float)
+impl_softmax(softmax_f16, half, float)
 
 #if __METAL_VERSION__ >= 220
-REDUCE(Sum, fast_sum_i64, int64_t)
-REDUCE(Mul, fast_mul_i64, int64_t)
-REDUCE(Min, fast_min_i64, int64_t)
-REDUCE(Max, fast_max_i64, int64_t)
+impl_reduce(Sum, fast_sum_i64, int64_t)
+impl_reduce(Mul, fast_mul_i64, int64_t)
+impl_reduce(Min, fast_min_i64, int64_t)
+impl_reduce(Max, fast_max_i64, int64_t)
 
-ARG_REDUCE(ArgMin, fast_argmin_i64, int64_t)
-ARG_REDUCE(ArgMax, fast_argmax_i64, int64_t)
+impl_arg_reduce(Min, fast_argmin_i64, int64_t)
+impl_arg_reduce(Max, fast_argmax_i64, int64_t)
 #endif
 
 #if defined(__HAVE_BFLOAT__)
-REDUCE(Sum, fast_sum_bf16, bfloat)
-REDUCE(Mul, fast_mul_bf16, bfloat)
-REDUCE(Max, fast_max_bf16, bfloat)
-REDUCE(Min, fast_min_bf16, bfloat)
+impl_reduce(Sum, fast_sum_bf16, bfloat)
+impl_reduce(Mul, fast_mul_bf16, bfloat)
+impl_reduce(Max, fast_max_bf16, bfloat)
+impl_reduce(Min, fast_min_bf16, bfloat)
 
-ARG_REDUCE(ArgMin, fast_argmin_bf16, bfloat)
-ARG_REDUCE(ArgMax, fast_argmax_bf16, bfloat)
+impl_arg_reduce(Min, fast_argmin_bf16, bfloat)
+impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
 
-SOFTMAX(softmax_bf16, bfloat, float)
+impl_softmax(softmax_bf16, bfloat, float)
 #endif

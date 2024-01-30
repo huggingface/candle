@@ -622,7 +622,7 @@ fn cos_f16() {
     assert_eq!(approx_f16(expected, 2), vec![0.54, -0.42, -0.99]);
 }
 
-fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T> {
+fn run_reduce<T, U: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<U> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
@@ -630,10 +630,10 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
     let input = new_buffer(&device, v);
 
     let options = MTLResourceOptions::StorageModeManaged;
-    let output = device.new_buffer((out_length * core::mem::size_of::<T>()) as u64, options);
+    let output = device.new_buffer((out_length * core::mem::size_of::<U>()) as u64, options);
     let dims = vec![v.len()];
     let strides = vec![1];
-    call_reduce_strided(
+    match call_reduce_strided(
         &device,
         command_buffer,
         &kernels,
@@ -644,8 +644,13 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
         &input,
         0,
         &output,
-    )
-    .unwrap();
+    ) {
+        Ok(_) => {}
+        Err(e) => {
+            println!("Error: {}", e);
+            panic!();
+        }
+    }
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -677,22 +682,114 @@ fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'sta
     read_to_vec(&output, v.len())
 }
 
-#[test]
-fn reduce_sum() {
-    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let out_length = 1;
+const fn create_array<const N: usize>() -> [f32; N] {
+    let mut array: [f32; N] = [0.0; N];
+    let mut i = 1;
+    while i <= N {
+        array[i - 1] = i as f32;
+        i += 1;
+    }
+    array
+}
 
-    let results = run_reduce(&v, out_length, "fast_sum_f32_strided");
-    assert_eq!(approx(results, 4), vec![21.0]);
+const fn correct_sum<const N: usize, const D: usize>() -> [f32; D] {
+    let mut sum = 0;
+    let mut results: [f32; D] = [0.0; D];
+    let mut i = 1;
+    let mut j = 1;
+    while i <= N {
+        sum += i;
+        i += 1;
+        if i > j * N / D {
+            results[j - 1] = sum as f32;
+            j += 1;
+            sum = 0;
+        }
+    }
+    results
+}
+
+fn correct_argmax<const N: usize, const D: usize>(arr: [f32; N]) -> [u32; D] {
+    let mut max = 0.0;
+    let mut max_index: u32 = 0;
+    let mut results: [u32; D] = [0; D];
+    let mut i = 0;
+    let mut j = 1;
+    while i <= N {
+        if i >= (j * N / D) {
+            results[j - 1] = max_index;
+            max = 0.0;
+            max_index = 0;
+            j += 1;
+        }
+        if i == N {
+            break;
+        }
+        if arr[i] > max {
+            max = arr[i];
+            max_index = i as u32;
+        }
+        i += 1;
+    }
+    results
+}
+
+fn reduce_sum_case<const N: usize, const D: usize>() {
+    let v = create_array::<N>();
+    let results = run_reduce(&v, D, "fast_sum_f32_strided");
+    assert_eq!(approx(results, 4), correct_sum::<N, D>());
+}
+
+fn reduce_argmax_case<const N: usize, const D: usize>() {
+    let v = create_array::<N>();
+    let results: Vec<u32> = run_reduce(&v, D, "fast_argmax_f32_strided");
+    assert_eq!(results, correct_argmax::<N, D>(v));
 }
 
 #[test]
-fn reduce_sum2() {
-    let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let out_length = 2;
+fn reduce_sum() {
+    reduce_sum_case::<6, 1>();
+    reduce_sum_case::<10, 1>();
+    reduce_sum_case::<64, 1>();
+    reduce_sum_case::<128, 1>();
+    reduce_sum_case::<256, 1>();
+    reduce_sum_case::<512, 1>();
+    reduce_sum_case::<1024, 1>();
+    reduce_sum_case::<2048, 1>();
+    reduce_sum_case::<4096, 1>();
 
-    let results = run_reduce(&v, out_length, "fast_sum_f32_strided");
-    assert_eq!(approx(results, 4), vec![6.0, 15.0]);
+    reduce_sum_case::<6, 2>();
+    reduce_sum_case::<10, 2>();
+    reduce_sum_case::<64, 2>();
+    reduce_sum_case::<128, 2>();
+    reduce_sum_case::<256, 2>();
+    reduce_sum_case::<512, 2>();
+    reduce_sum_case::<1024, 2>();
+    reduce_sum_case::<2048, 2>();
+    reduce_sum_case::<4096, 2>();
+}
+
+#[test]
+fn reduce_argmax() {
+    reduce_argmax_case::<6, 1>();
+    reduce_argmax_case::<10, 1>();
+    reduce_argmax_case::<64, 1>();
+    reduce_argmax_case::<128, 1>();
+    reduce_argmax_case::<256, 1>();
+    reduce_argmax_case::<512, 1>();
+    reduce_argmax_case::<1024, 1>();
+    reduce_argmax_case::<2048, 1>();
+    reduce_argmax_case::<4096, 1>();
+
+    reduce_argmax_case::<6, 2>();
+    reduce_argmax_case::<10, 2>();
+    reduce_argmax_case::<64, 2>();
+    reduce_argmax_case::<128, 2>();
+    reduce_argmax_case::<256, 2>();
+    reduce_argmax_case::<512, 2>();
+    reduce_argmax_case::<1024, 2>();
+    reduce_argmax_case::<2048, 2>();
+    reduce_argmax_case::<4096, 2>();
 }
 
 #[test]
