@@ -127,6 +127,8 @@ enum Which {
     V1Orig,
     V1,
     V1Zephyr,
+    V2,
+    V2Zephyr,
     Code,
 }
 
@@ -225,6 +227,8 @@ fn main() -> Result<()> {
             Which::V1 => "stabilityai/stablelm-3b-4e1t".to_string(),
             Which::V1Zephyr => "stabilityai/stablelm-zephyr-3b".to_string(),
             Which::Code => "stabilityai/stable-code-3b".to_string(),
+            Which::V2 => "stabilityai/stablelm-2-1_6b".to_string(),
+            Which::V2Zephyr => "stabilityai/stablelm-2-zephyr-1_6b".to_string(),
         },
     };
 
@@ -244,10 +248,10 @@ fn main() -> Result<()> {
             .collect::<Vec<_>>(),
         None => match (args.which, args.quantized) {
             (Which::V1Orig, true) => vec![repo.get("model-q4k.gguf")?],
-            (Which::V1 | Which::V1Zephyr | Which::Code, true) => {
+            (Which::V1 | Which::V1Zephyr | Which::V2 | Which::V2Zephyr | Which::Code, true) => {
                 anyhow::bail!("Quantized {:?} variant not supported.", args.which)
             }
-            (Which::V1Orig | Which::V1 | Which::V1Zephyr, false) => {
+            (Which::V1Orig | Which::V1 | Which::V1Zephyr | Which::V2 | Which::V2Zephyr, false) => {
                 vec![repo.get("model.safetensors")?]
             }
             (Which::Code, false) => {
@@ -262,7 +266,7 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let config = match args.which {
         Which::V1Orig => Config::stablelm_3b_4e1t(args.use_flash_attn),
-        Which::V1 | Which::V1Zephyr | Which::Code => {
+        Which::V1 | Which::V1Zephyr | Which::V2 | Which::V2Zephyr | Which::Code => {
             let config_filename = repo.get("config.json")?;
             let config = std::fs::read_to_string(config_filename)?;
             let mut config: Config = serde_json::from_str(&config)?;
