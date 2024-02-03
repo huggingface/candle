@@ -770,13 +770,9 @@ pub fn simple_eval(
             "Flatten" => {
                 let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1) as usize;
                 let input = get(&node.input[0])?;
+                let first_part: usize = input.shape().dims().iter().take(axis).product();
                 let end_index = input.shape().dims().iter().product::<usize>();
-                let new_shape = if axis == 0 {
-                    (1, end_index)
-                } else {
-                    let first_part: usize = input.shape().dims().iter().take(axis).product();
-                    (first_part, end_index / first_part)
-                };
+                let new_shape = (first_part, end_index / first_part);
                 let output = input.reshape(new_shape)?;
                 values.insert(node.output[0].clone(), output);
             }
