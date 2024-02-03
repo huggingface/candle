@@ -10,7 +10,7 @@ where
     samples.extend(data.chan(0).iter().map(|v| f32::from_sample(*v)))
 }
 
-pub(crate) fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<Vec<f32>> {
+pub(crate) fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<(Vec<f32>, u32)> {
     // Open the media source.
     let src = std::fs::File::open(path)?;
 
@@ -44,6 +44,7 @@ pub(crate) fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<V
         .make(&track.codec_params, &dec_opts)
         .expect("unsupported codec");
     let track_id = track.id;
+    let sample_rate = track.codec_params.sample_rate.unwrap_or(0);
     let mut pcm_data = Vec::new();
     // The decode loop.
     while let Ok(packet) = format.next_packet() {
@@ -69,5 +70,5 @@ pub(crate) fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<V
             AudioBufferRef::F64(data) => conv(&mut pcm_data, data),
         }
     }
-    Ok(pcm_data)
+    Ok((pcm_data, sample_rate))
 }

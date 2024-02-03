@@ -20,7 +20,6 @@ use tokenizers::Tokenizer;
 mod multilingual;
 mod pcm_decode;
 
-use crate::pcm_decode::pcm_decode;
 use candle_transformers::models::whisper::{self as m, audio, Config};
 
 pub enum Model {
@@ -538,7 +537,10 @@ fn main() -> Result<()> {
     let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
     <byteorder::LittleEndian as byteorder::ByteOrder>::read_f32_into(mel_bytes, &mut mel_filters);
 
-    let pcm_data = pcm_decode(input)?;
+    let (pcm_data, sample_rate) = pcm_decode::pcm_decode(input)?;
+    if sample_rate != m::SAMPLE_RATE as u32 {
+        anyhow::bail!("input file must have a {} sampling rate", m::SAMPLE_RATE)
+    }
     println!("pcm data loaded {}", pcm_data.len());
     let mel = audio::pcm_to_mel(&config, &pcm_data, &mel_filters);
     let mel_len = mel.len();
