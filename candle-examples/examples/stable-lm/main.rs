@@ -171,7 +171,7 @@ struct Args {
     #[arg(long, default_value = "main")]
     revision: String,
 
-    #[arg(long, default_value = "v1-orig")]
+    #[arg(long, default_value = "v2")]
     which: Which,
 
     #[arg(long)]
@@ -239,7 +239,14 @@ fn main() -> Result<()> {
     ));
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => match args.which {
+            Which::V1Orig | Which::V1 | Which::V1Zephyr | Which::Code => {
+                repo.get("tokenizer.json")?
+            }
+            Which::V2 | Which::V2Zephyr => api
+                .model("lmz/candle-stablelm".to_string())
+                .get("tokenizer-gpt4.json")?,
+        },
     };
     let filenames = match args.weight_files {
         Some(files) => files
@@ -247,8 +254,14 @@ fn main() -> Result<()> {
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
         None => match (args.which, args.quantized) {
-            (Which::V1Orig, true) => vec![repo.get("model-q4k.gguf")?],
-            (Which::V1 | Which::V1Zephyr | Which::V2 | Which::V2Zephyr | Which::Code, true) => {
+            (Which::V1Orig | Which::V1, true) => vec![repo.get("model-q4k.gguf")?],
+            (Which::V2, true) => {
+                let gguf = api
+                    .model("lmz/candle-stablelm".to_string())
+                    .get("stablelm-2-1_6b-q4k.gguf")?;
+                vec![gguf]
+            }
+            (Which::V1Zephyr | Which::V2Zephyr | Which::Code, true) => {
                 anyhow::bail!("Quantized {:?} variant not supported.", args.which)
             }
             (Which::V1Orig | Which::V1 | Which::V1Zephyr | Which::V2 | Which::V2Zephyr, false) => {
