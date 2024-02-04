@@ -47,6 +47,7 @@ pub mod segment_anything;
 pub mod stable_diffusion;
 pub mod stable_lm;
 pub mod starcoder2;
+pub mod swin_transformer;
 pub mod t5;
 pub mod trocr;
 pub mod vgg;
