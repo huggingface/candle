@@ -162,7 +162,7 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 100)]
+    #[arg(long, short = 'n', default_value_t = 1000)]
     sample_len: usize,
 
     #[arg(long)]
@@ -261,7 +261,13 @@ fn main() -> Result<()> {
                     .get("stablelm-2-1_6b-q4k.gguf")?;
                 vec![gguf]
             }
-            (Which::V1Zephyr | Which::V2Zephyr | Which::Code, true) => {
+            (Which::V2Zephyr, true) => {
+                let gguf = api
+                    .model("lmz/candle-stablelm".to_string())
+                    .get("stablelm-2-zephyr-1_6b-q4k.gguf")?;
+                vec![gguf]
+            }
+            (Which::V1Zephyr | Which::Code, true) => {
                 anyhow::bail!("Quantized {:?} variant not supported.", args.which)
             }
             (Which::V1Orig | Which::V1 | Which::V1Zephyr | Which::V2 | Which::V2Zephyr, false) => {
