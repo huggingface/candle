@@ -17,8 +17,10 @@ mod image_processor;
 
 #[derive(Clone, Debug, Copy, ValueEnum)]
 enum Which {
-    Base,
-    Large,
+    BaseHandWritten,
+    LargeHandWritten,
+    BasePrinted,
+    LargePrinted,
 }
 
 #[derive(Parser, Debug)]
@@ -59,18 +61,32 @@ pub fn main() -> anyhow::Result<()> {
         let model = match args.model {
             Some(model) => std::path::PathBuf::from(model),
             None => match args.which {
-                Which::Base => Api::new()?
+                Which::BaseHandWritten => Api::new()?
                     .repo(hf_hub::Repo::with_revision(
                         "microsoft/trocr-base-handwritten".to_string(),
                         hf_hub::RepoType::Model,
                         "refs/pr/3".to_string(),
                     ))
                     .get("model.safetensors")?,
-                Which::Large => Api::new()?
+                Which::LargeHandWritten => Api::new()?
                     .repo(hf_hub::Repo::with_revision(
                         "microsoft/trocr-large-handwritten".to_string(),
                         hf_hub::RepoType::Model,
                         "refs/pr/6".to_string(),
+                    ))
+                    .get("model.safetensors")?,
+                Which::BasePrinted => Api::new()?
+                    .repo(hf_hub::Repo::with_revision(
+                        "microsoft/trocr-base-printed".to_string(),
+                        hf_hub::RepoType::Model,
+                        "refs/pr/7".to_string(),
+                    ))
+                    .get("model.safetensors")?,
+                Which::LargePrinted => Api::new()?
+                    .repo(hf_hub::Repo::with_revision(
+                        "microsoft/trocr-large-printed".to_string(),
+                        hf_hub::RepoType::Model,
+                        "main".to_string(),
                     ))
                     .get("model.safetensors")?,
             },
@@ -80,9 +96,17 @@ pub fn main() -> anyhow::Result<()> {
     };
 
     let encoder_config = match args.which {
-        Which::Base => candle_transformers::models::vit::Config::microsoft_trocr_base_handwritten(),
-        Which::Large => {
+        Which::BaseHandWritten => {
             candle_transformers::models::vit::Config::microsoft_trocr_base_handwritten()
+        }
+        Which::LargeHandWritten => {
+            candle_transformers::models::vit::Config::microsoft_trocr_large_handwritten()
+        }
+        Which::BasePrinted => {
+            candle_transformers::models::vit::Config::microsoft_trocr_base_printed()
+        }
+        Which::LargePrinted => {
+            candle_transformers::models::vit::Config::microsoft_trocr_large_printed()
         }
     };
 

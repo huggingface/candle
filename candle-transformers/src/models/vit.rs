@@ -49,6 +49,51 @@ impl Config {
             qkv_bias: false,
         }
     }
+
+    pub fn microsoft_trocr_large_handwritten() -> Self {
+        Self {
+            hidden_size: 1024,
+            num_hidden_layers: 12,
+            num_attention_heads: 12,
+            intermediate_size: 3072,
+            hidden_act: candle_nn::Activation::Gelu,
+            layer_norm_eps: 1e-12,
+            image_size: 384,
+            patch_size: 16,
+            num_channels: 3,
+            qkv_bias: false,
+        }
+    }
+
+    pub fn microsoft_trocr_base_printed() -> Self {
+        Self {
+            hidden_size: 768,
+            num_hidden_layers: 12,
+            num_attention_heads: 12,
+            intermediate_size: 3072,
+            hidden_act: candle_nn::Activation::Gelu,
+            layer_norm_eps: 1e-12,
+            image_size: 384,
+            patch_size: 16,
+            num_channels: 3,
+            qkv_bias: false,
+        }
+    }
+
+    pub fn microsoft_trocr_large_printed() -> Self {
+        Self {
+            hidden_size: 1024,
+            num_hidden_layers: 12,
+            num_attention_heads: 12,
+            intermediate_size: 3072,
+            hidden_act: candle_nn::Activation::Gelu,
+            layer_norm_eps: 1e-12,
+            image_size: 384,
+            patch_size: 16,
+            num_channels: 3,
+            qkv_bias: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
