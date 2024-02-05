@@ -7,6 +7,7 @@ fn silu(xs: &Tensor) -> Result<Tensor> {
     xs / (xs.neg()?.exp()? + 1.0)?
 }
 
+#[derive(Debug, Clone)]
 struct CausalSelfAttention {
     q_proj: Linear,
     k_proj: Linear,
@@ -118,6 +119,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
     Ok(m)
 }
 
+#[derive(Debug, Clone)]
 struct Mlp {
     c_fc1: Linear,
     c_fc2: Linear,
@@ -148,6 +150,7 @@ impl Mlp {
     }
 }
 
+#[derive(Debug, Clone)]
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
@@ -189,6 +192,7 @@ impl Block {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct QLlama {
     wte: Embedding,
     blocks: Vec<Block>,
