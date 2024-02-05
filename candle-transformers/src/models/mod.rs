@@ -3,6 +3,7 @@ pub mod bigcode;
 pub mod blip;
 pub mod blip_text;
 pub mod convmixer;
+pub mod convnext;
 pub mod dinov2;
 pub mod distilbert;
 pub mod efficientnet;
