@@ -227,13 +227,11 @@ impl Object {
             _ => return Ok(None),
         };
         let (layout, dtype, file_path, storage_size) = rebuild_args(args)?;
-        let mut path = dir_name.to_path_buf();
-        path.push(file_path);
         Ok(Some(TensorInfo {
             name,
             dtype,
             layout,
-            path: path.to_string_lossy().into_owned(),
+            path: format!("{}/{}", dir_name.to_string_lossy(), file_path),
             storage_size,
         }))
     }
