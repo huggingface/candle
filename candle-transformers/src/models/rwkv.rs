@@ -107,7 +107,16 @@ impl FeedForward {
     }
 
     pub fn forward(&self, xs: &Tensor, state: State) -> Result<(Tensor, State)> {
-        todo!()
+        let shifted = xs.clone(); // TODO: use state
+        let key = (xs.broadcast_mul(&self.time_mix_key)?
+            + shifted.broadcast_mul(&(1.0 - &self.time_mix_key)?)?)?;
+        let receptance = (xs.broadcast_mul(&self.time_mix_receptance)?
+            + shifted.broadcast_mul(&(1.0 - &self.time_mix_receptance)?)?)?;
+        let key = key.apply(&self.key)?.relu()?.sqr()?;
+        let value = key.apply(&self.value)?;
+        let receptance = candle_nn::ops::sigmoid(&receptance.apply(&self.receptance)?)?;
+        let xs = (receptance * value)?;
+        Ok((xs, state))
     }
 }
 
