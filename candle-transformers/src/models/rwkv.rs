@@ -14,7 +14,10 @@ pub struct Config {
     pub head_size: usize,
     pub intermediate_size: Option<usize>,
     pub layer_norm_epsilon: f64,
+    pub rescale_every: usize,
 }
+
+pub struct State;
 
 #[derive(Debug, Clone)]
 struct SelfAttention {
@@ -24,6 +27,12 @@ struct SelfAttention {
     gate: Linear,
     output: Linear,
     ln_x: candle_nn::GroupNorm,
+    time_mix_key: Tensor,
+    time_mix_value: Tensor,
+    time_mix_receptance: Tensor,
+    time_decay: Tensor,
+    time_faaaa: Tensor,
+    time_mix_gate: Tensor,
 }
 
 impl SelfAttention {
@@ -41,6 +50,13 @@ impl SelfAttention {
             1e-5,
             vb.pp("ln_x"),
         )?;
+        let time_mix_key = vb.get((1, 1, cfg.hidden_size), "time_mix_key")?;
+        let time_mix_value = vb.get((1, 1, cfg.hidden_size), "time_mix_value")?;
+        let time_mix_receptance = vb.get((1, 1, cfg.hidden_size), "time_mix_receptance")?;
+        let n_attn_heads = cfg.hidden_size / cfg.head_size;
+        let time_decay = vb.get((n_attn_heads, cfg.head_size), "time_decay")?;
+        let time_faaaa = vb.get((n_attn_heads, cfg.head_size), "time_faaaa")?;
+        let time_mix_gate = vb.get((1, 1, cfg.hidden_size), "time_mix_gate")?;
         Ok(Self {
             key,
             value,
@@ -48,12 +64,24 @@ impl SelfAttention {
             gate,
             output,
             ln_x,
+            time_mix_key,
+            time_mix_value,
+            time_mix_receptance,
+            time_decay,
+            time_faaaa,
+            time_mix_gate,
         })
+    }
+
+    pub fn forward(&self, xs: &Tensor, state: State) -> Result<(Tensor, State)> {
+        todo!()
     }
 }
 
 #[derive(Debug, Clone)]
 struct FeedForward {
+    time_mix_key: Tensor,
+    time_mix_receptance: Tensor,
     key: Linear,
     receptance: Linear,
     value: Linear,
@@ -67,11 +95,19 @@ impl FeedForward {
         let key = linear(cfg.hidden_size, int_size, vb.pp("key"))?;
         let receptance = linear(cfg.hidden_size, cfg.hidden_size, vb.pp("receptance"))?;
         let value = linear(int_size, cfg.hidden_size, vb.pp("value"))?;
+        let time_mix_key = vb.get((1, 1, cfg.hidden_size), "time_mix_key")?;
+        let time_mix_receptance = vb.get((1, 1, cfg.hidden_size), "time_mix_receptance")?;
         Ok(Self {
             key,
             receptance,
             value,
+            time_mix_key,
+            time_mix_receptance,
         })
+    }
+
+    pub fn forward(&self, xs: &Tensor, state: State) -> Result<(Tensor, State)> {
+        todo!()
     }
 }
 
@@ -104,6 +140,18 @@ impl Block {
             feed_forward,
         })
     }
+
+    pub fn forward(&self, xs: &Tensor, state: State) -> Result<(Tensor, State)> {
+        let xs = match self.pre_ln.as_ref() {
+            None => xs.clone(),
+            Some(pre_ln) => xs.apply(pre_ln)?,
+        };
+        let (attention, state) = self.attention.forward(&xs.apply(&self.ln1)?, state)?;
+        let xs = (xs + attention)?;
+        let (feed_forward, state) = self.feed_forward.forward(&xs.apply(&self.ln2)?, state)?;
+        let xs = (xs + feed_forward)?;
+        Ok((xs, state))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -132,5 +180,19 @@ impl Model {
             ln_out,
             head,
         })
+    }
+
+    pub fn forward(&self, xs: &Tensor, mut state: State) -> Result<(Tensor, State)> {
+        let (_b_size, seq_len) = xs.dims2()?;
+        let mut xs = xs.apply(&self.embeddings)?;
+        for (block_idx, block) in self.blocks.iter().enumerate() {
+            (xs, state) = block.forward(&xs, state)?
+        }
+        let xs = xs
+            .apply(&self.ln_out)?
+            .narrow(1, seq_len - 1, 1)?
+            .apply(&self.head)?
+            .squeeze(1)?;
+        Ok((xs, state))
     }
 }
