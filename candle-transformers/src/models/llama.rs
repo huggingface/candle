@@ -1,13 +1,12 @@
 use super::with_tracing::{linear_no_bias as linear, Linear};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct LlamaConfig {
     pub hidden_size: usize,
     pub intermediate_size: usize,
