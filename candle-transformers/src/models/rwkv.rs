@@ -160,6 +160,7 @@ pub struct Model {
     blocks: Vec<Block>,
     ln_out: LayerNorm,
     head: Linear,
+    rescale_every: usize,
 }
 
 impl Model {
@@ -179,6 +180,7 @@ impl Model {
             blocks,
             ln_out,
             head,
+            rescale_every: cfg.rescale_every,
         })
     }
 
@@ -186,7 +188,10 @@ impl Model {
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embeddings)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
-            (xs, state) = block.forward(&xs, state)?
+            (xs, state) = block.forward(&xs, state)?;
+            if (block_idx + 1) % self.rescale_every == 0 {
+                xs = (xs / 2.)?
+            }
         }
         let xs = xs
             .apply(&self.ln_out)?
