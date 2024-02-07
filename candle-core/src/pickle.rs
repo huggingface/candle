@@ -741,7 +741,7 @@ impl PthTensors {
 
         // Reading the data is a bit tricky as it can be strided, for now only support the basic
         // case and when the tensor is fortran contiguous.
-        if rank > 1 && !tensor_info.layout.is_contiguous() && !is_fortran_contiguous {
+        if !tensor_info.layout.is_contiguous() && !is_fortran_contiguous {
             crate::bail!(
                 "cannot retrieve non-contiguous tensors {:?}",
                 tensor_info.layout
