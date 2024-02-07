@@ -760,10 +760,14 @@ impl PthTensors {
         )?;
 
         if is_fortran_contiguous {
-            // if tensor is fortan contiguous, then we need to reverse all the dimensions.
+            // Reverse the shape, e.g. Shape(2, 3, 4) -> Shape(4, 3, 2)
+            let shape_reversed: Vec<_> = tensor_info.layout.dims().iter().rev().cloned().collect();
+            let tensor = tensor.reshape(shape_reversed)?;
+
+            // Permute (transpose) the dimensions, e.g. Shape(4, 3, 2) -> Shape(2, 3, 4)
             let rank = tensor_info.layout.dims().len();
-            let dims_reversed: Vec<usize> = (0..rank).rev().collect();
-            let tensor = tensor.permute(dims_reversed)?;
+            let dim_indeces_reversed: Vec<_> = (0..rank).rev().collect();
+            let tensor = tensor.permute(dim_indeces_reversed)?;
             Ok(Some(tensor))
         } else {
             Ok(Some(tensor))
