@@ -748,7 +748,7 @@ fn reduce_max_case<const N: usize, const D: usize>() {
 fn reduce_argmax_case<const N: usize, const D: usize>() {
     let v = create_array::<N>();
     let results: Vec<u32> = run_reduce(&v, D, "fast_argmax_f32");
-    assert_eq!(results, [63, 127]);
+    assert_eq!(results, correct_argmax::<N, D>(v));
 }
 
 #[test]
@@ -799,25 +799,25 @@ fn reduce_max() {
 
 #[test]
 fn reduce_argmax() {
-    //reduce_argmax_case::<6, 1>();
-    //reduce_argmax_case::<10, 1>();
-    //reduce_argmax_case::<64, 1>();
-    //reduce_argmax_case::<128, 1>();
-    //reduce_argmax_case::<256, 1>();
-    //reduce_argmax_case::<512, 1>();
-    //reduce_argmax_case::<1024, 1>();
-    //reduce_argmax_case::<2048, 1>();
-    //reduce_argmax_case::<4096, 1>();
-    //
+    reduce_argmax_case::<6, 1>();
+    reduce_argmax_case::<10, 1>();
+    reduce_argmax_case::<64, 1>();
+    reduce_argmax_case::<128, 1>();
+    reduce_argmax_case::<256, 1>();
+    reduce_argmax_case::<512, 1>();
+    reduce_argmax_case::<1024, 1>();
+    reduce_argmax_case::<2048, 1>();
+    reduce_argmax_case::<4096, 1>();
+
     reduce_argmax_case::<6, 2>();
     reduce_argmax_case::<10, 2>();
-    //reduce_argmax_case::<64, 2>();
-    //reduce_argmax_case::<128, 2>();
-    //reduce_argmax_case::<256, 2>();
-    //reduce_argmax_case::<512, 2>();
-    //reduce_argmax_case::<1024, 2>();
-    //reduce_argmax_case::<2048, 2>();
-    //reduce_argmax_case::<4096, 2>();
+    reduce_argmax_case::<64, 2>();
+    reduce_argmax_case::<128, 2>();
+    reduce_argmax_case::<256, 2>();
+    reduce_argmax_case::<512, 2>();
+    reduce_argmax_case::<1024, 2>();
+    reduce_argmax_case::<2048, 2>();
+    reduce_argmax_case::<4096, 2>();
 }
 
 #[test]

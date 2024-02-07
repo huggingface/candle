@@ -318,25 +318,33 @@ struct Max {
 
 // Scalar values.
 template<typename Op, typename T, typename _E = typename metal::enable_if<is_scalar_v<T>>::type>
-METAL_FUNC T apply_operator(Op op, size_t _idx, T a, T b) {
+METAL_FUNC T apply_operator(Op op, T a, T b) {
+     return op(a, b);
+}
+template<typename Op, typename T, typename _E = typename metal::enable_if<is_scalar_v<T>>::type>
+METAL_FUNC T apply_operator(Op op, T a, T b, size_t _idx) {
      return op(a, b);
 }
 
 // Convertible types.
 template<typename Op, typename T, typename U, typename _E = typename metal::enable_if_t<is_convertible_v<U, T>>>
-METAL_FUNC T apply_operator(Op op, size_t _idx, T a, U b) {
+METAL_FUNC T apply_operator(Op op, T a, U b, size_t _idx) {
+     return op(a, static_cast<T>(b));
+}
+template<typename Op, typename T, typename U, typename _E = typename metal::enable_if_t<is_convertible_v<U, T>>>
+METAL_FUNC T apply_operator(Op op, T a, U b) {
      return op(a, static_cast<T>(b));
 }
 
 // indexed scalar and scalar.
 template<typename Op, typename T, typename _E = typename metal::enable_if<is_scalar_v<T>>::type>
-METAL_FUNC indexed<T> apply_operator(Op op, size_t idx, indexed<T> a, T b) {
+METAL_FUNC indexed<T> apply_operator(Op op, indexed<T> a, T b, size_t idx) {
     return op(a, indexed<T>(idx, b));
 }
 
 // Indexed vector and vector.
 template<typename Op, typename T, uint N>
-METAL_FUNC indexed<vec<T, N>> apply_operator(Op op, size_t idx, indexed<vec<T, N>> a, vec<T, N> b) {
+METAL_FUNC indexed<vec<T, N>> apply_operator(Op op, indexed<vec<T, N>> a, vec<T, N> b, size_t idx) {
     #pragma clang loop unroll(full)
     for (ushort n = 0; n < N; n++) {
         a[n] = op(a[n], indexed<Scalar<T>>(idx + n, b[n]));
@@ -346,7 +354,7 @@ METAL_FUNC indexed<vec<T, N>> apply_operator(Op op, size_t idx, indexed<vec<T, N
 
 // indexed vectors with same length and convertible types.
 template<typename Op, typename T, typename U, typename _E = typename metal::enable_if_t<is_same_len_v<T, U>>>
-METAL_FUNC indexed<T> apply_operator(Op op, size_t idx, indexed<T> a, indexed<U> b) {
+METAL_FUNC indexed<T> apply_operator(Op op, indexed<T> a, indexed<U> b) {
     #pragma clang loop unroll(full)
     for (ushort n = 0; n < vec_elements<T>::value; n++) {
         a[n] = op(a[n], b[n]);
@@ -356,7 +364,16 @@ METAL_FUNC indexed<T> apply_operator(Op op, size_t idx, indexed<T> a, indexed<U>
 
 // Vectors with same length and convertible types.
 template<typename Op, typename T, typename U, uint N>
-METAL_FUNC vec<T, N> apply_operator(Op op, size_t _idx, vec<T, N> a, vec<U, N> b) {
+METAL_FUNC vec<T, N> apply_operator(Op op, vec<T, N> a, vec<U, N> b) {
+    #pragma clang loop unroll(full)
+    for (ushort n = 0; n < N; n++) {
+        a[n] = op(a[n], static_cast<T>(b[n]));
+    }
+    return a;
+}
+
+template<typename Op, typename T, typename U, uint N>
+METAL_FUNC vec<T, N> apply_operator(Op op, vec<T, N> a, vec<U, N> b, size_t _idx) {
     #pragma clang loop unroll(full)
     for (ushort n = 0; n < N; n++) {
         a[n] = op(a[n], static_cast<T>(b[n]));
@@ -420,12 +437,14 @@ METAL_FUNC R load_from_global(
 ) {
     ReductionOp op;
 
+    uint idx = offset + tid;
     #pragma clang loop unroll(full)
     for (uint i = offset + tid; i < offset + el_to_sum_per_block; i += BLOCKSIZE) {
         if (STRIDED) {
-            value = apply_operator(op, i, value, src[get_strided_index(i, num_dims, dims, strides)]);
+            idx = get_strided_index(i, num_dims, dims, strides);
+            value = apply_operator(op, value, src[idx], idx);
         } else {
-            value = apply_operator(op, i, value, src[i]);
+            value = apply_operator(op, value, src[i], i);
         }
     }
     return value;
@@ -464,42 +483,46 @@ METAL_FUNC R load_from_global(
     );
 }
 
-#if __METAL_VERSION__ >= 220
-
+// TODO: This allows int64_t simd_shuffle_down, but it is buggy so we should remove it.
+//#if __METAL_VERSION__ >= 220
 // Specialization for int64_t since it does not support simd_shuffle_down.
-template<typename ReductionOp, ushort BLOCKSIZE, typename T, typename _E = typename enable_if<!__is_valid_simdgroup_type<T>::value>::type>
-METAL_FUNC T simdgroup_reduce(
-    volatile threadgroup T shared[BLOCKSIZE],
-    const uint offset,
-    const ushort tid
-) {
-    ReductionOp op;
-    T value = shared[tid];
-    uint idx = offset + tid;
-    if (BLOCKSIZE >= 32) value = apply_operator(op, idx + 16, shared[tid], shared[tid + 16]);
-    if (BLOCKSIZE >= 16) value = apply_operator(op, idx  + 8, shared[tid], shared[tid +  8]);
-    if (BLOCKSIZE >=  8) value = apply_operator(op, idx  + 4, shared[tid], shared[tid +  4]);
-    if (BLOCKSIZE >=  4) value = apply_operator(op, idx  + 2, shared[tid], shared[tid +  2]);
-    if (BLOCKSIZE >=  2) value = apply_operator(op, idx  + 1, shared[tid], shared[tid +  1]);
-    return value;
-}
-#endif
+//template<typename ReductionOp, ushort BLOCKSIZE, typename T, typename _E = typename enable_if<!__is_valid_simdgroup_type<T>::value>::type>
+//METAL_FUNC T simdgroup_reduce(
+//    volatile threadgroup T shared[BLOCKSIZE],
+//    const ushort tid
+//) {
+//    ReductionOp op;
+//    T value = shared[tid];
+//    if (BLOCKSIZE >= 32) value = apply_operator(op, shared[tid], shared[tid + 16]);
+//    if (BLOCKSIZE >= 16) value = apply_operator(op, shared[tid], shared[tid +  8]);
+//    if (BLOCKSIZE >=  8) value = apply_operator(op, shared[tid], shared[tid +  4]);
+//    if (BLOCKSIZE >=  4) value = apply_operator(op, shared[tid], shared[tid +  2]);
+//    if (BLOCKSIZE >=  2) value = apply_operator(op, shared[tid], shared[tid +  1]);
+//    return value;
+//}
+//#endif
 
 // Since we are using simd_shuffle_down with a BLOCKSIZE guard we don't need any barriers.
-template<typename ReductionOp, ushort BLOCKSIZE, typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
-METAL_FUNC T simdgroup_reduce(
-    threadgroup T shared[BLOCKSIZE],
-    const uint offset,
-    const ushort tid
-) {
+template<typename ReductionOp, ushort BLOCKSIZE, typename T>
+METAL_FUNC T simdgroup_reduce(T value) {
     ReductionOp op;
-    T value = shared[tid];
-    uint idx = offset + tid;
-    if (BLOCKSIZE >= 32) value = apply_operator(op, idx + 16, value, simd_shuffle_down(value, 16));
-    if (BLOCKSIZE >= 16) value = apply_operator(op, idx +  8, value, simd_shuffle_down(value,  8));
-    if (BLOCKSIZE >=  8) value = apply_operator(op, idx +  4, value, simd_shuffle_down(value,  4));
-    if (BLOCKSIZE >=  4) value = apply_operator(op, idx +  2, value, simd_shuffle_down(value,  2));
-    if (BLOCKSIZE >=  2) value = apply_operator(op, idx +  1, value, simd_shuffle_down(value,  1));
+    if (BLOCKSIZE >= 32) value = apply_operator(op, value, simd_shuffle_down(value, 16));
+    if (BLOCKSIZE >= 16) value = apply_operator(op, value, simd_shuffle_down(value,  8));
+    if (BLOCKSIZE >=  8) value = apply_operator(op, value, simd_shuffle_down(value,  4));
+    if (BLOCKSIZE >=  4) value = apply_operator(op, value, simd_shuffle_down(value,  2));
+    if (BLOCKSIZE >=  2) value = apply_operator(op, value, simd_shuffle_down(value,  1));
+    return value;
+}
+
+// Since we are using simd_shuffle_down with a BLOCKSIZE guard we don't need any barriers.
+template<typename ReductionOp, ushort BLOCKSIZE, typename T>
+METAL_FUNC indexed<T> simdgroup_reduce(indexed<T> value) {
+    ReductionOp op;
+    if (BLOCKSIZE >= 32) value = apply_operator(op, value, simd_shuffle_down(value, 16));
+    if (BLOCKSIZE >= 16) value = apply_operator(op, value, simd_shuffle_down(value,  8));
+    if (BLOCKSIZE >=  8) value = apply_operator(op, value, simd_shuffle_down(value,  4));
+    if (BLOCKSIZE >=  4) value = apply_operator(op, value, simd_shuffle_down(value,  2));
+    if (BLOCKSIZE >=  2) value = apply_operator(op, value, simd_shuffle_down(value,  1));
     return value;
 }
 
@@ -519,7 +542,7 @@ METAL_FUNC T threadgroup_reduce(
     #pragma clang loop unroll(full)
     for (ushort s = BLOCKSIZE / 2; s >= 64; s >>= 1) {
         if (tid < s) {
-            shared[tid] = apply_operator(op, offset + tid, shared[tid], shared[tid + s]);
+            shared[tid] = apply_operator(op, shared[tid], shared[tid + s]);
         }
         threadgroup_barrier(mem_flags::mem_none);
     }
@@ -527,11 +550,11 @@ METAL_FUNC T threadgroup_reduce(
     if (tid < 32) {
         // Last shared memory reduce can be done without tid < s check.
         if (BLOCKSIZE >= 64) {
-            shared[tid] = apply_operator(op, offset + tid, shared[tid], shared[tid + 32]);
+            shared[tid] = apply_operator(op, shared[tid], shared[tid + 32]);
             simdgroup_barrier(mem_flags::mem_none);
         }
         // Remaining 32 threads can be reduced with simdgroup_reduce.
-        shared[tid] = simdgroup_reduce<ReductionOp, BLOCKSIZE>(shared, offset, tid);
+        shared[tid] = simdgroup_reduce<ReductionOp, BLOCKSIZE>(shared[tid]);
     }
 
     return shared[tid];
@@ -1016,39 +1039,39 @@ impl_softmax_inner(NAME, T, ACC)                        \
 impl_softmax_inner(NAME##x2, T##2, ACC##2)              \
 impl_softmax_inner(NAME##x4, T##4, ACC##4)
 
-//impl_reduce(Sum, fast_sum_f32, float)
-//impl_reduce(Sum, fast_sum_u32, uint)
-//impl_reduce(Sum, fast_sum_f16, half)
-//impl_reduce(Sum, fast_sum_u8, uint8_t)
-//
-//impl_reduce(Mul, fast_mul_f32, float)
-//impl_reduce(Mul, fast_mul_u32, uint)
-//impl_reduce(Mul, fast_mul_f16, half)
-//impl_reduce(Mul, fast_mul_u8, uint8_t)
-//
-//impl_reduce(Max, fast_max_f32, float)
-//impl_reduce(Max, fast_max_u32, uint)
-//impl_reduce(Max, fast_max_f16, half)
-//impl_reduce(Max, fast_max_u8, uint8_t)
-//
-//impl_reduce(Min, fast_min_f32, float)
-//impl_reduce(Min, fast_min_u32, uint)
-//impl_reduce(Min, fast_min_f16, half)
-//impl_reduce(Min, fast_min_u8, uint8_t)
-//
-//impl_arg_reduce(Min, fast_argmin_f32, float)
-//impl_arg_reduce(Min, fast_argmin_f16, half)
-//impl_arg_reduce(Min, fast_argmin_u32, uint)
-//impl_arg_reduce(Min, fast_argmin_u8, uint8_t)
-//
+impl_reduce(Sum, fast_sum_f32, float)
+impl_reduce(Sum, fast_sum_u32, uint)
+impl_reduce(Sum, fast_sum_f16, half)
+impl_reduce(Sum, fast_sum_u8, uint8_t)
+
+impl_reduce(Mul, fast_mul_f32, float)
+impl_reduce(Mul, fast_mul_u32, uint)
+impl_reduce(Mul, fast_mul_f16, half)
+impl_reduce(Mul, fast_mul_u8, uint8_t)
+
+impl_reduce(Max, fast_max_f32, float)
+impl_reduce(Max, fast_max_u32, uint)
+impl_reduce(Max, fast_max_f16, half)
+impl_reduce(Max, fast_max_u8, uint8_t)
+
+impl_reduce(Min, fast_min_f32, float)
+impl_reduce(Min, fast_min_u32, uint)
+impl_reduce(Min, fast_min_f16, half)
+impl_reduce(Min, fast_min_u8, uint8_t)
+
+impl_arg_reduce(Min, fast_argmin_f32, float)
+impl_arg_reduce(Min, fast_argmin_f16, half)
+impl_arg_reduce(Min, fast_argmin_u32, uint)
+impl_arg_reduce(Min, fast_argmin_u8, uint8_t)
+
 impl_arg_reduce(Max, fast_argmax_f32, float)
-//impl_arg_reduce(Max, fast_argmax_f16, half)
-//impl_arg_reduce(Max, fast_argmax_u32, uint)
-//impl_arg_reduce(Max, fast_argmax_u8, uint8_t)
-//
-//impl_softmax(softmax_f32, float, float)
-//impl_softmax(softmax_f16, half, float)
-//
+impl_arg_reduce(Max, fast_argmax_f16, half)
+impl_arg_reduce(Max, fast_argmax_u32, uint)
+impl_arg_reduce(Max, fast_argmax_u8, uint8_t)
+
+impl_softmax(softmax_f32, float, float)
+impl_softmax(softmax_f16, half, float)
+
 //#if __METAL_VERSION__ >= 220
 //impl_reduce(Sum, fast_sum_i64, int64_t)
 //impl_reduce(Mul, fast_mul_i64, int64_t)
@@ -1058,15 +1081,15 @@ impl_arg_reduce(Max, fast_argmax_f32, float)
 //impl_arg_reduce(Min, fast_argmin_i64, int64_t)
 //impl_arg_reduce(Max, fast_argmax_i64, int64_t)
 //#endif
-//
-//#if defined(__HAVE_BFLOAT__)
-//impl_reduce(Sum, fast_sum_bf16, bfloat)
-//impl_reduce(Mul, fast_mul_bf16, bfloat)
-//impl_reduce(Max, fast_max_bf16, bfloat)
-//impl_reduce(Min, fast_min_bf16, bfloat)
-//
-//impl_arg_reduce(Min, fast_argmin_bf16, bfloat)
-//impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
-//
-//impl_softmax(softmax_bf16, bfloat, float)
-//#endif
+
+#if defined(__HAVE_BFLOAT__)
+impl_reduce(Sum, fast_sum_bf16, bfloat)
+impl_reduce(Mul, fast_mul_bf16, bfloat)
+impl_reduce(Max, fast_max_bf16, bfloat)
+impl_reduce(Min, fast_min_bf16, bfloat)
+
+impl_arg_reduce(Min, fast_argmin_bf16, bfloat)
+impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
+
+impl_softmax(softmax_bf16, bfloat, float)
+#endif
