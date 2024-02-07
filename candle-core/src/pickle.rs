@@ -736,10 +736,11 @@ impl PthTensors {
         let zip_reader = std::io::BufReader::new(std::fs::File::open(&self.path)?);
         let mut zip = zip::ZipArchive::new(zip_reader)?;
         let mut reader = zip.by_name(&tensor_info.path)?;
+        let is_fortran_contiguous = tensor_info.layout.is_fortran_contiguous();
 
         // Reading the data is a bit tricky as it can be strided, for now only support the basic
-        // case.
-        if !tensor_info.layout.is_contiguous() {
+        // case and when the tensor is fortran contiguous.
+        if !tensor_info.layout.is_contiguous() && !is_fortran_contiguous {
             crate::bail!(
                 "cannot retrieve non-contiguous tensors {:?}",
                 tensor_info.layout
@@ -757,7 +758,16 @@ impl PthTensors {
             tensor_info.dtype,
             &mut reader,
         )?;
-        Ok(Some(tensor))
+
+        if is_fortran_contiguous {
+            // if tensor is fortan contiguous, then we need to reverse all the dimensions.
+            let rank = tensor_info.layout.dims().len();
+            let dims_reversed: Vec<usize> = (0..rank).rev().collect();
+            let tensor = tensor.permute(dims_reversed)?;
+            Ok(Some(tensor))
+        } else {
+            Ok(Some(tensor))
+        }
     }
 }
 
