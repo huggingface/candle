@@ -560,8 +560,19 @@ pub fn call_reduce_contiguous(
     input_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+    let mut elements_to_sum = length / out_length;
+    /*
+    let (name, granularity) = if elements_to_sum % 4 == 0 {
+        (format!("{kernel_name}x4").leak(), 4)
+    } else if elements_to_sum % 2 == 0 {
+        (format!("{kernel_name}x2").leak(), 2)
+    } else {
+        (format!("{kernel_name}").leak(), 1)
+    };
+    elements_to_sum /= granularity;
+    */
+
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
-    let elements_to_sum = length / out_length;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -579,7 +590,7 @@ pub fn call_reduce_contiguous(
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        (elements_to_sum as u64 + 2 - 1) / 2,
+        ((elements_to_sum) as u64 + 1) / 2,
     )
     .next_power_of_two();
 
@@ -609,8 +620,18 @@ pub fn call_reduce_strided(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let length: usize = shape.iter().product();
+    let mut elements_to_sum = length / out_length;
+    /*
+    let (name, granularity) = if elements_to_sum % 4 == 0 {
+        (format!("{kernel_name}x4").leak(), 4)
+    } else if elements_to_sum % 2 == 0 {
+        (format!("{kernel_name}x2").leak(), 2)
+    } else {
+        (format!("{kernel_name}").leak(), 1)
+    };
+    elements_to_sum /= granularity;
+    */
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
-    let elements_to_sum = length / out_length;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -636,7 +657,7 @@ pub fn call_reduce_strided(
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum as u64,
+        ((elements_to_sum) as u64 + 1) / 2,
     )
     .next_power_of_two();
 
@@ -665,6 +686,18 @@ pub fn call_last_softmax(
     input_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
+
+
+    let (name, granularity) = if elements_to_sum % 4 == 0 {
+        (format!("{kernel_name}x4").leak(), 4)
+    } else if elements_to_sum % 2 == 0 {
+        (format!("{kernel_name}x2").leak(), 2)
+    } else {
+        (format!("{kernel_name}").leak(), 1)
+    };
+    //let mut elements_to_sum = elements_to_sum;
+    //elements_to_sum /= granularity;
+
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -684,7 +717,7 @@ pub fn call_last_softmax(
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum as u64,
+        (elements_to_sum as u64 + 1) / 2,
     )
     .next_power_of_two();
 

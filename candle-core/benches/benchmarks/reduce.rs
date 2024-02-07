@@ -194,7 +194,7 @@ fn run_arg_reduce<T: candle_core::FloatDType>(
         Tensor::rand(lo, up, (b, m, k), &device).unwrap()
     };
 
-    let flops = b * m * k * (DType::U32.size_in_bytes() + T::DTYPE.size_in_bytes());
+    let flops = b * m * k * T::DTYPE.size_in_bytes();
 
     let name = match T::DTYPE {
         DType::F32 => {

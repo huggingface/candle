@@ -2,8 +2,9 @@
 #include <metal_limits>
 using namespace metal;
 
-// TODO: Load multiple values per thread to improve memory bandwidth utilization
-// static constant constexpr uint VALUES_PER_THREAD = 1;
+// Use this to get the scalar type of a vector type
+template <typename T>
+using Scalar = make_scalar_t<T>;
 
 METAL_FUNC uint get_strided_index(
     uint idx,
@@ -21,116 +22,382 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
-template <typename V>
-struct Indexed {
+#pragma METAL internals : enable
+// Vector helper traits
+template <typename T, int N>
+struct is_len : false_type {};
+
+template <typename T, int N>
+struct is_len<vec<T, N>, N>: true_type {};
+
+template <typename T, int N>
+constexpr constant int is_len_v = is_len<T, N>::value;
+
+template <typename T, typename U>
+struct _is_same_len : false_type {};
+
+template <typename T, typename U, int N>
+struct _is_same_len<vec<T, N>, vec<U, N>>: true_type {};
+
+template <typename T, typename U>
+struct is_same_len : _is_same_len<remove_cv_t<T>, remove_cv_t<U>> {};
+
+template <typename T, typename U>
+constexpr constant int is_same_len_v = _is_same_len<T, U>::value;
+#pragma METAL internals : disable
+
+// Keeps track of the index of the value in the reduction operation (argmin, argmax, etc.)
+// and the value itself. The index is also used to break ties in the reduction operation.
+// There are two specializations of the indexed class, one for scalar values and one for vector values.
+template <typename T, typename = void>
+class indexed;
+
+
+template <typename T>
+struct _make_scalar_impl<indexed<T>>
+{
+  typedef indexed<Scalar<T>> type;
+};
+
+// Specialization for scalar values
+template <typename T>
+class indexed<T, typename metal::enable_if_t<is_scalar_v<T>>> {
+public:
     uint i;
-    V val;
-    typedef V type;
+    T val;
 
-    constexpr Indexed<V>() thread = default;
-    constexpr Indexed<V>() threadgroup = default;
-    constexpr Indexed<V>() device = default;
-    constexpr Indexed<V>() constant = default;
+    constexpr indexed<T>() thread = default;
+    constexpr indexed<T>() threadgroup = default;
+    constexpr indexed<T>() device = default;
+    constexpr indexed<T>() constant = default;
 
-    constexpr Indexed<V>(uint _i, V _val) : i(_i), val(_val) {}
-
-    template <typename U, typename = typename enable_if<is_convertible_v<U, V>>::type>
-    constexpr Indexed<V>(uint _i, U _val) : i(_i), val(static_cast<U>(_val)) {}
+    constexpr indexed<T>(uint _i, T _val) : i(_i), val(_val) {}
 
     template <typename U>
-    constexpr Indexed<V>(const thread Indexed<U> &iv): Indexed<V>(iv.i, iv.val) {}
+    constexpr indexed<T>(const thread indexed<U> &iv): indexed<T>(iv.i, iv.val) {}
 
-    template <typename U>
-    constexpr Indexed<V>(const threadgroup Indexed<V> &iv): Indexed<V>(iv.i, iv.val) {}
+    constexpr indexed<T>(const threadgroup indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
 
-    Indexed<V> operator=(const thread Indexed<V> &iv) thread {
+    constexpr indexed<T>(const volatile threadgroup indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
+
+    indexed<T> operator=(const thread indexed<T> &iv) thread {
         this->i = iv.i;
         this->val = iv.val;
         return *this;
     }
-    Indexed<V> operator=(const thread Indexed<V> &iv) threadgroup {
+
+    indexed<T> operator=(const thread indexed<T> &iv) threadgroup {
+        this->i = iv.i;
+        this->val = iv.val;
+        return *this;
+    }
+
+    // To align with above implementation.
+    constexpr auto operator[](uint n) {
+        assert(n == 0);
+        return *this;
+    }
+};
+
+// Specialization for vector values
+template <typename T>
+class indexed<T, typename metal::enable_if_t<is_vector_v<T>>> {
+public:
+    typedef vec<uint, vec_elements<T>::value> I;
+    I i;
+    T val;
+
+    constexpr indexed<T>() thread = default;
+    constexpr indexed<T>() threadgroup = default;
+    constexpr indexed<T>() device = default;
+    constexpr indexed<T>() constant = default;
+
+    constexpr indexed<T>(I _i, T _val) : i(_i), val(_val) {}
+
+    // Return 1-dimensional indexed value
+    constexpr indexed<Scalar<T>> operator[](uint n) {
+        assert(n < N);
+        return indexed<Scalar<T>>(i[n], val[n]);
+    }
+    constexpr const indexed<Scalar<T>> operator[](uint n) const {
+        assert(n < N);
+        return indexed<Scalar<T>>(i[n], val[n]);
+    }
+
+    constexpr indexed<T>(const thread indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
+
+    constexpr indexed<T>(const threadgroup indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
+
+    constexpr indexed<T>(const volatile threadgroup indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
+
+    indexed<T> operator=(const thread indexed<T> &iv) thread {
+        this->i = iv.i;
+        this->val = iv.val;
+        return *this;
+    }
+
+    indexed<T> operator=(const thread indexed<T> &iv) threadgroup {
         this->i = iv.i;
         this->val = iv.val;
         return *this;
     }
 };
 
-template<typename V>
-constexpr METAL_FUNC bool operator<(Indexed<V> lhs, Indexed<V> rhs) {
+template<typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
+constexpr METAL_FUNC bool operator<(indexed<T> lhs, indexed<T> rhs) {
     return lhs.val < rhs.val || (lhs.val == rhs.val && lhs.i < rhs.i);
 }
 
-template<typename V>
-constexpr METAL_FUNC bool operator>(Indexed<V> lhs, Indexed<V> rhs) {
+template<typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
+constexpr METAL_FUNC bool operator>(indexed<T> lhs, indexed<T> rhs) {
     return lhs.val > rhs.val || (lhs.val == rhs.val && lhs.i > rhs.i);
 }
 
 template<typename T>
-struct _numeric_limits_impl<Indexed<T>> {
-    static constexpr Indexed<T> lowest() {
-        return Indexed<T>(0, numeric_limits<T>::lowest());
+struct _numeric_limits_impl<indexed<T>> {
+    static constexpr METAL_FUNC indexed<T> lowest() {
+        return indexed<T>(0, numeric_limits<T>::lowest());
     }
 
-    static constexpr Indexed<T> max() {
-        return Indexed<T>(0, numeric_limits<T>::max());
+    static constexpr METAL_FUNC indexed<T> max() {
+        return indexed<T>(0, numeric_limits<T>::max());
     }
 };
 
 #if defined(__HAVE_BFLOAT__)
 // Metal does not have simd_shuffle_down for bfloat16
-// TODO: Check if volatile threadgroup memory reduction is faster than simd_shuffle_down for bfloat
 bfloat simd_shuffle_down(bfloat value, ushort delta) {
-    return static_cast<bfloat>(__metal_simd_shuffle_down(static_cast<float>(value), delta));
+    return static_cast<bfloat>(simd_shuffle_down(static_cast<float>(value), delta));
+}
+
+template<uint N>
+vec<bfloat, N> simd_shuffle_down(vec<bfloat, N> value, ushort delta) {
+    return static_cast<vec<bfloat, N>>(simd_shuffle_down(static_cast<vec<float, N>>(value), delta));
 }
 #endif
 
-template <typename V>
-Indexed<V> simd_shuffle_down(Indexed<V> iv, ushort delta) {
-    return Indexed<V>(
+template <typename T>
+indexed<T> simd_shuffle_down(indexed<T> iv, ushort delta) {
+    return indexed<T>(
         simd_shuffle_down(iv.i, delta),
         simd_shuffle_down(iv.val, delta)
     );
 }
 
-#define impl_reduction_op_helper(name, op, init_val, __result_type__)  \
-template<typename T, typename R = __result_type__>                                  \
-struct name {                                                                       \
-    static constexpr T init() {                                                     \
-        return init_val;                                                            \
-    }                                                                               \
-    METAL_FUNC R operator()(T a, T b) {                                             \
-        return op;                                                                  \
-    }                                                                               \
-    METAL_FUNC R operator()(thread const T& a, thread const T& b) const {           \
-        return op;                                                                  \
-    }                                                                               \
-    METAL_FUNC R operator()(threadgroup const T& a, threadgroup const T& b) const { \
-        return op;                                                                  \
-    }                                                                               \
-}                                                                                   \
+// Reduction base class.
+// The reduction class is used to define the reduction operation for a given type.
+// The reduction operation is defined by the operator() method, which is overloaded for both indexed and non-indexed types.
+// Operation definitions are provided for default, thread, and threadgroup address spaces.
+// Operations are defined as scalar, but is applied for both scalar and vector via apply_operation.
+template <typename T, typename R = T, typename = void>
+class reduction {
+private:
+    // Scalar representation of the input type.
+    typedef Scalar<T> type;
+    // Scalar representation of the result type.
+    typedef Scalar<R> result_type;
+public:
+    // The initial value for the reduction operation. This returns R as opposed to result_type because it can
+    // potentially be a vector type, so that it can be used for both scalar and vector types.
+    static constexpr METAL_FUNC R init();
+    // The reduction operation for default, thread, and threadgroup address spaces respectively.
+    METAL_FUNC result_type operator()(type a, type b);
+    METAL_FUNC result_type operator()(thread const type& a, thread const type& b) const;
+    METAL_FUNC result_type operator()(threadgroup const type &a, threadgroup const type &b) const;
+};
 
-#define impl_reduction_op(name, op, init_val) \
-impl_reduction_op_helper(name, op, init_val, T);
+template<typename T, typename R = T>
+struct Sum {
+    typedef Scalar<T> type;
+    typedef Scalar<R> result_type;
 
-#define impl_arg_reduction_op(name, op, init_val) \
-impl_reduction_op_helper(name, op, init_val, tuple<bool, Indexed<T>>);
+    static constexpr METAL_FUNC R init() {
+        return 0;
+    }
+    METAL_FUNC result_type operator()(type a, type b) {
+        return a + b;
+    }
+    METAL_FUNC result_type operator()(
+        thread const type& a,
+        thread const type& b
+    ) const {
+        return a + b;
+    }
+    METAL_FUNC result_type operator()(
+        threadgroup const type &a,
+        threadgroup const type &b
+    ) const {
+        return a + b;
+    }
+};
 
-impl_reduction_op(Sum, a + b, 0);
-impl_reduction_op(Mul, a * b, 1);
-impl_reduction_op(Min, a < b ? a : b, numeric_limits<T>::max());
-impl_reduction_op(Max, a > b ? a : b, numeric_limits<T>::lowest());
-#undef impl_reduction_op
 
-// These are used when loading elements from global memory into shared memory.
-// They let us use the same code for both indexed and non-indexed types.
-template<typename Op, typename T, typename U>
-METAL_FUNC T apply_operator(Op op, size_t _idx, T a, U b) {
-    return op(a, static_cast<T>(b));
+template<typename T, typename R = T>
+struct Mul {
+    typedef Scalar<T> type;
+    typedef Scalar<R> result_type;
+
+    static constexpr METAL_FUNC R init() {
+        return 1;
+    }
+    METAL_FUNC result_type operator()(type a, type b) {
+        return a * b;
+    }
+    METAL_FUNC result_type operator()(
+        thread const type& a,
+        thread const type& b
+    ) const {
+        return a * b;
+    }
+    METAL_FUNC result_type operator()(
+        threadgroup const type &a,
+        threadgroup const type &b
+    ) const {
+        return a * b;
+    }
+};
+
+template<typename T, typename R = T>
+struct Min {
+    typedef Scalar<T> type;
+    typedef Scalar<R> result_type;
+
+    static constexpr METAL_FUNC R init() {
+        return numeric_limits<R>::max();
+    }
+    METAL_FUNC result_type operator()(type a, type b) {
+        return a < b ? a : b;
+    }
+    METAL_FUNC result_type operator()(
+        thread const type& a,
+        thread const type& b
+    ) const {
+        return a < b ? a : b;
+    }
+    METAL_FUNC result_type operator()(
+        threadgroup const type &a,
+        threadgroup const type &b
+    ) const {
+        return a < b ? a : b;
+    }
+};
+
+template<typename T, typename R = T>
+struct Max {
+    typedef Scalar<T> type;
+    typedef Scalar<R> result_type;
+
+    static constexpr METAL_FUNC R init() {
+        return numeric_limits<R>::lowest();
+    }
+    METAL_FUNC result_type operator()(type a, type b) {
+        return a > b ? a : b;
+    }
+    METAL_FUNC result_type operator()(
+        thread const type& a,
+        thread const type& b
+    ) const {
+        return a > b ? a : b;
+    }
+    METAL_FUNC result_type operator()(
+        threadgroup const type &a,
+        threadgroup const type &b
+    ) const {
+        return a > b ? a : b;
+    }
+};
+
+
+// Helper methods for applying operators to both indexed and non-indexed types.
+//
+// The apply_operator function is used to apply an operator to two values.
+// It handles both indexed and non-indexed types by using the operator() method of the operator.
+// The operator() method is overloaded for both indexed and non-indexed types.
+// The operator() method for indexed types takes an index as an argument.
+// The operator() method for non-indexed types does not take an index as an argument.
+
+// Scalar values.
+template<typename Op, typename T, typename _E = typename metal::enable_if<is_scalar_v<T>>::type>
+METAL_FUNC T apply_operator(Op op, size_t _idx, T a, T b) {
+     return op(a, b);
 }
 
-template<typename Op, typename T, typename U>
-METAL_FUNC Indexed<T> apply_operator(Op op, size_t idx, Indexed<T> a, U b) {
-    return op(a, Indexed<T>(idx, b));
+// Convertible types.
+template<typename Op, typename T, typename U, typename _E = typename metal::enable_if_t<is_convertible_v<U, T>>>
+METAL_FUNC T apply_operator(Op op, size_t _idx, T a, U b) {
+     return op(a, static_cast<T>(b));
+}
+
+// indexed scalar and scalar.
+template<typename Op, typename T, typename _E = typename metal::enable_if<is_scalar_v<T>>::type>
+METAL_FUNC indexed<T> apply_operator(Op op, size_t idx, indexed<T> a, T b) {
+    return op(a, indexed<T>(idx, b));
+}
+
+// Indexed vector and vector.
+template<typename Op, typename T, uint N>
+METAL_FUNC indexed<vec<T, N>> apply_operator(Op op, size_t idx, indexed<vec<T, N>> a, vec<T, N> b) {
+    #pragma clang loop unroll(full)
+    for (ushort n = 0; n < N; n++) {
+        a[n] = op(a[n], indexed<Scalar<T>>(idx + n, b[n]));
+    }
+    return a;
+}
+
+// indexed vectors with same length and convertible types.
+template<typename Op, typename T, typename U, typename _E = typename metal::enable_if_t<is_same_len_v<T, U>>>
+METAL_FUNC indexed<T> apply_operator(Op op, size_t idx, indexed<T> a, indexed<U> b) {
+    indexed<T> result;
+    #pragma clang loop unroll(full)
+    for (ushort n = 0; n < vec_elements<T>::value; n++) {
+        result[n] = op(a[n], b[n]);
+    }
+    return result;
+}
+
+// Vectors with same length and convertible types.
+template<typename Op, typename T, typename U, uint N>
+METAL_FUNC vec<T, N> apply_operator(Op op, size_t _idx, vec<T, N> a, vec<U, N> b) {
+    vec<T, N> result;
+    #pragma clang loop unroll(full)
+    for (ushort n = 0; n < N; n++) {
+        result[n] = op(a[n], static_cast<T>(b[n]));
+    }
+    return result;
+}
+
+template<typename Op, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
+METAL_FUNC uint finalize(indexed<T> value) {
+    return value.i;
+}
+
+template<typename Op, typename T, uint N, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
+METAL_FUNC uint finalize(indexed<vec<T, N>> value) {
+    Op op;
+    indexed<T> result = value[0];
+
+    #pragma clang loop unroll(full)
+    for (ushort n = 1; n < N; n++) {
+        result = op(result, value[n]);
+    }
+    return result.i;
+}
+
+template<typename Op, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
+METAL_FUNC T finalize(T value) {
+    return value;
+}
+
+template<typename Op, typename T, typename _E = typename metal::enable_if_t<is_vector_v<T>>>
+METAL_FUNC Scalar<T> finalize(T value) {
+    Op op;
+    Scalar<T> result = value[0];
+
+    #pragma clang loop unroll(full)
+    for (ushort n = 1; n < vec_elements<T>::value; n++) {
+        result = op(result, value[n]);
+    }
+    return result;
 }
 
 // Load elements from global memory into shared memory.
@@ -156,21 +423,19 @@ METAL_FUNC R load_from_global(
 ) {
     ReductionOp op;
 
-    size_t stop_idx = offset + el_to_sum_per_block;
-    size_t idx = offset + tid;
-
-    while (idx < stop_idx) {
+    #pragma clang loop unroll(full)
+    for (uint i = offset + tid; i < offset + el_to_sum_per_block; i += BLOCKSIZE) {
         if (STRIDED) {
-            idx = get_strided_index(idx, num_dims, dims, strides);
+            value = apply_operator(op, offset + i, value, src[get_strided_index(i, num_dims, dims, strides)]);
+        } else {
+            value = apply_operator(op, offset + i, value, src[i]);
         }
-        value = apply_operator(op, idx, value, src[idx]);
-        idx += BLOCKSIZE;
     }
     return value;
 }
 
 
-// Convenience function for when we don't need to sum over multiple dimensions.
+// Convenience function for when we don't need to reduce over multiple dimensions.
 template<
     typename T,
     typename R,
@@ -202,34 +467,65 @@ METAL_FUNC R load_from_global(
     );
 }
 
-// Since we are using simd_shuffle_down with a BLOCKSIZE guard we don't need any barriers.
-template<typename ReductionOp, ushort BLOCKSIZE, typename T>
-METAL_FUNC T simdgroup_reduce(T value) {
+
+
+
+#if __METAL_VERSION__ >= 220
+
+// Specialization for int64_t since it does not support simd_shuffle_down.
+template<typename ReductionOp, ushort BLOCKSIZE, typename T, typename _E = typename enable_if<!__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simdgroup_reduce(
+    volatile threadgroup T shared[BLOCKSIZE],
+    const uint offset,
+    const ushort tid
+) {
     ReductionOp op;
-    if (BLOCKSIZE >= 32) value = op(value, simd_shuffle_down(value, 16));
-    if (BLOCKSIZE >= 16) value = op(value, simd_shuffle_down(value,  8));
-    if (BLOCKSIZE >=  8) value = op(value, simd_shuffle_down(value,  4));
-    if (BLOCKSIZE >=  4) value = op(value, simd_shuffle_down(value,  2));
-    if (BLOCKSIZE >=  2) value = op(value, simd_shuffle_down(value,  1));
+    T value = shared[tid];
+    uint idx = offset + tid;
+    if (BLOCKSIZE >= 32) value = apply_operator(op, idx + 16, shared[tid], shared[tid + 16]);
+    if (BLOCKSIZE >= 16) value = apply_operator(op, idx  + 8, shared[tid], shared[tid +  8]);
+    if (BLOCKSIZE >=  8) value = apply_operator(op, idx  + 4, shared[tid], shared[tid +  4]);
+    if (BLOCKSIZE >=  4) value = apply_operator(op, idx  + 2, shared[tid], shared[tid +  2]);
+    if (BLOCKSIZE >=  2) value = apply_operator(op, idx  + 1, shared[tid], shared[tid +  1]);
+    return value;
+}
+#endif
+
+// Since we are using simd_shuffle_down with a BLOCKSIZE guard we don't need any barriers.
+template<typename ReductionOp, ushort BLOCKSIZE, typename T, typename _E = typename enable_if<__is_valid_simdgroup_type<T>::value>::type>
+METAL_FUNC T simdgroup_reduce(
+    threadgroup T shared[BLOCKSIZE],
+    const uint offset,
+    const ushort tid
+) {
+    ReductionOp op;
+    T value = shared[tid];
+    uint idx = offset + tid;
+    if (BLOCKSIZE >= 32) value = apply_operator(op, idx + 16, value, simd_shuffle_down(value, 16));
+    if (BLOCKSIZE >= 16) value = apply_operator(op, idx +  8, value, simd_shuffle_down(value,  8));
+    if (BLOCKSIZE >=  8) value = apply_operator(op, idx +  4, value, simd_shuffle_down(value,  4));
+    if (BLOCKSIZE >=  4) value = apply_operator(op, idx +  2, value, simd_shuffle_down(value,  2));
+    if (BLOCKSIZE >=  2) value = apply_operator(op, idx +  1, value, simd_shuffle_down(value,  1));
     return value;
 }
 
 template<
+   typename T,
    typename ReductionOp,
-   ushort BLOCKSIZE,
-   typename T
+   ushort BLOCKSIZE
 >
 METAL_FUNC T threadgroup_reduce(
     threadgroup T shared[BLOCKSIZE],
-    ushort tid [[ thread_index_in_threadgroup ]]
+    const uint offset,
+    const ushort tid
 ) {
     ReductionOp op;
 
     // Fully unrolled reduction loop from BLOCKSIZE down to 64.
     #pragma clang loop unroll(full)
-    for (uint s = BLOCKSIZE / 2; s >= 64; s >>= 1) {
+    for (ushort s = BLOCKSIZE / 2; s >= 64; s >>= 1) {
         if (tid < s) {
-            shared[tid] = op(shared[tid], shared[tid + s]);
+            shared[tid] = apply_operator(op, offset + tid, shared[tid], shared[tid + s]);
         }
         threadgroup_barrier(mem_flags::mem_none);
     }
@@ -237,11 +533,11 @@ METAL_FUNC T threadgroup_reduce(
     if (tid < 32) {
         // Last shared memory reduce can be done without tid < s check.
         if (BLOCKSIZE >= 64) {
-            shared[tid] = op(shared[tid], shared[tid + 32]);
+            shared[tid] = apply_operator(op, offset + tid, shared[tid], shared[tid + 32]);
             simdgroup_barrier(mem_flags::mem_none);
         }
         // Remaining 32 threads can be reduced with simdgroup_reduce.
-        shared[tid] = simdgroup_reduce<ReductionOp, BLOCKSIZE>(shared[tid]);
+        shared[tid] = simdgroup_reduce<ReductionOp, BLOCKSIZE>(shared, offset, tid);
     }
 
     return shared[tid];
@@ -261,9 +557,9 @@ METAL_FUNC void reduce(
     constant size_t *strides,
     constant size_t &el_to_sum_per_block,
     device const T *src,
-    device R *dst,
+    device Scalar<R> *dst,
     constant size_t &num_elements,
-    threadgroup T shared[BLOCKSIZE],
+    threadgroup R shared[BLOCKSIZE],
     ushort tid [[ thread_index_in_threadgroup ]],
     ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
@@ -291,16 +587,21 @@ METAL_FUNC void reduce(
     threadgroup_barrier(mem_flags::mem_none);
 
     // Complete reduction
-    R value = threadgroup_reduce<ReductionOp, BLOCKSIZE>(shared, tid);
+    R value = threadgroup_reduce<R, ReductionOp, BLOCKSIZE>(shared, offset, tid);
 
-    if (tid == 0) dst[dst_id] = value;
+    if (tid == 0) dst[dst_id] = finalize<ReductionOp>(value);
 }
 
 
 #define reduce_case(OP, T, R, N)                        \
 case N: {                                               \
-    threadgroup R shared[N];                            \
-    reduce<T, R, OP<R>, N, STRIDED>(                    \
+    constexpr uint GRANULARITY = vec_elements<T>::value == 0 ? 1 : vec_elements<T>::value; \
+    if (N / GRANULARITY == 0) {                         \
+        break;                                          \
+    }                                                   \
+    constexpr uint B = N / GRANULARITY == 0 ? 1 : N / GRANULARITY;                 \
+    threadgroup R shared[B];                            \
+    reduce<T, R, OP<R>, B, STRIDED>(                    \
         num_dims,                                       \
         dims,                                           \
         strides,                                        \
@@ -314,12 +615,15 @@ case N: {                                               \
     break;                                              \
 }
 
-#define impl_reduce(OP, NAME, T)                        \
+
+#define ARG(...) __VA_ARGS__
+
+#define impl_reduce_inner(OP, NAME, T)                  \
 kernel void NAME(                                       \
     constant size_t &num_dims,                          \
     constant size_t &el_to_sum_per_block,               \
     device const T *src,                                \
-    device T *dst,                                      \
+    device Scalar<T> *dst,                              \
     constant size_t &num_elements,                      \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
@@ -329,27 +633,28 @@ kernel void NAME(                                       \
     constant size_t *strides = {};                      \
     const bool STRIDED = false;                         \
     switch (block_dim) {                                \
-        reduce_case(OP, T, T, 2048);                    \
-        reduce_case(OP, T, T, 1024);                    \
-        reduce_case(OP, T, T, 512);                     \
-        reduce_case(OP, T, T, 256);                     \
-        reduce_case(OP, T, T, 128);                     \
-        reduce_case(OP, T, T, 64);                      \
-        reduce_case(OP, T, T, 32);                      \
-        reduce_case(OP, T, T, 16);                      \
-        reduce_case(OP, T, T, 8);                       \
-        reduce_case(OP, T, T, 4);                       \
-        reduce_case(OP, T, T, 2);                       \
-        reduce_case(OP, T, T, 1);                       \
+        reduce_case(OP, ARG(T), ARG(T), 1024);          \
+        reduce_case(OP, ARG(T), ARG(T),  512);          \
+        reduce_case(OP, ARG(T), ARG(T),  256);          \
+        reduce_case(OP, ARG(T), ARG(T),  128);          \
+        reduce_case(OP, ARG(T), ARG(T),   64);          \
+        reduce_case(OP, ARG(T), ARG(T),   32);          \
+        reduce_case(OP, ARG(T), ARG(T),   16);          \
+        reduce_case(OP, ARG(T), ARG(T),    8);          \
+        reduce_case(OP, ARG(T), ARG(T),    4);          \
+        reduce_case(OP, ARG(T), ARG(T),    2);          \
+        reduce_case(OP, ARG(T), ARG(T),    1);          \
     }                                                   \
-}                                                       \
-kernel void NAME##_strided(                             \
+}
+
+#define impl_reduce_strided(OP, NAME, T, NAME_SUFFIX)   \
+kernel void NAME##_strided##NAME_SUFFIX(                \
     constant size_t &num_dims,                          \
     constant size_t *dims,                              \
     constant size_t *strides,                           \
     constant size_t &el_to_sum_per_block,               \
     device const T *src,                                \
-    device T *dst,                                      \
+    device Scalar<T> *dst,                              \
     constant size_t &num_elements,                      \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
@@ -357,20 +662,27 @@ kernel void NAME##_strided(                             \
 ) {                                                     \
     const bool STRIDED = true;                          \
     switch (block_dim) {                                \
-        reduce_case(OP, T, T, 2048);                    \
-        reduce_case(OP, T, T, 1024);                    \
-        reduce_case(OP, T, T, 512);                     \
-        reduce_case(OP, T, T, 256);                     \
-        reduce_case(OP, T, T, 128);                     \
-        reduce_case(OP, T, T, 64);                      \
-        reduce_case(OP, T, T, 32);                      \
-        reduce_case(OP, T, T, 16);                      \
-        reduce_case(OP, T, T, 8);                       \
-        reduce_case(OP, T, T, 4);                       \
-        reduce_case(OP, T, T, 2);                       \
-        reduce_case(OP, T, T, 1);                       \
+        reduce_case(OP, ARG(T), ARG(T), 1024);          \
+        reduce_case(OP, ARG(T), ARG(T),  512);          \
+        reduce_case(OP, ARG(T), ARG(T),  256);          \
+        reduce_case(OP, ARG(T), ARG(T),  128);          \
+        reduce_case(OP, ARG(T), ARG(T),   64);          \
+        reduce_case(OP, ARG(T), ARG(T),   32);          \
+        reduce_case(OP, ARG(T), ARG(T),   16);          \
+        reduce_case(OP, ARG(T), ARG(T),    8);          \
+        reduce_case(OP, ARG(T), ARG(T),    4);          \
+        reduce_case(OP, ARG(T), ARG(T),    2);          \
+        reduce_case(OP, ARG(T), ARG(T),    1);          \
     }                                                   \
 }
+
+#define impl_reduce(OP, NAME, T)                    \
+impl_reduce_inner(OP, NAME, T)                      \
+impl_reduce_inner(OP, NAME##x##2, ARG(vec<T, 2>))   \
+impl_reduce_inner(OP, NAME##x##4, ARG(vec<T, 4>))   \
+impl_reduce_strided(OP, NAME, T, )                  \
+impl_reduce_strided(OP, NAME, ARG(vec<T, 2>), x##2) \
+impl_reduce_strided(OP, NAME, ARG(vec<T, 4>), x##4)
 
 template<
     typename T,
@@ -386,7 +698,7 @@ METAL_FUNC void reduce(
     device const T *src,
     device uint *dst,
     constant size_t &num_elements,
-    threadgroup Indexed<T> shared[BLOCKSIZE],
+    threadgroup indexed<T> shared[BLOCKSIZE],
     ushort tid [[ thread_index_in_threadgroup ]],
     ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
@@ -395,9 +707,9 @@ METAL_FUNC void reduce(
 
     // Calcluate offset for the threadgroup of current thread
     ushort offset = dst_id * el_to_sum_per_block;
-    Indexed<T> initial = ReductionOp::init();
+    indexed<T> initial = ReductionOp::init();
     // Load with reduction from global memory into shared memory
-    shared[tid] = load_from_global<T, Indexed<T>, ReductionOp, BLOCKSIZE, STRIDED>(
+    shared[tid] = load_from_global<T, indexed<T>, ReductionOp, BLOCKSIZE, STRIDED>(
         initial,
         num_elements,
         num_dims,
@@ -414,16 +726,21 @@ METAL_FUNC void reduce(
     threadgroup_barrier(mem_flags::mem_none);
 
     // Complete reduction
-    Indexed<T> value = threadgroup_reduce<ReductionOp, BLOCKSIZE, Indexed<T>>(shared, tid);
+    indexed<T> value = threadgroup_reduce<indexed<T>, ReductionOp, BLOCKSIZE>(shared, offset, tid);
 
     // Return index of reduce result
-    if (tid == 0) dst[dst_id] = value.i;
+    if (tid == 0) dst[dst_id] = finalize<ReductionOp>(value);
 }
 
-#define arg_reduce_case(OP, T, N)                       \
+#define arg_reduce_case(OP, N, T)                       \
 case N: {                                               \
-    threadgroup Indexed<T> shared[N];                   \
-    reduce<T, OP<Indexed<T>>, N, STRIDED>(              \
+    constexpr uint GRANULARITY = vec_elements<T>::value == 0 ? 1 : vec_elements<T>::value; \
+    if (N / GRANULARITY == 0) {                         \
+        break;                                          \
+    }                                                   \
+    constexpr uint B = N / GRANULARITY == 0 ? 1 : N / GRANULARITY;                 \
+    threadgroup indexed<T> shared[B];              \
+    reduce<T, OP<indexed<T>>, B, STRIDED>(              \
         num_dims,                                       \
         dims,                                           \
         strides,                                        \
@@ -437,8 +754,8 @@ case N: {                                               \
     break;                                              \
 }
 
-#define impl_arg_reduce(OP, NAME, T)                    \
-kernel void NAME(                                       \
+#define impl_arg_reduce_inner(OP, NAME, T, NAME_SUFFIX) \
+kernel void NAME##NAME_SUFFIX(                          \
     constant size_t &num_dims,                          \
     constant size_t &el_to_sum_per_block,               \
     device const T *src,                                \
@@ -452,21 +769,20 @@ kernel void NAME(                                       \
     constant size_t *strides = {};                      \
     const bool STRIDED = false;                         \
     switch (block_dim) {                                \
-        arg_reduce_case(OP, T, 2048);                   \
-        arg_reduce_case(OP, T, 1024);                   \
-        arg_reduce_case(OP, T, 512);                    \
-        arg_reduce_case(OP, T, 256);                    \
-        arg_reduce_case(OP, T, 128);                    \
-        arg_reduce_case(OP, T, 64);                     \
-        arg_reduce_case(OP, T, 32);                     \
-        arg_reduce_case(OP, T, 16);                     \
-        arg_reduce_case(OP, T, 8);                      \
-        arg_reduce_case(OP, T, 4);                      \
-        arg_reduce_case(OP, T, 2);                      \
-        arg_reduce_case(OP, T, 1);                      \
+        arg_reduce_case(OP, 1024, ARG(T));              \
+        arg_reduce_case(OP,  512, ARG(T));              \
+        arg_reduce_case(OP,  256, ARG(T));              \
+        arg_reduce_case(OP,  128, ARG(T));              \
+        arg_reduce_case(OP,   64, ARG(T));              \
+        arg_reduce_case(OP,   32, ARG(T));              \
+        arg_reduce_case(OP,   16, ARG(T));              \
+        arg_reduce_case(OP,    8, ARG(T));              \
+        arg_reduce_case(OP,    4, ARG(T));              \
+        arg_reduce_case(OP,    2, ARG(T));              \
+        arg_reduce_case(OP,    1, ARG(T));              \
     }                                                   \
 }                                                       \
-kernel void NAME##_strided(                             \
+kernel void NAME##NAME_SUFFIX##_strided(                \
     constant size_t &num_dims,                          \
     constant size_t *dims,                              \
     constant size_t *strides,                           \
@@ -480,19 +796,120 @@ kernel void NAME##_strided(                             \
 ) {                                                     \
     const bool STRIDED = true;                          \
     switch (block_dim) {                                \
-        arg_reduce_case(OP, T, 2048);                   \
-        arg_reduce_case(OP, T, 1024);                   \
-        arg_reduce_case(OP, T, 512);                    \
-        arg_reduce_case(OP, T, 256);                    \
-        arg_reduce_case(OP, T, 128);                    \
-        arg_reduce_case(OP, T, 64);                     \
-        arg_reduce_case(OP, T, 32);                     \
-        arg_reduce_case(OP, T, 16);                     \
-        arg_reduce_case(OP, T, 8);                      \
-        arg_reduce_case(OP, T, 4);                      \
-        arg_reduce_case(OP, T, 2);                      \
-        arg_reduce_case(OP, T, 1);                      \
+        arg_reduce_case(OP, 1024, ARG(T));              \
+        arg_reduce_case(OP,  512, ARG(T));              \
+        arg_reduce_case(OP,  256, ARG(T));              \
+        arg_reduce_case(OP,  128, ARG(T));              \
+        arg_reduce_case(OP,   64, ARG(T));              \
+        arg_reduce_case(OP,   32, ARG(T));              \
+        arg_reduce_case(OP,   16, ARG(T));              \
+        arg_reduce_case(OP,    8, ARG(T));              \
+        arg_reduce_case(OP,    4, ARG(T));              \
+        arg_reduce_case(OP,    2, ARG(T));              \
+        arg_reduce_case(OP,    1, ARG(T));              \
     }                                                   \
+}
+
+
+#define impl_arg_reduce(OP, NAME, T)                    \
+impl_arg_reduce_inner(OP, NAME, T, )                    \
+impl_arg_reduce_inner(OP, NAME, ARG(vec<T, 2>), x##2)   \
+impl_arg_reduce_inner(OP, NAME, ARG(vec<T, 4>), x##4)
+
+/*
+template<
+    typename T,
+    typename ACC = float4,
+    ushort BLOCKSIZE,
+    typename _E = typename metal::enable_if_t<is_vector_v<T> && is_vector_v<ACC>>
+>
+METAL_FUNC void _softmax_partial(
+    constant size_t &src_numel,
+    constant size_t &el_to_sum_per_block,
+    const device T *src,
+    const size_t offset,
+    device Scalar<T> *dst,
+    threadgroup ACC shared[BLOCKSIZE],
+    const Scalar<ACC> max_result,
+
+    const ushort tid,
+    const ushort dst_id
+) {
+    const size_t N = vec_elements<T>::value;
+
+    #pragma clang loop unroll(full)
+    for (uint n = 0; n < N; n++) {
+        dst[idx + n] = static_cast<Scalar<T>>(val[n]);
+    }
+}
+*/
+
+
+template<
+    typename T,
+    typename ACC = float4,
+    ushort BLOCKSIZE,
+    typename _E = typename metal::enable_if_t<is_vector_v<T> && is_vector_v<ACC>>
+>
+METAL_FUNC void _softmax_exp(
+    constant size_t &src_numel,
+    constant size_t &el_to_sum_per_block,
+    const device T *src,
+    const size_t offset,
+    device Scalar<T> *dst,
+    threadgroup ACC shared[BLOCKSIZE],
+    const Scalar<ACC> max_result,
+
+    const ushort tid,
+    const ushort dst_id
+) {
+    // Calculate softmax values
+    size_t stop_idx = min(offset + el_to_sum_per_block, src_numel);
+    size_t idx = offset + tid;
+
+    while (idx < stop_idx) {
+        const ACC val = exp(ACC(src[idx]) - max_result);
+
+        #pragma clang loop unroll(full)
+        for (ushort n = 0; n < vec_elements<T>::value; n++) {
+            dst[idx + n] = static_cast<Scalar<T>>(val[n]);
+        }
+
+        shared[tid] += val;
+        idx += BLOCKSIZE + vec_elements<T>::value;
+    }
+    threadgroup_barrier(mem_flags::mem_none);
+}
+
+template<
+    typename T,
+    typename ACC = float,
+    ushort BLOCKSIZE,
+    typename _E = typename metal::enable_if<is_scalar_v<T> && is_scalar_v<ACC>>::type
+>
+METAL_FUNC void _softmax_exp(
+    constant size_t &src_numel,
+    constant size_t &el_to_sum_per_block,
+    const device T *src,
+    const size_t offset,
+    device T *dst,
+    threadgroup ACC shared[BLOCKSIZE],
+    const ACC max_result,
+
+    const ushort tid,
+    const ushort dst_id
+) {
+    // Calculate softmax values
+    size_t stop_idx = min(offset + el_to_sum_per_block, src_numel);
+    size_t idx = offset + tid;
+
+    while (idx < stop_idx) {
+        const ACC val = exp(ACC(src[idx]) - max_result);
+        dst[idx] = static_cast<T>(val);
+        shared[tid] += val;
+        idx += BLOCKSIZE;
+    }
+    threadgroup_barrier(mem_flags::mem_none);
 }
 
 template<
@@ -504,18 +921,18 @@ METAL_FUNC void softmax(
     constant size_t &src_numel,
     constant size_t &el_to_sum_per_block,
     const device T *src,
-    device T *dst,
+    device Scalar<T> *dst,
     threadgroup ACC shared[BLOCKSIZE],
 
     ushort tid [[ thread_index_in_threadgroup ]],
     ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
     // Initialize shared memory for current thread to lowest value
-    shared[tid] = numeric_limits<ACC>::lowest();
+    shared[tid] = Max<ACC>::init();
 
     // Calcluate offset for the threadgroup of current thread
     size_t offset = dst_id * el_to_sum_per_block;
-    ACC initial = numeric_limits<ACC>::lowest();
+    ACC initial = Max<ACC>::init();
     // Load with reduction from global memory into shared memory
     shared[tid] = load_from_global<T, ACC, Max<ACC>, BLOCKSIZE>(
         initial,
@@ -531,29 +948,24 @@ METAL_FUNC void softmax(
     threadgroup_barrier(mem_flags::mem_none);
 
     // Reduce shared memory to find max value
-    threadgroup_reduce<Max<ACC>, BLOCKSIZE>(shared, tid);
-    ACC max_result = shared[0];
+    threadgroup_reduce<ACC, Max<ACC>, BLOCKSIZE>(shared, offset, tid);
+    Scalar<ACC> max_result = finalize<Max<ACC>>(shared[0]);
 
     // Ensure all threads have max_result = shared[0] before we set shared[0] = 0.
     threadgroup_barrier(mem_flags::mem_none);
-    shared[tid] = 0;
+    shared[tid] = ACC(0);
 
     // Calculate softmax values
-    size_t stop_idx = min(offset + el_to_sum_per_block, src_numel);
+    const size_t stop_idx = min(offset + el_to_sum_per_block, src_numel);
+    _softmax_exp<T, ACC, BLOCKSIZE>(src_numel, el_to_sum_per_block, src, offset, dst, shared, max_result, tid, dst_id);
+
+    threadgroup_reduce<ACC, Sum<ACC>, BLOCKSIZE>(shared, offset, tid);
+    threadgroup_barrier(mem_flags::mem_none);
+
+    Scalar<ACC> acc = finalize<Sum<ACC>>(shared[0]);
+
+    const Scalar<T> inv_acc = static_cast<Scalar<T>>(1.0/acc);
     size_t idx = offset + tid;
-    while (idx < stop_idx) {
-        const ACC val = exp(ACC(src[idx]) - max_result);
-        dst[idx] = T(val);
-        shared[tid] += val;
-        idx += BLOCKSIZE;
-    }
-    threadgroup_barrier(mem_flags::mem_none);
-
-    threadgroup_reduce<Sum<ACC>, BLOCKSIZE>(shared, tid);
-    threadgroup_barrier(mem_flags::mem_none);
-
-    const T inv_acc = T(1.0/shared[0]);
-    idx = offset + tid;
     while (idx < stop_idx) {
         dst[idx] *= inv_acc;
         idx += BLOCKSIZE;
@@ -562,8 +974,13 @@ METAL_FUNC void softmax(
 
 #define softmax_case(T, ACC, N)                         \
 case N: {                                               \
-    threadgroup ACC shared[N];                          \
-    softmax<T, ACC, N>(                                 \
+    constexpr uint GRANULARITY = vec_elements<ACC>::value == 0 ? 1 : vec_elements<ACC>::value; \
+    if (N / GRANULARITY == 0) {                         \
+        break;                                          \
+    }                                                   \
+    constexpr uint B = N / GRANULARITY == 0 ? 1 : N / GRANULARITY;                 \
+    threadgroup ACC shared[B];                          \
+    softmax<T, ACC, B>(                                 \
         src_numel,                                      \
         el_to_sum_per_block,                            \
         src,                                            \
@@ -574,32 +991,36 @@ case N: {                                               \
     break;                                              \
 }
 
-#define impl_softmax(NAME, T, ACC)                      \
+#define impl_softmax_inner(NAME, T, ACC)                \
 kernel void NAME(                                       \
     constant size_t &src_numel,                         \
     constant size_t &el_to_sum_per_block,               \
     device const T *src,                                \
-    device T *dst,                                      \
+    device Scalar<T> *dst,                              \
                                                         \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
     ushort block_dim [[ threads_per_threadgroup ]]      \
 ) {                                                     \
     switch (block_dim) {                                \
-        softmax_case(T, ACC, 2048);                     \
         softmax_case(T, ACC, 1024);                     \
-        softmax_case(T, ACC, 512);                      \
-        softmax_case(T, ACC, 256);                      \
-        softmax_case(T, ACC, 128);                      \
-        softmax_case(T, ACC, 64);                       \
-        softmax_case(T, ACC, 32);                       \
-        softmax_case(T, ACC, 16);                       \
-        softmax_case(T, ACC, 8);                        \
-        softmax_case(T, ACC, 4);                        \
-        softmax_case(T, ACC, 2);                        \
-        softmax_case(T, ACC, 1);                        \
+        softmax_case(T, ACC,  512);                     \
+        softmax_case(T, ACC,  256);                     \
+        softmax_case(T, ACC,  128);                     \
+        softmax_case(T, ACC,   64);                     \
+        softmax_case(T, ACC,   32);                     \
+        softmax_case(T, ACC,   16);                     \
+        softmax_case(T, ACC,    8);                     \
+        softmax_case(T, ACC,    4);                     \
+        softmax_case(T, ACC,    2);                     \
+        softmax_case(T, ACC,    1);                     \
     }                                                   \
 }
+
+#define impl_softmax(NAME, T, ACC)                      \
+impl_softmax_inner(NAME, T, ACC)                        \
+impl_softmax_inner(NAME##x2, T##2, ACC##2)              \
+impl_softmax_inner(NAME##x4, T##4, ACC##4)
 
 impl_reduce(Sum, fast_sum_f32, float)
 impl_reduce(Sum, fast_sum_u32, uint)
