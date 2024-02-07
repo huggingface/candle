@@ -92,7 +92,7 @@ public:
         return *this;
     }
 
-    // To align with above implementation.
+    // To align with below implementation.
     constexpr auto operator[](uint n) {
         assert(n == 0);
         return *this;
@@ -347,23 +347,21 @@ METAL_FUNC indexed<vec<T, N>> apply_operator(Op op, size_t idx, indexed<vec<T, N
 // indexed vectors with same length and convertible types.
 template<typename Op, typename T, typename U, typename _E = typename metal::enable_if_t<is_same_len_v<T, U>>>
 METAL_FUNC indexed<T> apply_operator(Op op, size_t idx, indexed<T> a, indexed<U> b) {
-    indexed<T> result;
     #pragma clang loop unroll(full)
     for (ushort n = 0; n < vec_elements<T>::value; n++) {
-        result[n] = op(a[n], b[n]);
+        a[n] = op(a[n], b[n]);
     }
-    return result;
+    return a;
 }
 
 // Vectors with same length and convertible types.
 template<typename Op, typename T, typename U, uint N>
 METAL_FUNC vec<T, N> apply_operator(Op op, size_t _idx, vec<T, N> a, vec<U, N> b) {
-    vec<T, N> result;
     #pragma clang loop unroll(full)
     for (ushort n = 0; n < N; n++) {
-        result[n] = op(a[n], static_cast<T>(b[n]));
+        a[n] = op(a[n], static_cast<T>(b[n]));
     }
-    return result;
+    return a;
 }
 
 template<typename Op, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
@@ -392,7 +390,6 @@ template<typename Op, typename T, typename _E = typename metal::enable_if_t<is_v
 METAL_FUNC Scalar<T> finalize(T value) {
     Op op;
     Scalar<T> result = value[0];
-
     #pragma clang loop unroll(full)
     for (ushort n = 1; n < vec_elements<T>::value; n++) {
         result = op(result, value[n]);
@@ -426,9 +423,9 @@ METAL_FUNC R load_from_global(
     #pragma clang loop unroll(full)
     for (uint i = offset + tid; i < offset + el_to_sum_per_block; i += BLOCKSIZE) {
         if (STRIDED) {
-            value = apply_operator(op, offset + i, value, src[get_strided_index(i, num_dims, dims, strides)]);
+            value = apply_operator(op, i, value, src[get_strided_index(i, num_dims, dims, strides)]);
         } else {
-            value = apply_operator(op, offset + i, value, src[i]);
+            value = apply_operator(op, i, value, src[i]);
         }
     }
     return value;
@@ -466,9 +463,6 @@ METAL_FUNC R load_from_global(
         tid
     );
 }
-
-
-
 
 #if __METAL_VERSION__ >= 220
 
@@ -1022,57 +1016,57 @@ impl_softmax_inner(NAME, T, ACC)                        \
 impl_softmax_inner(NAME##x2, T##2, ACC##2)              \
 impl_softmax_inner(NAME##x4, T##4, ACC##4)
 
-impl_reduce(Sum, fast_sum_f32, float)
-impl_reduce(Sum, fast_sum_u32, uint)
-impl_reduce(Sum, fast_sum_f16, half)
-impl_reduce(Sum, fast_sum_u8, uint8_t)
-
-impl_reduce(Mul, fast_mul_f32, float)
-impl_reduce(Mul, fast_mul_u32, uint)
-impl_reduce(Mul, fast_mul_f16, half)
-impl_reduce(Mul, fast_mul_u8, uint8_t)
-
-impl_reduce(Max, fast_max_f32, float)
-impl_reduce(Max, fast_max_u32, uint)
-impl_reduce(Max, fast_max_f16, half)
-impl_reduce(Max, fast_max_u8, uint8_t)
-
-impl_reduce(Min, fast_min_f32, float)
-impl_reduce(Min, fast_min_u32, uint)
-impl_reduce(Min, fast_min_f16, half)
-impl_reduce(Min, fast_min_u8, uint8_t)
-
-impl_arg_reduce(Min, fast_argmin_f32, float)
-impl_arg_reduce(Min, fast_argmin_f16, half)
-impl_arg_reduce(Min, fast_argmin_u32, uint)
-impl_arg_reduce(Min, fast_argmin_u8, uint8_t)
-
+//impl_reduce(Sum, fast_sum_f32, float)
+//impl_reduce(Sum, fast_sum_u32, uint)
+//impl_reduce(Sum, fast_sum_f16, half)
+//impl_reduce(Sum, fast_sum_u8, uint8_t)
+//
+//impl_reduce(Mul, fast_mul_f32, float)
+//impl_reduce(Mul, fast_mul_u32, uint)
+//impl_reduce(Mul, fast_mul_f16, half)
+//impl_reduce(Mul, fast_mul_u8, uint8_t)
+//
+//impl_reduce(Max, fast_max_f32, float)
+//impl_reduce(Max, fast_max_u32, uint)
+//impl_reduce(Max, fast_max_f16, half)
+//impl_reduce(Max, fast_max_u8, uint8_t)
+//
+//impl_reduce(Min, fast_min_f32, float)
+//impl_reduce(Min, fast_min_u32, uint)
+//impl_reduce(Min, fast_min_f16, half)
+//impl_reduce(Min, fast_min_u8, uint8_t)
+//
+//impl_arg_reduce(Min, fast_argmin_f32, float)
+//impl_arg_reduce(Min, fast_argmin_f16, half)
+//impl_arg_reduce(Min, fast_argmin_u32, uint)
+//impl_arg_reduce(Min, fast_argmin_u8, uint8_t)
+//
 impl_arg_reduce(Max, fast_argmax_f32, float)
-impl_arg_reduce(Max, fast_argmax_f16, half)
-impl_arg_reduce(Max, fast_argmax_u32, uint)
-impl_arg_reduce(Max, fast_argmax_u8, uint8_t)
-
-impl_softmax(softmax_f32, float, float)
-impl_softmax(softmax_f16, half, float)
-
-#if __METAL_VERSION__ >= 220
-impl_reduce(Sum, fast_sum_i64, int64_t)
-impl_reduce(Mul, fast_mul_i64, int64_t)
-impl_reduce(Min, fast_min_i64, int64_t)
-impl_reduce(Max, fast_max_i64, int64_t)
-
-impl_arg_reduce(Min, fast_argmin_i64, int64_t)
-impl_arg_reduce(Max, fast_argmax_i64, int64_t)
-#endif
-
-#if defined(__HAVE_BFLOAT__)
-impl_reduce(Sum, fast_sum_bf16, bfloat)
-impl_reduce(Mul, fast_mul_bf16, bfloat)
-impl_reduce(Max, fast_max_bf16, bfloat)
-impl_reduce(Min, fast_min_bf16, bfloat)
-
-impl_arg_reduce(Min, fast_argmin_bf16, bfloat)
-impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
-
-impl_softmax(softmax_bf16, bfloat, float)
-#endif
+//impl_arg_reduce(Max, fast_argmax_f16, half)
+//impl_arg_reduce(Max, fast_argmax_u32, uint)
+//impl_arg_reduce(Max, fast_argmax_u8, uint8_t)
+//
+//impl_softmax(softmax_f32, float, float)
+//impl_softmax(softmax_f16, half, float)
+//
+//#if __METAL_VERSION__ >= 220
+//impl_reduce(Sum, fast_sum_i64, int64_t)
+//impl_reduce(Mul, fast_mul_i64, int64_t)
+//impl_reduce(Min, fast_min_i64, int64_t)
+//impl_reduce(Max, fast_max_i64, int64_t)
+//
+//impl_arg_reduce(Min, fast_argmin_i64, int64_t)
+//impl_arg_reduce(Max, fast_argmax_i64, int64_t)
+//#endif
+//
+//#if defined(__HAVE_BFLOAT__)
+//impl_reduce(Sum, fast_sum_bf16, bfloat)
+//impl_reduce(Mul, fast_mul_bf16, bfloat)
+//impl_reduce(Max, fast_max_bf16, bfloat)
+//impl_reduce(Min, fast_min_bf16, bfloat)
+//
+//impl_arg_reduce(Min, fast_argmin_bf16, bfloat)
+//impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
+//
+//impl_softmax(softmax_bf16, bfloat, float)
+//#endif
