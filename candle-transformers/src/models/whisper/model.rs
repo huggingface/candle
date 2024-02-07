@@ -195,14 +195,14 @@ impl ResidualAttentionBlock {
     }
 }
 
-fn sinusoids(length: usize, channels: usize) -> Result<Tensor> {
+fn sinusoids(length: usize, channels: usize, device: &Device) -> Result<Tensor> {
     let max_timescale = 10000f32;
     let log_timescale_increment = max_timescale.ln() / (channels / 2 - 1) as f32;
     let inv_timescales: Vec<_> = (0..channels / 2)
         .map(|i| (i as f32 * (-log_timescale_increment)).exp())
         .collect();
-    let inv_timescales = Tensor::new(inv_timescales.as_slice(), &Device::Cpu)?.unsqueeze(0)?;
-    let arange = Tensor::arange(0, length as u32, &Device::Cpu)?
+    let inv_timescales = Tensor::new(inv_timescales.as_slice(), device)?.unsqueeze(0)?;
+    let arange = Tensor::arange(0, length as u32, device)?
         .to_dtype(candle::DType::F32)?
         .unsqueeze(1)?;
     let sh = (length, channels / 2);
@@ -246,7 +246,7 @@ impl AudioEncoder {
         };
         let conv1 = conv1d(cfg.num_mel_bins, n_state, 3, cfg1, vb.pp("conv1"))?;
         let conv2 = conv1d(n_state, n_state, 3, cfg2, vb.pp("conv2"))?;
-        let positional_embedding = sinusoids(n_ctx, n_state)?.to_device(vb.device())?;
+        let positional_embedding = sinusoids(n_ctx, n_state, vb.device())?;
         let blocks = (0..cfg.encoder_layers)
             .map(|i| {
                 ResidualAttentionBlock::load(n_state, n_head, false, vb.pp(&format!("layers.{i}")))

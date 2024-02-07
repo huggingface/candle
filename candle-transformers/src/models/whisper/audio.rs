@@ -1,7 +1,18 @@
 // Audio processing code, adapted from whisper.cpp
 // https://github.com/ggerganov/whisper.cpp
 
-pub trait Float: num_traits::Float + num_traits::FloatConst + num_traits::NumAssign {}
+use candle::utils::get_num_threads;
+use std::sync::Arc;
+use std::thread;
+
+pub trait Float:
+    num_traits::Float
+    + num_traits::FloatConst
+    + num_traits::NumAssign
+    + std::marker::Send
+    + std::marker::Sync
+{
+}
 
 impl Float for f32 {}
 impl Float for f64 {}
@@ -99,45 +110,50 @@ fn log_mel_spectrogram_w<T: Float>(
     };
 
     let zero = T::zero();
-    let half = T::from(0.5).unwrap();
     let mut fft_in = vec![zero; fft_size];
     let mut mel = vec![zero; n_len * n_mel];
+    let n_samples = samples.len();
+    let end = std::cmp::min(n_samples / fft_step + 1, n_len);
 
-    for i in (ith..n_len).step_by(n_threads) {
+    for i in (ith..end).step_by(n_threads) {
         let offset = i * fft_step;
 
         // apply Hanning window
-        for j in 0..fft_size {
-            fft_in[j] = if offset + j < samples.len() {
-                hann[j] * samples[offset + j]
-            } else {
-                zero
+        for j in 0..std::cmp::min(fft_size, n_samples - offset) {
+            fft_in[j] = hann[j] * samples[offset + j];
+        }
+
+        // fill the rest with zeros
+        if n_samples - offset < fft_size {
+            for j in n_samples - offset..fft_size {
+                fft_in[j] = zero;
             }
         }
 
-        // FFT -> mag^2
+        // FFT
         let mut fft_out: Vec<T> = fft(&fft_in);
 
+        // Calculate modulus^2 of complex numbers
         for j in 0..fft_size {
             fft_out[j] = fft_out[2 * j] * fft_out[2 * j] + fft_out[2 * j + 1] * fft_out[2 * j + 1];
-        }
-        for j in 1..fft_size / 2 {
-            let v = fft_out[fft_size - j];
-            fft_out[j] += v;
-        }
-
-        if speed_up {
-            // scale down in the frequency domain results in a speed up in the time domain
-            for j in 0..n_fft {
-                fft_out[j] = half * (fft_out[2 * j] + fft_out[2 * j + 1]);
-            }
         }
 
         // mel spectrogram
         for j in 0..n_mel {
             let mut sum = zero;
-            for k in 0..n_fft {
+            let mut k = 0;
+            // Unroll loop
+            while k < n_fft.saturating_sub(3) {
+                sum += fft_out[k] * filters[j * n_fft + k]
+                    + fft_out[k + 1] * filters[j * n_fft + k + 1]
+                    + fft_out[k + 2] * filters[j * n_fft + k + 2]
+                    + fft_out[k + 3] * filters[j * n_fft + k + 3];
+                k += 4;
+            }
+            // Handle remainder
+            while k < n_fft {
                 sum += fft_out[k] * filters[j * n_fft + k];
+                k += 1;
             }
             mel[j * n_len + i] = T::max(sum, T::from(1e-10).unwrap()).log10();
         }
@@ -152,7 +168,10 @@ fn log_mel_spectrogram_<T: Float + std::fmt::Display>(
     fft_step: usize,
     n_mel: usize,
     speed_up: bool,
-) -> Vec<T> {
+) -> Vec<T>
+where
+    T: Float + std::fmt::Display + Send + Sync + 'static,
+{
     let zero = T::zero();
     let two_pi = T::PI() + T::PI();
     let half = T::from(0.5).unwrap();
@@ -180,10 +199,55 @@ fn log_mel_spectrogram_<T: Float + std::fmt::Display>(
         samples_padded
     };
 
-    // Use a single thread for now.
-    let mut mel = log_mel_spectrogram_w(
-        0, &hann, &samples, filters, fft_size, fft_step, speed_up, n_len, n_mel, 1,
-    );
+    // ensure that the number of threads is even and less than 12
+    let n_threads = std::cmp::min(get_num_threads() - get_num_threads() % 2, 12);
+
+    let hann = Arc::new(hann);
+    let samples = Arc::new(samples);
+    let cloned_contents_of_filters = filters.to_vec();
+    let filters = Arc::new(cloned_contents_of_filters);
+
+    let mut handles = Vec::new();
+    for thread_id in 0..n_threads {
+        let hann_clone = hann.clone();
+        let samples_clone = samples.clone();
+        let filters_clone = filters.clone();
+
+        handles.push(thread::spawn(move || {
+            log_mel_spectrogram_w(
+                thread_id,
+                &hann_clone,
+                &samples_clone,
+                &filters_clone,
+                fft_size,
+                fft_step,
+                speed_up,
+                n_len,
+                n_mel,
+                n_threads,
+            )
+        }));
+    }
+
+    let mut all_outputs = Vec::new();
+    for handle in handles {
+        match handle.join() {
+            Ok(output) => all_outputs.push(output),
+            Err(_) => panic!("Thread failed"),
+        }
+    }
+
+    let l = all_outputs[0].len();
+    let mut mel = vec![zero; l];
+
+    for i in (0..l).step_by(n_threads) {
+        for ouputs in all_outputs.iter() {
+            for j in 0..n_threads {
+                mel[i + j] += ouputs[i + j];
+            }
+        }
+    }
+
     let mmax = mel
         .iter()
         .max_by(|&u, &v| u.partial_cmp(v).unwrap_or(std::cmp::Ordering::Greater))
@@ -197,7 +261,7 @@ fn log_mel_spectrogram_<T: Float + std::fmt::Display>(
     mel
 }
 
-pub fn pcm_to_mel<T: Float + std::fmt::Display>(
+pub fn pcm_to_mel<T: Float + std::fmt::Display + Send + Sync + 'static>(
     cfg: &super::Config,
     samples: &[T],
     filters: &[T],
@@ -210,4 +274,63 @@ pub fn pcm_to_mel<T: Float + std::fmt::Display>(
         cfg.num_mel_bins,
         false,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fft() {
+        let input = vec![0.0, 1.0, 0.0, 0.0];
+        let output = fft(&input);
+        assert_eq!(
+            output,
+            vec![
+                1.0,
+                0.0,
+                6.123233995736766e-17,
+                -1.0,
+                -1.0,
+                0.0,
+                -6.123233995736766e-17,
+                1.0
+            ]
+        );
+    }
+
+    #[test]
+    fn test_dft() {
+        let input = vec![0.0, 1.0, 0.0, 0.0];
+        let output = dft(&input);
+        assert_eq!(
+            output,
+            vec![
+                1.0,
+                0.0,
+                6.123233995736766e-17,
+                -1.0,
+                -1.0,
+                -1.2246467991473532e-16,
+                -1.8369701987210297e-16,
+                1.0
+            ]
+        );
+    }
+
+    #[test]
+    fn test_log_mel_spectrogram() {
+        let samples = vec![0.0; 1000];
+        let filters = vec![0.0; 1000];
+        let output = log_mel_spectrogram_(&samples, &filters, 100, 10, 10, false);
+        assert_eq!(output.len(), 30_000);
+    }
+
+    #[test]
+    fn test_tiny_log_mel_spectrogram() {
+        let samples = vec![0.0; 100];
+        let filters = vec![0.0; 100];
+        let output = log_mel_spectrogram_(&samples, &filters, 20, 2, 2, false);
+        assert_eq!(output.len(), 6_000);
+    }
 }
