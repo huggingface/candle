@@ -737,10 +737,11 @@ impl PthTensors {
         let mut zip = zip::ZipArchive::new(zip_reader)?;
         let mut reader = zip.by_name(&tensor_info.path)?;
         let is_fortran_contiguous = tensor_info.layout.is_fortran_contiguous();
+        let rank = tensor_info.layout.shape().rank();
 
         // Reading the data is a bit tricky as it can be strided, for now only support the basic
         // case and when the tensor is fortran contiguous.
-        if !tensor_info.layout.is_contiguous() && !is_fortran_contiguous {
+        if rank > 1 && !tensor_info.layout.is_contiguous() && !is_fortran_contiguous {
             crate::bail!(
                 "cannot retrieve non-contiguous tensors {:?}",
                 tensor_info.layout
@@ -759,13 +760,12 @@ impl PthTensors {
             &mut reader,
         )?;
 
-        if is_fortran_contiguous {
+        if rank > 1 && is_fortran_contiguous {
             // Reverse the shape, e.g. Shape(2, 3, 4) -> Shape(4, 3, 2)
             let shape_reversed: Vec<_> = tensor_info.layout.dims().iter().rev().cloned().collect();
             let tensor = tensor.reshape(shape_reversed)?;
 
             // Permute (transpose) the dimensions, e.g. Shape(4, 3, 2) -> Shape(2, 3, 4)
-            let rank = tensor_info.layout.dims().len();
             let dim_indeces_reversed: Vec<_> = (0..rank).rev().collect();
             let tensor = tensor.permute(dim_indeces_reversed)?;
             Ok(Some(tensor))
