@@ -190,4 +190,12 @@ impl AdamW {
         };
         Self::new(vars, params)
     }
+
+    pub fn params(&self) -> &ParamsAdamW {
+        &self.params
+    }
+
+    pub fn set_params(&mut self, params: ParamsAdamW) {
+        self.params = params;
+    }
 }

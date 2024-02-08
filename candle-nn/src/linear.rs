@@ -56,7 +56,7 @@ impl super::Module for Linear {
 
 /// Create or initialize a new linear layer.
 ///
-/// This uses some default names for weight and biases, namely `"weight"` and `"bias"`.
+/// This uses some default names for weights and biases, namely `"weight"` and `"bias"`.
 pub fn linear(in_dim: usize, out_dim: usize, vs: crate::VarBuilder) -> Result<Linear> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vs.get_with_hints((out_dim, in_dim), "weight", init_ws)?;
@@ -69,6 +69,7 @@ pub fn linear(in_dim: usize, out_dim: usize, vs: crate::VarBuilder) -> Result<Li
     Ok(Linear::new(ws, Some(bs)))
 }
 
+/// Create or initialize a new linear layer without biases.
 pub fn linear_no_bias(in_dim: usize, out_dim: usize, vs: crate::VarBuilder) -> Result<Linear> {
     let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
     let ws = vs.get_with_hints((out_dim, in_dim), "weight", init_ws)?;

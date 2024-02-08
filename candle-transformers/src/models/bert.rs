@@ -1,14 +1,15 @@
 use super::with_tracing::{layer_norm, linear, LayerNorm, Linear};
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, VarBuilder};
+use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use serde::Deserialize;
 
 pub const DTYPE: DType = DType::F32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum HiddenAct {
+pub enum HiddenAct {
     Gelu,
+    GeluApproximate,
     Relu,
 }
 
@@ -28,6 +29,7 @@ impl HiddenActLayer {
         match self.act {
             // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/activations.py#L213
             HiddenAct::Gelu => xs.gelu_erf(),
+            HiddenAct::GeluApproximate => xs.gelu(),
             HiddenAct::Relu => xs.relu(),
         }
     }
@@ -48,7 +50,7 @@ pub struct Config {
     num_hidden_layers: usize,
     num_attention_heads: usize,
     intermediate_size: usize,
-    hidden_act: HiddenAct,
+    pub hidden_act: HiddenAct,
     hidden_dropout_prob: f64,
     max_position_embeddings: usize,
     type_vocab_size: usize,
@@ -108,11 +110,6 @@ impl Config {
             model_type: Some("bert".to_string()),
         }
     }
-}
-
-fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
-    Ok(Embedding::new(embeddings, hidden_size))
 }
 
 struct Dropout {

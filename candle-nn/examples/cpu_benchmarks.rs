@@ -6,7 +6,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use candle::quantized::GgmlType;
-use candle::{CpuStorage, Device, Layout, Result, Shape, Tensor, D};
+use candle::{CpuStorage, Device, Layout, Module, Result, Shape, Tensor, D};
 use clap::{Parser, Subcommand};
 
 const CHECK_CONV2D: bool = false;
@@ -222,7 +222,10 @@ impl Benchmark for QMatMul {
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
         let zeros = vec![candle::quantized::k_quants::BlockQ4_0::zeros(); 4096 * 11008 / 32];
-        let mm = candle::quantized::QTensor::new(zeros, (4096, 11008))?;
+        let mm = candle::quantized::QTensor::new(
+            candle::quantized::QStorage::Cpu(Box::new(zeros)),
+            (4096, 11008),
+        )?;
         let mm = candle::quantized::QMatMul::from_qtensor(mm)?;
         let arg = Tensor::randn(0f32, 1., (128, 11008), &Device::Cpu)?;
         Ok((mm, arg))

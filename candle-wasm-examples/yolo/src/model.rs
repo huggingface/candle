@@ -107,8 +107,7 @@ impl ConvBlock {
 
 impl Module for ConvBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = self.conv.forward(xs)?;
-        let xs = self.bn.forward(&xs)?;
+        let xs = self.conv.forward(xs)?.apply_t(&self.bn, false)?;
         candle_nn::ops::silu(&xs)
     }
 }

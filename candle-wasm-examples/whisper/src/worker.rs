@@ -129,7 +129,13 @@ impl Decoder {
         let transcribe_token = token_id(&tokenizer, m::TRANSCRIBE_TOKEN)?;
         let translate_token = token_id(&tokenizer, m::TRANSLATE_TOKEN)?;
         let eot_token = token_id(&tokenizer, m::EOT_TOKEN)?;
-        let no_speech_token = token_id(&tokenizer, m::NO_SPEECH_TOKEN)?;
+        let no_speech_token = m::NO_SPEECH_TOKENS
+            .iter()
+            .find_map(|token| token_id(&tokenizer, token).ok());
+        let no_speech_token = match no_speech_token {
+            None => anyhow::bail!("unable to find any non-speech token"),
+            Some(n) => n,
+        };
         let seed = 299792458;
         Ok(Self {
             model,
@@ -309,6 +315,7 @@ impl Decoder {
         let model = if md.quantized {
             let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf_buffer(
                 &md.weights,
+                &device,
             )?;
             Model::Quantized(m::quantized_model::Whisper::load(&vb, config)?)
         } else {
@@ -408,7 +415,7 @@ pub enum Task {
 }
 
 // Communication to the worker happens through bincode, the model weights and configs are fetched
-// on the main thread and transfered via the following structure.
+// on the main thread and transferred via the following structure.
 #[derive(Serialize, Deserialize)]
 pub struct ModelData {
     pub weights: Vec<u8>,

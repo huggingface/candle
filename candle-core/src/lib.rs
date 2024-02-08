@@ -49,9 +49,12 @@ mod device;
 pub mod display;
 mod dtype;
 mod dummy_cuda_backend;
+mod dummy_metal_backend;
 pub mod error;
 mod indexer;
 pub mod layout;
+#[cfg(feature = "metal")]
+pub mod metal_backend;
 #[cfg(feature = "mkl")]
 mod mkl;
 pub mod npy;
@@ -69,7 +72,7 @@ pub mod utils;
 mod variable;
 
 pub use cpu_backend::CpuStorage;
-pub use device::{Device, DeviceLocation};
+pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, FloatDType, IntDType, WithDType};
 pub use error::{Error, Result};
 pub use indexer::IndexOp;
@@ -86,6 +89,12 @@ pub use cuda_backend::{CudaDevice, CudaStorage};
 
 #[cfg(not(feature = "cuda"))]
 pub use dummy_cuda_backend::{CudaDevice, CudaStorage};
+
+#[cfg(feature = "metal")]
+pub use metal_backend::{MetalDevice, MetalError, MetalStorage};
+
+#[cfg(not(feature = "metal"))]
+pub use dummy_metal_backend::{MetalDevice, MetalError, MetalStorage};
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -112,12 +121,6 @@ impl ToUsize2 for (usize, usize) {
 // A simple trait defining a module with forward method using a single argument.
 pub trait Module {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
-}
-
-impl Module for quantized::QMatMul {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.forward(xs)
-    }
 }
 
 impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {

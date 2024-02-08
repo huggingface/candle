@@ -1,4 +1,4 @@
-//! Tensors are N-dimenional matrixes of elements using a single data type.
+//! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{
@@ -6,7 +6,7 @@ use crate::op::{
 };
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims};
-use crate::{storage::Storage, DType, Device, Error, Layout, Result, Shape};
+use crate::{bail, storage::Storage, DType, Device, Error, Layout, Result, Shape};
 use std::sync::{Arc, RwLock};
 
 /// Unique identifier for tensors.
@@ -361,6 +361,16 @@ impl Tensor {
         Self::new_impl(array, shape, device, false)
     }
 
+    /// Returns a new tensor with all the elements having the same specified value. Note that
+    /// the tensor is not contiguous so you would have to call `.contiguous()` on it if needed.
+    pub fn full<D: crate::WithDType, S: Into<Shape>>(
+        value: D,
+        shape: S,
+        device: &Device,
+    ) -> Result<Self> {
+        Self::from_vec_impl(vec![value], (), device, false)?.broadcast_as(shape)
+    }
+
     /// Creates a new 1D tensor from an iterator.
     pub fn from_iter<D: crate::WithDType>(
         iter: impl IntoIterator<Item = D>,
@@ -386,7 +396,7 @@ impl Tensor {
         device: &Device,
     ) -> Result<Self> {
         if D::is_zero(&step) {
-            crate::bail!("step cannot be zero")
+            bail!("step cannot be zero")
         }
         let mut data = vec![];
         let mut current = start;
@@ -529,6 +539,7 @@ impl Tensor {
         match &*self.storage() {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -668,7 +679,7 @@ impl Tensor {
     }
 
     /// Split a tensor into the specified number of chunks, this may return less chunks than
-    /// specificed.
+    /// specified.
     pub fn chunk<D: Dim>(&self, chunks: usize, dim: D) -> Result<Vec<Self>> {
         let dim = dim.to_index(self.shape(), "chunk")?;
         let size = self.dim(dim)?;
@@ -793,6 +804,35 @@ impl Tensor {
         }
     }
 
+    /// Roll the tensor input along the given dimension.
+    /// Elements that are shifted beyond the last position are re-introduced at the first position.
+    ///
+    /// ```rust
+    /// # use candle_core::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.roll(1, 0)?;
+    /// assert_eq!(tensor.to_vec2::<f32>()?, &[[4., 5.], [0., 1.], [2., 3.]]);
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.roll(-1, 0)?;
+    /// assert_eq!(tensor.to_vec2::<f32>()?, &[[2., 3.], [4., 5.], [0., 1.]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn roll<D>(&self, shift: i32, dim: D) -> Result<Self>
+    where
+        D: Dim + Clone,
+    {
+        let dim = dim.to_index(self.shape(), "roll")?;
+        let dim_size = self.dim(dim)?;
+        let shift = shift.rem_euclid(dim_size as i32) as usize;
+        if shift == 0 {
+            Ok(self.clone())
+        } else {
+            let a = self.narrow(dim, 0, dim_size - shift)?;
+            let b = self.narrow(dim, dim_size - shift, shift)?;
+            Tensor::cat(&[&b, &a], dim)
+        }
+    }
+
     /// Returns the sum of all elements in the input tensor. The sum is performed over all the
     /// input dimensions.
     ///
@@ -853,6 +893,20 @@ impl Tensor {
         let reduced_dim: usize = mean_dims.iter().map(|i| self.dims()[*i]).product();
         let scale = 1f64 / (reduced_dim as f64);
         self.sum_impl(mean_dims, false)? * scale
+    }
+
+    /// Returns the unbiased variance over the selected dimension.
+    pub fn var_keepdim<D: Dim>(&self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "var")?;
+        let mean = self.mean_keepdim(dim)?;
+        let squares = self.broadcast_sub(&mean)?.sqr()?;
+        squares.sum_impl(dim, true)? / (self.dim(dim)? - 1) as f64
+    }
+
+    /// Returns the unbiased variance over the selected dimension.
+    pub fn var<D: Dim>(&self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "var")?;
+        self.var_keepdim(dim)?.squeeze(dim)
     }
 
     /// Gathers the maximum value across the selected dimension. The resulting shape has the same
@@ -979,7 +1033,11 @@ impl Tensor {
     /// tensor also has four dimensions, `(batch, channels, target_h, target_w)`.
     pub fn interpolate2d(&self, target_h: usize, target_w: usize) -> Result<Self> {
         let (n, c, _h, _w) = self.dims4()?;
-        let op = BackpropOp::new1(self, Op::UpsampleNearest2D);
+        let op = BackpropOp::new1(self, |arg| Op::UpsampleNearest2D {
+            arg,
+            target_h,
+            target_w,
+        });
         let storage = self
             .storage()
             .upsample_nearest2d(self.layout(), target_h, target_w)?;
@@ -1012,6 +1070,9 @@ impl Tensor {
         let kernel_size = kernel_size.to_usize2();
         let stride = stride.to_usize2();
         let (n, c, h, w) = self.dims4()?;
+        if h < kernel_size.0 || w < kernel_size.1 {
+            bail!("kernel-size {kernel_size:?} is larger than the input size {h},{w}")
+        }
         // https://pytorch.org/docs/stable/generated/torch.nn.AvgPool2d.html#torch.nn.AvgPool2d
         let h_out = (h - kernel_size.0) / stride.0 + 1;
         let w_out = (w - kernel_size.1) / stride.1 + 1;
@@ -1047,6 +1108,9 @@ impl Tensor {
         let kernel_size = kernel_size.to_usize2();
         let stride = stride.to_usize2();
         let (n, c, h, w) = self.dims4()?;
+        if h < kernel_size.0 || w < kernel_size.1 {
+            bail!("kernel-size {kernel_size:?} is larger than the input size {h},{w}")
+        }
         // https://pytorch.org/docs/stable/generated/torch.nn.MaxPool2d.html#torch.nn.MaxPool2d
         let h_out = (h - kernel_size.0) / stride.0 + 1;
         let w_out = (w - kernel_size.1) / stride.1 + 1;
@@ -1454,6 +1518,7 @@ impl Tensor {
         match &*self.storage() {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1484,6 +1549,7 @@ impl Tensor {
         match &*self.storage() {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1524,6 +1590,7 @@ impl Tensor {
         match &*self.storage() {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1766,7 +1833,7 @@ impl Tensor {
         let is_permutation =
             dims.len() == self.rank() && (0..dims.len()).all(|i| dims.contains(&i));
         if !is_permutation {
-            crate::bail!(
+            bail!(
                 "dimension mismatch in permute, tensor {:?}, dims: {:?}",
                 self.dims(),
                 dims
@@ -1841,7 +1908,11 @@ impl Tensor {
                 (Storage::Cpu(storage), Device::Cuda(cuda)) => {
                     Storage::Cuda(cuda.storage_from_cpu_storage(storage)?)
                 }
+                (Storage::Cpu(storage), Device::Metal(metal)) => {
+                    Storage::Metal(metal.storage_from_cpu_storage(storage)?)
+                }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {
                     // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
                     // are the same.
@@ -1849,6 +1920,9 @@ impl Tensor {
                     Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
+                _ => {
+                    bail!("not implemented yet")
+                }
             };
             let op = BackpropOp::new1(self, Op::ToDevice);
             let tensor_ = Tensor_ {
@@ -2254,7 +2328,7 @@ impl Tensor {
         if left == 0 && right == 0 {
             Ok(self.clone())
         } else if self.elem_count() == 0 {
-            crate::bail!("cannot use pad_with_same on an empty tensor")
+            bail!("cannot use pad_with_same on an empty tensor")
         } else if left == 0 {
             let dim = dim.to_index(self.shape(), "pad_with_same")?;
             let r = self.narrow(dim, self.dim(dim)? - 1, 1)?;
@@ -2418,16 +2492,135 @@ impl Tensor {
     pub fn normalize_axis(&self, axis: i64) -> Result<usize> {
         let rank = self.rank() as i64;
         if rank <= axis {
-            crate::bail!("axis {axis} is too large, tensor rank {rank}")
+            bail!("axis {axis} is too large, tensor rank {rank}")
         } else if 0 <= axis {
             Ok(axis as usize)
         } else {
             let naxis = rank + axis;
             if naxis < 0 {
-                crate::bail!("axis {axis} is too small, tensor rank {rank}")
+                bail!("axis {axis} is too small, tensor rank {rank}")
             }
             Ok(naxis as usize)
         }
+    }
+
+    /// Returns a lower triangular matrix of ones of size n by n.
+    pub fn tril2(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let t = Tensor::arange(0u32, n as u32, device)?;
+        let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
+        let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
+        t1.le(&t2)?.to_dtype(dtype)
+    }
+
+    /// Returns an upper triangular matrix of ones of size n by n.
+    pub fn triu2(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let t = Tensor::arange(0u32, n as u32, device)?;
+        let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
+        let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
+        t1.ge(&t2)?.to_dtype(dtype)
+    }
+
+    /// Returns a matrix with a diagonal of ones of size n by n.
+    pub fn eye(n: usize, dtype: DType, device: &Device) -> Result<Self> {
+        let t = Tensor::arange(0u32, n as u32, device)?;
+        let t1 = t.reshape((1, n))?.broadcast_as((n, n))?;
+        let t2 = t.reshape((n, 1))?.broadcast_as((n, n))?;
+        t1.eq(&t2)?.to_dtype(dtype)
+    }
+
+    /// Returns the cumulative sum of elements of the input tensor summed over the specified
+    /// dimension.
+    ///
+    /// This operation is most efficient when dim is the last dimension of the tensor.
+    pub fn cumsum<D: Dim>(&self, dim: D) -> Result<Self> {
+        let dim = dim.to_index(self.shape(), "cumsum")?;
+        let rank = self.rank();
+        if rank == 0 {
+            return Ok(self.clone());
+        }
+        let n_axis = self.dim(dim)?;
+        let triu = Tensor::triu2(n_axis, self.dtype(), self.device())?;
+        if rank == 1 {
+            self.unsqueeze(0)?.matmul(&triu)?.squeeze(0)
+        } else {
+            let last = rank - 1;
+            let t = self.transpose(dim, last)?;
+            let t = t.broadcast_matmul(&triu)?;
+            t.transpose(dim, last)
+        }
+    }
+
+    /// Returns a copy of `self` where the values within `ranges` have been replaced with the
+    /// content of `src`.
+    pub fn slice_assign<D: std::ops::RangeBounds<usize>>(
+        &self,
+        ranges: &[D],
+        src: &Tensor,
+    ) -> Result<Self> {
+        let src_dims = src.dims();
+        let self_dims = self.dims();
+        if self_dims.len() != src_dims.len() {
+            bail!(
+                "slice-assign requires input with the same rank {} <> {}",
+                self_dims.len(),
+                src_dims.len()
+            )
+        }
+        if self_dims.len() != ranges.len() {
+            bail!(
+                "slice-assign requires input with the same rank as there are ranges {} <> {}",
+                self_dims.len(),
+                ranges.len()
+            )
+        }
+        let mut src = src.clone();
+        let mut mask = Self::ones(src.shape(), DType::U8, src.device())?;
+        for (i, range) in ranges.iter().enumerate() {
+            let start_included = match range.start_bound() {
+                std::ops::Bound::Unbounded => 0,
+                std::ops::Bound::Included(v) => *v,
+                std::ops::Bound::Excluded(v) => *v + 1,
+            };
+            let end_excluded = match range.end_bound() {
+                std::ops::Bound::Unbounded => self_dims[i],
+                std::ops::Bound::Included(v) => *v + 1,
+                std::ops::Bound::Excluded(v) => *v,
+            };
+            if end_excluded <= start_included {
+                bail!("slice-assign: empty range for dim {i}, {start_included} {end_excluded}")
+            }
+            if self_dims[i] < end_excluded {
+                bail!(
+                    "slice-assign: upper bound is out of range for dim {i}, {end_excluded} {}",
+                    self_dims[i]
+                )
+            }
+            if end_excluded - start_included != src_dims[i] {
+                bail!(
+                    "slice-assign: the range for dim {i} ({start_included}..{end_excluded}) does not match the size of src {}", src_dims[i]
+                )
+            }
+            src = src.pad_with_zeros(i, start_included, self_dims[i] - end_excluded)?;
+            mask = mask.pad_with_zeros(i, start_included, self_dims[i] - end_excluded)?
+        }
+        mask.where_cond(/* on_true= */ &src, /* on_false= */ self)
+    }
+
+    /// Returns log(sum(exp(tensor), dim)).
+    pub fn log_sum_exp<D: Dims>(&self, sum_dims: D) -> Result<Self> {
+        let exp = self.exp()?;
+        let sum = exp.sum(sum_dims)?;
+        sum.log()
+    }
+
+    /// Pointwise pow operation.
+    pub fn pow(&self, rhs: &Tensor) -> Result<Self> {
+        rhs.mul(&self.log()?)?.exp()
+    }
+
+    /// Broadcasting version of `pow`.
+    pub fn broadcast_pow(&self, rhs: &Tensor) -> Result<Self> {
+        rhs.broadcast_mul(&self.log()?)?.exp()
     }
 }
 

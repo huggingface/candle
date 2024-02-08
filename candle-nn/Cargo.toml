@@ -11,7 +11,7 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { path = "../candle-core", version = "0.3.0", package = "candle-core" }
+candle = { workspace = true }
 half = { workspace = true }
 thiserror = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -19,6 +19,8 @@ num-traits = { workspace = true }
 rayon = { workspace = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
+metal = { workspace = true, optional = true }
+candle-metal-kernels = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -29,3 +31,4 @@ default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
+metal = ["candle/metal", "dep:candle-metal-kernels", "dep:metal"]

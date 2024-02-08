@@ -4,7 +4,8 @@ try:
     from .candle import *
 except ImportError as e:
     # If we are in development mode, or we did not bundle the DLLs, we try to locate them here
-    # PyO3 wont give us any infomration about what DLLs are missing, so we can only try to load the DLLs and re-import the module
+    # PyO3 wont give us any information about what DLLs are missing, so we can only try to load
+    # the DLLs and re-import the module
     logging.warning("DLLs were not bundled with this package. Trying to locate them...")
     import os
     import platform

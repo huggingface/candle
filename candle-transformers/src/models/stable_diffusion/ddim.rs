@@ -7,7 +7,9 @@
 //!
 //! Denoising Diffusion Implicit Models, J. Song et al, 2020.
 //! https://arxiv.org/abs/2010.02502
-use super::schedulers::{betas_for_alpha_bar, BetaSchedule, PredictionType};
+use super::schedulers::{
+    betas_for_alpha_bar, BetaSchedule, PredictionType, Scheduler, SchedulerConfig, TimestepSpacing,
+};
 use candle::{Result, Tensor};
 
 /// The configuration for the DDIM scheduler.
@@ -29,6 +31,8 @@ pub struct DDIMSchedulerConfig {
     pub prediction_type: PredictionType,
     /// number of diffusion steps used to train the model
     pub train_timesteps: usize,
+    /// time step spacing for the diffusion process
+    pub timestep_spacing: TimestepSpacing,
 }
 
 impl Default for DDIMSchedulerConfig {
@@ -41,7 +45,14 @@ impl Default for DDIMSchedulerConfig {
             steps_offset: 1,
             prediction_type: PredictionType::Epsilon,
             train_timesteps: 1000,
+            timestep_spacing: TimestepSpacing::Leading,
         }
+    }
+}
+
+impl SchedulerConfig for DDIMSchedulerConfig {
+    fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler>> {
+        Ok(Box::new(DDIMScheduler::new(inference_steps, *self)?))
     }
 }
 
@@ -60,12 +71,32 @@ impl DDIMScheduler {
     /// Creates a new DDIM scheduler given the number of steps to be
     /// used for inference as well as the number of steps that was used
     /// during training.
-    pub fn new(inference_steps: usize, config: DDIMSchedulerConfig) -> Result<Self> {
+    fn new(inference_steps: usize, config: DDIMSchedulerConfig) -> Result<Self> {
         let step_ratio = config.train_timesteps / inference_steps;
-        let timesteps: Vec<usize> = (0..(inference_steps))
-            .map(|s| s * step_ratio + config.steps_offset)
-            .rev()
-            .collect();
+        let timesteps: Vec<usize> = match config.timestep_spacing {
+            TimestepSpacing::Leading => (0..(inference_steps))
+                .map(|s| s * step_ratio + config.steps_offset)
+                .rev()
+                .collect(),
+            TimestepSpacing::Trailing => std::iter::successors(Some(config.train_timesteps), |n| {
+                if *n > step_ratio {
+                    Some(n - step_ratio)
+                } else {
+                    None
+                }
+            })
+            .map(|n| n - 1)
+            .collect(),
+            TimestepSpacing::Linspace => {
+                super::utils::linspace(0.0, (config.train_timesteps - 1) as f64, inference_steps)?
+                    .to_vec1::<f64>()?
+                    .iter()
+                    .map(|&f| f as usize)
+                    .rev()
+                    .collect()
+            }
+        };
+
         let betas = match config.beta_schedule {
             BetaSchedule::ScaledLinear => super::utils::linspace(
                 config.beta_start.sqrt(),
@@ -92,19 +123,11 @@ impl DDIMScheduler {
             config,
         })
     }
+}
 
-    pub fn timesteps(&self) -> &[usize] {
-        self.timesteps.as_slice()
-    }
-
-    ///  Ensures interchangeability with schedulers that need to scale the denoising model input
-    /// depending on the current timestep.
-    pub fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Result<Tensor> {
-        Ok(sample)
-    }
-
+impl Scheduler for DDIMScheduler {
     /// Performs a backward step during inference.
-    pub fn step(&self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
+    fn step(&self, model_output: &Tensor, timestep: usize, sample: &Tensor) -> Result<Tensor> {
         let timestep = if timestep >= self.alphas_cumprod.len() {
             timestep - 1
         } else {
@@ -163,7 +186,17 @@ impl DDIMScheduler {
         }
     }
 
-    pub fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor> {
+    ///  Ensures interchangeability with schedulers that need to scale the denoising model input
+    /// depending on the current timestep.
+    fn scale_model_input(&self, sample: Tensor, _timestep: usize) -> Result<Tensor> {
+        Ok(sample)
+    }
+
+    fn timesteps(&self) -> &[usize] {
+        self.timesteps.as_slice()
+    }
+
+    fn add_noise(&self, original: &Tensor, noise: Tensor, timestep: usize) -> Result<Tensor> {
         let timestep = if timestep >= self.alphas_cumprod.len() {
             timestep - 1
         } else {
@@ -174,7 +207,7 @@ impl DDIMScheduler {
         (original * sqrt_alpha_prod)? + (noise * sqrt_one_minus_alpha_prod)?
     }
 
-    pub fn init_noise_sigma(&self) -> f64 {
+    fn init_noise_sigma(&self) -> f64 {
         self.init_noise_sigma
     }
 }

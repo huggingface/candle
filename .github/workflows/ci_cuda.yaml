@@ -8,6 +8,8 @@ jobs:
   start-runner:
     name: Start self-hosted EC2 runner
     runs-on: ubuntu-latest
+    # Don't run on forks, they won't have access to secrets anyway.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     env:
       AWS_REGION: us-east-1
       EC2_AMI_ID: ami-03cfed9ea28f4b002
@@ -70,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AWS_REGION: us-east-1
-    if: ${{ always() }} # required to stop the runner even if the error happened in the previous jobs
+    if: ${{ (success() || failure()) && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }} # required to stop the runner even if the error happened in the previous jobs
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v1

@@ -7,6 +7,8 @@ extern "C" {
         v_ptr: *const c_void,
         o_ptr: *const c_void,
         softmax_lse_ptr: *const c_void,
+        alibi_slopes_ptr: *const c_void,
+
         cu_seqlens_q_ptr: *const i32,
         cu_seqlens_k_ptr: *const i32,
 
@@ -14,6 +16,7 @@ extern "C" {
         k_batch_stride: u32,
         v_batch_stride: u32,
         o_batch_stride: u32,
+        alibi_slopes_batch_stride: u32,
 
         q_row_stride: u32,
         k_row_stride: u32,
@@ -37,8 +40,11 @@ extern "C" {
         seqlen_q_rounded: u32,
         seqlen_k_rounded: u32,
 
-        is_causal: c_int,
         is_bf16: c_int,
+        is_causal: c_int,
+
+        window_size_left: c_int,
+        window_size_right: c_int,
     );
 
 }

@@ -2,6 +2,7 @@ pub mod activation;
 pub mod batch_norm;
 pub mod conv;
 pub mod embedding;
+pub mod encoding;
 pub mod func;
 pub mod group_norm;
 pub mod init;
@@ -15,7 +16,7 @@ pub mod sequential;
 pub mod var_builder;
 pub mod var_map;
 
-pub use activation::Activation;
+pub use activation::{prelu, Activation, PReLU};
 pub use batch_norm::{batch_norm, BatchNorm, BatchNormConfig};
 pub use conv::{
     conv1d, conv2d, conv2d_no_bias, conv_transpose2d, conv_transpose2d_no_bias, Conv1d,

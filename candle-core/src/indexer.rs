@@ -64,7 +64,7 @@ impl Tensor {
 #[derive(Debug)]
 /// Generic structure used to index a slice of the tensor
 pub enum TensorIndexer {
-    /// This selects the elemnts for which an index has some specific value.
+    /// This selects the elements for which an index has some specific value.
     Select(usize),
     /// This is a regular slice, purely indexing a chunk of the tensor
     Narrow(Bound<usize>, Bound<usize>),
@@ -104,36 +104,30 @@ impl From<&Tensor> for TensorIndexer {
     }
 }
 
-macro_rules! impl_from_range {
-    ($range_type:ty) => {
-        impl From<$range_type> for TensorIndexer {
-            fn from(range: $range_type) -> Self {
-                use std::ops::Bound::*;
+trait RB: RangeBounds<usize> {}
+impl RB for Range<usize> {}
+impl RB for RangeFrom<usize> {}
+impl RB for RangeFull {}
+impl RB for RangeInclusive<usize> {}
+impl RB for RangeTo<usize> {}
+impl RB for RangeToInclusive<usize> {}
 
-                let start = match range.start_bound() {
-                    Included(idx) => Included(*idx),
-                    Excluded(idx) => Excluded(*idx),
-                    Unbounded => Unbounded,
-                };
-
-                let end = match range.end_bound() {
-                    Included(idx) => Included(*idx),
-                    Excluded(idx) => Excluded(*idx),
-                    Unbounded => Unbounded,
-                };
-
-                TensorIndexer::Narrow(start, end)
-            }
-        }
-    };
+impl<T: RB> From<T> for TensorIndexer {
+    fn from(range: T) -> Self {
+        use std::ops::Bound::*;
+        let start = match range.start_bound() {
+            Included(idx) => Included(*idx),
+            Excluded(idx) => Excluded(*idx),
+            Unbounded => Unbounded,
+        };
+        let end = match range.end_bound() {
+            Included(idx) => Included(*idx),
+            Excluded(idx) => Excluded(*idx),
+            Unbounded => Unbounded,
+        };
+        TensorIndexer::Narrow(start, end)
+    }
 }
-
-impl_from_range!(Range<usize>);
-impl_from_range!(RangeFrom<usize>);
-impl_from_range!(RangeFull);
-impl_from_range!(RangeInclusive<usize>);
-impl_from_range!(RangeTo<usize>);
-impl_from_range!(RangeToInclusive<usize>);
 
 /// Trait used to implement multiple signatures for ease of use of the slicing
 /// of a tensor

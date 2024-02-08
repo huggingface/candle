@@ -1,7 +1,7 @@
 use candle::{
     quantized::{self, k_quants, GgmlDType, GgmlType},
     test_utils::to_vec2_round,
-    Device, Result, Tensor,
+    Device, Module, Result, Tensor,
 };
 
 use wasm_bindgen_test::*;
@@ -40,7 +40,7 @@ fn quantized_matmul_neg() -> Result<()> {
         ]
     );
 
-    let qtensor = quantized::QTensor::new(rhs_t, (4, 64))?;
+    let qtensor = quantized::QTensor::new(quantized::QStorage::Cpu(Box::new(rhs_t)), (4, 64))?;
     let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
     let res = matmul.forward(&tensor_lhs)?;
     assert_eq!(

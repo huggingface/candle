@@ -17,7 +17,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use ::candle::{quantized::QTensor, DType, Device, Tensor, WithDType};
+use ::candle::{quantized::QTensor, DType, Device, Module, Tensor, WithDType};
 
 mod utils;
 use utils::wrap_err;
@@ -71,11 +71,13 @@ impl PyDType {
 }
 
 static CUDA_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
+static METAL_DEVICE: std::sync::Mutex<Option<Device>> = std::sync::Mutex::new(None);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PyDevice {
     Cpu,
     Cuda,
+    Metal,
 }
 
 impl PyDevice {
@@ -83,6 +85,7 @@ impl PyDevice {
         match device {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,
+            Device::Metal(_) => Self::Metal,
         }
     }
 
@@ -95,6 +98,15 @@ impl PyDevice {
                     return Ok(device.clone());
                 };
                 let d = Device::new_cuda(0).map_err(wrap_err)?;
+                *device = Some(d.clone());
+                Ok(d)
+            }
+            Self::Metal => {
+                let mut device = METAL_DEVICE.lock().unwrap();
+                if let Some(device) = device.as_ref() {
+                    return Ok(device.clone());
+                };
+                let d = Device::new_metal(0).map_err(wrap_err)?;
                 *device = Some(d.clone());
                 Ok(d)
             }
@@ -119,6 +131,7 @@ impl ToPyObject for PyDevice {
         let str = match self {
             PyDevice::Cpu => "cpu",
             PyDevice::Cuda => "cuda",
+            PyDevice::Metal => "metal",
         };
         str.to_object(py)
     }
@@ -199,7 +212,7 @@ trait MapDType {
 enum Indexer {
     Index(usize),
     Slice(usize, usize),
-    Elipsis,
+    Ellipsis,
     Expand,
     IndexSelect(Tensor),
 }
@@ -555,7 +568,7 @@ impl PyTensor {
                         "Ellipsis ('...') can only be used at the start of an indexing operation",
                     ));
                 }
-                Ok((Indexer::Elipsis, dims.len() - (index_argument_count - 1)))
+                Ok((Indexer::Ellipsis, dims.len() - (index_argument_count - 1)))
             } else if py_indexer.is_none() {
                 // Handle None e.g. tensor[None, 0]
                 Ok((Indexer::Expand, current_dim))
@@ -603,8 +616,9 @@ impl PyTensor {
                     current_dim += 1;
                     out
                 }
-                Indexer::Elipsis => {
-                    // Elipsis is a special case, it means that all remaining dimensions should be selected => advance the current_dim to the last dimension we have indexers for
+                Indexer::Ellipsis => {
+                    // Ellipsis is a special case, it means that all remaining dimensions should be
+                    // selected => advance the current_dim to the last dimension we have indexers for
                     current_dim += dims.len() - (indexers.len() - 1);
                     x
                 }
@@ -947,11 +961,11 @@ impl PyTensor {
             extraction_result: PyResult<T>,
             err_msg: &'static str,
         ) -> PyResult<()> {
-            if let Ok(sucessfull_extraction) = extraction_result {
+            if let Ok(successful_extraction) = extraction_result {
                 if opt.is_some() {
                     return Err(PyValueError::new_err(err_msg));
                 }
-                *opt = Some(sucessfull_extraction);
+                *opt = Some(successful_extraction);
             }
             Ok(())
         }
@@ -1032,9 +1046,7 @@ impl PyTensor {
                 .map_err(wrap_err)?,
             (Some(device), None) => self.0.to_device(&device.as_device()?).map_err(wrap_err)?,
             (None, Some(dtype)) => self.0.to_dtype(dtype.0).map_err(wrap_err)?,
-            (None, None) => {
-                return Err(PyTypeError::new_err("No valide dtype or device specified"))
-            }
+            (None, None) => return Err(PyTypeError::new_err("No valid dtype or device specified")),
         };
 
         Ok(PyTensor(result))
@@ -1062,20 +1074,20 @@ impl PyTensor {
     fn quantize(&self, quantized_dtype: &str) -> PyResult<PyQTensor> {
         use ::candle::quantized;
         let res = match quantized_dtype.to_lowercase().as_str() {
-            "q2k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ2K>(self),
-            "q3k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ3K>(self),
-            "q4_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4_0>(self),
-            "q4_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4_1>(self),
-            "q4k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4K>(self),
-            "q5_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5_0>(self),
-            "q5_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5_1>(self),
-            "q5k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5K>(self),
-            "q6k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ6K>(self),
-            "q8_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8_0>(self),
-            "q8_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8_1>(self),
-            "q8k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8K>(self),
-            "f16" => quantized::QTensor::quantize::<f16>(self),
-            "f32" => quantized::QTensor::quantize::<f32>(self),
+            "q2k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q2K),
+            "q3k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q3K),
+            "q4_0" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q4_0),
+            "q4_1" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q4_1),
+            "q4k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q4K),
+            "q5_0" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q5_0),
+            "q5_1" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q5_1),
+            "q5k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q5K),
+            "q6k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q6K),
+            "q8_0" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8_0),
+            "q8_1" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8_1),
+            "q8k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8K),
+            "f16" => quantized::QTensor::quantize(self, quantized::GgmlDType::F16),
+            "f32" => quantized::QTensor::quantize(self, quantized::GgmlDType::F32),
             dt => {
                 return Err(PyErr::new::<PyValueError, _>(format!(
                     "unknown quantized-dtype {dt}"
@@ -1266,13 +1278,19 @@ fn save_safetensors(
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike])")]
+#[pyo3(text_signature = "(path:Union[str,PathLike], device: Optional[Device] = None)")]
 /// Load a GGML file. Returns a tuple of three objects: a dictionary mapping tensor names to tensors,
 /// a dictionary mapping hyperparameter names to hyperparameter values, and a vocabulary.
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any], List[str]]
-fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObject)> {
+fn load_ggml(
+    path: &str,
+    device: Option<PyDevice>,
+    py: Python<'_>,
+) -> PyResult<(PyObject, PyObject, PyObject)> {
     let mut file = std::fs::File::open(path)?;
-    let ggml = ::candle::quantized::ggml_file::Content::read(&mut file).map_err(wrap_err)?;
+    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
+    let ggml =
+        ::candle::quantized::ggml_file::Content::read(&mut file, &device).map_err(wrap_err)?;
     let tensors = ggml
         .tensors
         .into_iter()
@@ -1301,11 +1319,16 @@ fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObje
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike])")]
+#[pyo3(text_signature = "(path:Union[str,PathLike], device: Optional[Device] = None)")]
 /// Loads a GGUF file. Returns a tuple of two dictionaries: the first maps tensor names to tensors,
 /// and the second maps metadata keys to metadata values.
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any]]
-fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+fn load_gguf(
+    path: &str,
+    device: Option<PyDevice>,
+    py: Python<'_>,
+) -> PyResult<(PyObject, PyObject)> {
+    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
     use ::candle::quantized::gguf_file;
     fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<PyObject> {
         let v: PyObject = match v {
@@ -1337,7 +1360,7 @@ fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
         .tensor_infos
         .keys()
         .map(|key| {
-            let qtensor = gguf.tensor(&mut file, key)?;
+            let qtensor = gguf.tensor(&mut file, key, &device)?;
             Ok((key, PyQTensor(Arc::new(qtensor)).into_py(py)))
         })
         .collect::<::candle::Result<Vec<_>>>()

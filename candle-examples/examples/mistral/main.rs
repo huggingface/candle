@@ -155,8 +155,8 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 100)]
     sample_len: usize,
 
-    #[arg(long, default_value = "lmz/candle-mistral")]
-    model_id: String,
+    #[arg(long)]
+    model_id: Option<String>,
 
     #[arg(long, default_value = "main")]
     revision: String,
@@ -207,8 +207,18 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
+    let model_id = match args.model_id {
+        Some(model_id) => model_id,
+        None => {
+            if args.quantized {
+                "lmz/candle-mistral".to_string()
+            } else {
+                "mistralai/Mistral-7B-v0.1".to_string()
+            }
+        }
+    };
     let repo = api.repo(Repo::with_revision(
-        args.model_id,
+        model_id,
         RepoType::Model,
         args.revision,
     ));
@@ -225,10 +235,7 @@ fn main() -> Result<()> {
             if args.quantized {
                 vec![repo.get("model-q4k.gguf")?]
             } else {
-                vec![
-                    repo.get("pytorch_model-00001-of-00002.safetensors")?,
-                    repo.get("pytorch_model-00002-of-00002.safetensors")?,
-                ]
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
             }
         }
     };
@@ -237,13 +244,14 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let config = Config::config_7b_v0_1(args.use_flash_attn);
+    let device = candle_examples::device(args.cpu)?;
     let (model, device) = if args.quantized {
         let filename = &filenames[0];
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename)?;
+        let vb =
+            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
         let model = QMistral::new(&config, vb)?;
-        (Model::Quantized(model), Device::Cpu)
+        (Model::Quantized(model), device)
     } else {
-        let device = candle_examples::device(args.cpu)?;
         let dtype = if device.is_cuda() {
             DType::BF16
         } else {

@@ -18,6 +18,8 @@ use rand::{distributions::Distribution, SeedableRng};
 use tokenizers::Tokenizer;
 
 mod multilingual;
+mod pcm_decode;
+
 use candle_transformers::models::whisper::{self as m, audio, Config};
 
 pub enum Model {
@@ -128,7 +130,13 @@ impl Decoder {
         let transcribe_token = token_id(&tokenizer, m::TRANSCRIBE_TOKEN)?;
         let translate_token = token_id(&tokenizer, m::TRANSLATE_TOKEN)?;
         let eot_token = token_id(&tokenizer, m::EOT_TOKEN)?;
-        let no_speech_token = token_id(&tokenizer, m::NO_SPEECH_TOKEN)?;
+        let no_speech_token = m::NO_SPEECH_TOKENS
+            .iter()
+            .find_map(|token| token_id(&tokenizer, token).ok());
+        let no_speech_token = match no_speech_token {
+            None => anyhow::bail!("unable to find any non-speech token"),
+            Some(n) => n,
+        };
         Ok(Self {
             model,
             rng: rand::rngs::StdRng::seed_from_u64(seed),
@@ -512,11 +520,7 @@ fn main() -> Result<()> {
             )
         } else {
             let config = repo.get("config.json")?;
-            let tokenizer = if args.model == WhichModel::LargeV3 {
-                panic!("openai/whisper-large-v3 does not provide a compatible tokenizer.json config at the moment")
-            } else {
-                repo.get("tokenizer.json")?
-            };
+            let tokenizer = repo.get("tokenizer.json")?;
             let model = repo.get("model.safetensors")?;
             (config, tokenizer, model)
         };
@@ -533,17 +537,10 @@ fn main() -> Result<()> {
     let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
     <byteorder::LittleEndian as byteorder::ByteOrder>::read_f32_into(mel_bytes, &mut mel_filters);
 
-    let mut input = std::fs::File::open(input)?;
-    let (header, data) = wav::read(&mut input)?;
-    println!("loaded wav data: {header:?}");
-    if header.sampling_rate != m::SAMPLE_RATE as u32 {
-        anyhow::bail!("wav file must have a {} sampling rate", m::SAMPLE_RATE)
+    let (pcm_data, sample_rate) = pcm_decode::pcm_decode(input)?;
+    if sample_rate != m::SAMPLE_RATE as u32 {
+        anyhow::bail!("input file must have a {} sampling rate", m::SAMPLE_RATE)
     }
-    let data = data.as_sixteen().expect("expected 16 bit wav file");
-    let pcm_data: Vec<_> = data[..data.len() / header.channel_count as usize]
-        .iter()
-        .map(|v| *v as f32 / 32768.)
-        .collect();
     println!("pcm data loaded {}", pcm_data.len());
     let mel = audio::pcm_to_mel(&config, &pcm_data, &mel_filters);
     let mel_len = mel.len();
@@ -555,8 +552,10 @@ fn main() -> Result<()> {
     println!("loaded mel: {:?}", mel.dims());
 
     let mut model = if args.quantized {
-        let vb =
-            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(&weights_filename)?;
+        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
+            &weights_filename,
+            &device,
+        )?;
         Model::Quantized(m::quantized_model::Whisper::load(&vb, config)?)
     } else {
         let vb =
