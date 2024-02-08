@@ -209,6 +209,15 @@ impl crate::backend::BackendDevice for MetalDevice {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
+    fn alloc_impl(
+        &self,
+        _shape: &Shape,
+        _dtype: DType,
+        init_value: Option<u8>,
+    ) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
