@@ -216,7 +216,7 @@ fn detect(
     xs: &Tensor,
     image_height: usize,
     classes: usize,
-    anchors: &Vec<(usize, usize)>,
+    anchors: &[(usize, usize)],
 ) -> Result<Tensor> {
     let (bsize, _channels, height, _width) = xs.dims4()?;
     let stride = image_height / height;
