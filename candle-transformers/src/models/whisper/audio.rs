@@ -125,9 +125,10 @@ fn log_mel_spectrogram_w<T: Float>(
 
         // fill the rest with zeros
         if n_samples - offset < fft_size {
-            for j in n_samples - offset..fft_size {
-                fft_in[j] = zero;
-            }
+            fft_in
+                .iter_mut()
+                .skip(n_samples - offset)
+                .for_each(|x| *x = zero);
         }
 
         // FFT
