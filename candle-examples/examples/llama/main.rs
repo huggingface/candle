@@ -89,6 +89,11 @@ struct Args {
     #[arg(long)]
     use_flash_attn: bool,
 
+    /// The folder name that contains safetensor weights and json files
+    /// (same structure as huggingface online)
+    #[arg(long)]
+    local_weights: Option<String>,
+
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.0)]
     repeat_penalty: f32,
@@ -132,16 +137,37 @@ fn main() -> Result<()> {
         let revision = args.revision.unwrap_or("main".to_string());
         let api = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
 
-        let tokenizer_filename = api.get("tokenizer.json")?;
-        let config_filename = api.get("config.json")?;
+        let tokenizer_filename = match &args.local_weights {
+            Some(path) => (path.to_owned() + "tokenizer.json").into(),
+            _ => api.get("tokenizer.json")?,
+        };
+        let config_filename = match &args.local_weights {
+            Some(path) => (path.to_owned() + "config.json").into(),
+            _ => api.get("config.json")?,
+        };
         let config: LlamaConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
         let config = config.into_config(args.use_flash_attn);
 
-        let filenames = match args.which {
-            Which::V1 | Which::V2 | Which::Solar10_7B => {
-                candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
+        let filenames = match &args.local_weights {
+            Some(path) => {
+                let mut filenames = vec![];
+                for rfilename in [
+                    "model-00001-of-00002.safetensors",
+                    "model-00002-of-00002.safetensors",
+                ] {
+                    filenames.push((path.to_owned() + rfilename).into());
+                }
+                filenames
             }
-            Which::TinyLlama1_1BChat => vec![api.get("model.safetensors")?],
+            _ => {
+                let filenames = match args.which {
+                    Which::V1 | Which::V2 | Which::Solar10_7B => {
+                        candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
+                    }
+                    Which::TinyLlama1_1BChat => vec![api.get("model.safetensors")?],
+                };
+                filenames
+            }
         };
         println!("building the model");
         let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;

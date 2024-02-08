@@ -188,17 +188,6 @@ pub trait CustomOp1 {
         ))
     }
 
-<<<<<<< HEAD
-=======
-    /// The forward pass, as run on a gcu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn gcu_fwd(&self, _storage: &GcuStorage, _layout: &Layout) -> Result<Option<(GcuStorage, Shape)>> {
-        Err(crate::Error::Gcu(
-            format!("no gcu implementation for {}", self.name()).into(),
-        ))
-    }
-
->>>>>>> 3893993 (On main: Support Inplace CustomOP)
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn metal_fwd(
@@ -245,24 +234,6 @@ pub trait CustomOp2 {
             format!("no cuda implementation for {}", self.name()).into(),
         ))
     }
-
-<<<<<<< HEAD
-=======
-    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn gcu_fwd(
-        &self,
-        _: &GcuStorage,
-        _: &Layout,
-        _: &GcuStorage,
-        _: &Layout,
-    ) -> Result<Option<(GcuStorage, Shape)>> {
-        Err(crate::Error::Gcu(
-            format!("no gcu implementation for {}", self.name()).into(),
-        ))
-    }
-
->>>>>>> 3893993 (On main: Support Inplace CustomOP)
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn metal_fwd(
@@ -318,26 +289,6 @@ pub trait CustomOp3 {
             format!("no cuda implementation for {}", self.name()).into(),
         ))
     }
-
-<<<<<<< HEAD
-=======
-    /// The forward pass, as run on a gcu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn gcu_fwd(
-        &self,
-        _: &GcuStorage,
-        _: &Layout,
-        _: &GcuStorage,
-        _: &Layout,
-        _: &GcuStorage,
-        _: &Layout,
-    ) -> Result<Option<(GcuStorage, Shape)>> {
-        Err(crate::Error::Gcu(
-            format!("no gcu implementation for {}", self.name()).into(),
-        ))
-    }
-
->>>>>>> 3893993 (On main: Support Inplace CustomOP)
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn metal_fwd(
