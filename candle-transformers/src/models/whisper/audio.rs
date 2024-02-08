@@ -6,11 +6,7 @@ use std::sync::Arc;
 use std::thread;
 
 pub trait Float:
-    num_traits::Float
-    + num_traits::FloatConst
-    + num_traits::NumAssign
-    + std::marker::Send
-    + std::marker::Sync
+    num_traits::Float + num_traits::FloatConst + num_traits::NumAssign + Send + Sync
 {
 }
 
@@ -126,10 +122,7 @@ fn log_mel_spectrogram_w<T: Float>(
 
         // fill the rest with zeros
         if n_samples - offset < fft_size {
-            fft_in
-                .iter_mut()
-                .skip(n_samples - offset)
-                .for_each(|x| *x = zero);
+            fft_in[n_samples - offset..].fill(zero);
         }
 
         // FFT
@@ -174,17 +167,14 @@ fn log_mel_spectrogram_w<T: Float>(
     mel
 }
 
-fn log_mel_spectrogram_<T: Float + std::fmt::Display>(
+fn log_mel_spectrogram_<T: Float>(
     samples: &[T],
     filters: &[T],
     fft_size: usize,
     fft_step: usize,
     n_mel: usize,
     speed_up: bool,
-) -> Vec<T>
-where
-    T: Float + std::fmt::Display + Send + Sync + 'static,
-{
+) -> Vec<T> {
     let zero = T::zero();
     let two_pi = T::PI() + T::PI();
     let half = T::from(0.5).unwrap();
@@ -217,46 +207,46 @@ where
 
     let hann = Arc::new(hann);
     let samples = Arc::new(samples);
-    let cloned_contents_of_filters = filters.to_vec();
-    let filters = Arc::new(cloned_contents_of_filters);
+    let filters = Arc::new(filters);
 
-    let mut handles = Vec::new();
-    for thread_id in 0..n_threads {
-        let hann_clone = hann.clone();
-        let samples_clone = samples.clone();
-        let filters_clone = filters.clone();
-
-        handles.push(thread::spawn(move || {
-            log_mel_spectrogram_w(
-                thread_id,
-                &hann_clone,
-                &samples_clone,
-                &filters_clone,
-                fft_size,
-                fft_step,
-                speed_up,
-                n_len,
-                n_mel,
-                n_threads,
-            )
-        }));
-    }
-
-    let mut all_outputs = Vec::new();
-    for handle in handles {
-        match handle.join() {
-            Ok(output) => all_outputs.push(output),
-            Err(_) => panic!("Thread failed"),
-        }
-    }
+    // use scope to allow for non static references to be passed to the threads
+    // and directly collect the results into a single vector
+    let all_outputs = thread::scope(|s| {
+        (0..n_threads)
+            // create threads and return their handles
+            .map(|thread_id| {
+                let hann = Arc::clone(&hann);
+                let samples = Arc::clone(&samples);
+                let filters = Arc::clone(&filters);
+                // spawn new thread and start work
+                s.spawn(move || {
+                    log_mel_spectrogram_w(
+                        thread_id, &hann, &samples, &filters, fft_size, fft_step, speed_up, n_len,
+                        n_mel, n_threads,
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            // wait for each thread to finish and collect their results
+            .map(|handle| handle.join().expect("Thread failed"))
+            .collect::<Vec<_>>()
+    });
 
     let l = all_outputs[0].len();
     let mut mel = vec![zero; l];
 
-    for i in (0..l).step_by(n_threads) {
-        for ouputs in all_outputs.iter() {
-            for j in 0..n_threads {
-                mel[i + j] += ouputs[i + j];
+    // iterate over mel spectrogram segments, dividing work by threads.
+    for segment_start in (0..l).step_by(n_threads) {
+        // go through each thread's output.
+        for thread_output in all_outputs.iter() {
+            // add each thread's piece to our mel spectrogram.
+            for offset in 0..n_threads {
+                let mel_index = segment_start + offset; // find location in mel.
+                if mel_index < mel.len() {
+                    // Make sure we don't go out of bounds.
+                    mel[mel_index] += thread_output[mel_index];
+                }
             }
         }
     }
@@ -274,11 +264,7 @@ where
     mel
 }
 
-pub fn pcm_to_mel<T: Float + std::fmt::Display + Send + Sync + 'static>(
-    cfg: &super::Config,
-    samples: &[T],
-    filters: &[T],
-) -> Vec<T> {
+pub fn pcm_to_mel<T: Float>(cfg: &super::Config, samples: &[T], filters: &[T]) -> Vec<T> {
     log_mel_spectrogram_(
         samples,
         filters,
