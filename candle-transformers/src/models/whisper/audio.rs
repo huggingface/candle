@@ -139,6 +139,10 @@ fn log_mel_spectrogram_w<T: Float>(
         for j in 0..fft_size {
             fft_out[j] = fft_out[2 * j] * fft_out[2 * j] + fft_out[2 * j + 1] * fft_out[2 * j + 1];
         }
+        for j in 1..fft_size / 2 {
+            let v = fft_out[fft_size - j];
+            fft_out[j] += v;
+        }
 
         if speed_up {
             // scale down in the frequency domain results in a speed up in the time domain
