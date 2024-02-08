@@ -126,6 +126,10 @@ impl MultiHeadAttention {
         .flatten_from(2)?;
         Ok(wv)
     }
+
+    fn reset_kv_cache(&mut self) {
+        self.kv_cache = None;
+    }
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L111
@@ -188,6 +192,13 @@ impl ResidualAttentionBlock {
             .gelu()?
             .apply(&self.mlp_linear2)?;
         x + mlp
+    }
+
+    fn reset_kv_cache(&mut self) {
+        self.attn.reset_kv_cache();
+        if let Some((attn, _)) = &mut self.cross_attn {
+            attn.reset_kv_cache();
+        }
     }
 }
 
@@ -281,6 +292,12 @@ impl AudioEncoder {
         let x = self.ln_post.forward(&x)?;
         Ok(x)
     }
+
+    pub fn reset_kv_cache(&mut self) {
+        for block in self.blocks.iter_mut() {
+            block.reset_kv_cache();
+        }
+    }
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L176
@@ -348,6 +365,12 @@ impl TextDecoder {
         };
         Ok(logits)
     }
+
+    pub fn reset_kv_cache(&mut self) {
+        for block in self.blocks.iter_mut() {
+            block.reset_kv_cache();
+        }
+    }
 }
 
 // https://github.com/openai/whisper/blob/f572f2161ba831bae131364c3bffdead7af6d210/whisper/model.py#L221
@@ -367,5 +390,10 @@ impl Whisper {
             decoder,
             config,
         })
+    }
+
+    pub fn reset_kv_cache(&mut self) {
+        self.encoder.reset_kv_cache();
+        self.decoder.reset_kv_cache();
     }
 }

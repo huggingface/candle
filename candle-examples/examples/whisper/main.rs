@@ -22,6 +22,11 @@ mod pcm_decode;
 
 use candle_transformers::models::whisper::{self as m, audio, Config};
 
+#[cfg(feature = "microphone")]
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(feature = "microphone")]
+use std::sync::{Arc, Mutex};
+
 pub enum Model {
     Normal(m::model::Whisper),
     Quantized(m::quantized_model::Whisper),
@@ -264,7 +269,7 @@ impl Decoder {
         unreachable!()
     }
 
-    fn run(&mut self, mel: &Tensor) -> Result<Vec<Segment>> {
+    fn run(&mut self, mel: &Tensor, times: Option<(f64, f64)>) -> Result<Vec<Segment>> {
         let (_, _, content_frames) = mel.dims3()?;
         let mut seek = 0;
         let mut segments = vec![];
@@ -324,12 +329,19 @@ impl Decoder {
                     tokens_to_decode.clear()
                 }
             } else {
-                println!(
-                    "{:.1}s -- {:.1}s: {}",
-                    segment.start,
-                    segment.start + segment.duration,
-                    segment.dr.text,
-                )
+                match times {
+                    Some((start, end)) => {
+                        println!("{:.1}s -- {:.1}s: {}", start, end, segment.dr.text)
+                    }
+                    None => {
+                        println!(
+                            "{:.1}s -- {:.1}s: {}",
+                            segment.start,
+                            segment.start + segment.duration,
+                            segment.dr.text,
+                        )
+                    }
+                }
             }
             if self.verbose {
                 println!("{seek}: {segment:?}, in {:?}", start.elapsed());
@@ -337,6 +349,22 @@ impl Decoder {
             segments.push(segment)
         }
         Ok(segments)
+    }
+
+    fn set_language_token(&mut self, language_token: Option<u32>) {
+        self.language_token = language_token;
+    }
+
+    #[allow(dead_code)]
+    fn reset_kv_cache(&mut self) {
+        match &mut self.model {
+            Model::Normal(m) => m.reset_kv_cache(),
+            Model::Quantized(m) => m.reset_kv_cache(),
+        }
+    }
+
+    fn model(&mut self) -> &mut Model {
+        &mut self.model
     }
 }
 
@@ -464,6 +492,10 @@ struct Args {
     /// Print the full DecodingResult structure rather than just the text.
     #[arg(long)]
     verbose: bool,
+
+    /// use the microphone as input.
+    #[arg(long)]
+    microphone: bool,
 }
 
 fn main() -> Result<()> {
@@ -503,6 +535,10 @@ fn main() -> Result<()> {
             } else {
                 std::path::PathBuf::from(input)
             }
+        } else if args.microphone {
+            // we don't need an input file for the microphone so we just use a dummy path.
+            println!("No audio file submitted: Using microphone");
+            std::path::PathBuf::from("microphone")
         } else {
             println!("No audio file submitted: Downloading https://huggingface.co/datasets/Narsil/candle_demo/blob/main/samples_jfk.wav");
             dataset.get("samples_jfk.wav")?
@@ -528,6 +564,28 @@ fn main() -> Result<()> {
     };
     let config: Config = serde_json::from_str(&std::fs::read_to_string(config_filename)?)?;
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+    let model = if args.quantized {
+        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
+            &weights_filename,
+            &device,
+        )?;
+        Model::Quantized(m::quantized_model::Whisper::load(&vb, config.clone())?)
+    } else {
+        let vb =
+            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], m::DTYPE, &device)? };
+        Model::Normal(m::model::Whisper::load(&vb, config.clone())?)
+    };
+    let language_token = None;
+    let mut dc = Decoder::new(
+        model,
+        tokenizer.clone(),
+        args.seed,
+        &device,
+        language_token,
+        args.task,
+        args.timestamps,
+        args.verbose,
+    )?;
 
     let mel_bytes = match config.num_mel_bins {
         80 => include_bytes!("melfilters.bytes").as_slice(),
@@ -537,53 +595,166 @@ fn main() -> Result<()> {
     let mut mel_filters = vec![0f32; mel_bytes.len() / 4];
     <byteorder::LittleEndian as byteorder::ByteOrder>::read_f32_into(mel_bytes, &mut mel_filters);
 
-    let (pcm_data, sample_rate) = pcm_decode::pcm_decode(input)?;
-    if sample_rate != m::SAMPLE_RATE as u32 {
-        anyhow::bail!("input file must have a {} sampling rate", m::SAMPLE_RATE)
-    }
-    println!("pcm data loaded {}", pcm_data.len());
-    let mel = audio::pcm_to_mel(&config, &pcm_data, &mel_filters);
-    let mel_len = mel.len();
-    let mel = Tensor::from_vec(
-        mel,
-        (1, config.num_mel_bins, mel_len / config.num_mel_bins),
-        &device,
-    )?;
-    println!("loaded mel: {:?}", mel.dims());
+    if !args.microphone {
+        let mut input = std::fs::File::open(input)?;
+        let (header, data) = wav::read(&mut input)?;
+        println!("loaded wav data: {header:?}");
+        if header.sampling_rate != m::SAMPLE_RATE as u32 {
+            anyhow::bail!("wav file must have a {} sampling rate", m::SAMPLE_RATE)
+        }
+        let data = data.as_sixteen().expect("expected 16 bit wav file");
+        let channel_count = header.channel_count;
 
-    let mut model = if args.quantized {
-        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
-            &weights_filename,
+        let pcm_data: Vec<_> = data[..data.len() / channel_count as usize]
+            .iter()
+            .map(|v| *v as f32 / 32768.)
+            .collect();
+        // println!("pcm data loaded {}", pcm_data.len());
+        let start = std::time::Instant::now();
+        let mel = audio::pcm_to_mel(&config, &pcm_data, &mel_filters);
+        println!("mel computed in {:?}", start.elapsed());
+        let mel_len = mel.len();
+        let mel = Tensor::from_vec(
+            mel,
+            (1, config.num_mel_bins, mel_len / config.num_mel_bins),
             &device,
         )?;
-        Model::Quantized(m::quantized_model::Whisper::load(&vb, config)?)
-    } else {
-        let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], m::DTYPE, &device)? };
-        Model::Normal(m::model::Whisper::load(&vb, config)?)
-    };
+        let language_token = match (args.model.is_multilingual(), args.language) {
+            (true, None) => Some(multilingual::detect_language(dc.model(), &tokenizer, &mel)?),
+            (false, None) => None,
+            (true, Some(language)) => match token_id(&tokenizer, &format!("<|{language}|>")) {
+                Ok(token_id) => Some(token_id),
+                Err(_) => anyhow::bail!("language {language} is not supported"),
+            },
+            (false, Some(_)) => {
+                anyhow::bail!("a language cannot be set for non-multilingual models")
+            }
+        };
+        dc.set_language_token(language_token);
+        let start = std::time::Instant::now();
+        dc.run(&mel, None)?;
+        println!("decoded in {:?}", start.elapsed());
+        return Ok(());
+    }
 
-    let language_token = match (args.model.is_multilingual(), args.language) {
-        (true, None) => Some(multilingual::detect_language(&mut model, &tokenizer, &mel)?),
-        (false, None) => None,
-        (true, Some(language)) => match token_id(&tokenizer, &format!("<|{language}|>")) {
-            Ok(token_id) => Some(token_id),
-            Err(_) => anyhow::bail!("language {language} is not supported"),
-        },
-        (false, Some(_)) => {
-            anyhow::bail!("a language cannot be set for non-multilingual models")
+    // if using microphone feature, we need to use the nightly feature
+    #[cfg(feature = "microphone")]
+    {
+        // Set up the input device and stream with the default input config.
+        let host = cpal::default_host();
+        let _device = "default";
+        let _device = if _device == "default" {
+            host.default_input_device()
+        } else {
+            host.input_devices()?
+                .find(|x| x.name().map(|y| y == _device).unwrap_or(false))
         }
-    };
-    let mut dc = Decoder::new(
-        model,
-        tokenizer,
-        args.seed,
-        &device,
-        language_token,
-        args.task,
-        args.timestamps,
-        args.verbose,
-    )?;
-    dc.run(&mel)?;
+        .expect("failed to find input device");
+
+        let _config = _device
+            .default_input_config()
+            .expect("Failed to get default input config");
+
+        let channel_count = _config.channels() as usize;
+
+        let audio_ring_buffer = Arc::new(Mutex::new(Vec::new()));
+        let audio_ring_buffer_2 = audio_ring_buffer.clone();
+
+        std::thread::spawn(move || loop {
+            let data = record_audio(&_device, &_config, 300).unwrap();
+            audio_ring_buffer.lock().unwrap().extend_from_slice(&data);
+            let max_len = data.len() * 16;
+            let data_len = data.len();
+            let len = audio_ring_buffer.lock().unwrap().len();
+            if len > max_len {
+                let mut data = audio_ring_buffer.lock().unwrap();
+                let new_data = data[data_len..].to_vec();
+                *data = new_data;
+            }
+        });
+
+        // loop to process the audio data
+        for i in 0..60 {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            let data = audio_ring_buffer_2.lock().unwrap().clone();
+
+            let pcm_data: Vec<_> = data[..data.len() / channel_count as usize]
+                .iter()
+                .map(|v| *v as f32 / 32768.)
+                .collect();
+            // let start = std::time::Instant::now();
+            let mel = audio::pcm_to_mel(&config, &pcm_data, &mel_filters);
+            // println!("mel computed in {:?}", start.elapsed());
+            let mel_len = mel.len();
+            let mel = Tensor::from_vec(
+                mel,
+                (1, config.num_mel_bins, mel_len / config.num_mel_bins),
+                &device,
+            )?;
+
+            // on the first iteration, we detect the language and set the language token.
+            if i == 0 {
+                let language_token = match (args.model.is_multilingual(), args.language.clone()) {
+                    (true, None) => {
+                        Some(multilingual::detect_language(dc.model(), &tokenizer, &mel)?)
+                    }
+                    (false, None) => None,
+                    (true, Some(language)) => {
+                        match token_id(&tokenizer, &format!("<|{language}|>")) {
+                            Ok(token_id) => Some(token_id),
+                            Err(_) => anyhow::bail!("language {language} is not supported"),
+                        }
+                    }
+                    (false, Some(_)) => {
+                        anyhow::bail!("a language cannot be set for non-multilingual models")
+                    }
+                };
+                dc.set_language_token(language_token);
+            }
+
+            // let start = std::time::Instant::now();
+            dc.run(
+                &mel,
+                Some((
+                    i as f64,
+                    i as f64 + data.len() as f64 / m::SAMPLE_RATE as f64,
+                )),
+            )?;
+
+            // println!("done in {:?}", start.elapsed());
+            dc.reset_kv_cache();
+        }
+    }
     Ok(())
+}
+
+#[cfg(feature = "microphone")]
+fn record_audio(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    milliseconds: u64,
+) -> Result<Vec<i16>> {
+    let writer = Arc::new(Mutex::new(Vec::new()));
+    let writer_2 = writer.clone();
+    let stream = device.build_input_stream(
+        &config.config(),
+        move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            let processed = data
+                .iter()
+                .map(|v| (v * 32768.0) as i16)
+                .collect::<Vec<i16>>();
+            writer_2.lock().unwrap().extend_from_slice(&processed);
+        },
+        move |err| {
+            eprintln!("an error occurred on stream: {}", err);
+        },
+        None,
+    )?;
+    stream.play()?;
+    std::thread::sleep(std::time::Duration::from_millis(milliseconds));
+    drop(stream);
+    let data = writer.lock().unwrap().clone();
+    let step = 3;
+    let data: Vec<i16> = data.iter().step_by(step).copied().collect();
+    Ok(data)
 }
