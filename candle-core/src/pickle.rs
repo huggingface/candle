@@ -217,6 +217,13 @@ impl Object {
                 let args = args.remove(1);
                 (callable, args)
             }
+            Object::Class {
+                module_name,
+                class_name,
+            } if module_name == "torch._utils" && class_name == "_rebuild_parameter" => {
+                let mut args = args.tuple()?;
+                args.remove(0).reduce()?
+            }
             _ => (callable, args),
         };
         match callable {
