@@ -110,6 +110,7 @@ fn log_mel_spectrogram_w<T: Float>(
     };
 
     let zero = T::zero();
+    let half = T::from(0.5).unwrap();
     let mut fft_in = vec![zero; fft_size];
     let mut mel = vec![zero; n_len * n_mel];
     let n_samples = samples.len();
@@ -137,6 +138,13 @@ fn log_mel_spectrogram_w<T: Float>(
         // Calculate modulus^2 of complex numbers
         for j in 0..fft_size {
             fft_out[j] = fft_out[2 * j] * fft_out[2 * j] + fft_out[2 * j + 1] * fft_out[2 * j + 1];
+        }
+
+        if speed_up {
+            // scale down in the frequency domain results in a speed up in the time domain
+            for j in 0..n_fft {
+                fft_out[j] = half * (fft_out[2 * j] + fft_out[2 * j + 1]);
+            }
         }
 
         // mel spectrogram
