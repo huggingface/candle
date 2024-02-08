@@ -628,7 +628,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // if using microphone feature, we need to use the nightly feature
     #[cfg(feature = "microphone")]
     {
         // Set up the input device and stream with the default input config.
