@@ -45,7 +45,7 @@ impl CustomOp1 for AllReduce {
         "allreduce"
     }
 
-    fn cpu_fwd(&self, _s: &CpuStorage, _l: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn cpu_fwd(&self, _s: &CpuStorage, _l: &Layout) -> Result<Option<(CpuStorage, Shape)>> {
         todo!("implement allreduce for cpu is not necessary for single node");
     }
 
@@ -54,7 +54,7 @@ impl CustomOp1 for AllReduce {
         &self,
         s: &candle::CudaStorage,
         l: &Layout,
-    ) -> Result<(candle::CudaStorage, Shape)> {
+    ) -> Result<Option<(candle::CudaStorage, Shape)>> {
         use candle::cuda_backend::WrapErr;
         let elem_count = l.shape().elem_count();
         let dev = s.device().clone();
@@ -66,7 +66,7 @@ impl CustomOp1 for AllReduce {
         let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
         self.comm.all_reduce(s, &mut dst, &ReduceOp::Sum).unwrap();
         let dst = candle::CudaStorage::wrap_cuda_slice(dst, dev);
-        Ok((dst, l.shape().clone()))
+        Ok(Some((dst, l.shape().clone())))
     }
 }
 

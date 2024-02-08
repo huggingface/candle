@@ -42,7 +42,7 @@ impl candle::CustomOp1 for Im2Col {
         "im2col"
     }
 
-    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<Option<(CpuStorage, Shape)>> {
         let &Self {
             h_k,
             w_k,
@@ -98,7 +98,7 @@ impl candle::CustomOp1 for Im2Col {
             }
         }
         let storage = candle::WithDType::to_cpu_storage_owned(dst);
-        Ok((storage, (b * h_out * w_out, c * h_k * w_k).into()))
+        Ok(Some((storage, (b * h_out * w_out, c * h_k * w_k).into())))
     }
 }
 

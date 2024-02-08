@@ -31,7 +31,7 @@ impl CustomOp1 for LayerNorm {
         "layer-norm"
     }
 
-    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<Option<(CpuStorage, Shape)>> {
         let (dim1, dim2) = layout.shape().dims2()?;
         let slice = storage.as_slice::<f32>()?;
         let src = match layout.contiguous_offsets() {
@@ -46,7 +46,7 @@ impl CustomOp1 for LayerNorm {
             dst.extend(src.iter().map(|x| x * s_variance))
         }
         let storage = candle::WithDType::to_cpu_storage_owned(dst);
-        Ok((storage, layout.shape().clone()))
+        Ok(Some((storage, layout.shape().clone())))
     }
 
     #[cfg(feature = "cuda")]
@@ -54,7 +54,7 @@ impl CustomOp1 for LayerNorm {
         &self,
         storage: &candle::CudaStorage,
         layout: &Layout,
-    ) -> Result<(candle::CudaStorage, Shape)> {
+    ) -> Result<Option<(candle::CudaStorage, Shape)>> {
         use candle::backend::BackendStorage;
         use candle::cuda_backend::cudarc::driver::{LaunchAsync, LaunchConfig};
         use candle::cuda_backend::WrapErr;
@@ -79,7 +79,7 @@ impl CustomOp1 for LayerNorm {
         unsafe { func.launch(cfg, params) }.w()?;
 
         let dst = candle::CudaStorage::wrap_cuda_slice(dst, dev);
-        Ok((dst, layout.shape().clone()))
+        Ok(Some((dst, layout.shape().clone())))
     }
 }
 

@@ -2424,6 +2424,31 @@ impl Tensor {
         Ok(from_storage(storage, shape, BackpropOp::none(), false))
     }
 
+    /// Applies a unary custom op without backward support
+    pub fn apply_inplace_op1_no_bwd<C: CustomOp1>(&self, c: &C) -> Result<()> {
+        self.storage().apply_inplace_op1(self.layout(), c)?;
+        Ok(())
+    }
+
+    /// Applies a binary custom op without backward support
+    pub fn apply_inplace_op2_no_bwd<C: CustomOp2>(&self, rhs: &Self, c: &C) -> Result<()> {
+        self.storage()
+                .apply_inplace_op2(self.layout(), &rhs.storage(), rhs.layout(), c)?;
+        Ok(())
+    }
+
+    /// Applies a ternary custom op without backward support
+    pub fn apply_inplace_op3_no_bwd<C: CustomOp3>(&self, t2: &Self, t3: &Self, c: &C) -> Result<()> {
+        self.storage().apply_inplace_op3(
+            self.layout(),
+            &t2.storage(),
+            t2.layout(),
+            &t3.storage(),
+            t3.layout(),
+            c,
+        )?;
+        Ok(())
+    }
     /// Applies a unary custom op.
     pub fn apply_op1_arc(&self, c: Arc<Box<dyn CustomOp1 + Send + Sync>>) -> Result<Self> {
         let (storage, shape) = self

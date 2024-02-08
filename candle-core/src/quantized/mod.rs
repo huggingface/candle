@@ -407,7 +407,7 @@ impl crate::CustomOp1 for QTensor {
         &self,
         storage: &crate::CpuStorage,
         layout: &crate::Layout,
-    ) -> Result<(crate::CpuStorage, Shape)> {
+    ) -> Result<Option<(crate::CpuStorage, Shape)>> {
         if !layout.is_contiguous() {
             crate::bail!("input tensor is not contiguous {layout:?}")
         }
@@ -434,7 +434,7 @@ impl crate::CustomOp1 for QTensor {
         let slice = &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
         let mut dst_storage = vec![0f32; dst_shape.elem_count()];
         self_storage.matmul_t((dst_shape.elem_count() / n, k, n), slice, &mut dst_storage)?;
-        Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
+        Ok(Some((crate::CpuStorage::F32(dst_storage), dst_shape)))
     }
 
     #[cfg(feature = "metal")]
@@ -442,7 +442,7 @@ impl crate::CustomOp1 for QTensor {
         &self,
         storage: &crate::MetalStorage,
         layout: &crate::Layout,
-    ) -> Result<(crate::MetalStorage, Shape)> {
+    ) -> Result<Option<(crate::MetalStorage, Shape)>> {
         use crate::MetalError;
 
         if !layout.is_contiguous() {
@@ -487,7 +487,7 @@ impl crate::CustomOp1 for QTensor {
         )
         .map_err(MetalError::from)?;
         let dst_storage = crate::MetalStorage::new(dst, device, DType::F32);
-        Ok((dst_storage, dst_shape))
+        Ok(Some((dst_storage, dst_shape)))
     }
 }
 

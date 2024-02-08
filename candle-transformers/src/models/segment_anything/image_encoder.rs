@@ -55,7 +55,7 @@ impl candle::CustomOp3 for Add3 {
         l2: &candle::Layout,
         s3: &candle::CpuStorage,
         l3: &candle::Layout,
-    ) -> Result<(candle::CpuStorage, candle::Shape)> {
+    ) -> Result<Option<(candle::CpuStorage, candle::Shape)>> {
         use rayon::prelude::*;
 
         let Add3(b, q_h, q_w, k_h, k_w) = *self;
@@ -94,7 +94,7 @@ impl candle::CustomOp3 for Add3 {
                 }
             });
         let dst = candle::WithDType::to_cpu_storage_owned(dst);
-        Ok((dst, (b, q_h * q_w, k_h * k_w).into()))
+        Ok(Some((dst, (b, q_h * q_w, k_h * k_w).into())))
     }
 }
 

@@ -185,16 +185,22 @@ impl Storage {
     pub(crate) fn apply_op1(&self, l: &Layout, c: &dyn CustomOp1) -> Result<(Self, Shape)> {
         match self {
             Self::Cpu(storage) => {
-                let (storage, shape) = c.cpu_fwd(storage, l)?;
-                Ok((Self::Cpu(storage), shape))
+                match c.cpu_fwd(storage, l)? {
+                    Some((storage, shape)) => Ok((Self::Cpu(storage), shape)),
+                    _ => panic!("CustomOp1: returned None for non-inplace op!"),
+                }
             }
             Self::Cuda(storage) => {
-                let (storage, shape) = c.cuda_fwd(storage, l)?;
-                Ok((Self::Cuda(storage), shape))
+                match c.cuda_fwd(storage, l)? {
+                    Some((storage, shape)) => Ok((Self::Cuda(storage), shape)),
+                    _ => panic!("CustomOp1: returned None for non-inplace op!"),
+                }
             }
             Self::Metal(storage) => {
-                let (storage, shape) = c.metal_fwd(storage, l)?;
-                Ok((Self::Metal(storage), shape))
+                match c.metal_fwd(storage, l)? {
+                    Some((storage, shape)) => Ok((Self::Metal(storage), shape)),
+                    _ => panic!("CustomOp1: returned None for non-inplace op!"),
+                }
             }
         }
     }
@@ -209,16 +215,22 @@ impl Storage {
         self.same_device(t2, c.name())?;
         match (self, t2) {
             (Self::Cpu(s1), Self::Cpu(s2)) => {
-                let (s, shape) = c.cpu_fwd(s1, l1, s2, l2)?;
-                Ok((Self::Cpu(s), shape))
+                match c.cpu_fwd(s1, l1, s2, l2)? {
+                    Some((storage, shape)) => Ok((Self::Cpu(storage), shape)),
+                    _ => panic!("CustomOp2: returned None for non-inplace op!"),
+                }
             }
             (Self::Cuda(s1), Self::Cuda(s2)) => {
-                let (s, shape) = c.cuda_fwd(s1, l1, s2, l2)?;
-                Ok((Self::Cuda(s), shape))
+                match c.cuda_fwd(s1, l1, s2, l2)? {
+                    Some((storage, shape)) => Ok((Self::Cuda(storage), shape)),
+                    _ => panic!("CustomOp2: returned None for non-inplace op!"),
+                }
             }
             (Self::Metal(s1), Self::Metal(s2)) => {
-                let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
-                Ok((Self::Metal(s), shape))
+                match c.metal_fwd(s1, l1, s2, l2)? {
+                    Some((storage, shape)) => Ok((Self::Metal(storage), shape)),
+                    _ => panic!("CustomOp2: returned None for non-inplace op!"),
+                }
             }
             _ => unreachable!(),
         }
@@ -237,16 +249,92 @@ impl Storage {
         self.same_device(t3, c.name())?;
         match (self, t2, t3) {
             (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => {
-                let (s, shape) = c.cpu_fwd(s1, l1, s2, l2, s3, l3)?;
-                Ok((Self::Cpu(s), shape))
+                match c.cpu_fwd(s1, l1, s2, l2, s3, l3)? {
+                    Some((storage, shape)) => Ok((Self::Cpu(storage), shape)),
+                    _ => panic!("CustomOp3: returned None for non-inplace op!"),
+                }
             }
             (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => {
-                let (s, shape) = c.cuda_fwd(s1, l1, s2, l2, s3, l3)?;
-                Ok((Self::Cuda(s), shape))
+                match c.cuda_fwd(s1, l1, s2, l2, s3, l3)? {
+                    Some((storage, shape)) => Ok((Self::Cuda(storage), shape)),
+                    _ => panic!("CustomOp3: returned None for non-inplace op!"),
+                }
             }
             (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
-                let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
-                Ok((Self::Metal(s), shape))
+                match c.metal_fwd(s1, l1, s2, l2, s3, l3)? {
+                    Some((storage, shape)) => Ok((Self::Metal(storage), shape)),
+                    _ => panic!("CustomOp3: returned None for non-inplace op!"),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn apply_inplace_op1(&self, l: &Layout, c: &dyn CustomOp1) -> Result<()> {
+        match self {
+            Self::Cpu(storage) => {
+                c.cpu_fwd(storage, l)?;
+                Ok(())
+            }
+            Self::Cuda(storage) => {
+                c.cuda_fwd(storage, l)?;
+                Ok(())
+            }
+            Self::Metal(storage) => {
+                c.metal_fwd(storage, l)?;
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn apply_inplace_op2(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn CustomOp2,
+    ) -> Result<()> {
+        self.same_device(t2, c.name())?;
+        match (self, t2) {
+            (Self::Cpu(s1), Self::Cpu(s2)) => {
+                c.cpu_fwd(s1, l1, s2, l2)?;
+                Ok(())
+            }
+            (Self::Cuda(s1), Self::Cuda(s2)) => {
+                c.cuda_fwd(s1, l1, s2, l2)?;
+                Ok(())
+            }
+            (Self::Metal(s1), Self::Metal(s2)) => {
+                c.metal_fwd(s1, l1, s2, l2)?;
+                Ok(())
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn apply_inplace_op3(
+        &self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn CustomOp3,
+    ) -> Result<()> {
+        self.same_device(t2, c.name())?;
+        self.same_device(t3, c.name())?;
+        match (self, t2, t3) {
+            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => {
+                c.cpu_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok(())
+            }
+            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => {
+                c.cuda_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok(())
+            }
+            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
+                c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok(())
             }
             _ => unreachable!(),
         }

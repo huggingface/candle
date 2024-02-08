@@ -178,23 +178,34 @@ pub trait CustomOp1 {
 
     /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
-    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)>;
+    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<Option<(CpuStorage, Shape)>>;
 
     /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
-    fn cuda_fwd(&self, _storage: &CudaStorage, _layout: &Layout) -> Result<(CudaStorage, Shape)> {
+    fn cuda_fwd(&self, _storage: &CudaStorage, _layout: &Layout) -> Result<Option<(CudaStorage, Shape)>> {
         Err(crate::Error::Cuda(
             format!("no cuda implementation for {}", self.name()).into(),
         ))
     }
 
+<<<<<<< HEAD
+=======
+    /// The forward pass, as run on a gcu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn gcu_fwd(&self, _storage: &GcuStorage, _layout: &Layout) -> Result<Option<(GcuStorage, Shape)>> {
+        Err(crate::Error::Gcu(
+            format!("no gcu implementation for {}", self.name()).into(),
+        ))
+    }
+
+>>>>>>> 3893993 (On main: Support Inplace CustomOP)
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn metal_fwd(
         &self,
         _storage: &MetalStorage,
         _layout: &Layout,
-    ) -> Result<(MetalStorage, Shape)> {
+    ) -> Result<Option<(MetalStorage, Shape)>> {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
         ))
@@ -219,7 +230,7 @@ pub trait CustomOp2 {
         l1: &Layout,
         s2: &CpuStorage,
         l2: &Layout,
-    ) -> Result<(CpuStorage, Shape)>;
+    ) -> Result<Option<(CpuStorage, Shape)>>;
 
     /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
@@ -229,12 +240,29 @@ pub trait CustomOp2 {
         _: &Layout,
         _: &CudaStorage,
         _: &Layout,
-    ) -> Result<(CudaStorage, Shape)> {
+    ) -> Result<Option<(CudaStorage, Shape)>> {
         Err(crate::Error::Cuda(
             format!("no cuda implementation for {}", self.name()).into(),
         ))
     }
 
+<<<<<<< HEAD
+=======
+    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn gcu_fwd(
+        &self,
+        _: &GcuStorage,
+        _: &Layout,
+        _: &GcuStorage,
+        _: &Layout,
+    ) -> Result<Option<(GcuStorage, Shape)>> {
+        Err(crate::Error::Gcu(
+            format!("no gcu implementation for {}", self.name()).into(),
+        ))
+    }
+
+>>>>>>> 3893993 (On main: Support Inplace CustomOP)
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn metal_fwd(
@@ -243,7 +271,7 @@ pub trait CustomOp2 {
         _: &Layout,
         _: &MetalStorage,
         _: &Layout,
-    ) -> Result<(MetalStorage, Shape)> {
+    ) -> Result<Option<(MetalStorage, Shape)>> {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
         ))
@@ -273,7 +301,7 @@ pub trait CustomOp3 {
         l2: &Layout,
         s3: &CpuStorage,
         l3: &Layout,
-    ) -> Result<(CpuStorage, Shape)>;
+    ) -> Result<Option<(CpuStorage, Shape)>>;
 
     /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
@@ -285,12 +313,31 @@ pub trait CustomOp3 {
         _: &Layout,
         _: &CudaStorage,
         _: &Layout,
-    ) -> Result<(CudaStorage, Shape)> {
+    ) -> Result<Option<(CudaStorage, Shape)>> {
         Err(crate::Error::Cuda(
             format!("no cuda implementation for {}", self.name()).into(),
         ))
     }
 
+<<<<<<< HEAD
+=======
+    /// The forward pass, as run on a gcu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn gcu_fwd(
+        &self,
+        _: &GcuStorage,
+        _: &Layout,
+        _: &GcuStorage,
+        _: &Layout,
+        _: &GcuStorage,
+        _: &Layout,
+    ) -> Result<Option<(GcuStorage, Shape)>> {
+        Err(crate::Error::Gcu(
+            format!("no gcu implementation for {}", self.name()).into(),
+        ))
+    }
+
+>>>>>>> 3893993 (On main: Support Inplace CustomOP)
     /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn metal_fwd(
@@ -301,7 +348,7 @@ pub trait CustomOp3 {
         _: &Layout,
         _: &MetalStorage,
         _: &Layout,
-    ) -> Result<(MetalStorage, Shape)> {
+    ) -> Result<Option<(MetalStorage, Shape)>> {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
         ))
