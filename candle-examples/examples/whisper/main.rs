@@ -596,20 +596,11 @@ fn main() -> Result<()> {
     <byteorder::LittleEndian as byteorder::ByteOrder>::read_f32_into(mel_bytes, &mut mel_filters);
 
     if !args.microphone {
-        let mut input = std::fs::File::open(input)?;
-        let (header, data) = wav::read(&mut input)?;
-        println!("loaded wav data: {header:?}");
-        if header.sampling_rate != m::SAMPLE_RATE as u32 {
-            anyhow::bail!("wav file must have a {} sampling rate", m::SAMPLE_RATE)
+        let (pcm_data, sample_rate) = pcm_decode::pcm_decode(input)?;
+        if sample_rate != m::SAMPLE_RATE as u32 {
+            anyhow::bail!("input file must have a {} sampling rate", m::SAMPLE_RATE)
         }
-        let data = data.as_sixteen().expect("expected 16 bit wav file");
-        let channel_count = header.channel_count;
-
-        let pcm_data: Vec<_> = data[..data.len() / channel_count as usize]
-            .iter()
-            .map(|v| *v as f32 / 32768.)
-            .collect();
-        // println!("pcm data loaded {}", pcm_data.len());
+        println!("pcm data loaded {}", pcm_data.len());
         let start = std::time::Instant::now();
         let mel = audio::pcm_to_mel(&config, &pcm_data, &mel_filters);
         println!("mel computed in {:?}", start.elapsed());
@@ -674,17 +665,15 @@ fn main() -> Result<()> {
         });
 
         // loop to process the audio data
+        println!("Recording audio for 60 seconds");
         for i in 0..60 {
             std::thread::sleep(std::time::Duration::from_millis(1000));
             let data = audio_ring_buffer_2.lock().unwrap().clone();
-
             let pcm_data: Vec<_> = data[..data.len() / channel_count as usize]
                 .iter()
                 .map(|v| *v as f32 / 32768.)
                 .collect();
-            // let start = std::time::Instant::now();
             let mel = audio::pcm_to_mel(&config, &pcm_data, &mel_filters);
-            // println!("mel computed in {:?}", start.elapsed());
             let mel_len = mel.len();
             let mel = Tensor::from_vec(
                 mel,
@@ -711,8 +700,6 @@ fn main() -> Result<()> {
                 };
                 dc.set_language_token(language_token);
             }
-
-            // let start = std::time::Instant::now();
             dc.run(
                 &mel,
                 Some((
@@ -720,8 +707,6 @@ fn main() -> Result<()> {
                     i as f64 + data.len() as f64 / m::SAMPLE_RATE as f64,
                 )),
             )?;
-
-            // println!("done in {:?}", start.elapsed());
             dc.reset_kv_cache();
         }
     }
