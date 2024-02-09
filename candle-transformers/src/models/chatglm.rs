@@ -161,6 +161,10 @@ struct SelfAttention {
     query_key_value: Linear,
     core_attention: CoreAttention,
     dense: Linear,
+    multi_query_attention: bool,
+    num_attention_heads_per_partition: usize,
+    num_multi_query_groups_per_partition: usize,
+    hidden_size_per_attention_head: usize,
 }
 
 impl SelfAttention {
@@ -189,11 +193,38 @@ impl SelfAttention {
             query_key_value,
             core_attention,
             dense,
+            multi_query_attention: cfg.multi_query_attention,
+            num_attention_heads_per_partition: cfg.num_attention_heads,
+            num_multi_query_groups_per_partition: cfg.multi_query_group_num,
+            hidden_size_per_attention_head: cfg.kv_channels,
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+        let mixed_x_layer = xs.apply(&self.query_key_value)?;
+        if !self.multi_query_attention {
+            candle::bail!("only multi_query_attention=true is supported")
+        }
+        let hpa = self.hidden_size_per_attention_head;
+        let query_layer =
+            mixed_x_layer.narrow(D::Minus1, 0, self.num_attention_heads_per_partition * hpa)?;
+        let key_layer = mixed_x_layer.narrow(
+            D::Minus1,
+            self.num_attention_heads_per_partition * hpa,
+            self.num_multi_query_groups_per_partition * hpa,
+        )?;
+        let value_layer = mixed_x_layer.narrow(
+            D::Minus1,
+            self.num_attention_heads_per_partition * hpa
+                + self.num_multi_query_groups_per_partition * hpa,
+            self.num_multi_query_groups_per_partition * hpa,
+        )?;
+
+        let context_layer =
+            self.core_attention
+                .forward(&query_layer, &key_layer, &value_layer, attention_mask)?;
+        let output = context_layer.apply(&self.dense)?;
+        Ok(output)
     }
 }
 
@@ -239,6 +270,7 @@ struct Block {
     self_attention: SelfAttention,
     post_attention_layernorm: candle_nn::LayerNorm,
     mlp: MLP,
+    apply_residual_connection_post_layernorm: bool,
 }
 
 impl Block {
@@ -278,11 +310,29 @@ impl Block {
             self_attention,
             post_attention_layernorm,
             mlp,
+            apply_residual_connection_post_layernorm: cfg.apply_residual_connection_post_layernorm,
         })
     }
 
     fn forward(&self, xs: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
-        todo!()
+        let layernorm_output = xs.apply(&self.input_layernorm)?;
+        let attention_output = self
+            .self_attention
+            .forward(&layernorm_output, attention_mask)?;
+        let residual = if self.apply_residual_connection_post_layernorm {
+            &layernorm_output
+        } else {
+            xs
+        };
+        let layernorm_input = (residual + attention_output)?;
+        let layernorm_output = layernorm_input.apply(&self.post_attention_layernorm)?;
+        let mlp_output = layernorm_output.apply(&self.mlp)?;
+        let residual = if self.apply_residual_connection_post_layernorm {
+            &layernorm_output
+        } else {
+            &layernorm_input
+        };
+        mlp_output + residual
     }
 }
 
