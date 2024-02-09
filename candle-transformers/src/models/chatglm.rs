@@ -295,10 +295,10 @@ impl MLP {
             vb.pp("dense_h_to_4h"),
         )?;
         let dense_4h_to_h = linear(
-            cfg.ffn_hidden_size * 2,
+            cfg.ffn_hidden_size,
             cfg.hidden_size,
             cfg.add_bias_linear,
-            vb.pp("dense_h_to_4h"),
+            vb.pp("dense_4h_to_h"),
         )?;
         Ok(Self {
             dense_4h_to_h,
