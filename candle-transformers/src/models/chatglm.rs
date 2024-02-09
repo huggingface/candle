@@ -91,15 +91,68 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-struct CoreAttention {}
+struct CoreAttention {
+    coeff: Option<f64>,
+    norm_factor: f64,
+}
+
+fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+    let shape = mask.shape();
+    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
+    let m = mask.where_cond(&on_true, on_false)?;
+    Ok(m)
+}
 
 impl CoreAttention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        todo!()
+    fn new(layer_number: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let norm_factor = (cfg.kv_channels as f64).sqrt();
+        let (norm_factor, coeff) = if cfg.apply_query_key_layer_scaling {
+            let coeff = f64::max(1.0, layer_number as f64);
+            (norm_factor * coeff, Some(coeff))
+        } else {
+            (norm_factor, None)
+        };
+        Ok(Self { coeff, norm_factor })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(
+        &self,
+        query_layer: &Tensor,
+        key_layer: &Tensor,
+        value_layer: &Tensor,
+        attention_mask: &Tensor,
+    ) -> Result<Tensor> {
+        let output_size = (
+            query_layer.dim(1)?,
+            query_layer.dim(2)?,
+            query_layer.dim(0)?,
+            key_layer.dim(0)?,
+        );
+        let query_layer =
+            query_layer.reshape((output_size.2, output_size.0 * output_size.1, ()))?;
+        let key_layer = key_layer.reshape((output_size.3, output_size.0 * output_size.1, ()))?;
+        let matmul_result = Tensor::matmul(
+            &query_layer.transpose(0, 1)?,
+            &key_layer.transpose(0, 1)?.transpose(1, 2)?,
+        )?;
+        let matmul_result = (matmul_result / self.norm_factor)?.reshape(output_size)?;
+        let attention_scores = masked_fill(&matmul_result, attention_mask, f32::NEG_INFINITY)?;
+        let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+
+        let output_size = (
+            value_layer.dim(1)?,
+            value_layer.dim(2)?,
+            query_layer.dim(0)?,
+            value_layer.dim(3)?,
+        );
+        let value_layer =
+            value_layer.reshape((value_layer.dim(0)?, output_size.0 * output_size.1, ()))?;
+        let attention_probs =
+            attention_probs.reshape((output_size.0 * output_size.1, output_size.2, ()))?;
+        let context_layer = Tensor::matmul(&attention_probs, &value_layer.transpose(0, 1)?)?;
+        let context_layer = context_layer.reshape(output_size)?;
+        let context_layer = context_layer.permute((2, 0, 1, 3))?.contiguous()?;
+        context_layer.flatten_from(D::Minus2)
     }
 }
 
@@ -111,7 +164,7 @@ struct SelfAttention {
 }
 
 impl SelfAttention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(layer_number: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let projection_size = cfg.kv_channels * cfg.num_attention_heads;
         let hidden_size_per_attention_head = projection_size / cfg.num_attention_heads;
         let qkv_hidden_size = if cfg.multi_query_attention {
@@ -125,7 +178,7 @@ impl SelfAttention {
             cfg.add_bias_linear || cfg.add_qkv_bias,
             vb.pp("query_key_value"),
         )?;
-        let core_attention = CoreAttention::new(cfg, vb.pp("core_attention"))?;
+        let core_attention = CoreAttention::new(layer_number, cfg, vb.pp("core_attention"))?;
         let dense = linear(
             cfg.hidden_size,
             cfg.hidden_size,
@@ -189,7 +242,7 @@ struct Block {
 }
 
 impl Block {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(layer_number: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let input_layernorm = if cfg.rmsnorm {
             candle_nn::rms_norm(
                 cfg.hidden_size,
@@ -218,7 +271,7 @@ impl Block {
                 vb.pp("post_attention_layernorm"),
             )?
         };
-        let self_attention = SelfAttention::new(cfg, vb.pp("self_attention"))?;
+        let self_attention = SelfAttention::new(layer_number, cfg, vb.pp("self_attention"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
         Ok(Self {
             input_layernorm,
@@ -228,7 +281,7 @@ impl Block {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
         todo!()
     }
 }
@@ -241,11 +294,46 @@ struct Transformer {
 
 impl Transformer {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        todo!()
+        let vb_l = vb.pp("layers");
+        let mut layers = Vec::with_capacity(cfg.num_layers);
+        for layer_index in 0..cfg.num_layers {
+            let block = Block::new(layer_index + 1, cfg, vb_l.pp(layer_index))?;
+            layers.push(block)
+        }
+        let final_layernorm = if cfg.post_layer_norm {
+            let ln = if cfg.rmsnorm {
+                candle_nn::rms_norm(
+                    cfg.hidden_size,
+                    cfg.layernorm_epsilon,
+                    vb.pp("final_layernorm"),
+                )?
+                .into_inner()
+            } else {
+                candle_nn::layer_norm(
+                    cfg.hidden_size,
+                    cfg.layernorm_epsilon,
+                    vb.pp("final_layernorm"),
+                )?
+            };
+            Some(ln)
+        } else {
+            None
+        };
+        Ok(Self {
+            layers,
+            final_layernorm,
+        })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+        let mut xs = xs.clone();
+        for block in self.layers.iter() {
+            xs = block.forward(&xs, attention_mask)?
+        }
+        match self.final_layernorm.as_ref() {
+            None => Ok(xs),
+            Some(ln) => xs.apply(ln),
+        }
     }
 }
 
