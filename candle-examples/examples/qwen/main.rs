@@ -113,6 +113,22 @@ impl TextGeneration {
     }
 }
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
+enum WhichModel {
+    #[value(name = "0.5b")]
+    W0_5b,
+    #[value(name = "1.8b")]
+    W1_8b,
+    #[value(name = "4b")]
+    W4b,
+    #[value(name = "7b")]
+    W7b,
+    #[value(name = "14b")]
+    W14b,
+    #[value(name = "72b")]
+    W72b,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -143,7 +159,7 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 100)]
+    #[arg(long, short = 'n', default_value_t = 10000)]
     sample_len: usize,
 
     #[arg(long)]
@@ -165,6 +181,9 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
+
+    #[arg(long, default_value = "0.5b")]
+    model: WhichModel,
 }
 
 fn main() -> Result<()> {
@@ -197,7 +216,17 @@ fn main() -> Result<()> {
     let api = Api::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
-        None => "Qwen/Qwen1.5-0.5B".to_string(),
+        None => {
+            let size = match args.model {
+                WhichModel::W0_5b => "0.5B",
+                WhichModel::W1_8b => "1.8B",
+                WhichModel::W4b => "4B",
+                WhichModel::W7b => "7B",
+                WhichModel::W14b => "14B",
+                WhichModel::W72b => "72B",
+            };
+            format!("Qwen/Qwen1.5-{size}")
+        }
     };
     let repo = api.repo(Repo::with_revision(
         model_id,
@@ -213,10 +242,12 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => {
-            // candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
-            vec![repo.get("model.safetensors")?]
-        }
+        None => match args.model {
+            WhichModel::W0_5b | WhichModel::W1_8b => vec![repo.get("model.safetensors")?],
+            WhichModel::W4b | WhichModel::W7b | WhichModel::W14b | WhichModel::W72b => {
+                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
+            }
+        },
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
