@@ -1,4 +1,3 @@
-#![allow(unused)]
 use crate::models::with_tracing::Linear;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
@@ -27,7 +26,7 @@ pub struct Config {
 }
 
 impl Config {
-    fn glm3_6b() -> Self {
+    pub fn glm3_6b() -> Self {
         Self {
             num_layers: 28,
             padded_vocab_size: 65024,
@@ -121,7 +120,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
 }
 
 impl CoreAttention {
-    fn new(layer_number: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(layer_number: usize, cfg: &Config) -> Result<Self> {
         let norm_factor = (cfg.kv_channels as f64).sqrt();
         let (norm_factor, coeff) = if cfg.apply_query_key_layer_scaling {
             let coeff = f64::max(1.0, layer_number as f64);
@@ -153,6 +152,10 @@ impl CoreAttention {
             &key_layer.transpose(0, 1)?.transpose(1, 2)?,
         )?;
         let matmul_result = (matmul_result / self.norm_factor)?.reshape(output_size)?;
+        let matmul_result = match self.coeff {
+            None => matmul_result,
+            Some(coeff) => (matmul_result * coeff)?,
+        };
         let attention_scores = match attention_mask {
             Some(mask) => masked_fill(&matmul_result, mask, f32::NEG_INFINITY)?,
             None => matmul_result,
@@ -185,6 +188,7 @@ struct SelfAttention {
     num_attention_heads_per_partition: usize,
     num_multi_query_groups_per_partition: usize,
     hidden_size_per_attention_head: usize,
+    kv_cache: Option<(Tensor, Tensor)>,
 }
 
 impl SelfAttention {
@@ -202,7 +206,7 @@ impl SelfAttention {
             cfg.add_bias_linear || cfg.add_qkv_bias,
             vb.pp("query_key_value"),
         )?;
-        let core_attention = CoreAttention::new(layer_number, cfg, vb.pp("core_attention"))?;
+        let core_attention = CoreAttention::new(layer_number, cfg)?;
         let dense = linear(
             cfg.hidden_size,
             cfg.hidden_size,
@@ -217,11 +221,16 @@ impl SelfAttention {
             num_attention_heads_per_partition: cfg.num_attention_heads,
             num_multi_query_groups_per_partition: cfg.multi_query_group_num,
             hidden_size_per_attention_head: cfg.kv_channels,
+            kv_cache: None,
         })
     }
 
+    fn reset_kv_cache(&mut self) {
+        self.kv_cache = None
+    }
+
     fn forward(
-        &self,
+        &mut self,
         xs: &Tensor,
         attention_mask: &Option<Tensor>,
         rotary_emb: &RotaryEmbedding,
@@ -245,9 +254,22 @@ impl SelfAttention {
             self.num_multi_query_groups_per_partition * hpa,
         )?;
 
-        let seqlen_offset = 0; // TODO: tweak once we have the KV cache.
+        let seqlen_offset = match &self.kv_cache {
+            None => 0,
+            Some((prev_k, _)) => prev_k.dim(0)?,
+        };
         let query_layer = rotary_emb.apply(&query_layer, seqlen_offset)?;
         let key_layer = rotary_emb.apply(&key_layer, seqlen_offset)?;
+
+        let (key_layer, value_layer) = match &self.kv_cache {
+            None => (key_layer, value_layer),
+            Some((prev_k, prev_v)) => {
+                let k = Tensor::cat(&[prev_k, &key_layer], 0)?;
+                let v = Tensor::cat(&[prev_v, &value_layer], 0)?;
+                (k, v)
+            }
+        };
+        self.kv_cache = Some((key_layer.clone(), value_layer.clone()));
 
         let context_layer =
             self.core_attention
@@ -343,8 +365,12 @@ impl Block {
         })
     }
 
+    fn reset_kv_cache(&mut self) {
+        self.self_attention.reset_kv_cache()
+    }
+
     fn forward(
-        &self,
+        &mut self,
         xs: &Tensor,
         attention_mask: &Option<Tensor>,
         rotary_emb: &RotaryEmbedding,
@@ -412,9 +438,15 @@ impl Transformer {
         })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: &Option<Tensor>) -> Result<Tensor> {
+    fn reset_kv_cache(&mut self) {
+        for block in self.layers.iter_mut() {
+            block.reset_kv_cache()
+        }
+    }
+
+    fn forward(&mut self, xs: &Tensor, attention_mask: &Option<Tensor>) -> Result<Tensor> {
         let mut xs = xs.clone();
-        for block in self.layers.iter() {
+        for block in self.layers.iter_mut() {
             xs = block.forward(&xs, attention_mask, &self.rotary_emb)?
         }
         match self.final_layernorm.as_ref() {
@@ -456,7 +488,7 @@ impl Module for Embedding {
 }
 
 #[derive(Debug, Clone)]
-struct Model {
+pub struct Model {
     embedding: Embedding,
     encoder: Transformer,
     output_layer: Linear,
@@ -470,7 +502,7 @@ fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
 }
 
 impl Model {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb = vb.pp("transformer");
         let embedding = Embedding::new(cfg, vb.pp("embedding"))?;
         let encoder = Transformer::new(cfg, vb.pp("encoder"))?;
@@ -487,7 +519,11 @@ impl Model {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    pub fn reset_kv_cache(&mut self) {
+        self.encoder.reset_kv_cache()
+    }
+
+    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let input_embeds = xs.apply(&self.embedding)?;
         let attention_mask = if seq_len <= 1 {
