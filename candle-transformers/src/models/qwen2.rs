@@ -1,9 +1,9 @@
-#![allow(unused)]
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
     pub hidden_size: usize,
