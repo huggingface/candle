@@ -142,10 +142,10 @@ impl CoreAttention {
         attention_mask: &Option<Tensor>,
     ) -> Result<Tensor> {
         let output_size = (
-            query_layer.dim(1)?,
-            query_layer.dim(2)?,
-            query_layer.dim(0)?,
-            key_layer.dim(0)?,
+            query_layer.dim(1)?, // b
+            query_layer.dim(2)?, // np
+            query_layer.dim(0)?, // sq
+            key_layer.dim(0)?,   // sk
         );
         let query_layer =
             query_layer.reshape((output_size.2, output_size.0 * output_size.1, ()))?;
@@ -160,7 +160,11 @@ impl CoreAttention {
             Some(coeff) => (matmul_result * coeff)?,
         };
         let attention_scores = match attention_mask {
-            Some(mask) => masked_fill(&matmul_result, mask, f32::NEG_INFINITY)?,
+            Some(mask) => masked_fill(
+                &matmul_result,
+                &mask.broadcast_left((matmul_result.dim(0)?, matmul_result.dim(1)?))?,
+                f32::NEG_INFINITY,
+            )?,
             None => matmul_result,
         };
         let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
@@ -275,6 +279,7 @@ impl SelfAttention {
             hpa,
         ))?;
 
+        // Rotary embeddings.
         let seqlen_offset = match &self.kv_cache {
             None => 0,
             Some((prev_k, _)) => prev_k.dim(0)?,
@@ -282,6 +287,7 @@ impl SelfAttention {
         let query_layer = rotary_emb.apply(&query_layer, seqlen_offset)?;
         let key_layer = rotary_emb.apply(&key_layer, seqlen_offset)?;
 
+        // KV cache.
         let (key_layer, value_layer) = match &self.kv_cache {
             None => (key_layer, value_layer),
             Some((prev_k, prev_v)) => {
@@ -291,6 +297,34 @@ impl SelfAttention {
             }
         };
         self.kv_cache = Some((key_layer.clone(), value_layer.clone()));
+
+        // Repeat KV.
+        let ratio =
+            self.num_attention_heads_per_partition / self.num_multi_query_groups_per_partition;
+        let key_layer = {
+            let (d0, d1, d2, d3) = key_layer.dims4()?;
+            key_layer
+                .unsqueeze(D::Minus2)?
+                .expand((d0, d1, d2, ratio, d3))?
+                .reshape((
+                    d0,
+                    d1,
+                    self.num_attention_heads_per_partition,
+                    self.hidden_size_per_attention_head,
+                ))?
+        };
+        let value_layer = {
+            let (d0, d1, d2, d3) = value_layer.dims4()?;
+            value_layer
+                .unsqueeze(D::Minus2)?
+                .expand((d0, d1, d2, ratio, d3))?
+                .reshape((
+                    d0,
+                    d1,
+                    self.num_attention_heads_per_partition,
+                    self.hidden_size_per_attention_head,
+                ))?
+        };
 
         let context_layer =
             self.core_attention
@@ -553,7 +587,7 @@ impl Model {
             Some(get_mask(seq_len, xs.device())?)
         };
         let xs = self.encoder.forward(&input_embeds, &attention_mask)?;
-        let lm_logits = xs.apply(&self.output_layer)?;
+        let lm_logits = xs.i(seq_len - 1)?.apply(&self.output_layer)?;
         Ok(lm_logits)
     }
 }
