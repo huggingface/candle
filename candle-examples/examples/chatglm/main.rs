@@ -202,7 +202,9 @@ fn main() -> Result<()> {
     let repo = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
     let tokenizer_filename = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
-        None => repo.get("tokenizer.json")?,
+        None => api
+            .model("lmz/candle-chatglm".to_string())
+            .get("chatglm-tokenizer.json")?,
     };
     let filenames = match args.weight_file {
         Some(weight_file) => vec![std::path::PathBuf::from(weight_file)],
