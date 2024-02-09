@@ -231,7 +231,6 @@ struct Sum {
     }
 };
 
-
 template<typename T, typename R = T>
 struct Mul {
     typedef Scalar<T> type;
@@ -483,10 +482,42 @@ METAL_FUNC R load_from_global(
     );
 }
 
-// TODO: This allows int64_t simd_shuffle_down, but it is buggy so we should remove it.
+template <typename T, typename _E = void>
+struct is_valid_simgroup_reduce_type {
+    static constant constexpr bool value = false;
+};
+
+template <typename T>
+struct is_valid_simgroup_reduce_type<T, typename enable_if<__is_valid_simdgroup_type<T>::value>::type> {
+    static constant constexpr bool value = true;
+};
+
+template <typename T>
+struct is_valid_simgroup_reduce_type<indexed<T>, typename enable_if<is_valid_simgroup_reduce_type<T>::value>::type> {
+    static constant constexpr bool value = true;
+};
+
+#if defined(__HAVE_BFLOAT__)
+template <>
+struct is_valid_simgroup_reduce_type<bfloat> {
+    static constant constexpr bool value = true;
+};
+
+template <uint N>
+struct is_valid_simgroup_reduce_type<vec<bfloat, N>> {
+    static constant constexpr bool value = true;
+};
+#endif
+
+//// TODO: This allows int64_t simd_shuffle_down, but it is buggy so we should remove it.
 //#if __METAL_VERSION__ >= 220
-// Specialization for int64_t since it does not support simd_shuffle_down.
-//template<typename ReductionOp, ushort BLOCKSIZE, typename T, typename _E = typename enable_if<!__is_valid_simdgroup_type<T>::value>::type>
+//// Specialization for int64_t since it does not support simd_shuffle_down.
+//template<
+//    typename ReductionOp,
+//    ushort BLOCKSIZE,
+//    typename T,
+//    typename _E = typename enable_if<!is_valid_simgroup_reduce_type<T>::value>::type
+//>
 //METAL_FUNC T simdgroup_reduce(
 //    volatile threadgroup T shared[BLOCKSIZE],
 //    const ushort tid
@@ -503,7 +534,12 @@ METAL_FUNC R load_from_global(
 //#endif
 
 // Since we are using simd_shuffle_down with a BLOCKSIZE guard we don't need any barriers.
-template<typename ReductionOp, ushort BLOCKSIZE, typename T>
+template<
+    typename ReductionOp,
+    ushort BLOCKSIZE,
+    typename T,
+    typename _E = typename enable_if<is_valid_simgroup_reduce_type<T>::value>::type
+>
 METAL_FUNC T simdgroup_reduce(T value) {
     ReductionOp op;
     if (BLOCKSIZE >= 32) value = apply_operator(op, value, simd_shuffle_down(value, 16));
@@ -515,7 +551,12 @@ METAL_FUNC T simdgroup_reduce(T value) {
 }
 
 // Since we are using simd_shuffle_down with a BLOCKSIZE guard we don't need any barriers.
-template<typename ReductionOp, ushort BLOCKSIZE, typename T>
+template<
+    typename ReductionOp,
+    ushort BLOCKSIZE,
+    typename T,
+    typename _E = typename enable_if<is_valid_simgroup_reduce_type<T>::value>::type
+>
 METAL_FUNC indexed<T> simdgroup_reduce(indexed<T> value) {
     ReductionOp op;
     if (BLOCKSIZE >= 32) value = apply_operator(op, value, simd_shuffle_down(value, 16));
@@ -609,14 +650,23 @@ METAL_FUNC void reduce(
     if (tid == 0) dst[dst_id] = finalize<ReductionOp>(value);
 }
 
+template<uint N>
+constexpr uint nonzero() {
+    return N == 0 ? 1 : N;
+}
+
+template<typename T>
+constexpr uint granularity() {
+    return nonzero<vec_elements<T>::value>();
+}
 
 #define reduce_case(OP, T, R, N)                        \
 case N: {                                               \
-    constexpr uint GRANULARITY = vec_elements<T>::value == 0 ? 1 : vec_elements<T>::value; \
+    constexpr uint GRANULARITY = granularity<T>();      \
     if (N / GRANULARITY == 0) {                         \
         break;                                          \
     }                                                   \
-    constexpr uint B = N / GRANULARITY == 0 ? 1 : N / GRANULARITY;                 \
+    constexpr uint B = nonzero<N / GRANULARITY>();      \
     threadgroup R shared[B];                            \
     reduce<T, R, OP<R>, B, STRIDED>(                    \
         num_dims,                                       \
@@ -751,12 +801,12 @@ METAL_FUNC void reduce(
 
 #define arg_reduce_case(OP, N, T)                       \
 case N: {                                               \
-    constexpr uint GRANULARITY = vec_elements<T>::value == 0 ? 1 : vec_elements<T>::value; \
+    constexpr uint GRANULARITY = granularity<T>();      \
     if (N / GRANULARITY == 0) {                         \
         break;                                          \
     }                                                   \
-    constexpr uint B = N / GRANULARITY == 0 ? 1 : N / GRANULARITY;                 \
-    threadgroup indexed<T> shared[B];              \
+    constexpr uint B = nonzero<N / GRANULARITY>();      \
+    threadgroup indexed<T> shared[B];                   \
     reduce<T, OP<indexed<T>>, B, STRIDED>(              \
         num_dims,                                       \
         dims,                                           \
@@ -991,11 +1041,11 @@ METAL_FUNC void softmax(
 
 #define softmax_case(T, ACC, N)                         \
 case N: {                                               \
-    constexpr uint GRANULARITY = vec_elements<ACC>::value == 0 ? 1 : vec_elements<ACC>::value; \
+    constexpr uint GRANULARITY = granularity<ACC>();    \
     if (N / GRANULARITY == 0) {                         \
         break;                                          \
     }                                                   \
-    constexpr uint B = N / GRANULARITY == 0 ? 1 : N / GRANULARITY;                 \
+    constexpr uint B = nonzero<N / GRANULARITY>();      \
     threadgroup ACC shared[B];                          \
     softmax<T, ACC, B>(                                 \
         src_numel,                                      \

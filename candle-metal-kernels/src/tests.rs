@@ -708,6 +708,20 @@ const fn correct_sum<const N: usize, const D: usize>() -> [f32; D] {
     results
 }
 
+const fn correct_max<const N: usize, const D: usize>() -> [f32; D] {
+    let mut results: [f32; D] = [0.0; D];
+    let mut i = 1;
+    let mut j = 1;
+    while i <= N {
+        i += 1;
+        if i > j * N / D {
+            results[j - 1] = (i - 1) as f32;
+            j += 1;
+        }
+    }
+    results
+}
+
 fn correct_argmax<const N: usize, const D: usize>(arr: [f32; N]) -> [u32; D] {
     let mut max = 0.0;
     let mut max_index: u32 = 0;
@@ -741,8 +755,8 @@ fn reduce_sum_case<const N: usize, const D: usize>() {
 
 fn reduce_max_case<const N: usize, const D: usize>() {
     let v = create_array::<N>();
-    let results = run_reduce(&v, 1, "fast_max_f32");
-    assert_eq!(approx(results, 4), vec![N as f32]);
+    let results = run_reduce(&v, D, "fast_max_f32");
+    assert_eq!(approx(results, 4), correct_max::<N, D>());
 }
 
 fn reduce_argmax_case<const N: usize, const D: usize>() {
