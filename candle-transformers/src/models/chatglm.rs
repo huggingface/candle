@@ -78,7 +78,7 @@ impl RotaryEmbedding {
             .to_dtype(dtype)?
             .reshape((cfg.seq_length, 1))?;
         let freqs = t.matmul(&inv_freq)?;
-        let cache = Tensor::cat(&[&freqs.cos()?, &freqs.sin()?], D::Minus1)?;
+        let cache = Tensor::stack(&[&freqs.cos()?, &freqs.sin()?], D::Minus1)?;
         Ok(Self { cache })
     }
 
@@ -88,16 +88,19 @@ impl RotaryEmbedding {
         let rot_dim = cache.dim(D::Minus2)? * 2;
         let (xs, xs_pass) = (
             xs.narrow(D::Minus1, 0, rot_dim)?,
-            xs.narrow(D::Minus1, rot_dim, 2 * rot_dim)?,
+            xs.narrow(D::Minus1, rot_dim, rot_dim)?,
         );
         let xshaped = xs.reshape((seqlen, (), np, rot_dim / 2, 2))?;
         let cache = cache.reshape((seqlen, (), 1, rot_dim / 2, 2))?;
-        let (xshaped0, xshaped1) = (xshaped.i((.., 0))?, xshaped.i((.., 1))?);
-        let (cache0, cache1) = (cache.i((.., 0))?, cache.i((.., 1))?);
+        let (xshaped0, xshaped1) = (
+            xshaped.i((.., .., .., .., 0))?,
+            xshaped.i((.., .., .., .., 1))?,
+        );
+        let (cache0, cache1) = (cache.i((.., .., .., .., 0))?, cache.i((.., .., .., .., 1))?);
         let xs_out = Tensor::stack(
             &[
-                ((&xshaped0 * &cache0)? - (&xshaped1 * &cache1)?)?,
-                ((&xshaped1 * &cache0)? + (&xshaped0 * &cache1)?)?,
+                (xshaped0.broadcast_mul(&cache0)? - xshaped1.broadcast_mul(&cache1)?)?,
+                (xshaped1.broadcast_mul(&cache0)? + xshaped0.broadcast_mul(&cache1)?)?,
             ],
             D::Minus1,
         )?;
