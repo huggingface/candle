@@ -1,6 +1,6 @@
 #![allow(unused)]
 use crate::models::with_tracing::Linear;
-use candle::{Module, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 #[derive(Debug, Clone)]
@@ -66,9 +66,7 @@ struct RotaryEmbedding {
 }
 
 impl RotaryEmbedding {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let dtype = vb.dtype();
-        let dev = vb.device();
+    fn new(cfg: &Config, dtype: DType, dev: &Device) -> Result<Self> {
         let rotary_dim = cfg.kv_channels;
         let n_elem = rotary_dim / 2;
         let inv_freq: Vec<_> = (0..n_elem)
@@ -85,8 +83,27 @@ impl RotaryEmbedding {
         Ok(Self { cache })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn apply(&self, xs: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        let (seqlen, _b, np, _hn) = xs.dims4()?;
+        let cache = self.cache.narrow(0, seqlen_offset, seqlen)?;
+        let rot_dim = cache.dim(D::Minus2)? * 2;
+        let (xs, xs_pass) = (
+            xs.narrow(D::Minus1, 0, rot_dim)?,
+            xs.narrow(D::Minus1, rot_dim, 2 * rot_dim)?,
+        );
+        let xshaped = xs.reshape((seqlen, (), np, rot_dim / 2, 2))?;
+        let cache = cache.reshape((seqlen, (), 1, rot_dim / 2, 2))?;
+        let (xshaped0, xshaped1) = (xshaped.i((.., 0))?, xshaped.i((.., 1))?);
+        let (cache0, cache1) = (cache.i((.., 0))?, cache.i((.., 1))?);
+        let xs_out = Tensor::stack(
+            &[
+                ((&xshaped0 * &cache0)? - (&xshaped1 * &cache1)?)?,
+                ((&xshaped1 * &cache0)? + (&xshaped0 * &cache1)?)?,
+            ],
+            D::Minus1,
+        )?;
+        let xs_out = xs_out.flatten_from(3)?;
+        Tensor::cat(&[xs_out, xs_pass], D::Minus1)
     }
 }
 
@@ -120,7 +137,7 @@ impl CoreAttention {
         query_layer: &Tensor,
         key_layer: &Tensor,
         value_layer: &Tensor,
-        attention_mask: &Tensor,
+        attention_mask: &Option<Tensor>,
     ) -> Result<Tensor> {
         let output_size = (
             query_layer.dim(1)?,
@@ -136,7 +153,10 @@ impl CoreAttention {
             &key_layer.transpose(0, 1)?.transpose(1, 2)?,
         )?;
         let matmul_result = (matmul_result / self.norm_factor)?.reshape(output_size)?;
-        let attention_scores = masked_fill(&matmul_result, attention_mask, f32::NEG_INFINITY)?;
+        let attention_scores = match attention_mask {
+            Some(mask) => masked_fill(&matmul_result, mask, f32::NEG_INFINITY)?,
+            None => matmul_result,
+        };
         let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
 
         let output_size = (
@@ -200,7 +220,12 @@ impl SelfAttention {
         })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        attention_mask: &Option<Tensor>,
+        rotary_emb: &RotaryEmbedding,
+    ) -> Result<Tensor> {
         let mixed_x_layer = xs.apply(&self.query_key_value)?;
         if !self.multi_query_attention {
             candle::bail!("only multi_query_attention=true is supported")
@@ -219,6 +244,10 @@ impl SelfAttention {
                 + self.num_multi_query_groups_per_partition * hpa,
             self.num_multi_query_groups_per_partition * hpa,
         )?;
+
+        let seqlen_offset = 0; // TODO: tweak once we have the KV cache.
+        let query_layer = rotary_emb.apply(&query_layer, seqlen_offset)?;
+        let key_layer = rotary_emb.apply(&key_layer, seqlen_offset)?;
 
         let context_layer =
             self.core_attention
@@ -314,11 +343,16 @@ impl Block {
         })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        xs: &Tensor,
+        attention_mask: &Option<Tensor>,
+        rotary_emb: &RotaryEmbedding,
+    ) -> Result<Tensor> {
         let layernorm_output = xs.apply(&self.input_layernorm)?;
-        let attention_output = self
-            .self_attention
-            .forward(&layernorm_output, attention_mask)?;
+        let attention_output =
+            self.self_attention
+                .forward(&layernorm_output, attention_mask, rotary_emb)?;
         let residual = if self.apply_residual_connection_post_layernorm {
             &layernorm_output
         } else {
@@ -340,6 +374,7 @@ impl Block {
 struct Transformer {
     layers: Vec<Block>,
     final_layernorm: Option<candle_nn::LayerNorm>,
+    rotary_emb: RotaryEmbedding,
 }
 
 impl Transformer {
@@ -369,16 +404,18 @@ impl Transformer {
         } else {
             None
         };
+        let rotary_emb = RotaryEmbedding::new(cfg, vb.dtype(), vb.device())?;
         Ok(Self {
             layers,
             final_layernorm,
+            rotary_emb,
         })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, attention_mask: &Option<Tensor>) -> Result<Tensor> {
         let mut xs = xs.clone();
         for block in self.layers.iter() {
-            xs = block.forward(&xs, attention_mask)?
+            xs = block.forward(&xs, attention_mask, &self.rotary_emb)?
         }
         match self.final_layernorm.as_ref() {
             None => Ok(xs),
@@ -425,6 +462,13 @@ struct Model {
     output_layer: Linear,
 }
 
+fn get_mask(size: usize, device: &Device) -> Result<Tensor> {
+    let mask: Vec<_> = (0..size)
+        .flat_map(|i| (0..size).map(move |j| u8::from(j > i)))
+        .collect();
+    Tensor::from_slice(&mask, (size, size), device)
+}
+
 impl Model {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb = vb.pp("transformer");
@@ -444,6 +488,15 @@ impl Model {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
+        let (_b_size, seq_len) = xs.dims2()?;
+        let input_embeds = xs.apply(&self.embedding)?;
+        let attention_mask = if seq_len <= 1 {
+            None
+        } else {
+            Some(get_mask(seq_len, xs.device())?)
+        };
+        let xs = self.encoder.forward(&input_embeds, &attention_mask)?;
+        let lm_logits = xs.apply(&self.output_layer)?;
+        Ok(lm_logits)
     }
 }
