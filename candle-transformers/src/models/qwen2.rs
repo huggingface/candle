@@ -15,7 +15,7 @@ pub struct Config {
     pub sliding_window: usize,
     pub max_window_layers: usize,
     pub tie_word_embeddings: bool,
-    pub rope_threat: f64,
+    pub rope_theta: f64,
     pub rms_norm_eps: f64,
     pub use_sliding_window: bool,
     pub hidden_act: Activation,
@@ -61,7 +61,7 @@ impl RotaryEmbedding {
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / 10000f32.powf(i as f32 / dim as f32))
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
