@@ -215,8 +215,8 @@ impl Attention {
         };
         self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
-        let key_states = self.repeat_kv(key_states)?;
-        let value_states = self.repeat_kv(value_states)?;
+        let key_states = self.repeat_kv(key_states)?.contiguous()?;
+        let value_states = self.repeat_kv(value_states)?.contiguous()?;
 
         let attn_output = {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
