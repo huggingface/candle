@@ -55,7 +55,7 @@ impl TextGeneration {
         println!("starting the inference loop");
         let tokens = self.tokenizer.encode(prompt, true).map_err(E::msg)?;
         if tokens.is_empty() {
-            anyhow::bail!("Empty prompts are not supported in the phi model.")
+            anyhow::bail!("Empty prompts are not supported in the chatglm model.")
         }
         if self.verbose_prompt {
             for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
@@ -65,7 +65,7 @@ impl TextGeneration {
         }
         let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
+        let eos_token = match self.tokenizer.get_vocab(true).get("</s>") {
             Some(token) => *token,
             None => anyhow::bail!("cannot find the endoftext token"),
         };

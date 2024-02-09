@@ -253,6 +253,24 @@ impl SelfAttention {
                 + self.num_multi_query_groups_per_partition * hpa,
             self.num_multi_query_groups_per_partition * hpa,
         )?;
+        let query_layer = query_layer.reshape((
+            query_layer.dim(0)?,
+            query_layer.dim(1)?,
+            self.num_attention_heads_per_partition,
+            hpa,
+        ))?;
+        let key_layer = key_layer.reshape((
+            key_layer.dim(0)?,
+            key_layer.dim(1)?,
+            self.num_multi_query_groups_per_partition,
+            hpa,
+        ))?;
+        let value_layer = value_layer.reshape((
+            value_layer.dim(0)?,
+            value_layer.dim(1)?,
+            self.num_multi_query_groups_per_partition,
+            hpa,
+        ))?;
 
         let seqlen_offset = match &self.kv_cache {
             None => 0,
