@@ -110,7 +110,17 @@ pub fn main() -> anyhow::Result<()> {
         }
     };
 
-    let decoder_config = trocr::TrOCRConfig::default();
+    let decoder_config = match args.which {
+        Which::BaseHandWritten => trocr::TrOCRConfig::default(),
+        Which::LargeHandWritten => {
+            candle_transformers::models::vit::DecoderConfig::microsoft_trocr_large_handwritten()
+        }
+        Which::BasePrinted => trocr::TrOCRConfig::default(),
+        Which::LargePrinted => {
+            candle_transformers::models::vit::DecoderConfig::microsoft_trocr_large_printed()
+        }
+    };
+
     let mut model = trocr::TrOCRModel::new(&encoder_config, &decoder_config, vb)?;
 
     let config = image_processor::ProcessorConfig::default();

@@ -1,7 +1,11 @@
 #![allow(unused)]
+use std::default;
+
 use crate::models::with_tracing::{conv2d, linear, linear_no_bias, Conv2d, Linear};
 use candle::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
+
+use super::trocr::TrOCRConfig;
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/vit/configuration_vit.py
 #[derive(Debug, Clone)]
@@ -53,9 +57,9 @@ impl Config {
     pub fn microsoft_trocr_large_handwritten() -> Self {
         Self {
             hidden_size: 1024,
-            num_hidden_layers: 12,
-            num_attention_heads: 12,
-            intermediate_size: 3072,
+            num_hidden_layers: 24,
+            num_attention_heads: 16,
+            intermediate_size: 4096,
             hidden_act: candle_nn::Activation::Gelu,
             layer_norm_eps: 1e-12,
             image_size: 384,
@@ -83,15 +87,82 @@ impl Config {
     pub fn microsoft_trocr_large_printed() -> Self {
         Self {
             hidden_size: 1024,
-            num_hidden_layers: 12,
-            num_attention_heads: 12,
-            intermediate_size: 3072,
+            num_hidden_layers: 24,
+            num_attention_heads: 16,
+            intermediate_size: 4096,
             hidden_act: candle_nn::Activation::Gelu,
             layer_norm_eps: 1e-12,
             image_size: 384,
             patch_size: 16,
             num_channels: 3,
             qkv_bias: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DecoderConfig {
+    pub trocr_config: TrOCRConfig,
+}
+
+impl DecoderConfig {
+    pub fn microsoft_trocr_large_handwritten() -> TrOCRConfig {
+        TrOCRConfig {
+            vocab_size: 50265,
+            d_model: 1024,
+            decoder_layers: 12,
+            decoder_attention_heads: 16,
+            decoder_ffn_dim: 4096,
+            activation_function: candle_nn::Activation::Gelu,
+            max_position_embeddings: 512,
+            dropout: 0.1,
+            attention_dropout: 0.0,
+            activation_dropout: 0.0,
+            decoder_start_token_id: 2,
+            init_std: 0.02,
+            decoder_layerdrop: 0.0,
+            use_cache: true,
+            scale_embedding: false,
+            layernorm_embedding: true,
+            pad_token_id: 1,
+            bos_token_id: 0,
+            eos_token_id: 2,
+            decoder_vocab_size: Some(50265),
+
+            // cross_attention_hidden_size
+            hidden_size: 1024,
+
+            ..Default::default()
+        }
+    }
+
+    pub fn microsoft_trocr_large_printed() -> TrOCRConfig {
+        TrOCRConfig {
+            vocab_size: 50265,
+            d_model: 1024,
+            decoder_layers: 12,
+            decoder_attention_heads: 16,
+            decoder_ffn_dim: 4096,
+            activation_function: candle_nn::Activation::Gelu,
+            max_position_embeddings: 512,
+            dropout: 0.1,
+            attention_dropout: 0.0,
+            activation_dropout: 0.0,
+            decoder_start_token_id: 2,
+            init_std: 0.02,
+            decoder_layerdrop: 0.0,
+            use_cache: true,
+            scale_embedding: false,
+            layernorm_embedding: true,
+            pad_token_id: 1,
+            bos_token_id: 0,
+            eos_token_id: 2,
+            decoder_vocab_size: Some(50265),
+
+            // cross_attention_hidden_size
+            hidden_size: 1024,
+
+            ..Default::default()
         }
     }
 }
