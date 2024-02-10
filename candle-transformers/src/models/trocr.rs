@@ -1,5 +1,5 @@
 use crate::models::vit::{Config, Embeddings, Encoder};
-use candle::{Result, Tensor};
+use candle::{DType, Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, linear_no_bias, Embedding, LayerNorm, Linear, Module, VarBuilder,
 };
@@ -78,17 +78,49 @@ impl TrOCRLearnedPositionalEmbedding {
         Ok(Self { offset, weights })
     }
 
+    fn new_sinusoidal(vb: VarBuilder, cfg: &TrOCRConfig) -> Result<Self> {
+        // https://github.com/huggingface/transformers/blob/58e3d23e97078f361a533b9ec4a6a2de674ea52a/src/transformers/models/trocr/modeling_trocr.py#L81
+        let embedding_dim = cfg.d_model;
+        let half_dim = embedding_dim / 2;
+        let num_positions = cfg.max_position_embeddings + cfg.pad_token_id + 1;
+        let dev = vb.device();
+        let inv_freq: Vec<_> = (0..half_dim)
+            .map(|i| 1f32 / 10000f32.powf(i as f32 / (half_dim - 1) as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+        let t = Tensor::arange(0u32, num_positions as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((num_positions, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let emb = Tensor::cat(&[freqs.sin()?, freqs.cos()?], 1)?;
+        let emb = Tensor::cat(
+            &[
+                emb.narrow(0, 0, cfg.pad_token_id)?,
+                Tensor::zeros((1, embedding_dim), DType::F32, dev)?,
+                emb.narrow(0, cfg.pad_token_id + 1, cfg.max_position_embeddings)?,
+            ],
+            0,
+        )?
+        .contiguous()?;
+        let emb = Embedding::new(emb, embedding_dim);
+        Ok(Self {
+            offset: cfg.pad_token_id + 1,
+            weights: emb,
+        })
+    }
+
     fn forward(&mut self, input_ids: &Tensor, past_key_values_length: u32) -> Result<Tensor> {
         let (b_sz, seq_len) = input_ids.dims2()?;
 
-        let mut positions = Tensor::arange(
+        let positions = Tensor::arange(
             past_key_values_length,
             seq_len as u32 + past_key_values_length,
             input_ids.device(),
         )?
         .expand((b_sz, seq_len))?;
 
-        positions =
+        let positions =
             positions.broadcast_add(&Tensor::new(self.offset as u32, input_ids.device())?)?;
         self.weights.forward(&positions)
     }
@@ -294,10 +326,11 @@ impl TrOCRDecoder {
         let vb = vb.pp("decoder.model.decoder");
 
         let embed_tokens = embedding(cfg.vocab_size, cfg.d_model, vb.pp("embed_tokens"))?;
-        if !cfg.use_learned_position_embeddings {
-            candle::bail!("only models with use_learned_position_embeddings=true are supported")
-        }
-        let embed_positions = TrOCRLearnedPositionalEmbedding::load(vb.pp("embed_positions"), cfg)?;
+        let embed_positions = if cfg.use_learned_position_embeddings {
+            TrOCRLearnedPositionalEmbedding::load(vb.pp("embed_positions"), cfg)?
+        } else {
+            TrOCRLearnedPositionalEmbedding::new_sinusoidal(vb.pp("embed_positions"), cfg)?
+        };
         let mut layers = Vec::with_capacity(cfg.decoder_layers);
         let vb_l = vb.pp("layers");
         for idx in 0..cfg.decoder_layers {
