@@ -17,15 +17,21 @@ mod image_processor;
 
 #[derive(Clone, Debug, Copy, ValueEnum)]
 enum Which {
-    Base,
-    Large,
+    #[value(name = "base")]
+    BaseHandwritten,
+    #[value(name = "large")]
+    LargeHandwritten,
+    BasePrinted,
+    LargePrinted,
 }
 
 impl Which {
     fn repo_and_branch_name(&self) -> (&str, &str) {
         match self {
-            Self::Base => ("microsoft/trocr-base-handwritten", "refs/pr/3"),
-            Self::Large => ("microsoft/trocr-large-handwritten", "refs/pr/6"),
+            Self::BaseHandwritten => ("microsoft/trocr-base-handwritten", "refs/pr/3"),
+            Self::LargeHandwritten => ("microsoft/trocr-large-handwritten", "refs/pr/6"),
+            Self::BasePrinted => ("microsoft/trocr-base-printed", "refs/pr/7"),
+            Self::LargePrinted => ("microsoft/trocr-large-printed", "main"),
         }
     }
 }
