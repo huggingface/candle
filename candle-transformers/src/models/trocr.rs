@@ -4,6 +4,9 @@ use candle_nn::{
     embedding, layer_norm, linear_no_bias, Embedding, LayerNorm, Linear, Module, VarBuilder,
 };
 
+fn default_tie_word_embeddings() -> bool {
+    true
+}
 fn default_use_learned_position_embeddings() -> bool {
     true
 }
@@ -32,6 +35,8 @@ pub struct TrOCRConfig {
     pub decoder_vocab_size: Option<usize>,
     #[serde(default = "default_use_learned_position_embeddings")]
     pub use_learned_position_embeddings: bool,
+    #[serde(default = "default_tie_word_embeddings")]
+    pub tie_word_embeddings: bool,
 }
 
 impl Default for TrOCRConfig {
@@ -58,6 +63,7 @@ impl Default for TrOCRConfig {
             eos_token_id: 2,
             decoder_vocab_size: Some(50265),
             use_learned_position_embeddings: true,
+            tie_word_embeddings: true,
         }
     }
 }
@@ -261,11 +267,9 @@ impl TrOCRDecoderLayer {
         let fc1 = linear_no_bias(embed_dim, cfg.decoder_ffn_dim, vb.pp("fc1"))?;
         let fc2 = linear_no_bias(cfg.decoder_ffn_dim, embed_dim, vb.pp("fc2"))?;
         let final_layer_norm = layer_norm(embed_dim, 1e-5, vb.pp("final_layer_norm"))?;
-        let activation_fn = candle_nn::Activation::Gelu;
-
         Ok(Self {
             self_attn,
-            activation_fn,
+            activation_fn: cfg.activation_function,
             self_attn_layer_norm,
             encoder_attn,
             encoder_attn_layer_norm,
@@ -419,8 +423,15 @@ pub struct TrOCRForCausalLM {
 impl TrOCRForCausalLM {
     pub fn new(decoder_cfg: &TrOCRConfig, vb: VarBuilder) -> Result<Self> {
         let decoder = TrOCRDecoder::new(decoder_cfg, vb.clone())?;
-        let output_projection =
-            candle_nn::Linear::new(decoder.embed_tokens.embeddings().clone(), None);
+        let output_projection = if decoder_cfg.tie_word_embeddings {
+            candle_nn::Linear::new(decoder.embed_tokens.embeddings().clone(), None)
+        } else {
+            candle_nn::linear_no_bias(
+                decoder_cfg.d_model,
+                decoder_cfg.vocab_size,
+                vb.pp("decoder.output_projection"),
+            )?
+        };
         Ok(Self {
             decoder,
             output_projection,
