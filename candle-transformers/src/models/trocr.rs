@@ -3,13 +3,12 @@ use candle::{Result, Tensor};
 use candle_nn::{
     embedding, layer_norm, linear_no_bias, Embedding, LayerNorm, Linear, Module, VarBuilder,
 };
-use serde::Deserialize;
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct TrOCRConfig {
     pub vocab_size: usize,
     pub d_model: usize,
-    pub hidden_size: usize,
+    pub cross_attention_hidden_size: usize,
     pub decoder_layers: usize,
     pub decoder_attention_heads: usize,
     pub decoder_ffn_dim: usize,
@@ -23,12 +22,9 @@ pub struct TrOCRConfig {
     pub decoder_layerdrop: f64,
     pub use_cache: bool,
     pub scale_embedding: bool,
-    pub use_learned_position_embeddings: bool,
-    pub layernorm_embedding: bool,
     pub pad_token_id: usize,
     pub bos_token_id: usize,
     pub eos_token_id: u32,
-    pub num_attention_heads: usize,
     pub decoder_vocab_size: Option<usize>,
 }
 
@@ -37,7 +33,7 @@ impl Default for TrOCRConfig {
         Self {
             vocab_size: 50265,
             d_model: 1024,
-            hidden_size: 768,
+            cross_attention_hidden_size: 768,
             decoder_layers: 12,
             decoder_attention_heads: 16,
             decoder_ffn_dim: 4096,
@@ -51,12 +47,9 @@ impl Default for TrOCRConfig {
             decoder_layerdrop: 0.0,
             use_cache: true,
             scale_embedding: false,
-            use_learned_position_embeddings: true,
-            layernorm_embedding: true,
             pad_token_id: 1,
             bos_token_id: 0,
             eos_token_id: 2,
-            num_attention_heads: 12,
             decoder_vocab_size: Some(50265),
         }
     }
@@ -221,8 +214,8 @@ impl TrOCRDecoderLayer {
         let encoder_attn = TrOCRAttention::load(
             vb.pp("encoder_attn"),
             cfg,
-            Some(cfg.hidden_size),
-            Some(cfg.hidden_size),
+            Some(cfg.cross_attention_hidden_size),
+            Some(cfg.cross_attention_hidden_size),
         )?;
         let encoder_attn_layer_norm =
             layer_norm(embed_dim, 1e-5, vb.pp("encoder_attn_layer_norm"))?;
