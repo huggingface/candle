@@ -3,7 +3,7 @@ use candle::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, VarBuilder};
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/vit/configuration_vit.py
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub hidden_size: usize,
     pub num_hidden_layers: usize,
