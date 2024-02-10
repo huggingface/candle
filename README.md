@@ -113,8 +113,9 @@ We also provide a some command line based examples using state of the art models
 - [VGG](./candle-examples/examples/vgg/),
   [RepVGG](./candle-examples/examples/repvgg): computer vision models.
 - [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
-- [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
   generate captions for an image.
+- [TrOCR](./candle-examples/examples/trocr/): a transformer OCR model, with
+  dedicated submodels for hand-writing and printed recognition.
 - [Marian-MT](./candle-examples/examples/marian-mt/): neural machine translation
   model, generates the translated text from the input text.
 
@@ -207,6 +208,7 @@ If you have an addition to this list, please submit a pull request.
         - Wurstchen v2.
     - Image to text.
         - BLIP.
+        - TrOCR.
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT.
         - yolo-v3, yolo-v8.
