@@ -4,6 +4,10 @@ use candle_nn::{
     embedding, layer_norm, linear_no_bias, Embedding, LayerNorm, Linear, Module, VarBuilder,
 };
 
+fn default_use_learned_position_embeddings() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct TrOCRConfig {
     pub vocab_size: usize,
@@ -26,6 +30,8 @@ pub struct TrOCRConfig {
     pub bos_token_id: usize,
     pub eos_token_id: u32,
     pub decoder_vocab_size: Option<usize>,
+    #[serde(default = "default_use_learned_position_embeddings")]
+    pub use_learned_position_embeddings: bool,
 }
 
 impl Default for TrOCRConfig {
@@ -51,6 +57,7 @@ impl Default for TrOCRConfig {
             bos_token_id: 0,
             eos_token_id: 2,
             decoder_vocab_size: Some(50265),
+            use_learned_position_embeddings: true,
         }
     }
 }
@@ -287,6 +294,9 @@ impl TrOCRDecoder {
         let vb = vb.pp("decoder.model.decoder");
 
         let embed_tokens = embedding(cfg.vocab_size, cfg.d_model, vb.pp("embed_tokens"))?;
+        if !cfg.use_learned_position_embeddings {
+            candle::bail!("only models with use_learned_position_embeddings=true are supported")
+        }
         let embed_positions = TrOCRLearnedPositionalEmbedding::load(vb.pp("embed_positions"), cfg)?;
         let mut layers = Vec::with_capacity(cfg.decoder_layers);
         let vb_l = vb.pp("layers");
