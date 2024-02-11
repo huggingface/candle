@@ -67,6 +67,7 @@ pub struct MambaBlock {
     out_proj: Linear,
     dt_rank: usize,
     layer_index: usize,
+    d_inner: usize,
 }
 
 impl MambaBlock {
@@ -98,20 +99,21 @@ impl MambaBlock {
             out_proj,
             dt_rank,
             layer_index,
+            d_inner,
         })
     }
 
     pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
-        let (b_sz, d_inner) = xs.dims2()?;
+        let (b_sz, _dim) = xs.dims2()?;
+        let li = self.layer_index;
         let mut xs = xs.apply(&self.in_proj)?.chunk(2, D::Minus1)?;
         let proj_for_silu = xs.remove(1);
-        state.prev_xs[self.layer_index][state.pos % D_CONV] = xs.remove(0);
-        let mut proj_for_conv = self.conv1d_bias.broadcast_as((b_sz, d_inner))?;
+        state.prev_xs[li][state.pos % D_CONV] = xs.remove(0);
+        let mut proj_for_conv = self.conv1d_bias.broadcast_as((b_sz, self.d_inner))?;
         for d_c in 0..D_CONV {
             proj_for_conv = (proj_for_conv
-                + self.conv1d_weights[d_c].broadcast_mul(
-                    &state.prev_xs[self.layer_index][(d_c + 1 + state.pos) % D_CONV],
-                )?)?;
+                + self.conv1d_weights[d_c]
+                    .broadcast_mul(&state.prev_xs[li][(d_c + 1 + state.pos) % D_CONV])?)?;
         }
         let proj_for_conv = candle_nn::ops::silu(&proj_for_conv)?;
         // SSM + Selection, we're doing inference here so only need the last step of
@@ -128,36 +130,15 @@ impl MambaBlock {
         let delta = (delta.exp()? + 1.)?.log()?;
         let a = self.a_log.to_dtype(candle::DType::F32)?.exp()?.neg()?;
         let d = self.d.to_dtype(candle::DType::F32)?;
-        let ss = selective_scan(&proj_for_conv, &delta, &a, &b, &c, &d)?;
+
+        // Selective scan part
+        // Eqn (2a), page 3, h_t = Ab h_{t-1} + Bb x_t
+        state.hs[li] = ((&state.hs[li] * (&delta * &a)?.exp()?)? + &delta * &b * &proj_for_conv)?;
+        let ss = (c.matmul(&state.hs[li])? + proj_for_conv.broadcast_mul(&d)?)?;
+
         let ys = (ss * candle_nn::ops::silu(&proj_for_silu))?;
         ys.apply(&self.out_proj)
     }
-}
-
-fn selective_scan(
-    u: &Tensor,
-    delta: &Tensor,
-    a: &Tensor,
-    b: &Tensor,
-    c: &Tensor,
-    d: &Tensor,
-) -> Result<Tensor> {
-    let (b_sz, l, d_in) = u.dims3()?;
-    let n = a.dim(1)?;
-    let delta = delta.t()?.reshape((b_sz, d_in, l, 1))?; // b d_in l 1
-    let delta_a = delta.broadcast_mul(&a.reshape((1, d_in, 1, n))?)?.exp()?;
-    let delta_b_u = delta
-        .broadcast_mul(&b.reshape((b_sz, 1, l, n))?)?
-        .broadcast_mul(&u.t()?.reshape((b_sz, d_in, l, 1))?)?;
-    let mut xs = Tensor::zeros((b_sz, d_in, n), delta_a.dtype(), delta_a.device())?;
-    let mut ys = Vec::with_capacity(l);
-    for i in 0..l {
-        xs = ((delta_a.i((.., .., i))? * xs)? + delta_b_u.i((.., .., i))?)?;
-        let y = xs.matmul(&c.i((.., i, ..))?.unsqueeze(2)?)?.squeeze(2)?;
-        ys.push(y)
-    }
-    let ys = Tensor::stack(ys.as_slice(), 1)?;
-    ys + u.broadcast_mul(d)
 }
 
 #[derive(Clone, Debug)]
