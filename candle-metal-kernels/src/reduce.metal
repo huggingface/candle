@@ -816,9 +816,6 @@ METAL_FUNC void reduce(
         shared,
         tid
     );
-    // Threadgroup barrier is needed to ensure that all threads have written to shared memory
-    // Memory space is not shared between threadgroups so we can use the mem_none flag for all threadgroup barriers.
-    threadgroup_barrier(mem_flags::mem_none);
 
     // Complete reduction
     value = threadgroup_reduce<indexed<T>, ReductionOp, BLOCKSIZE>(value, shared, tid);
