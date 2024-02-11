@@ -133,8 +133,20 @@ impl MambaBlock {
 
         // Selective scan part
         // Eqn (2a), page 3, h_t = Ab h_{t-1} + Bb x_t
-        state.hs[li] = ((&state.hs[li] * (&delta * &a)?.exp()?)? + &delta * &b * &proj_for_conv)?;
-        let ss = (c.matmul(&state.hs[li])? + proj_for_conv.broadcast_mul(&d)?)?;
+        let delta = delta
+            .unsqueeze(D::Minus1)?
+            .broadcast_as((b_sz, self.d_inner, D_STATE))?;
+        let a = a.broadcast_as((b_sz, self.d_inner, D_STATE))?;
+        let b = b.broadcast_as((b_sz, self.d_inner, D_STATE))?;
+        let proj_for_conv_b =
+            proj_for_conv
+                .unsqueeze(D::Minus1)?
+                .broadcast_as((b_sz, self.d_inner, D_STATE))?;
+        state.hs[li] = ((&state.hs[li] * (&delta * &a)?.exp()?)? + &delta * &b * &proj_for_conv_b)?;
+        let ss = (state.hs[li]
+            .matmul(&c.unsqueeze(D::Minus1)?)?
+            .squeeze(D::Minus1)?
+            + proj_for_conv.broadcast_mul(&d)?)?;
 
         let ys = (ss * candle_nn::ops::silu(&proj_for_silu))?;
         ys.apply(&self.out_proj)
