@@ -2,7 +2,7 @@
 /// A fast implementation of mamba for inference only.
 /// This is based on: https://github.com/LaurentMazare/mamba.rs
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
-use candle::{DType, Device, IndexOp, Module, Result, Tensor};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{RmsNorm, VarBuilder};
 
 const D_CONV: usize = 4;
@@ -34,6 +34,7 @@ impl Config {
 pub struct State {
     hs: Vec<Tensor>,
     prev_xs: Vec<[Tensor; D_CONV]>,
+    pos: usize,
 }
 
 impl State {
@@ -46,7 +47,11 @@ impl State {
             hs.push(h);
             prev_xs.push([x.clone(), x.clone(), x.clone(), x.clone()]);
         }
-        Ok(Self { hs, prev_xs })
+        Ok(Self {
+            hs,
+            prev_xs,
+            pos: 0,
+        })
     }
 }
 
@@ -97,8 +102,62 @@ impl MambaBlock {
     }
 
     pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
-        todo!()
+        let (b_sz, d_inner) = xs.dims2()?;
+        let mut xs = xs.apply(&self.in_proj)?.chunk(2, D::Minus1)?;
+        let proj_for_silu = xs.remove(1);
+        state.prev_xs[self.layer_index][state.pos % D_CONV] = xs.remove(0);
+        let mut proj_for_conv = self.conv1d_bias.broadcast_as((b_sz, d_inner))?;
+        for d_c in 0..D_CONV {
+            proj_for_conv = (proj_for_conv
+                + self.conv1d_weights[d_c].broadcast_mul(
+                    &state.prev_xs[self.layer_index][(d_c + 1 + state.pos) % D_CONV],
+                )?)?;
+        }
+        let proj_for_conv = candle_nn::ops::silu(&proj_for_conv)?;
+        // SSM + Selection, we're doing inference here so only need the last step of
+        // the sequence.
+        // Algorithm 3.2 on page 6, https://arxiv.org/pdf/2312.00752.pdf
+
+        let x_proj = self.x_proj.forward(&proj_for_conv)?;
+        let delta = x_proj.narrow(D::Minus1, 0, self.dt_rank)?;
+        let b = x_proj.narrow(D::Minus1, self.dt_rank, D_STATE)?;
+        let c = x_proj.narrow(D::Minus1, self.dt_rank + D_STATE, D_STATE)?;
+
+        let delta = delta.apply(&self.dt_proj)?;
+        // softplus
+        let delta = (delta.exp()? + 1.)?.log()?;
+        let a = self.a_log.to_dtype(candle::DType::F32)?.exp()?.neg()?;
+        let d = self.d.to_dtype(candle::DType::F32)?;
+        let ss = selective_scan(&proj_for_conv, &delta, &a, &b, &c, &d)?;
+        let ys = (ss * candle_nn::ops::silu(&proj_for_silu))?;
+        ys.apply(&self.out_proj)
     }
+}
+
+fn selective_scan(
+    u: &Tensor,
+    delta: &Tensor,
+    a: &Tensor,
+    b: &Tensor,
+    c: &Tensor,
+    d: &Tensor,
+) -> Result<Tensor> {
+    let (b_sz, l, d_in) = u.dims3()?;
+    let n = a.dim(1)?;
+    let delta = delta.t()?.reshape((b_sz, d_in, l, 1))?; // b d_in l 1
+    let delta_a = delta.broadcast_mul(&a.reshape((1, d_in, 1, n))?)?.exp()?;
+    let delta_b_u = delta
+        .broadcast_mul(&b.reshape((b_sz, 1, l, n))?)?
+        .broadcast_mul(&u.t()?.reshape((b_sz, d_in, l, 1))?)?;
+    let mut xs = Tensor::zeros((b_sz, d_in, n), delta_a.dtype(), delta_a.device())?;
+    let mut ys = Vec::with_capacity(l);
+    for i in 0..l {
+        xs = ((delta_a.i((.., .., i))? * xs)? + delta_b_u.i((.., .., i))?)?;
+        let y = xs.matmul(&c.i((.., i, ..))?.unsqueeze(2)?)?.squeeze(2)?;
+        ys.push(y)
+    }
+    let ys = Tensor::stack(ys.as_slice(), 1)?;
+    ys + u.broadcast_mul(d)
 }
 
 #[derive(Clone, Debug)]
@@ -153,6 +212,7 @@ impl Model {
         for layer in self.layers.iter() {
             xs = layer.forward(&xs, state)?
         }
+        state.pos += 1;
         xs.apply(&self.norm_f)?.apply(&self.lm_head)
     }
 }
