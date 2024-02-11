@@ -1,7 +1,7 @@
 use crate::whisper_micro::{token_id, Model};
 use candle::{IndexOp, Result, Tensor, D};
-use tokenizers::Tokenizer;
 use candle_transformers::models::whisper::{self as m};
+use tokenizers::Tokenizer;
 
 const LANGUAGES: [(&str, &str); 99] = [
     ("en", "english"),
@@ -106,11 +106,7 @@ const LANGUAGES: [(&str, &str); 99] = [
 ];
 
 /// Returns the token id for the selected language.
-pub fn detect_language(
-    model: &mut Model,
-    tokenizer: &Tokenizer,
-    mel: &Tensor,
-) -> Result<u32> {
+pub fn detect_language(model: &mut Model, tokenizer: &Tokenizer, mel: &Tensor) -> Result<u32> {
     let (_bsize, _, seq_len) = mel.dims3()?;
     let mel = mel.narrow(
         2,
