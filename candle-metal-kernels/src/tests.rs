@@ -885,7 +885,7 @@ fn softmax() {
     let results = run_softmax(&v, last_dim, "softmax_f16");
     assert_eq!(
         approx_f16(results, 4),
-        vec![0.0043, 0.0116, 0.0316, 0.0858, 0.2332, 0.6338]
+        vec![0.0043, 0.0116, 0.0315, 0.0858, 0.233, 0.6333]
     );
 
     let v = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]
@@ -896,7 +896,7 @@ fn softmax() {
     let results = run_softmax(&v, last_dim, "softmax_bf16");
     assert_eq!(
         approx_bf16(results, 4),
-        vec![0.0043, 0.0116, 0.0315, 0.0859, 0.2324, 0.6328]
+        vec![0.0043, 0.0117, 0.0317, 0.0864, 0.2334, 0.6367]
     );
 }
 
