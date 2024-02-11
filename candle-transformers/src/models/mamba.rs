@@ -206,7 +206,7 @@ impl Model {
         })
     }
 
-    fn forward(&self, input_ids: &Tensor, state: &mut State) -> Result<Tensor> {
+    pub fn forward(&self, input_ids: &Tensor, state: &mut State) -> Result<Tensor> {
         let _b_size = input_ids.dims1()?;
         let mut xs = self.embedding.forward(input_ids)?;
         for layer in self.layers.iter() {

@@ -7,10 +7,9 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::{Parser, ValueEnum};
 
-mod model;
-use model::{Config, Model};
+use candle_transformers::models::mamba::{Config, Model, State};
 
-use candle::{DType, Device, Module, Tensor};
+use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
@@ -19,6 +18,7 @@ use tokenizers::Tokenizer;
 
 struct TextGeneration {
     model: Model,
+    config: Config,
     device: Device,
     tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
@@ -30,6 +30,7 @@ impl TextGeneration {
     #[allow(clippy::too_many_arguments)]
     fn new(
         model: Model,
+        config: Config,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -41,6 +42,7 @@ impl TextGeneration {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
             model,
+            config,
             tokenizer: TokenOutputStream::new(tokenizer),
             logits_processor,
             repeat_penalty,
@@ -59,23 +61,30 @@ impl TextGeneration {
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
+        let mut generated_tokens = 0usize;
+        let eos_token = match self.tokenizer.get_token("<|endoftext|>") {
+            Some(token) => token,
+            None => anyhow::bail!("cannot find the </s> token"),
+        };
+        let mut state = State::new(1, &self.config, &self.device)?;
+        let mut next_logits = None;
         for &t in tokens.iter() {
+            let input = Tensor::new(&[t], &self.device)?;
+            let logits = self.model.forward(&input, &mut state)?;
+            next_logits = Some(logits);
             if let Some(t) = self.tokenizer.next_token(t)? {
                 print!("{t}")
             }
         }
         std::io::stdout().flush()?;
 
-        let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("<|endoftext|>") {
-            Some(token) => token,
-            None => anyhow::bail!("cannot find the </s> token"),
-        };
         let start_gen = std::time::Instant::now();
         for _ in 0..sample_len {
-            let input = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input)?;
-            let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
+            let logits = match next_logits.as_ref() {
+                Some(logits) => logits,
+                None => anyhow::bail!("cannot work on an empty prompt"),
+            };
+            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
             } else {
@@ -86,7 +95,6 @@ impl TextGeneration {
                     &tokens[start_at..],
                 )?
             };
-
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             generated_tokens += 1;
@@ -97,6 +105,9 @@ impl TextGeneration {
                 print!("{t}");
                 std::io::stdout().flush()?;
             }
+
+            let input = Tensor::new(&[next_token], &self.device)?;
+            next_logits = Some(self.model.forward(&input, &mut state)?)
         }
         let dt = start_gen.elapsed();
         if let Some(rest) = self.tokenizer.decode_rest().map_err(E::msg)? {
@@ -274,6 +285,7 @@ fn main() -> Result<()> {
 
     let mut pipeline = TextGeneration::new(
         model,
+        config,
         tokenizer,
         args.seed,
         args.temperature,
