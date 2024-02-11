@@ -235,9 +235,7 @@ fn main() -> Result<()> {
     ));
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => api
-            .model("lmz/candle-chatglm".to_string())
-            .get("chatglm-tokenizer.json")?,
+        None => repo.get("tokenizer.json")?,
     };
     let filenames = match args.weight_files {
         Some(files) => files
