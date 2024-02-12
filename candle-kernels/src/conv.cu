@@ -71,7 +71,6 @@ __device__ void im2col1d(
   }
   const size_t *src_dims = info;
   const size_t *src_s = info + 3;
-  const size_t b_in = src_dims[0];
   const size_t c_in = src_dims[1];
   const size_t l_in = src_dims[2];
 
@@ -120,7 +119,6 @@ __device__ void im2col(
   }
   const size_t *src_dims = info;
   const size_t *src_s = info + 4;
-  const size_t b_in = src_dims[0];
   const size_t c_in = src_dims[1];
   const size_t h_in = src_dims[2];
   const size_t w_in = src_dims[3];
