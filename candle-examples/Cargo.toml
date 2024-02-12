@@ -79,3 +79,7 @@ required-features = ["onnx"]
 [[example]]
 name = "onnx_basics"
 required-features = ["onnx"]
+
+[[example]]
+name = "whisper-microphone"
+required-features = ["microphone"]
