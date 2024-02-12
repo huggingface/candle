@@ -353,6 +353,9 @@ impl Stack {
                 if module_name == "collections" && class_name == "OrderedDict" {
                     // TODO: have a separate ordered dict.
                     Some(Object::Dict(vec![]))
+                } else if module_name == "collections" && class_name == "defaultdict" {
+                    // TODO: have a separate default dict.
+                    Some(Object::Dict(vec![]))
                 } else {
                     None
                 }
