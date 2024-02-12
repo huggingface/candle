@@ -350,11 +350,10 @@ impl Stack {
                 module_name,
                 class_name,
             } => {
-                if module_name == "collections" && class_name == "OrderedDict" {
-                    // TODO: have a separate ordered dict.
-                    Some(Object::Dict(vec![]))
-                } else if module_name == "collections" && class_name == "defaultdict" {
-                    // TODO: have a separate default dict.
+                if module_name == "collections"
+                    && (class_name == "OrderedDict" || class_name == "defaultdict")
+                {
+                    // TODO: have a separate ordered dict and a separate default dict.
                     Some(Object::Dict(vec![]))
                 } else {
                     None
