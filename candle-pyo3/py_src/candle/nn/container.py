@@ -57,12 +57,10 @@ class Sequential(Module):
     _modules: Dict[str, Module]  # type: ignore[assignment]
 
     @overload
-    def __init__(self, *args: Module) -> None:
-        ...
+    def __init__(self, *args: Module) -> None: ...
 
     @overload
-    def __init__(self, arg: "OrderedDict[str, Module]") -> None:
-        ...
+    def __init__(self, arg: "OrderedDict[str, Module]") -> None: ...
 
     def __init__(self, *args):
         super().__init__()
