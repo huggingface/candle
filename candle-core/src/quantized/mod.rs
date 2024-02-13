@@ -76,6 +76,14 @@ impl QStorage {
         }
     }
 
+    fn device(&self) -> Device {
+        match self {
+            QStorage::Cpu(_storage) => Device::Cpu,
+            #[cfg(feature = "metal")]
+            QStorage::Metal(storage) => Device::Metal(storage.device().clone()),
+        }
+    }
+
     fn size_in_bytes(&self) -> usize {
         match self {
             QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
@@ -334,6 +342,10 @@ impl QTensor {
 
     pub fn dtype(&self) -> GgmlDType {
         self.storage.dtype()
+    }
+
+    pub fn device(&self) -> Device {
+        self.storage.device()
     }
 
     pub fn rank(&self) -> usize {

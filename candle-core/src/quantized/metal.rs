@@ -14,6 +14,10 @@ impl QMetalStorage {
         self.dtype
     }
 
+    pub fn device(&self) -> &MetalDevice {
+        &self.device
+    }
+
     pub fn buffer(&self) -> &Buffer {
         &self.buffer
     }
