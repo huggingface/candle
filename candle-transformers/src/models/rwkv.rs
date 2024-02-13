@@ -117,7 +117,52 @@ impl SelfAttention {
     }
 
     pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
-        todo!()
+        let h = self.time_decay.dim(0)?;
+        let (b, t, s) = xs.dims3()?;
+        let s = s / h;
+        let (receptance, key, value, gate) = {
+            // exctract key-value
+            let shifted = state.per_layer[self.layer_id].extract_key_value.clone();
+            let shifted = if shifted.rank() == 2 {
+                shifted.unsqueeze(1)?
+            } else {
+                shifted
+            };
+            let key = ((xs * &self.time_mix_key)? + &shifted * (1.0 - &self.time_mix_key)?)?;
+            let value = ((xs * &self.time_mix_value)? + &shifted * (1.0 - &self.time_mix_value)?)?;
+            let receptance = ((xs * &self.time_mix_receptance)?
+                + &shifted * (1.0 - &self.time_mix_receptance)?)?;
+            let gate = ((xs * &self.time_mix_gate)? + &shifted * (1.0 - &self.time_mix_gate)?)?;
+
+            let key = self.key.forward(&key)?;
+            let value = self.value.forward(&value)?;
+            let receptance = self.receptance.forward(&receptance)?;
+            let gate = candle_nn::ops::silu(&self.gate.forward(&gate)?)?;
+            state.per_layer[self.layer_id].extract_key_value = xs.i((.., t - 1))?;
+            (receptance, key, value, gate)
+        };
+        // linear attention
+        let mut state_ = state.per_layer[self.layer_id].linear_attention.clone();
+        let key = key.reshape((b, t, h, s))?.permute((0, 2, 3, 1))?;
+        let value = value.reshape((b, t, h, s))?.transpose(1, 2)?;
+        let receptance = receptance.reshape((b, t, h, s))?.transpose(1, 2)?;
+
+        let out: Vec<Tensor> = Vec::with_capacity(t);
+        for t_ in 0..t {
+            //
+            let rt = receptance.i((.., .., t_..t_ + 1))?;
+            let kt = key.i((.., .., t_..t_ + 1))?;
+            let vt = value.i((.., .., t_..t_ + 1))?;
+            let at = kt.matmul(&vt)?;
+            let rhs = ((&self.time_faaaa * &at)? + &state_)?;
+            let out_ = rt.matmul(&rhs)?.squeeze(2)?;
+            state_ = (&at + &self.time_decay * &state_)?
+        }
+        let out = Tensor::cat(&out, 1)?.reshape((b * t, h * s))?;
+        // out = F.group_norm(out, num_groups=H, weight=lxw, bias=lxb).reshape(B, T, H * S)
+        let out = (out * gate)?.apply(&self.output)?;
+        state.per_layer[self.layer_id].linear_attention = state_;
+        Ok(out)
     }
 }
 
@@ -152,7 +197,7 @@ impl FeedForward {
     }
 
     pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
-        let shifted = xs.clone(); // TODO: use state
+        let shifted = &state.per_layer[self.layer_id].feed_forward;
         let key = (xs.broadcast_mul(&self.time_mix_key)?
             + shifted.broadcast_mul(&(1.0 - &self.time_mix_key)?)?)?;
         let receptance = (xs.broadcast_mul(&self.time_mix_receptance)?
@@ -160,6 +205,7 @@ impl FeedForward {
         let key = key.apply(&self.key)?.relu()?.sqr()?;
         let value = key.apply(&self.value)?;
         let receptance = candle_nn::ops::sigmoid(&receptance.apply(&self.receptance)?)?;
+        state.per_layer[self.layer_id].feed_forward = xs.i((.., xs.dim(1)? - 1))?;
         let xs = (receptance * value)?;
         Ok(xs)
     }
