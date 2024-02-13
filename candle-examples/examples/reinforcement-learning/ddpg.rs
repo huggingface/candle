@@ -411,7 +411,7 @@ impl DDPG<'_> {
     pub fn actions(&mut self, state: &Tensor) -> Result<f32> {
         let actions = self
             .actor
-            .forward(&state.detach()?.unsqueeze(0)?)?
+            .forward(&state.detach().unsqueeze(0)?)?
             .squeeze(0)?;
         let actions = if self.train {
             (actions + self.ou_noise.sample()?)?

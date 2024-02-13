@@ -1882,9 +1882,9 @@ impl Tensor {
     /// this new node. The storage of this tensor is shared with the initial tensor.
     ///
     /// If the tensor is already detached from the computation graph, the same tensor is returned.
-    pub fn detach(&self) -> Result<Tensor> {
+    pub fn detach(&self) -> Tensor {
         if self.op.is_none() && !self.is_variable {
-            Ok(self.clone())
+            self.clone()
         } else {
             let tensor_ = Tensor_ {
                 id: TensorId::new(),
@@ -1895,7 +1895,7 @@ impl Tensor {
                 dtype: self.dtype,
                 device: self.device.clone(),
             };
-            Ok(Tensor(Arc::new(tensor_)))
+            Tensor(Arc::new(tensor_))
         }
     }
 
