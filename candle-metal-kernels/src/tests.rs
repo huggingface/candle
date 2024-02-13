@@ -767,6 +767,7 @@ fn reduce_argmax_case<const N: usize, const D: usize>() {
 
 #[test]
 fn reduce_sum() {
+    reduce_sum_case::<9, 1>();
     reduce_sum_case::<6, 1>();
     reduce_sum_case::<10, 1>();
     reduce_sum_case::<64, 1>();
@@ -791,6 +792,7 @@ fn reduce_sum() {
 #[test]
 fn reduce_max() {
     reduce_max_case::<6, 1>();
+    reduce_max_case::<9, 1>();
     reduce_max_case::<10, 1>();
     reduce_max_case::<64, 1>();
     reduce_max_case::<128, 1>();
@@ -814,6 +816,7 @@ fn reduce_max() {
 #[test]
 fn reduce_argmax() {
     reduce_argmax_case::<6, 1>();
+    reduce_argmax_case::<9, 1>();
     reduce_argmax_case::<10, 1>();
     reduce_argmax_case::<64, 1>();
     reduce_argmax_case::<128, 1>();

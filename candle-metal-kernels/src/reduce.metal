@@ -2,13 +2,19 @@
 #include <metal_limits>
 using namespace metal;
 
-// Use this to get the scalar type of a vector type
-template <typename T>
-using Scalar = make_scalar_t<T>;
+template<uint N>
+constexpr uint nonzero() {
+    return N == 0 ? 1 : N;
+}
+
+template<typename T>
+constexpr uint granularity() {
+    return nonzero<vec_elements<T>::value>();
+}
 
 METAL_FUNC uint get_strided_index(
     uint idx,
-    constant const size_t &num_dims,
+    constant const uint &num_dims,
     constant const size_t *dims,
     constant const size_t *strides
 ) {
@@ -84,6 +90,7 @@ public:
 template <typename T>
 class indexed<T, typename metal::enable_if_t<is_vector_v<T>>> {
 public:
+    typedef indexed<make_scalar_t<T>> scalar;
     typedef vec<uint, vec_elements<T>::value> I;
     I i;
     T val;
@@ -96,13 +103,13 @@ public:
     constexpr indexed<T>(I _i, T _val) : i(_i), val(_val) {}
 
     // Return 1-dimensional indexed value
-    constexpr indexed<Scalar<T>> operator[](uint n) {
+    constexpr scalar operator[](uint n) {
         assert(n < N);
-        return indexed<Scalar<T>>(i[n], val[n]);
+        return scalar(i[n], val[n]);
     }
-    constexpr const indexed<Scalar<T>> operator[](uint n) const {
+    constexpr const scalar operator[](uint n) const {
         assert(n < N);
-        return indexed<Scalar<T>>(i[n], val[n]);
+        return scalar(i[n], val[n]);
     }
 
     constexpr indexed<T>(const thread indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
@@ -171,51 +178,16 @@ indexed<T> simd_shuffle_down(indexed<T> iv, ushort delta) {
     );
 }
 
-// Reduction base class.
-// The reduction class is used to define the reduction operation for a given type.
-// The reduction operation is defined by the operator() method, which is overloaded for both indexed and non-indexed types.
-// OPeration definitions are provided for default, thread, and threadgroup address spaces.
-// OPerations are defined as scalar, but is applied for both scalar and vector via apply_operation.
-template <typename T, typename R = T, typename = void>
-class reduction {
-private:
-    // Scalar representation of the input type.
-    typedef Scalar<T> type;
-    // Scalar representation of the result type.
-    typedef Scalar<R> result_type;
-public:
-    // The initial value for the reduction operation. This returns R as opposed to result_type because it can
-    // potentially be a vector type, so that it can be used for both scalar and vector types.
-    static constexpr METAL_FUNC R init();
-    // The reduction operation for default, thread, and threadgroup address spaces respectively.
-    METAL_FUNC result_type operator()(type a, type b);
-    METAL_FUNC result_type operator()(thread const type& a, thread const type& b) const;
-    METAL_FUNC result_type operator()(threadgroup const type &a, threadgroup const type &b) const;
-};
-
 template<typename T>
 struct Sum {
-    typedef Scalar<T> type;
+    typedef make_scalar_t<T> scalar;
 
     static constexpr METAL_FUNC T init() {
         return 0;
     }
-    METAL_FUNC type operator()(type a, type b) {
+    METAL_FUNC scalar operator()(scalar a, scalar b) {
         return a + b;
     }
-    METAL_FUNC type operator()(
-        thread const type& a,
-        thread const type& b
-    ) const {
-        return a + b;
-    }
-    METAL_FUNC type operator()(
-        threadgroup const type &a,
-        threadgroup const type &b
-    ) const {
-        return a + b;
-    }
-
     static METAL_FUNC T simd_op(T a) {
         return simd_sum(a);
     }
@@ -223,27 +195,14 @@ struct Sum {
 
 template<typename T>
 struct Mul {
-    typedef Scalar<T> type;
+    typedef make_scalar_t<T> scalar;
 
     static constexpr METAL_FUNC T init() {
         return 1;
     }
-    METAL_FUNC type operator()(type a, type b) {
+    METAL_FUNC scalar operator()(scalar a, scalar b) {
         return a * b;
     }
-    METAL_FUNC type operator()(
-        thread const type& a,
-        thread const type& b
-    ) const {
-        return a * b;
-    }
-    METAL_FUNC type operator()(
-        threadgroup const type &a,
-        threadgroup const type &b
-    ) const {
-        return a * b;
-    }
-
     static METAL_FUNC T simd_op(T a) {
         return simd_product(a);
     }
@@ -251,27 +210,14 @@ struct Mul {
 
 template<typename T>
 struct Min {
-    typedef Scalar<T> type;
+    typedef make_scalar_t<T> scalar;
 
     static constexpr METAL_FUNC T init() {
         return numeric_limits<T>::max();
     }
-    METAL_FUNC type operator()(type a, type b) {
+    METAL_FUNC scalar operator()(scalar a, scalar b) {
         return a < b ? a : b;
     }
-    METAL_FUNC type operator()(
-        thread const type& a,
-        thread const type& b
-    ) const {
-        return a < b ? a : b;
-    }
-    METAL_FUNC type operator()(
-        threadgroup const type &a,
-        threadgroup const type &b
-    ) const {
-        return a < b ? a : b;
-    }
-
     static METAL_FUNC T simd_op(T a) {
         return simd_min(a);
     }
@@ -279,29 +225,29 @@ struct Min {
 
 template<typename T>
 struct Max {
-    typedef Scalar<T> type;
+    typedef make_scalar_t<T> scalar;
 
     static constexpr METAL_FUNC T init() {
         return numeric_limits<T>::lowest();
     }
-    METAL_FUNC type operator()(type a, type b) {
+    METAL_FUNC scalar operator()(scalar a, scalar b) {
         return a > b ? a : b;
     }
-    METAL_FUNC type operator()(
-        thread const type& a,
-        thread const type& b
-    ) const {
-        return a > b ? a : b;
-    }
-    METAL_FUNC type operator()(
-        threadgroup const type &a,
-        threadgroup const type &b
-    ) const {
-        return a > b ? a : b;
-    }
-
     static METAL_FUNC T simd_op(T a) {
         return simd_max(a);
+    }
+};
+
+// For testing purposes
+template<typename T>
+struct Identity {
+    typedef make_scalar_t<T> scalar;
+
+    static constexpr METAL_FUNC T init() {
+        return numeric_limits<T>::lowest();
+    }
+    METAL_FUNC scalar operator()(scalar a, scalar b) {
+        return b;
     }
 };
 
@@ -384,7 +330,7 @@ template<typename OP, typename T, uint N>
 struct operation<OP, vec<T, N>> {
     METAL_FUNC vec<T, N> operator()(OP op, vec<T, N> a, vec<T, N> b) {
         #pragma clang loop unroll(full)
-        for (ushort n = 0; n < vec_elements<T>::value; n++) {
+        for (ushort n = 0; n < N; n++) {
             a[n] = op(a[n], b[n]);
         }
         return a;
@@ -406,19 +352,21 @@ struct operation<OP, indexed<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
 };
 
 // Specialization for indexed vector values.
-template<typename OP, typename T, uint N>
-struct operation<OP, indexed<vec<T, N>>> {
-    METAL_FUNC indexed<vec<T, N>> operator()(OP op, indexed<vec<T, N>> a, indexed<vec<T, N>> b) {
+template<typename OP, typename T>
+struct operation<OP, indexed<T>, typename metal::enable_if_t<is_vector_v<T>>> {
+    typedef indexed<make_scalar_t<T>> scalar;
+
+    METAL_FUNC indexed<T> operator()(OP op, indexed<T> a, indexed<T> b) {
         #pragma clang loop unroll(full)
-        for (ushort n = 0; n < N; n++) {
+        for (ushort n = 0; n < vec_elements<T>::value; n++) {
             a[n] = op(a[n], b[n]);
         }
         return a;
     }
-    METAL_FUNC indexed<vec<T, N>> operator()(OP op, indexed<vec<T, N>> a, vec<T, N> b, uint idx) {
+    METAL_FUNC indexed<T> operator()(OP op, indexed<T> a, T b, uint idx) {
         #pragma clang loop unroll(full)
-        for (ushort n = 0; n < N; n++) {
-            a[n] = op(a[n], indexed<T>(idx + n, b[n]));
+        for (ushort n = 0; n < vec_elements<T>::value; n++) {
+            a[n] = op(a[n], scalar{ idx + n, b[n] });
         }
         return a;
     }
@@ -446,9 +394,80 @@ METAL_FUNC T finalize(T value) {
 }
 
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_vector_v<T>>>
-METAL_FUNC Scalar<T> finalize(T value) {
+METAL_FUNC make_scalar_t<T> finalize(T value) {
     OP op;
-    Scalar<T> result = value[0];
+    make_scalar_t<T> result = value[0];
+
+    #pragma clang loop unroll(full)
+    for (ushort n = 1; n < vec_elements<T>::value; n++) {
+        result = op(result, value[n]);
+    }
+    return result;
+}
+
+// Contains the intermediate results for the online softmax calculation.
+// m: max
+// d: sum of the exponentials
+template <typename T>
+struct MD {
+    T m;
+    T d;
+
+    constexpr MD<T>() = default;
+    constexpr MD<T>() threadgroup = default;
+
+    static constant constexpr uint N = vec_elements<T>::value;
+
+    // Return 1-dimensional indexed value
+    constexpr MD<make_scalar_t<T>> operator[](uint n) {
+        assert(n < N);
+        return MD<make_scalar_t<T>> { m[n], d[n] };
+    }
+    constexpr const MD<make_scalar_t<T>> operator[](uint n) const {
+        assert(n < N);
+        return MD<make_scalar_t<T>> { m[n], d[n] };
+    }
+};
+
+// Enable operations for softmax MD
+template<typename OP, typename T>
+struct operation<OP, MD<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
+    METAL_FUNC MD<T> operator()(OP op, MD<T> a, MD<T> b) {
+        return op(a, b);
+    }
+    METAL_FUNC MD<T> operator()(OP op, MD<T> a, T b, uint idx) {
+        return this->operator()(op, a, MD<T> { b, static_cast<T>(1.0) });
+    }
+};
+
+// Specialization for indexed vector values.
+template<typename OP, typename T>
+struct operation<OP, MD<T>, typename metal::enable_if_t<is_vector_v<T>>> {
+    METAL_FUNC MD<T> operator()(OP op, MD<T> a, MD<T> b) {
+        #pragma clang loop unroll(full)
+        for (ushort n = 0; n < vec_elements<T>::value; n++) {
+            a[n] = op(a[n], b[n]);
+        }
+        return a;
+    }
+    METAL_FUNC MD<T> operator()(OP op, MD<T> a, T b, uint idx) {
+        #pragma clang loop unroll(full)
+        for (ushort n = 0; n < vec_elements<T>::value; n++) {
+            a[n] = op(a[n], MD<make_scalar_t<T>> { b[n], static_cast<make_scalar_t<T>>(1.0) });
+        }
+        return a;
+    }
+};
+
+template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
+METAL_FUNC MD<T> finalize(MD<T> value) {
+    return value;
+}
+
+template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_vector_v<T>>>
+METAL_FUNC MD<make_scalar_t<T>> finalize(MD<T> value) {
+    OP op;
+    MD<make_scalar_t<T>> result = value[0];
     #pragma clang loop unroll(full)
     for (ushort n = 1; n < vec_elements<T>::value; n++) {
         result = op(result, value[n]);
@@ -457,78 +476,144 @@ METAL_FUNC Scalar<T> finalize(T value) {
 }
 
 // Load elements from global memory into shared memory.
-// Handles both indexed and non-indexed types by using apply_operator.
+// Handles both indexed and non-indexed types by using operate.
 template<
     typename T,
     typename R,
     typename OP,
     ushort BLOCKSIZE,
-    bool STRIDED = false
+    bool STRIDED = false,
+    typename _E = void
 >
-METAL_FUNC R load_from_global(
-    R value,
-    constant size_t &num_elements,
-    constant size_t &num_dims,
-    constant size_t *dims,
-    constant size_t *strides,
-    constant size_t &el_to_sum_per_block,
-    const device T *src,
-    const ushort offset,
-    threadgroup R shared[BLOCKSIZE],
-    const ushort tid
-) {
-    OP op;
-    operation<OP, R> apply_operator;
-    uint idx = offset + tid;
-    #pragma clang loop unroll(full)
-    for (uint i = offset + tid; i < offset + el_to_sum_per_block; i += BLOCKSIZE) {
-        if (STRIDED) {
-            // TODO: if vec.
-            // #pragma clang loop unroll(full)
-            //for (ushort n = 0; n < granularity<T>(); n++) {
-            //
-            //}
-            idx = get_strided_index(i, num_dims, dims, strides);
-            value = apply_operator(op, value, src[idx], idx);
-        } else {
-            value = apply_operator(op, value, src[i], i);
-        }
-    }
-    return value;
-}
+struct loader;
 
-
-// Convenience function for when we don't need to reduce over multiple dimensions.
 template<
     typename T,
     typename R,
     typename OP,
+    bool STRIDED,
     ushort BLOCKSIZE
 >
-METAL_FUNC R load_from_global(
-    R value,
-    constant size_t &num_elements,
-    constant size_t &el_to_sum_per_block,
-    const device T *src,
-    const size_t offset,
-    threadgroup R shared[BLOCKSIZE],
-    const ushort tid
-) {
-    return load_from_global<T, R, OP, BLOCKSIZE, false>(
-        value,
-        num_elements,
-        // Dummy values for num_dims, dims, and strides
-        num_elements,
-        nullptr,
-        nullptr,
-        // end dummy values
-        el_to_sum_per_block,
-        src,
-        offset,
-        shared,
-        tid
-    );
-}
+struct loader<T, R, OP, BLOCKSIZE, STRIDED, typename metal::enable_if_t<is_scalar_v<T>>> {
+    OP op;
+    operation<OP, R> operate;
+
+    METAL_FUNC R operator()(
+        R value,
+        constant uint &src_numel,
+        const uint el_to_sum_per_block,
+        const device T *src,
+        const ushort offset,
+        const ushort tid
+    ) {
+        const uint thread_id = tid + offset;
+        const uint stop_idx = el_to_sum_per_block + offset;
+
+        #pragma clang loop unroll(full)
+        for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
+            value = operate(op, value, src[i], i);
+        }
+        return value;
+    }
+
+    METAL_FUNC R operator()(
+        R value,
+        constant uint &src_numel,
+        constant size_t *dims,
+        constant size_t *strides,
+        const uint el_to_sum_per_block,
+        const device T *src,
+        const ushort offset,
+        const ushort tid
+    ) {
+        if (!STRIDED) {
+            return this->operator()(
+                value,
+                src_numel,
+                el_to_sum_per_block,
+                src,
+                offset,
+                tid
+            );
+        }
+        const uint thread_id = tid + offset;
+        const uint stop_idx = min(el_to_sum_per_block + offset, src_numel);
+
+        uint idx = thread_id;
+        #pragma clang loop unroll(full)
+        for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
+            idx = get_strided_index(i, src_numel, dims, strides);
+            value = operate(op, value, src[idx], idx);
+        }
+        return value;
+    }
+};
+
+template<
+    typename T,
+    typename R,
+    typename OP,
+    ushort BLOCKSIZE,
+    bool STRIDED
+>
+struct loader<T, R, OP, BLOCKSIZE, STRIDED, typename metal::enable_if_t<is_vector_v<T>>> {
+    OP op;
+    operation<OP, R> operate;
+
+    METAL_FUNC R operator()(
+        R value,
+        constant uint &src_numel,
+        const uint el_per_block,
+        const device T *src,
+        const ushort offset,
+        const ushort tid
+    ) {
+        // blocksize = 3
+        // G = 2
+        // offset = dst_id * 3
+        constexpr uint G = granularity<T>();
+        const uint thread_id = tid + (offset / G);
+        const uint stop_idx = min(el_per_block + offset, src_numel) / G;
+
+        #pragma clang loop unroll(full)
+        for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
+            value = operate(op, value, src[i], i);
+        }
+        return value;
+    }
+
+    METAL_FUNC R operator()(
+        R value,
+        constant uint &src_numel,
+        constant size_t *dims,
+        constant size_t *strides,
+        const uint el_to_sum_per_block,
+        const device T *src,
+        const ushort offset,
+        const ushort tid
+    ) {
+        if (!STRIDED) {
+            return this->operator()(
+                value,
+                src_numel,
+                el_to_sum_per_block,
+                src,
+                offset,
+                tid
+            );
+        }
+        //const uint thread_id = tid + offset;
+        //const uint stop_idx = el_to_sum_per_block + offset;
+        //
+        //uint idx = thread_id;
+        //#pragma clang loop unroll(full)
+        //for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
+        //    idx = get_strided_index(i, src_numel, dims, strides);
+        //    value = operate(op, value, src[idx], idx);
+        //}
+        return value;
+    }
+};
 
 template<
     typename OP,
@@ -537,7 +622,6 @@ template<
     typename _E = void
 >
 struct simdgroup_reducer;
-
 
 // Specialization for built-in simd operations.
 template<typename OP, ushort BLOCKSIZE, typename T>
@@ -555,12 +639,12 @@ template<typename OP, ushort BLOCKSIZE, typename T>
 struct simdgroup_reducer<OP, BLOCKSIZE, T, typename metal::enable_if_t<!is_simd_op<OP>::value && is_valid_simd_t<T>>> {
     METAL_FUNC T operator()(T value) {
         OP op;
-        operation<OP, T> apply_operator;
-        if (BLOCKSIZE >= 32) value = apply_operator(op, value, simd_shuffle_down(value, 16));
-        if (BLOCKSIZE >= 16) value = apply_operator(op, value, simd_shuffle_down(value,  8));
-        if (BLOCKSIZE >=  8) value = apply_operator(op, value, simd_shuffle_down(value,  4));
-        if (BLOCKSIZE >=  4) value = apply_operator(op, value, simd_shuffle_down(value,  2));
-        if (BLOCKSIZE >=  2) value = apply_operator(op, value, simd_shuffle_down(value,  1));
+        operation<OP, T> operate;
+        if (BLOCKSIZE >= 32) value = operate(op, value, simd_shuffle_down(value, 16));
+        if (BLOCKSIZE >= 16) value = operate(op, value, simd_shuffle_down(value,  8));
+        if (BLOCKSIZE >=  8) value = operate(op, value, simd_shuffle_down(value,  4));
+        if (BLOCKSIZE >=  4) value = operate(op, value, simd_shuffle_down(value,  2));
+        if (BLOCKSIZE >=  2) value = operate(op, value, simd_shuffle_down(value,  1));
         return value;
     }
     METAL_FUNC T operator()(threadgroup T shared[BLOCKSIZE], const ushort tid) {
@@ -576,13 +660,13 @@ struct simdgroup_reducer<OP, BLOCKSIZE, T, typename metal::enable_if_t<!is_simd_
 //        const ushort tid
 //    ) {
 //        OP op;
-//        operation<OP, T> apply_operator;
+//        operation<OP, T> operate;
 //        T value = shared[tid];
-//        if (BLOCKSIZE >= 32) value = apply_operator(op, value, shared[tid + 16]);
-//        if (BLOCKSIZE >= 16) value = apply_operator(op, value, shared[tid +  8]);
-//        if (BLOCKSIZE >=  8) value = apply_operator(op, value, shared[tid +  4]);
-//        if (BLOCKSIZE >=  4) value = apply_operator(op, value, shared[tid +  2]);
-//        if (BLOCKSIZE >=  2) value = apply_operator(op, value, shared[tid +  1]);
+//        if (BLOCKSIZE >= 32) value = operate(op, value, shared[tid + 16]);
+//        if (BLOCKSIZE >= 16) value = operate(op, value, shared[tid +  8]);
+//        if (BLOCKSIZE >=  8) value = operate(op, value, shared[tid +  4]);
+//        if (BLOCKSIZE >=  4) value = operate(op, value, shared[tid +  2]);
+//        if (BLOCKSIZE >=  2) value = operate(op, value, shared[tid +  1]);
 //        return value;
 //    }
 //    METAL_FUNC T operator()(T value) {
@@ -590,46 +674,45 @@ struct simdgroup_reducer<OP, BLOCKSIZE, T, typename metal::enable_if_t<!is_simd_
 //    }
 //};
 
-template<
-   typename T,
-   typename OP,
-   ushort BLOCKSIZE
->
-METAL_FUNC T threadgroup_reduce(
-    T value,
-    threadgroup T shared[BLOCKSIZE],
-    const ushort tid
-) {
+template<typename T, typename OP, ushort BLOCKSIZE>
+struct block_reducer {
     OP op;
-    operation<OP, T> apply_operator;
+    operation<OP, T> operate;
+    threadgroup T *shared;
+    simdgroup_reducer<OP, BLOCKSIZE, T> simd_reduce;
 
-    if (BLOCKSIZE >= 64) {
-        // Only store in threadgroup shared memory if needed.
-        shared[tid] = value;
-        // Threadgroup barrier is needed to ensure that all threads have written to shared memory
-        threadgroup_barrier(mem_flags::mem_none);
+    block_reducer(threadgroup T shared[BLOCKSIZE]) {
+        this->shared = shared;
     }
 
-    #pragma clang loop unroll(full)
-    for (ushort s = BLOCKSIZE / 2; s >= 64; s >>= 1) {
-        if (tid < s) {
-            shared[tid] = apply_operator(op, shared[tid], shared[tid + s]);
-        }
-        threadgroup_barrier(mem_flags::mem_none);
-    }
-    if (tid < 32) {
-        // Last shared memory reduce can be done without tid < s check.
+    METAL_FUNC T operator()(T value, const ushort tid) {
         if (BLOCKSIZE >= 64) {
-            value = apply_operator(op, shared[tid], shared[tid + 32]);
-            simdgroup_barrier(mem_flags::mem_none);
+            // Only store in threadgroup shared memory if needed.
+            shared[tid] = value;
+            // Threadgroup barrier is needed to ensure that all threads have written to shared memory
+            threadgroup_barrier(mem_flags::mem_none);
         }
-        // Remaining 32 threads can be reduced with simdgroup_reduce.
-        simdgroup_reducer<OP, BLOCKSIZE, T> reduce;
-        value = reduce(value);
-    }
 
-    return value;
-}
+        #pragma clang loop unroll(full)
+        for (ushort s = BLOCKSIZE / 2; s >= 64; s >>= 1) {
+            if (tid < s) {
+                shared[tid] = operate(op, shared[tid], shared[tid + s]);
+            }
+            threadgroup_barrier(mem_flags::mem_none);
+        }
+        if (tid < 32) {
+            // Last shared memory reduce can be done without tid < s check.
+            if (BLOCKSIZE >= 64) {
+                value = operate(op, shared[tid], shared[tid + 32]);
+                simdgroup_barrier(mem_flags::mem_none);
+            }
+            // Remaining 32 threads can be reduced with simdgroup_reduce.
+            value = simd_reduce(value);
+        }
+
+        return value;
+    }
+};
 
 // Inspired by "Optimizing Parallel Reduction in CUDA" by Mark Harris
 template<
@@ -640,13 +723,12 @@ template<
     bool STRIDED = false
 >
 METAL_FUNC void reduce(
-    constant size_t &num_dims,
+    constant uint &num_dims,
     constant size_t *dims,
     constant size_t *strides,
-    constant size_t &el_to_sum_per_block,
+    constant uint &el_to_sum_per_block,
     device const T *src,
-    device Scalar<R> *dst,
-    constant size_t &num_elements,
+    device make_scalar_t<R> *dst,
     threadgroup R shared[BLOCKSIZE],
     ushort tid [[ thread_index_in_threadgroup ]],
     ushort dst_id [[ threadgroup_position_in_grid ]]
@@ -654,37 +736,29 @@ METAL_FUNC void reduce(
     // Initialize shared memory for current thread to correct value for reduction operation
     shared[tid] = ReductionOp::init();
 
-    // Calcluate offset for the threadgroup of current thread
-    ushort offset = dst_id * el_to_sum_per_block;
+    // Calcluate offset for the threadgroup of current thread;
+    const uint el_to_sum = el_to_sum_per_block;
+    const uint offset = dst_id * el_to_sum;
     R value = ReductionOp::init();
+
+    loader<T, R, ReductionOp, BLOCKSIZE, STRIDED> load;
     // Load with reduction from global memory into shared memory
-    value = load_from_global<T, R, ReductionOp, BLOCKSIZE, STRIDED>(
+    value = load(
         value,
-        num_elements,
         num_dims,
         dims,
         strides,
-        el_to_sum_per_block,
+        el_to_sum,
         src,
         offset,
-        shared,
         tid
     );
 
     // Complete reduction
-    value = threadgroup_reduce<R, ReductionOp, BLOCKSIZE>(value, shared, tid);
+    block_reducer<T, ReductionOp, BLOCKSIZE> block_reduce(shared);
+    value = block_reduce(value, tid);
 
     if (tid == 0) dst[dst_id] = finalize<ReductionOp>(value);
-}
-
-template<uint N>
-constexpr uint nonzero() {
-    return N == 0 ? 1 : N;
-}
-
-template<typename T>
-constexpr uint granularity() {
-    return nonzero<vec_elements<T>::value>();
 }
 
 #define reduce_case(OP, T, R, N)                        \
@@ -701,23 +775,20 @@ case N: {                                               \
         el_to_sum_per_block,                            \
         src,                                            \
         dst,                                            \
-        num_elements,                                   \
         shared,                                         \
         tid,                                            \
         dst_id);                                        \
     break;                                              \
 }
 
-
 #define ARG(...) __VA_ARGS__
 
 #define impl_reduce_inner(OP, NAME, T)                  \
 kernel void NAME(                                       \
-    constant size_t &num_dims,                          \
-    constant size_t &el_to_sum_per_block,               \
+    constant uint &num_dims,                            \
+    constant uint &el_to_sum_per_block,                 \
     device const T *src,                                \
-    device Scalar<T> *dst,                              \
-    constant size_t &num_elements,                      \
+    device make_scalar_t<T> *dst,                       \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
     ushort block_dim [[ threads_per_threadgroup ]]      \
@@ -743,13 +814,12 @@ kernel void NAME(                                       \
 
 #define impl_reduce_strided(OP, NAME, T, NAME_SUFFIX)   \
 kernel void NAME##_strided##NAME_SUFFIX(                \
-    constant size_t &num_dims,                          \
+    constant uint &num_dims,                            \
     constant size_t *dims,                              \
     constant size_t *strides,                           \
-    constant size_t &el_to_sum_per_block,               \
+    constant uint &el_to_sum_per_block,                 \
     device const T *src,                                \
-    device Scalar<T> *dst,                              \
-    constant size_t &num_elements,                      \
+    device make_scalar_t<T> *dst,                       \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
     ushort block_dim [[ threads_per_threadgroup ]]      \
@@ -773,11 +843,11 @@ kernel void NAME##_strided##NAME_SUFFIX(                \
 
 #define impl_reduce(OP, NAME, T)                    \
 impl_reduce_inner(OP, NAME, T)                      \
-impl_reduce_inner(OP, NAME##x##2, ARG(vec<T, 2>))   \
-impl_reduce_inner(OP, NAME##x##4, ARG(vec<T, 4>))   \
+impl_reduce_inner(OP, NAME##x2, ARG(vec<T, 2>))     \
+impl_reduce_inner(OP, NAME##x4, ARG(vec<T, 4>))     \
 impl_reduce_strided(OP, NAME, T, )                  \
-impl_reduce_strided(OP, NAME, ARG(vec<T, 2>), x##2) \
-impl_reduce_strided(OP, NAME, ARG(vec<T, 4>), x##4)
+impl_reduce_strided(OP, NAME, ARG(vec<T, 2>), x2)   \
+impl_reduce_strided(OP, NAME, ARG(vec<T, 4>), x4)
 
 template<
     typename T,
@@ -786,39 +856,41 @@ template<
     bool STRIDED
 >
 METAL_FUNC void reduce(
-    constant size_t &num_dims,
+    constant uint &num_dims,
     constant size_t *dims,
     constant size_t *strides,
-    constant size_t &el_to_sum_per_block,
+    constant uint &el_to_sum_per_block,
     device const T *src,
     device uint *dst,
-    constant size_t &num_elements,
     threadgroup indexed<T> shared[BLOCKSIZE],
     ushort tid [[ thread_index_in_threadgroup ]],
     ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
+    loader<T, indexed<T>, ReductionOp, BLOCKSIZE, STRIDED> load;
+    block_reducer<indexed<T>, ReductionOp, BLOCKSIZE> block_reduce(shared);
+
     // Initialize shared memory for current thread to correct value for reduction operation
     shared[tid] = ReductionOp::init();
 
     // Calcluate offset for the threadgroup of current thread
-    ushort offset = dst_id * el_to_sum_per_block;
-    indexed<T> value = ReductionOp::init();
+    const uint el_to_sum = el_to_sum_per_block;
+    const uint offset = dst_id * el_to_sum;
+
     // Load with reduction from global memory into shared memory
-    value = load_from_global<T, indexed<T>, ReductionOp, BLOCKSIZE, STRIDED>(
+    indexed<T> value = ReductionOp::init();
+    value = load(
         value,
-        num_elements,
         num_dims,
         dims,
         strides,
-        el_to_sum_per_block,
+        el_to_sum,
         src,
         offset,
-        shared,
         tid
     );
 
     // Complete reduction
-    value = threadgroup_reduce<indexed<T>, ReductionOp, BLOCKSIZE>(value, shared, tid);
+    value = block_reduce(value, tid);
 
     // Return index of reduce result
     if (tid == 0) dst[dst_id] = finalize<ReductionOp>(value);
@@ -838,7 +910,6 @@ case N: {                                               \
         el_to_sum_per_block,                            \
         src,                                            \
         dst,                                            \
-        num_elements,                                   \
         shared,                                         \
         tid,                                            \
         dst_id);                                        \
@@ -847,11 +918,10 @@ case N: {                                               \
 
 #define impl_arg_reduce_inner(OP, NAME, T, NAME_SUFFIX) \
 kernel void NAME##NAME_SUFFIX(                          \
-    constant size_t &num_dims,                          \
-    constant size_t &el_to_sum_per_block,               \
+    constant uint &num_dims,                            \
+    constant uint &el_to_sum_per_block,                 \
     device const T *src,                                \
     device uint *dst,                                   \
-    constant size_t &num_elements,                      \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
     ushort block_dim [[ threads_per_threadgroup ]]      \
@@ -875,13 +945,12 @@ kernel void NAME##NAME_SUFFIX(                          \
     }                                                   \
 }                                                       \
 kernel void NAME##NAME_SUFFIX##_strided(                \
-    constant size_t &num_dims,                          \
+    constant uint &num_dims,                            \
     constant size_t *dims,                              \
     constant size_t *strides,                           \
-    constant size_t &el_to_sum_per_block,               \
+    constant uint &el_to_sum_per_block,                 \
     device const T *src,                                \
     device uint *dst,                                   \
-    constant size_t &num_elements,                      \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
     ushort block_dim [[ threads_per_threadgroup ]]      \
@@ -906,16 +975,43 @@ kernel void NAME##NAME_SUFFIX##_strided(                \
 
 #define impl_arg_reduce(OP, NAME, T)                    \
 impl_arg_reduce_inner(OP, NAME, T, )                    \
-impl_arg_reduce_inner(OP, NAME, ARG(vec<T, 2>), x##2)   \
-impl_arg_reduce_inner(OP, NAME, ARG(vec<T, 4>), x##4)
+impl_arg_reduce_inner(OP, NAME, ARG(vec<T, 2>), x2)     \
+impl_arg_reduce_inner(OP, NAME, ARG(vec<T, 4>), x4)
 
-// Contains the intermediate results for the online softmax calculation.
-// m: max
-// d: sum of the exponentials
-template <typename T>
-struct MD {
-    T m;
-    T d;
+struct Divide {
+    template<typename T>
+    METAL_FUNC T operator()(T a, T b) { return a / b; }
+
+    template<> METAL_FUNC float  operator()(float  a, float b) { return fast::divide(a, b); }
+    template<> METAL_FUNC float2  operator()(float2  a, float2 b) { return fast::divide(a, b); }
+    template<> METAL_FUNC float4  operator()(float4  a, float4 b) { return fast::divide(a, b); }
+    template<> METAL_FUNC half  operator()(half  a, half b) { return divide(a, b); }
+    template<> METAL_FUNC half2  operator()(half2  a, half2 b) { return divide(a, b); }
+    template<> METAL_FUNC half4  operator()(half4  a, half4 b) { return divide(a, b); }
+    #if defined(__HAVE_BFLOAT__)
+    template<> METAL_FUNC bfloat  operator()( bfloat  a,  bfloat b) { return static_cast<bfloat>(fast::divide(a, b)); }
+    template<> METAL_FUNC bfloat2  operator()(bfloat2  a, bfloat2 b) { return static_cast<bfloat2>( a / b ); }
+    template<> METAL_FUNC bfloat4  operator()(bfloat4  a, bfloat4 b) { return static_cast<bfloat4>( a / b ); }
+    #endif
+};
+struct Exp {
+    template<typename T>
+    METAL_FUNC T operator()(T a) { return fast::exp(a); }
+
+    template<> METAL_FUNC float  operator()(float  a) { return fast::exp(a); }
+    template<> METAL_FUNC float2 operator()(float2 a) { return fast::exp(a); }
+    template<> METAL_FUNC float4 operator()(float4 a) { return fast::exp(a); }
+    template<> METAL_FUNC half   operator()(half   a) { return exp(a); }
+    template<> METAL_FUNC half2  operator()(half2  a) { return exp(a); }
+    template<> METAL_FUNC half4  operator()(half4  a) { return exp(a); }
+    #if defined(__HAVE_BFLOAT__)
+    template<>
+    METAL_FUNC bfloat  operator()(bfloat  a) { return static_cast<bfloat>(fast::exp(a)); }
+    template<>
+    METAL_FUNC bfloat2 operator()(bfloat2 a) { return static_cast<bfloat2>(fast::exp(static_cast<float2>(a))); }
+    template<>
+    METAL_FUNC bfloat4 operator()(bfloat4 a) { return static_cast<bfloat4>(fast::exp(static_cast<float4>(a))); }
+    #endif
 };
 
 template <typename T>
@@ -932,19 +1028,9 @@ struct is_valid_simd_type<MD<T>, typename metal::enable_if_t<is_valid_simd_t<T>>
     static constant constexpr bool value = true;
 };
 
-// Enable operations for softmax MD
-template<typename OP, typename T>
-struct operation<OP, MD<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
-    METAL_FUNC MD<T> operator()(OP op, MD<T> a, MD<T> b) {
-        return op(a, b);
-    }
-    METAL_FUNC MD<T> operator()(OP op, MD<T> a, MD<T> b, uint idx) {
-        return this->operator()(op, a, b);
-    }
-};
-
 template<typename T>
 struct MDReduceOp {
+    Exp exp;
 
     static constexpr METAL_FUNC MD<T> init() {
         return MD<T>{ numeric_limits<T>::lowest(), 0 };
@@ -955,31 +1041,7 @@ struct MDReduceOp {
         MD<T> bigger_m = a_bigger ? a : b;
         MD<T> smaller_m = a_bigger ? b : a;
         MD<T> res;
-        res.d = bigger_m.d + smaller_m.d *  static_cast<T>(fast::exp(smaller_m.m - bigger_m.m));
-        res.m = bigger_m.m;
-        return res;
-    }
-    METAL_FUNC MD<T> operator()(
-        thread const MD<T> &a,
-        thread const MD<T> &b
-    ) const {
-        bool a_bigger = a.m > b.m;
-        MD<T> bigger_m = a_bigger ? a : b;
-        MD<T> smaller_m = a_bigger ? b : a;
-        MD<T> res;
-        res.d = bigger_m.d + smaller_m.d *  static_cast<T>(fast::exp(smaller_m.m - bigger_m.m));
-        res.m = bigger_m.m;
-        return res;
-    }
-    METAL_FUNC MD<T> operator()(
-        threadgroup const MD<T> &a,
-        threadgroup const MD<T> &b
-    ) const {
-        bool a_bigger = a.m > b.m;
-        MD<T> bigger_m = a_bigger ? a : b;
-        MD<T> smaller_m = a_bigger ? b : a;
-        MD<T> res;
-        res.d = bigger_m.d + smaller_m.d *  static_cast<T>(fast::exp(smaller_m.m - bigger_m.m));
+        res.d = bigger_m.d + smaller_m.d * exp(smaller_m.m - bigger_m.m);
         res.m = bigger_m.m;
         return res;
     }
@@ -988,44 +1050,98 @@ struct MDReduceOp {
         return a;
     }
 };
+template<
+    typename T,
+    ushort BLOCKSIZE,
+    typename _E = void
+>
+struct finalize_softmax;
+
+template<typename T, ushort BLOCKSIZE>
+struct finalize_softmax<T, BLOCKSIZE, typename metal::enable_if_t<is_scalar_v<T>>> {
+    Divide divide;
+    Exp exp;
+
+    METAL_FUNC void operator()(
+        const device T *src,
+        device T *dst,
+        threadgroup MD<T> &md_total,
+        const uint thread_id,
+        const uint stop_idx
+    ) {
+        const T d_total_inverse = divide(static_cast<T>(1.0), md_total.d);
+        for (uint idx = thread_id; idx < stop_idx; idx += BLOCKSIZE) {
+            dst[idx] = exp(src[idx] - md_total.m) * d_total_inverse;
+        }
+    }
+};
+
+
+template<typename T, ushort BLOCKSIZE>
+struct finalize_softmax<T, BLOCKSIZE, typename metal::enable_if_t<is_vector_v<T>>> {
+    Divide divide;
+    Exp exp;
+
+    METAL_FUNC void operator()(
+        const device T *src,
+        device make_scalar_t<T> *dst,
+        threadgroup MD<make_scalar_t<T>> &md_total,
+        const uint thread_id,
+        const uint stop_idx
+    ) {
+        const make_scalar_t<T> d_total_inverse = divide(static_cast<make_scalar_t<T>>(1.0), md_total.d);
+        for (uint idx = thread_id; idx < stop_idx; idx += BLOCKSIZE) {
+            #pragma clang loop unroll(full)
+            for (uint i = 0; i < granularity<T>(); i++) {
+                dst[idx + i] = exp(src[idx][i] - md_total.m) * d_total_inverse;
+            }
+        }
+    }
+};
 
 // Welford's algorithm approach for an online softmax implementation.
 // Same as the Online normalizer calculation for softmax: https://arxiv.org/pdf/1805.02867.pdf
 template<typename T, ushort BLOCKSIZE>
 METAL_FUNC void softmax(
-    constant size_t &src_numel,
-    constant size_t &el_to_sum_per_block,
+    constant uint &src_numel,
+    constant uint &el_to_sum_per_block,
     const device T *src,
-    device Scalar<T> *dst,
+    device make_scalar_t<T> *dst,
     threadgroup MD<T> shared[BLOCKSIZE],
-    threadgroup MD<T> &md_total,
+    threadgroup MD<make_scalar_t<T>> &md_total,
 
     ushort tid [[ thread_index_in_threadgroup ]],
     ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
-    MDReduceOp<T> op;
+    loader<T, MD<T>, MDReduceOp<make_scalar_t<T>>, BLOCKSIZE> load;
+    block_reducer<MD<T>, MDReduceOp<make_scalar_t<T>>, BLOCKSIZE> block_reduce(shared);
+    finalize_softmax<T, BLOCKSIZE> softmax_finalize;
 
-    // Calcluate offset for the threadgroup of current thread
-    const size_t offset = dst_id * el_to_sum_per_block;
-    const size_t thread_id = tid + offset;
-    const size_t stop_idx = min(el_to_sum_per_block + offset, src_numel);
+    // Calcluate offset for the threadgroup of current thread;
+    const uint el_to_sum = el_to_sum_per_block;
+    const uint offset = dst_id * el_to_sum;
 
     // Calculate partial result for current thread
     MD<T> md_partial = MD<T> { numeric_limits<T>::lowest(), 0 };
-    for (size_t idx = thread_id; idx < stop_idx; idx += BLOCKSIZE) {
-        md_partial = op(md_partial, MD<T> { src[idx], static_cast<T>(1.0) });
-    }
+    md_partial = load(
+        md_partial,
+        src_numel,
+        el_to_sum_per_block,
+        src,
+        offset,
+        tid
+    );
 
     // Reduce in shared memory
-    MD<T> md = threadgroup_reduce<MD<T>, MDReduceOp<T>, BLOCKSIZE>(md_partial, shared, tid);
+    MD<T> md = block_reduce(md_partial, tid);
 
-    if (tid == 0) md_total = md;
+    if (tid == 0) md_total = finalize<MDReduceOp<make_scalar_t<T>>>(md);
     threadgroup_barrier(mem_flags::mem_none);
 
-    const T d_total_inverse = static_cast<T>(fast::divide(1.0, md_total.d));
-    for (size_t idx = thread_id; idx < stop_idx; idx += BLOCKSIZE) {
-        dst[idx] = static_cast<T>(fast::exp(src[idx] - md_total.m)) * d_total_inverse;
-    }
+    // Finalize softmax
+    const uint thread_id = tid + offset;
+    const uint stop_idx = min(el_to_sum_per_block + offset, src_numel);
+    softmax_finalize(src, dst, md_total, thread_id, stop_idx);
 }
 
 #define softmax_case(T, N)                              \
@@ -1035,7 +1151,7 @@ case N: {                                               \
     }                                                   \
     constexpr uint B = nonzero<N / GRANULARITY>();      \
     threadgroup MD<T> shared[B];                        \
-    threadgroup MD<T> md_total;                         \
+    threadgroup MD<make_scalar_t<T>> md_total;          \
     softmax<T, B>(                                      \
         src_numel,                                      \
         el_to_sum_per_block,                            \
@@ -1050,10 +1166,10 @@ case N: {                                               \
 
 #define impl_softmax_inner(NAME, T)                     \
 kernel void NAME(                                       \
-    constant size_t &src_numel,                         \
-    constant size_t &el_to_sum_per_block,               \
+    constant uint &src_numel,                           \
+    constant uint &el_to_sum_per_block,                 \
     device const T *src,                                \
-    device Scalar<T> *dst,                              \
+    device make_scalar_t<T> *dst,                       \
                                                         \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
@@ -1075,40 +1191,40 @@ kernel void NAME(                                       \
     }                                                   \
 }
 
-#define impl_softmax(NAME, T)                      \
-impl_softmax_inner(NAME, T)                        \
-//impl_softmax_inner(NAME##x2, T##2)              \
-//impl_softmax_inner(NAME##x4, T##4)
+#define impl_softmax(NAME, T)                           \
+impl_softmax_inner(NAME, T)                             \
+impl_softmax_inner(NAME##x2, T##2)                      \
+impl_softmax_inner(NAME##x4, T##4)
 
 impl_reduce(Sum, fast_sum_f32, float)
-impl_reduce(Sum, fast_sum_u32, uint)
-impl_reduce(Sum, fast_sum_f16, half)
-impl_reduce(Sum, fast_sum_u8, uint8_t)
-
-impl_reduce(Mul, fast_mul_f32, float)
-impl_reduce(Mul, fast_mul_u32, uint)
-impl_reduce(Mul, fast_mul_f16, half)
-impl_reduce(Mul, fast_mul_u8, uint8_t)
+//impl_reduce(Sum, fast_sum_u32, uint)
+//impl_reduce(Sum, fast_sum_f16, half)
+//impl_reduce(Sum, fast_sum_u8, uint8_t)
+//
+//impl_reduce(Mul, fast_mul_f32, float)
+//impl_reduce(Mul, fast_mul_u32, uint)
+//impl_reduce(Mul, fast_mul_f16, half)
+//impl_reduce(Mul, fast_mul_u8, uint8_t)
 
 impl_reduce(Max, fast_max_f32, float)
-impl_reduce(Max, fast_max_u32, uint)
-impl_reduce(Max, fast_max_f16, half)
-impl_reduce(Max, fast_max_u8, uint8_t)
-
-impl_reduce(Min, fast_min_f32, float)
-impl_reduce(Min, fast_min_u32, uint)
-impl_reduce(Min, fast_min_f16, half)
-impl_reduce(Min, fast_min_u8, uint8_t)
-
-impl_arg_reduce(Min, fast_argmin_f32, float)
-impl_arg_reduce(Min, fast_argmin_f16, half)
-impl_arg_reduce(Min, fast_argmin_u32, uint)
-impl_arg_reduce(Min, fast_argmin_u8, uint8_t)
+//impl_reduce(Max, fast_max_u32, uint)
+//impl_reduce(Max, fast_max_f16, half)
+//impl_reduce(Max, fast_max_u8, uint8_t)
+//
+//impl_reduce(Min, fast_min_f32, float)
+//impl_reduce(Min, fast_min_u32, uint)
+//impl_reduce(Min, fast_min_f16, half)
+//impl_reduce(Min, fast_min_u8, uint8_t)
+//
+//impl_arg_reduce(Min, fast_argmin_f32, float)
+//impl_arg_reduce(Min, fast_argmin_f16, half)
+//impl_arg_reduce(Min, fast_argmin_u32, uint)
+//impl_arg_reduce(Min, fast_argmin_u8, uint8_t)
 
 impl_arg_reduce(Max, fast_argmax_f32, float)
-impl_arg_reduce(Max, fast_argmax_f16, half)
-impl_arg_reduce(Max, fast_argmax_u32, uint)
-impl_arg_reduce(Max, fast_argmax_u8, uint8_t)
+//impl_arg_reduce(Max, fast_argmax_f16, half)
+//impl_arg_reduce(Max, fast_argmax_u32, uint)
+//impl_arg_reduce(Max, fast_argmax_u8, uint8_t)
 
 impl_softmax(softmax_f32, float)
 impl_softmax(softmax_f16, half)
@@ -1124,13 +1240,13 @@ impl_softmax(softmax_f16, half)
 //#endif
 
 #if defined(__HAVE_BFLOAT__)
-impl_reduce(Sum, fast_sum_bf16, bfloat)
-impl_reduce(Mul, fast_mul_bf16, bfloat)
-impl_reduce(Max, fast_max_bf16, bfloat)
-impl_reduce(Min, fast_min_bf16, bfloat)
-
-impl_arg_reduce(Min, fast_argmin_bf16, bfloat)
-impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
+//impl_reduce(Sum, fast_sum_bf16, bfloat)
+//impl_reduce(Mul, fast_mul_bf16, bfloat)
+//impl_reduce(Max, fast_max_bf16, bfloat)
+//impl_reduce(Min, fast_min_bf16, bfloat)
+//
+//impl_arg_reduce(Min, fast_argmin_bf16, bfloat)
+//impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
 
 impl_softmax(softmax_bf16, bfloat)
 #endif

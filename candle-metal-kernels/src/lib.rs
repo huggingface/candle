@@ -560,17 +560,17 @@ pub fn call_reduce_contiguous(
     input_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let elements_to_sum = length / out_length;
-    /*
-    let (name, granularity) = if elements_to_sum % 4 == 0 {
-        (format!("{kernel_name}x4").leak(), 4)
-    } else if elements_to_sum % 2 == 0 {
-        (format!("{kernel_name}x2").leak(), 2)
-    } else {
-        (format!("{kernel_name}").leak(), 1)
-    };
-    println!("{name} el_to_sum:{elements_to_sum} g:{granularity} l:{length} o:{out_length}");
-    */
+    let work_per_threadgroup = length / out_length;
+
+    //let (name, granularity) = if work_per_threadgroup % 4 == 0 {
+    //    (format!("{kernel_name}x4").leak(), 4)
+    //} else if work_per_threadgroup % 2 == 0 {
+    //    (format!("{kernel_name}x2").leak(), 2)
+    //} else {
+    //    (format!("{kernel_name}").leak(), 1)
+    //};
+    //println!("{name} length:{length} work_per_threadgroup:{work_per_threadgroup} g:{granularity} l:{length} o:{out_length}");
+
     let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
@@ -578,7 +578,12 @@ pub fn call_reduce_contiguous(
 
     set_params!(
         encoder,
-        (length, elements_to_sum, (input, input_offset), output)
+        (
+            length as u32,
+            work_per_threadgroup as u32,
+            (input, input_offset),
+            output
+        )
     );
 
     let thread_group_count = MTLSize {
@@ -589,10 +594,10 @@ pub fn call_reduce_contiguous(
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        (elements_to_sum as u64 + 1) / 2,
+        (work_per_threadgroup as u64 + 1) / 2,
     )
     .next_power_of_two();
-
+    //println!("width:{}", width);
     let thread_group_size = MTLSize {
         width,
         height: 1,
