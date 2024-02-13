@@ -32,7 +32,7 @@ METAL_FUNC uint get_strided_index(
 // and the value itself. The index is also used to break ties in the reduction operation.
 // There are two specializations of the indexed class, one for scalar values and one for vector values.
 template <typename T, typename = void>
-class indexed;
+struct indexed;
 
 template <typename T>
 struct _make_scalar_impl<indexed<T>> {
@@ -41,43 +41,11 @@ struct _make_scalar_impl<indexed<T>> {
 
 // Specialization for scalar values
 template <typename T>
-class indexed<T, typename metal::enable_if_t<is_scalar_v<T>>> {
-public:
+struct indexed<T, typename metal::enable_if_t<is_scalar_v<T>>> {
     uint i;
     T val;
 
-    constexpr indexed<T>() thread = default;
     constexpr indexed<T>() threadgroup = default;
-    constexpr indexed<T>() device = default;
-    constexpr indexed<T>() constant = default;
-
-    constexpr indexed<T>(uint _i, T _val) : i(_i), val(_val) {}
-
-    template <typename U>
-    constexpr indexed<T>(const thread indexed<U> &iv): indexed<T>(iv.i, iv.val) {}
-
-    constexpr indexed<T>(const threadgroup indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
-
-    // constexpr indexed<T>(const volatile threadgroup indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
-
-
-    indexed<T> operator=(const threadgroup indexed<T> &iv) {
-        this->i = iv.i;
-        this->val = iv.val;
-        return *this;
-    }
-
-    indexed<T> operator=(const thread indexed<T> &iv) thread {
-        this->i = iv.i;
-        this->val = iv.val;
-        return *this;
-    }
-
-    indexed<T> operator=(const thread indexed<T> &iv) threadgroup {
-        this->i = iv.i;
-        this->val = iv.val;
-        return *this;
-    }
 
     // To align with below implementation.
     constexpr auto operator[](uint n) {
@@ -88,52 +56,18 @@ public:
 
 // Specialization for vector values
 template <typename T>
-class indexed<T, typename metal::enable_if_t<is_vector_v<T>>> {
-public:
+struct indexed<T, typename metal::enable_if_t<is_vector_v<T>>> {
     typedef indexed<make_scalar_t<T>> scalar;
     typedef vec<uint, vec_elements<T>::value> I;
     I i;
     T val;
 
-    constexpr indexed<T>() thread = default;
     constexpr indexed<T>() threadgroup = default;
-    constexpr indexed<T>() device = default;
-    constexpr indexed<T>() constant = default;
-
-    constexpr indexed<T>(I _i, T _val) : i(_i), val(_val) {}
 
     // Return 1-dimensional indexed value
     constexpr scalar operator[](uint n) {
         assert(n < N);
-        return scalar(i[n], val[n]);
-    }
-    constexpr const scalar operator[](uint n) const {
-        assert(n < N);
-        return scalar(i[n], val[n]);
-    }
-
-    constexpr indexed<T>(const thread indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
-
-    constexpr indexed<T>(const threadgroup indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
-
-    // constexpr indexed<T>(const volatile threadgroup indexed<T> &iv): indexed<T>(iv.i, iv.val) {}
-
-    indexed<T> operator=(const threadgroup indexed<T> &iv) {
-        this->i = iv.i;
-        this->val = iv.val;
-        return *this;
-    }
-
-    indexed<T> operator=(const thread indexed<T> &iv) thread {
-        this->i = iv.i;
-        this->val = iv.val;
-        return *this;
-    }
-
-    indexed<T> operator=(const thread indexed<T> &iv) threadgroup {
-        this->i = iv.i;
-        this->val = iv.val;
-        return *this;
+        return scalar{ i[n], val[n] };
     }
 };
 
@@ -150,11 +84,11 @@ constexpr METAL_FUNC bool operator>(indexed<T> lhs, indexed<T> rhs) {
 template<typename T>
 struct _numeric_limits_impl<indexed<T>> {
     static constexpr METAL_FUNC indexed<T> lowest() {
-        return indexed<T>(0, numeric_limits<T>::lowest());
+        return indexed<T>{ 0, numeric_limits<T>::lowest() };
     }
 
     static constexpr METAL_FUNC indexed<T> max() {
-        return indexed<T>(0, numeric_limits<T>::max());
+        return indexed<T>{ 0, numeric_limits<T>::max() };
     }
 };
 
@@ -172,10 +106,10 @@ vec<bfloat, N> simd_shuffle_down(vec<bfloat, N> value, ushort delta) {
 
 template <typename T>
 indexed<T> simd_shuffle_down(indexed<T> iv, ushort delta) {
-    return indexed<T>(
+    return indexed<T> {
         simd_shuffle_down(iv.i, delta),
         simd_shuffle_down(iv.val, delta)
-    );
+    };
 }
 
 template<typename T>
@@ -347,7 +281,7 @@ struct operation<OP, indexed<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
         return op(a, b);
     }
     METAL_FUNC indexed<T> operator()(OP op, indexed<T> a, T b, uint idx) {
-        return this->operator()(op, a, indexed<T>(idx, b));
+        return this->operator()(op, a, indexed<T>{ idx, b });
     }
 };
 
@@ -421,11 +355,11 @@ struct MD {
     // Return 1-dimensional indexed value
     constexpr MD<make_scalar_t<T>> operator[](uint n) {
         assert(n < N);
-        return MD<make_scalar_t<T>> { m[n], d[n] };
+        return MD<make_scalar_t<T>>{ m[n], d[n] };
     }
     constexpr const MD<make_scalar_t<T>> operator[](uint n) const {
         assert(n < N);
-        return MD<make_scalar_t<T>> { m[n], d[n] };
+        return MD<make_scalar_t<T>>{ m[n], d[n] };
     }
 };
 
@@ -436,7 +370,7 @@ struct operation<OP, MD<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
         return op(a, b);
     }
     METAL_FUNC MD<T> operator()(OP op, MD<T> a, T b, uint idx) {
-        return this->operator()(op, a, MD<T> { b, static_cast<T>(1.0) });
+        return this->operator()(op, a, MD<T>{ b, static_cast<T>(1.0) });
     }
 };
 
@@ -453,7 +387,7 @@ struct operation<OP, MD<T>, typename metal::enable_if_t<is_vector_v<T>>> {
     METAL_FUNC MD<T> operator()(OP op, MD<T> a, T b, uint idx) {
         #pragma clang loop unroll(full)
         for (ushort n = 0; n < vec_elements<T>::value; n++) {
-            a[n] = op(a[n], MD<make_scalar_t<T>> { b[n], static_cast<make_scalar_t<T>>(1.0) });
+            a[n] = op(a[n], MD<make_scalar_t<T>>{ b[n], static_cast<make_scalar_t<T>>(1.0) });
         }
         return a;
     }
