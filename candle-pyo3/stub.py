@@ -189,7 +189,6 @@ def do_black(content, is_pyi):
         line_length=119,
         is_pyi=is_pyi,
         string_normalization=True,
-        experimental_string_processing=False,
     )
     try:
         return black.format_file_contents(content, fast=True, mode=mode)

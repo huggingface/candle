@@ -32,6 +32,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 symphonia = { version = "0.5.3", features = ["all"] }
 tokenizers = { workspace = true, features = ["onig"] }
+cpal= { version = "0.15.2", optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -61,6 +62,7 @@ mkl = ["dep:intel-mkl-src", "candle/mkl", "candle-nn/mkl", "candle-transformers/
 nccl = ["cuda", "cudarc/nccl", "dep:half"]
 onnx = ["candle-onnx"]
 metal = ["candle/metal", "candle-nn/metal"]
+microphone = ["cpal"]
 
 [[example]]
 name = "llama_multiprocess"
@@ -77,3 +79,7 @@ required-features = ["onnx"]
 [[example]]
 name = "onnx_basics"
 required-features = ["onnx"]
+
+[[example]]
+name = "whisper-microphone"
+required-features = ["microphone"]

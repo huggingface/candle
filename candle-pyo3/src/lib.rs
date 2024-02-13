@@ -938,8 +938,8 @@ impl PyTensor {
 
     /// Detach the tensor from the computation graph.
     /// &RETURNS&: Tensor
-    fn detach(&self) -> PyResult<Self> {
-        Ok(PyTensor(self.0.detach().map_err(wrap_err)?))
+    fn detach(&self) -> Self {
+        PyTensor(self.0.detach())
     }
 
     /// Returns a copy of the tensor.

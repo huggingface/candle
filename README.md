@@ -67,7 +67,7 @@ We also provide a some command line based examples using state of the art models
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
   pre-trained on 1T tokens of English and code datasets. Also supports
   StableLM-2, a 1.6b LLM trained on 2T tokens, as well as the code variants.
-- [Minimal Mamba](./candle-examples/examples/mamba-minimal/): a minimal
+- [Mamba](./candle-examples/examples/mamba/): an inference only
   implementation of the Mamba state space model.
 - [Mistral7b-v0.1](./candle-examples/examples/mistral/): a 7b general LLM with
   better performance than all publicly available 13b models as of 2023-09-28.
@@ -113,8 +113,9 @@ We also provide a some command line based examples using state of the art models
 - [VGG](./candle-examples/examples/vgg/),
   [RepVGG](./candle-examples/examples/repvgg): computer vision models.
 - [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
-- [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
   generate captions for an image.
+- [TrOCR](./candle-examples/examples/trocr/): a transformer OCR model, with
+  dedicated submodels for hand-writing and printed recognition.
 - [Marian-MT](./candle-examples/examples/marian-mt/): neural machine translation
   model, generates the translated text from the input text.
 
@@ -185,7 +186,7 @@ If you have an addition to this list, please submit a pull request.
         - Falcon.
         - StarCoder.
         - Phi 1, 1.5, and 2.
-        - Minimal Mamba
+        - Mamba, Minimal Mamba
         - Mistral 7b v0.1.
         - Mixtral 8x7b v0.1.
         - StableLM-3B-4E1T, StableLM-2-1.6B, Stable-Code-3B.
@@ -207,6 +208,7 @@ If you have an addition to this list, please submit a pull request.
         - Wurstchen v2.
     - Image to text.
         - BLIP.
+        - TrOCR.
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT.
         - yolo-v3, yolo-v8.

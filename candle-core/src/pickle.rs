@@ -217,6 +217,13 @@ impl Object {
                 let args = args.remove(1);
                 (callable, args)
             }
+            Object::Class {
+                module_name,
+                class_name,
+            } if module_name == "torch._utils" && class_name == "_rebuild_parameter" => {
+                let mut args = args.tuple()?;
+                args.remove(0).reduce()?
+            }
             _ => (callable, args),
         };
         match callable {
@@ -343,8 +350,10 @@ impl Stack {
                 module_name,
                 class_name,
             } => {
-                if module_name == "collections" && class_name == "OrderedDict" {
-                    // TODO: have a separate ordered dict.
+                if module_name == "collections"
+                    && (class_name == "OrderedDict" || class_name == "defaultdict")
+                {
+                    // TODO: have a separate ordered dict and a separate default dict.
                     Some(Object::Dict(vec![]))
                 } else {
                     None
@@ -625,9 +634,16 @@ pub struct TensorInfo {
     pub storage_size: usize,
 }
 
+/// Read the tensor info from a .pth file.
+///
+/// # Arguments
+/// * `file` - The path to the .pth file.
+/// * `verbose` - Whether to print debug information.
+/// * `key` - Optional key to retrieve `state_dict` from the pth file.
 pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
     file: P,
     verbose: bool,
+    key: Option<&str>,
 ) -> Result<Vec<TensorInfo>> {
     let file = std::fs::File::open(file)?;
     let zip_reader = std::io::BufReader::new(file);
@@ -649,8 +665,9 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
         stack.read_loop(&mut reader)?;
         let obj = stack.finalize()?;
         if VERBOSE || verbose {
-            println!("{obj:?}");
+            println!("{obj:#?}");
         }
+
         let obj = match obj {
             Object::Build { callable, args } => match *callable {
                 Object::Reduce { callable, args: _ } => match *callable {
@@ -664,6 +681,24 @@ pub fn read_pth_tensor_info<P: AsRef<std::path::Path>>(
             },
             obj => obj,
         };
+
+        // If key is provided, then we need to extract the state_dict from the object.
+        let obj = if let Some(key) = key {
+            if let Object::Dict(key_values) = obj {
+                key_values
+                    .into_iter()
+                    .find(|(k, _)| *k == Object::Unicode(key.to_owned()))
+                    .map(|(_, v)| v)
+                    .ok_or_else(|| E::Msg(format!("key {key} not found")))?
+            } else {
+                obj
+            }
+        } else {
+            obj
+        };
+
+        // If the object is a dict, then we can extract the tensor info from it.
+        // NOTE: We are assuming that the `obj` is state_dict by this stage.
         if let Object::Dict(key_values) = obj {
             for (name, value) in key_values.into_iter() {
                 match value.into_tensor_info(name, &dir_name) {
@@ -686,8 +721,8 @@ pub struct PthTensors {
 }
 
 impl PthTensors {
-    pub fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
-        let tensor_infos = read_pth_tensor_info(path.as_ref(), false)?;
+    pub fn new<P: AsRef<std::path::Path>>(path: P, key: Option<&str>) -> Result<Self> {
+        let tensor_infos = read_pth_tensor_info(path.as_ref(), false, key)?;
         let tensor_infos = tensor_infos
             .into_iter()
             .map(|ti| (ti.name.to_string(), ti))
@@ -710,10 +745,12 @@ impl PthTensors {
         let zip_reader = std::io::BufReader::new(std::fs::File::open(&self.path)?);
         let mut zip = zip::ZipArchive::new(zip_reader)?;
         let mut reader = zip.by_name(&tensor_info.path)?;
+        let is_fortran_contiguous = tensor_info.layout.is_fortran_contiguous();
+        let rank = tensor_info.layout.shape().rank();
 
         // Reading the data is a bit tricky as it can be strided, for now only support the basic
-        // case.
-        if !tensor_info.layout.is_contiguous() {
+        // case and when the tensor is fortran contiguous.
+        if !tensor_info.layout.is_contiguous() && !is_fortran_contiguous {
             crate::bail!(
                 "cannot retrieve non-contiguous tensors {:?}",
                 tensor_info.layout
@@ -731,13 +768,33 @@ impl PthTensors {
             tensor_info.dtype,
             &mut reader,
         )?;
-        Ok(Some(tensor))
+
+        if rank > 1 && is_fortran_contiguous {
+            // Reverse the shape, e.g. Shape(2, 3, 4) -> Shape(4, 3, 2)
+            let shape_reversed: Vec<_> = tensor_info.layout.dims().iter().rev().cloned().collect();
+            let tensor = tensor.reshape(shape_reversed)?;
+
+            // Permute (transpose) the dimensions, e.g. Shape(4, 3, 2) -> Shape(2, 3, 4)
+            let dim_indeces_reversed: Vec<_> = (0..rank).rev().collect();
+            let tensor = tensor.permute(dim_indeces_reversed)?;
+            Ok(Some(tensor))
+        } else {
+            Ok(Some(tensor))
+        }
     }
 }
 
-/// Read all the tensors from a PyTorch pth file.
-pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
-    let pth = PthTensors::new(path)?;
+/// Read all the tensors from a PyTorch pth file with a given key.
+///
+/// # Arguments
+/// * `path` - Path to the pth file.
+/// * `key` - Optional key to retrieve `state_dict` from the pth file. Sometimes the pth file
+///           contains multiple objects and the state_dict is the one we are interested in.
+pub fn read_all_with_key<P: AsRef<std::path::Path>>(
+    path: P,
+    key: Option<&str>,
+) -> Result<Vec<(String, Tensor)>> {
+    let pth = PthTensors::new(path, key)?;
     let tensor_names = pth.tensor_infos.keys();
     let mut tensors = Vec::with_capacity(tensor_names.len());
     for name in tensor_names {
@@ -746,4 +803,12 @@ pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tenso
         }
     }
     Ok(tensors)
+}
+
+/// Read all the tensors from a PyTorch pth file.
+///
+/// # Arguments
+/// * `path` - Path to the pth file.
+pub fn read_all<P: AsRef<std::path::Path>>(path: P) -> Result<Vec<(String, Tensor)>> {
+    read_all_with_key(path, None)
 }

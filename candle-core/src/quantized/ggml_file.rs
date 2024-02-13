@@ -233,6 +233,7 @@ pub struct Content {
     pub hparams: HParams,
     pub vocab: Vocab,
     pub tensors: HashMap<String, super::QTensor>,
+    pub device: Device,
 }
 
 impl Content {
@@ -252,11 +253,13 @@ impl Content {
             let (name, tensor) = read_one_tensor(reader, magic, device)?;
             tensors.insert(name, tensor);
         }
+        let device = device.clone();
         Ok(Self {
             magic,
             hparams,
             vocab,
             tensors,
+            device,
         })
     }
 
