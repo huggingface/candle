@@ -12,6 +12,43 @@ constexpr uint granularity() {
     return nonzero<vec_elements<T>::value>();
 }
 
+struct Divide {
+    template<typename T>
+    METAL_FUNC T operator()(T a, T b) { return a / b; }
+
+    template<> METAL_FUNC float  operator()(float  a, float  b) { return fast::divide(a, b); }
+    template<> METAL_FUNC float2 operator()(float2 a, float2 b) { return fast::divide(a, b); }
+    template<> METAL_FUNC float4 operator()(float4 a, float4 b) { return fast::divide(a, b); }
+    template<> METAL_FUNC half   operator()(half   a, half   b) { return divide(a, b); }
+    template<> METAL_FUNC half2  operator()(half2  a, half2  b) { return divide(a, b); }
+    template<> METAL_FUNC half4  operator()(half4  a, half4  b) { return divide(a, b); }
+    #if defined(__HAVE_BFLOAT__)
+    template<> METAL_FUNC bfloat  operator()(bfloat   a,  bfloat b) { return static_cast<bfloat>(fast::divide(a, b)); }
+    template<> METAL_FUNC bfloat2 operator()(bfloat2  a, bfloat2 b) { return static_cast<bfloat2>( a / b ); }
+    template<> METAL_FUNC bfloat4 operator()(bfloat4  a, bfloat4 b) { return static_cast<bfloat4>( a / b ); }
+    #endif
+};
+
+struct Exp {
+    template<typename T>
+    METAL_FUNC T operator()(T a) { return fast::exp(a); }
+
+    template<> METAL_FUNC float  operator()(float  a) { return fast::exp(a); }
+    template<> METAL_FUNC float2 operator()(float2 a) { return fast::exp(a); }
+    template<> METAL_FUNC float4 operator()(float4 a) { return fast::exp(a); }
+    template<> METAL_FUNC half   operator()(half   a) { return exp(a); }
+    template<> METAL_FUNC half2  operator()(half2  a) { return exp(a); }
+    template<> METAL_FUNC half4  operator()(half4  a) { return exp(a); }
+    #if defined(__HAVE_BFLOAT__)
+    template<>
+    METAL_FUNC bfloat  operator()(bfloat  a) { return static_cast<bfloat>(fast::exp(a)); }
+    template<>
+    METAL_FUNC bfloat2 operator()(bfloat2 a) { return static_cast<bfloat2>(fast::exp(static_cast<float2>(a))); }
+    template<>
+    METAL_FUNC bfloat4 operator()(bfloat4 a) { return static_cast<bfloat4>(fast::exp(static_cast<float4>(a))); }
+    #endif
+};
+
 METAL_FUNC uint get_strided_index(
     uint idx,
     constant const uint &num_dims,
@@ -34,11 +71,6 @@ METAL_FUNC uint get_strided_index(
 template <typename T, typename = void>
 struct indexed;
 
-template <typename T>
-struct _make_scalar_impl<indexed<T>> {
-    typedef indexed<make_scalar_t<T>> type;
-};
-
 // Specialization for scalar values
 template <typename T>
 struct indexed<T, typename metal::enable_if_t<is_scalar_v<T>>> {
@@ -52,6 +84,12 @@ struct indexed<T, typename metal::enable_if_t<is_scalar_v<T>>> {
         assert(n == 0);
         return *this;
     }
+};
+
+// Support turning indexed<T> into indexed<make_scalar_t<T>>.
+template <typename T>
+struct _make_scalar_impl<indexed<T>> {
+    typedef indexed<make_scalar_t<T>> type;
 };
 
 // Specialization for vector values
@@ -211,7 +249,6 @@ template <>
 struct is_valid_simd_type<bfloat> {
     static constant constexpr bool value = true;
 };
-
 template <uint N>
 struct is_valid_simd_type<vec<bfloat, N>> {
     static constant constexpr bool value = true;
@@ -332,76 +369,6 @@ METAL_FUNC make_scalar_t<T> finalize(T value) {
     OP op;
     make_scalar_t<T> result = value[0];
 
-    #pragma clang loop unroll(full)
-    for (ushort n = 1; n < vec_elements<T>::value; n++) {
-        result = op(result, value[n]);
-    }
-    return result;
-}
-
-// Contains the intermediate results for the online softmax calculation.
-// m: max
-// d: sum of the exponentials
-template <typename T>
-struct MD {
-    T m;
-    T d;
-
-    constexpr MD<T>() = default;
-    constexpr MD<T>() threadgroup = default;
-
-    static constant constexpr uint N = vec_elements<T>::value;
-
-    // Return 1-dimensional indexed value
-    constexpr MD<make_scalar_t<T>> operator[](uint n) {
-        assert(n < N);
-        return MD<make_scalar_t<T>>{ m[n], d[n] };
-    }
-    constexpr const MD<make_scalar_t<T>> operator[](uint n) const {
-        assert(n < N);
-        return MD<make_scalar_t<T>>{ m[n], d[n] };
-    }
-};
-
-// Enable operations for softmax MD
-template<typename OP, typename T>
-struct operation<OP, MD<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
-    METAL_FUNC MD<T> operator()(OP op, MD<T> a, MD<T> b) {
-        return op(a, b);
-    }
-    METAL_FUNC MD<T> operator()(OP op, MD<T> a, T b, uint idx) {
-        return this->operator()(op, a, MD<T>{ b, static_cast<T>(1.0) });
-    }
-};
-
-// Specialization for indexed vector values.
-template<typename OP, typename T>
-struct operation<OP, MD<T>, typename metal::enable_if_t<is_vector_v<T>>> {
-    METAL_FUNC MD<T> operator()(OP op, MD<T> a, MD<T> b) {
-        #pragma clang loop unroll(full)
-        for (ushort n = 0; n < vec_elements<T>::value; n++) {
-            a[n] = op(a[n], b[n]);
-        }
-        return a;
-    }
-    METAL_FUNC MD<T> operator()(OP op, MD<T> a, T b, uint idx) {
-        #pragma clang loop unroll(full)
-        for (ushort n = 0; n < vec_elements<T>::value; n++) {
-            a[n] = op(a[n], MD<make_scalar_t<T>>{ b[n], static_cast<make_scalar_t<T>>(1.0) });
-        }
-        return a;
-    }
-};
-
-template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
-METAL_FUNC MD<T> finalize(MD<T> value) {
-    return value;
-}
-
-template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_vector_v<T>>>
-METAL_FUNC MD<make_scalar_t<T>> finalize(MD<T> value) {
-    OP op;
-    MD<make_scalar_t<T>> result = value[0];
     #pragma clang loop unroll(full)
     for (ushort n = 1; n < vec_elements<T>::value; n++) {
         result = op(result, value[n]);
@@ -912,41 +879,75 @@ impl_arg_reduce_inner(OP, NAME, T, )                    \
 impl_arg_reduce_inner(OP, NAME, ARG(vec<T, 2>), x2)     \
 impl_arg_reduce_inner(OP, NAME, ARG(vec<T, 4>), x4)
 
-struct Divide {
-    template<typename T>
-    METAL_FUNC T operator()(T a, T b) { return a / b; }
+// Contains the intermediate results for the online softmax calculation.
+// m: max
+// d: sum of the exponentials
+template <typename T>
+struct MD {
+    T m;
+    T d;
 
-    template<> METAL_FUNC float  operator()(float  a, float b) { return fast::divide(a, b); }
-    template<> METAL_FUNC float2  operator()(float2  a, float2 b) { return fast::divide(a, b); }
-    template<> METAL_FUNC float4  operator()(float4  a, float4 b) { return fast::divide(a, b); }
-    template<> METAL_FUNC half  operator()(half  a, half b) { return divide(a, b); }
-    template<> METAL_FUNC half2  operator()(half2  a, half2 b) { return divide(a, b); }
-    template<> METAL_FUNC half4  operator()(half4  a, half4 b) { return divide(a, b); }
-    #if defined(__HAVE_BFLOAT__)
-    template<> METAL_FUNC bfloat  operator()( bfloat  a,  bfloat b) { return static_cast<bfloat>(fast::divide(a, b)); }
-    template<> METAL_FUNC bfloat2  operator()(bfloat2  a, bfloat2 b) { return static_cast<bfloat2>( a / b ); }
-    template<> METAL_FUNC bfloat4  operator()(bfloat4  a, bfloat4 b) { return static_cast<bfloat4>( a / b ); }
-    #endif
-};
-struct Exp {
-    template<typename T>
-    METAL_FUNC T operator()(T a) { return fast::exp(a); }
+    constexpr MD<T>() = default;
+    constexpr MD<T>() threadgroup = default;
 
-    template<> METAL_FUNC float  operator()(float  a) { return fast::exp(a); }
-    template<> METAL_FUNC float2 operator()(float2 a) { return fast::exp(a); }
-    template<> METAL_FUNC float4 operator()(float4 a) { return fast::exp(a); }
-    template<> METAL_FUNC half   operator()(half   a) { return exp(a); }
-    template<> METAL_FUNC half2  operator()(half2  a) { return exp(a); }
-    template<> METAL_FUNC half4  operator()(half4  a) { return exp(a); }
-    #if defined(__HAVE_BFLOAT__)
-    template<>
-    METAL_FUNC bfloat  operator()(bfloat  a) { return static_cast<bfloat>(fast::exp(a)); }
-    template<>
-    METAL_FUNC bfloat2 operator()(bfloat2 a) { return static_cast<bfloat2>(fast::exp(static_cast<float2>(a))); }
-    template<>
-    METAL_FUNC bfloat4 operator()(bfloat4 a) { return static_cast<bfloat4>(fast::exp(static_cast<float4>(a))); }
-    #endif
+    static constant constexpr uint N = vec_elements<T>::value;
+
+    // Return 1-dimensional indexed value
+    constexpr MD<make_scalar_t<T>> operator[](uint n) {
+        assert(n < N);
+        return MD<make_scalar_t<T>>{ m[n], d[n] };
+    }
+    constexpr const MD<make_scalar_t<T>> operator[](uint n) const {
+        assert(n < N);
+        return MD<make_scalar_t<T>>{ m[n], d[n] };
+    }
 };
+
+// Enable operations for softmax MD
+template<typename OP, typename T>
+struct operation<OP, MD<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
+    METAL_FUNC MD<T> operator()(OP op, MD<T> a, MD<T> b) {
+        return op(a, b);
+    }
+    METAL_FUNC MD<T> operator()(OP op, MD<T> a, T b, uint idx) {
+        return this->operator()(op, a, MD<T>{ b, static_cast<T>(1.0) });
+    }
+};
+
+// Specialization for indexed vector values.
+template<typename OP, typename T>
+struct operation<OP, MD<T>, typename metal::enable_if_t<is_vector_v<T>>> {
+    METAL_FUNC MD<T> operator()(OP op, MD<T> a, MD<T> b) {
+        #pragma clang loop unroll(full)
+        for (ushort n = 0; n < vec_elements<T>::value; n++) {
+            a[n] = op(a[n], b[n]);
+        }
+        return a;
+    }
+    METAL_FUNC MD<T> operator()(OP op, MD<T> a, T b, uint idx) {
+        #pragma clang loop unroll(full)
+        for (ushort n = 0; n < vec_elements<T>::value; n++) {
+            a[n] = op(a[n], MD<make_scalar_t<T>>{ b[n], static_cast<make_scalar_t<T>>(1.0) });
+        }
+        return a;
+    }
+};
+
+template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
+METAL_FUNC MD<T> finalize(MD<T> value) {
+    return value;
+}
+
+template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_vector_v<T>>>
+METAL_FUNC MD<make_scalar_t<T>> finalize(MD<T> value) {
+    OP op;
+    MD<make_scalar_t<T>> result = value[0];
+    #pragma clang loop unroll(full)
+    for (ushort n = 1; n < vec_elements<T>::value; n++) {
+        result = op(result, value[n]);
+    }
+    return result;
+}
 
 template <typename T>
 METAL_FUNC MD<T> simd_shuffle_down(MD<T> md, ushort delta) {
