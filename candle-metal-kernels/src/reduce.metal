@@ -78,12 +78,6 @@ struct indexed<T, typename metal::enable_if_t<is_scalar_v<T>>> {
     T val;
 
     constexpr indexed<T>() threadgroup = default;
-
-    // To align with below implementation.
-    constexpr auto operator[](uint n) {
-        assert(n == 0);
-        return *this;
-    }
 };
 
 // Support turning indexed<T> into indexed<make_scalar_t<T>>.
@@ -95,7 +89,6 @@ struct _make_scalar_impl<indexed<T>> {
 // Specialization for vector values
 template <typename T>
 struct indexed<T, typename metal::enable_if_t<is_vector_v<T>>> {
-    typedef indexed<make_scalar_t<T>> scalar;
     typedef vec<uint, vec_elements<T>::value> I;
     I i;
     T val;
@@ -103,10 +96,11 @@ struct indexed<T, typename metal::enable_if_t<is_vector_v<T>>> {
     constexpr indexed<T>() threadgroup = default;
 
     // Return 1-dimensional indexed value
-    constexpr scalar operator[](uint n) {
+    METAL_FUNC constexpr indexed<make_scalar_t<T>> operator[](uint n) const {
         assert(n < N);
-        return scalar{ i[n], val[n] };
+        return indexed<make_scalar_t<T>>{ i[n], val[n] };
     }
+
 };
 
 template<typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
@@ -182,14 +176,28 @@ struct Mul {
 
 template<typename T>
 struct Min {
-    typedef make_scalar_t<T> scalar;
-
     static constexpr METAL_FUNC T init() {
         return numeric_limits<T>::max();
     }
-    METAL_FUNC scalar operator()(scalar a, scalar b) {
-        return a < b ? a : b;
-    }
+
+    template<typename V>
+    METAL_FUNC V operator()(V a, V b) { return a < b ? a : b; }
+
+    template<> METAL_FUNC float operator()(float a, float b) { return fast::min(a, b); }
+    template<> METAL_FUNC float2 operator()(float2 a, float2 b) { return fast::min(a, b); }
+    template<> METAL_FUNC float4 operator()(float4 a, float4 b) { return fast::min(a, b); }
+    template<> METAL_FUNC half operator()(half a, half b) { return min(a, b); }
+    template<> METAL_FUNC half2 operator()(half2 a, half2 b) { return min(a, b); }
+    template<> METAL_FUNC half4 operator()(half4 a, half4 b) { return min(a, b); }
+
+    #if defined(__HAVE_BFLOAT__)
+    template <>
+    METAL_FUNC bfloat operator()(bfloat a, bfloat b) { return static_cast<bfloat>(fast::min(static_cast<float>(a), static_cast<float>(b))); }
+    template <>
+    METAL_FUNC bfloat2 operator()(bfloat2 a, bfloat2 b) { return static_cast<bfloat2>(fast::min(static_cast<float2>(a), static_cast<float2>(b))); }
+    template <>
+    METAL_FUNC bfloat4 operator()(bfloat4 a, bfloat4 b) { return static_cast<bfloat4>(fast::min(static_cast<float4>(a), static_cast<float4>(b))); }
+    #endif
     static METAL_FUNC T simd_op(T a) {
         return simd_min(a);
     }
@@ -197,14 +205,27 @@ struct Min {
 
 template<typename T>
 struct Max {
-    typedef make_scalar_t<T> scalar;
-
     static constexpr METAL_FUNC T init() {
         return numeric_limits<T>::lowest();
     }
-    METAL_FUNC scalar operator()(scalar a, scalar b) {
-        return a > b ? a : b;
-    }
+    template<typename V>
+    METAL_FUNC V operator()(V a, V b) { return a > b ? a : b; }
+
+    template<> METAL_FUNC float operator()(float a, float b) { return fast::max(a, b); }
+    template<> METAL_FUNC float2 operator()(float2 a, float2 b) { return fast::max(a, b); }
+    template<> METAL_FUNC float4 operator()(float4 a, float4 b) { return fast::max(a, b); }
+    template<> METAL_FUNC half operator()(half a, half b) { return max(a, b); }
+    template<> METAL_FUNC half2 operator()(half2 a, half2 b) { return max(a, b); }
+    template<> METAL_FUNC half4 operator()(half4 a, half4 b) { return max(a, b); }
+
+    #if defined(__HAVE_BFLOAT__)
+    template <>
+    METAL_FUNC bfloat operator()(bfloat a, bfloat b) { return static_cast<bfloat>(fast::max(static_cast<float>(a), static_cast<float>(b))); }
+    template <>
+    METAL_FUNC bfloat2 operator()(bfloat2 a, bfloat2 b) { return static_cast<bfloat2>(fast::max(static_cast<float2>(a), static_cast<float2>(b))); }
+    template <>
+    METAL_FUNC bfloat4 operator()(bfloat4 a, bfloat4 b) { return static_cast<bfloat4>(fast::max(static_cast<float4>(a), static_cast<float4>(b))); }
+    #endif
     static METAL_FUNC T simd_op(T a) {
         return simd_max(a);
     }
@@ -330,23 +351,49 @@ struct operation<OP, indexed<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
 
 // Specialization for indexed vector values.
 template<typename OP, typename T>
-struct operation<OP, indexed<T>, typename metal::enable_if_t<is_vector_v<T>>> {
-    typedef indexed<make_scalar_t<T>> scalar;
+struct operation<OP, indexed<vec<T, 2>>> {
     OP op;
 
-    METAL_FUNC indexed<T> operator()(indexed<T> a, indexed<T> b) {
-        #pragma clang loop unroll(full)
-        for (ushort n = 0; n < vec_elements<T>::value; n++) {
-            a[n] = op(a[n], b[n]);
-        }
-        return a;
+    METAL_FUNC indexed<vec<T, 2>> operator()(indexed<vec<T, 2>> a, indexed<vec<T, 2>> b) {
+        auto x = op(a[0], b[0]);
+        auto y = op(a[1], b[1]);
+        return indexed<vec<T, 2>>{
+            uint2(x.i, y.i),
+            vec<T, 2>(x.val, y.val)
+        };
     }
-    METAL_FUNC indexed<T> operator()(indexed<T> a, T b, uint idx) {
-        #pragma clang loop unroll(full)
-        for (ushort n = 0; n < vec_elements<T>::value; n++) {
-            a[n] = op(a[n], scalar{ idx + n, b[n] });
-        }
-        return a;
+    METAL_FUNC indexed<vec<T, 2>> operator()(indexed<vec<T, 2>> a, vec<T, 2> b, uint idx) {
+        auto x = op(a[0], indexed<T>{idx, b[0]});
+        auto y = op(a[1], indexed<T>{idx+1, b[1]});
+        return indexed<vec<T, 2>>{
+            uint2(x.i, y.i),
+            vec<T, 2>(x.val, y.val)
+        };
+    }
+};
+template<typename OP, typename T>
+struct operation<OP, indexed<vec<T, 4>>> {
+    OP op;
+
+    METAL_FUNC indexed<vec<T, 4>> operator()(indexed<vec<T, 4>> a, indexed<vec<T, 4>> b) {
+        auto x = op(a[0], b[0]);
+        auto y = op(a[1], b[1]);
+        auto z = op(a[2], b[2]);
+        auto w = op(a[3], b[3]);
+        return indexed<vec<T, 4>>{
+            uint4(x.i, y.i, z.i, w.i),
+            vec<T, 4>(x.val, y.val, z.val, w.val)
+        };
+    }
+    METAL_FUNC indexed<vec<T, 4>> operator()(indexed<vec<T, 4>> a, vec<T, 4> b, uint idx) {
+        auto x = op(a[0], indexed<T>{idx, b[0]});
+        auto y = op(a[1], indexed<T>{idx+1, b[1]});
+        auto z = op(a[2], indexed<T>{idx+2, b[2]});
+        auto w = op(a[3], indexed<T>{idx+3, b[3]});
+        return indexed<vec<T, 4>>{
+            uint4(x.i, y.i, z.i, w.i),
+            vec<T, 4>(x.val, y.val, z.val, w.val)
+        };
     }
 };
 
@@ -474,16 +521,13 @@ struct loader<T, R, OP, BLOCKSIZE, STRIDED, typename metal::enable_if_t<is_vecto
         const ushort offset,
         const ushort tid
     ) {
-        // blocksize = 3
-        // G = 2
-        // offset = dst_id * 3
         constexpr uint G = granularity<T>();
-        const uint thread_id = tid + (offset / G);
-        const uint stop_idx = min(el_per_block + offset, src_numel) / G;
+        const uint thread_id = tid + offset;
+        const uint stop_idx = min(el_per_block + offset, src_numel);
 
         #pragma clang loop unroll(full)
-        for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
-            value = operate(value, src[i], i);
+        for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE + G) {
+            value = operate(value, src[i / G], i);
         }
         return value;
     }
@@ -642,8 +686,8 @@ METAL_FUNC void reduce(
     shared[tid] = ReductionOp::init();
 
     // Calcluate offset for the threadgroup of current thread;
-    const uint el_to_sum = el_to_sum_per_block;
-    const uint offset = dst_id * el_to_sum;
+    const uint el_per_block = el_to_sum_per_block;
+    const uint offset = dst_id * el_per_block;
     R value = ReductionOp::init();
 
     loader<T, R, ReductionOp, BLOCKSIZE, STRIDED> load;
@@ -653,7 +697,7 @@ METAL_FUNC void reduce(
         num_dims,
         dims,
         strides,
-        el_to_sum,
+        el_per_block,
         src,
         offset,
         tid
@@ -901,10 +945,6 @@ struct MD {
         assert(n < N);
         return MD<make_scalar_t<T>>{ m[n], d[n] };
     }
-    constexpr const MD<make_scalar_t<T>> operator[](uint n) const {
-        assert(n < N);
-        return MD<make_scalar_t<T>>{ m[n], d[n] };
-    }
 };
 
 // Enable operations for softmax MD
@@ -915,7 +955,7 @@ struct operation<OP, MD<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
     METAL_FUNC MD<T> operator()(MD<T> a, MD<T> b) {
         return op(a, b);
     }
-    METAL_FUNC MD<T> operator()(MD<T> a, T b, uint idx) {
+    METAL_FUNC MD<T> operator()(MD<T> a, T b, uint _idx) {
         return this->operator()(a, MD<T>{ b, static_cast<T>(1.0) });
     }
 };
@@ -988,11 +1028,8 @@ struct MDReduceOp {
         res.m = bigger_m.m;
         return res;
     }
-
-    METAL_FUNC MD<T> simd_op(MD<T> a) {
-        return a;
-    }
 };
+
 template<
     typename T,
     ushort BLOCKSIZE,
@@ -1056,8 +1093,9 @@ METAL_FUNC void softmax(
     ushort tid [[ thread_index_in_threadgroup ]],
     ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
-    loader<T, MD<T>, MDReduceOp<make_scalar_t<T>>, BLOCKSIZE> load;
-    block_reducer<MD<T>, MDReduceOp<make_scalar_t<T>>, BLOCKSIZE> block_reduce(shared);
+    typedef MDReduceOp<make_scalar_t<T>> MDReduceOp;
+    loader<T, MD<T>, MDReduceOp, BLOCKSIZE> load;
+    block_reducer<MD<T>, MDReduceOp, BLOCKSIZE> block_reduce(shared);
     finalize_softmax<T, BLOCKSIZE> softmax_finalize;
 
     // Calcluate offset for the threadgroup of current thread;
@@ -1078,7 +1116,7 @@ METAL_FUNC void softmax(
     // Reduce in shared memory
     MD<T> md = block_reduce(md_partial, tid);
 
-    if (tid == 0) md_total = finalize<MDReduceOp<make_scalar_t<T>>>(md);
+    if (tid == 0) md_total = finalize<MDReduceOp>(md);
     threadgroup_barrier(mem_flags::mem_none);
 
     // Finalize softmax
