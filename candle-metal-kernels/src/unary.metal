@@ -64,6 +64,9 @@ template <typename T> METAL_FUNC T relu(T in){
     }
     return in;
 }
+template <typename T> METAL_FUNC T silu(T in){
+    return in / (static_cast<T>(1) + exp(-in));
+}
 
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
@@ -108,6 +111,7 @@ UNARY_OP(neg)
 UNARY_OP(exp)
 UNARY_OP(log)
 UNARY_OP(gelu)
+UNARY_OP(silu)
 UNARY_OP(abs)
 UNARY_OP(ceil)
 UNARY_OP(floor)
@@ -135,6 +139,7 @@ BFLOAT_UNARY_OP(neg)
 BFLOAT_UNARY_OP(exp)
 BFLOAT_UNARY_OP(log)
 BFLOAT_UNARY_OP(gelu)
+BFLOAT_UNARY_OP(silu)
 BFLOAT_UNARY_OP(abs)
 BFLOAT_UNARY_OP(ceil)
 BFLOAT_UNARY_OP(floor)
