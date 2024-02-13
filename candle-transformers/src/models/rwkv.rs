@@ -3,6 +3,10 @@ use super::with_tracing::{layer_norm, linear_no_bias as linear, LayerNorm, Linea
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 
+fn default_num_attention_heads() -> usize {
+    64
+}
+
 // https://huggingface.co/RWKV/HF_v5-Eagle-7B/blob/main/configuration_rwkv5.py
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
@@ -10,6 +14,7 @@ pub struct Config {
     pub hidden_size: usize,
     pub num_hidden_layers: usize,
     pub attention_hidden_size: usize,
+    #[serde(default = "default_num_attention_heads")]
     pub num_attention_heads: usize,
     pub head_size: usize,
     pub intermediate_size: Option<usize>,
@@ -18,6 +23,12 @@ pub struct Config {
 }
 
 pub struct State;
+
+impl State {
+    pub fn new(_batch_size: usize, _cfg: &Config, _device: &Device) -> Result<Self> {
+        Ok(Self)
+    }
+}
 
 #[derive(Debug, Clone)]
 struct SelfAttention {
@@ -73,7 +84,7 @@ impl SelfAttention {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, state: State) -> Result<(Tensor, State)> {
+    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
         todo!()
     }
 }
@@ -106,7 +117,7 @@ impl FeedForward {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, state: State) -> Result<(Tensor, State)> {
+    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
         let shifted = xs.clone(); // TODO: use state
         let key = (xs.broadcast_mul(&self.time_mix_key)?
             + shifted.broadcast_mul(&(1.0 - &self.time_mix_key)?)?)?;
@@ -116,7 +127,7 @@ impl FeedForward {
         let value = key.apply(&self.value)?;
         let receptance = candle_nn::ops::sigmoid(&receptance.apply(&self.receptance)?)?;
         let xs = (receptance * value)?;
-        Ok((xs, state))
+        Ok(xs)
     }
 }
 
@@ -150,16 +161,16 @@ impl Block {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, state: State) -> Result<(Tensor, State)> {
+    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
         let xs = match self.pre_ln.as_ref() {
             None => xs.clone(),
             Some(pre_ln) => xs.apply(pre_ln)?,
         };
-        let (attention, state) = self.attention.forward(&xs.apply(&self.ln1)?, state)?;
+        let attention = self.attention.forward(&xs.apply(&self.ln1)?, state)?;
         let xs = (xs + attention)?;
-        let (feed_forward, state) = self.feed_forward.forward(&xs.apply(&self.ln2)?, state)?;
+        let feed_forward = self.feed_forward.forward(&xs.apply(&self.ln2)?, state)?;
         let xs = (xs + feed_forward)?;
-        Ok((xs, state))
+        Ok(xs)
     }
 }
 
@@ -174,7 +185,7 @@ pub struct Model {
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let vb_m = vb.pp("model");
+        let vb_m = vb.pp("rwkv");
         let embeddings = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embeddings"))?;
         let mut blocks = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_b = vb_m.pp("blocks");
@@ -193,11 +204,11 @@ impl Model {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, mut state: State) -> Result<(Tensor, State)> {
+    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
         let (_b_size, seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embeddings)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
-            (xs, state) = block.forward(&xs, state)?;
+            xs = block.forward(&xs, state)?;
             if (block_idx + 1) % self.rescale_every == 0 {
                 xs = (xs / 2.)?
             }
@@ -207,6 +218,6 @@ impl Model {
             .narrow(1, seq_len - 1, 1)?
             .apply(&self.head)?
             .squeeze(1)?;
-        Ok((xs, state))
+        Ok(xs)
     }
 }
