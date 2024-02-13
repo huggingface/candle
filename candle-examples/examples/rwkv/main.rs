@@ -69,7 +69,7 @@ impl TextGeneration {
         let mut state = State::new(1, &self.config, &self.device)?;
         let mut next_logits = None;
         for &t in tokens.iter() {
-            let input = Tensor::new(&[t], &self.device)?;
+            let input = Tensor::new(&[[t]], &self.device)?;
             let logits = self.model.forward(&input, &mut state)?;
             next_logits = Some(logits);
             if let Some(t) = self.tokenizer.next_token(t)? {
@@ -84,7 +84,7 @@ impl TextGeneration {
                 Some(logits) => logits,
                 None => anyhow::bail!("cannot work on an empty prompt"),
             };
-            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+            let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
             } else {
@@ -106,7 +106,7 @@ impl TextGeneration {
                 std::io::stdout().flush()?;
             }
 
-            let input = Tensor::new(&[next_token], &self.device)?;
+            let input = Tensor::new(&[[next_token]], &self.device)?;
             next_logits = Some(self.model.forward(&input, &mut state)?)
         }
         let dt = start_gen.elapsed();

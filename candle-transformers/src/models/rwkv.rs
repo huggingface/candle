@@ -36,15 +36,16 @@ pub struct State {
 impl State {
     pub fn new(batch_size: usize, cfg: &Config, dev: &Device) -> Result<Self> {
         let mut per_layer = Vec::with_capacity(cfg.num_hidden_layers);
-        let num_attn_head = cfg.num_attention_heads;
+        // Certainly a weird convention but taken from modeling_rwkv5.py
+        let num_attention_heads = cfg.hidden_size / cfg.num_attention_heads;
         for _layer_idx in 0..cfg.num_hidden_layers {
             let extract_key_value = Tensor::zeros((batch_size, cfg.hidden_size), DType::F32, dev)?;
             let linear_attention = Tensor::zeros(
                 (
                     batch_size,
-                    num_attn_head,
-                    cfg.hidden_size / num_attn_head,
-                    cfg.hidden_size / num_attn_head,
+                    num_attention_heads,
+                    cfg.hidden_size / num_attention_heads,
+                    cfg.hidden_size / num_attention_heads,
                 ),
                 DType::F32,
                 dev,
@@ -75,6 +76,7 @@ struct SelfAttention {
     time_faaaa: Tensor,
     time_mix_gate: Tensor,
     layer_id: usize,
+    n_attn_heads: usize,
 }
 
 impl SelfAttention {
@@ -113,6 +115,7 @@ impl SelfAttention {
             time_faaaa,
             time_mix_gate,
             layer_id,
+            n_attn_heads,
         })
     }
 
@@ -147,19 +150,32 @@ impl SelfAttention {
         let value = value.reshape((b, t, h, s))?.transpose(1, 2)?;
         let receptance = receptance.reshape((b, t, h, s))?.transpose(1, 2)?;
 
-        let out: Vec<Tensor> = Vec::with_capacity(t);
+        let time_decay = self
+            .time_decay
+            .exp()?
+            .neg()?
+            .exp()?
+            .reshape(((), 1, 1))?
+            .reshape((self.n_attn_heads, (), 1))?;
+        let time_faaaa =
+            self.time_faaaa
+                .reshape(((), 1, 1))?
+                .reshape((self.n_attn_heads, (), 1))?;
+
+        let mut out: Vec<Tensor> = Vec::with_capacity(t);
         for t_ in 0..t {
             //
             let rt = receptance.i((.., .., t_..t_ + 1))?;
-            let kt = key.i((.., .., t_..t_ + 1))?;
+            let kt = key.i((.., .., .., t_..t_ + 1))?;
             let vt = value.i((.., .., t_..t_ + 1))?;
             let at = kt.matmul(&vt)?;
-            let rhs = ((&self.time_faaaa * &at)? + &state_)?;
+            let rhs = (time_faaaa.broadcast_mul(&at)? + &state_)?;
             let out_ = rt.matmul(&rhs)?.squeeze(2)?;
-            state_ = (&at + &self.time_decay * &state_)?
+            state_ = (&at + time_decay.broadcast_mul(&state_))?;
+            out.push(out_)
         }
-        let out = Tensor::cat(&out, 1)?.reshape((b * t, h * s))?;
-        // out = F.group_norm(out, num_groups=H, weight=lxw, bias=lxb).reshape(B, T, H * S)
+        let out = Tensor::cat(&out, 1)?.reshape((b * t, h * s, 1))?;
+        let out = out.apply(&self.ln_x)?.reshape((b, t, h * s))?;
         let out = (out * gate)?.apply(&self.output)?;
         state.per_layer[self.layer_id].linear_attention = state_;
         Ok(out)
@@ -285,7 +301,7 @@ impl Model {
     }
 
     pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
-        let _b_size = xs.dims1()?;
+        let (_b_size, _seq_len) = xs.dims2()?;
         let mut xs = xs.apply(&self.embeddings)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             xs = block.forward(&xs, state)?;
