@@ -288,37 +288,43 @@ struct operation;
 // Specialization for scalar values.
 template<typename OP, typename T>
 struct operation<OP, T, typename metal::enable_if_t<is_scalar_v<T>>> {
-    METAL_FUNC T operator()(OP op, T a, T b) const {
+    OP op;
+
+    METAL_FUNC T operator()(T a, T b) {
         return op(a, b);
     }
-    METAL_FUNC T operator()(OP op, T a, T b, uint idx) {
-        return this->operator()(op, a, b);
+    METAL_FUNC T operator()(T a, T b, uint idx) {
+        return this->operator()(a, b);
     }
 };
 
 // Specialization for vector values.
 template<typename OP, typename T, uint N>
 struct operation<OP, vec<T, N>> {
-    METAL_FUNC vec<T, N> operator()(OP op, vec<T, N> a, vec<T, N> b) {
+    OP op;
+
+    METAL_FUNC vec<T, N> operator()(vec<T, N> a, vec<T, N> b) {
         #pragma clang loop unroll(full)
         for (ushort n = 0; n < N; n++) {
             a[n] = op(a[n], b[n]);
         }
         return a;
     }
-    METAL_FUNC vec<T, N> operator()(OP op, vec<T, N> a, vec<T, N> b, uint _idx) {
-        return this->operator()(op, a, b);
+    METAL_FUNC vec<T, N> operator()(vec<T, N> a, vec<T, N> b, uint _idx) {
+        return this->operator()(a, b);
     }
 };
 
 // Specialization for indexed scalar values.
 template<typename OP, typename T>
 struct operation<OP, indexed<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
-    METAL_FUNC indexed<T> operator()(OP op, indexed<T> a, indexed<T> b) {
+    OP op;
+
+    METAL_FUNC indexed<T> operator()(indexed<T> a, indexed<T> b) {
         return op(a, b);
     }
-    METAL_FUNC indexed<T> operator()(OP op, indexed<T> a, T b, uint idx) {
-        return this->operator()(op, a, indexed<T>{ idx, b });
+    METAL_FUNC indexed<T> operator()(indexed<T> a, T b, uint idx) {
+        return this->operator()(a, indexed<T>{ idx, b });
     }
 };
 
@@ -326,15 +332,16 @@ struct operation<OP, indexed<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
 template<typename OP, typename T>
 struct operation<OP, indexed<T>, typename metal::enable_if_t<is_vector_v<T>>> {
     typedef indexed<make_scalar_t<T>> scalar;
+    OP op;
 
-    METAL_FUNC indexed<T> operator()(OP op, indexed<T> a, indexed<T> b) {
+    METAL_FUNC indexed<T> operator()(indexed<T> a, indexed<T> b) {
         #pragma clang loop unroll(full)
         for (ushort n = 0; n < vec_elements<T>::value; n++) {
             a[n] = op(a[n], b[n]);
         }
         return a;
     }
-    METAL_FUNC indexed<T> operator()(OP op, indexed<T> a, T b, uint idx) {
+    METAL_FUNC indexed<T> operator()(indexed<T> a, T b, uint idx) {
         #pragma clang loop unroll(full)
         for (ushort n = 0; n < vec_elements<T>::value; n++) {
             a[n] = op(a[n], scalar{ idx + n, b[n] });
@@ -396,7 +403,6 @@ template<
     ushort BLOCKSIZE
 >
 struct loader<T, R, OP, BLOCKSIZE, STRIDED, typename metal::enable_if_t<is_scalar_v<T>>> {
-    OP op;
     operation<OP, R> operate;
 
     METAL_FUNC R operator()(
@@ -412,7 +418,7 @@ struct loader<T, R, OP, BLOCKSIZE, STRIDED, typename metal::enable_if_t<is_scala
 
         #pragma clang loop unroll(full)
         for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
-            value = operate(op, value, src[i], i);
+            value = operate(value, src[i], i);
         }
         return value;
     }
@@ -444,7 +450,7 @@ struct loader<T, R, OP, BLOCKSIZE, STRIDED, typename metal::enable_if_t<is_scala
         #pragma clang loop unroll(full)
         for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
             idx = get_strided_index(i, src_numel, dims, strides);
-            value = operate(op, value, src[idx], idx);
+            value = operate(value, src[idx], idx);
         }
         return value;
     }
@@ -458,7 +464,6 @@ template<
     bool STRIDED
 >
 struct loader<T, R, OP, BLOCKSIZE, STRIDED, typename metal::enable_if_t<is_vector_v<T>>> {
-    OP op;
     operation<OP, R> operate;
 
     METAL_FUNC R operator()(
@@ -478,7 +483,7 @@ struct loader<T, R, OP, BLOCKSIZE, STRIDED, typename metal::enable_if_t<is_vecto
 
         #pragma clang loop unroll(full)
         for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
-            value = operate(op, value, src[i], i);
+            value = operate(value, src[i], i);
         }
         return value;
     }
@@ -510,7 +515,7 @@ struct loader<T, R, OP, BLOCKSIZE, STRIDED, typename metal::enable_if_t<is_vecto
         //#pragma clang loop unroll(full)
         //for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
         //    idx = get_strided_index(i, src_numel, dims, strides);
-        //    value = operate(op, value, src[idx], idx);
+        //    value = operate(value, src[idx], idx);
         //}
         return value;
     }
@@ -538,14 +543,14 @@ struct simdgroup_reducer<OP, BLOCKSIZE, T, typename metal::enable_if_t<is_simd_o
 // Specialization for custom (non-built-in) simd operations.
 template<typename OP, ushort BLOCKSIZE, typename T>
 struct simdgroup_reducer<OP, BLOCKSIZE, T, typename metal::enable_if_t<!is_simd_op<OP>::value && is_valid_simd_t<T>>> {
+    operation<OP, T> operate;
+
     METAL_FUNC T operator()(T value) {
-        OP op;
-        operation<OP, T> operate;
-        if (BLOCKSIZE >= 32) value = operate(op, value, simd_shuffle_down(value, 16));
-        if (BLOCKSIZE >= 16) value = operate(op, value, simd_shuffle_down(value,  8));
-        if (BLOCKSIZE >=  8) value = operate(op, value, simd_shuffle_down(value,  4));
-        if (BLOCKSIZE >=  4) value = operate(op, value, simd_shuffle_down(value,  2));
-        if (BLOCKSIZE >=  2) value = operate(op, value, simd_shuffle_down(value,  1));
+        if (BLOCKSIZE >= 32) value = operate(value, simd_shuffle_down(value, 16));
+        if (BLOCKSIZE >= 16) value = operate(value, simd_shuffle_down(value,  8));
+        if (BLOCKSIZE >=  8) value = operate(value, simd_shuffle_down(value,  4));
+        if (BLOCKSIZE >=  4) value = operate(value, simd_shuffle_down(value,  2));
+        if (BLOCKSIZE >=  2) value = operate(value, simd_shuffle_down(value,  1));
         return value;
     }
     METAL_FUNC T operator()(threadgroup T shared[BLOCKSIZE], const ushort tid) {
@@ -556,18 +561,18 @@ struct simdgroup_reducer<OP, BLOCKSIZE, T, typename metal::enable_if_t<!is_simd_
 // Specialization for non-simd types.
 //template<typename OP, ushort BLOCKSIZE, typename T>
 //struct simdgroup_reducer<OP, BLOCKSIZE, T, typename metal::enable_if_t<!is_valid_simd_t<T>>> {
+//    operation<OP, T> operate;
+//
 //    METAL_FUNC T operator()(
 //        volatile threadgroup T shared[BLOCKSIZE],
 //        const ushort tid
 //    ) {
-//        OP op;
-//        operation<OP, T> operate;
 //        T value = shared[tid];
-//        if (BLOCKSIZE >= 32) value = operate(op, value, shared[tid + 16]);
-//        if (BLOCKSIZE >= 16) value = operate(op, value, shared[tid +  8]);
-//        if (BLOCKSIZE >=  8) value = operate(op, value, shared[tid +  4]);
-//        if (BLOCKSIZE >=  4) value = operate(op, value, shared[tid +  2]);
-//        if (BLOCKSIZE >=  2) value = operate(op, value, shared[tid +  1]);
+//        if (BLOCKSIZE >= 32) value = operate(value, shared[tid + 16]);
+//        if (BLOCKSIZE >= 16) value = operate(value, shared[tid +  8]);
+//        if (BLOCKSIZE >=  8) value = operate(value, shared[tid +  4]);
+//        if (BLOCKSIZE >=  4) value = operate(value, shared[tid +  2]);
+//        if (BLOCKSIZE >=  2) value = operate(value, shared[tid +  1]);
 //        return value;
 //    }
 //    METAL_FUNC T operator()(T value) {
@@ -577,10 +582,9 @@ struct simdgroup_reducer<OP, BLOCKSIZE, T, typename metal::enable_if_t<!is_simd_
 
 template<typename T, typename OP, ushort BLOCKSIZE>
 struct block_reducer {
-    OP op;
+    simdgroup_reducer<OP, BLOCKSIZE, T> simd_reduce;
     operation<OP, T> operate;
     threadgroup T *shared;
-    simdgroup_reducer<OP, BLOCKSIZE, T> simd_reduce;
 
     block_reducer(threadgroup T shared[BLOCKSIZE]) {
         this->shared = shared;
@@ -597,14 +601,14 @@ struct block_reducer {
         #pragma clang loop unroll(full)
         for (ushort s = BLOCKSIZE / 2; s >= 64; s >>= 1) {
             if (tid < s) {
-                shared[tid] = operate(op, shared[tid], shared[tid + s]);
+                shared[tid] = operate(shared[tid], shared[tid + s]);
             }
             threadgroup_barrier(mem_flags::mem_none);
         }
         if (tid < 32) {
             // Last shared memory reduce can be done without tid < s check.
             if (BLOCKSIZE >= 64) {
-                value = operate(op, shared[tid], shared[tid + 32]);
+                value = operate(shared[tid], shared[tid + 32]);
                 simdgroup_barrier(mem_flags::mem_none);
             }
             // Remaining 32 threads can be reduced with simdgroup_reduce.
@@ -906,25 +910,29 @@ struct MD {
 // Enable operations for softmax MD
 template<typename OP, typename T>
 struct operation<OP, MD<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
-    METAL_FUNC MD<T> operator()(OP op, MD<T> a, MD<T> b) {
+    OP op;
+
+    METAL_FUNC MD<T> operator()(MD<T> a, MD<T> b) {
         return op(a, b);
     }
-    METAL_FUNC MD<T> operator()(OP op, MD<T> a, T b, uint idx) {
-        return this->operator()(op, a, MD<T>{ b, static_cast<T>(1.0) });
+    METAL_FUNC MD<T> operator()(MD<T> a, T b, uint idx) {
+        return this->operator()(a, MD<T>{ b, static_cast<T>(1.0) });
     }
 };
 
 // Specialization for indexed vector values.
 template<typename OP, typename T>
 struct operation<OP, MD<T>, typename metal::enable_if_t<is_vector_v<T>>> {
-    METAL_FUNC MD<T> operator()(OP op, MD<T> a, MD<T> b) {
+    OP op;
+
+    METAL_FUNC MD<T> operator()(MD<T> a, MD<T> b) {
         #pragma clang loop unroll(full)
         for (ushort n = 0; n < vec_elements<T>::value; n++) {
             a[n] = op(a[n], b[n]);
         }
         return a;
     }
-    METAL_FUNC MD<T> operator()(OP op, MD<T> a, T b, uint idx) {
+    METAL_FUNC MD<T> operator()(MD<T> a, T b, uint idx) {
         #pragma clang loop unroll(full)
         for (ushort n = 0; n < vec_elements<T>::value; n++) {
             a[n] = op(a[n], MD<make_scalar_t<T>>{ b[n], static_cast<make_scalar_t<T>>(1.0) });
