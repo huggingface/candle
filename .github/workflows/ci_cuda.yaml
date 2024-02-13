@@ -60,12 +60,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
       - name: Install Rust Stable
-        run: curl https://sh.rustup.rs -sSf | sh -s -- -y
-      - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
       - name: Test (cuda)
-        run: PATH=$PATH:/usr/local/cuda-11.8/bin/ /root/.cargo/bin/cargo test --features cuda
+        run: cargo test --features cuda
           # stop-runner:
           #   name: Stop self-hosted EC2 runner
           #   needs:
