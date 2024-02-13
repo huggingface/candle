@@ -1,5 +1,6 @@
 use super::{GgmlDType, QStorage};
-use crate::{DType, MetalDevice, MetalStorage, Result};
+use crate::backend::BackendStorage;
+use crate::{DType, MetalDevice, MetalStorage, Result, Shape};
 use metal::Buffer;
 use std::sync::Arc;
 
@@ -12,9 +13,9 @@ pub struct QMetalStorage {
 impl QMetalStorage {
     pub fn zeros(device: &MetalDevice, elem_count: usize, dtype: GgmlDType) -> Result<Self> {
         let size = elem_count * dtype.type_size() / dtype.block_size();
-        let buffer = metal.allocate_zeros(size)?;
+        let buffer = device.allocate_zeros(size)?;
         Ok(Self {
-            buffer: Arc::new(buffer),
+            buffer,
             device: device.clone(),
             dtype,
         })
@@ -30,14 +31,6 @@ impl QMetalStorage {
 
     pub fn buffer(&self) -> &Buffer {
         &self.buffer
-    }
-
-    fn new(buffer: Arc<Buffer>, device: MetalDevice, dtype: GgmlDType) -> Self {
-        Self {
-            device,
-            buffer,
-            dtype,
-        }
     }
 
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
@@ -146,10 +139,10 @@ impl QMetalStorage {
     }
 
     pub fn storage_size_in_bytes(&self) -> usize {
-        self.buffer.len()
+        self.buffer.length() as usize
     }
 
-    fn fwd(
+    pub fn fwd(
         &self,
         self_shape: &Shape,
         storage: &MetalStorage,

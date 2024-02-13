@@ -1,3 +1,4 @@
+#![allow(unused)]
 use super::GgmlDType;
 use crate::{Error, MetalDevice, MetalStorage, Result};
 
