@@ -49,7 +49,7 @@ jobs:
     # runs-on: ${{ needs.start-runner.outputs.label }} # run the job on the newly created runner
     runs-on: [single-gpu, nvidia-gpu, t4, ci]
     container:
-      image: nvidia/cuda:12.3.1-runtime-ubuntu22.04
+      image: nvidia/cuda:12.3.1-devel-ubuntu22.04
       options: --gpus 0 
     if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
@@ -62,8 +62,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      - name: Install dependencies
-        run: apt-get update && apt install curl -y
+          # - name: Install dependencies
+          #   run: apt-get update && apt install curl build-essential -y
       - name: Install Rust Stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
