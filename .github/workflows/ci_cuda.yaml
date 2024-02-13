@@ -48,6 +48,9 @@ jobs:
       cancel-in-progress: true
     # runs-on: ${{ needs.start-runner.outputs.label }} # run the job on the newly created runner
     runs-on: [single-gpu, nvidia-gpu, t4, ci]
+    container:
+      image: nvidia/cuda:12.3.1-runtime-ubuntu22.04
+      options: --gpus 0 
     if: ${{ github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name }}
     permissions:
       contents: write
