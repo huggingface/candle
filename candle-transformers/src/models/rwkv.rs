@@ -22,11 +22,41 @@ pub struct Config {
     pub rescale_every: usize,
 }
 
-pub struct State;
+struct StatePerLayer {
+    extract_key_value: Tensor,
+    linear_attention: Tensor,
+    feed_forward: Tensor,
+}
+
+pub struct State {
+    per_layer: Vec<StatePerLayer>,
+    pos: usize,
+}
 
 impl State {
-    pub fn new(_batch_size: usize, _cfg: &Config, _device: &Device) -> Result<Self> {
-        Ok(Self)
+    pub fn new(batch_size: usize, cfg: &Config, dev: &Device) -> Result<Self> {
+        let mut per_layer = Vec::with_capacity(cfg.num_hidden_layers);
+        let num_attn_head = cfg.num_attention_heads;
+        for _layer_idx in 0..cfg.num_hidden_layers {
+            let extract_key_value = Tensor::zeros((batch_size, cfg.hidden_size), DType::F32, dev)?;
+            let linear_attention = Tensor::zeros(
+                (
+                    batch_size,
+                    num_attn_head,
+                    cfg.hidden_size / num_attn_head,
+                    cfg.hidden_size / num_attn_head,
+                ),
+                DType::F32,
+                dev,
+            )?;
+            let feed_forward = Tensor::zeros((batch_size, cfg.hidden_size), DType::F32, dev)?;
+            per_layer.push(StatePerLayer {
+                extract_key_value,
+                linear_attention,
+                feed_forward,
+            });
+        }
+        Ok(Self { per_layer, pos: 0 })
     }
 }
 
@@ -44,10 +74,11 @@ struct SelfAttention {
     time_decay: Tensor,
     time_faaaa: Tensor,
     time_mix_gate: Tensor,
+    layer_id: usize,
 }
 
 impl SelfAttention {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(layer_id: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let attn_hidden_size = cfg.attention_hidden_size;
         let key = linear(hidden_size, attn_hidden_size, vb.pp("key"))?;
@@ -81,6 +112,7 @@ impl SelfAttention {
             time_decay,
             time_faaaa,
             time_mix_gate,
+            layer_id,
         })
     }
 
@@ -96,10 +128,11 @@ struct FeedForward {
     key: Linear,
     receptance: Linear,
     value: Linear,
+    layer_id: usize,
 }
 
 impl FeedForward {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(layer_id: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let int_size = cfg
             .intermediate_size
             .unwrap_or(((cfg.hidden_size as f64 * 3.5) as usize) / 32 * 32);
@@ -114,6 +147,7 @@ impl FeedForward {
             value,
             time_mix_key,
             time_mix_receptance,
+            layer_id,
         })
     }
 
@@ -141,17 +175,17 @@ struct Block {
 }
 
 impl Block {
-    pub fn new(layer_index: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(layer_id: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let ln1 = layer_norm(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("ln1"))?;
         let ln2 = layer_norm(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("ln2"))?;
-        let pre_ln = if layer_index == 0 {
+        let pre_ln = if layer_id == 0 {
             let ln = layer_norm(cfg.hidden_size, cfg.layer_norm_epsilon, vb.pp("pre_ln"))?;
             Some(ln)
         } else {
             None
         };
-        let attention = SelfAttention::new(cfg, vb.pp("attention"))?;
-        let feed_forward = FeedForward::new(cfg, vb.pp("feed_forward"))?;
+        let attention = SelfAttention::new(layer_id, cfg, vb.pp("attention"))?;
+        let feed_forward = FeedForward::new(layer_id, cfg, vb.pp("feed_forward"))?;
         Ok(Self {
             pre_ln,
             ln1,
@@ -205,7 +239,7 @@ impl Model {
     }
 
     pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
-        let (_b_size, seq_len) = xs.dims2()?;
+        let _b_size = xs.dims1()?;
         let mut xs = xs.apply(&self.embeddings)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             xs = block.forward(&xs, state)?;
@@ -213,11 +247,8 @@ impl Model {
                 xs = (xs / 2.)?
             }
         }
-        let xs = xs
-            .apply(&self.ln_out)?
-            .narrow(1, seq_len - 1, 1)?
-            .apply(&self.head)?
-            .squeeze(1)?;
+        let xs = xs.apply(&self.ln_out)?.apply(&self.head)?;
+        state.pos += 1;
         Ok(xs)
     }
 }
