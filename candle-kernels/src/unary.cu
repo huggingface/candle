@@ -57,7 +57,7 @@ __device__ __forceinline__ T relu_fwd(T x) {
 
 template<typename T>
 __device__ __forceinline__ T silu_fwd(T x) {
-    return x / (static_cast<scalar_t>(1) + expg(-x));
+    return x / (static_cast<T>(1) + expg(-x));
 }
 
 #define UNARY_OP1(TYPENAME, FN_NAME, FUNC) \
