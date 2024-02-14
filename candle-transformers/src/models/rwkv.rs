@@ -277,6 +277,7 @@ pub struct Model {
     ln_out: LayerNorm,
     head: Linear,
     rescale_every: usize,
+    layers_are_rescaled: bool,
 }
 
 impl Model {
@@ -297,6 +298,7 @@ impl Model {
             ln_out,
             head,
             rescale_every: cfg.rescale_every,
+            layers_are_rescaled: false, // This seem to only happen for the f16/bf16 dtypes.
         })
     }
 
@@ -305,7 +307,7 @@ impl Model {
         let mut xs = xs.apply(&self.embeddings)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             xs = block.forward(&xs, state)?;
-            if (block_idx + 1) % self.rescale_every == 0 {
+            if self.layers_are_rescaled && (block_idx + 1) % self.rescale_every == 0 {
                 xs = (xs / 2.)?
             }
         }
