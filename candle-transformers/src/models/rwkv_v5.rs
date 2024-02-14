@@ -320,6 +320,7 @@ impl Model {
 type Bytes = Vec<u8>;
 
 // https://github.com/BlinkDL/ChatRWKV/blob/095e812aef15a1f74107f6c39d13578a2412dc46/RWKV_v5_demo.py#L14
+#[allow(unused)]
 pub struct Tokenizer {
     table: Vec<Vec<Vec<Bytes>>>,
     good: Vec<HashSet<u8>>,

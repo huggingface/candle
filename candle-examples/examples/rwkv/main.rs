@@ -10,7 +10,6 @@ use clap::{Parser, ValueEnum};
 use candle_transformers::models::rwkv_v5::{Config, Model, State, Tokenizer};
 
 use candle::{DType, Device, Tensor};
-use candle_examples::token_output_stream::TokenOutputStream;
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
@@ -178,7 +177,7 @@ struct Args {
     revision: Option<String>,
 
     #[arg(long)]
-    tokenizer_file: Option<String>,
+    tokenizer: Option<String>,
 
     #[arg(long)]
     weight_files: Option<String>,
@@ -230,12 +229,11 @@ fn main() -> Result<()> {
         args.revision
             .unwrap_or_else(|| args.which.revision().to_string()),
     ));
-    let tokenizer_filename = match args.tokenizer_file {
+    let tokenizer = match args.tokenizer {
         Some(file) => std::path::PathBuf::from(file),
         None => api
-            // TODO: Use the appropriate tokenizer here.
-            .model("EleutherAI/gpt-neox-20b".to_string())
-            .get("tokenizer.json")?,
+            .model("lmz/candle-rwkv".to_string())
+            .get("rwkv_vocab_v20230424.json")?,
     };
     let config_filename = match args.config_file {
         Some(file) => std::path::PathBuf::from(file),
@@ -251,7 +249,7 @@ fn main() -> Result<()> {
         }
     };
     println!("retrieved the files in {:?}", start.elapsed());
-    let tokenizer = Tokenizer::new(tokenizer_filename)?;
+    let tokenizer = Tokenizer::new(tokenizer)?;
 
     let start = std::time::Instant::now();
     let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
