@@ -42,6 +42,7 @@ pub mod t5;
 pub mod trocr;
 pub mod vgg;
 pub mod vit;
+pub mod vocos;
 pub mod whisper;
 pub mod with_tracing;
 pub mod wuerstchen;
