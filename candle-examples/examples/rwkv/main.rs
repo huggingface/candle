@@ -51,16 +51,7 @@ impl TextGeneration {
 
     fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
         use std::io::Write;
-        /*
-        let mut tokens = self
-            .tokenizer
-            .tokenizer()
-            .encode(prompt, true)
-            .map_err(E::msg)?
-            .get_ids()
-            .to_vec();
-        */
-        let mut tokens = vec![33];
+        let mut tokens = self.tokenizer.encode(prompt)?;
         let mut generated_tokens = 0usize;
         let mut state = State::new(1, &self.config, &self.device)?;
         let mut next_logits = None;
