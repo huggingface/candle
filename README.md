@@ -75,6 +75,9 @@ We also provide a some command line based examples using state of the art models
   experts 8x7b general LLM with better performance than a Llama 2 70B model with
   much faster inference.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
+- [Qwen1.5](./candle-examples/examples/qwen/): Bilingual (English/Chinese) LLMs.
+- [RWKV v5](./candle-examples/examples/rwkv/): An RNN with transformer level LLM
+  performance.
 - [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Yi-6B / Yi-34B](./candle-examples/examples/yi/): two bilingual
   (English/Chinese) general LLMs with 6b and 34b parameters.
@@ -193,6 +196,8 @@ If you have an addition to this list, please submit a pull request.
         - Replit-code-v1.5-3B.
         - Bert.
         - Yi-6B and Yi-34B.
+        - Qwen1.5.
+        - RWKV.
     - Quantized LLMs.
         - Llama 7b, 13b, 70b, as well as the chat and code variants.
         - Mistral 7b, and 7b instruct.
@@ -210,7 +215,8 @@ If you have an addition to this list, please submit a pull request.
         - BLIP.
         - TrOCR.
     - Computer Vision Models.
-        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT.
+        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
+          ConvNeXTv2.
         - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
