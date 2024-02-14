@@ -34,6 +34,7 @@ pub mod quantized_t5;
 pub mod qwen2;
 pub mod repvgg;
 pub mod resnet;
+pub mod rwkv_v5;
 pub mod segment_anything;
 pub mod stable_diffusion;
 pub mod stable_lm;
