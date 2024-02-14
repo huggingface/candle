@@ -1,6 +1,7 @@
 use super::with_tracing::{layer_norm, linear_no_bias as linear, LayerNorm, Linear};
 use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use std::collections::{HashMap, HashSet};
 
 fn default_num_attention_heads() -> usize {
     64
@@ -313,5 +314,72 @@ impl Model {
         let xs = xs.apply(&self.ln_out)?.apply(&self.head)?;
         state.pos += 1;
         Ok(xs)
+    }
+}
+
+type Bytes = Vec<u8>;
+
+// https://github.com/BlinkDL/ChatRWKV/blob/095e812aef15a1f74107f6c39d13578a2412dc46/RWKV_v5_demo.py#L14
+pub struct Tokenizer {
+    table: Vec<Vec<Vec<Bytes>>>,
+    good: Vec<HashSet<u8>>,
+    wlen: Vec<usize>,
+    idx2token: HashMap<u32, Vec<u8>>,
+    token2idx: HashMap<Vec<u8>, u32>,
+}
+
+impl Tokenizer {
+    pub fn new<P: AsRef<std::path::Path>>(p: P) -> Result<Self> {
+        let file = std::fs::File::open(p)?;
+        let token2idx: HashMap<String, u32> =
+            serde_json::from_reader(file).map_err(candle::Error::wrap)?;
+        let token2idx = token2idx
+            .into_iter()
+            .map(|(key, value)| (key.into_bytes(), value))
+            .collect::<HashMap<_, _>>();
+        let idx2token = token2idx
+            .iter()
+            .map(|(key, value)| (*value, key.to_vec()))
+            .collect::<HashMap<_, _>>();
+
+        let max_idx = token2idx.values().copied().max().unwrap_or(0);
+
+        let mut table = vec![vec![vec![]; 256]; 256];
+        let mut good = vec![HashSet::new(); 256];
+        let mut wlen = vec![0; 256];
+        for idx in (0..(1 + max_idx)).rev() {
+            let s = match idx2token.get(&idx) {
+                None => continue,
+                Some(s) => s,
+            };
+            if s.len() >= 2 {
+                let (s0, s1) = (s[0], s[1]);
+                table[s0 as usize][s1 as usize].push(s.to_vec());
+                wlen[s0 as usize] = usize::max(s.len(), wlen[s0 as usize]);
+                good[s0 as usize].insert(s1);
+            }
+        }
+        Ok(Self {
+            table,
+            good,
+            wlen,
+            idx2token,
+            token2idx,
+        })
+    }
+
+    pub fn decode_bytes(&self, tokens: &[u32]) -> Vec<u8> {
+        let mut v = Vec::new();
+        for token_id in tokens.iter() {
+            if let Some(token) = self.idx2token.get(token_id) {
+                v.extend_from_slice(token.as_slice())
+            }
+        }
+        v
+    }
+
+    pub fn decode(&self, tokens: &[u32]) -> Result<String> {
+        let bytes = self.decode_bytes(tokens);
+        String::from_utf8(bytes).map_err(candle::Error::wrap)
     }
 }
