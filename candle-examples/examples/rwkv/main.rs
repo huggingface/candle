@@ -7,7 +7,7 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::{Parser, ValueEnum};
 
-use candle_transformers::models::rwkv::{Config, Model, State};
+use candle_transformers::models::rwkv_v5::{Config, Model, State};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;

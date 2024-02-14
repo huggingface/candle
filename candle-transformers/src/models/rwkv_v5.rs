@@ -1,6 +1,5 @@
-#![allow(unused)]
 use super::with_tracing::{layer_norm, linear_no_bias as linear, LayerNorm, Linear};
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 
 fn default_num_attention_heads() -> usize {
