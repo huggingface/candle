@@ -592,7 +592,7 @@ impl Tensor {
                     Op::Unary(arg, UnaryOp::Silu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
-                        let sigmoid_arg = (arg.silu()? / arg)?;
+                        let sigmoid_arg = (*node / arg)?;
                         let silu_grad = (&sigmoid_arg * (1. + (arg * (1. - &sigmoid_arg)?)?)?)?;
                         *sum_grad = sum_grad.add(&(&grad * silu_grad)?)?
                     }
