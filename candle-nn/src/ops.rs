@@ -35,13 +35,12 @@ pub fn log_softmax<D: candle::shape::Dim>(xs: &Tensor, d: D) -> Result<Tensor> {
 }
 
 pub fn silu(xs: &Tensor) -> Result<Tensor> {
-    // TODO: Should we have a specialized op for this?
-    xs / (xs.neg()?.exp()? + 1.0)?
+    xs.silu()
 }
 
 pub fn swiglu(xs: &Tensor) -> Result<Tensor> {
     let xs = xs.chunk(2, candle::D::Minus1)?;
-    crate::ops::silu(&xs[0])? * &xs[1]
+    &xs[0].silu()? * &xs[1]
 }
 
 pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
