@@ -1,7 +1,79 @@
 use candle::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{linear_no_bias, Linear, VarBuilder};
 
-pub struct SpeakerEncoder;
+#[allow(unused)]
+#[derive(Debug, Clone)]
+pub struct SpeakerEncoderConfig {
+    mel_window_step: usize,
+    mel_n_channels: usize,
+    sampling_rate: usize,
+    partial_n_frames: usize,
+    model_hidden_size: usize,
+    model_embedding_size: usize,
+    model_num_layers: usize,
+}
+
+pub struct SpeakerEncoder {
+    lstms: Vec<candle_nn::LSTM>,
+    linear: Linear,
+}
+
+impl SpeakerEncoder {
+    pub fn new(cfg: &SpeakerEncoderConfig, vb: VarBuilder) -> Result<Self> {
+        let mut lstms = Vec::with_capacity(cfg.model_num_layers);
+        let vb_l = vb.pp("lstm");
+        for layer_idx in 0..cfg.model_num_layers {
+            let c = candle_nn::LSTMConfig {
+                layer_idx,
+                ..Default::default()
+            };
+            let lstm = candle_nn::lstm(
+                cfg.mel_n_channels,
+                cfg.model_hidden_size,
+                c,
+                vb_l.pp(layer_idx),
+            )?;
+            lstms.push(lstm)
+        }
+        let linear = linear(
+            cfg.model_hidden_size,
+            cfg.model_embedding_size,
+            true,
+            vb.pp("linear"),
+        )?;
+        Ok(Self { lstms, linear })
+    }
+
+    fn compute_partial_slices(
+        _n_samples: usize,
+        _rate: f64,
+        _min_coverage: f64,
+    ) -> Result<(Tensor, Tensor)> {
+        todo!()
+    }
+
+    pub fn embed_utterance(&self, wav: &[f32], rate: f64, min_coverage: f64) -> Result<Tensor> {
+        let (_wav_slices, _mel_slices) =
+            Self::compute_partial_slices(wav.len(), rate, min_coverage)?;
+        todo!()
+    }
+}
+
+impl Module for SpeakerEncoder {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        use candle_nn::RNN;
+        let mut xs = xs.clone();
+        for lstm in self.lstms.iter() {
+            let res = lstm.seq(&xs)?;
+            let res: Vec<_> = res.into_iter().map(|s| s.h().clone()).collect();
+            xs = Tensor::stack(&res, 1)?;
+        }
+        let embeds_raw = xs.apply(&self.linear)?.relu()?;
+        // TODO: normalize.
+        Ok(embeds_raw)
+    }
+}
+
 pub struct BPETokenizer;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
