@@ -15,6 +15,7 @@ pub mod llama2_c;
 pub mod llama2_c_weights;
 pub mod mamba;
 pub mod marian;
+pub mod metavoice;
 pub mod mistral;
 pub mod mixformer;
 pub mod mixtral;
