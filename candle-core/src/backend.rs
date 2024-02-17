@@ -1,5 +1,6 @@
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
+use std::borrow::Cow;
 
 pub trait BackendStorage: Sized {
     type Device: BackendDevice;
@@ -10,8 +11,7 @@ pub trait BackendStorage: Sized {
 
     fn device(&self) -> &Self::Device;
 
-    // Maybe this should return a Cow instead so that no copy is done on the cpu case.
-    fn to_cpu_storage(&self) -> Result<CpuStorage>;
+    fn to_cpu_storage(&self) -> Result<Cow<'_, CpuStorage>>;
 
     fn affine(&self, _: &Layout, _: f64, _: f64) -> Result<Self>;
 
