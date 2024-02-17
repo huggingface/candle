@@ -6,6 +6,7 @@ use candle_metal_kernels;
 use candle_metal_kernels::Kernels;
 use metal;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
@@ -344,16 +345,16 @@ impl BackendStorage for MetalStorage {
         &self.device
     }
 
-    fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        match self.dtype {
-            DType::U8 => Ok(CpuStorage::U8(self.to_cpu()?)),
-            DType::U32 => Ok(CpuStorage::U32(self.to_cpu()?)),
-            DType::I64 => Ok(CpuStorage::I64(self.to_cpu()?)),
-            DType::F16 => Ok(CpuStorage::F16(self.to_cpu()?)),
-            DType::BF16 => Ok(CpuStorage::BF16(self.to_cpu()?)),
-            DType::F32 => Ok(CpuStorage::F32(self.to_cpu()?)),
-            DType::F64 => Ok(CpuStorage::F64(self.to_cpu()?)),
-        }
+    fn to_cpu_storage(&self) -> Result<Cow<'_, CpuStorage>> {
+        Ok(Cow::Owned(match self.dtype {
+            DType::U8 => CpuStorage::U8(self.to_cpu()?),
+            DType::U32 => CpuStorage::U32(self.to_cpu()?),
+            DType::I64 => CpuStorage::I64(self.to_cpu()?),
+            DType::F16 => CpuStorage::F16(self.to_cpu()?),
+            DType::BF16 => CpuStorage::BF16(self.to_cpu()?),
+            DType::F32 => CpuStorage::F32(self.to_cpu()?),
+            DType::F64 => CpuStorage::F64(self.to_cpu()?),
+        }))
     }
 
     fn affine(&self, layout: &Layout, mul: f64, add: f64) -> Result<Self> {

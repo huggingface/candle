@@ -9,6 +9,7 @@ use cudarc::driver::{
     ValidAsZeroBits,
 };
 use half::{bf16, f16};
+use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 
 /// cudarc related errors
@@ -1755,44 +1756,44 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
-    fn to_cpu_storage(&self) -> Result<CpuStorage> {
-        match &self.slice {
+    fn to_cpu_storage(&self) -> Result<Cow<'_, CpuStorage>> {
+        Ok(Cow::Owned(match &self.slice {
             CudaStorageSlice::U8(slice) => {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
-                Ok(CpuStorage::U8(cpu_storage))
+                CpuStorage::U8(cpu_storage)
             }
             CudaStorageSlice::U32(slice) => {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
-                Ok(CpuStorage::U32(cpu_storage))
+                CpuStorage::U32(cpu_storage)
             }
             CudaStorageSlice::I64(slice) => {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
-                Ok(CpuStorage::I64(cpu_storage))
+                CpuStorage::I64(cpu_storage)
             }
             CudaStorageSlice::BF16(slice) => {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
-                Ok(CpuStorage::BF16(cpu_storage))
+                CpuStorage::BF16(cpu_storage)
             }
             CudaStorageSlice::F16(slice) => {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
-                Ok(CpuStorage::F16(cpu_storage))
+                CpuStorage::F16(cpu_storage)
             }
             CudaStorageSlice::F32(slice) => {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
-                Ok(CpuStorage::F32(cpu_storage))
+                CpuStorage::F32(cpu_storage)
             }
             CudaStorageSlice::F64(slice) => {
                 let dev = slice.device();
                 let cpu_storage = dev.dtoh_sync_copy(slice).w()?;
-                Ok(CpuStorage::F64(cpu_storage))
+                CpuStorage::F64(cpu_storage)
             }
-        }
+        }))
     }
 
     fn where_cond(
