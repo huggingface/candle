@@ -134,7 +134,7 @@ impl crate::Module for ConvTranspose1d {
             None => Ok(x),
             Some(bias) => {
                 let b = bias.dims1()?;
-                let bias = bias.reshape((1, b, 1, 1))?;
+                let bias = bias.reshape((1, b, 1))?;
                 Ok(x.broadcast_add(&bias)?)
             }
         }
