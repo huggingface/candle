@@ -646,7 +646,7 @@ fn run_reduce<T, U: Clone>(v: &[T], out_length: usize, name: &'static str) -> Ve
     ) {
         Ok(_) => {}
         Err(e) => {
-            println!("Error: {}", e);
+            println!("{e}");
             panic!();
         }
     }
@@ -714,7 +714,7 @@ const fn correct_max<const N: usize, const D: usize>() -> [f32; D] {
     let mut j = 1;
     while i <= N {
         i += 1;
-        if i > j * N / D {
+        if i > j * (N / D) {
             results[j - 1] = (i - 1) as f32;
             j += 1;
         }
@@ -766,7 +766,7 @@ fn reduce_argmax_case<const N: usize, const D: usize>() {
 }
 
 #[test]
-fn reduce_sum() {
+fn reduce_sum1() {
     reduce_sum_case::<9, 1>();
     reduce_sum_case::<6, 1>();
     reduce_sum_case::<10, 1>();
@@ -777,7 +777,10 @@ fn reduce_sum() {
     reduce_sum_case::<1024, 1>();
     reduce_sum_case::<2048, 1>();
     reduce_sum_case::<4096, 1>();
+}
 
+#[test]
+fn reduce_sum2() {
     reduce_sum_case::<6, 2>();
     reduce_sum_case::<10, 2>();
     reduce_sum_case::<64, 2>();
@@ -811,6 +814,16 @@ fn reduce_max() {
     reduce_max_case::<1024, 2>();
     reduce_max_case::<2048, 2>();
     reduce_max_case::<4096, 2>();
+
+    reduce_max_case::<6, 3>();
+    reduce_max_case::<10, 3>();
+    reduce_max_case::<64, 3>();
+    reduce_max_case::<128, 3>();
+    reduce_max_case::<256, 3>();
+    reduce_max_case::<512, 3>();
+    reduce_max_case::<1024, 3>();
+    reduce_max_case::<2048, 3>();
+    reduce_max_case::<4096, 3>();
 }
 
 #[test]
@@ -825,7 +838,10 @@ fn reduce_argmax() {
     reduce_argmax_case::<1024, 1>();
     reduce_argmax_case::<2048, 1>();
     reduce_argmax_case::<4096, 1>();
+}
 
+#[test]
+fn reduce_argmax2() {
     reduce_argmax_case::<6, 2>();
     reduce_argmax_case::<10, 2>();
     reduce_argmax_case::<64, 2>();

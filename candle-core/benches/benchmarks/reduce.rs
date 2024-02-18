@@ -58,8 +58,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     let (lo, up) = (-1000.0f32, 1000.0f32);
     for device in handler.devices {
         run_softmax(c, &device, (lo, up));
-        run_softmax(c, &device, (f16::from_f32(lo), f16::from_f32(up)));
-        run_softmax(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)));
+        //run_softmax(c, &device, (f16::from_f32(lo), f16::from_f32(up)));
+        //run_softmax(c, &device, (bf16::from_f32(lo), bf16::from_f32(up)));
 
         run_reduce(c, &device, (lo, up), false);
         run_reduce(c, &device, (f16::from_f32(lo), f16::from_f32(up)), false);

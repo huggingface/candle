@@ -196,7 +196,7 @@ pub enum MetalKernelError {
     LockError(String),
     #[error("Error while loading library: {0}")]
     LoadLibraryError(String),
-    #[error("Error while loading function: {0:?}")]
+    #[error("Error while loading function: {0}")]
     LoadFunctionError(String),
     #[error("Failed to create compute function")]
     FailedToCreateComputeFunction,
@@ -562,16 +562,16 @@ pub fn call_reduce_contiguous(
 ) -> Result<(), MetalKernelError> {
     let work_per_threadgroup = length / out_length;
 
-    //let (name, granularity) = if work_per_threadgroup % 4 == 0 {
-    //    (format!("{kernel_name}x4").leak(), 4)
-    //} else if work_per_threadgroup % 2 == 0 {
-    //    (format!("{kernel_name}x2").leak(), 2)
-    //} else {
-    //    (format!("{kernel_name}").leak(), 1)
-    //};
-    //println!("{name} length:{length} work_per_threadgroup:{work_per_threadgroup} g:{granularity} l:{length} o:{out_length}");
-
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let (name, granularity) = if work_per_threadgroup % 4 == 0 {
+        (format!("{kernel_name}x4").leak(), 4)
+    } else if work_per_threadgroup % 2 == 0 {
+        (format!("{kernel_name}x2").leak(), 2)
+    } else {
+        (format!("{kernel_name}").leak(), 1)
+    };
+    //let name = kernel_name; //format!("{kernel_name}x2").leak();
+    //let granularity = 1;
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -592,18 +592,23 @@ pub fn call_reduce_contiguous(
         depth: 1,
     };
 
+    let work_split = work_per_threadgroup / (2 * granularity);
+    let mut w = 2;
+    while w < work_split {
+        w *= 2;
+    }
+
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        (work_per_threadgroup as u64 + 1) / 2,
-    )
-    .next_power_of_two();
-    //println!("width:{}", width);
+        w as NSUInteger,
+    );
+
     let thread_group_size = MTLSize {
         width,
         height: 1,
         depth: 1,
     };
-
+    //println!("{kernel_name}: work_per_threadgroup:{work_per_threadgroup} g:1 l:{length} o:{out_length} width:{width} w:{w} tgc:{thread_group_count:?} tgs:{thread_group_size:?}");
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -624,18 +629,17 @@ pub fn call_reduce_strided(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let length: usize = shape.iter().product();
-    let elements_to_sum = length / out_length;
-    /*
-    let (name, granularity) = if elements_to_sum % 4 == 0 {
-        (format!("{kernel_name}x4").leak(), 4)
-    } else if elements_to_sum % 2 == 0 {
-        (format!("{kernel_name}x2").leak(), 2)
+    let work_per_threadgroup = length / out_length;
+
+    let (name, granularity) = if work_per_threadgroup % 4 == 0 {
+        (format!("{kernel_name}x4").leak(), 1)
+    } else if work_per_threadgroup % 2 == 0 {
+        (format!("{kernel_name}x2").leak(), 1)
     } else {
         (format!("{kernel_name}").leak(), 1)
     };
-    println!("{name} el_to_sum:{elements_to_sum} g:{granularity} l:{length} o:{out_length}");
-    */
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -646,7 +650,7 @@ pub fn call_reduce_strided(
             shape.len(),
             shape,
             strides,
-            elements_to_sum,
+            work_per_threadgroup,
             (input, input_offset),
             output,
             out_length
@@ -659,18 +663,23 @@ pub fn call_reduce_strided(
         depth: 1,
     };
 
+    let work_split = work_per_threadgroup / (2 * granularity);
+    let mut w = 2;
+    while w < work_split {
+        w *= 2;
+    }
+
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        (elements_to_sum as u64 + 1) / 2,
-    )
-    .next_power_of_two();
+        w as NSUInteger,
+    );
 
     let thread_group_size = MTLSize {
         width,
         height: 1,
         depth: 1,
     };
-
+    //println!("{kernel_name}: work_per_threadgroup:{work_per_threadgroup} g:{granularity} l:{length} o:{out_length} width:{width} w:{w} tgc:{thread_group_count:?} tgs:{thread_group_size:?}");
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -685,31 +694,33 @@ pub fn call_last_softmax(
     kernels: &Kernels,
     kernel_name: &'static str,
     length: usize,
-    elements_to_sum: usize,
+    elements: usize,
     input: &Buffer,
     input_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    /*
-    let (name, granularity) = if elements_to_sum % 4 == 0 {
-        (format!("{kernel_name}x4").leak(), 4)
-    } else if elements_to_sum % 2 == 0 {
-        (format!("{kernel_name}x2").leak(), 2)
-    } else {
-        (format!("{kernel_name}").leak(), 1)
-    };
-    */
 
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let work_per_threadgroup = elements;
+    let granularity = 1;
+    let name = kernel_name;
+    //let (name, granularity) = if work_per_threadgroup % 4 == 0 {
+    //    (format!("{kernel_name}x4").leak(), 4)
+    //} else if work_per_threadgroup % 2 == 0 {
+    //    (format!("{kernel_name}x2").leak(), 2)
+    //} else {
+    //    (format!("{kernel_name}").leak(), 1)
+    //};
+
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, name)?;
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
         encoder,
-        (length, elements_to_sum, (input, input_offset), output)
+        (length, work_per_threadgroup, (input, input_offset), output)
     );
 
-    let out_length = length / elements_to_sum;
+    let out_length = length / work_per_threadgroup;
     //println!("{name} el_to_sum:{elements_to_sum} g:{granularity} l:{length} o:{out_length}");
 
     let thread_group_count = MTLSize {
@@ -718,9 +729,15 @@ pub fn call_last_softmax(
         depth: 1,
     };
 
+    let work_split = work_per_threadgroup / (2 * granularity);
+    let mut w = 2;
+    while w < work_split {
+        w *= 2;
+    }
+
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        (elements_to_sum as u64 + 1) / 2,
+        w as NSUInteger,
     )
     .next_power_of_two();
 
