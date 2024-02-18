@@ -109,6 +109,14 @@ impl ConvTranspose1d {
     pub fn config(&self) -> &ConvTranspose1dConfig {
         &self.config
     }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
 }
 
 impl crate::Module for ConvTranspose1d {
@@ -257,6 +265,14 @@ impl ConvTranspose2d {
 
     pub fn config(&self) -> &ConvTranspose2dConfig {
         &self.config
+    }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
     }
 }
 
