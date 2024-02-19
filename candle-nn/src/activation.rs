@@ -30,7 +30,7 @@ impl super::Module for Activation {
             Self::Relu => xs.relu(),
             Self::Relu2 => xs.relu()?.sqr(),
             Self::Relu6 => xs.clamp(0f32, 6f32),
-            Self::Silu => crate::ops::silu(xs),
+            Self::Silu => xs.silu(),
             Self::Sigmoid => crate::ops::sigmoid(xs),
             Self::HardSigmoid => crate::ops::hard_sigmoid(xs),
             Self::Swiglu => crate::ops::swiglu(xs),

@@ -121,6 +121,13 @@ fn unary_op(device: &Device) -> Result<()> {
         ]
     );
     assert_eq!(
+        test_utils::to_vec2_round(&tensor.silu()?, 4)?,
+        [
+            [-0.1423, 0.7311, 3.9281, -0.0475, 0.3112],
+            [2.53, -0.2553, -0.1205, 1.5447, 2.6395]
+        ]
+    );
+    assert_eq!(
         test_utils::to_vec2_round(&tensor.ceil()?, 4)?,
         [[-3.0, 1.0, 4.0, -0.0, 1.0], [3.0, -1.0, -0.0, 2.0, 3.0]]
     );

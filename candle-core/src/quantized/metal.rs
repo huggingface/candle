@@ -1,5 +1,6 @@
 use super::{GgmlDType, QStorage};
-use crate::{DType, MetalDevice, MetalStorage, Result};
+use crate::backend::BackendStorage;
+use crate::{DType, MetalDevice, MetalStorage, Result, Shape};
 use metal::Buffer;
 use std::sync::Arc;
 
@@ -10,20 +11,26 @@ pub struct QMetalStorage {
 }
 
 impl QMetalStorage {
+    pub fn zeros(device: &MetalDevice, elem_count: usize, dtype: GgmlDType) -> Result<Self> {
+        let size = elem_count * dtype.type_size() / dtype.block_size();
+        let buffer = device.allocate_zeros(size)?;
+        Ok(Self {
+            buffer,
+            device: device.clone(),
+            dtype,
+        })
+    }
+
     pub fn dtype(&self) -> GgmlDType {
         self.dtype
     }
 
-    pub fn buffer(&self) -> &Buffer {
-        &self.buffer
+    pub fn device(&self) -> &MetalDevice {
+        &self.device
     }
 
-    pub fn new(buffer: Arc<Buffer>, device: MetalDevice, dtype: GgmlDType) -> Self {
-        Self {
-            device,
-            buffer,
-            dtype,
-        }
+    pub fn buffer(&self) -> &Buffer {
+        &self.buffer
     }
 
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
@@ -130,6 +137,59 @@ impl QMetalStorage {
         self.buffer = buffer;
         Ok(())
     }
+
+    pub fn storage_size_in_bytes(&self) -> usize {
+        self.buffer.length() as usize
+    }
+
+    pub fn fwd(
+        &self,
+        self_shape: &Shape,
+        storage: &MetalStorage,
+        layout: &crate::Layout,
+    ) -> Result<(MetalStorage, Shape)> {
+        use crate::MetalError;
+
+        if !layout.is_contiguous() {
+            crate::bail!("input tensor is not contiguous {layout:?}")
+        }
+        let src_shape = layout.shape();
+        // self is transposed so n is first then k.
+        if src_shape.rank() < 2 {
+            crate::bail!("input tensor has only one dimension {layout:?}")
+        }
+        let (n, k) = self_shape.dims2()?;
+        let mut dst_shape = src_shape.dims().to_vec();
+
+        let (b, m) = match dst_shape.len() {
+            3 => (dst_shape[0], dst_shape[1]),
+            2 => (1, dst_shape[0]),
+            n => crate::bail!("Invalid rank {n} for quantized matmul metal"),
+        };
+        let last_k = dst_shape.pop().unwrap();
+        if last_k != k {
+            crate::bail!("input tensor {layout:?} incompatible with {:?}", self_shape)
+        }
+        dst_shape.push(n);
+        let dst_shape = Shape::from(dst_shape);
+        let device = storage.device().clone();
+        let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
+        let command_buffer = device.command_buffer()?;
+        candle_metal_kernels::call_quantized_matmul_t(
+            device.device(),
+            &command_buffer,
+            device.kernels(),
+            self.dtype.into(),
+            (b, m, n, k),
+            storage.buffer(),
+            layout.start_offset() * storage.dtype().size_in_bytes(),
+            &self.buffer,
+            &dst,
+        )
+        .map_err(MetalError::from)?;
+        let dst_storage = crate::MetalStorage::new(dst, device, DType::F32);
+        Ok((dst_storage, dst_shape))
+    }
 }
 
 pub fn load_quantized_metal<T: super::GgmlType + Send + Sync + 'static>(
@@ -150,4 +210,25 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     assert!(!ptr.is_null());
     let slice = unsafe { std::slice::from_raw_parts(ptr, n) };
     slice.to_vec()
+}
+
+impl From<GgmlDType> for candle_metal_kernels::GgmlDType {
+    fn from(value: GgmlDType) -> Self {
+        match value {
+            GgmlDType::Q4_0 => candle_metal_kernels::GgmlDType::Q4_0,
+            GgmlDType::Q4_1 => candle_metal_kernels::GgmlDType::Q4_1,
+            GgmlDType::Q5_0 => candle_metal_kernels::GgmlDType::Q5_0,
+            GgmlDType::Q5_1 => candle_metal_kernels::GgmlDType::Q5_1,
+            GgmlDType::Q8_0 => candle_metal_kernels::GgmlDType::Q8_0,
+            GgmlDType::Q8_1 => candle_metal_kernels::GgmlDType::Q8_1,
+            GgmlDType::Q2K => candle_metal_kernels::GgmlDType::Q2K,
+            GgmlDType::Q3K => candle_metal_kernels::GgmlDType::Q3K,
+            GgmlDType::Q4K => candle_metal_kernels::GgmlDType::Q4K,
+            GgmlDType::Q5K => candle_metal_kernels::GgmlDType::Q5K,
+            GgmlDType::Q6K => candle_metal_kernels::GgmlDType::Q6K,
+            GgmlDType::Q8K => candle_metal_kernels::GgmlDType::Q8K,
+            GgmlDType::F16 => candle_metal_kernels::GgmlDType::F16,
+            GgmlDType::F32 => candle_metal_kernels::GgmlDType::F32,
+        }
+    }
 }

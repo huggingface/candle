@@ -8,6 +8,13 @@ Card](https://huggingface.co/stabilityai/stablelm-3b-4e1t).
 Note that this model is gated so you will have to request access on the Hub in
 order to be able to use it.
 
+Other available models are Stable-Code-3B, StableLM-2 and Zephyr variants.
+
+StableLM-2 uses a Tiktoken based GPT-3.5/GPT-4 tokenizer not supported by
+Candle, so to run it you can download a somewhat compatible
+[tokenizer.json](https://huggingface.co/Xenova/gpt-4/resolve/main/tokenizer.json?download=true)
+and pass it via the --tokenizer-file argument.
+
 ## Running some example
 
 ```bash

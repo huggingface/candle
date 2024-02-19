@@ -14,9 +14,9 @@ struct RmsNorm {
 }
 
 impl RmsNorm {
-    fn new(scale: QTensor, eps: f32, device: &Device) -> Result<Self> {
+    fn new(scale: QTensor, eps: f32) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let scale = scale.dequantize(device)?;
+        let scale = scale.dequantize(&scale.device())?;
         let inner = candle_nn::LayerNorm::rms_norm(scale, eps as f64);
         Ok(Self { inner, span })
     }
@@ -273,7 +273,6 @@ pub struct ModelWeights {
     masks: HashMap<usize, Tensor>,
     span: tracing::Span,
     span_output: tracing::Span,
-    device: Device,
 }
 
 fn precomput_freqs_cis(
@@ -296,12 +295,12 @@ fn precomput_freqs_cis(
 }
 
 impl ModelWeights {
-    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize, device: &Device) -> Result<Self> {
+    pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
-        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., device)?;
+        let (cos, sin) = precomput_freqs_cis(head_dim, 10000., &ct.device)?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
-        let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let norm = RmsNorm::new(ct.remove("norm.weight")?, 1e-5, device)?;
+        let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
+        let norm = RmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
         for layer_idx in 0..ct.hparams.n_layer {
@@ -330,9 +329,9 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::new(attention_norm, 1e-5, device)?,
+                attention_norm: RmsNorm::new(attention_norm, 1e-5)?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::new(ffn_norm, 1e-5, device)?,
+                ffn_norm: RmsNorm::new(ffn_norm, 1e-5)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
                 head_dim: (ct.hparams.n_embd / ct.hparams.n_head) as usize,
@@ -354,7 +353,6 @@ impl ModelWeights {
             masks: HashMap::new(),
             span,
             span_output,
-            device: device.clone(),
         })
     }
 
@@ -393,7 +391,6 @@ impl ModelWeights {
         let norm = RmsNorm::new(
             ct.tensor(reader, "output_norm.weight", device)?,
             rms_norm_eps,
-            device,
         )?;
         let output = ct.tensor(reader, "output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
@@ -450,9 +447,9 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::new(attention_norm, rms_norm_eps, device)?,
+                attention_norm: RmsNorm::new(attention_norm, rms_norm_eps)?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::new(ffn_norm, rms_norm_eps, device)?,
+                ffn_norm: RmsNorm::new(ffn_norm, rms_norm_eps)?,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
@@ -474,18 +471,17 @@ impl ModelWeights {
             masks: HashMap::new(),
             span,
             span_output,
-            device: device.clone(),
         })
     }
 
-    fn mask(&mut self, t: usize) -> Result<Tensor> {
+    fn mask(&mut self, t: usize, device: &Device) -> Result<Tensor> {
         if let Some(mask) = self.masks.get(&t) {
             Ok(mask.clone())
         } else {
             let mask: Vec<_> = (0..t)
                 .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
                 .collect();
-            let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
+            let mask = Tensor::from_slice(&mask, (t, t), device)?;
             self.masks.insert(t, mask.clone());
             Ok(mask)
         }
@@ -493,7 +489,7 @@ impl ModelWeights {
 
     pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
-        let mask = self.mask(seq_len)?;
+        let mask = self.mask(seq_len, x.device())?;
         let _enter = self.span.enter();
         let mut layer_in = self.tok_embeddings.forward(x)?;
         for layer in self.layers.iter_mut() {

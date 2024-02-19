@@ -232,6 +232,25 @@ fn gelu_f32() {
 }
 
 #[test]
+fn silu_f16() {
+    let v: Vec<f16> = [-10f32, -1.0, 0., 1., 2., 3., 10.0, 20.0]
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect();
+    let expected: Vec<f32> = vec![-0.0, -0.27, 0.0, 0.73, 1.76, 2.86, 10.0, 20.0];
+    let results = run(&v, unary::contiguous::silu::HALF);
+    assert_eq!(approx_f16(results, 2), expected);
+}
+
+#[test]
+fn silu_f32() {
+    let v: Vec<f32> = vec![-10f32, -1.0, 0., 1., 2., 3., 10.0, 20.0];
+    let expected: Vec<f32> = vec![-0.0, -0.269, 0.0, 0.731, 1.762, 2.858, 10.0, 20.0];
+    let results = run(&v, unary::contiguous::silu::FLOAT);
+    assert_eq!(approx(results, 3), expected);
+}
+
+#[test]
 fn binary_add_f32() {
     let left = vec![1.0f32, 2.0, 3.0];
     let right = vec![2.0f32, 3.1, 4.2];

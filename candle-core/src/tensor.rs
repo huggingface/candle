@@ -508,6 +508,7 @@ impl Tensor {
     unary_op!(gelu_erf, GeluErf);
     unary_op!(erf, Erf);
     unary_op!(relu, Relu);
+    unary_op!(silu, Silu);
     unary_op!(ceil, Ceil);
     unary_op!(floor, Floor);
     unary_op!(round, Round);
@@ -801,6 +802,35 @@ impl Tensor {
             Ok(sum)
         } else {
             sum.squeeze_dims(&sum_dims)
+        }
+    }
+
+    /// Roll the tensor input along the given dimension.
+    /// Elements that are shifted beyond the last position are re-introduced at the first position.
+    ///
+    /// ```rust
+    /// # use candle_core::{Tensor, Device};
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.roll(1, 0)?;
+    /// assert_eq!(tensor.to_vec2::<f32>()?, &[[4., 5.], [0., 1.], [2., 3.]]);
+    /// let tensor = Tensor::new(&[[0f32, 1.], [2., 3.], [4., 5.]], &Device::Cpu)?;
+    /// let tensor = tensor.roll(-1, 0)?;
+    /// assert_eq!(tensor.to_vec2::<f32>()?, &[[2., 3.], [4., 5.], [0., 1.]]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
+    pub fn roll<D>(&self, shift: i32, dim: D) -> Result<Self>
+    where
+        D: Dim + Clone,
+    {
+        let dim = dim.to_index(self.shape(), "roll")?;
+        let dim_size = self.dim(dim)?;
+        let shift = shift.rem_euclid(dim_size as i32) as usize;
+        if shift == 0 {
+            Ok(self.clone())
+        } else {
+            let a = self.narrow(dim, 0, dim_size - shift)?;
+            let b = self.narrow(dim, dim_size - shift, shift)?;
+            Tensor::cat(&[&b, &a], dim)
         }
     }
 
@@ -1853,9 +1883,9 @@ impl Tensor {
     /// this new node. The storage of this tensor is shared with the initial tensor.
     ///
     /// If the tensor is already detached from the computation graph, the same tensor is returned.
-    pub fn detach(&self) -> Result<Tensor> {
+    pub fn detach(&self) -> Tensor {
         if self.op.is_none() && !self.is_variable {
-            Ok(self.clone())
+            self.clone()
         } else {
             let tensor_ = Tensor_ {
                 id: TensorId::new(),
@@ -1866,7 +1896,7 @@ impl Tensor {
                 dtype: self.dtype,
                 device: self.device.clone(),
             };
-            Ok(Tensor(Arc::new(tensor_)))
+            Tensor(Arc::new(tensor_))
         }
     }
 

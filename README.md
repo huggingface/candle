@@ -65,8 +65,9 @@ We also provide a some command line based examples using state of the art models
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
 - [Phi-1, Phi-1.5, and Phi-2](./candle-examples/examples/phi/): 1.3b and 2.7b general LLMs with performance on par with LLaMA-v2 7b.
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
-  pre-trained on 1T tokens of English and code datasets.
-- [Minimal Mamba](./candle-examples/examples/mamba-minimal/): a minimal
+  pre-trained on 1T tokens of English and code datasets. Also supports
+  StableLM-2, a 1.6b LLM trained on 2T tokens, as well as the code variants.
+- [Mamba](./candle-examples/examples/mamba/): an inference only
   implementation of the Mamba state space model.
 - [Mistral7b-v0.1](./candle-examples/examples/mistral/): a 7b general LLM with
   better performance than all publicly available 13b models as of 2023-09-28.
@@ -74,6 +75,9 @@ We also provide a some command line based examples using state of the art models
   experts 8x7b general LLM with better performance than a Llama 2 70B model with
   much faster inference.
 - [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
+- [Qwen1.5](./candle-examples/examples/qwen/): Bilingual (English/Chinese) LLMs.
+- [RWKV v5](./candle-examples/examples/rwkv/): An RNN with transformer level LLM
+  performance.
 - [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Yi-6B / Yi-34B](./candle-examples/examples/yi/): two bilingual
   (English/Chinese) general LLMs with 6b and 34b parameters.
@@ -112,8 +116,9 @@ We also provide a some command line based examples using state of the art models
 - [VGG](./candle-examples/examples/vgg/),
   [RepVGG](./candle-examples/examples/repvgg): computer vision models.
 - [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
-- [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
   generate captions for an image.
+- [TrOCR](./candle-examples/examples/trocr/): a transformer OCR model, with
+  dedicated submodels for hand-writing and printed recognition.
 - [Marian-MT](./candle-examples/examples/marian-mt/): neural machine translation
   model, generates the translated text from the input text.
 
@@ -184,13 +189,15 @@ If you have an addition to this list, please submit a pull request.
         - Falcon.
         - StarCoder.
         - Phi 1, 1.5, and 2.
-        - Minimal Mamba
+        - Mamba, Minimal Mamba
         - Mistral 7b v0.1.
         - Mixtral 8x7b v0.1.
-        - StableLM-3B-4E1T.
+        - StableLM-3B-4E1T, StableLM-2-1.6B, Stable-Code-3B.
         - Replit-code-v1.5-3B.
         - Bert.
         - Yi-6B and Yi-34B.
+        - Qwen1.5.
+        - RWKV.
     - Quantized LLMs.
         - Llama 7b, 13b, 70b, as well as the chat and code variants.
         - Mistral 7b, and 7b instruct.
@@ -206,8 +213,10 @@ If you have an addition to this list, please submit a pull request.
         - Wurstchen v2.
     - Image to text.
         - BLIP.
+        - TrOCR.
     - Computer Vision Models.
-        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG.
+        - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
+          ConvNeXTv2.
         - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
