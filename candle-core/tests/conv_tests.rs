@@ -18,6 +18,9 @@ w_t = w.transpose(0, 1)
 res = torch.nn.functional.conv_transpose1d(t, w_t)
 print(res.shape)
 print(res)
+res = torch.nn.functional.conv_transpose1d(t, w_t, groups=2)
+print(res.shape)
+print(res)
 */
 fn conv1d(dev: &Device) -> Result<()> {
     let t = Tensor::new(
@@ -58,6 +61,17 @@ fn conv1d(dev: &Device) -> Result<()> {
             0.0699, -1.2899, 8.3018, 5.5873, 2.4572, -2.6143, -0.0706, 1.8765, 4.8318, 1.1538,
             4.7076, -5.9745, -0.8276, 1.621
         ],
+    );
+    let res = t.conv_transpose1d(&w.transpose(0, 1)?, 0, 0, 1, 1, 2)?;
+    assert_eq!(res.dims(), [1, 4, 7]);
+    assert_eq!(
+        test_utils::to_vec2_round(&res.squeeze(0)?, 4)?,
+        [
+            [-1.5596, -1.8099, 2.0407, 4.8764, -0.1743, -0.735, -0.7819],
+            [0.7816, 3.8152, -0.5926, 2.2515, -5.1844, -0.3157, 1.4721],
+            [0.2078, -1.1815, -3.9922, -0.1274, -0.0157, 1.9521, -1.0745],
+            [-4.0576, 4.9815, -2.4332, 7.0124, 0.4011, 0.7971, -0.2763]
+        ]
     );
     Ok(())
 }
