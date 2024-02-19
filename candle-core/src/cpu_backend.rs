@@ -1263,6 +1263,7 @@ impl<'a> Map2 for ConvTranspose1D<'a> {
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
         let inp = &inp[inp_l.start_offset()..];
+        let k = &k[k_l.start_offset()..];
         let (inp_s0, inp_s1, inp_s2) = crate::shape::dims3(inp_l.stride())?;
         let (k_s0, k_s1, k_s2) = crate::shape::dims3(k_l.stride())?;
         let l_out = p.l_out();
