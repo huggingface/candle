@@ -2575,7 +2575,7 @@ impl BackendStorage for CpuStorage {
             Self::U8(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
             Self::U32(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
             Self::I64(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-select")),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-select").bt()),
         }
     }
 
@@ -2584,7 +2584,7 @@ impl BackendStorage for CpuStorage {
             Self::U8(ids) => Gather { ids, ids_l, dim }.map(self, l),
             Self::U32(ids) => Gather { ids, ids_l, dim }.map(self, l),
             Self::I64(ids) => Gather { ids, ids_l, dim }.map(self, l),
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "gather")),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "gather").bt()),
         }
     }
 
@@ -2601,7 +2601,7 @@ impl BackendStorage for CpuStorage {
             Self::U8(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
             Self::U32(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
             Self::I64(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter-add")),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter-add").bt()),
         }
     }
 
