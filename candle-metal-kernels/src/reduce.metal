@@ -893,7 +893,6 @@ METAL_FUNC void reduce(
     ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
     using I = indexed<make_scalar_t<T>>;
-
     loader<T, indexed<T>, ReductionOp, BLOCKSIZE, STRIDED> load;
     block_reducer<I, ReductionOp, BLOCKSIZE> block_reduce(shared);
 
@@ -1033,24 +1032,49 @@ struct operation<OP, MD<T>, typename metal::enable_if_t<is_scalar_v<T>>> {
     }
 };
 
-// Specialization for MD vector values.
 template<typename OP, typename T>
-struct operation<OP, MD<T>, typename metal::enable_if_t<is_vector_v<T>>> {
+struct operation<OP, MD<vec<T, 2>>> {
+    using V = vec<T, 2>;
     OP op;
 
-    METAL_FUNC MD<T> operator()(MD<T> a, MD<T> b) {
-        #pragma clang loop unroll(full)
-        for (ushort n = 0; n < vec_elements<T>::value; n++) {
-            a[n] = op(a[n], b[n]);
-        }
-        return a;
+    METAL_FUNC MD<V> operator()(MD<V> a, MD<V> b) {
+        MD<T> x = op(a[0], b[0]);
+        MD<T> y = op(a[1], b[1]);
+        return MD<V>{
+            V { x.m, y.m },
+            V { x.d, y.d }
+        };
     }
-    METAL_FUNC MD<T> operator()(MD<T> a, T b, uint idx) {
-        #pragma clang loop unroll(full)
-        for (ushort n = 0; n < vec_elements<T>::value; n++) {
-            a[n] = op(a[n], MD<make_scalar_t<T>>{ b[n], static_cast<make_scalar_t<T>>(1.0) });
-        }
-        return a;
+    METAL_FUNC MD<V> operator()(MD<V> a, V b, uint _i) {
+        return this->operator()(a, MD<V>{ b, V(static_cast<T>(1.0)) });
+    }
+
+    METAL_FUNC MD<V> operator()(MD<V> a, V b, uint4 _i) {
+        return this->operator()(a, MD<V>{ b, V(static_cast<T>(1.0)) });
+    }
+};
+
+template<typename OP, typename T>
+struct operation<OP, MD<vec<T, 4>>> {
+    using V = vec<T, 4>;
+    OP op;
+
+    METAL_FUNC MD<V> operator()(MD<V> a, MD<V> b) {
+        MD<T> x = op(a[0], b[0]);
+        MD<T> y = op(a[1], b[1]);
+        MD<T> z = op(a[2], b[2]);
+        MD<T> w = op(a[3], b[3]);
+        return MD<V>{
+            V { x.m, y.m, z.m, w.m },
+            V { x.d, y.d, z.d, w.d }
+        };
+    }
+    METAL_FUNC MD<V> operator()(MD<V> a, V b, uint _i) {
+        return this->operator()(a, MD<V>{ b, V(static_cast<T>(1.0)) });
+    }
+
+    METAL_FUNC MD<V> operator()(MD<V> a, V b, uint4 _i) {
+        return this->operator()(a, MD<V>{ b, V(static_cast<T>(1.0)) });
     }
 };
 
@@ -1068,7 +1092,7 @@ METAL_FUNC MD<T> finalize(MD<vec<T, 2>> v) {
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
 METAL_FUNC MD<T> finalize(MD<vec<T, 4>> v) {
     OP op;
-    return op(op(v[0], v[1]),op(v[2], v[3]));
+    return op(op(v[0], v[1]), op(v[2], v[3]));
 }
 
 template <typename T>
@@ -1143,14 +1167,12 @@ struct finalize_softmax<T, BLOCKSIZE, typename metal::enable_if_t<is_vector_v<T>
         const uint thread_id,
         const uint stop_idx
     ) {
+        const device make_scalar_t<T>*__restrict in = reinterpret_cast<const device make_scalar_t<T> *__restrict>(src);
         const make_scalar_t<T> d_total_inverse = divide(static_cast<make_scalar_t<T>>(1.0), md_total.d);
 
         #pragma clang loop unroll(full)
         for (uint idx = thread_id; idx < stop_idx; idx += BLOCKSIZE) {
-            #pragma clang loop unroll(full)
-            for (uint i = 0; i < granularity<T>(); i++) {
-                dst[idx + i] = exp(src[idx][i] - md_total.m) * d_total_inverse;
-            }
+            dst[idx] = exp(in[idx] - md_total.m) * d_total_inverse;
         }
     }
 };
@@ -1163,15 +1185,17 @@ METAL_FUNC void softmax(
     constant ushort &el_per_block,
     const device T *src,
     device make_scalar_t<T> *dst,
-    threadgroup MD<T> shared[BLOCKSIZE],
+    threadgroup MD<make_scalar_t<T>> shared[BLOCKSIZE],
     threadgroup MD<make_scalar_t<T>> &md_total,
 
     ushort tid [[ thread_index_in_threadgroup ]],
     ushort dst_id [[ threadgroup_position_in_grid ]]
 ) {
-    using MDReduceOp = MDReduceOp<make_scalar_t<T>>;
+    using ST = make_scalar_t<T>;
+    using MDReduceOp = MDReduceOp<ST>;
+
     loader<T, MD<T>, MDReduceOp, BLOCKSIZE> load;
-    block_reducer<MD<T>, MDReduceOp, BLOCKSIZE> block_reduce(shared);
+    block_reducer<MD<ST>, MDReduceOp, BLOCKSIZE> block_reduce(shared);
     finalize_softmax<T, BLOCKSIZE> softmax_finalize;
 
     // Calcluate offset for the threadgroup of current thread;
@@ -1189,9 +1213,9 @@ METAL_FUNC void softmax(
     );
 
     // Reduce in shared memory
-    MD<T> md = block_reduce(md_partial, tid);
+    MD<ST> md = block_reduce(finalize<MDReduceOp>(md_partial), tid);
 
-    if (tid == 0) md_total = finalize<MDReduceOp>(md);
+    if (tid == 0) md_total = md;
     threadgroup_barrier(mem_flags::mem_none);
 
     // Finalize softmax
@@ -1202,11 +1226,10 @@ METAL_FUNC void softmax(
 
 #define softmax_case(T, N)                              \
 case N: {                                               \
-    if (N / GRANULARITY == 0) break;                    \
-    constexpr uint B = nonzero<N / GRANULARITY>();      \
-    threadgroup MD<T> shared[B];                        \
-    threadgroup MD<make_scalar_t<T>> md_total;          \
-    softmax<T, B>(                                      \
+    using SMDT = MD<make_scalar_t<T>>;                  \
+    threadgroup SMDT shared[N];                         \
+    threadgroup SMDT md_total;                          \
+    softmax<T, N>(                                      \
         src_numel,                                      \
         el_per_block,                                   \
         src,                                            \
@@ -1229,8 +1252,7 @@ kernel void NAME(                                       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
     ushort block_dim [[ threads_per_threadgroup ]]      \
 ) {                                                     \
-    constexpr uint GRANULARITY = granularity<T>();      \
-    switch (block_dim) {                                \
+    switch (max_shared_mem<T>(block_dim)) {             \
         softmax_case(T, 1024);                          \
         softmax_case(T,  512);                          \
         softmax_case(T,  256);                          \

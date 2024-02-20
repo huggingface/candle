@@ -569,8 +569,6 @@ pub fn call_reduce_contiguous(
     } else {
         (format!("{kernel_name}").leak(), 1)
     };
-    //let name = kernel_name; //format!("{kernel_name}x2").leak();
-    //let granularity = 1;
     let pipeline = kernels.load_pipeline(device, Source::Reduce, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
@@ -699,17 +697,14 @@ pub fn call_last_softmax(
     input_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-
     let work_per_threadgroup = elements;
-    let granularity = 1;
-    let name = kernel_name;
-    //let (name, granularity) = if work_per_threadgroup % 4 == 0 {
-    //    (format!("{kernel_name}x4").leak(), 4)
-    //} else if work_per_threadgroup % 2 == 0 {
-    //    (format!("{kernel_name}x2").leak(), 2)
-    //} else {
-    //    (format!("{kernel_name}").leak(), 1)
-    //};
+    let (name, granularity) = if work_per_threadgroup % 4 == 0 {
+        (format!("{kernel_name}x4").leak(), 4)
+    } else if work_per_threadgroup % 2 == 0 {
+        (format!("{kernel_name}x2").leak(), 2)
+    } else {
+        (format!("{kernel_name}").leak(), 1)
+    };
 
     let pipeline = kernels.load_pipeline(device, Source::Reduce, name)?;
     let encoder = command_buffer.new_compute_command_encoder();
@@ -721,10 +716,9 @@ pub fn call_last_softmax(
     );
 
     let out_length = length / work_per_threadgroup;
-    //println!("{name} el_to_sum:{elements_to_sum} g:{granularity} l:{length} o:{out_length}");
 
     let thread_group_count = MTLSize {
-        width: out_length as u64,
+        width: out_length as NSUInteger,
         height: 1,
         depth: 1,
     };
@@ -734,19 +728,19 @@ pub fn call_last_softmax(
     while w < work_split {
         w *= 2;
     }
+    w *= 2;
 
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
         w as NSUInteger,
-    )
-    .next_power_of_two();
+    );
 
     let thread_group_size = MTLSize {
         width,
         height: 1,
         depth: 1,
     };
-
+    //println!("{kernel_name}: work_per_threadgroup:{work_per_threadgroup} g:1 l:{length} o:{out_length} width:{width} w:{w} tgc:{thread_group_count:?} tgs:{thread_group_size:?}");
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
