@@ -195,8 +195,12 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let model_id = match args.model_id {
-        Some(model_id) => model_id,
+    let model_id = match &args.model_id {
+        Some(model_id) => match model_id.as_str() {
+            "7b" => "google/gemma-7b".to_string(),
+            "2b" => "google/gemma-2b".to_string(),
+            _ => model_id.to_string(),
+        },
         None => "google/gemma-2b".to_string(),
     };
     let repo = api.repo(Repo::with_revision(
