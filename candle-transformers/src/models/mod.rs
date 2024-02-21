@@ -9,6 +9,7 @@ pub mod dinov2;
 pub mod distilbert;
 pub mod efficientnet;
 pub mod falcon;
+pub mod gemma;
 pub mod jina_bert;
 pub mod llama;
 pub mod llama2_c;
