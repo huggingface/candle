@@ -74,7 +74,7 @@ impl RotaryEmbedding {
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / 10000f32.powf(i as f32 / dim as f32))
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
@@ -308,6 +308,7 @@ pub struct Model {
     lm_head: Linear,
     device: Device,
     dtype: DType,
+    hidden_size: usize,
 }
 
 impl Model {
@@ -331,6 +332,7 @@ impl Model {
             lm_head,
             device: vb.device().clone(),
             dtype: vb.dtype(),
+            hidden_size: cfg.hidden_size,
         })
     }
 
@@ -362,7 +364,8 @@ impl Model {
             let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
             Some(mask)
         };
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
