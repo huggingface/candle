@@ -149,7 +149,6 @@ struct Attention {
     num_kv_heads: usize,
     num_kv_groups: usize,
     head_dim: usize,
-    hidden_size: usize,
     rotary_emb: Arc<RotaryEmbedding>,
     kv_cache: Option<(Tensor, Tensor)>,
 }
@@ -174,7 +173,6 @@ impl Attention {
             num_kv_heads,
             num_kv_groups,
             head_dim,
-            hidden_size: hidden_sz,
             rotary_emb,
             kv_cache: None,
         })
@@ -244,7 +242,7 @@ impl Attention {
         };
         attn_output
             .transpose(1, 2)?
-            .reshape((b_sz, q_len, self.hidden_size))?
+            .reshape((b_sz, q_len, ()))?
             .apply(&self.o_proj)
     }
 
