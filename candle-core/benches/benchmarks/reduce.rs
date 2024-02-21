@@ -6,10 +6,10 @@ use std::ops::Deref;
 use std::time::Instant;
 
 fn run_sum(a: &Tensor) {
-    a.sum(2).unwrap();
+    a.sum_keepdim(2).unwrap();
 }
 fn run_arg_min(a: &Tensor) {
-    a.argmin(2).unwrap();
+    a.argmin_keepdim(2).unwrap();
 }
 
 // TODO: Remove before merging. Softmax impls live in candle-nn, so this is a temporary workaround.
@@ -121,6 +121,7 @@ fn run_reduce<T: candle_core::FloatDType>(
     strided: bool,
 ) {
     let b = 1;
+
     let m = 1024;
     let k = 1024;
 
@@ -157,7 +158,7 @@ fn run_reduce<T: candle_core::FloatDType>(
                 "reduce_bf16"
             }
         }
-        _ => "reduce",
+        _ => "unknown",
     };
 
     let mut group = c.benchmark_group(device.bench_name(name));

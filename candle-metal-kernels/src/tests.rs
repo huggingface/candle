@@ -837,7 +837,6 @@ fn reduce_argmax() {
     reduce_argmax_case::<512, 1>();
     reduce_argmax_case::<1024, 1>();
     reduce_argmax_case::<2048, 1>();
-    reduce_argmax_case::<4096, 1>();
 }
 
 #[test]

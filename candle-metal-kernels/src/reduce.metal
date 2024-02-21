@@ -34,16 +34,16 @@ struct Divide {
     template<typename T>
     METAL_FUNC T operator()(T a, T b) { return a / b; }
 
-    template<> METAL_FUNC float  operator()(float  a, float  b) { return fast::divide(a, b); }
-    template<> METAL_FUNC float2 operator()(float2 a, float2 b) { return fast::divide(a, b); }
-    template<> METAL_FUNC float4 operator()(float4 a, float4 b) { return fast::divide(a, b); }
-    template<> METAL_FUNC half   operator()(half   a, half   b) { return divide(a, b); }
-    template<> METAL_FUNC half2  operator()(half2  a, half2  b) { return divide(a, b); }
-    template<> METAL_FUNC half4  operator()(half4  a, half4  b) { return divide(a, b); }
+    METAL_FUNC float  operator()(float  a, float  b) { return fast::divide(a, b); }
+    METAL_FUNC float2 operator()(float2 a, float2 b) { return fast::divide(a, b); }
+    METAL_FUNC float4 operator()(float4 a, float4 b) { return fast::divide(a, b); }
+    METAL_FUNC half   operator()(half   a, half   b) { return divide(a, b); }
+    METAL_FUNC half2  operator()(half2  a, half2  b) { return divide(a, b); }
+    METAL_FUNC half4  operator()(half4  a, half4  b) { return divide(a, b); }
     #if defined(__HAVE_BFLOAT__)
-    template<> METAL_FUNC bfloat  operator()(bfloat   a,  bfloat b) { return static_cast<bfloat>(fast::divide(a, b)); }
-    template<> METAL_FUNC bfloat2 operator()(bfloat2  a, bfloat2 b) { return static_cast<bfloat2>( a / b ); }
-    template<> METAL_FUNC bfloat4 operator()(bfloat4  a, bfloat4 b) { return static_cast<bfloat4>( a / b ); }
+    METAL_FUNC bfloat  operator()(bfloat   a,  bfloat b) { return static_cast<bfloat>(fast::divide(a, b)); }
+    METAL_FUNC bfloat2 operator()(bfloat2  a, bfloat2 b) { return static_cast<bfloat2>( a / b ); }
+    METAL_FUNC bfloat4 operator()(bfloat4  a, bfloat4 b) { return static_cast<bfloat4>( a / b ); }
     #endif
 };
 
@@ -51,18 +51,15 @@ struct Exp {
     template<typename T>
     METAL_FUNC T operator()(T a) { return fast::exp(a); }
 
-    template<> METAL_FUNC float  operator()(float  a) { return fast::exp(a); }
-    template<> METAL_FUNC float2 operator()(float2 a) { return fast::exp(a); }
-    template<> METAL_FUNC float4 operator()(float4 a) { return fast::exp(a); }
-    template<> METAL_FUNC half   operator()(half   a) { return exp(a); }
-    template<> METAL_FUNC half2  operator()(half2  a) { return exp(a); }
-    template<> METAL_FUNC half4  operator()(half4  a) { return exp(a); }
+    METAL_FUNC float  operator()(float  a) { return fast::exp(a); }
+    METAL_FUNC float2 operator()(float2 a) { return fast::exp(a); }
+    METAL_FUNC float4 operator()(float4 a) { return fast::exp(a); }
+    METAL_FUNC half   operator()(half   a) { return exp(a); }
+    METAL_FUNC half2  operator()(half2  a) { return exp(a); }
+    METAL_FUNC half4  operator()(half4  a) { return exp(a); }
     #if defined(__HAVE_BFLOAT__)
-    template<>
     METAL_FUNC bfloat  operator()(bfloat  a) { return static_cast<bfloat>(fast::exp(a)); }
-    template<>
     METAL_FUNC bfloat2 operator()(bfloat2 a) { return static_cast<bfloat2>(fast::exp(static_cast<float2>(a))); }
-    template<>
     METAL_FUNC bfloat4 operator()(bfloat4 a) { return static_cast<bfloat4>(fast::exp(static_cast<float4>(a))); }
     #endif
 };
@@ -87,7 +84,6 @@ METAL_FUNC size_t get_strided_index(
 // There are two specializations of the indexed class, one for scalar values and one for vector values.
 template <typename T, typename = void>
 struct indexed;
-
 
 template <typename T>
 struct is_indexed_type {
@@ -178,14 +174,11 @@ METAL_FUNC bfloat simd_shuffle_down(bfloat value, ushort delta) {
     return static_cast<bfloat>(simd_shuffle_down(static_cast<float>(value), delta));
 }
 
-METAL_FUNC vec<bfloat, 2> simd_shuffle_down(vec<bfloat, 2> value, ushort delta) {
-    return as_type<vec<bfloat, 2>>(simd_shuffle_down(as_type<float>(value), delta));
-}
-
 template<uint N>
 METAL_FUNC vec<bfloat, N> simd_shuffle_down(vec<bfloat, N> value, ushort delta) {
     return as_type<vec<bfloat, N>>(simd_shuffle_down(as_type<vec<float, N / 2>>(value), delta));
 }
+
 #endif
 
 template <typename T>
@@ -238,20 +231,17 @@ struct Min {
     template<typename V>
     METAL_FUNC V operator()(V a, V b) { return a < b ? a : b; }
 
-    template<> METAL_FUNC float operator()(float a, float b) { return fast::min(a, b); }
-    template<> METAL_FUNC float2 operator()(float2 a, float2 b) { return fast::min(a, b); }
-    template<> METAL_FUNC float4 operator()(float4 a, float4 b) { return fast::min(a, b); }
-    template<> METAL_FUNC half operator()(half a, half b) { return min(a, b); }
-    template<> METAL_FUNC half2 operator()(half2 a, half2 b) { return min(a, b); }
-    template<> METAL_FUNC half4 operator()(half4 a, half4 b) { return min(a, b); }
+    METAL_FUNC float operator()(float a, float b) { return fast::min(a, b); }
+    METAL_FUNC float2 operator()(float2 a, float2 b) { return fast::min(a, b); }
+    METAL_FUNC float4 operator()(float4 a, float4 b) { return fast::min(a, b); }
+    METAL_FUNC half operator()(half a, half b) { return min(a, b); }
+    METAL_FUNC half2 operator()(half2 a, half2 b) { return min(a, b); }
+    METAL_FUNC half4 operator()(half4 a, half4 b) { return min(a, b); }
 
     #if defined(__HAVE_BFLOAT__)
-    template <>
     METAL_FUNC bfloat operator()(bfloat a, bfloat b) { return static_cast<bfloat>(fast::min(static_cast<float>(a), static_cast<float>(b))); }
-    template <>
-    METAL_FUNC bfloat2 operator()(bfloat2 a, bfloat2 b) { return static_cast<bfloat2>(fast::min(static_cast<float2>(a), static_cast<float2>(b))); }
-    template <>
-    METAL_FUNC bfloat4 operator()(bfloat4 a, bfloat4 b) { return static_cast<bfloat4>(fast::min(static_cast<float4>(a), static_cast<float4>(b))); }
+    METAL_FUNC bfloat2 operator()(bfloat2 a, bfloat2 b) { return as_type<bfloat2>(fast::min(as_type<float>(a), as_type<float>(b))); }
+    METAL_FUNC bfloat4 operator()(bfloat4 a, bfloat4 b) { return as_type<bfloat4>(fast::min(as_type<float2>(a), as_type<float2>(b))); }
     #endif
 };
 
@@ -267,20 +257,17 @@ struct Max {
     template<typename V>
     METAL_FUNC V operator()(V a, V b) { return a > b ? a : b; }
 
-    template<> METAL_FUNC float operator()(float a, float b) { return fast::max(a, b); }
-    template<> METAL_FUNC float2 operator()(float2 a, float2 b) { return fast::max(a, b); }
-    template<> METAL_FUNC float4 operator()(float4 a, float4 b) { return fast::max(a, b); }
-    template<> METAL_FUNC half operator()(half a, half b) { return max(a, b); }
-    template<> METAL_FUNC half2 operator()(half2 a, half2 b) { return max(a, b); }
-    template<> METAL_FUNC half4 operator()(half4 a, half4 b) { return max(a, b); }
+    METAL_FUNC float operator()(float a, float b) { return fast::max(a, b); }
+    METAL_FUNC float2 operator()(float2 a, float2 b) { return fast::max(a, b); }
+    METAL_FUNC float4 operator()(float4 a, float4 b) { return fast::max(a, b); }
+    METAL_FUNC half operator()(half a, half b) { return max(a, b); }
+    METAL_FUNC half2 operator()(half2 a, half2 b) { return max(a, b); }
+    METAL_FUNC half4 operator()(half4 a, half4 b) { return max(a, b); }
 
     #if defined(__HAVE_BFLOAT__)
-    template <>
     METAL_FUNC bfloat operator()(bfloat a, bfloat b) { return static_cast<bfloat>(fast::max(static_cast<float>(a), static_cast<float>(b))); }
-    template <>
-    METAL_FUNC bfloat2 operator()(bfloat2 a, bfloat2 b) { return static_cast<bfloat2>(fast::max(static_cast<float2>(a), static_cast<float2>(b))); }
-    template <>
-    METAL_FUNC bfloat4 operator()(bfloat4 a, bfloat4 b) { return static_cast<bfloat4>(fast::max(static_cast<float4>(a), static_cast<float4>(b))); }
+    METAL_FUNC bfloat2 operator()(bfloat2 a, bfloat2 b) { return as_type<bfloat2>(fast::max(as_type<float>(a), as_type<float>(b))); }
+    METAL_FUNC bfloat4 operator()(bfloat4 a, bfloat4 b) { return as_type<bfloat4>(fast::max(as_type<float2>(a), as_type<float2>(b))); }
     #endif
 };
 
@@ -722,9 +709,7 @@ struct block_reducer {
 
         #pragma clang loop unroll(full)
         for (ushort s = BLOCKSIZE / 2; s >= 64; s >>= 1) {
-            if (tid < s) {
-                shared[tid] = operate(shared[tid], shared[tid + s]);
-            }
+            if (tid < s) shared[tid] = operate(shared[tid], shared[tid + s]);
             threadgroup_barrier(mem_flags::mem_none);
         }
         if (tid < 32) {
@@ -1157,18 +1142,19 @@ struct finalize_softmax<T, BLOCKSIZE, typename metal::enable_if_t<is_scalar_v<T>
 
 template<typename T, ushort BLOCKSIZE>
 struct finalize_softmax<T, BLOCKSIZE, typename metal::enable_if_t<is_vector_v<T>>> {
+    using ST = make_scalar_t<T>;
     Divide divide;
     Exp exp;
 
     METAL_FUNC void operator()(
         const device T *src,
-        device make_scalar_t<T> *dst,
-        threadgroup MD<make_scalar_t<T>> &md_total,
+        device ST *dst,
+        threadgroup MD<ST> &md_total,
         const uint thread_id,
         const uint stop_idx
     ) {
-        const device make_scalar_t<T>*__restrict in = reinterpret_cast<const device make_scalar_t<T> *__restrict>(src);
-        const make_scalar_t<T> d_total_inverse = divide(static_cast<make_scalar_t<T>>(1.0), md_total.d);
+        const device ST *__restrict in = reinterpret_cast<const device ST *__restrict>(src);
+        const ST d_total_inverse = divide(static_cast<ST>(1.0), md_total.d);
 
         #pragma clang loop unroll(full)
         for (uint idx = thread_id; idx < stop_idx; idx += BLOCKSIZE) {
