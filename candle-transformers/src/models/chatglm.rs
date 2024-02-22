@@ -1,4 +1,4 @@
-use crate::models::with_tracing::Linear;
+use crate::models::with_tracing::{linear_b as linear, Linear};
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
@@ -48,14 +48,6 @@ impl Config {
             attention_softmax_in_fp32: true,
             fp32_residual_connection: false,
         }
-    }
-}
-
-fn linear(in_dim: usize, out_dim: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
-    if bias {
-        crate::models::with_tracing::linear(in_dim, out_dim, vb)
-    } else {
-        crate::models::with_tracing::linear_no_bias(in_dim, out_dim, vb)
     }
 }
 

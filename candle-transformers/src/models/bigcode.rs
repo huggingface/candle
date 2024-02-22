@@ -1,15 +1,5 @@
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, LayerNorm, Linear, Module, VarBuilder};
-
-fn linear(size1: usize, size2: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
-    let weight = vb.get((size2, size1), "weight")?;
-    let bias = if bias {
-        Some(vb.get(size2, "bias")?)
-    } else {
-        None
-    };
-    Ok(Linear::new(weight, bias))
-}
+use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
 
 fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
     let weight = vb.get(size, "weight")?;
