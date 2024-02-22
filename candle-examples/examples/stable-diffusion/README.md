@@ -57,7 +57,7 @@ The downside is some long compilation time. You can set the
 `/home/user/.candle` to ensures that the compilation artifacts are properly
 cached.
 
-Enabling flash-attention requires both a feature flag, `--feature flash-attn`
+Enabling flash-attention requires both a feature flag, `--features flash-attn`
 and using the command line flag `--use-flash-attn`.
 
 Note that flash-attention-v2 is only compatible with Ampere, Ada, or Hopper GPUs
