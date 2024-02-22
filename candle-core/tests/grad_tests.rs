@@ -312,7 +312,7 @@ fn unary_grad(device: &Device) -> Result<()> {
     println!("grad: {grad_x}");
 
     assert_eq!(
-        test_utils::to_vec3_round(&grad_x, 4)?,
+        test_utils::to_vec3_round(grad_x, 4)?,
         [[[10_f32, 26., 42.], [58., 74., 90.], [106., 122., 138.]]]
     );
 
