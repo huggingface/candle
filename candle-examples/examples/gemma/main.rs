@@ -66,9 +66,9 @@ impl TextGeneration {
         std::io::stdout().flush()?;
 
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("</s>") {
+        let eos_token = match self.tokenizer.get_token("<eos>") {
             Some(token) => token,
-            None => anyhow::bail!("cannot find the </s> token"),
+            None => anyhow::bail!("cannot find the <eos> token"),
         };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
