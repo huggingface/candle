@@ -139,6 +139,22 @@ impl QCudaStorage {
                 layout
             )
         }
+        let (n, k) = self_shape.dims2()?;
+        let (dst_shape, m) = match layout.shape().dims() {
+            &[b, m, k2] => {
+                if k2 != k {
+                    crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", layout.shape())
+                }
+                (vec![b, m, n], b * m)
+            }
+            &[m, k2] => {
+                if k2 != k {
+                    crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", layout.shape())
+                }
+                (vec![m, n], m)
+            }
+            s => crate::bail!("unexpected shape for input {s:?}"),
+        };
 
         let dev = storage.device().clone();
         let slice = storage.as_cuda_slice::<f32>()?;
@@ -147,19 +163,19 @@ impl QCudaStorage {
             Some((o1, o2)) => slice.slice(o1..o2),
         };
         let func = dev.get_or_load_func("mul_mat_q4_0_check", candle_kernels::QUANTIZED)?;
-        let params = (&self.data, &slice);
-        let cfg = cudarc::driver::LaunchConfig {
-            grid_dim: (1, 1, 1),
-            block_dim: (1, 1, 1),
-            shared_mem_bytes: 0,
-        };
-
-        let elem_count = layout.shape().elem_count();
+        let elem_count = m * n;
         let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+        let params = (
+            &self.data, &slice, &dst, /* ncols_x */ k, /* nrows_x */ n,
+            /* ncols_y */ k, /* nrows_y */ m, /* nrows_dst */ m,
+        );
+
+        let cfg = cudarc::driver::LaunchConfig::for_num_elems(elem_count as u32);
+
         unsafe { func.launch(cfg, params) }.w()?;
 
         let dst = CudaStorage::wrap_cuda_slice(dst, dev);
-        Ok((dst, layout.shape().clone()))
+        Ok((dst, dst_shape.into()))
     }
 }
 
