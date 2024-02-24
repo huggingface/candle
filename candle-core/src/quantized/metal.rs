@@ -192,7 +192,7 @@ impl QMetalStorage {
     }
 }
 
-pub fn load_quantized_metal<T: super::GgmlType + Send + Sync + 'static>(
+pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
     device: &MetalDevice,
     data: &[T],
 ) -> Result<QStorage> {

@@ -41,3 +41,10 @@ impl QMetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 }
+
+pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
+    _device: &MetalDevice,
+    _data: &[T],
+) -> Result<super::QStorage> {
+    Err(Error::NotCompiledWithMetalSupport)
+}
