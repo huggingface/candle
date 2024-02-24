@@ -348,8 +348,7 @@ template <int mmq_y> static __device__ __forceinline__ void allocate_tiles_q4_0(
     *x_dm = (half2 *) tile_x_d;
 }
 
-template <bool need_check> static void
-    mul_mat_q4_0(
+extern "C" __global__ void mul_mat_q4_0_check(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
     const int mmq_x  =  MMQ_X_Q4_0_AMPERE;
@@ -357,18 +356,18 @@ template <bool need_check> static void
     const int nwarps = NWARPS_Q4_0_AMPERE;
 
     mul_mat_q<QK4_0, QR4_0, QI4_0, true, block_q4_0, mmq_x, mmq_y, nwarps, allocate_tiles_q4_0<mmq_y>,
-        load_tiles_q4_0<mmq_y, nwarps, need_check>, VDR_Q4_0_Q8_1_MMQ, vec_dot_q4_0_q8_1_mul_mat>
+        load_tiles_q4_0<mmq_y, nwarps, true>, VDR_Q4_0_Q8_1_MMQ, vec_dot_q4_0_q8_1_mul_mat>
         (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
 }
 
-extern "C" void mul_mat_q4_0_check(
+extern "C" __global__ void mul_mat_q4_0_no_check(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-  mul_mat_q4_0<true>(vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
-}
+    const int mmq_x  =  MMQ_X_Q4_0_AMPERE;
+    const int mmq_y  =  MMQ_Y_Q4_0_AMPERE;
+    const int nwarps = NWARPS_Q4_0_AMPERE;
 
-extern "C" void mul_mat_q4_0_no_check(
-    const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
-    const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst) {
-  mul_mat_q4_0<false>(vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
+    mul_mat_q<QK4_0, QR4_0, QI4_0, true, block_q4_0, mmq_x, mmq_y, nwarps, allocate_tiles_q4_0<mmq_y>,
+        load_tiles_q4_0<mmq_y, nwarps, false>, VDR_Q4_0_Q8_1_MMQ, vec_dot_q4_0_q8_1_mul_mat>
+        (vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst);
 }

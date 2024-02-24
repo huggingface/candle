@@ -125,15 +125,41 @@ impl QCudaStorage {
     pub fn fwd(
         &self,
         self_shape: &crate::Shape,
-        _storage: &CudaStorage,
+        storage: &CudaStorage,
         layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
-        crate::bail!(
-            "cuda quantized fwd is not implemented for {:?} ({:?} {:?})",
-            self.dtype,
-            self_shape,
-            layout
-        )
+        use crate::backend::BackendStorage;
+        use cudarc::driver::LaunchAsync;
+
+        if self.dtype != GgmlDType::Q4_0 {
+            crate::bail!(
+                "cuda quantized fwd is not implemented for {:?} ({:?} {:?})",
+                self.dtype,
+                self_shape,
+                layout
+            )
+        }
+
+        let dev = storage.device().clone();
+        let slice = storage.as_cuda_slice::<f32>()?;
+        let slice = match layout.contiguous_offsets() {
+            None => crate::bail!("input has to be contiguous"),
+            Some((o1, o2)) => slice.slice(o1..o2),
+        };
+        let func = dev.get_or_load_func("mul_mat_q4_0_check", candle_kernels::QUANTIZED)?;
+        let params = (&self.data, &slice);
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (1, 1, 1),
+            block_dim: (1, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let elem_count = layout.shape().elem_count();
+        let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+        unsafe { func.launch(cfg, params) }.w()?;
+
+        let dst = CudaStorage::wrap_cuda_slice(dst, dev);
+        Ok((dst, layout.shape().clone()))
     }
 }
 
