@@ -124,11 +124,16 @@ impl QCudaStorage {
 
     pub fn fwd(
         &self,
-        _self_shape: &crate::Shape,
+        self_shape: &crate::Shape,
         _storage: &CudaStorage,
-        _layout: &crate::Layout,
+        layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
-        crate::bail!("cuda quantized fwd is not implemented yet")
+        crate::bail!(
+            "cuda quantized fwd is not implemented for {:?} ({:?} {:?})",
+            self.dtype,
+            self_shape,
+            layout
+        )
     }
 }
 
