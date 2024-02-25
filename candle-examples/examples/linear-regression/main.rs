@@ -63,13 +63,13 @@ impl LinearRegression {
 fn r2_score(predictions: &Tensor, labels: &Tensor) -> Result<f32, Box<dyn std::error::Error>> {
     let mean = labels.mean(D::Minus1)?;
 
-    let rss = labels.sub(predictions)?;
-    let rss = rss.mul(&rss)?.sum(D::Minus1)?;
+    let ssr = labels.sub(predictions)?;
+    let ssr = ssr.mul(&ssr)?.sum(D::Minus1)?;
 
     let sst = labels.broadcast_sub(&mean)?;
     let sst = sst.mul(&sst)?.sum(D::Minus1)?;
 
-    let tmp = rss.div(&sst)?.to_scalar::<f32>()?;
+    let tmp = ssr.div(&sst)?.to_scalar::<f32>()?;
 
     Ok(1.0 - tmp)
 }
