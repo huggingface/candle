@@ -160,7 +160,9 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_0_q8_1_imp
     const float2 ds8f = __half22float2(ds8);
 
     // second part effectively subtracts 8 from each quant value
-    return d4 * (sumi * ds8f.x - (8*vdr/QI4_0) * ds8f.y);
+    const float res = d4 * (sumi * ds8f.x - (8*vdr/QI4_0) * ds8f.y);
+    printf("%f %f %f %f %f %f\n", res, d4, sumi, ds8f.x, vdr/QI4_0, ds8f.y);
+    return res;
 }
 
 

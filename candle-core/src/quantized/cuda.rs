@@ -134,7 +134,6 @@ impl QCudaStorage {
         layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
         use crate::backend::BackendStorage;
-        use cudarc::driver::LaunchAsync;
 
         if self.dtype != GgmlDType::Q4_0 {
             crate::bail!(
@@ -145,50 +144,22 @@ impl QCudaStorage {
             )
         }
         let (n, k) = self_shape.dims2()?;
-        let (dst_shape, m) = match layout.shape().dims() {
-            &[b, m, k2] => {
-                if k2 != k {
-                    crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", layout.shape())
-                }
-                (vec![b, m, n], b * m)
-            }
-            &[m, k2] => {
-                if k2 != k {
-                    crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", layout.shape())
-                }
-                (vec![m, n], m)
-            }
+        let (b, m, k2) = match layout.shape().dims() {
+            &[b, m, k2] => (b, m, k2),
+            &[m, k2] => (1, m, k2),
             s => crate::bail!("unexpected shape for input {s:?}"),
         };
+        if k2 != k {
+            crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", layout.shape())
+        }
 
-        let dev = storage.device().clone();
-        let slice = storage.as_cuda_slice::<f32>()?;
-        let slice = match layout.contiguous_offsets() {
-            None => crate::bail!("input has to be contiguous"),
-            Some((o1, o2)) => slice.slice(o1..o2),
-        };
-        let func = dev.get_or_load_func("mul_mat_q4_0_check", candle_kernels::QUANTIZED)?;
-        let elem_count = m * n;
-        let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
-        let (nrows_x, ncols_x) = (n, k);
-        let (nrows_y, ncols_y) = (m, k);
-        let params = (
-            &self.data, &slice, &dst, /* ncols_x */ ncols_x, /* nrows_x */ nrows_x,
-            /* ncols_y */ ncols_y, /* nrows_y */ nrows_y, /* nrows_dst */ m,
-        );
-        let block_num_x = (nrows_x + MMQ_Y_Q4_0_AMPERE - 1) / MMQ_Y_Q4_0_AMPERE;
-        let block_num_y = (ncols_y + MMQ_X_Q4_0_AMPERE - 1) / MMQ_X_Q4_0_AMPERE;
-
-        let cfg = cudarc::driver::LaunchConfig {
-            grid_dim: (block_num_x as u32, block_num_y as u32, 1),
-            block_dim: (WARP_SIZE as u32, NWARPS_Q4_0_AMPERE as u32, 1),
-            shared_mem_bytes: 0,
-        };
-
-        unsafe { func.launch(cfg, params) }.w()?;
-
-        let dst = CudaStorage::wrap_cuda_slice(dst, dev);
-        Ok((dst, dst_shape.into()))
+        let data_f32 = self.dequantize(n * k)?;
+        let rhs_l = crate::Layout::new((k, n).into(), vec![1, k], 0);
+        let out = storage.matmul(&data_f32, (b, m, n, k), &layout, &rhs_l)?;
+        let mut out_shape = layout.shape().dims().to_vec();
+        out_shape.pop();
+        out_shape.push(n);
+        Ok((out, out_shape.into()))
     }
 }
 
