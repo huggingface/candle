@@ -30,6 +30,7 @@ pub mod quantized_llama2_c;
 pub mod quantized_mistral;
 pub mod quantized_mixformer;
 pub mod quantized_mpt;
+pub mod quantized_rwkv_v5;
 pub mod quantized_stable_lm;
 pub mod quantized_t5;
 pub mod qwen2;
