@@ -32,9 +32,9 @@ impl Config {
 }
 
 pub struct State {
-    hs: Vec<Tensor>,
-    prev_xs: Vec<[Tensor; D_CONV]>,
-    pos: usize,
+    pub hs: Vec<Tensor>,
+    pub prev_xs: Vec<[Tensor; D_CONV]>,
+    pub pos: usize,
 }
 
 impl State {

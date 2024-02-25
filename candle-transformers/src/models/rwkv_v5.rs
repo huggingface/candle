@@ -22,15 +22,15 @@ pub struct Config {
     pub rescale_every: usize,
 }
 
-struct StatePerLayer {
-    extract_key_value: Tensor,
-    linear_attention: Tensor,
-    feed_forward: Tensor,
+pub struct StatePerLayer {
+    pub extract_key_value: Tensor,
+    pub linear_attention: Tensor,
+    pub feed_forward: Tensor,
 }
 
 pub struct State {
-    per_layer: Vec<StatePerLayer>,
-    pos: usize,
+    pub per_layer: Vec<StatePerLayer>,
+    pub pos: usize,
 }
 
 impl State {

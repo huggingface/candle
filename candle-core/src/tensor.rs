@@ -1015,7 +1015,7 @@ impl Tensor {
     /// tensor also has three dimensions, `(batch, channels, target_size)`.
     pub fn interpolate1d(&self, target_size: usize) -> Result<Self> {
         let (n, c, _l) = self.dims3()?;
-        let op = BackpropOp::new1(self, Op::UpsampleNearest1D);
+        let op = BackpropOp::new1(self, |arg| Op::UpsampleNearest1D { arg, target_size });
         let storage = self
             .storage()
             .upsample_nearest1d(self.layout(), target_size)?;

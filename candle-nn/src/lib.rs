@@ -28,7 +28,7 @@ pub use func::{func, func_t, Func, FuncT};
 pub use group_norm::{group_norm, GroupNorm};
 pub use init::Init;
 pub use layer_norm::{layer_norm, rms_norm, LayerNorm, LayerNormConfig, RmsNorm};
-pub use linear::{linear, linear_no_bias, Linear};
+pub use linear::{linear, linear_b, linear_no_bias, Linear};
 pub use ops::Dropout;
 pub use optim::{AdamW, Optimizer, ParamsAdamW, SGD};
 pub use rnn::{gru, lstm, GRUConfig, LSTMConfig, GRU, LSTM, RNN};

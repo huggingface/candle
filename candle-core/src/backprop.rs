@@ -113,7 +113,7 @@ impl Tensor {
                     | Op::Unary(_node, UnaryOp::Floor)
                     | Op::Unary(_node, UnaryOp::Round) => nodes,
                     Op::Reshape(node)
-                    | Op::UpsampleNearest1D(node)
+                    | Op::UpsampleNearest1D { arg: node, .. }
                     | Op::UpsampleNearest2D { arg: node, .. }
                     | Op::AvgPool2D { arg: node, .. }
                     | Op::MaxPool2D { arg: node, .. }
@@ -348,9 +348,18 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
                     }
-                    Op::UpsampleNearest1D { .. } => Err(Error::BackwardNotSupported {
-                        op: "upsample-nearest1d",
-                    })?,
+                    Op::UpsampleNearest1D { arg, target_size } => {
+                        let (_n, c, size) = arg.dims3()?;
+                        if target_size % size != 0 {
+                            crate::bail!("backward not supported for non integer upscaling factors")
+                        }
+                        let scale = target_size / size;
+
+                        let kernel = Tensor::ones((c, 1, scale), arg.dtype(), arg.device())?;
+                        let conv_sum = grad.conv1d(&kernel, 0, scale, 1, c)?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = conv_sum;
+                    }
                     Op::UpsampleNearest2D {
                         arg,
                         target_h,
