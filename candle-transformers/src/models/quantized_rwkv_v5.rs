@@ -2,49 +2,10 @@ use crate::{
     quantized_nn::{layer_norm, linear_no_bias as linear, Embedding, Linear},
     quantized_var_builder::VarBuilder,
 };
-use candle::{DType, Device, IndexOp, Result, Tensor};
+use candle::{IndexOp, Result, Tensor};
 use candle_nn::{GroupNorm, LayerNorm, Module};
 
-pub use crate::models::rwkv_v5::{Config, Tokenizer};
-
-struct StatePerLayer {
-    extract_key_value: Tensor,
-    linear_attention: Tensor,
-    feed_forward: Tensor,
-}
-
-pub struct State {
-    per_layer: Vec<StatePerLayer>,
-    pos: usize,
-}
-
-impl State {
-    pub fn new(batch_size: usize, cfg: &Config, dev: &Device) -> Result<Self> {
-        let mut per_layer = Vec::with_capacity(cfg.num_hidden_layers);
-        // Certainly a weird convention but taken from modeling_rwkv5.py
-        let num_attention_heads = cfg.hidden_size / cfg.num_attention_heads;
-        for _layer_idx in 0..cfg.num_hidden_layers {
-            let extract_key_value = Tensor::zeros((batch_size, cfg.hidden_size), DType::F32, dev)?;
-            let linear_attention = Tensor::zeros(
-                (
-                    batch_size,
-                    num_attention_heads,
-                    cfg.hidden_size / num_attention_heads,
-                    cfg.hidden_size / num_attention_heads,
-                ),
-                DType::F32,
-                dev,
-            )?;
-            let feed_forward = Tensor::zeros((batch_size, cfg.hidden_size), DType::F32, dev)?;
-            per_layer.push(StatePerLayer {
-                extract_key_value,
-                linear_attention,
-                feed_forward,
-            });
-        }
-        Ok(Self { per_layer, pos: 0 })
-    }
-}
+pub use crate::models::rwkv_v5::{Config, State, Tokenizer};
 
 #[derive(Debug, Clone)]
 struct SelfAttention {
@@ -58,7 +19,7 @@ struct SelfAttention {
     time_mix_value: Tensor,
     time_mix_receptance: Tensor,
     time_decay: Tensor,
-    time_first: Tensor,
+    time_faaaa: Tensor,
     time_mix_gate: Tensor,
     layer_id: usize,
     n_attn_heads: usize,
@@ -99,8 +60,8 @@ impl SelfAttention {
         let time_decay = vb
             .get((n_attn_heads, cfg.head_size), "time_decay")?
             .dequantize(vb.device())?;
-        let time_first = vb
-            .get((n_attn_heads, cfg.head_size), "time_first")?
+        let time_faaaa = vb
+            .get((n_attn_heads, cfg.head_size), "time_faaaa")?
             .dequantize(vb.device())?;
         let time_mix_gate = vb
             .get((1, 1, cfg.hidden_size), "time_mix_gate")?
@@ -116,19 +77,19 @@ impl SelfAttention {
             time_mix_value,
             time_mix_receptance,
             time_decay,
-            time_first,
+            time_faaaa,
             time_mix_gate,
             layer_id,
             n_attn_heads,
         })
     }
 
-    fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
         let h = self.time_decay.dim(0)?;
         let (b, t, s) = xs.dims3()?;
         let s = s / h;
         let (receptance, key, value, gate) = {
-            // exctract key-value
+            // extract key-value
             let shifted = state.per_layer[self.layer_id].extract_key_value.clone();
             let shifted = if shifted.rank() == 2 {
                 shifted.unsqueeze(1)?
@@ -161,19 +122,18 @@ impl SelfAttention {
             .exp()?
             .reshape(((), 1, 1))?
             .reshape((self.n_attn_heads, (), 1))?;
-        let time_first =
-            self.time_first
+        let time_faaaa =
+            self.time_faaaa
                 .reshape(((), 1, 1))?
                 .reshape((self.n_attn_heads, (), 1))?;
 
         let mut out: Vec<Tensor> = Vec::with_capacity(t);
         for t_ in 0..t {
-            //
             let rt = receptance.i((.., .., t_..t_ + 1))?.contiguous()?;
             let kt = key.i((.., .., .., t_..t_ + 1))?.contiguous()?;
             let vt = value.i((.., .., t_..t_ + 1))?.contiguous()?;
             let at = kt.matmul(&vt)?;
-            let rhs = (time_first.broadcast_mul(&at)? + &state_)?;
+            let rhs = (time_faaaa.broadcast_mul(&at)? + &state_)?;
             let out_ = rt.matmul(&rhs)?.squeeze(2)?;
             state_ = (&at + time_decay.broadcast_mul(&state_))?;
             out.push(out_)
