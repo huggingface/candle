@@ -16,13 +16,21 @@ fn main() -> Result<()> {
     let q = QTensor::quantize(&q, candle_core::quantized::GgmlDType::Q4_0)?;
     let q = QMatMul::from_qtensor(q)?;
     let x = Tensor::randn(0f32, 1.0, (5, 32), &device)?;
-    let res = q.forward(&x)?;
-    println!("{res}");
+    let res_q_cuda = q.forward(&x)?;
+    println!("{res_q_cuda}");
 
     let q_cpu = QTensor::quantize(&q_cpu, candle_core::quantized::GgmlDType::Q4_0)?;
+    let q_cpu_tensor = q_cpu.dequantize(&Device::Cpu)?;
     let q_cpu = QMatMul::from_qtensor(q_cpu)?;
     let x_cpu = x.to_device(&Device::Cpu)?;
-    let res = q_cpu.forward(&x_cpu)?;
-    println!("{res}");
+    let res_q_cpu = q_cpu.forward(&x_cpu)?;
+    println!("{res_q_cpu}");
+
+    let res_mm = x_cpu.matmul(&q_cpu_tensor.t()?)?;
+    let diff = (res_mm - res_q_cuda.to_device(&Device::Cpu))?
+        .abs()?
+        .flatten_all()?
+        .max(0)?;
+    println!("{diff}");
     Ok(())
 }
