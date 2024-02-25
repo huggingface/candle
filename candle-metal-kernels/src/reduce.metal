@@ -457,35 +457,35 @@ struct operation<OP, indexed<vec<T, 4>>> {
 };
 
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
-METAL_FUNC indexed<T> finalize(indexed<T> value) {
+METAL_FUNC indexed<T> to_scalar(indexed<T> value) {
     return value;
 }
 
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
-METAL_FUNC indexed<T> finalize(indexed<vec<T, 2>> v) {
+METAL_FUNC indexed<T> to_scalar(indexed<vec<T, 2>> v) {
     OP op;
     return op(v[0], v[1]);
 }
 
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
-METAL_FUNC indexed<T> finalize(indexed<vec<T, 4>> v) {
+METAL_FUNC indexed<T> to_scalar(indexed<vec<T, 4>> v) {
     OP op;
     return op(op(v[0], v[1]), op(v[2], v[3]));
 }
 
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
-METAL_FUNC T finalize(T value) {
+METAL_FUNC T to_scalar(T value) {
     return value;
 }
 
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
-METAL_FUNC T finalize(vec<T, 2> v) {
+METAL_FUNC T to_scalar(vec<T, 2> v) {
     OP op;
     return op(v.x, v.y);
 }
 
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
-METAL_FUNC T finalize(vec<T, 4> v) {
+METAL_FUNC T to_scalar(vec<T, 4> v) {
     OP op;
     return op(op(v.x, v.y), op(v.z, v.w));
 }
@@ -769,7 +769,7 @@ METAL_FUNC void reduce(
     );
 
     // Complete reduction
-    SR result =  block_reduce(finalize<ReductionOp>(value), tid);
+    SR result =  block_reduce(to_scalar<ReductionOp>(value), tid);
 
     if (tid == 0) dst[dst_id] = result;
 }
@@ -899,7 +899,7 @@ METAL_FUNC void reduce(
     );
 
     // Complete reduction
-    I result =  block_reduce(finalize<ReductionOp>(value), tid);
+    I result =  block_reduce(to_scalar<ReductionOp>(value), tid);
 
     // Return index of reduce result
     if (tid == 0) dst[dst_id] = result.i;
@@ -1062,18 +1062,18 @@ struct operation<OP, MD<vec<T, 4>>> {
 };
 
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
-METAL_FUNC MD<T> finalize(MD<T> value) {
+METAL_FUNC MD<T> to_scalar(MD<T> value) {
     return value;
 }
 
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
-METAL_FUNC MD<T> finalize(MD<vec<T, 2>> v) {
+METAL_FUNC MD<T> to_scalar(MD<vec<T, 2>> v) {
     OP op;
     return op(v[0], v[1]);
 }
 
 template<typename OP, typename T, typename _E = typename metal::enable_if_t<is_scalar_v<T>>>
-METAL_FUNC MD<T> finalize(MD<vec<T, 4>> v) {
+METAL_FUNC MD<T> to_scalar(MD<vec<T, 4>> v) {
     OP op;
     return op(op(v[0], v[1]), op(v[2], v[3]));
 }
@@ -1197,7 +1197,7 @@ METAL_FUNC void softmax(
     );
 
     // Reduce in shared memory
-    MD<ST> md = block_reduce(finalize<MDReduceOp>(md_partial), tid);
+    MD<ST> md = block_reduce(to_scalar<MDReduceOp>(md_partial), tid);
 
     if (tid == 0) md_total = md;
     threadgroup_barrier(mem_flags::mem_none);
