@@ -14,6 +14,8 @@ pub const WARP_SIZE: usize = 32;
 pub const MMQ_X_Q4_0_AMPERE: usize = 4;
 pub const MMQ_Y_Q4_0_AMPERE: usize = 32;
 pub const NWARPS_Q4_0_AMPERE: usize = 4;
+pub const GGML_CUDA_MMV_X: usize = 32;
+pub const GGML_CUDA_MMV_Y: usize = 1;
 
 fn dequantize_q4_0(
     data: &CudaSlice<u8>,
@@ -33,6 +35,32 @@ fn dequantize_q4_0(
         shared_mem_bytes: 0,
     };
 
+    unsafe { func.launch(cfg, params) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
+fn dequantize_mut_mal_vec_q4_0(
+    data: &CudaSlice<u8>,
+    y: &cudarc::driver::CudaView<f32>,
+    ncols: usize,
+    nrows: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    use cudarc::driver::LaunchAsync;
+
+    let func = dev.get_or_load_func(
+        "dequantize_mul_mat_vec_q4_0_cuda",
+        candle_kernels::QUANTIZED,
+    )?;
+    let dst = dev.alloc_zeros::<f32>(nrows).w()?;
+    let block_num_y = (nrows + GGML_CUDA_MMV_Y - 1) / GGML_CUDA_MMV_Y;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (block_num_y as u32, 1, 1),
+        block_dim: (WARP_SIZE as u32, GGML_CUDA_MMV_Y as u32, 1),
+        shared_mem_bytes: 0,
+    };
+
+    let params = (data, y, &dst, ncols as i32, nrows as i32);
     unsafe { func.launch(cfg, params) }.w()?;
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
@@ -158,16 +186,56 @@ impl QCudaStorage {
         storage: &CudaStorage,
         layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
-        use crate::backend::BackendStorage;
-
-        if self.dtype != GgmlDType::Q4_0 {
-            crate::bail!(
-                "cuda quantized fwd is not implemented for {:?} ({:?} {:?})",
-                self.dtype,
-                self_shape,
-                layout
-            )
+        let dmmv = match layout.shape().dims() {
+            [1, 1, _] | [1, _] => true,
+            _ => false,
+        };
+        if dmmv {
+            self.dequantize_matmul_vec(self_shape, storage, layout)
+        } else {
+            self.dequantize_matmul(self_shape, storage, layout)
         }
+    }
+}
+
+impl QCudaStorage {
+    fn dequantize_matmul_vec(
+        &self,
+        self_shape: &crate::Shape,
+        rhs: &CudaStorage,
+        rhs_l: &crate::Layout,
+    ) -> Result<(CudaStorage, crate::Shape)> {
+        let (nrows, ncols) = self_shape.dims2()?;
+        let rhs = rhs.as_cuda_slice::<f32>()?;
+        let rhs = match rhs_l.contiguous_offsets() {
+            Some((o1, o2)) => rhs.slice(o1..o2),
+            None => Err(crate::Error::RequiresContiguous { op: "dmmv" }.bt())?,
+        };
+        let (with_batch, k) = match rhs_l.shape().dims() {
+            [1, 1, k] => (true, k),
+            [1, k] => (false, k),
+            _ => crate::bail!("unexpected rhs shape in dmmv {:?}", rhs_l.shape()),
+        };
+        if ncols != *k {
+            crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", rhs_l.shape())
+        }
+
+        let out = dequantize_mut_mal_vec_q4_0(&self.data, &rhs, ncols, nrows, self.device())?;
+        let out_shape = if with_batch {
+            vec![1, 1, nrows]
+        } else {
+            vec![1, nrows]
+        };
+        Ok((out, out_shape.into()))
+    }
+
+    fn dequantize_matmul(
+        &self,
+        self_shape: &crate::Shape,
+        storage: &CudaStorage,
+        layout: &crate::Layout,
+    ) -> Result<(CudaStorage, crate::Shape)> {
+        use crate::backend::BackendStorage;
         let (n, k) = self_shape.dims2()?;
         let (b, m, k2) = match layout.shape().dims() {
             &[b, m, k2] => (b, m, k2),
