@@ -10,6 +10,11 @@ pub struct QCudaStorage {
     device: CudaDevice,
 }
 
+pub const WARP_SIZE: usize = 32;
+pub const MMQ_X_Q4_0_AMPERE: usize = 4;
+pub const MMQ_Y_Q4_0_AMPERE: usize = 32;
+pub const NWARPS_Q4_0_AMPERE: usize = 4;
+
 impl QCudaStorage {
     pub fn zeros(device: &CudaDevice, el_count: usize, dtype: GgmlDType) -> Result<Self> {
         let size_in_bytes = el_count * dtype.type_size() / dtype.block_size();
@@ -165,12 +170,20 @@ impl QCudaStorage {
         let func = dev.get_or_load_func("mul_mat_q4_0_check", candle_kernels::QUANTIZED)?;
         let elem_count = m * n;
         let dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+        let (nrows_x, ncols_x) = (n, k);
+        let (nrows_y, ncols_y) = (m, k);
         let params = (
-            &self.data, &slice, &dst, /* ncols_x */ k, /* nrows_x */ n,
-            /* ncols_y */ k, /* nrows_y */ m, /* nrows_dst */ m,
+            &self.data, &slice, &dst, /* ncols_x */ ncols_x, /* nrows_x */ nrows_x,
+            /* ncols_y */ ncols_y, /* nrows_y */ nrows_y, /* nrows_dst */ m,
         );
+        let block_num_x = (nrows_x + MMQ_Y_Q4_0_AMPERE - 1) / MMQ_Y_Q4_0_AMPERE;
+        let block_num_y = (ncols_y + MMQ_X_Q4_0_AMPERE - 1) / MMQ_X_Q4_0_AMPERE;
 
-        let cfg = cudarc::driver::LaunchConfig::for_num_elems(elem_count as u32);
+        let cfg = cudarc::driver::LaunchConfig {
+            grid_dim: (block_num_x as u32, block_num_y as u32, 1),
+            block_dim: (WARP_SIZE as u32, NWARPS_Q4_0_AMPERE as u32, 1),
+            shared_mem_bytes: 0,
+        };
 
         unsafe { func.launch(cfg, params) }.w()?;
 
