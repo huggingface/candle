@@ -633,12 +633,14 @@ fn run_reduce<T, U: Clone>(v: &[T], out_length: usize, name: &'static str) -> Ve
     let output = device.new_buffer((out_length * core::mem::size_of::<U>()) as u64, options);
     let dims = vec![v.len()];
     let strides = vec![1];
-    match call_reduce_contiguous(
+    match call_reduce_strided(
         &device,
         command_buffer,
         &kernels,
         name,
-        v.len(),
+        //v.len(),
+        &dims,
+        &strides,
         out_length,
         &input,
         0,
@@ -749,19 +751,19 @@ fn correct_argmax<const N: usize, const D: usize>(arr: [f32; N]) -> [u32; D] {
 
 fn reduce_sum_case<const N: usize, const D: usize>() {
     let v = create_array::<N>();
-    let results = run_reduce(&v, D, "fast_sum_f32");
+    let results = run_reduce(&v, D, "fast_sum_f32_strided");
     assert_eq!(approx(results, 4), correct_sum::<N, D>());
 }
 
 fn reduce_max_case<const N: usize, const D: usize>() {
     let v = create_array::<N>();
-    let results = run_reduce(&v, D, "fast_max_f32");
+    let results = run_reduce(&v, D, "fast_max_f32_strided");
     assert_eq!(approx(results, 4), correct_max::<N, D>());
 }
 
 fn reduce_argmax_case<const N: usize, const D: usize>() {
     let v = create_array::<N>();
-    let results: Vec<u32> = run_reduce(&v, D, "fast_argmax_f32");
+    let results: Vec<u32> = run_reduce(&v, D, "fast_argmax_f32_strided");
     assert_eq!(results, correct_argmax::<N, D>(v));
 }
 

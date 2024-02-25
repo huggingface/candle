@@ -628,16 +628,7 @@ pub fn call_reduce_strided(
 ) -> Result<(), MetalKernelError> {
     let length: usize = shape.iter().product();
     let work_per_threadgroup = length / out_length;
-
-    let (name, granularity) = if work_per_threadgroup % 4 == 0 {
-        (format!("{kernel_name}x4").leak(), 1)
-    } else if work_per_threadgroup % 2 == 0 {
-        (format!("{kernel_name}x2").leak(), 1)
-    } else {
-        (format!("{kernel_name}").leak(), 1)
-    };
-
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -661,7 +652,7 @@ pub fn call_reduce_strided(
         depth: 1,
     };
 
-    let work_split = work_per_threadgroup / (2 * granularity);
+    let work_split = work_per_threadgroup / 2;
     let mut w = 2;
     while w < work_split {
         w *= 2;

@@ -41,9 +41,9 @@ struct Divide {
     METAL_FUNC half2  operator()(half2  a, half2  b) { return divide(a, b); }
     METAL_FUNC half4  operator()(half4  a, half4  b) { return divide(a, b); }
     #if defined(__HAVE_BFLOAT__)
-    METAL_FUNC bfloat  operator()(bfloat   a,  bfloat b) { return static_cast<bfloat>(fast::divide(a, b)); }
-    METAL_FUNC bfloat2 operator()(bfloat2  a, bfloat2 b) { return static_cast<bfloat2>( a / b ); }
-    METAL_FUNC bfloat4 operator()(bfloat4  a, bfloat4 b) { return static_cast<bfloat4>( a / b ); }
+    METAL_FUNC bfloat  operator()(bfloat  a, bfloat  b) { return static_cast<bfloat>(fast::divide(a, b)); }
+    METAL_FUNC bfloat2 operator()(bfloat2 a, bfloat2 b) { return static_cast<bfloat2>( a / b ); }
+    METAL_FUNC bfloat4 operator()(bfloat4 a, bfloat4 b) { return static_cast<bfloat4>( a / b ); }
     #endif
 };
 
@@ -64,13 +64,13 @@ struct Exp {
     #endif
 };
 
-METAL_FUNC size_t get_strided_index(
+METAL_FUNC uint get_strided_index(
     uint idx,
     constant const uint &num_dims,
     constant const size_t *dims,
     constant const size_t *strides
 ) {
-    size_t strided_i = 0;
+    uint strided_i = 0;
     for (uint d = 0; d < num_dims; d++) {
         uint dim_idx = num_dims - 1 - d;
         strided_i += (idx % dims[dim_idx]) * strides[dim_idx];
@@ -515,7 +515,7 @@ struct loader<T, R, OP, BLOCKSIZE> {
         R value,
         constant uint &src_numel,
         constant ushort &el_per_block,
-        const device T *src,
+        constant T *src,
         const uint offset,
         const ushort tid
     ) {
@@ -537,7 +537,7 @@ struct loader<T, R, OP, BLOCKSIZE> {
         constant size_t *dims,
         constant size_t *strides,
         constant ushort &el_per_block,
-        const device T *src,
+        constant T *src,
         const uint offset,
         const ushort tid
     ) {
@@ -560,18 +560,16 @@ struct loader<T, R, OP, BLOCKSIZE, true, typename metal::enable_if_t<is_scalar_v
         constant size_t *dims,
         constant size_t *strides,
         constant ushort &el_per_block,
-        const device T *src,
+        constant T *src,
         const uint offset,
         const ushort tid
     ) {
         const uint thread_id = tid + offset;
-        const uint stop_idx = min(el_per_block + offset, src_numel);
+        const uint stop_idx = el_per_block + offset;
 
-        uint idx = thread_id;
         #pragma clang loop unroll(full)
         for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
-            idx = get_strided_index(i, src_numel, dims, strides);
-            value = operate(value, src[idx], uint(i));
+            value = operate(value, src[get_strided_index(i, src_numel, dims, strides)], i);
         }
         return value;
     }
@@ -603,17 +601,17 @@ struct loader<vec<T, N>, R, OP, BLOCKSIZE, true> {
         constant size_t *dims,
         constant size_t *strides,
         constant ushort &el_per_block,
-        const device vec<T, N> *src,
+        constant vec<T, N> *src,
         const uint offset,
         const ushort tid
     ) {
         // Reinterpret src as device T* to allow for strided access.
-        const device T*__restrict in = reinterpret_cast<const device T *__restrict>(src);
+        constant T *__restrict in = reinterpret_cast<constant T *__restrict>(src);
         array<T, N> values;
         array<uint, N> indices;
 
         const uint thread_id = tid + (offset / N);
-        const uint stop_idx = min(el_per_block + offset, src_numel) * N;
+        const uint stop_idx = (el_per_block + offset) / N;
 
         #pragma clang loop unroll(full)
         for (uint i = thread_id; i < stop_idx; i += BLOCKSIZE) {
@@ -739,7 +737,7 @@ METAL_FUNC void reduce(
     constant size_t *dims,
     constant size_t *strides,
     constant ushort &el_per_block,
-    device const T *src,
+    constant T *src,
     device make_scalar_t<R> *dst,
     threadgroup make_scalar_t<R> shared[BLOCKSIZE],
     uint tid [[ thread_index_in_threadgroup ]],
@@ -798,7 +796,7 @@ case N: {                                               \
 kernel void NAME(                                       \
     constant uint &num_dims,                            \
     constant ushort &el_per_block,                      \
-    device const T *src,                                \
+    constant T *src,                                    \
     device make_scalar_t<T> *dst,                       \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
@@ -829,7 +827,7 @@ kernel void NAME##_strided##NAME_SUFFIX(                \
     constant size_t *dims,                              \
     constant size_t *strides,                           \
     constant ushort &el_per_block,                      \
-    device const T *src,                                \
+    constant T *src,                                    \
     device make_scalar_t<T> *dst,                       \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
@@ -871,7 +869,7 @@ METAL_FUNC void reduce(
     constant size_t *dims,
     constant size_t *strides,
     constant ushort &el_per_block,
-    device const T *src,
+    constant T *src,
     device uint *dst,
     threadgroup indexed<make_scalar_t<T>> shared[BLOCKSIZE],
     ushort tid [[ thread_index_in_threadgroup ]],
@@ -928,7 +926,7 @@ case N: {                                               \
 kernel void NAME##NAME_SUFFIX(                          \
     constant uint &num_dims,                            \
     constant ushort &el_per_block,                      \
-    device const T *src,                                \
+    constant T *src,                                    \
     device uint *dst,                                   \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
@@ -956,7 +954,7 @@ kernel void NAME##_strided##NAME_SUFFIX(                \
     constant size_t *dims,                              \
     constant size_t *strides,                           \
     constant ushort &el_per_block,                      \
-    device const T *src,                                \
+    constant T *src,                                    \
     device uint *dst,                                   \
     ushort tid [[ thread_index_in_threadgroup ]],       \
     ushort dst_id [[ threadgroup_position_in_grid ]],   \
@@ -1096,7 +1094,7 @@ struct is_valid_simd_type<MD<T>, typename metal::enable_if_t<is_valid_simd_t<T>>
 
 template<typename T>
 struct MDReduceOp {
-    Exp exp;
+    Exp fast_exp;
 
     static constexpr METAL_FUNC MD<T> init() {
         return MD<T>{ numeric_limits<T>::lowest(), 0 };
@@ -1107,7 +1105,7 @@ struct MDReduceOp {
         MD<T> bigger_m = a_bigger ? a : b;
         MD<T> smaller_m = a_bigger ? b : a;
         MD<T> res;
-        res.d = bigger_m.d + smaller_m.d * exp(smaller_m.m - bigger_m.m);
+        res.d = bigger_m.d + smaller_m.d * fast_exp(smaller_m.m - bigger_m.m);
         res.m = bigger_m.m;
         return res;
     }
@@ -1122,19 +1120,19 @@ struct finalize_softmax;
 
 template<typename T, ushort BLOCKSIZE>
 struct finalize_softmax<T, BLOCKSIZE, typename metal::enable_if_t<is_scalar_v<T>>> {
-    Divide divide;
-    Exp exp;
+    Divide fast_divide;
+    Exp fast_exp;
 
     METAL_FUNC void operator()(
-        const device T *src,
+        constant T *src,
         device T *dst,
         threadgroup MD<T> &md_total,
         const uint thread_id,
         const uint stop_idx
     ) {
-        const T d_total_inverse = divide(static_cast<T>(1.0), md_total.d);
+        const T d_total_inverse = fast_divide(static_cast<T>(1.0), md_total.d);
         for (uint idx = thread_id; idx < stop_idx; idx += BLOCKSIZE) {
-            dst[idx] = exp(src[idx] - md_total.m) * d_total_inverse;
+            dst[idx] = fast_exp(src[idx] - md_total.m) * d_total_inverse;
         }
     }
 };
@@ -1143,22 +1141,22 @@ struct finalize_softmax<T, BLOCKSIZE, typename metal::enable_if_t<is_scalar_v<T>
 template<typename T, ushort BLOCKSIZE>
 struct finalize_softmax<T, BLOCKSIZE, typename metal::enable_if_t<is_vector_v<T>>> {
     using ST = make_scalar_t<T>;
-    Divide divide;
-    Exp exp;
+    Divide fast_divide;
+    Exp fast_exp;
 
     METAL_FUNC void operator()(
-        const device T *src,
+        constant T *src,
         device ST *dst,
         threadgroup MD<ST> &md_total,
         const uint thread_id,
         const uint stop_idx
     ) {
-        const device ST *__restrict in = reinterpret_cast<const device ST *__restrict>(src);
-        const ST d_total_inverse = divide(static_cast<ST>(1.0), md_total.d);
+        constant ST *__restrict in = reinterpret_cast<constant ST *__restrict>(src);
+        const ST d_total_inverse = fast_divide(static_cast<ST>(1.0), md_total.d);
 
         #pragma clang loop unroll(full)
         for (uint idx = thread_id; idx < stop_idx; idx += BLOCKSIZE) {
-            dst[idx] = exp(in[idx] - md_total.m) * d_total_inverse;
+            dst[idx] = fast_exp(in[idx] - md_total.m) * d_total_inverse;
         }
     }
 };
@@ -1169,7 +1167,7 @@ template<typename T, ushort BLOCKSIZE>
 METAL_FUNC void softmax(
     constant uint &src_numel,
     constant ushort &el_per_block,
-    const device T *src,
+    constant T *src,
     device make_scalar_t<T> *dst,
     threadgroup MD<make_scalar_t<T>> shared[BLOCKSIZE],
     threadgroup MD<make_scalar_t<T>> &md_total,
@@ -1231,7 +1229,7 @@ case N: {                                               \
 kernel void NAME(                                       \
     constant uint &src_numel,                           \
     constant ushort &el_per_block,                      \
-    device const T *src,                                \
+    constant T *src,                                    \
     device make_scalar_t<T> *dst,                       \
                                                         \
     ushort tid [[ thread_index_in_threadgroup ]],       \
