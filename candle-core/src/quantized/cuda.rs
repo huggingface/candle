@@ -15,6 +15,28 @@ pub const MMQ_X_Q4_0_AMPERE: usize = 4;
 pub const MMQ_Y_Q4_0_AMPERE: usize = 32;
 pub const NWARPS_Q4_0_AMPERE: usize = 4;
 
+fn dequantize_q4_0(
+    data: &CudaSlice<u8>,
+    elem_count: usize,
+    dev: &CudaDevice,
+) -> Result<CudaStorage> {
+    use cudarc::driver::LaunchAsync;
+
+    let func = dev.get_or_load_func("dequantize_block_q4_0", candle_kernels::QUANTIZED)?;
+    let dst = dev.alloc_zeros::<f32>(elem_count).w()?;
+    let nb32 = elem_count / 32;
+    let nb = (elem_count + 255) / 256;
+    let params = (data, &dst, nb32 as i32);
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (nb as u32, 1, 1),
+        block_dim: (32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+
+    unsafe { func.launch(cfg, params) }.w()?;
+    Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
+}
+
 impl QCudaStorage {
     pub fn zeros(device: &CudaDevice, el_count: usize, dtype: GgmlDType) -> Result<Self> {
         let size_in_bytes = el_count * dtype.type_size() / dtype.block_size();
@@ -35,6 +57,9 @@ impl QCudaStorage {
     }
 
     pub fn dequantize(&self, elem_count: usize) -> Result<CudaStorage> {
+        if self.dtype == GgmlDType::Q4_0 {
+            return dequantize_q4_0(&self.data, elem_count, self.device());
+        }
         // Run the dequantization on cpu.
         use crate::quantized::k_quants::GgmlType;
 
