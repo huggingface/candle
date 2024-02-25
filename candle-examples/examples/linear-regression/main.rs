@@ -6,7 +6,7 @@ use std::fs::File;
 use std::rc::Rc;
 use clap::Parser;
 
-pub struct Dataset {
+struct Dataset {
     pub training_data: Tensor,
     pub training_labels: Tensor,
     pub test_data: Tensor,
@@ -16,23 +16,24 @@ pub struct Dataset {
 
 // Implement Linear Regression model using Gradient Descent
 // https://www.youtube.com/watch?v=UVCFaaEBnTE
-pub struct LinearRegression {
+struct LinearRegression {
     thetas: Tensor,
     device: Rc<Device>,
 }
 
 impl LinearRegression {
-    pub fn new(feature_cnt: usize, device: Rc<Device>) -> Result<Self> {
+    fn new(feature_cnt: usize, device: Rc<Device>) -> Result<Self> {
         let thetas: Vec<f32> = vec![0.0; feature_cnt];
         let thetas = Tensor::from_vec(thetas, (feature_cnt,), &device)?;
         Ok(Self { thetas, device })
     }
 
-    pub fn predict(&self, x: &Tensor) -> Result<Tensor> {
+    fn predict(&self, x: &Tensor) -> Result<Tensor> {
         Ok(x.matmul(&self.thetas.unsqueeze(1)?)?.squeeze(1)?)
     }
 
-    pub fn cost(&self, x: &Tensor, y: &Tensor) -> Result<Tensor> {
+    #[allow(unused)]
+    fn cost(&self, x: &Tensor, y: &Tensor) -> Result<Tensor> {
         let m = y.shape().dims1()?;
         let predictions = self.predict(x)?;
         let deltas = predictions.sub(y)?;
@@ -43,7 +44,7 @@ impl LinearRegression {
         Ok(cost)
     }
 
-    pub fn train(&mut self, x: &Tensor, y: &Tensor, learning_rate: f32) -> Result<()> {
+    fn train(&mut self, x: &Tensor, y: &Tensor, learning_rate: f32) -> Result<()> {
         let m = y.shape().dims1()?;
         let predictions = self.predict(x)?;
         let deltas = predictions.sub(y)?;
@@ -59,7 +60,7 @@ impl LinearRegression {
     }
 }
 
-pub fn r2_score(predictions: &Tensor, labels: &Tensor) -> Result<f32, Box<dyn std::error::Error>> {
+fn r2_score(predictions: &Tensor, labels: &Tensor) -> Result<f32, Box<dyn std::error::Error>> {
     let mean = labels.mean(D::Minus1)?;
 
     let rss = labels.sub(predictions)?;
