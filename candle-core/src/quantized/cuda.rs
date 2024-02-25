@@ -39,19 +39,27 @@ fn dequantize_q4_0(
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
-fn dequantize_mut_mal_vec_q4_0(
+fn dequantize_mut_mal_vec(
     data: &CudaSlice<u8>,
     y: &cudarc::driver::CudaView<f32>,
+    dtype: GgmlDType,
     ncols: usize,
     nrows: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
     use cudarc::driver::LaunchAsync;
 
-    let func = dev.get_or_load_func(
-        "dequantize_mul_mat_vec_q4_0_cuda",
-        candle_kernels::QUANTIZED,
-    )?;
+    let kernel_name = match dtype {
+        GgmlDType::Q4_0 => "dequantize_mul_mat_vec_q4_0_cuda",
+        GgmlDType::Q4_1 => "dequantize_mul_mat_vec_q4_1_cuda",
+        GgmlDType::Q5_0 => "dequantize_mul_mat_vec_q5_0_cuda",
+        GgmlDType::Q5_1 => "dequantize_mul_mat_vec_q5_1_cuda",
+        GgmlDType::Q8_0 => "dequantize_mul_mat_vec_q8_0_cuda",
+        GgmlDType::Q4K => "dequantize_mul_mat_vec_q4_k",
+        GgmlDType::Q6K => "dequantize_mul_mat_vec_q6_k",
+        _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
+    };
+    let func = dev.get_or_load_func(kernel_name, candle_kernels::QUANTIZED)?;
     let dst = dev.alloc_zeros::<f32>(nrows).w()?;
     let block_num_y = (nrows + GGML_CUDA_MMV_Y - 1) / GGML_CUDA_MMV_Y;
     let cfg = cudarc::driver::LaunchConfig {
@@ -220,7 +228,8 @@ impl QCudaStorage {
             crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", rhs_l.shape())
         }
 
-        let out = dequantize_mut_mal_vec_q4_0(&self.data, &rhs, ncols, nrows, self.device())?;
+        let out =
+            dequantize_mut_mal_vec(&self.data, &rhs, self.dtype, ncols, nrows, self.device())?;
         let out_shape = if with_batch {
             vec![1, 1, nrows]
         } else {
@@ -248,7 +257,7 @@ impl QCudaStorage {
 
         let data_f32 = self.dequantize(n * k)?;
         let rhs_l = crate::Layout::new((k, n).into(), vec![1, k], 0);
-        let out = storage.matmul(&data_f32, (b, m, n, k), &layout, &rhs_l)?;
+        let out = storage.matmul(&data_f32, (b, m, n, k), layout, &rhs_l)?;
         let mut out_shape = layout.shape().dims().to_vec();
         out_shape.pop();
         out_shape.push(n);
