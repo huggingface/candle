@@ -129,6 +129,15 @@ impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {
     }
 }
 
+impl<M: Module> Module for Option<&M> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            None => Ok(xs.clone()),
+            Some(m) => m.forward(xs),
+        }
+    }
+}
+
 // A trait defining a module with forward method using a single tensor argument and a flag to
 // separate the training and evaluation behaviors.
 pub trait ModuleT {

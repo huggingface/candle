@@ -1263,6 +1263,7 @@ impl<'a> Map2 for ConvTranspose1D<'a> {
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
         let inp = &inp[inp_l.start_offset()..];
+        let k = &k[k_l.start_offset()..];
         let (inp_s0, inp_s1, inp_s2) = crate::shape::dims3(inp_l.stride())?;
         let (k_s0, k_s1, k_s2) = crate::shape::dims3(k_l.stride())?;
         let l_out = p.l_out();
@@ -2574,7 +2575,7 @@ impl BackendStorage for CpuStorage {
             Self::U8(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
             Self::U32(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
             Self::I64(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-select")),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-select").bt()),
         }
     }
 
@@ -2583,7 +2584,7 @@ impl BackendStorage for CpuStorage {
             Self::U8(ids) => Gather { ids, ids_l, dim }.map(self, l),
             Self::U32(ids) => Gather { ids, ids_l, dim }.map(self, l),
             Self::I64(ids) => Gather { ids, ids_l, dim }.map(self, l),
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "gather")),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "gather").bt()),
         }
     }
 
@@ -2600,7 +2601,7 @@ impl BackendStorage for CpuStorage {
             Self::U8(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
             Self::U32(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
             Self::I64(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter-add")),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter-add").bt()),
         }
     }
 

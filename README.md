@@ -63,6 +63,8 @@ We also provide a some command line based examples using state of the art models
 - [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM, includes
   the SOLAR-10.7B variant.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
+- [Gemma](./candle-examples/examples/gemma/): 2b and 7b general LLMs from Google
+  Deepmind.
 - [Phi-1, Phi-1.5, and Phi-2](./candle-examples/examples/phi/): 1.3b and 2.7b general LLMs with performance on par with LLaMA-v2 7b.
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
   pre-trained on 1T tokens of English and code datasets. Also supports
@@ -190,6 +192,7 @@ If you have an addition to this list, please submit a pull request.
         - StarCoder.
         - Phi 1, 1.5, and 2.
         - Mamba, Minimal Mamba
+        - Gemma 2b and 7b.
         - Mistral 7b v0.1.
         - Mixtral 8x7b v0.1.
         - StableLM-3B-4E1T, StableLM-2-1.6B, Stable-Code-3B.

@@ -42,7 +42,7 @@ pub enum OpCode {
     Stop = b'.',
     NewObj = 0x81,
     EmptyList = b']',
-    BinFloat = b'g',
+    BinFloat = b'G',
     Append = b'a',
     Appends = b'e',
 }
@@ -462,7 +462,10 @@ impl Stack {
                 self.push(Object::Int(arg))
             }
             OpCode::BinFloat => {
-                let arg = r.read_f64::<LittleEndian>()?;
+                // Somehow floats are encoded using BigEndian whereas int types use LittleEndian.
+                // https://github.com/python/cpython/blob/0c80da4c14d904a367968955544dd6ae58c8101c/Lib/pickletools.py#L855
+                // https://github.com/pytorch/pytorch/blob/372d078f361e726bb4ac0884ac334b04c58179ef/torch/_weights_only_unpickler.py#L243
+                let arg = r.read_f64::<byteorder::BigEndian>()?;
                 self.push(Object::Float(arg))
             }
             OpCode::BinUnicode => {

@@ -132,7 +132,10 @@ pub enum Op {
         stride: (usize, usize),
     },
 
-    UpsampleNearest1D(Tensor),
+    UpsampleNearest1D {
+        arg: Tensor,
+        target_size: usize,
+    },
     UpsampleNearest2D {
         arg: Tensor,
         target_h: usize,

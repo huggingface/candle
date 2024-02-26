@@ -1,17 +1,7 @@
 use candle::{DType, Device, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, LayerNorm, Linear, Module, VarBuilder};
+use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
 
 const MAX_SEQ_LEN: usize = 5000;
-
-fn linear(size1: usize, size2: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
-    let weight = vb.get((size2, size1), "weight")?;
-    let bias = if bias {
-        Some(vb.get(size2, "bias")?)
-    } else {
-        None
-    };
-    Ok(Linear::new(weight, bias))
-}
 
 fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
     let (weight, bias) = match (vb.get(size, "weight"), vb.get(size, "bias")) {

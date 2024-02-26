@@ -57,7 +57,7 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 10000)]
     sample_len: usize,
 
     /// Disable the key-value cache.
@@ -120,7 +120,7 @@ fn main() -> Result<()> {
         Some(dtype) => bail!("Unsupported dtype {dtype}"),
         None => DType::F16,
     };
-    let (llama, tokenizer_filename, cache) = {
+    let (llama, tokenizer_filename, mut cache) = {
         let api = Api::new()?;
         let model_id = args.model_id.unwrap_or_else(|| match args.which {
             Which::V1 => "Narsil/amall-7b".to_string(),
@@ -143,11 +143,10 @@ fn main() -> Result<()> {
             }
             Which::TinyLlama1_1BChat => vec![api.get("model.safetensors")?],
         };
-        println!("building the model");
         let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;
 
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-        (Llama::load(vb, &cache, &config)?, tokenizer_filename, cache)
+        (Llama::load(vb, &config)?, tokenizer_filename, cache)
     };
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
     let eos_token_id = tokenizer.token_to_id(EOS_TOKEN);
@@ -157,6 +156,7 @@ fn main() -> Result<()> {
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
+    let mut tokenizer = candle_examples::token_output_stream::TokenOutputStream::new(tokenizer);
 
     println!("starting the inference loop");
     print!("{prompt}");
@@ -172,7 +172,7 @@ fn main() -> Result<()> {
         };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
-        let logits = llama.forward(&input, context_index)?;
+        let logits = llama.forward(&input, context_index, &mut cache)?;
         let logits = logits.squeeze(0)?;
         let logits = if args.repeat_penalty == 1. {
             logits
@@ -190,18 +190,16 @@ fn main() -> Result<()> {
         token_generated += 1;
         tokens.push(next_token);
 
-        // Extracting the last token as a string is complicated, here we just apply some simple
-        // heuristics as it seems to work well enough for this example. See the following for more
-        // details:
-        // https://github.com/huggingface/tokenizers/issues/1141#issuecomment-1562644141
-        if let Some(text) = tokenizer.id_to_token(next_token) {
-            let text = text.replace('▁', " ").replace("<0x0A>", "\n");
-            print!("{text}");
-            std::io::stdout().flush()?;
-        }
         if Some(next_token) == eos_token_id {
             break;
         }
+        if let Some(t) = tokenizer.next_token(next_token)? {
+            print!("{t}");
+            std::io::stdout().flush()?;
+        }
+    }
+    if let Some(rest) = tokenizer.decode_rest().map_err(E::msg)? {
+        print!("{rest}");
     }
     let dt = start_gen.elapsed();
     println!(

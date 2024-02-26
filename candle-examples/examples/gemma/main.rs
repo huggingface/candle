@@ -7,8 +7,7 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::Parser;
 
-use candle_transformers::models::mistral::{Config, Model as Mistral};
-use candle_transformers::models::quantized_mistral::Model as QMistral;
+use candle_transformers::models::gemma::{Config, Model};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -16,11 +15,6 @@ use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
-
-enum Model {
-    Mistral(Mistral),
-    Quantized(QMistral),
-}
 
 struct TextGeneration {
     model: Model,
@@ -72,9 +66,9 @@ impl TextGeneration {
         std::io::stdout().flush()?;
 
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_token("</s>") {
+        let eos_token = match self.tokenizer.get_token("<eos>") {
             Some(token) => token,
-            None => anyhow::bail!("cannot find the </s> token"),
+            None => anyhow::bail!("cannot find the <eos> token"),
         };
         let start_gen = std::time::Instant::now();
         for index in 0..sample_len {
@@ -82,10 +76,7 @@ impl TextGeneration {
             let start_pos = tokens.len().saturating_sub(context_size);
             let ctxt = &tokens[start_pos..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = match &mut self.model {
-                Model::Mistral(m) => m.forward(&input, start_pos)?,
-                Model::Quantized(m) => m.forward(&input, start_pos)?,
-            };
+            let logits = self.model.forward(&input, start_pos)?;
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
@@ -134,9 +125,6 @@ struct Args {
     tracing: bool,
 
     #[arg(long)]
-    use_flash_attn: bool,
-
-    #[arg(long)]
     prompt: String,
 
     /// The temperature used to generate samples.
@@ -165,10 +153,10 @@ struct Args {
     tokenizer_file: Option<String>,
 
     #[arg(long)]
-    weight_files: Option<String>,
+    config_file: Option<String>,
 
     #[arg(long)]
-    quantized: bool,
+    weight_files: Option<String>,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.1)]
@@ -207,15 +195,13 @@ fn main() -> Result<()> {
 
     let start = std::time::Instant::now();
     let api = Api::new()?;
-    let model_id = match args.model_id {
-        Some(model_id) => model_id,
-        None => {
-            if args.quantized {
-                "lmz/candle-mistral".to_string()
-            } else {
-                "mistralai/Mistral-7B-v0.1".to_string()
-            }
-        }
+    let model_id = match &args.model_id {
+        Some(model_id) => match model_id.as_str() {
+            "7b" => "google/gemma-7b".to_string(),
+            "2b" => "google/gemma-2b".to_string(),
+            _ => model_id.to_string(),
+        },
+        None => "google/gemma-2b".to_string(),
     };
     let repo = api.repo(Repo::with_revision(
         model_id,
@@ -226,41 +212,30 @@ fn main() -> Result<()> {
         Some(file) => std::path::PathBuf::from(file),
         None => repo.get("tokenizer.json")?,
     };
+    let config_filename = match args.config_file {
+        Some(file) => std::path::PathBuf::from(file),
+        None => repo.get("config.json")?,
+    };
     let filenames = match args.weight_files {
         Some(files) => files
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => {
-            if args.quantized {
-                vec![repo.get("model-q4k.gguf")?]
-            } else {
-                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
-            }
-        }
+        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
+    let config: Config = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
 
     let start = std::time::Instant::now();
-    let config = Config::config_7b_v0_1(args.use_flash_attn);
     let device = candle_examples::device(args.cpu)?;
-    let (model, device) = if args.quantized {
-        let filename = &filenames[0];
-        let vb =
-            candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
-        let model = QMistral::new(&config, vb)?;
-        (Model::Quantized(model), device)
+    let dtype = if device.is_cuda() {
+        DType::BF16
     } else {
-        let dtype = if device.is_cuda() {
-            DType::BF16
-        } else {
-            DType::F32
-        };
-        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-        let model = Mistral::new(&config, vb)?;
-        (Model::Mistral(model), device)
+        DType::F32
     };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+    let model = Model::new(&config, vb)?;
 
     println!("loaded the model in {:?}", start.elapsed());
 
