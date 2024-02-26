@@ -28,14 +28,14 @@ impl LinearRegression {
         Ok(Self { thetas, device })
     }
 
-    fn predict(&self, x: &Tensor) -> Result<Tensor> {
+    fn hypothesis(&self, x: &Tensor) -> Result<Tensor> {
         Ok(x.matmul(&self.thetas.unsqueeze(1)?)?.squeeze(1)?)
     }
 
     #[allow(unused)]
     fn cost(&self, x: &Tensor, y: &Tensor) -> Result<Tensor> {
         let m = y.shape().dims1()?;
-        let predictions = self.predict(x)?;
+        let predictions = self.hypothesis(x)?;
         let deltas = predictions.sub(y)?;
         let cost = deltas
             .mul(&deltas)?
@@ -46,7 +46,7 @@ impl LinearRegression {
 
     fn train(&mut self, x: &Tensor, y: &Tensor, learning_rate: f32) -> Result<()> {
         let m = y.shape().dims1()?;
-        let predictions = self.predict(x)?;
+        let predictions = self.hypothesis(x)?;
         let deltas = predictions.sub(y)?;
         let gradient = x
             .t()?
@@ -183,7 +183,7 @@ fn main() -> Result<()> {
         )?;
     }
 
-    let predictions = model.predict(&dataset.test_data)?;
+    let predictions = model.hypothesis(&dataset.test_data)?;
     let r2 = r2_score(&predictions, &dataset.test_labels).unwrap();
     println!("r2: {r2}");
 
