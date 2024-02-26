@@ -116,20 +116,20 @@ impl QCudaStorage {
     }
 
     pub fn dequantize(&self, elem_count: usize) -> Result<CudaStorage> {
-        let fast_kernel = match self.dtype {
+        let fast_kernel = matches!(
+            self.dtype,
             GgmlDType::Q4_0
-            | GgmlDType::Q4_1
-            | GgmlDType::Q5_0
-            | GgmlDType::Q5_1
-            | GgmlDType::Q8_0
-            | GgmlDType::Q2K
-            | GgmlDType::Q3K
-            | GgmlDType::Q4K
-            | GgmlDType::Q5K
-            | GgmlDType::Q6K
-            | GgmlDType::Q8K => true,
-            _ => false,
-        };
+                | GgmlDType::Q4_1
+                | GgmlDType::Q5_0
+                | GgmlDType::Q5_1
+                | GgmlDType::Q8_0
+                | GgmlDType::Q2K
+                | GgmlDType::Q3K
+                | GgmlDType::Q4K
+                | GgmlDType::Q5K
+                | GgmlDType::Q6K
+                | GgmlDType::Q8K
+        );
         if fast_kernel {
             return dequantize(&self.data, self.dtype, elem_count, self.device());
         }
@@ -231,11 +231,7 @@ impl QCudaStorage {
         storage: &CudaStorage,
         layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
-        let dmmv = match layout.shape().dims() {
-            [1, 1, _] | [1, _] => true,
-            _ => false,
-        };
-        if dmmv {
+        if matches!(layout.shape().dims(), [1, 1, _] | [1, _]) {
             self.dequantize_matmul_vec(self_shape, storage, layout)
         } else {
             self.dequantize_matmul(self_shape, storage, layout)
