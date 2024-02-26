@@ -36,7 +36,8 @@ fn dequantize(
         GgmlDType::Q4K => ("dequantize_block_q4_K", true),
         GgmlDType::Q5K => ("dequantize_block_q5_K", true),
         GgmlDType::Q6K => ("dequantize_block_q6_K", true),
-        _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
+        GgmlDType::Q8K => ("dequantize_block_q8_K", true),
+        _ => crate::bail!("unsupported dtype for dequantize {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, candle_kernels::QUANTIZED)?;
     let dst = dev.alloc_zeros::<f32>(elem_count).w()?;
@@ -125,7 +126,8 @@ impl QCudaStorage {
             | GgmlDType::Q3K
             | GgmlDType::Q4K
             | GgmlDType::Q5K
-            | GgmlDType::Q6K => true,
+            | GgmlDType::Q6K
+            | GgmlDType::Q8K => true,
             _ => false,
         };
         if fast_kernel {
