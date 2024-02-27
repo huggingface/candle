@@ -1,6 +1,7 @@
 pub mod coco_classes;
 pub mod imagenet;
 pub mod token_output_stream;
+pub mod wav;
 
 use candle::utils::{cuda_is_available, metal_is_available};
 use candle::{Device, Result, Tensor};
