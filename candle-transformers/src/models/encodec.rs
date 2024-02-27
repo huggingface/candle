@@ -380,6 +380,7 @@ impl EncodecConv1d {
         out_c: usize,
         kernel_size: usize,
         stride: usize,
+        dilation: usize,
         cfg: &Config,
         vb: VarBuilder,
     ) -> Result<Self> {
@@ -389,10 +390,9 @@ impl EncodecConv1d {
                 out_c,
                 kernel_size,
                 candle_nn::Conv1dConfig {
-                    padding: 0,
                     stride,
-                    groups: 1,
-                    dilation: 1,
+                    dilation,
+                    ..Default::default()
                 },
                 vb.pp("conv"),
             )?,
@@ -463,20 +463,29 @@ pub struct EncodecResnetBlock {
 }
 
 impl EncodecResnetBlock {
-    pub fn new(dim: usize, dilations: &[usize], cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(
+        dim: usize,
+        (dilation1, dilation2): (usize, usize),
+        cfg: &Config,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let h = dim / cfg.compress;
         let mut layer = Layer::new(vb.pp("block"));
-        if dilations.len() != 2 {
-            candle::bail!("expected dilations of size 2")
-        }
         // TODO: Apply dilations!
         layer.inc();
-        let block_conv1 =
-            EncodecConv1d::new(dim, h, cfg.residual_kernel_size, 1, cfg, layer.next())?;
+        let block_conv1 = EncodecConv1d::new(
+            dim,
+            h,
+            cfg.residual_kernel_size,
+            1,
+            dilation1,
+            cfg,
+            layer.next(),
+        )?;
         layer.inc();
-        let block_conv2 = EncodecConv1d::new(h, dim, 1, 1, cfg, layer.next())?;
+        let block_conv2 = EncodecConv1d::new(h, dim, 1, 1, dilation2, cfg, layer.next())?;
         let shortcut = if cfg.use_conv_shortcut {
-            let conv = EncodecConv1d::new(dim, dim, 1, 1, cfg, vb.pp("shortcut"))?;
+            let conv = EncodecConv1d::new(dim, dim, 1, 1, 1, cfg, vb.pp("shortcut"))?;
             Some(conv)
         } else {
             None
@@ -541,6 +550,7 @@ impl Encoder {
             cfg.num_filters,
             cfg.kernel_size,
             1,
+            1,
             cfg,
             layer.next(),
         )?;
@@ -552,7 +562,7 @@ impl Encoder {
             for j in 0..(cfg.num_residual_layers as u32) {
                 let resnet = EncodecResnetBlock::new(
                     current_scale,
-                    &[cfg.dilation_growth_rate.pow(j), 1],
+                    (cfg.dilation_growth_rate.pow(j), 1),
                     cfg,
                     layer.next(),
                 )?;
@@ -564,6 +574,7 @@ impl Encoder {
                 current_scale * 2,
                 ratio * 2,
                 ratio,
+                1,
                 cfg,
                 layer.next(),
             )?;
@@ -576,6 +587,7 @@ impl Encoder {
             cfg.num_filters * scaling,
             cfg.hidden_size,
             cfg.last_kernel_size,
+            1,
             1,
             cfg,
             layer.next(),
@@ -621,6 +633,7 @@ impl Decoder {
             cfg.num_filters * scaling,
             cfg.last_kernel_size,
             1,
+            1,
             cfg,
             layer.next(),
         )?;
@@ -641,7 +654,7 @@ impl Decoder {
             for j in 0..(cfg.num_residual_layers as u32) {
                 let resnet = EncodecResnetBlock::new(
                     current_scale / 2,
-                    &[cfg.dilation_growth_rate.pow(j), 1],
+                    (cfg.dilation_growth_rate.pow(j), 1),
                     cfg,
                     layer.next(),
                 )?;
@@ -655,6 +668,7 @@ impl Decoder {
             cfg.num_filters,
             cfg.audio_channels,
             cfg.last_kernel_size,
+            1,
             1,
             cfg,
             layer.next(),
