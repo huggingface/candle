@@ -226,6 +226,7 @@ pub struct EuclideanCodebook {
     cluster_size: Tensor,
     embed: candle_nn::Embedding,
     embed_avg: Tensor,
+    c2: Tensor,
 }
 
 impl EuclideanCodebook {
@@ -234,13 +235,34 @@ impl EuclideanCodebook {
         let cluster_size = vb.get(cfg.codebook_size, "cluster_size")?;
         let e_shape = (cfg.codebook_size, cfg.codebook_dim());
         let embed = vb.get(e_shape, "embed")?;
+        let c2 = ((&embed * &embed)?.sum(D::Minus1)? / 2.0)?;
         let embed_avg = vb.get(e_shape, "embed_avg")?;
         Ok(Self {
             inited,
             cluster_size,
             embed: candle_nn::Embedding::new(embed, cfg.codebook_dim()),
             embed_avg,
+            c2,
         })
+    }
+
+    pub fn encode_slow(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut target_shape = xs.dims().to_vec();
+        target_shape.pop();
+        let xs = xs.flatten_to(D::Minus2)?;
+        let _ = xs.dims2()?;
+        let dot_prod = xs.matmul(&self.embed.embeddings().t()?)?;
+        let codes = self.c2.broadcast_sub(&dot_prod)?.argmin(D::Minus1)?;
+        codes.reshape(target_shape)
+    }
+
+    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut target_shape = xs.dims().to_vec();
+        target_shape.pop();
+        let xs = xs.flatten_to(D::Minus2)?;
+        let _ = xs.dims2()?;
+        let codes = Tensor::apply_op2(&xs, self.embed.embeddings(), CodebookEncode)?;
+        codes.reshape(target_shape)
     }
 
     pub fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
@@ -258,6 +280,10 @@ impl VectorQuantization {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let codebook = EuclideanCodebook::new(cfg, vb.pp("codebook"))?;
         Ok(Self { codebook })
+    }
+
+    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+        self.codebook.encode_slow(xs)
     }
 
     pub fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
@@ -279,6 +305,18 @@ impl ResidualVectorQuantizer {
             .map(|i| VectorQuantization::new(cfg, vb.pp(i)))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self { layers })
+    }
+
+    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut codes = Vec::with_capacity(self.layers.len());
+        let mut residual = xs.clone();
+        for layer in self.layers.iter() {
+            let indices = layer.encode(&residual)?;
+            let quantized = layer.decode(&indices)?;
+            residual = (residual - quantized)?;
+            codes.push(indices)
+        }
+        Tensor::stack(&codes, 0)
     }
 
     pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
@@ -714,12 +752,10 @@ impl Model {
         })
     }
 
-    pub fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
-    }
-
-    pub fn encode(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
+        let xs = self.encoder.forward(xs)?;
+        let codes = self.quantizer.encode(&xs)?;
+        codes.transpose(0, 1)
     }
 
     pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
