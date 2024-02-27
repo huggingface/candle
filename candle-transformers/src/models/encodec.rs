@@ -5,14 +5,14 @@ use candle_nn::{conv1d, Conv1d, Conv1dConfig, ConvTranspose1d, VarBuilder};
 // Encodec Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py
 
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Deserialize)]
 pub enum NormType {
     WeightNorm,
     TimeGroupNorm,
     None,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Deserialize)]
 pub enum PadMode {
     Constant,
     Reflect,
@@ -37,7 +37,7 @@ pub struct Config {
     pub residual_kernel_size: usize,
     pub dilation_growth_rate: usize,
     pub use_causal_conv: bool,
-    pub pad_mode: &'static str,
+    pub pad_mode: PadMode,
     pub compress: usize,
     pub num_lstm_layers: usize,
     pub trim_right_ratio: f64,
@@ -65,7 +65,8 @@ impl Default for Config {
             residual_kernel_size: 3,
             dilation_growth_rate: 2,
             use_causal_conv: true,
-            pad_mode: "reflect",
+            // This should be PadMode::Reflect which is currently unsupported in candle.
+            pad_mode: PadMode::Replicate,
             compress: 2,
             num_lstm_layers: 2,
             trim_right_ratio: 1.0,
@@ -370,6 +371,7 @@ pub struct EncodecConv1d {
     causal: bool,
     conv: Conv1d,
     norm: Option<candle_nn::GroupNorm>,
+    pad_mode: PadMode,
 }
 
 impl EncodecConv1d {
@@ -418,14 +420,34 @@ impl EncodecConv1d {
             causal: cfg.use_causal_conv,
             conv,
             norm,
+            pad_mode: cfg.pad_mode,
         })
     }
 }
 
 impl Module for EncodecConv1d {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        // TODO: padding, depending on causal.
-        let xs = self.conv.forward(xs)?;
+        let (_b, _t, _c) = xs.dims3()?;
+        let k_size = self.conv.weight().dim(D::Minus1)?;
+        let conv_cfg = self.conv.config();
+        // Effective kernel size with dilations.
+        let k_size = (k_size - 1) * conv_cfg.dilation + 1;
+        let padding_total = k_size - conv_cfg.stride;
+        let extra_padding =
+            get_extra_padding_for_conv1d(xs, k_size, conv_cfg.stride, padding_total)?;
+        let xs = if self.causal {
+            pad1d(xs, padding_total, extra_padding, self.pad_mode)?
+        } else {
+            let padding_right = padding_total / 2;
+            let padding_left = padding_total - padding_right;
+            pad1d(
+                xs,
+                padding_left,
+                padding_right + extra_padding,
+                self.pad_mode,
+            )?
+        };
+        let xs = self.conv.forward(&xs)?;
         match &self.norm {
             None => Ok(xs),
             Some(norm) => xs.apply(norm),

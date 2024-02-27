@@ -22,8 +22,13 @@ struct Args {
     #[arg(long)]
     model: Option<String>,
 
+    /// Input file as a safetensors containing the encodec tokens.
     #[arg(long)]
     code_file: String,
+
+    /// Output file that will be generated in wav format.
+    #[arg(long)]
+    out: String,
 }
 
 fn main() -> Result<()> {
@@ -42,9 +47,9 @@ fn main() -> Result<()> {
     let codes = candle::safetensors::load(args.code_file, &device)?;
     let codes = codes.get("codes").expect("no codes in input file").i(0)?;
     let pcm = model.decode(&codes)?;
-    let pcm = pcm.to_vec1::<f32>()?;
+    let pcm = pcm.i(0)?.i(0)?.to_vec1::<f32>()?;
 
-    let mut output = std::fs::File::create("output.wav")?;
+    let mut output = std::fs::File::create(&args.out)?;
     candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
 
     Ok(())
