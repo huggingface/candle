@@ -1,6 +1,6 @@
 #![allow(unused)]
-use candle::{DType, IndexOp, Layout, Module, Result, Shape, Tensor};
-use candle_nn::{conv1d, Conv1d, Conv1dConfig, VarBuilder};
+use candle::{DType, IndexOp, Layout, Module, Result, Shape, Tensor, D};
+use candle_nn::{conv1d, Conv1d, Conv1dConfig, ConvTranspose1d, VarBuilder};
 
 // Encodec Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/encodec/modeling_encodec.py
@@ -10,6 +10,13 @@ pub enum NormType {
     WeightNorm,
     TimeGroupNorm,
     None,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum PadMode {
+    Constant,
+    Reflect,
+    Replicate,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -89,6 +96,27 @@ impl Config {
     }
 }
 
+fn get_extra_padding_for_conv1d(
+    xs: &Tensor,
+    k_size: usize,
+    stride: usize,
+    padding_total: usize,
+) -> Result<usize> {
+    let len = xs.dim(D::Minus1)?;
+    let n_frames = (len + padding_total).saturating_sub(k_size) as f64 / stride as f64 + 1.0;
+    let ideal_len =
+        ((n_frames.ceil() as usize - 1) * stride + k_size).saturating_sub(padding_total);
+    Ok(ideal_len.saturating_sub(len))
+}
+
+fn pad1d(xs: &Tensor, pad_l: usize, pad_r: usize, mode: PadMode) -> Result<Tensor> {
+    match mode {
+        PadMode::Constant => xs.pad_with_zeros(D::Minus1, pad_l, pad_r),
+        PadMode::Reflect => candle::bail!("pad-mode 'reflect' is not supported"),
+        PadMode::Replicate => xs.pad_with_same(D::Minus1, pad_l, pad_r),
+    }
+}
+
 // Applies weight norm for inference by recomputing the weight tensor. This
 // does not apply to training.
 // https://pytorch.org/docs/stable/generated/torch.nn.utils.weight_norm.html
@@ -96,7 +124,7 @@ pub fn conv1d_weight_norm(
     in_c: usize,
     out_c: usize,
     kernel_size: usize,
-    config: Conv1dConfig,
+    config: candle_nn::Conv1dConfig,
     vb: VarBuilder,
 ) -> Result<Conv1d> {
     let weight_g = vb.get((out_c, 1, 1), "weight_g")?;
@@ -105,6 +133,26 @@ pub fn conv1d_weight_norm(
     let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
     let bias = vb.get(out_c, "bias")?;
     Ok(Conv1d::new(weight, Some(bias), config))
+}
+
+fn conv_transpose1d_weight_norm(
+    in_c: usize,
+    out_c: usize,
+    kernel_size: usize,
+    bias: bool,
+    config: candle_nn::ConvTranspose1dConfig,
+    vb: VarBuilder,
+) -> Result<ConvTranspose1d> {
+    let weight_g = vb.get((in_c, 1, 1), "weight_g")?;
+    let weight_v = vb.get((in_c, out_c, kernel_size), "weight_v")?;
+    let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
+    let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
+    let bias = if bias {
+        Some(vb.get(out_c, "bias")?)
+    } else {
+        None
+    };
+    Ok(ConvTranspose1d::new(weight, bias, config))
 }
 
 struct CodebookEncode;
@@ -286,9 +334,7 @@ impl Module for EncodecLSTM {
 
 #[derive(Clone, Debug)]
 pub struct EncodecConvTranspose1d {
-    weight_g: Tensor,
-    weight_v: Tensor,
-    bias: Tensor,
+    conv: ConvTranspose1d,
 }
 
 impl EncodecConvTranspose1d {
@@ -296,25 +342,22 @@ impl EncodecConvTranspose1d {
         in_c: usize,
         out_c: usize,
         k: usize,
-        _stride: usize,
+        stride: usize,
         _cfg: &Config,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let vb = &vb.pp("conv");
-        let weight_g = vb.get((in_c, 1, 1), "weight_g")?;
-        let weight_v = vb.get((in_c, out_c, k), "weight_v")?;
-        let bias = vb.get(out_c, "bias")?;
-        Ok(Self {
-            weight_g,
-            weight_v,
-            bias,
-        })
+        let cfg = candle_nn::ConvTranspose1dConfig {
+            stride,
+            ..Default::default()
+        };
+        let conv = conv_transpose1d_weight_norm(in_c, out_c, k, true, cfg, vb.pp("conv"))?;
+        Ok(Self { conv })
     }
 }
 
 impl Module for EncodecConvTranspose1d {
-    fn forward(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.conv)
     }
 }
 
@@ -339,7 +382,7 @@ impl EncodecConv1d {
                 in_c,
                 out_c,
                 kernel_size,
-                Conv1dConfig {
+                candle_nn::Conv1dConfig {
                     padding: 0,
                     stride,
                     groups: 1,
@@ -351,7 +394,7 @@ impl EncodecConv1d {
                 in_c,
                 out_c,
                 kernel_size,
-                Conv1dConfig {
+                candle_nn::Conv1dConfig {
                     padding: 0,
                     stride,
                     groups: 1,
