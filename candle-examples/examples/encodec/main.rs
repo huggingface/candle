@@ -46,7 +46,7 @@ fn main() -> Result<()> {
 
     let codes = candle::safetensors::load(args.code_file, &device)?;
     let codes = codes.get("codes").expect("no codes in input file").i(0)?;
-    println!("codes shape: {:?}");
+    println!("codes shape: {:?}", codes.shape());
     let pcm = model.decode(&codes)?;
     let pcm = pcm.i(0)?.i(0)?.to_vec1::<f32>()?;
 
