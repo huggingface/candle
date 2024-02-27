@@ -323,11 +323,15 @@ impl EncodecLSTM {
 impl Module for EncodecLSTM {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         use candle_nn::RNN;
+        // This is different from the Python transformers version as candle LSTM is batch first.
+        let xs = xs.t()?;
+        let residual = &xs;
         let mut xs = xs.clone();
         for layer in self.layers.iter() {
             let states = layer.seq(&xs)?;
             xs = layer.states_to_tensor(&states)?;
         }
+        let xs = (xs + residual)?.t()?;
         Ok(xs)
     }
 }
@@ -683,6 +687,7 @@ impl Model {
     }
 
     pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+        let (_b_sz, _codebooks, _seqlen) = codes.dims3()?;
         let codes = codes.transpose(0, 1)?;
         let embeddings = self.quantizer.decode(&codes)?;
         let outputs = self.decoder.forward(&embeddings)?;

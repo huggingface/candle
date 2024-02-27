@@ -5,7 +5,7 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::Result;
-use candle::DType;
+use candle::{DType, IndexOp};
 use candle_nn::VarBuilder;
 use candle_transformers::models::encodec::{Config, Model};
 use clap::Parser;
@@ -40,8 +40,8 @@ fn main() -> Result<()> {
     let model = Model::new(&config, vb)?;
 
     let codes = candle::safetensors::load(args.code_file, &device)?;
-    let codes = codes.get("codes").expect("no codes in input file");
-    let pcm = model.decode(codes)?;
+    let codes = codes.get("codes").expect("no codes in input file").i(0)?;
+    let pcm = model.decode(&codes)?;
     let pcm = pcm.to_vec1::<f32>()?;
 
     let mut output = std::fs::File::create("output.wav")?;
