@@ -1,5 +1,5 @@
 #![allow(unused)]
-use candle::{DType, IndexOp, Module, Result, Tensor};
+use candle::{DType, IndexOp, Layout, Module, Result, Shape, Tensor};
 use candle_nn::{conv1d, Conv1d, Conv1dConfig, VarBuilder};
 
 // Encodec Model
@@ -70,37 +70,8 @@ impl Default for Config {
 }
 
 impl Config {
-    // https://huggingface.co/facebook/musicgen-small/blob/495da4ad086b3416a27c6187f9239f9fd96f3962/config.json#L6
-    pub fn musicgen_small() -> Self {
-        Self {
-            audio_channels: 1,
-            chunk_length_s: None,
-            codebook_dim: Some(128),
-            codebook_size: 2048,
-            compress: 2,
-            dilation_growth_rate: 2,
-            hidden_size: 128,
-            kernel_size: 7,
-            last_kernel_size: 7,
-            norm_type: NormType::WeightNorm,
-            normalize: false,
-            num_filters: 64,
-            num_lstm_layers: 2,
-            num_residual_layers: 1,
-            overlap: None,
-            pad_mode: "reflect",
-            residual_kernel_size: 3,
-            sampling_rate: 32_000,
-            target_bandwidths: vec![2.2],
-            trim_right_ratio: 1.0,
-            upsampling_ratios: vec![8, 5, 4, 4],
-            use_causal_conv: false,
-            use_conv_shortcut: false,
-        }
-    }
-
     fn codebook_dim(&self) -> usize {
-        self.codebook_dim.unwrap_or(self.codebook_size)
+        self.codebook_dim.unwrap_or(self.hidden_size)
     }
 
     fn frame_rate(&self) -> usize {
@@ -136,17 +107,80 @@ pub fn conv1d_weight_norm(
     Ok(Conv1d::new(weight, Some(bias), config))
 }
 
+struct CodebookEncode;
+
+impl candle::CustomOp2 for CodebookEncode {
+    fn name(&self) -> &'static str {
+        "cb"
+    }
+
+    fn cpu_fwd(
+        &self,
+        lhs_storage: &candle::CpuStorage,
+        lhs_layout: &Layout,
+        rhs_storage: &candle::CpuStorage,
+        rhs_layout: &Layout,
+    ) -> Result<(candle::CpuStorage, Shape)> {
+        use rayon::prelude::*;
+
+        let (lhs_dim1, lhs_dim2) = lhs_layout.shape().dims2()?;
+        let (rhs_dim1, rhs_dim2) = rhs_layout.shape().dims2()?;
+        if lhs_dim2 != rhs_dim2 {
+            candle::bail!("CodebookEncode, mismatch on last dim, {lhs_layout:?} {rhs_layout:?}");
+        }
+        if lhs_dim2 == 0 {
+            candle::bail!("CodebookEncode, empty last dim {lhs_layout:?}")
+        }
+        let lhs = match lhs_layout.contiguous_offsets() {
+            None => candle::bail!("CodebookEncode, lhs has to be contiguous, got {lhs_layout:?}"),
+            Some((o1, o2)) => {
+                let slice = lhs_storage.as_slice::<f32>()?;
+                &slice[o1..o2]
+            }
+        };
+        let rhs = match rhs_layout.contiguous_offsets() {
+            None => candle::bail!("CodebookEncode, rhs has to be contiguous, got {rhs_layout:?}"),
+            Some((o1, o2)) => {
+                let slice = rhs_storage.as_slice::<f32>()?;
+                &slice[o1..o2]
+            }
+        };
+        let dst = (0..lhs_dim1)
+            .into_par_iter()
+            .map(|idx1| {
+                let mut where_min = 0;
+                let mut min_dist = f32::INFINITY;
+                let lhs = &lhs[idx1 * lhs_dim2..(idx1 + 1) * lhs_dim2];
+                for idx2 in 0..rhs_dim1 {
+                    let rhs = &rhs[idx2 * rhs_dim2..(idx2 + 1) * rhs_dim2];
+                    let mut dist = 0f32;
+                    for (a, b) in lhs.iter().zip(rhs.iter()) {
+                        dist += (a - b) * (a - b)
+                    }
+                    if dist < min_dist {
+                        min_dist = dist;
+                        where_min = idx2;
+                    }
+                }
+                where_min as u32
+            })
+            .collect();
+        let storage = candle::WithDType::to_cpu_storage_owned(dst);
+        Ok((storage, (lhs_dim1,).into()))
+    }
+}
+
 // https://github.com/huggingface/transformers/blob/abaca9f9432a84cfaa95531de4c72334f38a42f2/src/transformers/models/encodec/modeling_encodec.py#L340
 #[derive(Clone, Debug)]
-struct EuclideanCodebook {
+pub struct EuclideanCodebook {
     inited: Tensor,
     cluster_size: Tensor,
-    embed: Tensor,
+    embed: candle_nn::Embedding,
     embed_avg: Tensor,
 }
 
 impl EuclideanCodebook {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let inited = vb.get(1, "inited")?;
         let cluster_size = vb.get(cfg.codebook_size, "cluster_size")?;
         let e_shape = (cfg.codebook_size, cfg.codebook_dim());
@@ -155,29 +189,29 @@ impl EuclideanCodebook {
         Ok(Self {
             inited,
             cluster_size,
-            embed,
+            embed: candle_nn::Embedding::new(embed, cfg.codebook_dim()),
             embed_avg,
         })
     }
 
-    fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
-        let quantize = self.embed.embedding(embed_ind)?;
+    pub fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
+        let quantize = self.embed.forward(embed_ind)?;
         Ok(quantize)
     }
 }
 
 #[derive(Clone, Debug)]
-struct VectorQuantization {
+pub struct VectorQuantization {
     codebook: EuclideanCodebook,
 }
 
 impl VectorQuantization {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let codebook = EuclideanCodebook::new(cfg, vb.pp("codebook"))?;
         Ok(Self { codebook })
     }
 
-    fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {
         let quantize = self.codebook.decode(embed_ind)?;
         let quantize = quantize.transpose(1, 2)?;
         Ok(quantize)
@@ -185,12 +219,12 @@ impl VectorQuantization {
 }
 
 #[derive(Clone, Debug)]
-struct ResidualVectorQuantizer {
+pub struct ResidualVectorQuantizer {
     layers: Vec<VectorQuantization>,
 }
 
 impl ResidualVectorQuantizer {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb = &vb.pp("layers");
         let layers = (0..cfg.num_quantizers())
             .map(|i| VectorQuantization::new(cfg, vb.pp(i)))
@@ -198,16 +232,17 @@ impl ResidualVectorQuantizer {
         Ok(Self { layers })
     }
 
-    fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+    pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
         let mut quantized_out = Tensor::zeros((), DType::F32, codes.device())?;
-        if codes.dim(0)? != self.layers.len() {
+        let ncodes = codes.dim(0)?;
+        if ncodes > self.layers.len() {
             candle::bail!(
                 "codes shape {:?} does not match the number of quantization layers {}",
                 codes.shape(),
                 self.layers.len()
             )
         }
-        for (i, layer) in self.layers.iter().enumerate() {
+        for (i, layer) in self.layers.iter().take(ncodes).enumerate() {
             let quantized = layer.decode(&codes.i(i)?)?;
             quantized_out = quantized.broadcast_add(&quantized_out)?;
         }
@@ -217,12 +252,12 @@ impl ResidualVectorQuantizer {
 
 // https://github.com/huggingface/transformers/blob/abaca9f9432a84cfaa95531de4c72334f38a42f2/src/transformers/models/encodec/modeling_encodec.py#L226
 #[derive(Clone, Debug)]
-struct EncodecLSTM {
+pub struct EncodecLSTM {
     layers: Vec<candle_nn::LSTM>,
 }
 
 impl EncodecLSTM {
-    fn new(dim: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(dim: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let vb = &vb.pp("lstm");
         let mut layers = vec![];
         for layer_idx in 0..cfg.num_lstm_layers {
@@ -250,7 +285,7 @@ impl Module for EncodecLSTM {
 }
 
 #[derive(Clone, Debug)]
-struct EncodecConvTranspose1d {
+pub struct EncodecConvTranspose1d {
     weight_g: Tensor,
     weight_v: Tensor,
     bias: Tensor,
@@ -284,14 +319,14 @@ impl Module for EncodecConvTranspose1d {
 }
 
 #[derive(Clone, Debug)]
-struct EncodecConv1d {
+pub struct EncodecConv1d {
     causal: bool,
     conv: Conv1d,
     norm: Option<candle_nn::GroupNorm>,
 }
 
 impl EncodecConv1d {
-    fn new(
+    pub fn new(
         in_c: usize,
         out_c: usize,
         kernel_size: usize,
@@ -352,14 +387,14 @@ impl Module for EncodecConv1d {
 }
 
 #[derive(Clone, Debug)]
-struct EncodecResnetBlock {
+pub struct EncodecResnetBlock {
     block_conv1: EncodecConv1d,
     block_conv2: EncodecConv1d,
     shortcut: Option<EncodecConv1d>,
 }
 
 impl EncodecResnetBlock {
-    fn new(dim: usize, dilations: &[usize], cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(dim: usize, dilations: &[usize], cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let h = dim / cfg.compress;
         let mut layer = Layer::new(vb.pp("block"));
         if dilations.len() != 2 {
@@ -422,7 +457,7 @@ impl<'a> Layer<'a> {
 }
 
 #[derive(Clone, Debug)]
-struct Encoder {
+pub struct Encoder {
     init_conv: EncodecConv1d,
     sampling_layers: Vec<(Vec<EncodecResnetBlock>, EncodecConv1d)>,
     final_lstm: EncodecLSTM,
@@ -430,7 +465,7 @@ struct Encoder {
 }
 
 impl Encoder {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let mut layer = Layer::new(vb.pp("layers"));
         let init_conv = EncodecConv1d::new(
             cfg.audio_channels,
@@ -483,7 +518,9 @@ impl Encoder {
             final_lstm,
         })
     }
+}
 
+impl Module for Encoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut xs = xs.apply(&self.init_conv)?;
         for (resnets, conv) in self.sampling_layers.iter() {
@@ -499,7 +536,7 @@ impl Encoder {
 }
 
 #[derive(Clone, Debug)]
-struct Decoder {
+pub struct Decoder {
     init_conv: EncodecConv1d,
     init_lstm: EncodecLSTM,
     sampling_layers: Vec<(EncodecConvTranspose1d, Vec<EncodecResnetBlock>)>,
@@ -507,7 +544,7 @@ struct Decoder {
 }
 
 impl Decoder {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let mut layer = Layer::new(vb.pp("layers"));
         let mut scaling = usize::pow(2, cfg.upsampling_ratios.len() as u32);
         let init_conv = EncodecConv1d::new(
@@ -560,7 +597,9 @@ impl Decoder {
             final_conv,
         })
     }
+}
 
+impl Module for Decoder {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut xs = xs.apply(&self.init_conv)?.apply(&self.init_lstm)?;
         for (conv, resnets) in self.sampling_layers.iter() {
@@ -600,7 +639,10 @@ impl Model {
         todo!()
     }
 
-    pub fn decode(&self, _xs: &Tensor) -> Result<Tensor> {
-        todo!()
+    pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+        let codes = codes.transpose(0, 1)?;
+        let embeddings = self.quantizer.decode(&codes)?;
+        let outputs = self.decoder.forward(&embeddings)?;
+        Ok(outputs)
     }
 }
