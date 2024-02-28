@@ -83,6 +83,8 @@ We also provide a some command line based examples using state of the art models
 - [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Yi-6B / Yi-34B](./candle-examples/examples/yi/): two bilingual
   (English/Chinese) general LLMs with 6b and 34b parameters.
+- [EnCodec](./candle-examples/examples/encodec/): high-quality audio compression
+  model using residual vector quantization.
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
@@ -210,13 +212,15 @@ If you have an addition to this list, please submit a pull request.
     - Text to text.
         - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
-    - Whisper (multi-lingual support).
     - Text to image.
         - Stable Diffusion v1.5, v2.1, XL v1.0.
         - Wurstchen v2.
     - Image to text.
         - BLIP.
         - TrOCR.
+    - Audio.
+        - Whisper, multi-lingual text-to-speech.
+        - EnCodec, audio compression model.
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
           ConvNeXTv2.
