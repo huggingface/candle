@@ -76,7 +76,8 @@ We also provide a some command line based examples using state of the art models
 - [Mixtral8x7b-v0.1](./candle-examples/examples/mixtral/): a sparse mixture of
   experts 8x7b general LLM with better performance than a Llama 2 70B model with
   much faster inference.
-- [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
+- [StarCoder](./candle-examples/examples/bigcode/) and
+  [StarCoder2](./candle-examples/examples/starcoder2/): LLM specialized to code generation.
 - [Qwen1.5](./candle-examples/examples/qwen/): Bilingual (English/Chinese) LLMs.
 - [RWKV v5](./candle-examples/examples/rwkv/): An RNN with transformer level LLM
   performance.
@@ -191,7 +192,7 @@ If you have an addition to this list, please submit a pull request.
     - Language Models.
         - LLaMA v1 and v2 with variants such as SOLAR-10.7B.
         - Falcon.
-        - StarCoder.
+        - StarCoder, StarCoder2.
         - Phi 1, 1.5, and 2.
         - Mamba, Minimal Mamba
         - Gemma 2b and 7b.
