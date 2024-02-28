@@ -12,7 +12,7 @@ readme = "README.md"
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
 candle = { workspace = true }
-candle-datasets = { workspace = true }
+candle-datasets = { workspace = true, optional = true }
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
 candle-flash-attn = { workspace = true, optional = true }
@@ -30,7 +30,7 @@ rayon = { workspace = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-symphonia = { version = "0.5.3", features = ["all"] }
+symphonia = { version = "0.5.3", features = ["all"], optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
 cpal= { version = "0.15.2", optional = true }
 
@@ -81,5 +81,23 @@ name = "onnx_basics"
 required-features = ["onnx"]
 
 [[example]]
+name = "whisper"
+required-features = ["symphonia"]
+
+[[example]]
 name = "whisper-microphone"
 required-features = ["microphone"]
+
+[[example]]
+name = "mnist-training"
+required-features = ["candle-datasets"]
+
+[[example]]
+name = "llama2-c"
+required-features = ["candle-datasets"]
+
+[[example]]
+name = "encodec"
+required-features = ["symphonia"]
+
+

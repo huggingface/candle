@@ -8,6 +8,7 @@ pub mod convnext;
 pub mod dinov2;
 pub mod distilbert;
 pub mod efficientnet;
+pub mod encodec;
 pub mod falcon;
 pub mod gemma;
 pub mod jina_bert;
