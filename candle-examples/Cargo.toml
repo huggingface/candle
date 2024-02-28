@@ -95,3 +95,9 @@ required-features = ["candle-datasets"]
 [[example]]
 name = "llama2-c"
 required-features = ["candle-datasets"]
+
+[[example]]
+name = "encodec"
+required-features = ["symphonia"]
+
+
