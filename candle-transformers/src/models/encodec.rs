@@ -283,7 +283,8 @@ impl VectorQuantization {
     }
 
     pub fn encode(&self, xs: &Tensor) -> Result<Tensor> {
-        self.codebook.encode_slow(xs)
+        let xs = xs.transpose(1, 2)?;
+        self.codebook.encode_slow(&xs)
     }
 
     pub fn decode(&self, embed_ind: &Tensor) -> Result<Tensor> {

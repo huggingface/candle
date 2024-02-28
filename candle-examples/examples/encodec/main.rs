@@ -29,6 +29,10 @@ struct Args {
     /// Output file that will be generated in wav format.
     #[arg(long)]
     out: String,
+
+    /// Do another step of encoding the PCM data and and decoding the resulting codes.
+    #[arg(long)]
+    roundtrip: bool,
 }
 
 fn main() -> Result<()> {
@@ -48,8 +52,19 @@ fn main() -> Result<()> {
     let codes = codes.get("codes").expect("no codes in input file").i(0)?;
     println!("codes shape: {:?}", codes.shape());
     let pcm = model.decode(&codes)?;
-    let pcm = pcm.i(0)?.i(0)?.to_vec1::<f32>()?;
+    println!("pcm shape: {:?}", pcm.shape());
 
+    let pcm = if args.roundtrip {
+        let codes = model.encode(&pcm)?;
+        println!("second step codes shape: {:?}", pcm.shape());
+        let pcm = model.decode(&codes)?;
+        println!("second step pcm shape: {:?}", pcm.shape());
+        pcm
+    } else {
+        pcm
+    };
+
+    let pcm = pcm.i(0)?.i(0)?.to_vec1::<f32>()?;
     let mut output = std::fs::File::create(&args.out)?;
     candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
 
