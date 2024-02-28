@@ -238,6 +238,20 @@ struct Min {
     METAL_FUNC half2 operator()(half2 a, half2 b) { return min(a, b); }
     METAL_FUNC half4 operator()(half4 a, half4 b) { return min(a, b); }
 
+    METAL_FUNC uint operator()(uint a, uint b) { return min(a, b); }
+    METAL_FUNC uint2 operator()(uint2 a, uint2 b) { return min(a, b); }
+    METAL_FUNC uint4 operator()(uint4 a, uint4 b) { return min(a, b); }
+
+    METAL_FUNC uchar operator()(uchar a, uchar b) { return min(a, b); }
+    METAL_FUNC uchar2 operator()(uchar2 a, uchar2 b) { return min(a, b); }
+    METAL_FUNC uchar4 operator()(uchar4 a, uchar4 b) { return min(a, b); }
+
+    #if __METAL_VERSION__ >= 220
+    METAL_FUNC long operator()(long a, long b) { return min(a, b); }
+    METAL_FUNC long2 operator()(long2 a, long2 b) { return min(a, b); }
+    METAL_FUNC long4 operator()(long4 a, long4 b) { return min(a, b); }
+    #endif
+
     #if defined(__HAVE_BFLOAT__)
     METAL_FUNC bfloat operator()(bfloat a, bfloat b) { return static_cast<bfloat>(fast::min(static_cast<float>(a), static_cast<float>(b))); }
     METAL_FUNC bfloat2 operator()(bfloat2 a, bfloat2 b) { return as_type<bfloat2>(fast::min(as_type<float>(a), as_type<float>(b))); }
@@ -263,6 +277,20 @@ struct Max {
     METAL_FUNC half operator()(half a, half b) { return max(a, b); }
     METAL_FUNC half2 operator()(half2 a, half2 b) { return max(a, b); }
     METAL_FUNC half4 operator()(half4 a, half4 b) { return max(a, b); }
+
+    METAL_FUNC uint operator()(uint a, uint b) { return max(a, b); }
+    METAL_FUNC uint2 operator()(uint2 a, uint2 b) { return max(a, b); }
+    METAL_FUNC uint4 operator()(uint4 a, uint4 b) { return max(a, b); }
+
+    METAL_FUNC uchar operator()(uchar a, uchar b) { return max(a, b); }
+    METAL_FUNC uchar2 operator()(uchar2 a, uchar2 b) { return max(a, b); }
+    METAL_FUNC uchar4 operator()(uchar4 a, uchar4 b) { return max(a, b); }
+
+    #if __METAL_VERSION__ >= 220
+    METAL_FUNC long operator()(long a, long b) { return max(a, b); }
+    METAL_FUNC long2 operator()(long2 a, long2 b) { return max(a, b); }
+    METAL_FUNC long4 operator()(long4 a, long4 b) { return max(a, b); }
+    #endif
 
     #if defined(__HAVE_BFLOAT__)
     METAL_FUNC bfloat operator()(bfloat a, bfloat b) { return static_cast<bfloat>(fast::max(static_cast<float>(a), static_cast<float>(b))); }
@@ -1257,54 +1285,54 @@ impl_softmax_inner(NAME##x2, T##2)                      \
 impl_softmax_inner(NAME##x4, T##4)
 
 impl_reduce(Sum, fast_sum_f32, float)
-//impl_reduce(Sum, fast_sum_u32, uint)
+impl_reduce(Sum, fast_sum_u32, uint)
 impl_reduce(Sum, fast_sum_f16, half)
-//impl_reduce(Sum, fast_sum_u8, uint8_t)
-//
-//impl_reduce(Mul, fast_mul_f32, float)
-//impl_reduce(Mul, fast_mul_u32, uint)
-//impl_reduce(Mul, fast_mul_f16, half)
-//impl_reduce(Mul, fast_mul_u8, uint8_t)
+impl_reduce(Sum, fast_sum_u8, uint8_t)
+
+impl_reduce(Mul, fast_mul_f32, float)
+impl_reduce(Mul, fast_mul_u32, uint)
+impl_reduce(Mul, fast_mul_f16, half)
+impl_reduce(Mul, fast_mul_u8, uint8_t)
 
 impl_reduce(Max, fast_max_f32, float)
-//impl_reduce(Max, fast_max_u32, uint)
-//impl_reduce(Max, fast_max_f16, half)
-//impl_reduce(Max, fast_max_u8, uint8_t)
-//
-//impl_reduce(Min, fast_min_f32, float)
-//impl_reduce(Min, fast_min_u32, uint)
-//impl_reduce(Min, fast_min_f16, half)
-//impl_reduce(Min, fast_min_u8, uint8_t)
-//
+impl_reduce(Max, fast_max_u32, uint)
+impl_reduce(Max, fast_max_f16, half)
+impl_reduce(Max, fast_max_u8, uint8_t)
+
+impl_reduce(Min, fast_min_f32, float)
+impl_reduce(Min, fast_min_u32, uint)
+impl_reduce(Min, fast_min_f16, half)
+impl_reduce(Min, fast_min_u8, uint8_t)
+
 impl_arg_reduce(Min, fast_argmin_f32, float)
 impl_arg_reduce(Min, fast_argmin_f16, half)
-//impl_arg_reduce(Min, fast_argmin_u32, uint)
-//impl_arg_reduce(Min, fast_argmin_u8, uint8_t)
+impl_arg_reduce(Min, fast_argmin_u32, uint)
+impl_arg_reduce(Min, fast_argmin_u8, uint8_t)
 
 impl_arg_reduce(Max, fast_argmax_f32, float)
 impl_arg_reduce(Max, fast_argmax_f16, half)
-//impl_arg_reduce(Max, fast_argmax_u32, uint)
-//impl_arg_reduce(Max, fast_argmax_u8, uint8_t)
+impl_arg_reduce(Max, fast_argmax_u32, uint)
+impl_arg_reduce(Max, fast_argmax_u8, uint8_t)
 
 impl_softmax(softmax_f32, float)
 impl_softmax(softmax_f16, half)
 
 #if __METAL_VERSION__ >= 220
 impl_reduce(Sum, fast_sum_i64, int64_t)
-//impl_reduce(Mul, fast_mul_i64, int64_t)
-//impl_reduce(Min, fast_min_i64, int64_t)
-//impl_reduce(Max, fast_max_i64, int64_t)
-//
-//impl_arg_reduce(Min, fast_argmin_i64, int64_t)
-//impl_arg_reduce(Max, fast_argmax_i64, int64_t)
+impl_reduce(Mul, fast_mul_i64, int64_t)
+impl_reduce(Min, fast_min_i64, int64_t)
+impl_reduce(Max, fast_max_i64, int64_t)
+
+impl_arg_reduce(Min, fast_argmin_i64, int64_t)
+impl_arg_reduce(Max, fast_argmax_i64, int64_t)
 #endif
 
 #if defined(__HAVE_BFLOAT__)
 impl_reduce(Sum, fast_sum_bf16, bfloat)
-//impl_reduce(Mul, fast_mul_bf16, bfloat)
+impl_reduce(Mul, fast_mul_bf16, bfloat)
 impl_reduce(Max, fast_max_bf16, bfloat)
-//impl_reduce(Min, fast_min_bf16, bfloat)
-//
+impl_reduce(Min, fast_min_bf16, bfloat)
+
 impl_arg_reduce(Min, fast_argmin_bf16, bfloat)
 impl_arg_reduce(Max, fast_argmax_bf16, bfloat)
 
