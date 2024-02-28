@@ -20,6 +20,7 @@ pub enum Activation {
     HardSwish,
     Elu(f64),
     LeakyRelu(f64),
+    #[serde(alias = "gelu_pytorch_tanh")]
     GeluPytorchTanh,
 }
 
