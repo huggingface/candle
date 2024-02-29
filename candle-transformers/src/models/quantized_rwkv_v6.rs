@@ -229,7 +229,7 @@ impl FeedForward {
     fn forward(&self, xs: &Tensor, state: &mut State) -> Result<Tensor> {
         let shifted = state.per_layer[self.layer_id]
             .feed_forward
-            .broadcast_sub(&xs)?;
+            .broadcast_sub(xs)?;
         let key = (xs + shifted.broadcast_mul(&self.time_mix_key)?)?;
         let receptance = (xs + shifted.broadcast_mul(&self.time_mix_receptance)?)?;
         let key = key.apply(&self.key)?.relu()?.sqr()?;
