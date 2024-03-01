@@ -224,7 +224,7 @@ If you have an addition to this list, please submit a pull request.
         - EnCodec, audio compression model.
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
-          ConvNeXTv2.
+          ConvNeXTv2, MobileOne, EfficientVit (MSRA).
         - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
