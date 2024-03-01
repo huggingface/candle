@@ -76,13 +76,16 @@ We also provide a some command line based examples using state of the art models
 - [Mixtral8x7b-v0.1](./candle-examples/examples/mixtral/): a sparse mixture of
   experts 8x7b general LLM with better performance than a Llama 2 70B model with
   much faster inference.
-- [StarCoder](./candle-examples/examples/bigcode/): LLM specialized to code generation.
+- [StarCoder](./candle-examples/examples/bigcode/) and
+  [StarCoder2](./candle-examples/examples/starcoder2/): LLM specialized to code generation.
 - [Qwen1.5](./candle-examples/examples/qwen/): Bilingual (English/Chinese) LLMs.
-- [RWKV v5](./candle-examples/examples/rwkv/): An RNN with transformer level LLM
+- [RWKV v5 and v6](./candle-examples/examples/rwkv/): An RNN with transformer level LLM
   performance.
 - [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Yi-6B / Yi-34B](./candle-examples/examples/yi/): two bilingual
   (English/Chinese) general LLMs with 6b and 34b parameters.
+- [EnCodec](./candle-examples/examples/encodec/): high-quality audio compression
+  model using residual vector quantization.
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
@@ -189,7 +192,7 @@ If you have an addition to this list, please submit a pull request.
     - Language Models.
         - LLaMA v1 and v2 with variants such as SOLAR-10.7B.
         - Falcon.
-        - StarCoder.
+        - StarCoder, StarCoder2.
         - Phi 1, 1.5, and 2.
         - Mamba, Minimal Mamba
         - Gemma 2b and 7b.
@@ -200,7 +203,7 @@ If you have an addition to this list, please submit a pull request.
         - Bert.
         - Yi-6B and Yi-34B.
         - Qwen1.5.
-        - RWKV.
+        - RWKV v5 and v6.
     - Quantized LLMs.
         - Llama 7b, 13b, 70b, as well as the chat and code variants.
         - Mistral 7b, and 7b instruct.
@@ -210,16 +213,18 @@ If you have an addition to this list, please submit a pull request.
     - Text to text.
         - T5 and its variants: FlanT5, UL2, MADLAD400 (translation), CoEdit (Grammar correction).
         - Marian MT (Machine Translation).
-    - Whisper (multi-lingual support).
     - Text to image.
         - Stable Diffusion v1.5, v2.1, XL v1.0.
         - Wurstchen v2.
     - Image to text.
         - BLIP.
         - TrOCR.
+    - Audio.
+        - Whisper, multi-lingual text-to-speech.
+        - EnCodec, audio compression model.
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
-          ConvNeXTv2.
+          ConvNeXTv2, MobileOne, EfficientVit (MSRA).
         - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.

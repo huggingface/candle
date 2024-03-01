@@ -231,10 +231,6 @@ fn quantize_q4_1(device: &Device) -> Result<()> {
 }
 
 fn quantize_q5_0(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
     let src = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant = quantized::QTensor::quantize(&src, GgmlDType::Q5_0)?;
@@ -261,10 +257,6 @@ fn quantize_q5_0(device: &Device) -> Result<()> {
 }
 
 fn quantize_q5_1(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
     let src = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant = quantized::QTensor::quantize(&src, GgmlDType::Q5_1)?;

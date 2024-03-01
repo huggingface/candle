@@ -216,6 +216,10 @@ struct Args {
     #[arg(long)]
     split_prompt: bool,
 
+    /// Run on CPU rather than GPU even if a GPU is available.
+    #[arg(long)]
+    cpu: bool,
+
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.1)]
     repeat_penalty: f32,
@@ -365,7 +369,7 @@ fn main() -> anyhow::Result<()> {
     let model_path = args.model()?;
     let mut file = std::fs::File::open(&model_path)?;
     let start = std::time::Instant::now();
-    let device = candle_examples::device(false)?;
+    let device = candle_examples::device(args.cpu)?;
 
     let mut model = match model_path.extension().and_then(|v| v.to_str()) {
         Some("gguf") => {
