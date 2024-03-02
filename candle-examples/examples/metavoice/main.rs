@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::encodec;
-use candle_transformers::models::metavoice::{adapters, gpt, transformer};
+use candle_transformers::models::metavoice::{adapters, gpt, tokenizers, transformer};
 
 use candle::{DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
@@ -49,6 +49,9 @@ struct Args {
     out_file: String,
 
     #[arg(long)]
+    first_stage_meta: Option<String>,
+
+    #[arg(long)]
     first_stage_weights: Option<String>,
 
     #[arg(long)]
@@ -83,6 +86,21 @@ fn main() -> Result<()> {
     let device = candle_examples::device(args.cpu)?;
     let api = Api::new()?;
     let repo = api.model("lmz/candle-metavoice".to_string());
+    let first_stage_meta = match &args.first_stage_meta {
+        Some(w) => std::path::PathBuf::from(w),
+        None => repo.get("first_stage.meta.json")?,
+    };
+    let first_stage_meta: serde_json::Value =
+        serde_json::from_reader(&std::fs::File::open(first_stage_meta)?)?;
+    let first_stage_tokenizer = match first_stage_meta.as_object() {
+        None => anyhow::bail!("not a json object"),
+        Some(j) => match j.get("tokenizer") {
+            None => anyhow::bail!("no tokenizer key"),
+            Some(j) => j,
+        },
+    };
+    let fs_tokenizer = tokenizers::BPE::from_json(first_stage_tokenizer, 512)?;
+
     let first_stage_weights = match &args.first_stage_weights {
         Some(w) => std::path::PathBuf::from(w),
         None => repo.get("first_stage.safetensors")?,
@@ -114,13 +132,10 @@ fn main() -> Result<()> {
     let encodec_config = encodec::Config::default();
     let encodec_model = encodec::Model::new(&encodec_config, encodec_vb)?;
 
-    // TODO: Properly tokenize the prompt with BPE rather than encoding the tokens here.
-    let mut tokens = vec![
-        2133u32, 2153, 2320, 2388, 2307, 2434, 2158, 2160, 2328, 2305, 2150, 2169, 2165, 2327,
-        2311, 2456, 2150, 2419, 2452, 2428, 2377, 2146, 2135, 2160, 2355, 2150, 2094, 2098, 2115,
-        2093, 2399, 2313, 2161, 2325, 2094, 2164, 2483, 2374, 2323, 2514, 2487, 2380, 2307, 2166,
-        2149, 2154, 2160, 2321, 2160, 2149, 2150, 2157, 2095, 2561,
-    ];
+    println!("prompt: '{}'", args.prompt);
+    let prompt_tokens = fs_tokenizer.encode(&args.prompt)?;
+    let mut tokens = prompt_tokens.clone();
+    println!("{tokens:?}");
     let spk_emb_file = match &args.spk_emb {
         Some(w) => std::path::PathBuf::from(w),
         None => repo.get("spk_emb.safetensors")?,
@@ -155,13 +170,8 @@ fn main() -> Result<()> {
     let (text_ids, ids1, ids2) = fie2c.decode(&tokens);
     println!("text ids len: {}", text_ids.len());
     let mut rng = rand::rngs::StdRng::seed_from_u64(args.seed + 1337);
-    // TODO: Generate these properly, BPE Tokenization.
-    let encoded_text = vec![
-        1109u32, 1129, 1296, 1364, 1283, 1410, 1134, 1136, 1304, 1281, 1126, 1145, 1141, 1303,
-        1287, 1432, 1126, 1395, 1428, 1404, 1353, 1122, 1111, 1136, 1331, 1126, 1070, 1074, 1091,
-        1069, 1375, 1289, 1137, 1301, 1070, 1140, 1459, 1350, 1299, 1490, 1463, 1356, 1283, 1142,
-        1125, 1130, 1136, 1297, 1136, 1125, 1126, 1133, 1071, 1537,
-    ];
+    // TODO: Use the config rather than hardcoding the offset here.
+    let encoded_text: Vec<_> = prompt_tokens.iter().map(|v| v - 1024).collect();
     let hierarchies_in1 = [encoded_text.as_slice(), ids1.as_slice(), &[ENCODEC_NTOKENS]].concat();
     let hierarchies_in2 = [
         vec![ENCODEC_NTOKENS; encoded_text.len()].as_slice(),

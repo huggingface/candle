@@ -1,4 +1,4 @@
-use candle::{DType, IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Error as E, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{embedding, linear_b, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 
 // Equivalent to torch.repeat_interleave
@@ -84,10 +84,162 @@ pub mod speaker_encoder {
     }
 }
 
+type Rank = u32;
+
+pub mod tokenizers {
+    use super::*;
+    use std::collections::HashMap;
+
+    pub struct BPE {
+        pub re: fancy_regex::Regex,
+        pub end_of_text: usize,
+        pub offset: usize,
+        pub ranks: HashMap<Vec<u8>, Rank>,
+    }
+
+    impl BPE {
+        pub fn from_json(json: &serde_json::Value, end_of_text: usize) -> Result<Self> {
+            let json = match json.as_object() {
+                None => candle::bail!("json value is not an object"),
+                Some(json) => json,
+            };
+            let re = match json.get("pat_str") {
+                None => candle::bail!("json object has no pat_str field"),
+                Some(pat_str) => match pat_str.as_str() {
+                    None => candle::bail!("pat_str field is not a string"),
+                    Some(pat_str) => fancy_regex::Regex::new(pat_str).map_err(E::wrap)?,
+                },
+            };
+            let offset = match json.get("offset") {
+                None => candle::bail!("json object has no offset field"),
+                Some(offset) => match offset.as_u64() {
+                    None => candle::bail!("offset field is not a positive int"),
+                    Some(offset) => offset as usize,
+                },
+            };
+            let mut ranks = HashMap::new();
+            for id in 0u8..=255 {
+                ranks.insert(vec![id], id as u32);
+            }
+            let mergeable_ranks = match json.get("mergeable_ranks") {
+                None => candle::bail!("json object has no mergeable_ranks field"),
+                Some(mr) => match mr.as_object() {
+                    None => candle::bail!("mergeable_ranks is not an object"),
+                    Some(mr) => mr,
+                },
+            };
+            for (key, value) in mergeable_ranks.iter() {
+                let value = match value.as_u64() {
+                    None => candle::bail!("mergeable_ranks '{key}' is not a u64"),
+                    Some(value) => value as u32,
+                };
+                if value < 256 {
+                    continue;
+                }
+                // No escaping for other keys.
+                let key = key.as_bytes().to_vec();
+                ranks.insert(key, value);
+            }
+            Ok(Self {
+                re,
+                end_of_text,
+                offset,
+                ranks,
+            })
+        }
+
+        // Taken from:
+        // https://github.com/openai/tiktoken/blob/1b9faf2779855124f05174adf1383e53689ed94b/src/lib.rs#L16C1-L82C2
+        fn _byte_pair_merge(&self, piece: &[u8]) -> Vec<(usize, Rank)> {
+            // This is a vector of (start, rank).
+            // The rank is of the pair starting at position start.
+            let mut parts = Vec::with_capacity(piece.len() + 1);
+
+            // Note that we hash bytes when indexing into `ranks`, not token pairs. As long as we train BPE
+            // the way we currently do, this is equivalent. An easy way to break this would be to decouple
+            // merge priority from token index or to prevent specific token merges.
+            let mut min_rank: (Rank, usize) = (Rank::MAX, usize::MAX);
+            for i in 0..piece.len() - 1 {
+                let rank = *self.ranks.get(&piece[i..i + 2]).unwrap_or(&Rank::MAX);
+                if rank < min_rank.0 {
+                    min_rank = (rank, i);
+                }
+                parts.push((i, rank));
+            }
+            parts.push((piece.len() - 1, Rank::MAX));
+            parts.push((piece.len(), Rank::MAX));
+
+            let get_rank = {
+                #[inline(always)]
+                |parts: &Vec<(usize, Rank)>, i: usize| {
+                    if (i + 3) < parts.len() {
+                        // Similar to `piece[i..i + 2]` above. The +3 is because we haven't yet deleted
+                        // parts[i + 1], see comment in the main loop.
+                        *self
+                            .ranks
+                            .get(&piece[parts[i].0..parts[i + 3].0])
+                            .unwrap_or(&Rank::MAX)
+                    } else {
+                        Rank::MAX
+                    }
+                }
+            };
+
+            // If you have n parts and m merges, this does O(mn) work.
+            // We could do something with a heap and do O(m log n) work.
+            // n is often very small so considerations like cache-locality outweigh the algorithmic
+            // complexity downsides of the `parts` vector.
+            while min_rank.0 != Rank::MAX {
+                let i = min_rank.1;
+                // Update parts[i] and parts[i - 1] before removing parts[i + 1], since
+                // `parts.remove(i + 1)` will thrash the cache.
+                if i > 0 {
+                    parts[i - 1].1 = get_rank(&parts, i - 1);
+                }
+                parts[i].1 = get_rank(&parts, i);
+                parts.remove(i + 1);
+
+                min_rank = (Rank::MAX, usize::MAX);
+                for (i, &(_, rank)) in parts[..parts.len() - 1].iter().enumerate() {
+                    if rank < min_rank.0 {
+                        min_rank = (rank, i);
+                    }
+                }
+            }
+            parts
+        }
+
+        pub fn byte_pair_encode(&self, piece: &[u8]) -> Vec<Rank> {
+            if piece.is_empty() {
+                return Vec::new();
+            }
+            if piece.len() == 1 {
+                return vec![self.ranks[piece]];
+            }
+            assert!(piece.len() > 1);
+            self._byte_pair_merge(piece)
+                .windows(2)
+                .map(|part| self.ranks[&piece[part[0].0..part[1].0]])
+                .collect()
+        }
+
+        pub fn encode(&self, text: &str) -> Result<Vec<u32>> {
+            let mut bpe_tokens: Vec<u32> = Vec::new();
+            for word in self.re.find_iter(text) {
+                let word = word.map_err(E::wrap)?;
+                let word_tokens = self.byte_pair_encode(word.as_str().as_bytes());
+                for &token in word_tokens.iter() {
+                    bpe_tokens.push(token + self.offset as u32)
+                }
+            }
+            bpe_tokens.push((self.end_of_text + self.offset) as u32);
+            Ok(bpe_tokens)
+        }
+    }
+}
+
 pub mod gpt {
     use super::*;
-
-    pub struct BPETokenizer;
 
     #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
     pub enum NormType {
