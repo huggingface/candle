@@ -42,6 +42,7 @@ candle-transformers = { path = "./candle-transformers", version = "0.4.1" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.5.1", default-features=false }
 cudarc = { version = "0.10.0", features = ["f16"] }
+fancy-regex = "0.13.0"
 gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
 hf-hub = "0.3.0"
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
