@@ -658,3 +658,41 @@ pub mod transformer {
         }
     }
 }
+
+pub mod adapters {
+    // https://github.com/metavoiceio/metavoice-src/blob/9078234c496d76adbec06df789b6b04b1875f129/fam/llm/adapters/tilted_encodec.py
+    pub struct TiltedEncodec {
+        end_of_audio_token: u32,
+    }
+
+    impl TiltedEncodec {
+        pub fn new(end_of_audio_token: u32) -> Self {
+            Self { end_of_audio_token }
+        }
+
+        pub fn decode(&self, tokens: &[Vec<u32>]) -> (Vec<u32>, Vec<Vec<u32>>) {
+            let mut text_ids = vec![];
+            let mut extracted_audio_ids = vec![];
+            let mut min_audio_ids_len = usize::MAX;
+            for (book_id, tokens) in tokens.iter().enumerate() {
+                let mut audio_ids = vec![];
+                for &t in tokens.iter() {
+                    #[allow(clippy::comparison_chain)]
+                    if t > self.end_of_audio_token {
+                        if book_id == 0 {
+                            text_ids.push(t)
+                        }
+                    } else if t < self.end_of_audio_token {
+                        audio_ids.push(t)
+                    }
+                }
+                min_audio_ids_len = usize::min(min_audio_ids_len, audio_ids.len());
+                extracted_audio_ids.push(audio_ids)
+            }
+            for audio_ids in extracted_audio_ids.iter_mut() {
+                audio_ids.truncate(min_audio_ids_len)
+            }
+            (text_ids, extracted_audio_ids)
+        }
+    }
+}

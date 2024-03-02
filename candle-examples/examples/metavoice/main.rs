@@ -9,7 +9,7 @@ use clap::Parser;
 
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::encodec;
-use candle_transformers::models::metavoice::{gpt, transformer};
+use candle_transformers::models::metavoice::{adapters, gpt, transformer};
 
 use candle::{DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
@@ -177,10 +177,14 @@ fn main() -> Result<()> {
 
         let codes = Tensor::new(codes, &device)?.unsqueeze(0)?;
         let codes = Tensor::cat(&[in_x, codes], 1)?;
-
-        println!("codes shape: {:?}", codes.shape());
-        let pcm = encodec_model.decode(&codes)?;
-        // TODO: Apply data_adapter_second_stage.
+        println!("codes: {codes}");
+        let tilted_encodec = adapters::TiltedEncodec::new(1024);
+        let codes = codes.i(0)?.to_vec2::<u32>()?;
+        let (text_ids, audio_ids) = tilted_encodec.decode(&codes);
+        println!("text_ids len: {:?}", text_ids.len());
+        let audio_ids = Tensor::new(audio_ids, &device)?;
+        println!("audio_ids shape: {:?}", audio_ids.shape());
+        let pcm = encodec_model.decode(&audio_ids)?;
         println!("output pcm shape: {:?}", pcm.shape());
         let pcm = pcm.i(0)?.i(0)?.to_vec1::<f32>()?;
         let mut output = std::fs::File::create(&args.out_file)?;
