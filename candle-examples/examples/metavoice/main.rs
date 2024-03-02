@@ -8,11 +8,13 @@ use anyhow::Result;
 use clap::Parser;
 
 use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::models::encodec;
 use candle_transformers::models::metavoice::{gpt, transformer};
 
 use candle::{DType, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::api::sync::Api;
+use rand::{distributions::Distribution, SeedableRng};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -40,11 +42,18 @@ struct Args {
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
 
+    /// The output file using the wav format.
+    #[arg(long, default_value = "out.wav")]
+    out_file: String,
+
     #[arg(long)]
     first_stage_weights: Option<String>,
 
     #[arg(long)]
     second_stage_weights: Option<String>,
+
+    #[arg(long)]
+    encodec_weights: Option<String>,
 
     #[arg(long)]
     spk_emb: Option<String>,
@@ -80,6 +89,12 @@ fn main() -> Result<()> {
         Some(w) => std::path::PathBuf::from(w),
         None => repo.get("second_stage.safetensors")?,
     };
+    let encodec_weights = match args.encodec_weights {
+        Some(w) => std::path::PathBuf::from(w),
+        None => Api::new()?
+            .model("facebook/encodec_24khz".to_string())
+            .get("model.safetensors")?,
+    };
     let first_stage_vb = unsafe {
         VarBuilder::from_mmaped_safetensors(&[first_stage_weights], DType::F32, &device)?
     };
@@ -91,6 +106,11 @@ fn main() -> Result<()> {
     };
     let second_stage_config = gpt::Config::cfg1b_v0_1();
     let second_stage_model = gpt::Model::new(second_stage_config, second_stage_vb)?;
+
+    let encodec_vb =
+        unsafe { VarBuilder::from_mmaped_safetensors(&[encodec_weights], DType::F32, &device)? };
+    let encodec_config = encodec::Config::default();
+    let encodec_model = encodec::Model::new(&encodec_config, encodec_vb)?;
 
     let first_stage = false;
     let second_stage = true;
@@ -134,11 +154,37 @@ fn main() -> Result<()> {
         }
     }
     if second_stage {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(args.seed + 1337);
+        // TODO: Generate these properly using TiltedEncodec + BPE Tokenization.
         let in_x = (Tensor::ones((1, 2, 1024), DType::U32, &device)? * 1024.)?;
         let logits = second_stage_model.forward(&in_x)?;
+        let mut codes = vec![];
         for (idx, logits) in logits.iter().enumerate() {
             println!("{idx} {logits}");
+            let logits = logits.squeeze(0)?;
+            let (seq_len, _) = logits.dims2()?;
+            let mut codes_ = Vec::with_capacity(seq_len);
+            for step in 0..seq_len {
+                let logits = logits.i(step)?.to_dtype(DType::F32)?;
+                let logits = &(&logits / 1.0)?;
+                let prs = candle_nn::ops::softmax_last_dim(logits)?.to_vec1::<f32>()?;
+                let distr = rand::distributions::WeightedIndex::new(prs.as_slice())?;
+                let sample = distr.sample(&mut rng) as u32;
+                codes_.push(sample)
+            }
+            codes.push(codes_)
         }
+
+        let codes = Tensor::new(codes, &device)?.unsqueeze(0)?;
+        let codes = Tensor::cat(&[in_x, codes], 1)?;
+
+        println!("codes shape: {:?}", codes.shape());
+        let pcm = encodec_model.decode(&codes)?;
+        // TODO: Apply data_adapter_second_stage.
+        println!("output pcm shape: {:?}", pcm.shape());
+        let pcm = pcm.i(0)?.i(0)?.to_vec1::<f32>()?;
+        let mut output = std::fs::File::create(&args.out_file)?;
+        candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
     }
     Ok(())
 }
