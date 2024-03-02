@@ -197,7 +197,9 @@ fn main() -> Result<()> {
     let api = Api::new()?;
     let model_id = match &args.model_id {
         Some(model_id) => match model_id.as_str() {
+            "7b-it" => "google/gemma-7b-it".to_string(),
             "7b" => "google/gemma-7b".to_string(),
+            "2b-it" => "google/gemma-2b-it".to_string(),
             "2b" => "google/gemma-2b".to_string(),
             _ => model_id.to_string(),
         },

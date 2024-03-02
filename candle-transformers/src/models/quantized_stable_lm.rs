@@ -186,10 +186,14 @@ impl DecoderLayer {
     fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
-        let input_layernorm = layer_norm(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?;
+        let input_layernorm = layer_norm(
+            cfg.hidden_size,
+            cfg.layer_norm_eps,
+            vb.pp("input_layernorm"),
+        )?;
         let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
-            cfg.norm_eps,
+            cfg.layer_norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
         Ok(Self {
@@ -240,7 +244,7 @@ impl Model {
             let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm = layer_norm(cfg.hidden_size, cfg.norm_eps, vb_m.pp("norm"))?;
+        let norm = layer_norm(cfg.hidden_size, cfg.layer_norm_eps, vb_m.pp("norm"))?;
         let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
         Ok(Self {
             embed_tokens,
