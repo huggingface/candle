@@ -219,9 +219,9 @@ pub mod gpt {
             let q = c_x.i((.., .., 0))?;
             let k = c_x.i((.., .., 1))?;
             let v = c_x.i((.., .., 2))?;
-            let q = q.transpose(1, 2)?;
-            let k = k.transpose(1, 2)?;
-            let v = v.transpose(1, 2)?;
+            let q = q.transpose(1, 2)?.contiguous()?;
+            let k = k.transpose(1, 2)?.contiguous()?;
+            let v = v.transpose(1, 2)?.contiguous()?;
             let att = (q.matmul(&k.t()?)? / (k.dim(D::Minus1)? as f64).sqrt())?;
             // TODO: causal mask
             let att = candle_nn::ops::softmax_last_dim(&att)?;
@@ -377,15 +377,15 @@ pub mod gpt {
             }
             // TODO: speaker embs.
             let spk_emb = 0f64;
-            let mut xs = ((pos_emb + tok_emb)? + spk_emb)?;
+            let mut xs = (pos_emb.broadcast_add(&tok_emb)? + spk_emb)?;
             for block in self.h.iter() {
                 xs = xs.apply(block)?
             }
             let xs = xs.apply(&self.ln_f)?;
             let mut logits = Vec::with_capacity(self.lm_heads.len());
             for lm_head in self.lm_heads.iter() {
-                // causal mode only.
-                let ys = xs.narrow(1, t - 1, 1)?.apply(lm_head)?;
+                // non-causal mode only.
+                let ys = xs.apply(lm_head)?;
                 logits.push(ys)
             }
             Ok(logits)
