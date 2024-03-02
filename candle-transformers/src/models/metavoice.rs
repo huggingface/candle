@@ -118,6 +118,7 @@ pub mod gpt {
     pub struct Config {
         pub block_size: usize,
         pub vocab_sizes: Vec<usize>,
+        pub target_vocab_sizes: Vec<usize>,
         pub n_layer: usize,
         pub n_head: usize,
         pub n_embd: usize,
@@ -133,26 +134,23 @@ pub mod gpt {
     }
 
     impl Config {
-        // {'n_layer': 24, 'n_head': 16, 'n_embd': 2048, 'block_size': 2048, 'bias': False,
-        // 'vocab_sizes': [2562], 'dropout': 0.0, 'causal': True, 'norm_type': 'rmsnorm',
-        // 'rmsnorm_eps': 1e-05, 'nonlinearity_type': 'swiglu', 'spk_emb_on_text': True,
-        // 'attn_kernel_type': 'torch_attn', 'swiglu_multiple_of': 256, 'spkemb_dropout': 0.1}
-        pub fn cfg() -> Self {
+        pub fn cfg1b_v0_1() -> Self {
             Self {
-                block_size: 2048,
-                vocab_sizes: vec![2562],
-                swiglu_multiple_of: Some(256),
-                attn_kernel_type: AttnKernelType::TorchAttn,
-                spk_emb_on_text: true,
-                nonlinearity_type: NonLinearityType::Swiglu,
-                rmsnorm_eps: 1e-5,
-                causal: true,
+                n_layer: 6,
+                n_head: 6,
+                n_embd: 384,
+                block_size: 1024,
                 bias: false,
-                n_embd: 2048,
-                n_head: 16,
-                n_layer: 24,
+                vocab_sizes: vec![1538, 1025],
+                causal: false,
+                target_vocab_sizes: vec![1025, 1025, 1025, 1025, 1025, 1025],
+                swiglu_multiple_of: Some(256),
                 norm_type: NormType::RMSNorm,
                 kv_cache_enabled: false,
+                attn_kernel_type: AttnKernelType::TorchAttn,
+                spk_emb_on_text: true,
+                nonlinearity_type: NonLinearityType::Gelu,
+                rmsnorm_eps: 1e-5,
             }
         }
     }
@@ -330,25 +328,26 @@ pub mod gpt {
 
     impl Model {
         pub fn new(cfg: Config, vb: VarBuilder) -> Result<Self> {
-            let ln_f = Norm::new(&cfg, vb.pp("ln_f"))?;
+            let vb_t = vb.pp("transformer");
+            let ln_f = Norm::new(&cfg, vb_t.pp("ln_f"))?;
             let mut wtes = Vec::with_capacity(cfg.vocab_sizes.len());
-            let vb_w = vb.pp("wtes");
+            let vb_w = vb_t.pp("wtes");
             for (idx, vocab_size) in cfg.vocab_sizes.iter().enumerate() {
                 let wte = candle_nn::embedding(*vocab_size, cfg.n_embd, vb_w.pp(idx))?;
                 wtes.push(wte)
             }
-            let wpe = candle_nn::embedding(cfg.block_size, cfg.n_embd, vb.pp("wpe"))?;
+            let wpe = candle_nn::embedding(cfg.block_size, cfg.n_embd, vb_t.pp("wpe"))?;
 
             let mut h = Vec::with_capacity(cfg.n_layer);
-            let vb_h = vb.pp("h");
+            let vb_h = vb_t.pp("h");
             for idx in 0..cfg.n_layer {
                 let block = Block::new(&cfg, vb_h.pp(idx))?;
                 h.push(block)
             }
 
-            let mut lm_heads = Vec::with_capacity(cfg.vocab_sizes.len());
+            let mut lm_heads = Vec::with_capacity(cfg.target_vocab_sizes.len());
             let vb_l = vb.pp("lm_heads");
-            for (idx, vocab_size) in cfg.vocab_sizes.iter().enumerate() {
+            for (idx, vocab_size) in cfg.target_vocab_sizes.iter().enumerate() {
                 let head = linear_b(cfg.n_embd, *vocab_size, false, vb_l.pp(idx))?;
                 lm_heads.push(head)
             }
@@ -653,7 +652,9 @@ pub mod transformer {
             for layer in self.layers.iter_mut() {
                 xs = layer.forward(&xs, pos, &mask)?
             }
-            xs.apply(&self.norm)?.apply(&self.output)
+            xs.narrow(1, seqlen - 1, 1)?
+                .apply(&self.norm)?
+                .apply(&self.output)
         }
     }
 }
