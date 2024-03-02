@@ -137,7 +137,7 @@ fn main() -> Result<()> {
         &device
     };
     let encodec_vb = unsafe {
-        VarBuilder::from_mmaped_safetensors(&[encodec_weights], DType::F32, &encodec_device)?
+        VarBuilder::from_mmaped_safetensors(&[encodec_weights], DType::F32, encodec_device)?
     };
     let encodec_config = encodec::Config::default();
     let encodec_model = encodec::Model::new(&encodec_config, encodec_vb)?;
@@ -217,7 +217,7 @@ fn main() -> Result<()> {
     let codes = codes.i(0)?.to_vec2::<u32>()?;
     let (text_ids, audio_ids) = tilted_encodec.decode(&codes);
     println!("text_ids len: {:?}", text_ids.len());
-    let audio_ids = Tensor::new(audio_ids, &encodec_device)?.unsqueeze(0)?;
+    let audio_ids = Tensor::new(audio_ids, encodec_device)?.unsqueeze(0)?;
     println!("audio_ids shape: {:?}", audio_ids.shape());
     let pcm = encodec_model.decode(&audio_ids)?;
     println!("output pcm shape: {:?}", pcm.shape());
