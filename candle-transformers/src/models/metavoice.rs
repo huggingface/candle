@@ -695,4 +695,32 @@ pub mod adapters {
             (text_ids, extracted_audio_ids)
         }
     }
+
+    // https://github.com/metavoiceio/metavoice-src/blob/9078234c496d76adbec06df789b6b04b1875f129/fam/llm/adapters/flattened_encodec.py#L4
+    pub struct FlattenedInterleavedEncodec2Codebook {
+        end_of_audio_token: u32,
+    }
+
+    impl FlattenedInterleavedEncodec2Codebook {
+        pub fn new(end_of_audio_token: u32) -> Self {
+            Self { end_of_audio_token }
+        }
+
+        pub fn decode(&self, tokens: &[u32]) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+            let mut text_ids = vec![];
+            let mut audio_ids1 = vec![];
+            let mut audio_ids2 = vec![];
+            for &t in tokens.iter() {
+                #[allow(clippy::comparison_chain)]
+                if t < self.end_of_audio_token {
+                    audio_ids1.push(t)
+                } else if t < 2 * self.end_of_audio_token {
+                    audio_ids2.push(t - self.end_of_audio_token)
+                } else {
+                    text_ids.push(t)
+                }
+            }
+            (text_ids, audio_ids1, audio_ids2)
+        }
+    }
 }
