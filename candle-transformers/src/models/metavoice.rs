@@ -1,4 +1,3 @@
-#![allow(unused)]
 use candle::{DType, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{embedding, linear_b, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 
@@ -501,7 +500,7 @@ pub mod transformer {
             })
         }
 
-        fn forward(&mut self, xs: &Tensor, pos: usize, mask: &Tensor) -> Result<Tensor> {
+        fn forward(&mut self, xs: &Tensor, _pos: usize, mask: &Tensor) -> Result<Tensor> {
             let (b_sz, seqlen, _) = xs.dims3()?;
 
             let qkv = xs.apply(&self.wqkv)?;
@@ -510,7 +509,8 @@ pub mod transformer {
             let v = qkv.narrow(D::Minus1, self.dim + self.kv_size, self.kv_size)?;
             let q = q
                 .reshape((b_sz, seqlen, self.n_head, self.head_dim))?
-                .transpose(1, 2)?;
+                .transpose(1, 2)?
+                .contiguous()?;
             let k = k
                 .reshape((b_sz, seqlen, self.n_local_heads, self.head_dim))?
                 .transpose(1, 2)?;
@@ -573,11 +573,11 @@ pub mod transformer {
         fn forward(&mut self, xs: &Tensor, pos: usize, mask: &Tensor) -> Result<Tensor> {
             let hs = xs.apply(&self.attention_norm)?;
             let hs = (xs + self.attention.forward(&hs, pos, mask))?;
-            (&hs + hs.apply(&self.ffn_norm)?.apply(&self.feed_forward))
+            &hs + hs.apply(&self.ffn_norm)?.apply(&self.feed_forward)
         }
 
         fn clear_kv_cache(&mut self) {
-            self.attention.kv_cache = None
+            self.attention.clear_kv_cache()
         }
     }
 
@@ -635,7 +635,7 @@ pub mod transformer {
         }
 
         pub fn forward(&mut self, xs: &Tensor, spk_emb: &Tensor, pos: usize) -> Result<Tensor> {
-            let (_b_sz, seqlen, _) = xs.dims3()?;
+            let (_b_sz, seqlen) = xs.dims2()?;
             let mask: Vec<_> = (0..seqlen)
                 .flat_map(|i| (0..seqlen).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
                 .collect();
@@ -643,8 +643,13 @@ pub mod transformer {
             let input_pos = Tensor::arange(pos as u32, (pos + seqlen) as u32, xs.device())?;
             let tok_embeddings = xs.apply(&self.tok_embeddings)?;
             let pos_embeddings = input_pos.apply(&self.pos_embeddings)?;
-            let mut xs = ((tok_embeddings + pos_embeddings)?
-                + spk_emb.apply(&self.speaker_cond_pos)? * &self.spk_cond_mask)?;
+            let mut xs = tok_embeddings
+                .broadcast_add(&pos_embeddings)?
+                .broadcast_add(
+                    &spk_emb
+                        .apply(&self.speaker_cond_pos)?
+                        .broadcast_mul(&self.spk_cond_mask)?,
+                )?;
             for layer in self.layers.iter_mut() {
                 xs = layer.forward(&xs, pos, &mask)?
             }
