@@ -16,6 +16,8 @@ use candle_nn::VarBuilder;
 use hf_hub::api::sync::Api;
 use rand::{distributions::Distribution, SeedableRng};
 
+pub const ENCODEC_NTOKENS: u32 = 1024;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -149,7 +151,7 @@ fn main() -> Result<()> {
             break;
         }
     }
-    let fie2c = adapters::FlattenedInterleavedEncodec2Codebook::new(1024);
+    let fie2c = adapters::FlattenedInterleavedEncodec2Codebook::new(ENCODEC_NTOKENS);
     let (text_ids, ids1, ids2) = fie2c.decode(&tokens);
     println!("text ids len: {}", text_ids.len());
     let mut rng = rand::rngs::StdRng::seed_from_u64(args.seed + 1337);
@@ -160,11 +162,11 @@ fn main() -> Result<()> {
         1069, 1375, 1289, 1137, 1301, 1070, 1140, 1459, 1350, 1299, 1490, 1463, 1356, 1283, 1142,
         1125, 1130, 1136, 1297, 1136, 1125, 1126, 1133, 1071, 1537,
     ];
-    let hierarchies_in1 = [encoded_text.as_slice(), ids1.as_slice(), &[1024]].concat();
+    let hierarchies_in1 = [encoded_text.as_slice(), ids1.as_slice(), &[ENCODEC_NTOKENS]].concat();
     let hierarchies_in2 = [
-        vec![1024; encoded_text.len()].as_slice(),
+        vec![ENCODEC_NTOKENS; encoded_text.len()].as_slice(),
         ids2.as_slice(),
-        &[1024],
+        &[ENCODEC_NTOKENS],
     ]
     .concat();
     let in_x1 = Tensor::new(hierarchies_in1, &device)?;
@@ -191,7 +193,7 @@ fn main() -> Result<()> {
     let codes = Tensor::new(codes, &device)?.unsqueeze(0)?;
     let codes = Tensor::cat(&[in_x, codes], 1)?;
     println!("codes: {codes}");
-    let tilted_encodec = adapters::TiltedEncodec::new(1024);
+    let tilted_encodec = adapters::TiltedEncodec::new(ENCODEC_NTOKENS);
     let codes = codes.i(0)?.to_vec2::<u32>()?;
     let (text_ids, audio_ids) = tilted_encodec.decode(&codes);
     println!("text_ids len: {:?}", text_ids.len());
