@@ -595,7 +595,7 @@ pub mod transformer {
     impl Model {
         pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
             let tok_embeddings = embedding(cfg.vocab_size, cfg.dim, vb.pp("tok_embeddings"))?;
-            let pos_embeddings = embedding(cfg.vocab_size, cfg.dim, vb.pp("pos_embeddings"))?;
+            let pos_embeddings = embedding(cfg.block_size, cfg.dim, vb.pp("pos_embeddings"))?;
             let speaker_cond_pos = linear_b(
                 cfg.speaker_emb_dim,
                 cfg.dim,
@@ -605,7 +605,7 @@ pub mod transformer {
             let mut layers = Vec::with_capacity(cfg.n_layer);
             let vb_l = vb.pp("layers");
             for layer_idx in 0..cfg.n_layer {
-                let layer = Block::new(cfg, vb.pp(layer_idx))?;
+                let layer = Block::new(cfg, vb_l.pp(layer_idx))?;
                 layers.push(layer)
             }
             let norm = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("norm"))?;
