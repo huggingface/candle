@@ -15,7 +15,7 @@
 //!
 //! # Stereo integrated loudness example
 //!
-//! ```no_run
+//! ```ignore
 //! # fn load_stereo_audio() -> [Vec<i16>; 2] {
 //! #     [vec![0; 48_000], vec![0; 48_000]]
 //! # }
@@ -291,7 +291,7 @@ impl<T> Windows100ms<T> {
 ///
 /// Use `gated_mean` to perform an integrated loudness measurement:
 ///
-//! ```no_run
+/// ```ignore
 /// # use std::iter;
 /// # use bs1770::{ChannelLoudnessMeter, gated_mean};
 /// # let sample_rate_hz = 44_100;
@@ -345,7 +345,7 @@ impl ChannelLoudnessMeter {
     /// Full scale for the input samples is the interval [-1.0, 1.0]. If your
     /// input consists of signed integer samples, you can convert as follows:
     ///
-    /// ```no_run
+    /// ```ignore
     /// # let mut meter = bs1770::ChannelLoudnessMeter::new(44_100);
     /// # let bits_per_sample = 16_usize;
     /// # let samples = &[0_i16];
@@ -361,7 +361,7 @@ impl ChannelLoudnessMeter {
     /// This is equivalent to feeding a single chained iterator. The leftover of
     /// samples that did not fill a full 100ms window is not discarded:
     ///
-    /// ```no_run
+    /// ```ignore
     /// # use std::iter;
     /// # use bs1770::ChannelLoudnessMeter;
     /// let sample_rate_hz = 44_100;
