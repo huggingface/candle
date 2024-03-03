@@ -1,3 +1,5 @@
+pub mod audio;
+pub mod bs1770;
 pub mod coco_classes;
 pub mod imagenet;
 pub mod token_output_stream;

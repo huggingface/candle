@@ -224,7 +224,9 @@ fn main() -> Result<()> {
     println!("audio_ids shape: {:?}", audio_ids.shape());
     let pcm = encodec_model.decode(&audio_ids)?;
     println!("output pcm shape: {:?}", pcm.shape());
-    let pcm = pcm.i(0)?.i(0)?.to_vec1::<f32>()?;
+    let pcm = pcm.i(0)?.i(0)?;
+    let pcm = candle_examples::audio::normalize_loudness(&pcm, 24_000, true)?;
+    let pcm = pcm.to_vec1::<f32>()?;
     let mut output = std::fs::File::create(&args.out_file)?;
     candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
     Ok(())
