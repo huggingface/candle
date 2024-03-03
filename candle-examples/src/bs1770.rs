@@ -246,6 +246,7 @@ impl<T> Windows100ms<T> {
         }
     }
 
+    #[allow(clippy::len_without_is_empty)]
     /// Apply `len` to the inner value.
     pub fn len(&self) -> usize
     where
