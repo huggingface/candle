@@ -352,6 +352,10 @@ impl Storage {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Cuda(s))
             }
+            (Storage::Metal(inp), Storage::Metal(kernel)) => {
+                let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
+                Ok(Self::Metal(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),

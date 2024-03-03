@@ -738,6 +738,7 @@ impl BackendStorage for MetalStorage {
                 ("ufloor", DType::F32) => strided::floor::FLOAT,
                 ("urelu", DType::F32) => strided::relu::FLOAT,
                 ("uround", DType::F32) => strided::round::FLOAT,
+                ("utanh", DType::F32) => strided::tanh::FLOAT,
                 ("ucos", DType::F16) => strided::cos::HALF,
                 ("usin", DType::F16) => strided::sin::HALF,
                 ("usqr", DType::F16) => strided::sqr::HALF,
@@ -754,6 +755,7 @@ impl BackendStorage for MetalStorage {
                 ("ufloor", DType::F16) => strided::floor::HALF,
                 ("urelu", DType::F16) => strided::relu::HALF,
                 ("uround", DType::F16) => strided::round::HALF,
+                ("utanh", DType::F16) => strided::tanh::HALF,
                 (name, dtype) => {
                     crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
                 }
