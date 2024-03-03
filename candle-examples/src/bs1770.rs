@@ -70,15 +70,15 @@ impl Filter {
     pub fn high_shelf(sample_rate_hz: f32) -> Filter {
         // Coefficients taken from https://github.com/csteinmetz1/pyloudnorm/blob/
         // 6baa64d59b7794bc812e124438692e7fd2e65c0c/pyloudnorm/meter.py#L135-L136.
-        let gain_db = 3.99984385397;
-        let q = 0.7071752369554193;
-        let center_hz = 1681.9744509555319;
+        let gain_db = 3.999_843_8;
+        let q = 0.707_175_25;
+        let center_hz = 1_681.974_5;
 
         // Formula taken from https://github.com/csteinmetz1/pyloudnorm/blob/
         // 6baa64d59b7794bc812e124438692e7fd2e65c0c/pyloudnorm/iirfilter.py#L134-L143.
         let k = (f32::consts::PI * center_hz / sample_rate_hz).tan();
         let vh = 10.0_f32.powf(gain_db / 20.0);
-        let vb = vh.powf(0.499666774155);
+        let vb = vh.powf(0.499_666_78);
         let a0 = 1.0 + k / q + k * k;
         Filter {
             b0: (vh + vb * k / q + k * k) / a0,
@@ -98,8 +98,8 @@ impl Filter {
     pub fn high_pass(sample_rate_hz: f32) -> Filter {
         // Coefficients taken from https://github.com/csteinmetz1/pyloudnorm/blob/
         // 6baa64d59b7794bc812e124438692e7fd2e65c0c/pyloudnorm/meter.py#L135-L136.
-        let q = 0.5003270373253953;
-        let center_hz = 38.13547087613982;
+        let q = 0.500_327_05;
+        let center_hz = 38.135_47;
 
         // Formula taken from https://github.com/csteinmetz1/pyloudnorm/blob/
         // 6baa64d59b7794bc812e124438692e7fd2e65c0c/pyloudnorm/iirfilter.py#L145-L151
@@ -473,7 +473,7 @@ pub fn gated_mean(windows_100ms: Windows100ms<&[Power]>) -> Option<Power> {
         }
     }
 
-    if gating_blocks.len() == 0 {
+    if gating_blocks.is_empty() {
         return None;
     }
 
