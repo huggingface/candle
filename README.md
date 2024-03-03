@@ -84,8 +84,6 @@ We also provide a some command line based examples using state of the art models
 - [Replit-code-v1.5](./candle-examples/examples/replit-code/): a 3.3b LLM specialized for code completion.
 - [Yi-6B / Yi-34B](./candle-examples/examples/yi/): two bilingual
   (English/Chinese) general LLMs with 6b and 34b parameters.
-- [EnCodec](./candle-examples/examples/encodec/): high-quality audio compression
-  model using residual vector quantization.
 - [Quantized LLaMA](./candle-examples/examples/quantized/): quantized version of
   the LLaMA model using the same quantization techniques as
   [llama.cpp](https://github.com/ggerganov/llama.cpp).
@@ -112,7 +110,12 @@ We also provide a some command line based examples using state of the art models
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
 
+- [SegFormer](./candle-examples/examples/segformer/): transformer based semantic segmantation model.
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
+- [EnCodec](./candle-examples/examples/encodec/): high-quality audio compression
+  model using residual vector quantization.
+- [MetaVoice](./candle-examples/examples/metavoice/): foundational model for
+  text-to-speech.
 - [T5](./candle-examples/examples/t5), [Bert](./candle-examples/examples/bert/),
   [JinaBert](./candle-examples/examples/jina-bert/) : useful for sentence embeddings.
 - [DINOv2](./candle-examples/examples/dinov2/): computer vision model trained
@@ -220,13 +223,15 @@ If you have an addition to this list, please submit a pull request.
         - BLIP.
         - TrOCR.
     - Audio.
-        - Whisper, multi-lingual text-to-speech.
+        - Whisper, multi-lingual speech-to-text.
         - EnCodec, audio compression model.
+        - MetaVoice-1B, text-to-speech model.
     - Computer Vision Models.
         - DINOv2, ConvMixer, EfficientNet, ResNet, ViT, VGG, RepVGG, ConvNeXT,
           ConvNeXTv2, MobileOne, EfficientVit (MSRA).
         - yolo-v3, yolo-v8.
         - Segment-Anything Model (SAM).
+        - SegFormer.
 - File formats: load models from safetensors, npz, ggml, or PyTorch files.
 - Serverless (on CPU), small and fast deployments.
 - Quantization support using the llama.cpp quantized types.
