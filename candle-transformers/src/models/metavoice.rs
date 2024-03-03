@@ -297,7 +297,7 @@ pub mod gpt {
                 causal: false,
                 target_vocab_sizes: vec![1025, 1025, 1025, 1025, 1025, 1025],
                 swiglu_multiple_of: Some(256),
-                norm_type: NormType::RMSNorm,
+                norm_type: NormType::LayerNorm,
                 kv_cache_enabled: false,
                 attn_kernel_type: AttnKernelType::TorchAttn,
                 spk_emb_on_text: true,
