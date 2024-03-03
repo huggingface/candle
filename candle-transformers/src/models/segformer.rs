@@ -7,6 +7,7 @@ use std::collections::HashMap;
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/segformer/configuration_segformer.py
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
+    #[serde(default)]
     pub id2label: HashMap<String, String>,
     pub num_channels: usize,
     pub num_encoder_blocks: usize,
