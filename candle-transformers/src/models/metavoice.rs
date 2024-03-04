@@ -1,4 +1,4 @@
-use candle::{DType, Error as E, IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Device, Error as E, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{embedding, linear_b, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 
 // Equivalent to torch.repeat_interleave
@@ -13,25 +13,27 @@ pub mod speaker_encoder {
 
     #[derive(Debug, Clone, serde::Deserialize)]
     pub struct Config {
-        pub mel_window_step: usize,
-        pub mel_n_channels: usize,
         pub sampling_rate: usize,
         pub partial_n_frames: usize,
         pub model_hidden_size: usize,
         pub model_embedding_size: usize,
         pub model_num_layers: usize,
+        pub mel_window_length: usize,
+        pub mel_window_step: usize,
+        pub mel_n_channels: usize,
     }
 
     impl Config {
         pub fn cfg() -> Self {
             Self {
-                mel_window_step: 10,
-                mel_n_channels: 40,
                 sampling_rate: 16_000,
                 partial_n_frames: 160,
                 model_hidden_size: 256,
                 model_embedding_size: 256,
                 model_num_layers: 3,
+                mel_window_length: 25,
+                mel_window_step: 10,
+                mel_n_channels: 40,
             }
         }
     }
@@ -109,9 +111,43 @@ pub mod speaker_encoder {
             (wav_slices, mel_slices)
         }
 
-        pub fn embed_utterance(&self, wav: &[f32], rate: f64, min_c: f64) -> Result<Tensor> {
-            let (_wav, _mel) = self.compute_partial_slices(wav.len(), rate, min_c);
-            todo!()
+        pub fn embed_utterance(
+            &self,
+            wav: &[f32],
+            mel_filters: &[f32],
+            rate: f64,
+            min_c: f64,
+            device: &Device,
+        ) -> Result<Tensor> {
+            let (wav_slices, mel_slices) = self.compute_partial_slices(wav.len(), rate, min_c);
+            let max_wave_length = match wav_slices.last() {
+                Some(v) => v.1,
+                None => candle::bail!("empty wav slices"),
+            };
+            let wav = if max_wave_length > wav.len() {
+                let mut wav = wav.to_vec();
+                wav.resize(max_wave_length - wav.len(), 0.0);
+                std::borrow::Cow::Owned(wav)
+            } else {
+                std::borrow::Cow::Borrowed(wav)
+            };
+            let mel = crate::models::whisper::audio::log_mel_spectrogram_(
+                wav.as_ref(),
+                mel_filters,
+                /* fft_size */ self.cfg.mel_window_length,
+                /* fft_step */ self.cfg.mel_window_step,
+                self.cfg.mel_n_channels,
+                false,
+            );
+            let mels = mel_slices
+                .iter()
+                .flat_map(|s| [mel[s.0], mel[s.1]])
+                .collect::<Vec<_>>();
+            let mels = Tensor::from_vec(mels, (mel_slices.len(), 2), device)?;
+            let partial_embeds = self.forward(&mels)?;
+            let raw_embed = partial_embeds.mean(0)?;
+            let norm = raw_embed.sqr()?.sum_all()?.sqrt()?;
+            raw_embed.broadcast_div(&norm)
         }
     }
 
