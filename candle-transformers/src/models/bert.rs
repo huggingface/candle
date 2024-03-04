@@ -112,6 +112,24 @@ impl Config {
     }
 }
 
+// https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/modeling_utils.py#L877C1-L910C39
+fn get_extended_attention_mask(attention_mask: &Tensor) -> Result<Tensor> {
+    // extended_attention_mask = attention_mask[:, None, None, :]
+
+    let extended_attention_mask = attention_mask.unsqueeze(1)?.unsqueeze(2)?;
+
+    // extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dtype).min
+    let shape = extended_attention_mask.shape();
+
+    let on_true =
+        Tensor::new(0 as f32, extended_attention_mask.device())?.broadcast_as(shape.dims())?;
+    let on_false = Tensor::new(f32::NEG_INFINITY, extended_attention_mask.device())?
+        .broadcast_as(shape.dims())?;
+
+    let m = extended_attention_mask.where_cond(&on_true, &on_false)?;
+    Ok(m)
+}
+
 struct Dropout {
     #[allow(dead_code)]
     pr: f64,
@@ -232,8 +250,8 @@ impl BertSelfAttention {
     }
 }
 
-impl Module for BertSelfAttention {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+impl BertSelfAttention {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: &Option<Tensor>) -> Result<Tensor> {
         let _enter = self.span.enter();
         let query_layer = self.query.forward(hidden_states)?;
         let key_layer = self.key.forward(hidden_states)?;
@@ -244,7 +262,11 @@ impl Module for BertSelfAttention {
         let value_layer = self.transpose_for_scores(&value_layer)?;
 
         let attention_scores = query_layer.matmul(&key_layer.t()?)?;
-        let attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
+        let mut attention_scores = (attention_scores / (self.attention_head_size as f64).sqrt())?;
+        if let Some(attention_mask) = attention_mask {
+            let shape = attention_scores.shape().clone();
+            attention_scores = (attention_scores + attention_mask.broadcast_as(shape))?;
+        }
         let attention_probs = {
             let _enter_sm = self.span_softmax.enter();
             candle_nn::ops::softmax(&attention_scores, candle::D::Minus1)?
@@ -309,10 +331,10 @@ impl BertAttention {
     }
 }
 
-impl Module for BertAttention {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+impl BertAttention {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: &Option<Tensor>) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let self_outputs = self.self_attention.forward(hidden_states)?;
+        let self_outputs = self.self_attention.forward(hidden_states, attention_mask)?;
         let attention_output = self.self_output.forward(&self_outputs, hidden_states)?;
         Ok(attention_output)
     }
@@ -400,10 +422,10 @@ impl BertLayer {
     }
 }
 
-impl Module for BertLayer {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+impl BertLayer {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: &Option<Tensor>) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let attention_output = self.attention.forward(hidden_states)?;
+        let attention_output = self.attention.forward(hidden_states, attention_mask)?;
         // TODO: Support cross-attention?
         // https://github.com/huggingface/transformers/blob/6eedfa6dd15dc1e22a55ae036f681914e5a0d9a1/src/transformers/models/bert/modeling_bert.py#L523
         // TODO: Support something similar to `apply_chunking_to_forward`?
@@ -431,13 +453,13 @@ impl BertEncoder {
     }
 }
 
-impl Module for BertEncoder {
-    fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+impl BertEncoder {
+    fn forward(&self, hidden_states: &Tensor, attention_mask: &Option<Tensor>) -> Result<Tensor> {
         let _enter = self.span.enter();
         let mut hidden_states = hidden_states.clone();
         // Use a loop rather than a fold as it's easier to modify when adding debug/...
         for layer in self.layers.iter() {
-            hidden_states = layer.forward(&hidden_states)?
+            hidden_states = layer.forward(&hidden_states, attention_mask)?
         }
         Ok(hidden_states)
     }
@@ -481,10 +503,26 @@ impl BertModel {
         })
     }
 
+    pub fn forward_with_attention_mask(
+        &self,
+        input_ids: &Tensor,
+        token_type_ids: &Tensor,
+        attention_mask: &Tensor,
+    ) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
+
+        let extended_attention_mask = get_extended_attention_mask(&attention_mask)?;
+
+        let sequence_output = self
+            .encoder
+            .forward(&embedding_output, &Some(extended_attention_mask))?;
+        Ok(sequence_output)
+    }
     pub fn forward(&self, input_ids: &Tensor, token_type_ids: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
-        let sequence_output = self.encoder.forward(&embedding_output)?;
+        let sequence_output = self.encoder.forward(&embedding_output, &None)?;
         Ok(sequence_output)
     }
 }
