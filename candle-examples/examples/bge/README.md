@@ -8,14 +8,12 @@ Bert is used to compute the sentence embeddings for a prompt. The model weights
 are downloaded from the hub on the first run.
 
 ```bash
-cargo run --example bert --release -- --prompt "Here is a test sentence"
+cargo run --example bge --release -- --prompt "The cat sits outside"
 
-> [[[ 0.0798, -0.0665, -0.0247, ..., -0.1082, -0.1000, -0.2751],
->   [ 0.4218,  0.2690,  0.2740, ...,  0.3889,  1.3503,  0.9908],
->   [ 0.0466,  0.3041, -0.1143, ...,  0.4427,  0.6926, -0.1515],
->   ...
->   [ 0.3396,  0.4320, -0.4408, ...,  0.9212,  0.2331, -0.6777],
->   [ 0.2789,  0.7539,  0.4306, ..., -0.0095,  0.3375, -1.7529],
->   [ 0.6737,  0.7882,  0.0548, ...,  0.1836,  0.7299, -0.6617]]]
-> Tensor[[1, 7, 384], f32]
+> Loaded and encoded 244.278562ms
+> [[-3.6233e-2, -1.0165e-1,  2.7755e-2,  8.0149e-3,  3.2675e-2,  1.3506e-2,
+> ...
+>    6.9497e-3, -2.0638e-2,  3.9833e-3,  1.0049e-1,  2.4590e-2,  3.6645e-2]]
+> Tensor[[1, 768], f32]
+> Took 58.801007ms
 ```

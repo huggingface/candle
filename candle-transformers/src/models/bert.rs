@@ -512,7 +512,7 @@ impl BertModel {
         let _enter = self.span.enter();
         let embedding_output = self.embeddings.forward(input_ids, token_type_ids)?;
 
-        let extended_attention_mask = get_extended_attention_mask(&attention_mask)?;
+        let extended_attention_mask = get_extended_attention_mask(attention_mask)?;
 
         let sequence_output = self
             .encoder
