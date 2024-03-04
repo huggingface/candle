@@ -167,7 +167,7 @@ fn log_mel_spectrogram_w<T: Float>(
     mel
 }
 
-fn log_mel_spectrogram_<T: Float>(
+pub fn log_mel_spectrogram_<T: Float>(
     samples: &[T],
     filters: &[T],
     fft_size: usize,
