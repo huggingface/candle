@@ -100,4 +100,6 @@ required-features = ["candle-datasets"]
 name = "encodec"
 required-features = ["symphonia"]
 
-
+[[example]]
+name = "metavoice"
+required-features = ["symphonia"]
