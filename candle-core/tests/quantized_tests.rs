@@ -738,10 +738,6 @@ macro_rules! quantized_matmul {
     // stable. https://github.com/rust-lang/rust/issues/29599
     ($fn_name: ident, $fn_name_cpu: ident, $fn_name_cuda: ident, $fn_name_metal: ident, $dtype: expr) => {
         fn $fn_name(device: &Device) -> Result<()> {
-            if device.is_cuda() {
-                // TODO Enable Cuda GGML sometime maybe.
-                return Ok(());
-            }
             test_matmul(device, (1, 3, 4, 256), $dtype)?;
             Ok(())
         }

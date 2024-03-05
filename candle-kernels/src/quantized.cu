@@ -877,6 +877,30 @@ extern "C" __global__ void dequantize_block_q6_K(const void * __restrict__ vx, f
 #endif
 }
 
+extern "C" __global__ void dequantize_block_q8_0(const void * __restrict__ vx, float * __restrict__ yy, int nb32) {
+    const int i = blockIdx.x;
+
+    // assume 32 threads
+    const int tid = threadIdx.x;
+    const int il  = tid/8;
+    const int ir  = tid%8;
+    const int ib = 8*i + ir;
+    if (ib >= nb32) {
+        return;
+    }
+
+    float * y = yy + 256*i + 32*ir + 8*il;
+
+    const block_q8_0 * x = (const block_q8_0 *)vx + ib;
+    const float d = __half2float(x->d);
+
+    const int8_t * q = x->qs + 8*il;
+
+    for (int l = 0; l < 8; ++l) {
+        y[l] = d * q[l];
+    }
+}
+
 extern "C" __global__ void dequantize_block_q8_K(const void * __restrict__ vx, float * __restrict__ yy) {
     const block_q8_K * x = (const block_q8_K *) vx;
 
