@@ -12,7 +12,7 @@ use candle_nn::{
     Linear, VarBuilder,
 };
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 #[serde(untagged)]
 pub enum SizeValue {
     Integer(usize),
@@ -776,7 +776,7 @@ mod test {
     impl SwinConfig {
         fn tiny_patch4_window7_224() -> Self {
             Self {
-                image_size: (224, 224),
+                image_size: SizeValue::Pair(224, 224),
                 patch_size: 4,
                 num_channels: 3,
                 embed_dim: 96,
