@@ -188,7 +188,7 @@ fn main() -> Result<()> {
         Some(w) => std::path::PathBuf::from(w),
         None => repo.get("first_stage.safetensors")?,
     };
-    let second_stage_weights = match &args.first_stage_weights {
+    let second_stage_weights = match &args.second_stage_weights {
         Some(w) => std::path::PathBuf::from(w),
         None => repo.get("second_stage.safetensors")?,
     };
