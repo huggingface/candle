@@ -105,7 +105,7 @@ impl QMetalStorage {
             }
         }
 
-        let buffer = self.device.new_buffer_with_data(out)?;
+        let buffer = self.device.new_buffer_with_data(&out)?;
         Ok(MetalStorage::new(
             buffer,
             self.device.clone(),
@@ -121,9 +121,7 @@ impl QMetalStorage {
         let src = crate::Storage::Cpu(crate::CpuStorage::F32(src));
         let mut qcpu_storage = crate::Device::Cpu.qzeros(elem_count, self.dtype)?;
         qcpu_storage.quantize(&src)?;
-        let buffer = self
-            .device
-            .new_buffer_with_data(qcpu_storage.data()?.to_vec())?;
+        let buffer = self.device.new_buffer_with_data(&qcpu_storage.data()?)?;
         self.buffer = buffer;
         Ok(())
     }
@@ -184,7 +182,7 @@ impl QMetalStorage {
 
 pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
     device: &MetalDevice,
-    data: Vec<T>,
+    data: &[T],
 ) -> Result<QStorage> {
     let buffer = device.new_buffer_with_data(data)?;
     let device = device.clone();

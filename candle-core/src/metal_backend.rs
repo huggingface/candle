@@ -9,7 +9,7 @@ use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger}
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock, TryLockError};
+use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard, TryLockError};
 
 /// Simple way to catch lock error without
 /// depending on T
@@ -60,7 +60,8 @@ impl From<String> for MetalError {
     }
 }
 
-type AllocatedBuffers = Arc<RwLock<HashMap<(NSUInteger, MTLResourceOptions), Vec<Arc<Buffer>>>>>;
+type BufferMap = HashMap<(NSUInteger, MTLResourceOptions), Vec<Arc<Buffer>>>;
+type AllocatedBuffers = Arc<RwLock<BufferMap>>;
 
 #[derive(Clone)]
 pub struct MetalDevice {
@@ -211,27 +212,14 @@ impl MetalDevice {
 
     /// Creates a new buffer from data.
     /// The buffer is [MTLPrivate](https://developer.apple.com/documentation/metal/mtlstoragemode)
-    ///
-    /// This method will block the computation because of the
-    /// lack of lifetime management through the GPU.
-    /// Internal comment for technical details.
-    pub fn new_buffer_with_data<T>(&self, data: Vec<T>) -> Result<Arc<Buffer>> {
-        let size = (core::mem::size_of::<T>() * data.len()) as NSUInteger;
-        let tmp = self.device.new_buffer_with_data(
+    pub fn new_buffer_with_data<T>(&self, data: &[T]) -> Result<Arc<Buffer>> {
+        let size = core::mem::size_of_val(data) as NSUInteger;
+        let new_buffer = self.device.new_buffer_with_data(
             data.as_ptr() as *const c_void,
             size,
             MTLResourceOptions::StorageModeManaged,
         );
-        let real =
-            self.allocate_buffer(size, MTLResourceOptions::StorageModePrivate, "with_data")?;
-        let command_buffer = self.command_buffer()?;
-        command_buffer.set_label("with_data");
-        let blit = command_buffer.new_blit_command_encoder();
-        blit.set_label("with_data_blit");
-        blit.copy_from_buffer(&tmp, 0, &real, 0, tmp.length());
-        blit.end_encoding();
-
-        Ok(real)
+        Ok(Arc::new(new_buffer))
     }
 
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
@@ -255,14 +243,12 @@ impl MetalDevice {
         Ok(buffer)
     }
 
-    /// The critical allocator algorithm
-    fn allocate_buffer(
+    fn find_available_buffer(
         &self,
         size: NSUInteger,
         option: MTLResourceOptions,
-        _name: &str,
-    ) -> Result<Arc<Buffer>> {
-        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
+        buffers: &RwLockWriteGuard<BufferMap>,
+    ) -> Option<Arc<Buffer>> {
         let mut best_buffer: Option<&Arc<Buffer>> = None;
         let mut best_buffer_size: NSUInteger = NSUInteger::MAX;
         for ((buffer_size, buffer_option), subbuffers) in buffers.iter() {
@@ -275,25 +261,42 @@ impl MetalDevice {
                 }
             }
         }
+        return best_buffer.map(|b| b.clone());
+    }
 
-        if let Some(b) = best_buffer {
+    fn drop_unused_buffers(&self, mut buffers: RwLockWriteGuard<BufferMap>) {
+        for subbuffers in buffers.values_mut() {
+            let newbuffers = subbuffers
+                .iter()
+                .filter(|s| Arc::strong_count(*s) > 1)
+                .map(Arc::clone)
+                .collect();
+            *subbuffers = newbuffers;
+        }
+    }
+
+    /// The critical allocator algorithm
+    fn allocate_buffer(
+        &self,
+        size: NSUInteger,
+        option: MTLResourceOptions,
+        _name: &str,
+    ) -> Result<Arc<Buffer>> {
+        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
+        if let Some(b) = self.find_available_buffer(size, option, &buffers) {
+            // Cloning also ensures we increment the strong count
             return Ok(b.clone());
         }
 
-        let size = (size - 1).next_power_of_two();
+        let size = buf_size(size);
         let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
 
         let new_buffer = self.device.new_buffer(size as NSUInteger, option);
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
-        for subbuffers in buffers.values_mut() {
-            let newbuffers = subbuffers
-                .iter()
-                .filter(|s| Arc::strong_count(s) > 1)
-                .map(Arc::clone)
-                .collect();
-            *subbuffers = newbuffers;
-        }
+
+        self.drop_unused_buffers(buffers);
+
         Ok(new_buffer)
     }
 
@@ -1623,7 +1626,7 @@ impl BackendDevice for MetalDevice {
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
-        let (count, buffer) = match storage.clone() {
+        let (count, buffer) = match storage {
             CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
             CpuStorage::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
@@ -1726,6 +1729,10 @@ impl BackendDevice for MetalDevice {
 
         Ok(())
     }
+}
+
+fn buf_size(size: NSUInteger) -> NSUInteger {
+    (size - 1).next_power_of_two() as NSUInteger
 }
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
