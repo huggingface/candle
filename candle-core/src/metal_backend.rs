@@ -211,7 +211,10 @@ impl MetalDevice {
     }
 
     /// Creates a new buffer from data.
-    /// The buffer is [MTLPrivate](https://developer.apple.com/documentation/metal/mtlstoragemode)
+    /// The buffer is [MTLManaged](https://developer.apple.com/documentation/metal/mtlstoragemode)
+    ///
+    /// Does not require synchronization, as [newBufferWithBytes](https://developer.apple.com/documentation/metal/mtldevice/1433429-newbufferwithbytes)
+    /// allocates the buffer and copies over the existing data before returning the MTLBuffer.
     pub fn new_buffer_with_data<T>(&self, data: &[T]) -> Result<Arc<Buffer>> {
         let size = core::mem::size_of_val(data) as NSUInteger;
         let new_buffer = self.device.new_buffer_with_data(
