@@ -147,15 +147,7 @@ impl MetalDevice {
             *command_buffer_lock = command_buffer.clone();
             *index = 0;
 
-            let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
-            for (_, subbuffers) in buffers.iter_mut() {
-                let newbuffers = subbuffers
-                    .iter()
-                    .filter(|s| Arc::strong_count(s) > 1)
-                    .map(Arc::clone)
-                    .collect();
-                *subbuffers = newbuffers;
-            }
+            self.drop_unused_buffers()?;
         }
         *index += 1;
         Ok(command_buffer)
@@ -222,7 +214,14 @@ impl MetalDevice {
             size,
             MTLResourceOptions::StorageModeManaged,
         );
-        Ok(Arc::new(new_buffer))
+        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
+        let subbuffers = buffers
+            .entry((size, MTLResourceOptions::StorageModeManaged))
+            .or_insert(vec![]);
+
+        let new_buffer = Arc::new(new_buffer);
+        subbuffers.push(new_buffer.clone());
+        Ok(new_buffer)
     }
 
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
@@ -267,7 +266,8 @@ impl MetalDevice {
         return best_buffer.map(|b| b.clone());
     }
 
-    fn drop_unused_buffers(&self, mut buffers: RwLockWriteGuard<BufferMap>) {
+    fn drop_unused_buffers(&self) -> Result<()> {
+        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
         for subbuffers in buffers.values_mut() {
             let newbuffers = subbuffers
                 .iter()
@@ -276,6 +276,7 @@ impl MetalDevice {
                 .collect();
             *subbuffers = newbuffers;
         }
+        Ok(())
     }
 
     /// The critical allocator algorithm
@@ -297,8 +298,6 @@ impl MetalDevice {
         let new_buffer = self.device.new_buffer(size as NSUInteger, option);
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
-
-        self.drop_unused_buffers(buffers);
 
         Ok(new_buffer)
     }
