@@ -124,7 +124,8 @@ template<typename T> METAL_FUNC void rand_uniform(
     }
 
     float diff = abs(min - max);
-    HybridTaus rng = HybridTaus::init({ulong(seed), tid, 1, 1});
+    uint s = atomic_load_explicit(seed, memory_order_relaxed);
+    HybridTaus rng = HybridTaus::init({ulong(s), tid, 1, 1});
     out[tid] = static_cast<T>(rng.rand() * diff + min);
     if (tid == 0) {
         atomic_store_explicit(seed, uint(rng.rand() * UNIF01_NORM32), memory_order_relaxed);
@@ -148,7 +149,8 @@ template<typename T> METAL_FUNC void normal(
     if (tid >= size) {
         return;
     }
-    HybridTaus rng = HybridTaus::init({ulong(seed), tid, 1, 1});
+    uint s = atomic_load_explicit(seed, memory_order_relaxed);
+    HybridTaus rng = HybridTaus::init({ulong(s), tid, 1, 1});
     float u1 = rng.rand();
     float u2 = rng.rand();
 
