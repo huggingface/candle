@@ -106,7 +106,12 @@ impl QMetalStorage {
         }
 
         let buffer = self.device.new_buffer_with_data(&out)?;
-        Ok(MetalStorage::new(buffer, self.device.clone(), DType::F32))
+        Ok(MetalStorage::new(
+            buffer,
+            self.device.clone(),
+            elem_count,
+            DType::F32,
+        ))
     }
 
     pub fn quantize(&mut self, src: &MetalStorage) -> Result<()> {
@@ -170,7 +175,7 @@ impl QMetalStorage {
             &dst,
         )
         .map_err(MetalError::from)?;
-        let dst_storage = crate::MetalStorage::new(dst, device, DType::F32);
+        let dst_storage = crate::MetalStorage::new(dst, device, dst_shape.elem_count(), DType::F32);
         Ok((dst_storage, dst_shape))
     }
 }
