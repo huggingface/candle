@@ -1558,8 +1558,10 @@ pub fn call_random_uniform(
 
     set_params!(encoder, (length, min, max, seed, buffer));
 
-    encoder.use_resource(seed, metal::MTLResourceUsage::Read);
-    encoder.use_resource(seed, metal::MTLResourceUsage::Write);
+    encoder.use_resource(
+        seed,
+        metal::MTLResourceUsage::Read | metal::MTLResourceUsage::Write,
+    );
     encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
@@ -1589,8 +1591,10 @@ pub fn call_random_normal(
 
     set_params!(encoder, (length, mean, stddev, seed, buffer));
 
-    encoder.use_resource(seed, metal::MTLResourceUsage::Read);
-    encoder.use_resource(seed, metal::MTLResourceUsage::Write);
+    encoder.use_resource(
+        seed,
+        metal::MTLResourceUsage::Read | metal::MTLResourceUsage::Write,
+    );
     encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
