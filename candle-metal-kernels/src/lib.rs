@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::RwLock;
 
+const CANDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/candle.metallib"));
 const AFFINE: &str = include_str!("affine.metal");
 const INDEXING: &str = include_str!("indexing.metal");
 const UNARY: &str = include_str!("unary.metal");
@@ -13,7 +14,6 @@ const BINARY: &str = include_str!("binary.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
 const CONV: &str = include_str!("conv.metal");
-const REDUCE: &str = include_str!("reduce.metal");
 const RANDOM: &str = include_str!("random.metal");
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
 const QUANTIZED: &str = include_str!("quantized.metal");
@@ -114,13 +114,13 @@ macro_rules! set_params {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
+    Candle,
     Affine,
     Indexing,
     Unary,
     Binary,
     Ternary,
     Cast,
-    Reduce,
     Mfa,
     Conv,
     Random,
@@ -243,11 +243,10 @@ impl Kernels {
             Source::Ternary => TERNARY,
             Source::Indexing => INDEXING,
             Source::Cast => CAST,
-            Source::Reduce => REDUCE,
             Source::Conv => CONV,
             Source::Random => RANDOM,
             Source::Quantized => QUANTIZED,
-            Source::Mfa => panic!("Invalid lib"),
+            _ => panic!("Invalid lib"),
         }
     }
 
@@ -263,6 +262,14 @@ impl Kernels {
             Ok(lib.clone())
         } else {
             let lib = match source {
+                Source::Candle => {
+                    let source_data = CANDLE;
+                    device.new_library_with_data(source_data).map_err(|e| {
+                        MetalKernelError::LoadLibraryError(format!(
+                            "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
+                        ))
+                    })?
+                },
                 Source::Mfa => {
                     let source_data = MFA;
                     device.new_library_with_data(source_data).map_err(|e| {
@@ -569,7 +576,7 @@ pub fn call_reduce_contiguous(
     } else {
         (format!("{kernel_name}").leak(), 1)
     };
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -628,7 +635,7 @@ pub fn call_reduce_strided(
 ) -> Result<(), MetalKernelError> {
     let length: usize = shape.iter().product();
     let work_per_threadgroup = length / out_length;
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -697,7 +704,7 @@ pub fn call_last_softmax(
         (format!("{kernel_name}").leak(), 1)
     };
 
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, name)?;
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 

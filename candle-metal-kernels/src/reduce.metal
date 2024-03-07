@@ -19,6 +19,8 @@ constexpr ushort granularity() {
 METAL_FUNC uint next_p2(uint x) {
     return 1 << (32 - clz(x - 1));
 }
+
+
 METAL_FUNC uint prev_p2(uint x) {
     return 1 << (31 - clz(x));
 }
