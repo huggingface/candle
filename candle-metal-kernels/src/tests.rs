@@ -1,6 +1,8 @@
 use super::*;
 use half::{bf16, f16};
 use metal::{Buffer, Device, MTLResourceOptions};
+use rand::prelude::SliceRandom;
+use rand::thread_rng;
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
@@ -746,19 +748,31 @@ fn correct_argmax<const N: usize, const D: usize>(arr: [f32; N]) -> [u32; D] {
 }
 
 fn reduce_sum_case<const N: usize, const D: usize>() {
-    let v = create_array::<N>();
+    let mut v = create_array::<N>();
+    if D == 1 {
+        // Hardens 1-dimensional test cases
+        v.shuffle(&mut thread_rng());
+    }
     let results = run_reduce(&v, D, "fast_sum_f32");
     assert_eq!(approx(results, 4), correct_sum::<N, D>());
 }
 
 fn reduce_max_case<const N: usize, const D: usize>() {
-    let v = create_array::<N>();
+    let mut v = create_array::<N>();
+    if D == 1 {
+        // Hardens 1-dimensional test cases
+        v.shuffle(&mut thread_rng());
+    }
     let results = run_reduce(&v, D, "fast_max_f32");
     assert_eq!(approx(results, 4), correct_max::<N, D>());
 }
 
 fn reduce_argmax_case<const N: usize, const D: usize>() {
-    let v = create_array::<N>();
+    let mut v = create_array::<N>();
+    if D == 1 {
+        // Hardens 1-dimensional test cases
+        v.shuffle(&mut thread_rng());
+    }
     let results: Vec<u32> = run_reduce(&v, D, "fast_argmax_f32");
     assert_eq!(results, correct_argmax::<N, D>(v));
 }
