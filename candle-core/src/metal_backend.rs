@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock, TryLockError};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Simple way to catch lock error without
 /// depending on T
@@ -1563,8 +1564,12 @@ impl BackendDevice for MetalDevice {
             Ok(val) => val.parse()?,
             _ => 10,
         };
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs() as u32;
         let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
-            [299792458].as_ptr() as *const c_void,
+            [seed].as_ptr() as *const c_void,
             4,
             MTLResourceOptions::StorageModeManaged,
         )));
