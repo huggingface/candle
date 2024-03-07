@@ -1685,7 +1685,7 @@ impl BackendDevice for MetalDevice {
         let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
         let contents = seed_buffer.contents();
         unsafe {
-            std::ptr::copy([seed].as_ptr(), contents as *mut u32, 4);
+            std::ptr::copy([seed].as_ptr(), contents as *mut u32, 1);
         }
         seed_buffer.did_modify_range(metal::NSRange::new(0, 4));
 
