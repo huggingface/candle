@@ -1080,8 +1080,16 @@ fn broadcasting(device: &Device) -> Result<()> {
 fn randn(device: &Device) -> Result<()> {
     let tensor = Tensor::randn(0f32, 1f32, (5, 3), device)?;
     assert_eq!(tensor.dims(), [5, 3]);
+    // Check that the seed gets updated by checking that
+    // a new series of numbers is generated each time
+    let tensor2 = Tensor::randn(0f32, 1f32, (5, 3), device)?;
+    assert_ne!(tensor.to_vec2::<f32>()?, tensor2.to_vec2::<f32>()?);
     let tensor = Tensor::rand(0f32, 1f32, (5, 3), device)?;
     assert_eq!(tensor.dims(), [5, 3]);
+    // Check that the seed gets updated by checking that
+    // a new series of numbers is generated each time
+    let tensor2 = Tensor::rand(0f32, 1f32, (5, 3), device)?;
+    assert_ne!(tensor.to_vec2::<f32>()?, tensor2.to_vec2::<f32>()?);
     Ok(())
 }
 
