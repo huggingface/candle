@@ -53,26 +53,30 @@ fn conv1d(dev: &Device) -> Result<()> {
         test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
         [2.4509, 2.6357, -1.3336, 4.1393, 0.5657, 1.8091, -1.1784, 3.5675, 0.5069, 3.3352]
     );
-    let res = t.conv_transpose1d(&w.transpose(0, 1)?, 0, 0, 1, 1, 1)?;
-    assert_eq!(res.dims(), [1, 2, 7]);
-    assert_eq!(
-        test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
-        [
-            0.0699, -1.2899, 8.3018, 5.5873, 2.4572, -2.6143, -0.0706, 1.8765, 4.8318, 1.1538,
-            4.7076, -5.9745, -0.8276, 1.621
-        ],
-    );
-    let res = t.conv_transpose1d(&w.transpose(0, 1)?, 0, 0, 1, 1, 2)?;
-    assert_eq!(res.dims(), [1, 4, 7]);
-    assert_eq!(
-        test_utils::to_vec2_round(&res.squeeze(0)?, 4)?,
-        [
-            [-1.5596, -1.8099, 2.0407, 4.8764, -0.1743, -0.735, -0.7819],
-            [0.7816, 3.8152, -0.5926, 2.2515, -5.1844, -0.3157, 1.4721],
-            [1.6295, 0.52, 6.2611, 0.7109, 2.6315, -1.8793, 0.7113],
-            [1.0949, 1.0166, 1.7464, 2.4561, -0.79, -0.5119, 0.1488]
-        ]
-    );
+    let w = w.transpose(0, 1)?;
+    // The CPU kernels applied in the contiguous and non contiguous cases are different.
+    for w in [w.clone(), w.contiguous()?] {
+        let res = t.conv_transpose1d(&w, 0, 0, 1, 1, 1)?;
+        assert_eq!(res.dims(), [1, 2, 7]);
+        assert_eq!(
+            test_utils::to_vec1_round(&res.flatten_all()?, 4)?,
+            [
+                0.0699, -1.2899, 8.3018, 5.5873, 2.4572, -2.6143, -0.0706, 1.8765, 4.8318, 1.1538,
+                4.7076, -5.9745, -0.8276, 1.621
+            ],
+        );
+        let res = t.conv_transpose1d(&w, 0, 0, 1, 1, 2)?;
+        assert_eq!(res.dims(), [1, 4, 7]);
+        assert_eq!(
+            test_utils::to_vec2_round(&res.squeeze(0)?, 4)?,
+            [
+                [-1.5596, -1.8099, 2.0407, 4.8764, -0.1743, -0.735, -0.7819],
+                [0.7816, 3.8152, -0.5926, 2.2515, -5.1844, -0.3157, 1.4721],
+                [1.6295, 0.52, 6.2611, 0.7109, 2.6315, -1.8793, 0.7113],
+                [1.0949, 1.0166, 1.7464, 2.4561, -0.79, -0.5119, 0.1488]
+            ]
+        );
+    }
     Ok(())
 }
 
