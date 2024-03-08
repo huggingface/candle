@@ -55,12 +55,12 @@ pub mod speaker_encoder {
                     layer_idx,
                     ..Default::default()
                 };
-                let lstm = candle_nn::lstm(
-                    cfg.mel_n_channels,
-                    cfg.model_hidden_size,
-                    c,
-                    vb_l.pp(layer_idx),
-                )?;
+                let in_c = if layer_idx == 0 {
+                    cfg.mel_n_channels
+                } else {
+                    cfg.model_hidden_size
+                };
+                let lstm = candle_nn::lstm(in_c, cfg.model_hidden_size, c, vb_l.clone())?;
                 lstms.push(lstm)
             }
             let linear = linear_b(
@@ -143,7 +143,7 @@ pub mod speaker_encoder {
                 .iter()
                 .flat_map(|s| [mel[s.0], mel[s.1]])
                 .collect::<Vec<_>>();
-            let mels = Tensor::from_vec(mels, (mel_slices.len(), 2), device)?;
+            let mels = Tensor::from_vec(mels, (1, mel_slices.len(), 2), device)?;
             let partial_embeds = self.forward(&mels)?;
             let raw_embed = partial_embeds.mean(0)?;
             let norm = raw_embed.sqr()?.sum_all()?.sqrt()?;
