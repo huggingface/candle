@@ -74,7 +74,7 @@ pub fn dropout(xs: &Tensor, drop_p: f32) -> Result<Tensor> {
     xs * mask
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Dropout {
     drop_p: f32,
 }
