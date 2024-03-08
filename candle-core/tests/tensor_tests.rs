@@ -1080,8 +1080,33 @@ fn broadcasting(device: &Device) -> Result<()> {
 fn randn(device: &Device) -> Result<()> {
     let tensor = Tensor::randn(0f32, 1f32, (5, 3), device)?;
     assert_eq!(tensor.dims(), [5, 3]);
+    // Check that the seed gets updated by checking that
+    // a new series of numbers is generated each time
+    let tensor2 = Tensor::randn(0f32, 1f32, (5, 3), device)?;
+    assert_ne!(tensor.to_vec2::<f32>()?, tensor2.to_vec2::<f32>()?);
     let tensor = Tensor::rand(0f32, 1f32, (5, 3), device)?;
     assert_eq!(tensor.dims(), [5, 3]);
+    // Check that the seed gets updated by checking that
+    // a new series of numbers is generated each time
+    let tensor2 = Tensor::rand(0f32, 1f32, (5, 3), device)?;
+    assert_ne!(tensor.to_vec2::<f32>()?, tensor2.to_vec2::<f32>()?);
+    // We do not expect deterministic elements at any index.
+    // There once was a bug that had a deterministic zero element in evenly sized tensors.
+    const N: usize = 2;
+    let v = (0..100)
+        .map(|_| Tensor::randn(0f32, 1f32, N, device).and_then(|t| t.to_vec1::<f32>()))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(
+        (0..N).all(|i| v.windows(2).any(|pair| pair[0][i] != pair[1][i])),
+        "There are deterministic values in the randn tensors"
+    );
+    let v = (0..100)
+        .map(|_| Tensor::rand(0f32, 1f32, N, device).and_then(|t| t.to_vec1::<f32>()))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(
+        (0..N).all(|i| v.windows(2).any(|pair| pair[0][i] != pair[1][i])),
+        "There are deterministic values in the rand tensors"
+    );
     Ok(())
 }
 
