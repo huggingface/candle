@@ -269,7 +269,7 @@ impl Kernels {
                             "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
                         ))
                     })?
-                },
+                }
                 Source::Mfa => {
                     let source_data = MFA;
                     device.new_library_with_data(source_data).map_err(|e| {
