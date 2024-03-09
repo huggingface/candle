@@ -50,6 +50,16 @@ impl Module for Linear {
     }
 }
 
+pub fn linear_b(in_dim: usize, out_dim: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
+    let bias = if bias {
+        Some(vb.get(out_dim, "bias")?.dequantize(vb.device())?)
+    } else {
+        None
+    };
+    let weight = QMatMul::new(in_dim, out_dim, vb)?;
+    Ok(Linear { weight, bias })
+}
+
 pub fn linear(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {
     let bias = vb.get(out_dim, "bias")?.dequantize(vb.device())?;
     let weight = QMatMul::new(in_dim, out_dim, vb)?;

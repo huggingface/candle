@@ -2,7 +2,7 @@ use candle::{DType, Device, Error as E, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{embedding, linear_b, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 
 // Equivalent to torch.repeat_interleave
-fn repeat_interleave(img: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
+pub(crate) fn repeat_interleave(img: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
     let img = img.unsqueeze(dim + 1)?;
     let mut dims = img.dims().to_vec();
     dims[dim + 1] = repeats;
@@ -664,15 +664,15 @@ pub mod transformer {
             }
         }
 
-        fn n_local_heads(&self) -> usize {
+        pub(crate) fn n_local_heads(&self) -> usize {
             self.n_local_heads.unwrap_or(self.n_head)
         }
 
-        fn head_dim(&self) -> usize {
+        pub(crate) fn head_dim(&self) -> usize {
             self.dim / self.n_head
         }
 
-        fn intermediate_size(&self) -> usize {
+        pub(crate) fn intermediate_size(&self) -> usize {
             match self.intermediate_size {
                 Some(intermediate_size) => intermediate_size,
                 None => {
