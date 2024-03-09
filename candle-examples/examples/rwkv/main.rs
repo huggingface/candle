@@ -141,7 +141,7 @@ impl std::fmt::Display for Which {
 impl Which {
     fn model_id(&self) -> &'static str {
         match self {
-            Self::Eagle7b => "RWKV/HF_v5-Eagle-7B",
+            Self::Eagle7b => "RWKV/v5-Eagle-7B-HF",
             Self::World1b5 => "RWKV/rwkv-5-world-1b5",
             Self::World3b => "RWKV/rwkv-5-world-3b",
             Self::World6_1b6 => "paperfun/rwkv",
