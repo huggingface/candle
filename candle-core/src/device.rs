@@ -289,6 +289,28 @@ impl Device {
         }
     }
 
+    pub(crate) fn alloc(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        init_value: Option<u8>,
+    ) -> Result<Storage> {
+        match self {
+            Device::Cpu => {
+                let storage = CpuDevice.alloc_impl(shape, dtype, init_value)?;
+                Ok(Storage::Cpu(storage))
+            }
+            Device::Cuda(device) => {
+                let storage = device.alloc_impl(shape, dtype, init_value)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = device.alloc_impl(shape, dtype, init_value)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
     pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
         match self {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
