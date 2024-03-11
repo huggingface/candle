@@ -53,7 +53,7 @@ class TensorPrinter:
         self._shape = shape
 
     def to_string(self) -> str:
-        return "Tensor %s" % self._shape
+        return "Tensor %s" % list(reversed(self._shape))
 
     @staticmethod
     def mk_desc(dims: list[int], ptr: gdb.Value, indent: int) -> str:
