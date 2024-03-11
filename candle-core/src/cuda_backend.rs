@@ -372,34 +372,36 @@ impl BackendDevice for CudaDevice {
             self.const_impl(v as f64, shape, dtype);
         }
         let elem_count = shape.elem_count();
-        let slice = match dtype {
-            DType::U8 => {
-                let data = self.alloc::<u8>(elem_count).w()?;
-                CudaStorageSlice::U8(data)
-            }
-            DType::U32 => {
-                let data = self.alloc::<u32>(elem_count).w()?;
-                CudaStorageSlice::U32(data)
-            }
-            DType::I64 => {
-                let data = self.alloc::<i64>(elem_count).w()?;
-                CudaStorageSlice::I64(data)
-            }
-            DType::BF16 => {
-                let data = self.alloc::<bf16>(elem_count).w()?;
-                CudaStorageSlice::BF16(data)
-            }
-            DType::F16 => {
-                let data = self.alloc::<f16>(elem_count).w()?;
-                CudaStorageSlice::F16(data)
-            }
-            DType::F32 => {
-                let data = self.alloc::<f32>(elem_count).w()?;
-                CudaStorageSlice::F32(data)
-            }
-            DType::F64 => {
-                let data = self.alloc::<f64>(elem_count).w()?;
-                CudaStorageSlice::F64(data)
+        let slice = unsafe {
+            match dtype {
+                DType::U8 => {
+                    let data = self.alloc::<u8>(elem_count).w()?;
+                    CudaStorageSlice::U8(data)
+                }
+                DType::U32 => {
+                    let data = self.alloc::<u32>(elem_count).w()?;
+                    CudaStorageSlice::U32(data)
+                }
+                DType::I64 => {
+                    let data = self.alloc::<i64>(elem_count).w()?;
+                    CudaStorageSlice::I64(data)
+                }
+                DType::BF16 => {
+                    let data = self.alloc::<bf16>(elem_count).w()?;
+                    CudaStorageSlice::BF16(data)
+                }
+                DType::F16 => {
+                    let data = self.alloc::<f16>(elem_count).w()?;
+                    CudaStorageSlice::F16(data)
+                }
+                DType::F32 => {
+                    let data = self.alloc::<f32>(elem_count).w()?;
+                    CudaStorageSlice::F32(data)
+                }
+                DType::F64 => {
+                    let data = self.alloc::<f64>(elem_count).w()?;
+                    CudaStorageSlice::F64(data)
+                }
             }
         };
         Ok(CudaStorage {
