@@ -209,7 +209,12 @@ impl crate::backend::BackendDevice for CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
-    fn alloc_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+    fn alloc_impl(
+        &self,
+        _shape: &Shape,
+        _dtype: DType,
+        _init_value: Option<u8>,
+    ) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 }

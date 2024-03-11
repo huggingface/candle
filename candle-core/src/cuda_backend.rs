@@ -242,41 +242,7 @@ impl BackendDevice for CudaDevice {
     }
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
-        let elem_count = shape.elem_count();
-        let slice = match dtype {
-            DType::U8 => {
-                let data = self.alloc_zeros::<u8>(elem_count).w()?;
-                CudaStorageSlice::U8(data)
-            }
-            DType::U32 => {
-                let data = self.alloc_zeros::<u32>(elem_count).w()?;
-                CudaStorageSlice::U32(data)
-            }
-            DType::I64 => {
-                let data = self.alloc_zeros::<i64>(elem_count).w()?;
-                CudaStorageSlice::I64(data)
-            }
-            DType::BF16 => {
-                let data = self.alloc_zeros::<bf16>(elem_count).w()?;
-                CudaStorageSlice::BF16(data)
-            }
-            DType::F16 => {
-                let data = self.alloc_zeros::<f16>(elem_count).w()?;
-                CudaStorageSlice::F16(data)
-            }
-            DType::F32 => {
-                let data = self.alloc_zeros::<f32>(elem_count).w()?;
-                CudaStorageSlice::F32(data)
-            }
-            DType::F64 => {
-                let data = self.alloc_zeros::<f64>(elem_count).w()?;
-                CudaStorageSlice::F64(data)
-            }
-        };
-        Ok(CudaStorage {
-            slice,
-            device: self.clone(),
-        })
+        self.alloc_impl(shape, dtype, Some(0))
     }
 
     fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, up: f64) -> Result<CudaStorage> {
@@ -356,7 +322,7 @@ impl BackendDevice for CudaDevice {
     }
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
-        self.const_impl(1., shape, dtype)
+        self.alloc_impl(shape, dtype, Some(1))
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<CudaStorage> {
@@ -396,7 +362,15 @@ impl BackendDevice for CudaDevice {
         })
     }
 
-    fn alloc_impl(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
+    fn alloc_impl(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        init_value: Option<u8>,
+    ) -> Result<CudaStorage> {
+        if let Some(v) = init_value {
+            self.const_impl(v as f64, shape, dtype);
+        }
         let elem_count = shape.elem_count();
         let slice = match dtype {
             DType::U8 => {
