@@ -4,6 +4,8 @@
 [![Documentation](https://docs.rs/candle-core/badge.svg)](https://docs.rs/candle-core)
 ![License](https://img.shields.io/crates/l/candle-core.svg)
 
+**This is an optimized implmentation by Eric Buehler.**
+
 Candle is a minimalist ML framework for Rust with a focus on performance (including GPU support) 
 and ease of use. Try our online demos: 
 [whisper](https://huggingface.co/spaces/lmz/candle-whisper),
