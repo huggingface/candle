@@ -2880,6 +2880,10 @@ impl BackendDevice for CpuDevice {
         };
         Ok(storage)
     }
+
+    fn alloc_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+        self.zeros_impl(shape, dtype)
+    }
 }
 
 #[macro_export]

@@ -1623,6 +1623,17 @@ impl BackendDevice for MetalDevice {
         ))
     }
 
+    fn alloc_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+        let size = shape.elem_count() * dtype.size_in_bytes();
+        let buffer = self.allocate_zeros(size)?;
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
         // TODO Is there a faster way ?
         let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;

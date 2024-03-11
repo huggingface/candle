@@ -110,6 +110,8 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
 
     fn same_device(&self, _: &Self) -> bool;
 
+    fn alloc_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
+
     fn zeros_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
 
     fn ones_impl(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
