@@ -1613,20 +1613,33 @@ impl BackendDevice for MetalDevice {
     }
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-        let size = shape.elem_count() * dtype.size_in_bytes();
-        let buffer = self.allocate_zeros(size)?;
-        Ok(MetalStorage::new(
-            buffer,
-            self.clone(),
-            shape.elem_count(),
-            dtype,
-        ))
+        self.alloc_impl(shape, dtype, Some(0))
+    }
+
+    fn alloc_impl(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        init_value: Option<u8>,
+    ) -> Result<MetalStorage> {
+        if init_value.is_some_and(|x| x == 0) || init_value.is_none() {
+            let size = shape.elem_count() * dtype.size_in_bytes();
+            let buffer = self.allocate_zeros(size)?;
+            Ok(MetalStorage::new(
+                buffer,
+                self.clone(),
+                shape.elem_count(),
+                dtype,
+            ))
+        } else {
+            // TODO Is there a faster way ?
+            let cpu_storage = crate::cpu_backend::CpuDevice.alloc_impl(shape, dtype, init_value)?;
+            self.storage_from_cpu_storage(&cpu_storage)
+        }
     }
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
-        // TODO Is there a faster way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
-        self.storage_from_cpu_storage(&cpu_storage)
+        self.alloc_impl(shape, dtype, Some(1))
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {

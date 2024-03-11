@@ -2854,29 +2854,36 @@ impl BackendDevice for CpuDevice {
     }
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<CpuStorage> {
-        let elem_count = shape.elem_count();
-        let storage = match dtype {
-            DType::U8 => CpuStorage::U8(vec![1u8; elem_count]),
-            DType::U32 => CpuStorage::U32(vec![1u32; elem_count]),
-            DType::I64 => CpuStorage::I64(vec![1i64; elem_count]),
-            DType::BF16 => CpuStorage::BF16(vec![bf16::ONE; elem_count]),
-            DType::F16 => CpuStorage::F16(vec![f16::ONE; elem_count]),
-            DType::F32 => CpuStorage::F32(vec![1f32; elem_count]),
-            DType::F64 => CpuStorage::F64(vec![1f64; elem_count]),
-        };
-        Ok(storage)
+        self.alloc_impl(shape, dtype, Some(1))
     }
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<CpuStorage> {
+        self.alloc_impl(shape, dtype, Some(0))
+    }
+
+    fn alloc_impl(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        init_value: Option<u8>,
+    ) -> Result<Self::Storage> {
         let elem_count = shape.elem_count();
         let storage = match dtype {
-            DType::U8 => CpuStorage::U8(vec![0u8; elem_count]),
-            DType::U32 => CpuStorage::U32(vec![0u32; elem_count]),
-            DType::I64 => CpuStorage::I64(vec![0i64; elem_count]),
-            DType::BF16 => CpuStorage::BF16(vec![bf16::ZERO; elem_count]),
-            DType::F16 => CpuStorage::F16(vec![f16::ZERO; elem_count]),
-            DType::F32 => CpuStorage::F32(vec![0f32; elem_count]),
-            DType::F64 => CpuStorage::F64(vec![0f64; elem_count]),
+            DType::U8 => CpuStorage::U8(vec![init_value.unwrap_or(0); elem_count]),
+            DType::U32 => CpuStorage::U32(vec![init_value.unwrap_or(0) as u32; elem_count]),
+            DType::I64 => CpuStorage::I64(vec![init_value.unwrap_or(0) as i64; elem_count]),
+            DType::BF16 => {
+                CpuStorage::BF16(vec![
+                    bf16::from_f32_const(init_value.unwrap_or(0) as f32);
+                    elem_count
+                ])
+            }
+            DType::F16 => CpuStorage::F16(vec![
+                f16::from_f32_const(init_value.unwrap_or(0) as f32);
+                elem_count
+            ]),
+            DType::F32 => CpuStorage::F32(vec![init_value.unwrap_or(0) as f32; elem_count]),
+            DType::F64 => CpuStorage::F64(vec![init_value.unwrap_or(0) as f64; elem_count]),
         };
         Ok(storage)
     }

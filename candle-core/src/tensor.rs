@@ -2001,7 +2001,7 @@ impl Tensor {
             Ok(self.clone())
         } else {
             let shape = self.shape();
-            let mut storage = self.device().zeros(shape, self.dtype())?;
+            let mut storage = self.device().alloc(shape, self.dtype(), None)?;
             self.storage()
                 .copy_strided_src(&mut storage, 0, self.layout())?;
             let op = BackpropOp::new1(self, Op::Copy);
@@ -2066,7 +2066,7 @@ impl Tensor {
             };
             Ok(Tensor(Arc::new(tensor_)))
         } else {
-            let mut storage = self.device().zeros(&shape, self.dtype())?;
+            let mut storage = self.device().alloc(&shape, self.dtype(), None)?;
             self.storage()
                 .copy_strided_src(&mut storage, 0, self.layout())?;
             Ok(from_storage(storage, shape, op, false))
@@ -2286,7 +2286,7 @@ impl Tensor {
         }
         let shape = Shape::from(cat_dims);
         let op = BackpropOp::new(args, |args| Op::Cat(args, 0));
-        let mut storage = device.zeros(&shape, dtype)?;
+        let mut storage = device.alloc(&shape, dtype, None)?;
         for (arg, &offset) in args.iter().zip(offsets.iter()) {
             let arg = arg.as_ref();
             arg.storage()

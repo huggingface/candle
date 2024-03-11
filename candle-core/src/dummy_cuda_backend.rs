@@ -208,4 +208,13 @@ impl crate::backend::BackendDevice for CudaDevice {
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
+
+    fn alloc_impl(
+        &self,
+        _shape: &Shape,
+        _dtype: DType,
+        _init_value: Option<u8>,
+    ) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
 }
