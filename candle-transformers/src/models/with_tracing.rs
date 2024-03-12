@@ -116,6 +116,12 @@ impl QMatMul {
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
         Ok(Self { inner, span })
     }
+
+    pub fn from_weights(ws: std::sync::Arc<candle::quantized::QTensor>) -> Result<Self> {
+        let inner = candle::quantized::QMatMul::from_arc(ws)?;
+        let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
+        Ok(Self { inner, span })
+    }
 }
 
 impl Module for QMatMul {

@@ -35,6 +35,14 @@ pub struct Linear {
 }
 
 impl Linear {
+    pub fn from_arc(
+        weight: std::sync::Arc<candle::quantized::QTensor>,
+        bias: Option<Tensor>,
+    ) -> Result<Self> {
+        let weight = QMatMul::from_weights(weight)?;
+        Ok(Self { weight, bias })
+    }
+
     pub fn from_weights(weight: QMatMul, bias: Option<Tensor>) -> Self {
         Self { weight, bias }
     }
