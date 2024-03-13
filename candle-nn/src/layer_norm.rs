@@ -137,13 +137,13 @@ impl LayerNorm {
             dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::FUSED_LAYER_NORM)?;
         // 2*blockDim.y*sizeof(U)+blockDim.y*sizeof(int) shared memory available.
         let cfg = LaunchConfig {
-            grid_dim: (32, BLOCK_DIM_Y, 1), //(1, max_grid_y.max(n_rows as u32), max_grid_y),
-            block_dim: (1, max_grid_y.max(n_rows as u32), max_grid_y), //(32, BLOCK_DIM_Y, 1),
+            grid_dim: (1, max_grid_y.max(n_rows as u32), max_grid_y),
+            block_dim: (32, BLOCK_DIM_Y, 1),
             shared_mem_bytes: 2 * BLOCK_DIM_Y * mem::size_of::<T>() as u32
                 + BLOCK_DIM_Y * mem::size_of::<i32>() as u32,
         };
         let mean = unsafe { dev.alloc::<T>(n_rows) }.w()?;
-        let invvar = unsafe { dev.alloc::<T>(elem_count) }.w()?;
+        let invvar = unsafe { dev.alloc::<T>(n_rows) }.w()?;
 
         let params = (
             &out,
