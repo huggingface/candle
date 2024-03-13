@@ -82,7 +82,7 @@ impl LayerNorm {
     pub fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
         Self {
             weight,
-            bias: bias,
+            bias,
             remove_mean: true,
             eps,
         }
@@ -90,7 +90,7 @@ impl LayerNorm {
 
     pub fn new_no_bias(weight: Tensor, eps: f64) -> Result<Self> {
         Ok(Self {
-            weight,
+            weight: weight.clone(),
             bias: Tensor::zeros_like(&weight)?,
             remove_mean: true,
             eps,
@@ -99,7 +99,7 @@ impl LayerNorm {
 
     pub fn rms_norm(weight: Tensor, eps: f64) -> Result<Self> {
         Ok(Self {
-            weight,
+            weight: weight.clone(),
             bias: Tensor::zeros_like(&weight)?,
             remove_mean: false,
             eps,
@@ -226,7 +226,7 @@ impl crate::Module for LayerNorm {
             }
             _ => {}
         };
-        
+
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
@@ -260,7 +260,7 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
         None
     };
     Ok(LayerNorm {
-        weight,
+        weight: weight.clone(),
         bias: bias.unwrap_or(Tensor::zeros_like(&weight)?),
         remove_mean: config.remove_mean,
         eps: config.eps,
