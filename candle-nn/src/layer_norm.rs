@@ -73,7 +73,7 @@ impl From<f64> for LayerNormConfig {
 #[derive(Clone, Debug)]
 pub struct LayerNorm {
     weight: Tensor,
-    bias: Option<Tensor>,
+    bias: Tensor,
     remove_mean: bool,
     eps: f64,
 }
@@ -82,36 +82,36 @@ impl LayerNorm {
     pub fn new(weight: Tensor, bias: Tensor, eps: f64) -> Self {
         Self {
             weight,
-            bias: Some(bias),
+            bias: bias,
             remove_mean: true,
             eps,
         }
     }
 
-    pub fn new_no_bias(weight: Tensor, eps: f64) -> Self {
-        Self {
+    pub fn new_no_bias(weight: Tensor, eps: f64) -> Result<Self> {
+        Ok(Self {
             weight,
-            bias: None,
+            bias: Tensor::zeros_like(&weight)?,
             remove_mean: true,
             eps,
-        }
+        })
     }
 
-    pub fn rms_norm(weight: Tensor, eps: f64) -> Self {
-        Self {
+    pub fn rms_norm(weight: Tensor, eps: f64) -> Result<Self> {
+        Ok(Self {
             weight,
-            bias: None,
+            bias: Tensor::zeros_like(&weight)?,
             remove_mean: false,
             eps,
-        }
+        })
     }
 
     pub fn weight(&self) -> &Tensor {
         &self.weight
     }
 
-    pub fn bias(&self) -> Option<&Tensor> {
-        self.bias.as_ref()
+    pub fn bias(&self) -> &Tensor {
+        &self.bias
     }
 
     fn dtype_execute_layernorm<T: CudaDType + DeviceRepr + WithDType, F>(
@@ -180,9 +180,13 @@ impl LayerNorm {
         match (
             &*x.storage_and_layout().0,
             &*self.weight().storage_and_layout().0,
-            &self.bias,
+            &*self.bias().storage_and_layout().0,
         ) {
-            (Storage::Cuda(x_storage), Storage::Cuda(weight_storage), Some(bias)) => {
+            (
+                Storage::Cuda(x_storage),
+                Storage::Cuda(weight_storage),
+                Storage::Cuda(bias_storage),
+            ) => {
                 match (
                     x_storage.dtype(),
                     weight_storage.dtype(),
@@ -198,18 +202,11 @@ impl LayerNorm {
                             |x| half::bf16::from_f64(x),
                             x_storage,
                             weight_storage,
-                            if let Storage::Cuda(strg) = &*bias.clone().storage_and_layout().0 {
-                                strg
-                            } else {
-                                candle::bail!("Device mismatch in layernorm");
-                            },
+                            &*bias_storage,
                             x,
                         ),
                     _ => candle::bail!("Shape mismatch in fused layernorm."),
                 }
-            }
-            (Storage::Cuda(x_storage), Storage::Cuda(weight_storage), None) => {
-                todo!()
             }
             _ => unreachable!(),
         }
