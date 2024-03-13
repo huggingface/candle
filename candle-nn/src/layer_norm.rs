@@ -33,7 +33,7 @@ use std::{mem, sync::RwLockReadGuard};
 use candle::{
     backend::BackendStorage,
     cuda_backend::{
-        cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig},
+        cudarc::driver::{sys, DeviceRepr, LaunchAsync, LaunchConfig},
         kernel_name, kernels, CudaDType, WrapErr,
     },
     from_storage_no_op, CudaDevice, CudaStorage, DType, Device, Result, Storage, Tensor, WithDType,
@@ -169,7 +169,14 @@ impl LayerNorm {
         let dims = x.layout().shape().dims();
         let dim_m1 = dims[dims.len() - 1];
         let (n_rows, n_cols) = (elem_count / dim_m1, dim_m1);
-        let max_grid_y: u32 = todo!();
+
+        let mut devprop = sys::CUdevprop::default();
+        let res = unsafe { sys::cuDeviceGetProperties(&mut devprop as *mut _, dev.cu_device()) };
+        if res != sys::CUresult::CUDA_SUCCESS {
+            candle::bail!(format!("{res:?}"));
+        }
+        let max_grid_y: u32 = devprop.maxGridSize[1];
+
         let bias = if let Some(bias) = self.bias {
             Some(&*bias.storage_and_layout().0)
         } else {
