@@ -114,7 +114,7 @@ impl LayerNorm {
         self.bias.as_ref()
     }
 
-    fn dtype_execute_layernorm<T: CudaDType + DeviceRepr + WithDType>(
+    fn dtype_execute_layernorm<T: CudaDType + DeviceRepr + WithDType, F>(
         &self,
         dev: &CudaDevice,
         elem_count: usize,
@@ -122,9 +122,13 @@ impl LayerNorm {
         n_cols: usize,
         max_grid_y: usize,
         eps_converter: F,
+        x_storage: &CudaStorage,
+        weight_storage: &CudaStorage,
+        bias_storage: &CudaStorage,
+        x: &Tensor,
     ) -> Result<Tensor>
     where
-        F: FnOnce<f32, T>,
+        F: FnOnce(f32) -> T,
     {
         const BLOCK_DIM_Y: u32 = 4;
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
@@ -189,6 +193,10 @@ impl LayerNorm {
                             n_cols,
                             max_grid_y,
                             |x| half::bf16::from_f32(x),
+                            x_storage,
+                            weight_storage,
+                            bias_storage,
+                            x,
                         ),
                     _ => candle::bail!("Shape mismatch in fused layernorm."),
                 }
