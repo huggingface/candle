@@ -28,7 +28,7 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
-use std::mem;
+use std::{mem, time::{SystemTime, UNIX_EPOCH}};
 
 use candle::{
     backend::BackendStorage,
@@ -248,7 +248,18 @@ impl crate::Module for LayerNorm {
             (DType::BF16, Device::Cuda(dev))
             | (DType::F32, Device::Cuda(dev))
             | (DType::F16, Device::Cuda(dev)) => {
-                return self.fused_layernorm(x, dev);
+                let start = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time travel has occurred!")
+                    .as_micros();
+                println!("starting...");
+                let res = self.fused_layernorm(x, dev);
+                let end = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time travel has occurred!")
+                    .as_micros();
+                println!("{}us", end - start);
+                return res;//self.fused_layernorm(x, dev);
             }
             _ => {}
         };
