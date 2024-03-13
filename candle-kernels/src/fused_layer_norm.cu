@@ -270,8 +270,9 @@ template <> struct SharedMemory<__nv_bfloat16> {
 // 1) blockDim.x == warpSize
 // 2) Tensors are contiguous
 //
+/*
 #define LAYERNORM(FNNAME, TYPENAME) __global__ void \
-extern "C" FNNAME(TYPENAME *__restrict__ output_vals, TYPENAME *__restrict__ mean, \
+FNNAME(TYPENAME *__restrict__ output_vals, TYPENAME *__restrict__ mean, \
                  TYPENAME *__restrict__ invvar, const TYPENAME *__restrict__ vals, \
                  const int n1, const int n2, const TYPENAME epsilon, \
                  const TYPENAME *__restrict__ gamma, const TYPENAME *__restrict__ beta) { \
@@ -308,4 +309,67 @@ LAYERNORM(layernorm_f32, float)
 
 #if __CUDA_ARCH__ >= 800
 LAYERNORM(layernorm_bf16, __nv_bfloat16)
+#endif
+*/
+
+template <typename T, typename U>
+__global__ void
+cuApplyLayerNorm(T *__restrict__ output_vals, U *__restrict__ mean,
+                 U *__restrict__ invvar, const T *__restrict__ vals,
+                 const int n1, const int n2, const U epsilon,
+                 const T *__restrict__ gamma, const T *__restrict__ beta) {
+  // Assumptions:
+  // 1) blockDim.x == warpSize
+  // 2) Tensors are contiguous
+  //
+  for (auto i1 = blockIdx.y; i1 < n1; i1 += gridDim.y) {
+    SharedMemory<U> shared;
+    U *buf = shared.getPointer();
+    U mu, sigma2;
+    cuWelfordMuSigma2(vals, n1, n2, i1, mu, sigma2, buf);
+    const T *lvals = vals + i1 * n2;
+    T *ovals = output_vals + i1 * n2;
+    U c_invvar = rsqrt(sigma2 + epsilon);
+    const int numx = blockDim.x * blockDim.y;
+    const int thrx = threadIdx.x + threadIdx.y * blockDim.x;
+    if (gamma != NULL && beta != NULL) {
+      for (int i = thrx; i < n2; i += numx) {
+        U curr = static_cast<U>(lvals[i]);
+        ovals[i] = gamma[i] * static_cast<T>(c_invvar * (curr - mu)) + beta[i];
+      }
+    } else {
+      for (int i = thrx; i < n2; i += numx) {
+        U curr = static_cast<U>(lvals[i]);
+        ovals[i] = static_cast<T>(c_invvar * (curr - mu));
+      }
+    }
+    if (threadIdx.x == 0 && threadIdx.y == 0) {
+      mean[i1] = mu;
+      invvar[i1] = c_invvar;
+    }
+  }
+}
+
+extern "C" __global__ void layernorm_f16(__half *__restrict__ output_vals, __half *__restrict__ mean,
+                 __half *__restrict__ invvar, const __half *__restrict__ vals,
+                 const int n1, const int n2, const __half epsilon,
+                 const __half *__restrict__ gamma, const __half *__restrict__ beta) {
+  cuApplyLayerNorm(output_vals, mean, invvar, vals, n1, n2, epsilon, gamma, beta);
+}
+
+extern "C" __global__ void layernorm_f32(float *__restrict__ output_vals, float *__restrict__ mean,
+                 float *__restrict__ invvar, const float *__restrict__ vals,
+                 const int n1, const int n2, const float epsilon,
+                 const float *__restrict__ gamma, const float *__restrict__ beta) {
+  cuApplyLayerNorm(output_vals, mean, invvar, vals, n1, n2, epsilon, gamma, beta);
+}
+
+#if __CUDA_ARCH__ >= 800
+#include <cuda_bf16.h>
+extern "C" __global__ void layernorm_bf16(__nv_bfloat16 *__restrict__ output_vals, __nv_bfloat16 *__restrict__ mean,
+                 __nv_bfloat16 *__restrict__ invvar, const __nv_bfloat16 *__restrict__ vals,
+                 const int n1, const int n2, const __nv_bfloat16 epsilon,
+                 const __nv_bfloat16 *__restrict__ gamma, const __nv_bfloat16 *__restrict__ beta) {
+  cuApplyLayerNorm(output_vals, mean, invvar, vals, n1, n2, epsilon, gamma, beta);
+}
 #endif
