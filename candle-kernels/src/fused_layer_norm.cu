@@ -217,6 +217,7 @@ template <typename U> __device__ U rsqrt(U v) { return U(1) / sqrt(v); }
 template <> __device__ float rsqrt(float v) { return rsqrtf(v); }
 template <> __device__ double rsqrt(double v) { return rsqrt(v); }
 template <> __device__ __half rsqrt(__half v) { return rsqrt(v); }
+template <> __device__ __nv_bfloat16 rsqrt(__nv_bfloat16 v) { return rsqrt(v); }
 
 // This is the un-specialized struct.  Note that we prevent instantiation of
 // this struct by putting an undefined symbol in the function body so it won't
@@ -243,8 +244,8 @@ template <> struct SharedMemory<float> {
 
 template <> struct SharedMemory<__half> {
   __device__ __half *getPointer() {
-    extern __shared__ __half s_double[];
-    return s_double;
+    extern __shared__ __half s_half[];
+    return s_half;
   }
 };
 
@@ -253,8 +254,8 @@ template <> struct SharedMemory<__half> {
 
 template <> struct SharedMemory<__nv_bfloat16> {
   __device__ __nv_bfloat16 *getPointer() {
-    extern __shared__ __nv_bfloat16 s_double[];
-    return s_double;
+    extern __shared__ __nv_bfloat16 s_bf[];
+    return s_bf;
   }
 };
 #endif
