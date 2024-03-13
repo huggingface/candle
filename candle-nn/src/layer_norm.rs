@@ -239,10 +239,7 @@ impl crate::Module for LayerNorm {
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
         let x = x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)?;
-        match &self.bias {
-            None => Ok(x),
-            Some(bias) => x.broadcast_add(bias),
-        }
+        x.broadcast_add(bias)
     }
 }
 
@@ -260,7 +257,7 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     };
     Ok(LayerNorm {
         weight,
-        bias,
+        bias: bias.unwrap_or(Tensor::zeros_like(&weight)?),
         remove_mean: config.remove_mean,
         eps: config.eps,
     })
@@ -272,7 +269,7 @@ pub struct RmsNorm(LayerNorm);
 
 impl RmsNorm {
     pub fn new(weight: Tensor, eps: f64) -> Self {
-        Self(LayerNorm::rms_norm(weight, eps))
+        Self(LayerNorm::rms_norm(weight, eps).unwrap())
     }
 
     pub fn into_inner(self) -> LayerNorm {
