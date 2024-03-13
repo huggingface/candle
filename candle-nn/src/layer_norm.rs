@@ -44,7 +44,7 @@ use candle::{
     D,
 };
 
-static MAX_GRID_Y: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
+static MAX_GRID_Y: Mutex<Option<u32>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {
