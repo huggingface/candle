@@ -169,6 +169,22 @@ pub(crate) fn from_storage<S: Into<Shape>>(
     Tensor(Arc::new(tensor_))
 }
 
+/// Creates a fresh tensor structure based on a storage and a shape, this uses contiguous strides. This has a BackpropOp:none().
+pub fn from_storage_no_op<S: Into<Shape>>(storage: Storage, shape: S, is_variable: bool) -> Tensor {
+    let dtype = storage.dtype();
+    let device = storage.device();
+    let tensor_ = Tensor_ {
+        id: TensorId::new(),
+        storage: Arc::new(RwLock::new(storage)),
+        layout: Layout::contiguous(shape),
+        op: BackpropOp::none(),
+        is_variable,
+        dtype,
+        device,
+    };
+    Tensor(Arc::new(tensor_))
+}
+
 impl Tensor {
     pub(crate) fn ones_impl<S: Into<Shape>>(
         shape: S,

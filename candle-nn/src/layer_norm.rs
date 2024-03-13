@@ -28,7 +28,17 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
-use candle::{DType, Result, Tensor, D};
+use std::mem;
+
+use candle::{
+    backend::BackendStorage,
+    cuda_backend::{
+        cudarc::driver::{DeviceRepr, LaunchConfig},
+        kernel_name, kernels, CudaDType,
+    },
+    from_storage_no_op, CudaDevice, CudaStorage, DType, Device, Result, Storage, Tensor, WithDType,
+    D,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {
@@ -103,10 +113,104 @@ impl LayerNorm {
     pub fn bias(&self) -> Option<&Tensor> {
         self.bias.as_ref()
     }
+
+    fn dtype_execute_layernorm<T: CudaDType + DeviceRepr + WithDType>(
+        &self,
+        dev: &CudaDevice,
+        elem_count: usize,
+        n_rows: usize,
+        n_cols: usize,
+        max_grid_y: usize,
+        eps_converter: F,
+    ) -> Result<Tensor>
+    where
+        F: FnOnce<f32, T>,
+    {
+        const BLOCK_DIM_Y: u32 = 4;
+        let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
+        let func =
+            dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::FUSED_LAYER_NORM)?;
+        // 2*blockDim.y*sizeof(U)+blockDim.y*sizeof(int) shared memory available.
+        let cfg = LaunchConfig {
+            grid_dim: (1, max_grid_y.max(n_rows), max_grid_y),
+            block_dim: (32, BLOCK_DIM_Y, 1),
+            shared_mem_bytes: 2 * BLOCK_DIM_Y * mem::size_of::<T>()
+                + BLOCK_DIM_Y * mem::size_of::<T>(),
+        };
+        let mean = unsafe { dev.alloc::<T>(n_rows) }.w()?;
+        let invvar = unsafe { dev.alloc::<T>(elem_count) }.w()?;
+
+        let params = (
+            &out,
+            &mean,
+            &invvar,
+            x_storage.as_cuda_slice::<T>()?,
+            n_rows,
+            n_cols,
+            eps_converter(self.eps),
+            weight_storage.as_cuda_slice::<T>()?,
+            bias_storage.as_cuda_slice::<T>()?,
+        );
+        unsafe { func.launch(&cfg, params) }.w()?;
+
+        Ok(from_storage_no_op(
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev)),
+            x.shape(),
+            false,
+        ))
+    }
+
+    fn fused_layernorm(&self, x: &Tensor, dev: &CudaDevice) -> Result<Tensor> {
+        let elem_count = x.layout().shape().elem_count();
+        let dims = x.layout().shape().dims();
+        let dim_m1 = dims[dims.len() - 1];
+        let (n_rows, n_cols) = (elem_count / dim_m1, dim_m1);
+        let max_grid_y: u32 = todo!();
+        match (
+            &*x.storage_and_layout().0,
+            &*self.weight().storage_and_layout().0,
+            self.bias().map(|x| &*x.storage_and_layout().0),
+        ) {
+            (
+                Storage::Cuda(x_storage),
+                Storage::Cuda(weight_storage),
+                Some(Storage::Cuda(bias_storage)),
+            ) => {
+                match (
+                    x_storage.dtype(),
+                    weight_storage.dtype(),
+                    bias_storage.dtype(),
+                ) {
+                    (DType::BF16, DType::BF16, DType::BF16) => self
+                        .dtype_execute_layernorm::<half::bf16>(
+                            dev,
+                            elem_count,
+                            n_rows,
+                            n_cols,
+                            max_grid_y,
+                            |x| half::bf16::from_f32(x),
+                        ),
+                    _ => candle::bail!("Shape mismatch in fused layernorm."),
+                }
+            }
+            (Storage::Cuda(x_storage), Storage::Cuda(weight_storage), None) => {
+                todo!()
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl crate::Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        match (x.dtype(), x.device()) {
+            (DType::BF16, Device::Cuda(dev))
+            | (DType::F32, Device::Cuda(dev))
+            | (DType::F16, Device::Cuda(dev)) => {
+                return self.fused_layernorm(x, dev);
+            }
+            _ => {}
+        };
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
