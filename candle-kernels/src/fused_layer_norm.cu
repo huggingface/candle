@@ -2,6 +2,8 @@
 // Modified Eric Buehler 2024
 
 #include "cuda_fp16.h"
+#include <cuda.h>
+#include <cuda_runtime.h>
 
 #if __CUDA_ARCH__ >= 800
 #include <cuda_bf16.h>
