@@ -89,21 +89,21 @@ impl LayerNorm {
     }
 
     pub fn new_no_bias(weight: Tensor, eps: f64) -> Self {
-        Ok(Self {
+        Self {
             weight: weight.clone(),
             bias: Tensor::zeros_like(&weight).unwrap(),
             remove_mean: true,
             eps,
-        })
+        }
     }
 
     pub fn rms_norm(weight: Tensor, eps: f64) -> Self {
-        Ok(Self {
+        Self {
             weight: weight.clone(),
             bias: Tensor::zeros_like(&weight).unwrap(),
             remove_mean: false,
             eps,
-        })
+        }
     }
 
     pub fn weight(&self) -> &Tensor {
@@ -273,7 +273,7 @@ pub struct RmsNorm(LayerNorm);
 
 impl RmsNorm {
     pub fn new(weight: Tensor, eps: f64) -> Self {
-        Self(LayerNorm::rms_norm(weight, eps).unwrap())
+        Self(LayerNorm::rms_norm(weight, eps))
     }
 
     pub fn into_inner(self) -> LayerNorm {
