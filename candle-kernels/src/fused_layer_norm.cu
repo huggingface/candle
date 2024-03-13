@@ -38,31 +38,16 @@ __device__ void cuChanOnlineSum(const U muB, const U sigma2B, const U countB,
   }
 }
 
-// https://github.com/NVIDIA/apex/blob/810ffae374a2b9cb4b5c5e28eaeca7d7998fca0c/csrc/megatron/generic_scaled_masked_softmax.h#L44
-/*
+// https://github.com/pytorch/pytorch/blob/7fe0cc53e903e515e86b4a350614011c66e3b32d/aten/src/ATen/cuda/DeviceUtils.cuh#L50
 template <typename T>
-__device__ __forceinline__ T WARP_SHFL_DOWN_NATIVE(T value, int laneMask, int width = warpSize, unsigned int mask = 0xffffffff)
+__device__ __forceinline__ T WARP_SHFL(T value, int srcLane, int width = warpSize, unsigned int mask = 0xffffffff)
 {
-#if CUDA_VERSION >= 9000
-    return __shfl_down_sync(mask, value, laneMask, width);
+#if !defined(USE_ROCM)
+    return __shfl_sync(mask, value, srcLane, width);
 #else
-    return __shfl_down(value, laneMask, width);
+    return __shfl(value, srcLane, width);
 #endif
 }
-*/
-
-// https://github.com/NVIDIA/apex/blob/810ffae374a2b9cb4b5c5e28eaeca7d7998fca0c/csrc/megatron/scaled_masked_softmax.h#L71
-/*
-template <typename T>
-__device__ __forceinline__ T WARP_SHFL_XOR_NATIVE(T value, int laneMask, int width = warpSize, unsigned int mask = 0xffffffff)
-{
-#if CUDA_VERSION >= 9000
-    return __shfl_xor_sync(mask, value, laneMask, width);
-#else
-    return __shfl_xor(value, laneMask, width);
-#endif
-}
-*/
 
 template <typename T, typename U>
 __device__ void cuWelfordMuSigma2(const T *__restrict__ vals, const int n1,
