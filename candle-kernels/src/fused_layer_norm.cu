@@ -96,9 +96,9 @@ __device__ void cuWelfordMuSigma2(const T *__restrict__ vals, const int n1,
     // intra-warp reductions
     for (int l = 0; l <= 4; ++l) {
       int srcLaneB = (threadIdx.x + (1 << l)) & 31;
-      U muB = WARP_SHFL_XOR_NATIVE(mu, srcLaneB);
-      U countB = WARP_SHFL_XOR_NATIVE(count, srcLaneB);
-      U sigma2B = WARP_SHFL_XOR_NATIVE(sigma2, srcLaneB);
+      U muB = WARP_SHFL(mu, srcLaneB);
+      U countB = WARP_SHFL(count, srcLaneB);
+      U sigma2B = WARP_SHFL(sigma2, srcLaneB);
       cuChanOnlineSum<U>(muB, sigma2B, countB, mu, sigma2, count);
     }
     // threadIdx.x == 0 has correct values for each warp
@@ -135,8 +135,8 @@ __device__ void cuWelfordMuSigma2(const T *__restrict__ vals, const int n1,
       sigma2 = ubuf[1] / U(n2);
       // don't care about final value of count, we know count == n2
     } else {
-      mu = WARP_SHFL_XOR_NATIVE(mu, 0);
-      sigma2 = WARP_SHFL_XOR_NATIVE(sigma2 / U(n2), 0);
+      mu = WARP_SHFL(mu, 0);
+      sigma2 = WARP_SHFL(sigma2 / U(n2), 0);
     }
   }
 }
