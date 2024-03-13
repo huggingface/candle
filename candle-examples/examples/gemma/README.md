@@ -1,4 +1,4 @@
-# gemma-mistral: 2b and 7b LLMs from Google DeepMind
+# candle-gemma: 2b and 7b LLMs from Google DeepMind
 
 [Gemma](https://ai.google.dev/gemma/docs) is a collection of lightweight open
 models published by Google Deepmind with a 2b and a 7b variant.
