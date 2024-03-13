@@ -114,6 +114,7 @@ impl LayerNorm {
         &self.bias
     }
 
+    #[cfg(feature = "cuda")]
     fn dtype_execute_layernorm<T: CudaDType + DeviceRepr + WithDType, F>(
         &self,
         dev: &CudaDevice,
@@ -164,6 +165,7 @@ impl LayerNorm {
         ))
     }
 
+    #[cfg(feature = "cuda")]
     fn fused_layernorm(&self, x: &Tensor, dev: &CudaDevice) -> Result<Tensor> {
         let elem_count = x.layout().shape().elem_count();
         let dims = x.layout().shape().dims();
@@ -215,6 +217,7 @@ impl LayerNorm {
 
 impl crate::Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
         match (x.dtype(), x.device()) {
             (DType::BF16, Device::Cuda(dev))
             | (DType::F32, Device::Cuda(dev))
@@ -223,6 +226,7 @@ impl crate::Module for LayerNorm {
             }
             _ => {}
         };
+        
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
