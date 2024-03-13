@@ -132,6 +132,7 @@ impl LayerNorm {
         F: FnOnce(f64) -> T,
     {
         const BLOCK_DIM_Y: u32 = 4;
+        assert!(x.layout().is_contiguous());
         let start = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
