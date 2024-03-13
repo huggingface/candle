@@ -311,11 +311,46 @@ extern "C" __global__ void layernorm_f16(__half *__restrict__ output_vals, __hal
   cuApplyLayerNorm(output_vals, mean, invvar, vals, n1, n2, epsilon, gamma, beta);
 }
 
-extern "C" __global__ void layernorm_f32(float *__restrict__ output_vals, float *__restrict__ mean,
+/*extern "C" __global__ void layernorm_f32(float *__restrict__ output_vals, float *__restrict__ mean,
                  float *__restrict__ invvar, const float *__restrict__ vals,
                  const int n1, const int n2, const float epsilon,
                  const float *__restrict__ gamma, const float *__restrict__ beta) {
   cuApplyLayerNorm(output_vals, mean, invvar, vals, n1, n2, epsilon, gamma, beta);
+}*/
+extern "C" __global__ void layernorm_f32(float *__restrict__ output_vals, float *__restrict__ mean,
+                 float *__restrict__ invvar, const float *__restrict__ vals,
+                 const int n1, const int n2, const float epsilon,
+                 const float *__restrict__ gamma, const float *__restrict__ beta) {
+  // Assumptions:
+  // 1) blockDim.x == warpSize
+  // 2) Tensors are contiguous
+  //
+  for (auto i1 = blockIdx.y; i1 < n1; i1 += gridDim.y) {
+    SharedMemory<float> shared;
+    float *buf = shared.getPointer();
+    float mu, sigma2;
+    cuWelfordMuSigma2(vals, n1, n2, i1, mu, sigma2, buf);
+    const float *lvals = vals + i1 * n2;
+    float *ovals = output_vals + i1 * n2;
+    float c_invvar = rsqrt(sigma2 + epsilon);
+    const int numx = blockDim.x * blockDim.y;
+    const int thrx = threadIdx.x + threadIdx.y * blockDim.x;
+    if (gamma != NULL && beta != NULL) {
+      for (int i = thrx; i < n2; i += numx) {
+        float curr = static_cast<float>(lvals[i]);
+        ovals[i] = gamma[i] * static_cast<float>(c_invvar * (curr - mu)) + beta[i];
+      }
+    } else {
+      for (int i = thrx; i < n2; i += numx) {
+        float curr = static_cast<float>(lvals[i]);
+        ovals[i] = static_cast<float>(c_invvar * (curr - mu));
+      }
+    }
+    if (threadIdx.x == 0 && threadIdx.y == 0) {
+      mean[i1] = mu;
+      invvar[i1] = c_invvar;
+    }
+  }
 }
 
 #if __CUDA_ARCH__ >= 800
