@@ -245,7 +245,7 @@ impl LayerNorm {
 
 impl crate::Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        #[cfg(feature = "cuda")]
+        /*#[cfg(feature = "cuda")]
         match (x.dtype(), x.device()) {
             (DType::BF16, Device::Cuda(dev))
             | (DType::F32, Device::Cuda(dev))
@@ -264,8 +264,12 @@ impl crate::Module for LayerNorm {
                 return res;//self.fused_layernorm(x, dev);
             }
             _ => {}
-        };
-
+        };*/
+        let start = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time travel has occurred!")
+            .as_micros();
+        println!("starting...");
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
@@ -282,7 +286,13 @@ impl crate::Module for LayerNorm {
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
         let x = x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)?;
-        x.broadcast_add(&self.bias)
+        let res =x.broadcast_add(&self.bias);
+        let end = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time travel has occurred!")
+            .as_micros();
+        println!("{}us", end - start);
+        res
     }
 }
 
