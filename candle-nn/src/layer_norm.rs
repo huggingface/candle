@@ -139,8 +139,8 @@ impl LayerNorm {
         let cfg = LaunchConfig {
             grid_dim: (1, max_grid_y.max(n_rows as u32), max_grid_y),
             block_dim: (32, BLOCK_DIM_Y, 1),
-            shared_mem_bytes: 2 * BLOCK_DIM_Y * mem::size_of::<T>() as u32
-                + BLOCK_DIM_Y * mem::size_of::<T>() as u32,
+            shared_mem_bytes: 0, //2 * BLOCK_DIM_Y * mem::size_of::<T>() as u32
+                //+ BLOCK_DIM_Y * mem::size_of::<T>() as u32,
         };
         let mean = unsafe { dev.alloc::<T>(n_rows) }.w()?;
         let invvar = unsafe { dev.alloc::<T>(elem_count) }.w()?;
@@ -245,7 +245,7 @@ impl LayerNorm {
 
 impl crate::Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        /*#[cfg(feature = "cuda")]
+        #[cfg(feature = "cuda")]
         match (x.dtype(), x.device()) {
             (DType::BF16, Device::Cuda(dev))
             | (DType::F32, Device::Cuda(dev))
@@ -264,7 +264,9 @@ impl crate::Module for LayerNorm {
                 return res;//self.fused_layernorm(x, dev);
             }
             _ => {}
-        };*/
+        };
+
+
         let start = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
