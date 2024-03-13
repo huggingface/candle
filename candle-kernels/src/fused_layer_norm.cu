@@ -50,6 +50,7 @@ __device__ __forceinline__ T WARP_SHFL_DOWN_NATIVE(T value, int laneMask, int wi
 */
 
 // https://github.com/NVIDIA/apex/blob/810ffae374a2b9cb4b5c5e28eaeca7d7998fca0c/csrc/megatron/scaled_masked_softmax.h#L71
+/*
 template <typename T>
 __device__ __forceinline__ T WARP_SHFL_XOR_NATIVE(T value, int laneMask, int width = warpSize, unsigned int mask = 0xffffffff)
 {
@@ -59,6 +60,7 @@ __device__ __forceinline__ T WARP_SHFL_XOR_NATIVE(T value, int laneMask, int wid
     return __shfl_xor(value, laneMask, width);
 #endif
 }
+*/
 
 template <typename T, typename U>
 __device__ void cuWelfordMuSigma2(const T *__restrict__ vals, const int n1,
@@ -185,9 +187,9 @@ __device__ void cuWelfordMuSigma2(const __half *__restrict__ vals,
     // intra-warp reductions
     for (int l = 0; l <= 4; ++l) {
       int srcLaneB = (threadIdx.x + (1 << l)) & 31;
-      float muB = WARP_SHFL_XOR_NATIVE(mu, srcLaneB);
-      float countB = WARP_SHFL_XOR_NATIVE(count, srcLaneB);
-      float sigma2B = WARP_SHFL_XOR_NATIVE(sigma2, srcLaneB);
+      float muB = WARP_SHFL(mu, srcLaneB);
+      float countB = WARP_SHFL(count, srcLaneB);
+      float sigma2B = WARP_SHFL(sigma2, srcLaneB);
       cuChanOnlineSum(muB, sigma2B, countB, mu, sigma2, count);
     }
     // threadIdx.x == 0 has correct values for each warp
@@ -224,8 +226,8 @@ __device__ void cuWelfordMuSigma2(const __half *__restrict__ vals,
       sigma2 = ubuf[1] / float(n2);
       // don't care about final value of count, we know count == n2
     } else {
-      mu = WARP_SHFL_XOR_NATIVE(mu, 0);
-      sigma2 = WARP_SHFL_XOR_NATIVE(sigma2 / float(n2), 0);
+      mu = WARP_SHFL(mu, 0);
+      sigma2 = WARP_SHFL(sigma2 / float(n2), 0);
     }
   }
 }
