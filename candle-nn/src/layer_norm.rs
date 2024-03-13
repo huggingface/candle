@@ -193,7 +193,7 @@ impl LayerNorm {
                 candle::bail!("{res:?}");
             }
             let max_grid_y: u32 = devprop.maxGridSize[1] as u32;
-            *MAX_GRID_Y.lock().unwrap() = *max_grid_y;
+            *MAX_GRID_Y.lock().unwrap() = Some(max_grid_y);
             max_grid_y
         };
 
@@ -264,7 +264,7 @@ impl crate::Module for LayerNorm {
         match (x.dtype(), x.device()) {
             (DType::BF16, Device::Cuda(dev))
             | (DType::F32, Device::Cuda(dev))
-            | (DType::F16, Device::Cuda(dev)) => self.fused_layernorm(x, dev),
+            | (DType::F16, Device::Cuda(dev)) => return self.fused_layernorm(x, dev),
             _ => {}
         };
 
