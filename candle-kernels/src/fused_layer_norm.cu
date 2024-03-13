@@ -3,6 +3,10 @@
 
 #include "cuda_fp16.h"
 
+#if __CUDA_ARCH__ >= 800
+#include <cuda_bf16.h>
+#endif
+
 template <typename U>
 __device__ void cuWelfordOnlineSum(const U curr, U &mu, U &sigma2, U &count) {
   count = count + U(1);
@@ -33,6 +37,7 @@ __device__ void cuChanOnlineSum(const U muB, const U sigma2B, const U countB,
 }
 
 // https://github.com/NVIDIA/apex/blob/810ffae374a2b9cb4b5c5e28eaeca7d7998fca0c/csrc/megatron/generic_scaled_masked_softmax.h#L44
+/*
 template <typename T>
 __device__ __forceinline__ T WARP_SHFL_DOWN_NATIVE(T value, int laneMask, int width = warpSize, unsigned int mask = 0xffffffff)
 {
@@ -40,6 +45,18 @@ __device__ __forceinline__ T WARP_SHFL_DOWN_NATIVE(T value, int laneMask, int wi
     return __shfl_down_sync(mask, value, laneMask, width);
 #else
     return __shfl_down(value, laneMask, width);
+#endif
+}
+*/
+
+// https://github.com/NVIDIA/apex/blob/810ffae374a2b9cb4b5c5e28eaeca7d7998fca0c/csrc/megatron/scaled_masked_softmax.h#L71
+template <typename T>
+__device__ __forceinline__ T WARP_SHFL_XOR_NATIVE(T value, int laneMask, int width = warpSize, unsigned int mask = 0xffffffff)
+{
+#if CUDA_VERSION >= 9000
+    return __shfl_xor_sync(mask, value, laneMask, width);
+#else
+    return __shfl_xor(value, laneMask, width);
 #endif
 }
 
@@ -77,9 +94,9 @@ __device__ void cuWelfordMuSigma2(const T *__restrict__ vals, const int n1,
     // intra-warp reductions
     for (int l = 0; l <= 4; ++l) {
       int srcLaneB = (threadIdx.x + (1 << l)) & 31;
-      U muB = WARP_SHFL_DOWN_NATIVE(mu, srcLaneB);
-      U countB = WARP_SHFL_DOWN_NATIVE(count, srcLaneB);
-      U sigma2B = WARP_SHFL_DOWN_NATIVE(sigma2, srcLaneB);
+      U muB = WARP_SHFL_XOR_NATIVE(mu, srcLaneB);
+      U countB = WARP_SHFL_XOR_NATIVE(count, srcLaneB);
+      U sigma2B = WARP_SHFL_XOR_NATIVE(sigma2, srcLaneB);
       cuChanOnlineSum<U>(muB, sigma2B, countB, mu, sigma2, count);
     }
     // threadIdx.x == 0 has correct values for each warp
@@ -116,8 +133,8 @@ __device__ void cuWelfordMuSigma2(const T *__restrict__ vals, const int n1,
       sigma2 = ubuf[1] / U(n2);
       // don't care about final value of count, we know count == n2
     } else {
-      mu = WARP_SHFL_DOWN_NATIVE(mu, 0);
-      sigma2 = WARP_SHFL_DOWN_NATIVE(sigma2 / U(n2), 0);
+      mu = WARP_SHFL_XOR_NATIVE(mu, 0);
+      sigma2 = WARP_SHFL_XOR_NATIVE(sigma2 / U(n2), 0);
     }
   }
 }
@@ -168,9 +185,9 @@ __device__ void cuWelfordMuSigma2(const __half *__restrict__ vals,
     // intra-warp reductions
     for (int l = 0; l <= 4; ++l) {
       int srcLaneB = (threadIdx.x + (1 << l)) & 31;
-      float muB = WARP_SHFL_DOWN_NATIVE(mu, srcLaneB);
-      float countB = WARP_SHFL_DOWN_NATIVE(count, srcLaneB);
-      float sigma2B = WARP_SHFL_DOWN_NATIVE(sigma2, srcLaneB);
+      float muB = WARP_SHFL_XOR_NATIVE(mu, srcLaneB);
+      float countB = WARP_SHFL_XOR_NATIVE(count, srcLaneB);
+      float sigma2B = WARP_SHFL_XOR_NATIVE(sigma2, srcLaneB);
       cuChanOnlineSum(muB, sigma2B, countB, mu, sigma2, count);
     }
     // threadIdx.x == 0 has correct values for each warp
@@ -207,8 +224,8 @@ __device__ void cuWelfordMuSigma2(const __half *__restrict__ vals,
       sigma2 = ubuf[1] / float(n2);
       // don't care about final value of count, we know count == n2
     } else {
-      mu = WARP_SHFL_DOWN_NATIVE(mu, 0);
-      sigma2 = WARP_SHFL_DOWN_NATIVE(sigma2 / float(n2), 0);
+      mu = WARP_SHFL_XOR_NATIVE(mu, 0);
+      sigma2 = WARP_SHFL_XOR_NATIVE(sigma2 / float(n2), 0);
     }
   }
 }
@@ -217,7 +234,9 @@ template <typename U> __device__ U rsqrt(U v) { return U(1) / sqrt(v); }
 template <> __device__ float rsqrt(float v) { return rsqrtf(v); }
 template <> __device__ double rsqrt(double v) { return rsqrt(v); }
 template <> __device__ __half rsqrt(__half v) { return rsqrt(v); }
+#if __CUDA_ARCH__ >= 800
 template <> __device__ __nv_bfloat16 rsqrt(__nv_bfloat16 v) { return rsqrt(v); }
+#endif
 
 // This is the un-specialized struct.  Note that we prevent instantiation of
 // this struct by putting an undefined symbol in the function body so it won't
@@ -250,8 +269,6 @@ template <> struct SharedMemory<__half> {
 };
 
 #if __CUDA_ARCH__ >= 800
-#include <cuda_bf16.h>
-
 template <> struct SharedMemory<__nv_bfloat16> {
   __device__ __nv_bfloat16 *getPointer() {
     extern __shared__ __nv_bfloat16 s_bf[];
