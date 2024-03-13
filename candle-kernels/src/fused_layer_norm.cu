@@ -1,6 +1,6 @@
 // Based on https://github.com/NVIDIA/apex/blob/master/apex/contrib/csrc/multihead_attn/layer_norm.cuh#L243
 // Modified Eric Buehler 2024
-/*
+
 #include "cuda_fp16.h"
 
 template <typename U>
@@ -308,4 +308,3 @@ extern "C" __global__ void layernorm_bf16(__nv_bfloat16 *__restrict__ output_val
   cuApplyLayerNorm(output_vals, mean, invvar, vals, n1, n2, epsilon, gamma, beta);
 }
 #endif
-*/
