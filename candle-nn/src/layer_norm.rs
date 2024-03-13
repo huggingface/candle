@@ -133,6 +133,7 @@ impl LayerNorm {
     {
         const BLOCK_DIM_Y: u32 = 4;
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
+        dbg!(&kernels::FUSED_LAYER_NORM);
         let func =
             dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::FUSED_LAYER_NORM)?;
         // 2*blockDim.y*sizeof(U)+blockDim.y*sizeof(int) shared memory available.
