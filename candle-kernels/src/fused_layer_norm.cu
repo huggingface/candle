@@ -313,7 +313,7 @@ LAYERNORM(layernorm_bf16, __nv_bfloat16)
 */
 
 template <typename T, typename U>
-__global__ void
+__device__ void
 cuApplyLayerNorm(T *__restrict__ output_vals, U *__restrict__ mean,
                  U *__restrict__ invvar, const T *__restrict__ vals,
                  const int n1, const int n2, const U epsilon,
