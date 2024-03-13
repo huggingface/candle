@@ -33,7 +33,7 @@ use std::mem;
 use candle::{
     backend::BackendStorage,
     cuda_backend::{
-        cudarc::driver::{DeviceRepr, LaunchConfig},
+        cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig},
         kernel_name, kernels, CudaDType, WrapErr,
     },
     from_storage_no_op, CudaDevice, CudaStorage, DType, Device, Result, Storage, Tensor, WithDType,
