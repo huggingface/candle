@@ -88,19 +88,19 @@ impl LayerNorm {
         }
     }
 
-    pub fn new_no_bias(weight: Tensor, eps: f64) -> Result<Self> {
+    pub fn new_no_bias(weight: Tensor, eps: f64) -> Self {
         Ok(Self {
             weight: weight.clone(),
-            bias: Tensor::zeros_like(&weight)?,
+            bias: Tensor::zeros_like(&weight).unwrap(),
             remove_mean: true,
             eps,
         })
     }
 
-    pub fn rms_norm(weight: Tensor, eps: f64) -> Result<Self> {
+    pub fn rms_norm(weight: Tensor, eps: f64) -> Self {
         Ok(Self {
             weight: weight.clone(),
-            bias: Tensor::zeros_like(&weight)?,
+            bias: Tensor::zeros_like(&weight).unwrap(),
             remove_mean: false,
             eps,
         })
