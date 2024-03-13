@@ -34,7 +34,7 @@ use candle::{
     backend::BackendStorage,
     cuda_backend::{
         cudarc::driver::{DeviceRepr, LaunchConfig},
-        kernel_name, kernels, CudaDType,
+        kernel_name, kernels, CudaDType, WrapErr,
     },
     from_storage_no_op, CudaDevice, CudaStorage, DType, Device, Result, Storage, Tensor, WithDType,
     D,
@@ -120,7 +120,7 @@ impl LayerNorm {
         elem_count: usize,
         n_rows: usize,
         n_cols: usize,
-        max_grid_y: usize,
+        max_grid_y: u32,
         eps_converter: F,
         x_storage: &CudaStorage,
         weight_storage: &CudaStorage,
@@ -128,7 +128,7 @@ impl LayerNorm {
         x: &Tensor,
     ) -> Result<Tensor>
     where
-        F: FnOnce(f32) -> T,
+        F: FnOnce(f64) -> T,
     {
         const BLOCK_DIM_Y: u32 = 4;
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
@@ -136,10 +136,10 @@ impl LayerNorm {
             dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::FUSED_LAYER_NORM)?;
         // 2*blockDim.y*sizeof(U)+blockDim.y*sizeof(int) shared memory available.
         let cfg = LaunchConfig {
-            grid_dim: (1, max_grid_y.max(n_rows), max_grid_y),
+            grid_dim: (1, max_grid_y.max(n_rows as u32), max_grid_y),
             block_dim: (32, BLOCK_DIM_Y, 1),
-            shared_mem_bytes: 2 * BLOCK_DIM_Y * mem::size_of::<T>()
-                + BLOCK_DIM_Y * mem::size_of::<T>(),
+            shared_mem_bytes: 2 * BLOCK_DIM_Y * mem::size_of::<T>() as u32
+                + BLOCK_DIM_Y * mem::size_of::<T>() as u32,
         };
         let mean = unsafe { dev.alloc::<T>(n_rows) }.w()?;
         let invvar = unsafe { dev.alloc::<T>(elem_count) }.w()?;
@@ -158,7 +158,7 @@ impl LayerNorm {
         unsafe { func.launch(&cfg, params) }.w()?;
 
         Ok(from_storage_no_op(
-            Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev)),
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
             x.shape(),
             false,
         ))
@@ -186,13 +186,13 @@ impl LayerNorm {
                     bias_storage.dtype(),
                 ) {
                     (DType::BF16, DType::BF16, DType::BF16) => self
-                        .dtype_execute_layernorm::<half::bf16>(
+                        .dtype_execute_layernorm::<half::bf16, _>(
                             dev,
                             elem_count,
                             n_rows,
                             n_cols,
                             max_grid_y,
-                            |x| half::bf16::from_f32(x),
+                            |x| half::bf16::from_f64(x),
                             x_storage,
                             weight_storage,
                             bias_storage,
