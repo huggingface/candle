@@ -271,7 +271,7 @@ template <> struct SharedMemory<__nv_bfloat16> {
 // 2) Tensors are contiguous
 //
 #define LAYERNORM(FNNAME, TYPENAME) __global__ void \
-cuApplyLayerNorm(TYPENAME *__restrict__ output_vals, TYPENAME *__restrict__ mean, \
+FNNAME(TYPENAME *__restrict__ output_vals, TYPENAME *__restrict__ mean, \
                  TYPENAME *__restrict__ invvar, const TYPENAME *__restrict__ vals, \
                  const int n1, const int n2, const TYPENAME epsilon, \
                  const TYPENAME *__restrict__ gamma, const TYPENAME *__restrict__ beta) { \
