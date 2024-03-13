@@ -28,7 +28,7 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
-use std::mem;
+use std::{mem, sync::RwLockReadGuard};
 
 use candle::{
     backend::BackendStorage,
@@ -170,10 +170,15 @@ impl LayerNorm {
         let dim_m1 = dims[dims.len() - 1];
         let (n_rows, n_cols) = (elem_count / dim_m1, dim_m1);
         let max_grid_y: u32 = todo!();
+        let bias = if let Some(bias) = self.bias {
+            Some(&*bias.storage_and_layout().0)
+        } else {
+            None
+        };
         match (
             &*x.storage_and_layout().0,
             &*self.weight().storage_and_layout().0,
-            self.bias().map(|x| x.storage_and_layout().0),
+            bias,
         ) {
             (
                 Storage::Cuda(x_storage),
