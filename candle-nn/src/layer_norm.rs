@@ -187,22 +187,17 @@ impl LayerNorm {
         let max_grid_y = if let Some(max) = opt {
             max
         } else {
-            println!("a");
             let mut devprop = sys::CUdevprop::default();
-            println!("a");
             let res =
                 unsafe { sys::cuDeviceGetProperties(&mut devprop as *mut _, *dev.cu_device()) };
-                println!("a");
             if res != sys::CUresult::CUDA_SUCCESS {
                 candle::bail!("{res:?}");
             }
-            println!("a");
             let max_grid_y: u32 = devprop.maxGridSize[1] as u32;
-            println!("b");
             *MAX_GRID_Y.try_lock().unwrap() = Some(max_grid_y);
-            println!("c");
             max_grid_y
         };
+
         match (
             &*x.storage_and_layout().0,
             &*self.weight().storage_and_layout().0,
