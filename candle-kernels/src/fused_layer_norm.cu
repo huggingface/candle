@@ -216,6 +216,7 @@ __device__ void cuWelfordMuSigma2(const __half *__restrict__ vals,
 template <typename U> __device__ U rsqrt(U v) { return U(1) / sqrt(v); }
 template <> __device__ float rsqrt(float v) { return rsqrtf(v); }
 template <> __device__ double rsqrt(double v) { return rsqrt(v); }
+template <> __device__ __half rsqrt(__half v) { return rsqrt(v); }
 
 // This is the un-specialized struct.  Note that we prevent instantiation of
 // this struct by putting an undefined symbol in the function body so it won't
@@ -240,9 +241,9 @@ template <> struct SharedMemory<float> {
   }
 };
 
-template <> struct SharedMemory<double> {
-  __device__ double *getPointer() {
-    extern __shared__ double s_double[];
+template <> struct SharedMemory<__half> {
+  __device__ __half *getPointer() {
+    extern __shared__ __half s_double[];
     return s_double;
   }
 };
@@ -251,38 +252,37 @@ template <> struct SharedMemory<double> {
 // 1) blockDim.x == warpSize
 // 2) Tensors are contiguous
 //
-#define LAYERNORM(FNNAME, TYPENAME)\
-__global__ void\
-cuApplyLayerNorm(TYPENAME *__restrict__ output_vals, TYPENAME *__restrict__ mean,\\
-                 TYPENAME *__restrict__ invvar, const TYPENAME *__restrict__ vals,\
-                 const int n1, const int n2, const TYPENAME epsilon,\
-                 const TYPENAME *__restrict__ gamma, const TYPENAME *__restrict__ beta) {\
-  for (auto i1 = blockIdx.y; i1 < n1; i1 += gridDim.y) {\
-    SharedMemory<U> shared;\
-    U *buf = shared.getPointer();\
-    U mu, sigma2;\
-    cuWelfordMuSigma2(vals, n1, n2, i1, mu, sigma2, buf);\
-    const T *lvals = vals + i1 * n2;\
-    T *ovals = output_vals + i1 * n2;\
-    U c_invvar = rsqrt(sigma2 + epsilon);\
-    const int numx = blockDim.x * blockDim.y;\
-    const int thrx = threadIdx.x + threadIdx.y * blockDim.x;\
-    if (gamma != NULL && beta != NULL) {\
-      for (int i = thrx; i < n2; i += numx) {\
-        U curr = static_cast<U>(lvals[i]);\
-        ovals[i] = gamma[i] * static_cast<T>(c_invvar * (curr - mu)) + beta[i];\
-      }\
-    } else {\
-      for (int i = thrx; i < n2; i += numx) {\
-        U curr = static_cast<U>(lvals[i]);\
-        ovals[i] = static_cast<T>(c_invvar * (curr - mu));\
-      }\
-    }\
-    if (threadIdx.x == 0 && threadIdx.y == 0) {\
-      mean[i1] = mu;\
-      invvar[i1] = c_invvar;\
-    }\
-  }\
+#define LAYERNORM(FNNAME, TYPENAME) __global__ void \
+cuApplyLayerNorm(TYPENAME *__restrict__ output_vals, TYPENAME *__restrict__ mean, \
+                 TYPENAME *__restrict__ invvar, const TYPENAME *__restrict__ vals, \
+                 const int n1, const int n2, const TYPENAME epsilon, \
+                 const TYPENAME *__restrict__ gamma, const TYPENAME *__restrict__ beta) { \
+  for (auto i1 = blockIdx.y; i1 < n1; i1 += gridDim.y) { \
+    SharedMemory<TYPENAME> shared; \
+    TYPENAME *buf = shared.getPointer(); \
+    TYPENAME mu, sigma2; \
+    cuWelfordMuSigma2(vals, n1, n2, i1, mu, sigma2, buf); \
+    const TYPENAME *lvals = vals + i1 * n2; \
+    TYPENAME *ovals = output_vals + i1 * n2; \
+    TYPENAME c_invvar = rsqrt(sigma2 + epsilon); \
+    const int numx = blockDim.x * blockDim.y; \
+    const int thrx = threadIdx.x + threadIdx.y * blockDim.x; \
+    if (gamma != NULL && beta != NULL) { \
+      for (int i = thrx; i < n2; i += numx) { \
+        TYPENAME curr = static_cast<TYPENAME>(lvals[i]); \
+        ovals[i] = gamma[i] * static_cast<TYPENAME>(c_invvar * (curr - mu)) + beta[i]; \
+      } \
+    } else { \
+      for (int i = thrx; i < n2; i += numx) { \
+        TYPENAME curr = static_cast<TYPENAME>(lvals[i]); \
+        ovals[i] = static_cast<TYPENAME>(c_invvar * (curr - mu)); \
+      } \
+    } \
+    if (threadIdx.x == 0 && threadIdx.y == 0) { \
+      mean[i1] = mu; \
+      invvar[i1] = c_invvar; \
+    } \
+  } \
 }
 
 LAYERNORM(layernorm_f16, __half)
