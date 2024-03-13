@@ -28,6 +28,8 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
+
+#[cfg(feature = "cuda")]
 use std::{
     mem,
     sync::{Arc, Mutex},
@@ -39,11 +41,15 @@ use candle::cuda_backend::{
     kernel_name, kernels, CudaDType, WrapErr,
 };
 
+#[cfg(feature = "cuda")]
 use candle::{
-    backend::BackendStorage, from_storage_no_op, CudaDevice, CudaStorage, DType, Device, Result,
-    Storage, Tensor, WithDType, D,
+    backend::BackendStorage, from_storage_no_op, CudaDevice, CudaStorage, Device, Storage,
+    WithDType,
 };
 
+use candle::{DType, Result, Tensor, D};
+
+#[cfg(feature = "cuda")]
 static MAX_GRID_Y: Mutex<Option<u32>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
