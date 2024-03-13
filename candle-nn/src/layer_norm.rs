@@ -183,8 +183,7 @@ impl LayerNorm {
         let dim_m1 = dims[dims.len() - 1];
         let (n_rows, n_cols) = (elem_count / dim_m1, dim_m1);
 
-        dbg!(&MAX_GRID_Y);
-        let max_grid_y = if let Some(max) = &*MAX_GRID_Y.lock().unwrap() {
+        let max_grid_y = if let Some(max) = &*MAX_GRID_Y.try_lock().unwrap() {
             *max
         } else {
             let mut devprop = sys::CUdevprop::default();
