@@ -28,7 +28,11 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
-use std::{mem, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    mem,
+    sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use candle::{
     backend::BackendStorage,
@@ -39,6 +43,8 @@ use candle::{
     from_storage_no_op, CudaDevice, CudaStorage, DType, Device, Result, Storage, Tensor, WithDType,
     D,
 };
+
+static MAX_GRID_Y: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {
@@ -133,18 +139,11 @@ impl LayerNorm {
     {
         const BLOCK_DIM_Y: u32 = 4;
         assert!(x.layout().is_contiguous());
-        dbg!(x.dtype());
-        let start = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!")
-            .as_micros();
-        println!("allocing...");
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
         let end = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time travel has occurred!")
             .as_micros();
-        println!("alloc {}us", end - start);
         let func =
             dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::FUSED_LAYER_NORM)?;
         // 2*blockDim.y*sizeof(U)+blockDim.y*sizeof(int) shared memory available.
@@ -184,15 +183,20 @@ impl LayerNorm {
         let dim_m1 = dims[dims.len() - 1];
         let (n_rows, n_cols) = (elem_count / dim_m1, dim_m1);
 
-        /*dbg!(elem_count);
-        let mut devprop = sys::CUdevprop::default();
-        let res = unsafe { sys::cuDeviceGetProperties(&mut devprop as *mut _, *dev.cu_device()) };
-        if res != sys::CUresult::CUDA_SUCCESS {
-            candle::bail!("{res:?}");
-        }*/
-        let max_grid_y: u32 = 65535;//devprop.maxGridSize[1] as u32;
-        //dbg!(max_grid_y);
-        
+        let max_grid_y = if let Some(max) = &*MAX_GRID_Y.lock().unwrap() {
+            *max
+        } else {
+            let mut devprop = sys::CUdevprop::default();
+            let res =
+                unsafe { sys::cuDeviceGetProperties(&mut devprop as *mut _, *dev.cu_device()) };
+            if res != sys::CUresult::CUDA_SUCCESS {
+                candle::bail!("{res:?}");
+            }
+            let max_grid_y: u32 = devprop.maxGridSize[1] as u32;
+            *MAX_GRID_Y.lock().unwrap() = *max_grid_y;
+            max_grid_y
+        };
+
         match (
             &*x.storage_and_layout().0,
             &*self.weight().storage_and_layout().0,
@@ -234,19 +238,18 @@ impl LayerNorm {
                             &*bias_storage,
                             x,
                         ),
-                    (DType::F32, DType::F32, DType::F32) => self
-                        .dtype_execute_layernorm::<f32, _>(
-                            dev,
-                            elem_count,
-                            n_rows,
-                            n_cols,
-                            max_grid_y,
-                            |x| x as f32,
-                            x_storage,
-                            weight_storage,
-                            &*bias_storage,
-                            x,
-                        ),
+                    (DType::F32, DType::F32, DType::F32) => self.dtype_execute_layernorm::<f32, _>(
+                        dev,
+                        elem_count,
+                        n_rows,
+                        n_cols,
+                        max_grid_y,
+                        |x| x as f32,
+                        x_storage,
+                        weight_storage,
+                        &*bias_storage,
+                        x,
+                    ),
                     _ => candle::bail!("DType mismatch in fused layernorm."),
                 }
             }
@@ -261,29 +264,10 @@ impl crate::Module for LayerNorm {
         match (x.dtype(), x.device()) {
             (DType::BF16, Device::Cuda(dev))
             | (DType::F32, Device::Cuda(dev))
-            | (DType::F16, Device::Cuda(dev)) => {
-                let start = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_micros();
-                println!("starting...");
-                let res = self.fused_layernorm(x, dev);
-                let end = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time travel has occurred!")
-                    .as_micros();
-                println!("{}us", end - start);
-                return res;//self.fused_layernorm(x, dev);
-            }
+            | (DType::F16, Device::Cuda(dev)) => self.fused_layernorm(x, dev),
             _ => {}
         };
 
-
-        let start = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!")
-            .as_micros();
-        println!("starting...");
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,
@@ -300,13 +284,7 @@ impl crate::Module for LayerNorm {
         let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
         let x = x_normed.to_dtype(x_dtype)?.broadcast_mul(&self.weight)?;
-        let res =x.broadcast_add(&self.bias);
-        let end = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!")
-            .as_micros();
-        println!("{}us", end - start);
-        res
+        x.broadcast_add(&self.bias)
     }
 }
 
