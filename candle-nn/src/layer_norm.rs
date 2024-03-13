@@ -171,11 +171,11 @@ impl LayerNorm {
         let (n_rows, n_cols) = (elem_count / dim_m1, dim_m1);
 
         let mut devprop = sys::CUdevprop::default();
-        let res = unsafe { sys::cuDeviceGetProperties(&mut devprop as *mut _, dev.cu_device()) };
+        let res = unsafe { sys::cuDeviceGetProperties(&mut devprop as *mut _, *dev.cu_device()) };
         if res != sys::CUresult::CUDA_SUCCESS {
-            candle::bail!(format!("{res:?}"));
+            candle::bail!("{res:?}");
         }
-        let max_grid_y: u32 = devprop.maxGridSize[1];
+        let max_grid_y: u32 = devprop.maxGridSize[1] as u32;
 
         let bias = if let Some(bias) = self.bias {
             Some(&*bias.storage_and_layout().0)
