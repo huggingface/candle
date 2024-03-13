@@ -155,7 +155,7 @@ impl LayerNorm {
             weight_storage.as_cuda_slice::<T>()?,
             bias_storage.as_cuda_slice::<T>()?,
         );
-        unsafe { func.launch(&cfg, params) }.w()?;
+        unsafe { func.launch(cfg, params) }.w()?;
 
         Ok(from_storage_no_op(
             Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),

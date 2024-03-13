@@ -369,7 +369,7 @@ impl BackendDevice for CudaDevice {
         init_value: Option<u8>,
     ) -> Result<CudaStorage> {
         if let Some(v) = init_value {
-            self.const_impl(v as f64, shape, dtype);
+            return self.const_impl(v as f64, shape, dtype);
         }
         let elem_count = shape.elem_count();
         let slice = unsafe {
