@@ -31,7 +31,6 @@
 use std::{
     mem,
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(feature = "cuda")]
@@ -141,10 +140,6 @@ impl LayerNorm {
         const BLOCK_DIM_Y: u32 = 4;
         assert!(x.layout().is_contiguous());
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
-        let end = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time travel has occurred!")
-            .as_micros();
         let func =
             dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::FUSED_LAYER_NORM)?;
         // 2*blockDim.y*sizeof(U)+blockDim.y*sizeof(int) shared memory available.
