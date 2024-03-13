@@ -207,7 +207,33 @@ impl LayerNorm {
                             &*bias_storage,
                             x,
                         ),
-                    _ => candle::bail!("Shape mismatch in fused layernorm."),
+                    (DType::F16, DType::F16, DType::F16) => self
+                        .dtype_execute_layernorm::<half::f16, _>(
+                            dev,
+                            elem_count,
+                            n_rows,
+                            n_cols,
+                            max_grid_y,
+                            |x| half::f16::from_f64(x),
+                            x_storage,
+                            weight_storage,
+                            &*bias_storage,
+                            x,
+                        ),
+                    (DType::F32, DType::F32, DType::F32) => self
+                        .dtype_execute_layernorm::<f32, _>(
+                            dev,
+                            elem_count,
+                            n_rows,
+                            n_cols,
+                            max_grid_y,
+                            |x| x as f32,
+                            x_storage,
+                            weight_storage,
+                            &*bias_storage,
+                            x,
+                        ),
+                    _ => candle::bail!("DType mismatch in fused layernorm."),
                 }
             }
             _ => unreachable!(),
