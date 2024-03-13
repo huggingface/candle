@@ -173,7 +173,7 @@ impl LayerNorm {
         match (
             &*x.storage_and_layout().0,
             &*self.weight().storage_and_layout().0,
-            self.bias().map(|x| &*x.storage_and_layout().0),
+            self.bias().map(|x| x.storage_and_layout().0),
         ) {
             (
                 Storage::Cuda(x_storage),
@@ -195,7 +195,7 @@ impl LayerNorm {
                             |x| half::bf16::from_f64(x),
                             x_storage,
                             weight_storage,
-                            bias_storage,
+                            &*bias_storage,
                             x,
                         ),
                     _ => candle::bail!("Shape mismatch in fused layernorm."),
