@@ -260,6 +260,8 @@ impl crate::Module for LayerNorm {
                     .expect("Time travel has occurred!")
                     .as_micros();
                 println!("{}us", end - start);
+                dbg!(res);
+                dbg!(res?.mean_all()?)
                 return res;//self.fused_layernorm(x, dev);
             }
             _ => {}
