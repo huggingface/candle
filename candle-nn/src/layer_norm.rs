@@ -261,7 +261,7 @@ impl crate::Module for LayerNorm {
                     .as_micros();
                 println!("{}us", end - start);
                 dbg!(&res);
-                dbg!((&res).clone().map(|x| x.mean_all())?);
+                dbg!(res.as_ref().unwrap().mean_all());
                 return res;//self.fused_layernorm(x, dev);
             }
             _ => {}
