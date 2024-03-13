@@ -248,6 +248,17 @@ template <> struct SharedMemory<__half> {
   }
 };
 
+#if __CUDA_ARCH__ >= 800
+#include <cuda_bf16.h>
+
+template <> struct SharedMemory<__nv_bfloat16> {
+  __device__ __nv_bfloat16 *getPointer() {
+    extern __shared__ __nv_bfloat16 s_double[];
+    return s_double;
+  }
+};
+#endif
+
 // Assumptions:
 // 1) blockDim.x == warpSize
 // 2) Tensors are contiguous
@@ -289,6 +300,5 @@ LAYERNORM(layernorm_f16, __half)
 LAYERNORM(layernorm_f32, float)
 
 #if __CUDA_ARCH__ >= 800
-#include <cuda_bf16.h>
 LAYERNORM(layernorm_bf16, __nv_bfloat16)
 #endif
