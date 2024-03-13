@@ -152,7 +152,7 @@ impl LayerNorm {
             grid_dim: (1, max_grid_y.max(n_rows as u32), max_grid_y),
             block_dim: (32, BLOCK_DIM_Y, 1),
             shared_mem_bytes: 2 * BLOCK_DIM_Y * mem::size_of::<T>() as u32
-                + BLOCK_DIM_Y * mem::size_of::<i32>() as u32,
+                + (BLOCK_DIM_Y / 2) * mem::size_of::<T>() as u32,
         };
         let mean = unsafe { dev.alloc::<T>(n_rows) }.w()?;
         let invvar = unsafe { dev.alloc::<T>(n_rows) }.w()?;
