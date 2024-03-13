@@ -177,21 +177,21 @@ impl LayerNorm {
         }
         let max_grid_y: u32 = devprop.maxGridSize[1] as u32;
 
-        let bias = if let Some(bias) = self.bias {
-            Some(&*bias.storage_and_layout().0)
-        } else {
-            None
-        };
         match (
             &*x.storage_and_layout().0,
             &*self.weight().storage_and_layout().0,
-            bias,
+            &self.bias,
         ) {
             (
                 Storage::Cuda(x_storage),
                 Storage::Cuda(weight_storage),
-                Some(Storage::Cuda(bias_storage)),
+                Some(bias),
             ) => {
+                let bias_storage = if let Storage::Cuda(strg) = bias.clone().storage_and_layout().0 {
+                    strg
+                } else {
+                    candle::bail!("Device mismatch in layernorm");
+                };
                 match (
                     x_storage.dtype(),
                     weight_storage.dtype(),
