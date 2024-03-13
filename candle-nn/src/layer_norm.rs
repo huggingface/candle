@@ -34,14 +34,15 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "cuda")]
+use candle::cuda_backend::{
+    cudarc::driver::{sys, DeviceRepr, LaunchAsync, LaunchConfig},
+    kernel_name, kernels, CudaDType, WrapErr,
+};
+
 use candle::{
-    backend::BackendStorage,
-    cuda_backend::{
-        cudarc::driver::{sys, DeviceRepr, LaunchAsync, LaunchConfig},
-        kernel_name, kernels, CudaDType, WrapErr,
-    },
-    from_storage_no_op, CudaDevice, CudaStorage, DType, Device, Result, Storage, Tensor, WithDType,
-    D,
+    backend::BackendStorage, from_storage_no_op, CudaDevice, CudaStorage, DType, Device, Result,
+    Storage, Tensor, WithDType, D,
 };
 
 static MAX_GRID_Y: Mutex<Option<u32>> = Mutex::new(None);
