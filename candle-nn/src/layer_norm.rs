@@ -132,7 +132,17 @@ impl LayerNorm {
         F: FnOnce(f64) -> T,
     {
         const BLOCK_DIM_Y: u32 = 4;
+        let start = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time travel has occurred!")
+            .as_micros();
+        println!("allocing...");
         let out = unsafe { dev.alloc::<T>(elem_count) }.w()?;
+        let end = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time travel has occurred!")
+            .as_micros();
+        println!("alloc {}us", end - start);
         let func =
             dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::FUSED_LAYER_NORM)?;
         // 2*blockDim.y*sizeof(U)+blockDim.y*sizeof(int) shared memory available.
