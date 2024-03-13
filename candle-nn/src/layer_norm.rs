@@ -178,7 +178,8 @@ impl LayerNorm {
             candle::bail!("{res:?}");
         }
         let max_grid_y: u32 = devprop.maxGridSize[1] as u32;
-
+        dbg!(max_grid_y);
+        
         match (
             &*x.storage_and_layout().0,
             &*self.weight().storage_and_layout().0,
