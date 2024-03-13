@@ -196,7 +196,7 @@ impl LayerNorm {
             *MAX_GRID_Y.lock().unwrap() = Some(max_grid_y);
             max_grid_y
         };
-
+        dbg!(max_grid_y);
         match (
             &*x.storage_and_layout().0,
             &*self.weight().storage_and_layout().0,
