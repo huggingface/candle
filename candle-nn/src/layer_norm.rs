@@ -178,7 +178,6 @@ impl LayerNorm {
             candle::bail!("{res:?}");
         }
         let max_grid_y: u32 = devprop.maxGridSize[1] as u32;
-        dbg!(max_grid_y);
         
         match (
             &*x.storage_and_layout().0,
@@ -260,8 +259,6 @@ impl crate::Module for LayerNorm {
                     .expect("Time travel has occurred!")
                     .as_micros();
                 println!("{}us", end - start);
-                dbg!(&res);
-                dbg!(res.as_ref().unwrap().mean_all());
                 return res;//self.fused_layernorm(x, dev);
             }
             _ => {}
