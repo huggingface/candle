@@ -42,7 +42,7 @@ impl RotaryEmbedding {
         dbg!(head_dim);
         Ok(Self {
             head_size: head_dim,
-            cache: Tensor::cat(&[cos.clone(), sin.clone()], D::Minus1)?,
+            cache: Tensor::cat(&[cos.clone(), sin.clone()], D::Minus1)?.contiguous()?,
             cos,
             sin,
         })
@@ -166,6 +166,8 @@ impl RotaryEmbedding {
         k: &mut Tensor,
         is_neox: bool,
     ) -> Result<()> {
+        *q = q.contiguous()?;
+        *k = k.contiguous()?;
         match (q.device(), k.device()) {
             #[cfg(feature = "cuda")]
             (Device::Cuda(dev), Device::Cuda(_)) => {
