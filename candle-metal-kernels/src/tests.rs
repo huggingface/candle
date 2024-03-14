@@ -1104,53 +1104,69 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
 
 #[test]
 fn scatter_add() {
-    // f32, single dimension
-    let input = [5.0f32, 1.0, 7.0, 2.0, 3.0, 2.0, 1.0, 3.0];
-    let shape = [8];
-    let ids = [0, 0, 1, 0, 2, 2, 3, 3];
-    let dim = 0;
-    let result = run_scatter_add(&input, &ids, &shape, dim, "sa_u32_f32");
-    assert_eq!(result, vec![8.0, 7.0, 5.0, 4.0, 0.0, 0.0, 0.0, 0.0]);
+    let ids_u8 = [0u8, 0, 1, 0, 2, 2, 3, 3];
+    let ids_u32 = [0u32, 0, 1, 0, 2, 2, 3, 3];
+    let ids_i64 = [0i64, 0, 1, 0, 2, 2, 3, 3];
 
-    // f32, two dimension
-    let input = [5.0f32, 1.0, 7.0, 2.0, 3.0, 2.0, 1.0, 3.0];
-    let shape = [4, 2];
-    let ids = [0, 0, 1, 0, 2, 2, 3, 3];
-    let dim = 0;
-    let result = run_scatter_add(&input, &ids, &shape, dim, "sa_u32_f32");
-    assert_eq!(result, vec![5.0, 3.0, 7.0, 0.0, 3.0, 2.0, 1.0, 3.0]);
-
-    // f16, single dimension
-    let input: Vec<_> = [5.0f32, 1.0, 7.0, 2.0, 3.0, 2.0, 1.0, 3.0]
+    let input_f32 = [5.0f32, 1.0, 7.0, 2.0, 3.0, 2.0, 1.0, 3.0];
+    let input_f16 = input_f32
         .iter()
-        .map(|x| f16::from_f32(*x))
-        .collect();
-    let shape = [8];
-    let ids = [0, 0, 1, 0, 2, 2, 3, 3];
-    let dim = 0;
-    let result = run_scatter_add(&input, &ids, &shape, dim, "sa_u32_f16");
-    assert_eq!(
-        result,
-        vec![8.0, 7.0, 5.0, 4.0, 0.0, 0.0, 0.0, 0.0]
-            .iter()
-            .map(|x| f16::from_f32(*x))
-            .collect::<Vec<_>>()
-    );
-
-    // f16, two dimension
-    let input: Vec<_> = [5.0f32, 1.0, 7.0, 2.0, 3.0, 2.0, 1.0, 3.0]
+        .map(|v| f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    let input_bf16 = input_f32
         .iter()
-        .map(|x| f16::from_f32(*x))
-        .collect();
-    let shape = [4, 2];
-    let ids = [0, 0, 1, 0, 2, 2, 3, 3];
-    let dim = 0;
-    let result = run_scatter_add(&input, &ids, &shape, dim, "sa_u32_f16");
-    assert_eq!(
-        result,
-        vec![5.0, 3.0, 7.0, 0.0, 3.0, 2.0, 1.0, 3.0]
-            .iter()
-            .map(|x| f16::from_f32(*x))
-            .collect::<Vec<_>>()
-    );
+        .map(|v| bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+
+    let output_dim1_f32 = vec![8.0, 7.0, 5.0, 4.0, 0.0, 0.0, 0.0, 0.0];
+    let output_dim1_f16 = output_dim1_f32
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    let output_dim1_bf16 = output_dim1_f32
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+
+    let output_dim2_f32 = vec![5.0, 3.0, 7.0, 0.0, 3.0, 2.0, 1.0, 3.0];
+    let output_dim2_f16 = output_dim2_f32
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    let output_dim2_bf16 = output_dim2_f32
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+
+    for (shape, output_f32, output_f16, output_bf16) in [
+        (vec![8], output_dim1_f32, output_dim1_f16, output_dim1_bf16),
+        (
+            vec![4, 2],
+            output_dim2_f32,
+            output_dim2_f16,
+            output_dim2_bf16,
+        ),
+    ] {
+        for results in [
+            run_scatter_add(&input_f32, &ids_u8, &shape, 0, "sa_u8_f32"),
+            run_scatter_add(&input_f32, &ids_u32, &shape, 0, "sa_u32_f32"),
+            run_scatter_add(&input_f32, &ids_i64, &shape, 0, "sa_i64_f32"),
+        ] {
+            assert_eq!(results, output_f32);
+        }
+        for results in [
+            run_scatter_add(&input_f16, &ids_u8, &shape, 0, "sa_u8_f16"),
+            run_scatter_add(&input_f16, &ids_u32, &shape, 0, "sa_u32_f16"),
+            run_scatter_add(&input_f16, &ids_i64, &shape, 0, "sa_i64_f16"),
+        ] {
+            assert_eq!(results, output_f16);
+        }
+        for results in [
+            run_scatter_add(&input_bf16, &ids_u8, &shape, 0, "sa_u8_bf16"),
+            run_scatter_add(&input_bf16, &ids_u32, &shape, 0, "sa_u32_bf16"),
+            run_scatter_add(&input_bf16, &ids_i64, &shape, 0, "sa_i64_bf16"),
+        ] {
+            assert_eq!(results, output_bf16);
+        }
+    }
 }
