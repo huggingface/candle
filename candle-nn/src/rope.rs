@@ -79,7 +79,7 @@ impl RotaryEmbedding {
         let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
 
         let params = (
-            positions.as_ptr(),
+            positions.as_ptr() as u64,
             q_storage.as_cuda_slice::<T>()?,
             k_storage.as_cuda_slice::<T>()?,
             cache_storage.as_cuda_slice::<T>()?,
