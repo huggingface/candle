@@ -52,14 +52,16 @@ impl RotaryEmbedding {
         positions: &[usize],
         q_storage: &CudaStorage,
         k_storage: &CudaStorage,
-        q: Tensor,
-        k: Tensor,
+        q: &mut Tensor,
+        k: &mut Tensor,
         cache_storage: &CudaStorage,
     ) -> Result<()> {
+        use candle::cuda_backend::WrapErr;
+
         let num_tokens = q.elem_count() / q.dim(D::Minus1)?;
         let rot_dim = self.cache.dim(1)?;
-        let num_heads = q.dim(D::Minus1)? / head_size;
-        let num_kv_heads = k.dim(D::Minus1)? / head_size;
+        let num_heads = q.dim(D::Minus1)? / self.head_size;
+        let num_kv_heads = k.dim(D::Minus1)? / self.head_size;
         let q_stride = q.stride()[q.stride().len() - 2];
         let k_stride = k.stride()[k.stride().len() - 2];
 
@@ -69,12 +71,12 @@ impl RotaryEmbedding {
         )?;
 
         let cfg = LaunchConfig {
-            grid_dim: (num_tokens, 1, 1),
-            block_dim: (512.min(num_heads * rot_dim / 2), 1, 1),
+            grid_dim: (num_tokens as u32, 1, 1),
+            block_dim: (512.min((num_heads * rot_dim / 2) as u32), 1, 1),
             shared_mem_bytes: 0,
         };
 
-        let positions = positions.iter().map(|x| x as i64).collect::<Vec<_>>();
+        let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
 
         let params = (
             positions.as_ptr(),
@@ -96,10 +98,10 @@ impl RotaryEmbedding {
     #[cfg(feature = "cuda")]
     fn fused_rope(
         &self,
-        dev: CudaDevice,
+        dev: &CudaDevice,
         positions: &[usize],
-        q: Tensor,
-        k: Tensor,
+        q: &mut Tensor,
+        k: &mut Tensor,
         is_neox: bool,
     ) -> Result<()> {
         match (
@@ -108,7 +110,7 @@ impl RotaryEmbedding {
             &*self.cache.storage_and_layout().0,
         ) {
             (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
-                match (cache_storage.dtype(), q.dtype(), k.dtype()) {
+                return match (cache_storage.dtype(), q.dtype(), k.dtype()) {
                     (DType::BF16, DType::BF16, DType::BF16) => self.execute_dtype::<half::bf16>(
                         &dev,
                         positions,
@@ -150,7 +152,6 @@ impl RotaryEmbedding {
             }
             _ => unreachable!(),
         }
-        Ok(())
     }
 
     pub fn forward(
