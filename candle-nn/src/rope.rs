@@ -26,7 +26,7 @@ impl RotaryEmbedding {
         max_position_embeddings: usize,
         device: &Device,
     ) -> Result<Self> {
-        let theta: Vec<_> = (0..head_dim)
+        /*let theta: Vec<_> = (0..head_dim)
             .step_by(2)
             .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
             .collect();
@@ -34,6 +34,17 @@ impl RotaryEmbedding {
         let idx_theta = Tensor::arange(0., max_position_embeddings as f64, device)?
             .to_dtype(DType::F32)?
             .reshape((max_position_embeddings as usize, 1))?
+            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+        let cos = idx_theta.cos()?;
+        let sin = idx_theta.sin()?;*/
+        let theta: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let theta = Tensor::new(theta.as_slice(), device)?;
+        let idx_theta = Tensor::arange(0, max_position_embeddings, device)?
+            .to_dtype(DType::F32)?
+            .reshape((max_position_embeddings, 1))?
             .matmul(&theta.reshape((1, theta.elem_count()))?)?;
         let cos = idx_theta.cos()?;
         let sin = idx_theta.sin()?;
@@ -66,7 +77,7 @@ impl RotaryEmbedding {
         let k_stride = k.stride()[k.stride().len() - 2];
 
         let func = dev.get_or_load_func(
-            &kernel_name::<T>("rotary_embedding_kernel"),
+            &kernel_name::<T>("rotary_embedding_kernel_neox"),
             kernels::FUSED_ROPE,
         )?;
 
