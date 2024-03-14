@@ -12,6 +12,8 @@ pub mod loss;
 pub mod ops;
 pub mod optim;
 pub mod rnn;
+#[cfg(feature = "cuda")]
+pub mod rope;
 pub mod sequential;
 pub mod var_builder;
 pub mod var_map;
