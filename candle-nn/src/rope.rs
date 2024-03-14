@@ -158,19 +158,19 @@ impl RotaryEmbedding {
     pub fn forward(
         &self,
         positions: &[usize],
-        q: &Tensor,
-        k: &Tensor,
+        q: &mut Tensor,
+        k: &mut Tensor,
         is_neox: bool,
     ) -> Result<()> {
         match (q.device(), k.device()) {
             #[cfg(feature = "cuda")]
             (Device::Cuda(dev), Device::Cuda(_)) => {
-                self.fused_rope(dev, positions, q, k, is_neox);
+                self.fused_rope(dev, positions, &*q, &*k, is_neox);
             }
 
             _ => {
-                *q = self.apply_rotary_emb(q, positions)?;
-                *k = self.apply_rotary_emb(k, positions)?;
+                *q = self.apply_rotary_emb(&*q, positions)?;
+                *k = self.apply_rotary_emb(&*k, positions)?;
             }
         };
         Ok(())
