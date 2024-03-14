@@ -76,6 +76,8 @@ impl RotaryEmbedding {
             shared_mem_bytes: 0,
         };
 
+        dbg!(self.cache.shape());
+
         let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
         let params = (
             positions.as_ptr() as u64,
