@@ -30,7 +30,7 @@ impl RotaryEmbedding {
         head_size: usize,
     ) -> Result<()> {
         let num_tokens = q.elem_count() / q.dim(D::Minus1)?;
-        let rot_dim = self.cache.dim(D::Minus1)?;
+        let rot_dim = self.cache.dim(1)?;
         let num_heads = q.dim(D::Minus1)? / head_size;
         let num_kv_heads = k.dim(D::Minus1)? / head_size;
         let q_stride = q.stride()[q.stride().len() - 2];
