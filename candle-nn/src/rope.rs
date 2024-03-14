@@ -69,7 +69,7 @@ impl RotaryEmbedding {
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel_neox"),
             kernels::FUSED_ROPE,
-        )?;
+        ).unwrap();
 
         dbg!(&func);
 
