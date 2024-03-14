@@ -12,17 +12,27 @@ pub struct RotaryEmbedding {
 }
 
 impl RotaryEmbedding {
-    pub fn new(cache: Tensor) -> Result<Self> {
-        if !cache.device().is_cuda() {
-            candle::bail!("Expected CUDA cache.");
-        }
-        Ok(Self { cache })
+    pub fn new(base: f32, head_dim: usize, max_position_embeddings: usize) -> Result<Self> {
+        let theta: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / freq_base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let theta = Tensor::new(theta.as_slice(), device)?;
+        let idx_theta = Tensor::arange(0, max_position_embeddings, device)?
+            .to_dtype(DType::F32)?
+            .reshape((max_position_embeddings as usize, 1))?
+            .matmul(&theta.reshape((1, theta.elem_count()))?)?;
+        let cos = idx_theta.cos()?;
+        let sin = idx_theta.sin()?;
+        Ok(Self {
+            cache: Tensor::cat(&[cos, sin], D::Minus1)?,
+        })
     }
 
     fn execute_dtype<T: CudaDType + WithDType + DeviceRepr>(
         &self,
         dev: &CudaDevice,
-        pos_storage: &CudaStorage,
+        positions: &[usize],
         q_storage: &CudaStorage,
         k_storage: &CudaStorage,
         q: Tensor,
@@ -47,8 +57,10 @@ impl RotaryEmbedding {
             shared_mem_bytes: 0,
         };
 
+        let positions = positions.iter().map(|x| x as i64).collect::<Vec<_>>();
+
         let params = (
-            pos_storage.as_cuda_slice::<i64>()?,
+            positions.as_ptr(),
             q_storage.as_cuda_slice::<T>()?,
             k_storage.as_cuda_slice::<T>()?,
             cache_storage.as_cuda_slice::<T>()?,
@@ -67,67 +79,30 @@ impl RotaryEmbedding {
     fn fused_rope(
         &self,
         dev: CudaDevice,
-        positions: Tensor,
+        positions: &[usize],
         q: Tensor,
         k: Tensor,
         head_size: usize,
         is_neox: bool,
     ) -> Result<()> {
         match (
-            &*positions.storage_and_layout().0,
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
-            s & *self.cache.storage_and_layout().0,
+            &*self.cache.storage_and_layout().0,
         ) {
-            (
-                Storage::Cuda(pos_storage),
-                Storage::Cuda(q_storage),
-                Storage::Cuda(k_storage),
-                Storage::Cuda(cache_storage),
-            ) => {
-                match (
-                    cache_storage.dtype(),
-                    positions.dtype(),
-                    q.dtype(),
-                    k.dtype(),
-                ) {
-                    (DType::BF16, DType::I64, DType::BF16, DType::BF16) => self
-                        .execute_dtype::<half::bf16>(
-                            &dev,
-                            pos_storage,
-                            q_storage,
-                            k_storage,
-                            q,
-                            k,
-                            head_size,
-                        ),
-                    (DType::F16, DType::I64, DType::F16, DType::F16) => self
-                        .execute_dtype::<half::f16>(
-                            &dev,
-                            pos_storage,
-                            q_storage,
-                            k_storage,
-                            q,
-                            k,
-                            head_size,
-                        ),
-                    (DType::F32, DType::I64, DType::F32, DType::F32) => self.execute_dtype::<f32>(
-                        &dev,
-                        pos_storage,
-                        q_storage,
-                        k_storage,
-                        q,
-                        k,
-                        head_size,
+            (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
+                match (cache_storage.dtype(), q.dtype(), k.dtype()) {
+                    (DType::BF16, DType::BF16, DType::BF16) => self.execute_dtype::<half::bf16>(
+                        &dev, positions, q_storage, k_storage, q, k, head_size,
                     ),
-                    (DType::F64, DType::I64, DType::F64, DType::F64) => self.execute_dtype::<f64>(
-                        &dev,
-                        pos_storage,
-                        q_storage,
-                        k_storage,
-                        q,
-                        k,
-                        head_size,
+                    (DType::F16, DType::F16, DType::F16) => self.execute_dtype::<half::f16>(
+                        &dev, positions, q_storage, k_storage, q, k, head_size,
+                    ),
+                    (DType::F32, DType::F32, DType::F32) => self.execute_dtype::<f32>(
+                        &dev, positions, q_storage, k_storage, q, k, head_size,
+                    ),
+                    (DType::F64, DType::F64, DType::F64) => self.execute_dtype::<f64>(
+                        &dev, positions, q_storage, k_storage, q, k, head_size,
                     ),
                     _ => candle::bail!("DType mismatch in fused RotaryEmbedding"),
                 }
@@ -139,14 +114,14 @@ impl RotaryEmbedding {
 
     pub fn apply_forward(
         &self,
-        positions: Tensor,
+        positions: &[usize],
         q: Tensor,
         k: Tensor,
         head_size: usize,
         is_neox: bool,
     ) -> Result<()> {
-        match (positions.device(), q.device(), k.device()) {
-            (Device::Cuda(dev), Device::Cuda(_), Device::Cuda(_)) => {
+        match (q.device(), k.device()) {
+            (Device::Cuda(dev), Device::Cuda(_)) => {
                 return self.fused_rope(dev, positions, q, k, head_size, is_neox)
             }
             _ => candle::bail!("Expected a CUDA device."),
