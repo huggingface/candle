@@ -69,17 +69,13 @@ impl RotaryEmbedding {
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel_neox"),
             kernels::FUSED_ROPE,
-        ).unwrap();
-
-        dbg!(&func);
+        )?;
 
         let cfg = LaunchConfig {
             grid_dim: (num_tokens as u32, 1, 1),
             block_dim: (512.min((num_heads * rot_dim / 2) as u32), 1, 1),
             shared_mem_bytes: 0,
         };
-
-        dbg!(&cfg);
 
         let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
         let params = (

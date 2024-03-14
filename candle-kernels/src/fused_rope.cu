@@ -145,7 +145,7 @@ extern "C" __global__ void rotary_embedding_kernel_neox_f32(
   const int head_size) {
   // Each thread block is responsible for one token.
   const int token_idx = blockIdx.x;
-  int64_t pos = positions[token_idx];
+  int64_t pos = positions[0];//token_idx];
   const float* cache_ptr = cos_sin_cache + pos * rot_dim;
 
   apply_rotary_embedding<float, true>(query, key, cache_ptr, head_size, num_heads, num_kv_heads, rot_dim, token_idx, query_stride, key_stride);
