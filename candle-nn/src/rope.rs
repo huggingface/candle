@@ -1,11 +1,11 @@
 use std::iter::zip;
 
 use candle::{
-    backend::BackendStorage,
-    CudaDevice, CudaStorage, DType, Device, IndexOp, Module, Result, Storage, Tensor, WithDType, D,
+    backend::BackendStorage, CudaDevice, CudaStorage, DType, Device, IndexOp, Module, Result,
+    Storage, Tensor, WithDType, D,
 };
 
-#[cfg(feature="cuda")]
+#[cfg(feature = "cuda")]
 use candle::cuda_backend::{
     cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig},
     kernel_name, kernels, CudaDType,
@@ -16,10 +16,16 @@ pub struct RotaryEmbedding {
     cache: Tensor,
     cos: Tensor,
     sin: Tensor,
+    head_size: usize,
 }
 
 impl RotaryEmbedding {
-    pub fn new(base: f32, head_dim: usize, max_position_embeddings: usize, device: &Device) -> Result<Self> {
+    pub fn new(
+        base: f32,
+        head_dim: usize,
+        max_position_embeddings: usize,
+        device: &Device,
+    ) -> Result<Self> {
         let theta: Vec<_> = (0..head_dim)
             .step_by(2)
             .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
@@ -32,13 +38,14 @@ impl RotaryEmbedding {
         let cos = idx_theta.cos()?;
         let sin = idx_theta.sin()?;
         Ok(Self {
+            head_size: head_dim,
             cache: Tensor::cat(&[cos.clone(), sin.clone()], D::Minus1)?,
             cos,
             sin,
         })
     }
 
-    #[cfg(feature="cuda")]
+    #[cfg(feature = "cuda")]
     fn execute_dtype<T: CudaDType + WithDType + DeviceRepr>(
         &self,
         dev: &CudaDevice,
@@ -47,7 +54,6 @@ impl RotaryEmbedding {
         k_storage: &CudaStorage,
         q: Tensor,
         k: Tensor,
-        head_size: usize,
         cache_storage: &CudaStorage,
     ) -> Result<()> {
         let num_tokens = q.elem_count() / q.dim(D::Minus1)?;
@@ -80,21 +86,20 @@ impl RotaryEmbedding {
             k_stride,
             num_heads,
             num_kv_heads,
-            head_size,
+            self.head_size,
         );
         unsafe { func.launch(cfg, params) }.w()?;
 
         Ok(())
     }
 
-    #[cfg(feature="cuda")]
+    #[cfg(feature = "cuda")]
     fn fused_rope(
         &self,
         dev: CudaDevice,
         positions: &[usize],
         q: Tensor,
         k: Tensor,
-        head_size: usize,
         is_neox: bool,
     ) -> Result<()> {
         match (
@@ -105,16 +110,40 @@ impl RotaryEmbedding {
             (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
                 match (cache_storage.dtype(), q.dtype(), k.dtype()) {
                     (DType::BF16, DType::BF16, DType::BF16) => self.execute_dtype::<half::bf16>(
-                        &dev, positions, q_storage, k_storage, q, k, head_size, cache_storage,
+                        &dev,
+                        positions,
+                        q_storage,
+                        k_storage,
+                        q,
+                        k,
+                        cache_storage,
                     ),
                     (DType::F16, DType::F16, DType::F16) => self.execute_dtype::<half::f16>(
-                        &dev, positions, q_storage, k_storage, q, k, head_size, cache_storage,
+                        &dev,
+                        positions,
+                        q_storage,
+                        k_storage,
+                        q,
+                        k,
+                        cache_storage,
                     ),
                     (DType::F32, DType::F32, DType::F32) => self.execute_dtype::<f32>(
-                        &dev, positions, q_storage, k_storage, q, k, head_size, cache_storage,
+                        &dev,
+                        positions,
+                        q_storage,
+                        k_storage,
+                        q,
+                        k,
+                        cache_storage,
                     ),
                     (DType::F64, DType::F64, DType::F64) => self.execute_dtype::<f64>(
-                        &dev, positions, q_storage, k_storage, q, k, head_size, cache_storage,
+                        &dev,
+                        positions,
+                        q_storage,
+                        k_storage,
+                        q,
+                        k,
+                        cache_storage,
                     ),
                     _ => candle::bail!("DType mismatch in fused RotaryEmbedding"),
                 }
@@ -129,13 +158,12 @@ impl RotaryEmbedding {
         positions: &[usize],
         q: &mut Tensor,
         k: &mut Tensor,
-        head_size: usize,
         is_neox: bool,
     ) -> Result<()> {
         match (q.device(), k.device()) {
-            #[cfg(feature="cuda")]
+            #[cfg(feature = "cuda")]
             (Device::Cuda(dev), Device::Cuda(_)) => {
-                self.fused_rope(dev, positions, q, k, head_size, is_neox);
+                self.fused_rope(dev, positions, q, k, is_neox);
             }
 
             _ => {
