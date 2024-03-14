@@ -11,6 +11,7 @@ use candle::cuda_backend::{
     kernel_name, kernels, CudaDType,
 };
 
+#[derive(Debug, Clone)]
 pub struct RotaryEmbedding {
     cache: Tensor,
     cos: Tensor,
