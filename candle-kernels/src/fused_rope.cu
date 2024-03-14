@@ -1,5 +1,11 @@
 #include "cuda_fp16.h"
 
+#ifndef USE_ROCM
+  #define LDG(arg) __ldg(arg)
+#else
+  #define LDG(arg) *arg
+#endif
+
 template<typename scalar_t, bool IS_NEOX>
 inline __device__ void apply_token_rotary_embedding(
   scalar_t* __restrict__ arr,
@@ -14,14 +20,14 @@ inline __device__ void apply_token_rotary_embedding(
     // GPT-NeoX style rotary embedding.
     x_index = rot_offset;
     y_index = embed_dim + rot_offset;
-    cos = VLLM_LDG(cos_ptr + x_index);
-    sin = VLLM_LDG(sin_ptr + x_index);
+    cos = LDG(cos_ptr + x_index);
+    sin = LDG(sin_ptr + x_index);
   } else {
     // GPT-J style rotary embedding.
     x_index = 2 * rot_offset;
     y_index = 2 * rot_offset + 1;
-    cos = VLLM_LDG(cos_ptr + x_index / 2);
-    sin = VLLM_LDG(sin_ptr + x_index / 2);
+    cos = LDG(cos_ptr + x_index / 2);
+    sin = LDG(sin_ptr + x_index / 2);
   }
 
   const scalar_t x = arr[x_index];
