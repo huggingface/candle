@@ -72,7 +72,7 @@ inline __device__ void apply_rotary_embedding(
   }
 }
 
-__global__ void rotary_embedding_kernel_f32(
+extern "C" __global__ void rotary_embedding_kernel_f32(
   const int64_t* __restrict__ positions,        // [batch_size, seq_len] or [num_tokens]
   float* __restrict__ query,                 // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
   float* __restrict__ key,                   // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads, head_size]
@@ -91,7 +91,7 @@ __global__ void rotary_embedding_kernel_f32(
   apply_rotary_embedding<float, false>(query, key, cache_ptr, head_size, num_heads, num_kv_heads, rot_dim, token_idx, query_stride, key_stride);
 }
 
-__global__ void rotary_embedding_kernel_f16(
+extern "C" __global__ void rotary_embedding_kernel_f16(
   const int64_t* __restrict__ positions,        // [batch_size, seq_len] or [num_tokens]
   __half* __restrict__ query,                 // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
   __half* __restrict__ key,                   // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads, head_size]
@@ -110,7 +110,7 @@ __global__ void rotary_embedding_kernel_f16(
   apply_rotary_embedding<__half, false>(query, key, cache_ptr, head_size, num_heads, num_kv_heads, rot_dim, token_idx, query_stride, key_stride);
 }
 
-__global__ void rotary_embedding_kernel_f64(
+extern "C" __global__ void rotary_embedding_kernel_f64(
   const int64_t* __restrict__ positions,        // [batch_size, seq_len] or [num_tokens]
   double* __restrict__ query,                 // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
   double* __restrict__ key,                   // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads, head_size]
@@ -132,7 +132,7 @@ __global__ void rotary_embedding_kernel_f64(
 
 
 
-__global__ void rotary_embedding_kernel_neox_f32(
+extern "C" __global__ void rotary_embedding_kernel_neox_f32(
   const int64_t* __restrict__ positions,        // [batch_size, seq_len] or [num_tokens]
   float* __restrict__ query,                 // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
   float* __restrict__ key,                   // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads, head_size]
@@ -151,7 +151,7 @@ __global__ void rotary_embedding_kernel_neox_f32(
   apply_rotary_embedding<float, true>(query, key, cache_ptr, head_size, num_heads, num_kv_heads, rot_dim, token_idx, query_stride, key_stride);
 }
 
-__global__ void rotary_embedding_kernel_neox_f16(
+extern "C" __global__ void rotary_embedding_kernel_neox_f16(
   const int64_t* __restrict__ positions,        // [batch_size, seq_len] or [num_tokens]
   __half* __restrict__ query,                 // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
   __half* __restrict__ key,                   // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads, head_size]
@@ -170,7 +170,7 @@ __global__ void rotary_embedding_kernel_neox_f16(
   apply_rotary_embedding<__half, true>(query, key, cache_ptr, head_size, num_heads, num_kv_heads, rot_dim, token_idx, query_stride, key_stride);
 }
 
-__global__ void rotary_embedding_kernel_neox_f64(
+extern "C" __global__ void rotary_embedding_kernel_neox_f64(
   const int64_t* __restrict__ positions,        // [batch_size, seq_len] or [num_tokens]
   double* __restrict__ query,                 // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
   double* __restrict__ key,                   // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads, head_size]
@@ -191,7 +191,7 @@ __global__ void rotary_embedding_kernel_neox_f64(
 
 #if __CUDA_ARCH__ >= 800
 #include <cuda_bf16.h>
-__global__ void rotary_embedding_kernel_bf16(
+extern "C" __global__ void rotary_embedding_kernel_bf16(
   const int64_t* __restrict__ positions,        // [batch_size, seq_len] or [num_tokens]
   __nv_bfloat16* __restrict__ query,                 // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
   __nv_bfloat16* __restrict__ key,                   // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads, head_size]
@@ -210,7 +210,7 @@ __global__ void rotary_embedding_kernel_bf16(
   apply_rotary_embedding<__nv_bfloat16, false>(query, key, cache_ptr, head_size, num_heads, num_kv_heads, rot_dim, token_idx, query_stride, key_stride);
 }
 
-__global__ void rotary_embedding_kernel_neox_bf16(
+extern "C" __global__ void rotary_embedding_kernel_neox_bf16(
   const int64_t* __restrict__ positions,        // [batch_size, seq_len] or [num_tokens]
   __nv_bfloat16* __restrict__ query,                 // [batch_size, seq_len, num_heads, head_size] or [num_tokens, num_heads, head_size]
   __nv_bfloat16* __restrict__ key,                   // [batch_size, seq_len, num_kv_heads, head_size] or [num_tokens, num_kv_heads, head_size]
