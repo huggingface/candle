@@ -82,6 +82,15 @@ struct Args {
     #[arg(long)]
     revision: Option<String>,
 
+    #[arg(long)]
+    tokenizer_file: Option<String>,
+
+    #[arg(long)]
+    config_file: Option<String>,
+
+    #[arg(long)]
+    weight_files: Option<String>,
+
     /// The model size to use.
     #[arg(long, default_value = "v2")]
     which: Which,
@@ -132,14 +141,29 @@ fn main() -> Result<()> {
         let revision = args.revision.unwrap_or("main".to_string());
         let api = api.repo(Repo::with_revision(model_id, RepoType::Model, revision));
 
-        let tokenizer_filename = api.get("tokenizer.json")?;
-        let config_filename = api.get("config.json")?;
+        let tokenizer_filename = match args.tokenizer_file {
+            Some(file) => std::path::PathBuf::from(file),
+            None => api.get("tokenizer.json")?,
+        };
+        let config_filename = match args.config_file {
+            Some(file) => std::path::PathBuf::from(file),
+            None => api.get("config.json")?,
+        };
         let config: LlamaConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
         let config = config.into_config(args.use_flash_attn);
 
         let filenames = match args.which {
             Which::V1 | Which::V2 | Which::Solar10_7B => {
-                candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
+                let filenames = match args.weight_files {
+                    Some(files) => files
+                        .split(',')
+                        .map(std::path::PathBuf::from)
+                        .collect::<Vec<_>>(),
+                    None => {
+                        candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
+                    }
+                };
+                filenames
             }
             Which::TinyLlama1_1BChat => vec![api.get("model.safetensors")?],
         };
