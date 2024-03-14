@@ -64,7 +64,6 @@ impl RotaryEmbedding {
         let num_kv_heads = k.dim(D::Minus1)? / self.head_size;
         let q_stride = q.stride()[q.stride().len() - 2];
         let k_stride = k.stride()[k.stride().len() - 2];
-        dbg!(num_tokens);
 
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel_neox"),
@@ -76,6 +75,8 @@ impl RotaryEmbedding {
             block_dim: (512.min((num_heads * rot_dim / 2) as u32), 1, 1),
             shared_mem_bytes: 0,
         };
+
+        dbg!(self.cache.is_contiguous());
 
         let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
         let params = (
@@ -104,7 +105,6 @@ impl RotaryEmbedding {
         k: &Tensor,
         is_neox: bool,
     ) -> Result<()> {
-        println!("CALLED");
         match (
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
@@ -163,8 +163,6 @@ impl RotaryEmbedding {
         k: &mut Tensor,
         is_neox: bool,
     ) -> Result<()> {
-        *q = q.contiguous()?;
-        *k = k.contiguous()?;
         match (q.device(), k.device()) {
             #[cfg(feature = "cuda")]
             (Device::Cuda(dev), Device::Cuda(_)) => {
