@@ -4,11 +4,13 @@ use candle::{
         cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig},
         kernel_name, kernels, CudaDType,
     },
-    CudaDevice, CudaStorage, DType, Device, Module, Result, Storage, Tensor, WithDType, D,
+    CudaDevice, CudaStorage, DType, Device, IndexOp, Module, Result, Storage, Tensor, WithDType, D,
 };
 
 pub struct RotaryEmbedding {
     cache: Tensor,
+    cos: Tensor,
+    sin: Tensor,
 }
 
 impl RotaryEmbedding {
@@ -25,7 +27,9 @@ impl RotaryEmbedding {
         let cos = idx_theta.cos()?;
         let sin = idx_theta.sin()?;
         Ok(Self {
-            cache: Tensor::cat(&[cos, sin], D::Minus1)?,
+            cache: Tensor::cat(&[cos.clone(), sin.clone()], D::Minus1)?,
+            cos,
+            sin,
         })
     }
 
@@ -112,19 +116,56 @@ impl RotaryEmbedding {
         Ok(())
     }
 
-    pub fn apply_forward(
+    pub fn forward(
         &self,
         positions: &[usize],
-        q: Tensor,
-        k: Tensor,
+        q: &mut Tensor,
+        k: &mut Tensor,
         head_size: usize,
         is_neox: bool,
     ) -> Result<()> {
         match (q.device(), k.device()) {
             (Device::Cuda(dev), Device::Cuda(_)) => {
-                return self.fused_rope(dev, positions, q, k, head_size, is_neox)
+                self.fused_rope(dev, positions, q, k, head_size, is_neox);
             }
-            _ => candle::bail!("Expected a CUDA device."),
+            _ => {
+                *q = self.apply_rotary_emb(q, positions);
+                *k = self.apply_rotary_emb(k, positions);
+            }
         };
+        Ok(())
+    }
+
+    fn apply_rotary_emb(&self, x: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+        let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
+        let mut ropes = Vec::new();
+        let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
+        for (b, seqlen_offset) in zip(0..b_sz, seqlen_offsets) {
+            let cos =
+                self.cos
+                    .narrow(0, *seqlen_offset, seq_len)?
+                    .reshape((seq_len, n_embd / 2, 1))?;
+            let sin =
+                self.sin
+                    .narrow(0, *seqlen_offset, seq_len)?
+                    .reshape((seq_len, n_embd / 2, 1))?;
+            let cos = cos.broadcast_as((1, 1, seq_len, n_embd / 2, 1))?;
+            let sin = sin.broadcast_as((1, 1, seq_len, n_embd / 2, 1))?;
+            // This mimics the llama.cpp behavior.
+            // https://github.com/ggerganov/llama.cpp/blob/1f0bccb27929e261744c979bc75114955da49e98/ggml.c#L12104-L12105
+            // The x0 and x1 value are interleaved on the n_embd (= head_dim) dimension.
+            // The resulting y0 and y1 are also interleaved with:
+            //   y0 = x0*cos - x1*sin
+            //   y1 = x0*sin + x1*cos
+            let x_b = x.i(b)?.unsqueeze(0)?;
+            let x0 = x_b.narrow(D::Minus1, 0, 1)?;
+            let x1 = x_b.narrow(D::Minus1, 1, 1)?;
+            let y0 = (x0.broadcast_mul(&cos)? - x1.broadcast_mul(&sin)?)?;
+            let y1 = (x0.broadcast_mul(&sin)? + x1.broadcast_mul(&cos)?)?;
+            let rope = Tensor::cat(&[y0, y1], D::Minus1)?;
+            let rope = rope.flatten_from(D::Minus2)?;
+            ropes.push(rope);
+        }
+        Tensor::cat(&ropes, 0)
     }
 }
