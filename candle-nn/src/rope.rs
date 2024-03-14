@@ -105,6 +105,7 @@ impl RotaryEmbedding {
         k: &Tensor,
         is_neox: bool,
     ) -> Result<()> {
+        println!("CALLED");
         match (
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
