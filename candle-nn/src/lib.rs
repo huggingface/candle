@@ -33,6 +33,7 @@ pub use linear::{linear, linear_b, linear_no_bias, Linear};
 pub use ops::{kvconcat, Dropout};
 pub use optim::{AdamW, Optimizer, ParamsAdamW, SGD};
 pub use rnn::{gru, lstm, GRUConfig, LSTMConfig, GRU, LSTM, RNN};
+pub use rope::RotaryEmbedding;
 pub use sequential::{seq, Sequential};
 pub use var_builder::VarBuilder;
 pub use var_map::VarMap;
