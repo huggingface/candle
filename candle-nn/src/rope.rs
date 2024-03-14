@@ -52,8 +52,8 @@ impl RotaryEmbedding {
         positions: &[usize],
         q_storage: &CudaStorage,
         k_storage: &CudaStorage,
-        q: &mut Tensor,
-        k: &mut Tensor,
+        q: &Tensor,
+        k: &Tensor,
         cache_storage: &CudaStorage,
     ) -> Result<()> {
         use candle::cuda_backend::WrapErr;
@@ -100,8 +100,8 @@ impl RotaryEmbedding {
         &self,
         dev: &CudaDevice,
         positions: &[usize],
-        q: &mut Tensor,
-        k: &mut Tensor,
+        q: &Tensor,
+        k: &Tensor,
         is_neox: bool,
     ) -> Result<()> {
         match (
@@ -154,11 +154,12 @@ impl RotaryEmbedding {
         }
     }
 
+    /// This may modify the tensors in place!
     pub fn forward(
         &self,
         positions: &[usize],
-        q: &mut Tensor,
-        k: &mut Tensor,
+        q: &Tensor,
+        k: &Tensor,
         is_neox: bool,
     ) -> Result<()> {
         match (q.device(), k.device()) {
