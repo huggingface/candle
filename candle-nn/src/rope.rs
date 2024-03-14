@@ -72,7 +72,7 @@ impl RotaryEmbedding {
         )?;
 
         let cfg = LaunchConfig {
-            grid_dim: (num_tokens as u32, 1, 1),
+            grid_dim: (/*num_tokens as u32*/ positions.len() as u32, 1, 1),
             block_dim: (512.min((num_heads * rot_dim / 2) as u32), 1, 1),
             shared_mem_bytes: 0,
         };
