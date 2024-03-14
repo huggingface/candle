@@ -24,7 +24,7 @@ impl RotaryEmbedding {
             .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
             .collect();
         let theta = Tensor::new(theta.as_slice(), device)?;
-        let idx_theta = Tensor::arange(0, max_position_embeddings, device)?
+        let idx_theta = Tensor::arange(0, max_position_embeddings as f64, device)?
             .to_dtype(DType::F32)?
             .reshape((max_position_embeddings as usize, 1))?
             .matmul(&theta.reshape((1, theta.elem_count()))?)?;
@@ -132,12 +132,14 @@ impl RotaryEmbedding {
         is_neox: bool,
     ) -> Result<()> {
         match (q.device(), k.device()) {
+            #[cfg(feature="cuda")]
             (Device::Cuda(dev), Device::Cuda(_)) => {
                 self.fused_rope(dev, positions, q, k, head_size, is_neox);
             }
+
             _ => {
-                *q = self.apply_rotary_emb(q, positions);
-                *k = self.apply_rotary_emb(k, positions);
+                *q = self.apply_rotary_emb(q, positions)?;
+                *k = self.apply_rotary_emb(k, positions)?;
             }
         };
         Ok(())
