@@ -30,7 +30,7 @@ impl RotaryEmbedding {
             .step_by(2)
             .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
             .collect();
-        dbg!(&theta);
+        dbg!(max_position_embeddings);
         let theta = Tensor::new(theta.as_slice(), device)?;
         let idx_theta = Tensor::arange(0, max_position_embeddings as u32, device)?
             .to_dtype(DType::F32)?
@@ -78,7 +78,7 @@ impl RotaryEmbedding {
         };
 
         let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
-
+        dbg!(self.cache);
         let params = (
             positions.as_ptr() as u64,
             q_storage.as_cuda_slice::<T>()?,
