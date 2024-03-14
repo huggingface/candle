@@ -173,6 +173,8 @@ impl RotaryEmbedding {
                 *k = self.apply_rotary_emb(&*k, positions)?;
             }
         };
+        *q = q.contiguous()?;
+        *k = k.contiguous()?;
         Ok(())
     }
 
