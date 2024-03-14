@@ -72,6 +72,8 @@ impl RotaryEmbedding {
         dbg!(num_heads);
         dbg!(k.shape());
         dbg!(num_kv_heads);
+        dbg!(self.head_size);
+        dbg!(rot_dim);
 
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel_neox"),
