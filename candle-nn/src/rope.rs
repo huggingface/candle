@@ -48,10 +48,10 @@ impl RotaryEmbedding {
         };
 
         let params = (
-            pos_storage.as_cuda_slice::<f32>()?,
-            q_storage.as_cuda_slice::<f32>()?,
-            k_storage.as_cuda_slice::<f32>()?,
-            cache_storage.as_cuda_slice::<f32>()?,
+            pos_storage.as_cuda_slice::<i64>()?,
+            q_storage.as_cuda_slice::<T>()?,
+            k_storage.as_cuda_slice::<T>()?,
+            cache_storage.as_cuda_slice::<T>()?,
             rot_dim,
             q_stride,
             k_stride,
@@ -86,23 +86,22 @@ impl RotaryEmbedding {
                 Storage::Cuda(cache_storage),
             ) => {
                 match (
-                    x.dtype(),
                     cache_storage.dtype(),
                     positions.dtype(),
                     q.dtype(),
                     k.dtype(),
                 ) {
-                    (DType::BF16, DType::BF16, DType::BF16, DType::BF16, DType::BF16) => self
+                    (DType::BF16, DType::I64, DType::BF16, DType::BF16) => self
                         .execute_dtype::<half::bf16>(
-                        &dev,
-                        pos_storage,
-                        q_storage,
-                        k_storage,
-                        q,
-                        k,
-                        head_size,
-                    ),
-                    (DType::F16, DType::F16, DType::F16, DType::F16, DType::F16) => self
+                            &dev,
+                            pos_storage,
+                            q_storage,
+                            k_storage,
+                            q,
+                            k,
+                            head_size,
+                        ),
+                    (DType::F16, DType::I64, DType::F16, DType::F16) => self
                         .execute_dtype::<half::f16>(
                             &dev,
                             pos_storage,
@@ -112,26 +111,24 @@ impl RotaryEmbedding {
                             k,
                             head_size,
                         ),
-                    (DType::F32, DType::F32, DType::F32, DType::F32, DType::F32) => self
-                        .execute_dtype::<f32>(
-                            &dev,
-                            pos_storage,
-                            q_storage,
-                            k_storage,
-                            q,
-                            k,
-                            head_size,
-                        ),
-                    (DType::F64, DType::F64, DType::F64, DType::F64, DType::F64) => self
-                        .execute_dtype::<f64>(
-                            &dev,
-                            pos_storage,
-                            q_storage,
-                            k_storage,
-                            q,
-                            k,
-                            head_size,
-                        ),
+                    (DType::F32, DType::I64, DType::F32, DType::F32) => self.execute_dtype::<f32>(
+                        &dev,
+                        pos_storage,
+                        q_storage,
+                        k_storage,
+                        q,
+                        k,
+                        head_size,
+                    ),
+                    (DType::F64, DType::I64, DType::F64, DType::F64) => self.execute_dtype::<f64>(
+                        &dev,
+                        pos_storage,
+                        q_storage,
+                        k_storage,
+                        q,
+                        k,
+                        head_size,
+                    ),
                     _ => candle::bail!("DType mismatch in fused RotaryEmbedding"),
                 }
             }
