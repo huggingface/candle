@@ -39,6 +39,7 @@ impl RotaryEmbedding {
         let sin = idx_theta.sin()?;
         dbg!(&cos);
         dbg!(&sin);
+        dbg!(head_dim);
         Ok(Self {
             head_size: head_dim,
             cache: Tensor::cat(&[cos.clone(), sin.clone()], D::Minus1)?,
