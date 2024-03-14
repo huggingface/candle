@@ -64,11 +64,14 @@ impl RotaryEmbedding {
         let num_kv_heads = k.dim(D::Minus1)? / self.head_size;
         let q_stride = q.stride()[q.stride().len() - 2];
         let k_stride = k.stride()[k.stride().len() - 2];
+        dbg!(num_tokens);
 
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel_neox"),
             kernels::FUSED_ROPE,
         )?;
+
+        dbg!(&func);
 
         let cfg = LaunchConfig {
             grid_dim: (num_tokens as u32, 1, 1),
