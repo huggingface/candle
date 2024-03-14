@@ -68,6 +68,11 @@ impl RotaryEmbedding {
         let q_stride = q.stride()[q.stride().len() - 2];
         let k_stride = k.stride()[k.stride().len() - 2];
 
+        dbg!(q.shape());
+        dbg!(num_heads);
+        dbg!(k.shape());
+        dbg!(num_kv_heads);
+
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel_neox"),
             kernels::FUSED_ROPE,
