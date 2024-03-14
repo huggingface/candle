@@ -39,7 +39,7 @@ impl RotaryEmbedding {
         let sin = idx_theta.sin()?;
         Ok(Self {
             head_size: head_dim,
-            cache: Tensor::cat(&[cos.clone(), sin.clone()], D::Minus1)?.contiguous()?,
+            cache: Tensor::cat(&[cos.clone(), sin.clone()], D::Minus1)?,
             cos,
             sin,
         })
@@ -76,14 +76,12 @@ impl RotaryEmbedding {
             shared_mem_bytes: 0,
         };
 
-        dbg!(self.cache.is_contiguous());
-
         let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
         let params = (
             positions.as_ptr() as u64,
             q_storage.as_cuda_slice::<T>()?,
             k_storage.as_cuda_slice::<T>()?,
-            cache_storage.as_cuda_slice::<T>()?,
+            cache_storage.as_cuda_slice::<f32>()?,
             rot_dim,
             q_stride,
             k_stride,
@@ -112,7 +110,7 @@ impl RotaryEmbedding {
         ) {
             (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
                 return match (cache_storage.dtype(), q.dtype(), k.dtype()) {
-                    (DType::BF16, DType::BF16, DType::BF16) => self.execute_dtype::<half::bf16>(
+                    (DType::BF16, DType::BF16, DType::F32) => self.execute_dtype::<half::bf16>(
                         &dev,
                         positions,
                         q_storage,
@@ -121,7 +119,7 @@ impl RotaryEmbedding {
                         k,
                         cache_storage,
                     ),
-                    (DType::F16, DType::F16, DType::F16) => self.execute_dtype::<half::f16>(
+                    (DType::F16, DType::F16, DType::F32) => self.execute_dtype::<half::f16>(
                         &dev,
                         positions,
                         q_storage,
@@ -139,7 +137,7 @@ impl RotaryEmbedding {
                         k,
                         cache_storage,
                     ),
-                    (DType::F64, DType::F64, DType::F64) => self.execute_dtype::<f64>(
+                    (DType::F64, DType::F64, DType::F32) => self.execute_dtype::<f64>(
                         &dev,
                         positions,
                         q_storage,
