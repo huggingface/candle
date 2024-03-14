@@ -1066,3 +1066,91 @@ fn random() {
     validate_random!(f16);
     validate_random!(bf16);
 }
+
+fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
+    input: &[T],
+    ids: &[I],
+    shape: &[usize],
+    dim: usize,
+    name: &'static str,
+) -> Vec<T> {
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let options = MTLResourceOptions::StorageModeManaged;
+    let input_buffer = new_buffer(&device, input);
+    let ids_buffer = new_buffer(&device, ids);
+    let output = device.new_buffer(std::mem::size_of_val(input) as u64, options);
+    call_scatter_add(
+        &device,
+        command_buffer,
+        &kernels,
+        name,
+        shape,
+        shape,
+        dim,
+        &input_buffer,
+        0,
+        &ids_buffer,
+        0,
+        &output,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+    read_to_vec(&output, input.len())
+}
+
+#[test]
+fn scatter_add() {
+    // f32, single dimension
+    let input = [5.0f32, 1.0, 7.0, 2.0, 3.0, 2.0, 1.0, 3.0];
+    let shape = [8];
+    let ids = [0, 0, 1, 0, 2, 2, 3, 3];
+    let dim = 0;
+    let result = run_scatter_add(&input, &ids, &shape, dim, "sa_u32_f32");
+    assert_eq!(result, vec![8.0, 7.0, 5.0, 4.0, 0.0, 0.0, 0.0, 0.0]);
+
+    // f32, two dimension
+    let input = [5.0f32, 1.0, 7.0, 2.0, 3.0, 2.0, 1.0, 3.0];
+    let shape = [4, 2];
+    let ids = [0, 0, 1, 0, 2, 2, 3, 3];
+    let dim = 0;
+    let result = run_scatter_add(&input, &ids, &shape, dim, "sa_u32_f32");
+    assert_eq!(result, vec![5.0, 3.0, 7.0, 0.0, 3.0, 2.0, 1.0, 3.0]);
+
+    // f16, single dimension
+    let input: Vec<_> = [5.0f32, 1.0, 7.0, 2.0, 3.0, 2.0, 1.0, 3.0]
+        .iter()
+        .map(|x| f16::from_f32(*x))
+        .collect();
+    let shape = [8];
+    let ids = [0, 0, 1, 0, 2, 2, 3, 3];
+    let dim = 0;
+    let result = run_scatter_add(&input, &ids, &shape, dim, "sa_u32_f16");
+    assert_eq!(
+        result,
+        vec![8.0, 7.0, 5.0, 4.0, 0.0, 0.0, 0.0, 0.0]
+            .iter()
+            .map(|x| f16::from_f32(*x))
+            .collect::<Vec<_>>()
+    );
+
+    // f16, two dimension
+    let input: Vec<_> = [5.0f32, 1.0, 7.0, 2.0, 3.0, 2.0, 1.0, 3.0]
+        .iter()
+        .map(|x| f16::from_f32(*x))
+        .collect();
+    let shape = [4, 2];
+    let ids = [0, 0, 1, 0, 2, 2, 3, 3];
+    let dim = 0;
+    let result = run_scatter_add(&input, &ids, &shape, dim, "sa_u32_f16");
+    assert_eq!(
+        result,
+        vec![5.0, 3.0, 7.0, 0.0, 3.0, 2.0, 1.0, 3.0]
+            .iter()
+            .map(|x| f16::from_f32(*x))
+            .collect::<Vec<_>>()
+    );
+}

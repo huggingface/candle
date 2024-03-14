@@ -1129,6 +1129,7 @@ impl BackendStorage for MetalStorage {
         };
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "sa_u32_f32",
+            (DType::U32, DType::F16) => "sa_u32_f16",
             _ => Err(MetalError::UnexpectedDType {
                 msg: "scatter-add ids should be u8/u32/i64",
                 expected: DType::U32,
