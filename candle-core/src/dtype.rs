@@ -23,7 +23,15 @@ pub enum DType {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct DTypeParseError;
+pub struct DTypeParseError(String);
+
+impl std::fmt::Display for DTypeParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cannot parse '{}' as a dtype", self.0)
+    }
+}
+
+impl std::error::Error for DTypeParseError {}
 
 impl std::str::FromStr for DType {
     type Err = DTypeParseError;
@@ -36,7 +44,7 @@ impl std::str::FromStr for DType {
             "f16" => Ok(Self::F16),
             "f32" => Ok(Self::F32),
             "f64" => Ok(Self::F64),
-            _ => Err(DTypeParseError),
+            _ => Err(DTypeParseError(s.to_string())),
         }
     }
 }
