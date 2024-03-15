@@ -68,13 +68,6 @@ impl RotaryEmbedding {
         let q_stride = q.stride()[q.stride().len() - 2];
         let k_stride = k.stride()[k.stride().len() - 2];
 
-        dbg!(q.shape());
-        dbg!(num_heads);
-        dbg!(k.shape());
-        dbg!(num_kv_heads);
-        dbg!(self.head_size);
-        dbg!(rot_dim);
-
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel_neox"),
             kernels::FUSED_ROPE,
@@ -85,8 +78,6 @@ impl RotaryEmbedding {
             block_dim: (512.min((num_heads * rot_dim / 2) as u32), 1, 1),
             shared_mem_bytes: 0,
         };
-
-        dbg!(self.cache.shape());
 
         let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
         let positions = Tensor::new(positions.as_slice(), q.device())?;
@@ -198,6 +189,8 @@ impl RotaryEmbedding {
         };
         *q = q.contiguous()?;
         *k = k.contiguous()?;
+        dbg!(q.is_contiguous());
+        dbg!(k.is_contiguous());
         Ok(())
     }
 
