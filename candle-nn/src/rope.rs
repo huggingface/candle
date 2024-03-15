@@ -290,6 +290,7 @@ impl RotaryEmbedding {
                 let new_k = new_k.permute((1, 0, 2, 3))?;
                 *q = new_q;
                 *k = new_k;
+                panic!()
             }
 
             _ => {
