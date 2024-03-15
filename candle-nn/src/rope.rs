@@ -43,8 +43,8 @@ impl RotaryEmbedding {
         dbg!(head_dim);
         Ok(Self {
             head_size: head_dim,
-            cos,
-            sin,
+            cos: cos.clone(),
+            sin: sin.clone(),
             cos_unsqz: cos.unsqueeze(1)?.unsqueeze(1)?,
             sin_unsqz: sin.unsqueeze(1)?.unsqueeze(1)?,
         })
