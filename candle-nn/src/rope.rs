@@ -129,7 +129,7 @@ impl RotaryEmbedding {
             &*self.cache.storage_and_layout().0,
         ) {
             (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
-                return match (cache_storage.dtype(), q.dtype(), k.dtype()) {
+                match (cache_storage.dtype(), q.dtype(), k.dtype()) {
                     (DType::BF16, DType::BF16, DType::F32) => self.execute_dtype::<half::bf16>(
                         &dev,
                         positions,
