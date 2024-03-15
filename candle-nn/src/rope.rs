@@ -66,7 +66,7 @@ impl RotaryEmbedding {
 
         let d2 = self.cos_unsqz.dims()[3];
 
-        let output = unsafe { dev.alloc_zeros::<T>(s * b * h * d) }.w()?; // this will be the same as input
+        let output = unsafe { dev.alloc::<T>(s * b * h * d) }.w()?; // this will be the same as input
 
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel"),
@@ -99,6 +99,8 @@ impl RotaryEmbedding {
             &output,
             &pos_storage,
         );
+
+        return input.zeros_like();
 
         // shape: (seqlen, bs, heads, head_dim)
         Ok(from_storage_no_op(
