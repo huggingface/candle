@@ -13,9 +13,10 @@ use candle::cuda_backend::{
 
 #[derive(Debug, Clone)]
 pub struct RotaryEmbedding {
-    cache: Tensor,
     cos: Tensor,
     sin: Tensor,
+    cos_unsqz: Tensor,
+    sin_unsqz: Tensor,
     head_size: usize,
 }
 
@@ -42,9 +43,10 @@ impl RotaryEmbedding {
         dbg!(head_dim);
         Ok(Self {
             head_size: head_dim,
-            cache: Tensor::cat(&[cos.clone(), sin.clone()], D::Minus1)?.contiguous()?,
             cos,
             sin,
+            cos_unsqz: cos.unsqueeze(1)?.unsqueeze(1)?,
+            sin_unsqz: sin.unsqueeze(1)?.unsqueeze(1)?,
         })
     }
 
@@ -57,9 +59,74 @@ impl RotaryEmbedding {
         k_storage: &CudaStorage,
         q: &Tensor,
         k: &Tensor,
-        cache_storage: &CudaStorage,
+        cos_storage: &CudaStorage,
+        sin_storage: &CudaStorage,
     ) -> Result<()> {
-        use candle::cuda_backend::WrapErr;
+        use candle::{cuda_backend::WrapErr, from_storage_no_op};
+
+        let (s, b, h, d) = q.dims4()?;
+        let stride_s_q = q.stride()[0];
+        let stride_b_q = q.stride()[1];
+        let stride_h_q = q.stride()[2];
+        let stride_d_q = q.stride()[3];
+
+        let d2 = self.cos_unsqz.dims()[3];
+        
+        let output = unsafe { dev.alloc::<T>(s*b*h*d) }.w()?; // this will be the same as input
+
+        let func = dev.get_or_load_func(
+            &kernel_name::<T>("rotary_embedding_kernel"),
+            kernels::FUSED_ROPE,
+        )?;
+
+        const WARP_SIZE: u32 = 32;
+
+        let cfg = LaunchConfig {
+            grid_dim: (s as u32, b as u32, 1),
+            block_dim: (WARP_SIZE, if h < 16 {
+                4
+            } else {
+                8
+            }, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
+        let positions = Tensor::new(positions.as_slice(), q.device())?;
+        let bdg = positions.storage_and_layout();
+        let pos_storage = match  &*bdg.0{
+            Storage::Cuda(storage) => {
+                storage
+            }
+            _ => {
+                unreachable!();
+            }
+        };
+
+        let params = (
+            h,d, d2,
+            stride_s_q,stride_b_q,stride_h_q,stride_d_q,
+            stride_s_q,stride_b_q,stride_h_q,stride_d_q,
+            q_storage.as_cuda_slice::<T>()?,
+            cos_storage.as_cuda_slice::<f32>()?,
+            sin_storage.as_cuda_slice::<f32>()?,
+            &output,
+        );
+        
+        // shape: (seqlen, bs, heads, head_dim)
+        let out = from_storage_no_op(
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+            x.shape(),
+            false,
+        );
+
+        dbg!(&out);
+        dbg!(out.shape());
+        dbg!(&out + 1.);
+
+
+        todo!()
+        /*use candle::cuda_backend::WrapErr;
 
         let num_tokens = q.elem_count() / q.dim(D::Minus1)?;
         let rot_dim = self.cache.dim(1)?;
@@ -109,7 +176,7 @@ impl RotaryEmbedding {
         );
         unsafe { func.launch(cfg, params) }.w()?;
 
-        Ok(())
+        Ok(())*/
     }
 
     #[cfg(feature = "cuda")]
@@ -124,9 +191,10 @@ impl RotaryEmbedding {
         match (
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
-            &*self.cache.storage_and_layout().0,
+            &*self.cos_unsqz.storage_and_layout().0,
+            &*self.sin_unsqz.storage_and_layout().0,
         ) {
-            (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
+            (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cos_storage), Storage::Cuda(sin_storage)) => {
                 return match (cache_storage.dtype(), q.dtype(), k.dtype()) {
                     (DType::BF16, DType::BF16, DType::F32) => self.execute_dtype::<half::bf16>(
                         &dev,
@@ -135,7 +203,8 @@ impl RotaryEmbedding {
                         k_storage,
                         q,
                         k,
-                        cache_storage,
+                        cos_storage,
+                        sin_storage,
                     ),
                     (DType::F16, DType::F16, DType::F32) => self.execute_dtype::<half::f16>(
                         &dev,
@@ -144,7 +213,8 @@ impl RotaryEmbedding {
                         k_storage,
                         q,
                         k,
-                        cache_storage,
+                        cos_storage,
+                        sin_storage,
                     ),
                     (DType::F32, DType::F32, DType::F32) => self.execute_dtype::<f32>(
                         &dev,
@@ -153,7 +223,8 @@ impl RotaryEmbedding {
                         k_storage,
                         q,
                         k,
-                        cache_storage,
+                        cos_storage,
+                        sin_storage,
                     ),
                     (DType::F64, DType::F64, DType::F32) => self.execute_dtype::<f64>(
                         &dev,
@@ -162,7 +233,8 @@ impl RotaryEmbedding {
                         k_storage,
                         q,
                         k,
-                        cache_storage,
+                        cos_storage,
+                        sin_storage,
                     ),
                     _ => candle::bail!("DType mismatch in fused RotaryEmbedding"),
                 }
@@ -184,6 +256,10 @@ impl RotaryEmbedding {
         match (q.device(), k.device()) {
             #[cfg(feature = "cuda")]
             (Device::Cuda(dev), Device::Cuda(_)) => {
+                // input is (bs, seqlen, num_head, head_dim)
+                // want (seqlen, bs, num_head, head_dim)
+                let q = q.permute((1, 0, 2, 3))?;
+                let k = k.permute((1, 0, 2, 3))?;
                 self.fused_rope(dev, positions, &*q, &*k, is_neox);
             }
 
