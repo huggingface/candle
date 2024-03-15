@@ -241,13 +241,13 @@ __device__ void fused_rope_cached_forward(
     const scalar_t_1* sin, scalar_t_0* dst, int64_t* positions) {
   int b_id = blockIdx.y;
   int s_id = blockIdx.x;
-  int s_id_cache = blockIdx.x + positions[b_id];
+  int s_id_cache = blockIdx.x;
   int offset_block = s_id * stride_s + b_id * stride_b;
   int offset_block_dst = s_id * o_stride_s + b_id * o_stride_b;
 #pragma unroll
-  for (int d_id = threadIdx.x; d_id < d2; d_id += blockDim.x) {
-    scalar_t_0 v_cos = cos[s_id_cache * d2 + d_id];
-    scalar_t_0 v_sin = sin[s_id_cache * d2 + d_id];
+  for (int d_id = threadIdx.x; d_id < (d2 - positions[b_id]); d_id += blockDim.x) {
+    scalar_t_0 v_cos = cos[s_id_cache * d2 + d_id+ positions[b_id]];
+    scalar_t_0 v_sin = sin[s_id_cache * d2 + d_id+ positions[b_id]];
 #pragma unroll
     for (int h_id = threadIdx.y; h_id < h; h_id += blockDim.y) {
       int offset_src = offset_block + h_id * stride_h + d_id * stride_d;
