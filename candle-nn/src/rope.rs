@@ -121,11 +121,11 @@ impl RotaryEmbedding {
         k: &Tensor,
         is_neox: bool,
     ) -> Result<()> {
-        let cache = self.cache.reshape((self.cache.dims()[0], 2, self.cache.dims()[1]/2))?;
+        let cache = self.cache.reshape((self.cache.dims()[0], 2, self.cache.dims()[1]/2))?.storage_and_layout();
         match (
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
-            &*cache.storage_and_layout().0,
+            &*cache.0,
         ) {
             (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
                 return match (cache_storage.dtype(), q.dtype(), k.dtype()) {
