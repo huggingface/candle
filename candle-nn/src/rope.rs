@@ -121,7 +121,8 @@ impl RotaryEmbedding {
         k: &Tensor,
         is_neox: bool,
     ) -> Result<()> {
-        let cache = self.cache.reshape((self.cache.dims()[0], 2, self.cache.dims()[1]/2))?.storage_and_layout();
+        let cache = self.cache.reshape((self.cache.dims()[0], 2, self.cache.dims()[1]/2))?;
+        let cache = cache.storage_and_layout();
         match (
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
