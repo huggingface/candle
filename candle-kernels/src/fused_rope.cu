@@ -314,7 +314,7 @@ extern "C" __global__ void rotary_embedding_kernel_f16(
 
 #if __CUDA_ARCH__ >= 800
 #include <cuda_bf16.h>
-extern "C" __global__ void rotary_embedding_kernel_f16(
+extern "C" __global__ void rotary_embedding_kernel_bf16(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
     const int o_stride_s, const int o_stride_b, const int o_stride_h,
