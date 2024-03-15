@@ -189,8 +189,6 @@ impl RotaryEmbedding {
         };
         *q = q.contiguous()?;
         *k = k.contiguous()?;
-        dbg!(q.is_contiguous());
-        dbg!(k.is_contiguous());
         Ok(())
     }
 
