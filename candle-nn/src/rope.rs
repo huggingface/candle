@@ -272,6 +272,7 @@ impl RotaryEmbedding {
         k: &mut Tensor,
         is_neox: bool,
     ) -> Result<()> {
+        dbg!(q.mean_all()?);
         *q = q.contiguous()?;
         *k = k.contiguous()?;
         match (q.device(), k.device()) {
@@ -282,7 +283,6 @@ impl RotaryEmbedding {
                 let in_q = q.permute((1, 0, 2, 3))?;
                 let in_k = k.permute((1, 0, 2, 3))?;
                 dbg!(in_q.mean_all()?);
-                dbg!(q.mean_all()?);
                 let (new_q, new_k) = self.fused_rope(dev, positions, &in_q, &in_k, is_neox)?;
                 // output is (seqlen, bs, num_head, head_dim)
                 // want (bs, seqlen, num_head, head_dim)
