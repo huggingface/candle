@@ -106,6 +106,7 @@ impl RotaryEmbedding {
             false,
         );
         
+        dbg!(input.mean_all()?);
         dbg!(out.mean_all()?);
 
         // shape: (seqlen, bs, heads, head_dim)
