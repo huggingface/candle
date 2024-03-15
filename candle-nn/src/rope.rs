@@ -102,7 +102,7 @@ impl RotaryEmbedding {
             num_kv_heads,
             self.head_size,
         );
-        unsafe { func.launch(cfg, params) }.w()?;
+        //unsafe { func.launch(cfg, params) }.w()?;
 
         Ok(())
     }
