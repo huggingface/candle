@@ -67,6 +67,11 @@ impl RotaryEmbedding {
         let num_kv_heads = k.dim(D::Minus1)? / self.head_size;
         let q_stride = q.stride()[q.stride().len() - 2];
         let k_stride = k.stride()[k.stride().len() - 2];
+        
+        dbg!(num_heads);
+        dbg!(num_kv_heads);
+        dbg!(q_stride);
+        dbg!(k_stride);
 
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel_neox"),
@@ -102,7 +107,7 @@ impl RotaryEmbedding {
             num_kv_heads,
             self.head_size,
         );
-        //unsafe { func.launch(cfg, params) }.w()?;
+        unsafe { func.launch(cfg, params) }.w()?;
 
         Ok(())
     }
