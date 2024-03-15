@@ -120,23 +120,21 @@ impl RotaryEmbedding {
         q: &Tensor,
         k: &Tensor,
         is_neox: bool,
-    ) -> Result<(Tensor, Tensor)> {
-        let q = q.copy()?;
-        let k = k.copy()?;
+    ) -> Result<()> {
         match (
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
             &*self.cache.storage_and_layout().0,
         ) {
             (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
-                match (cache_storage.dtype(), q.dtype(), k.dtype()) {
+                return match (cache_storage.dtype(), q.dtype(), k.dtype()) {
                     (DType::BF16, DType::BF16, DType::F32) => self.execute_dtype::<half::bf16>(
                         &dev,
                         positions,
                         q_storage,
                         k_storage,
-                        &q,
-                        &k,
+                        q,
+                        k,
                         cache_storage,
                     ),
                     (DType::F16, DType::F16, DType::F32) => self.execute_dtype::<half::f16>(
@@ -144,8 +142,8 @@ impl RotaryEmbedding {
                         positions,
                         q_storage,
                         k_storage,
-                        &q,
-                        &k,
+                        q,
+                        k,
                         cache_storage,
                     ),
                     (DType::F32, DType::F32, DType::F32) => self.execute_dtype::<f32>(
@@ -153,8 +151,8 @@ impl RotaryEmbedding {
                         positions,
                         q_storage,
                         k_storage,
-                        &q,
-                        &k,
+                        q,
+                        k,
                         cache_storage,
                     ),
                     (DType::F64, DType::F64, DType::F32) => self.execute_dtype::<f64>(
@@ -162,16 +160,15 @@ impl RotaryEmbedding {
                         positions,
                         q_storage,
                         k_storage,
-                        &q,
-                        &k,
+                        q,
+                        k,
                         cache_storage,
                     ),
                     _ => candle::bail!("DType mismatch in fused RotaryEmbedding"),
                 }
             }
             _ => unreachable!(),
-        };
-        Ok((q,k))
+        }
     }
 
     /// This may modify the tensors in place!
@@ -187,9 +184,7 @@ impl RotaryEmbedding {
         match (q.device(), k.device()) {
             #[cfg(feature = "cuda")]
             (Device::Cuda(dev), Device::Cuda(_)) => {
-                let (newq, newk) = self.fused_rope(dev, positions, &*q, &*k, is_neox)?;
-                *q = newq;
-                *k = newk;
+                self.fused_rope(dev, positions, &*q, &*k, is_neox);
             }
 
             _ => {
