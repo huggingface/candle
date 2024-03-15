@@ -57,7 +57,7 @@ impl RotaryEmbedding {
         inp_storage: &CudaStorage,
         cos_storage: &CudaStorage,
         sin_storage: &CudaStorage,
-        pos_storage: &Tensor,
+        pos_storage: &CudaStorage,
     ) -> Result<Tensor> {
         use candle::{cuda_backend::WrapErr, from_storage_no_op};
 
@@ -96,7 +96,7 @@ impl RotaryEmbedding {
             stride_b,
             stride_h,
             stride_d,
-            q_storage.as_cuda_slice::<T>()?,
+            inp_storage.as_cuda_slice::<T>()?,
             cos_storage.as_cuda_slice::<f32>()?,
             sin_storage.as_cuda_slice::<f32>()?,
             &output,
@@ -106,7 +106,7 @@ impl RotaryEmbedding {
         // shape: (seqlen, bs, heads, head_dim)
         Ok(from_storage_no_op(
             Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-            q.shape(),
+            input.shape(),
             false,
         ))
     }
@@ -277,9 +277,9 @@ impl RotaryEmbedding {
             (Device::Cuda(dev), Device::Cuda(_)) => {
                 // input is (bs, seqlen, num_head, head_dim)
                 // want (seqlen, bs, num_head, head_dim)
-                let q = q.permute((1, 0, 2, 3))?;
-                let k = k.permute((1, 0, 2, 3))?;
-                let (new_q, new_k) = self.fused_rope(dev, positions, &q, &k, is_neox)?;
+                let in_q = q.permute((1, 0, 2, 3))?;
+                let in_k = k.permute((1, 0, 2, 3))?;
+                let (new_q, new_k) = self.fused_rope(dev, positions, &in_q, &ink, is_neox)?;
                 // output is (seqlen, bs, num_head, head_dim)
                 // want (bs, seqlen, num_head, head_dim)
                 let new_q = new_q.permute((1, 0, 2, 3))?;
