@@ -90,7 +90,8 @@ impl RotaryEmbedding {
 
         let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
         let positions = Tensor::new(positions.as_slice(), q.device())?;
-        let pos_storage = match  &*positions.storage_and_layout().0{
+        let bdg = positions.storage_and_layout();
+        let pos_storage = match  &*bdg.0{
             Storage::Cuda(storage) => {
                 storage
             }
