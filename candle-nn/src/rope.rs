@@ -84,7 +84,7 @@ impl RotaryEmbedding {
             shared_mem_bytes: 0,
         };
 
-        let positions = vec![0i64,100];//positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
+        let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
         let positions = Tensor::new(positions.as_slice(), q.device())?;
         let bdg = positions.storage_and_layout();
         let pos_storage = match  &*bdg.0{
@@ -121,10 +121,11 @@ impl RotaryEmbedding {
         k: &Tensor,
         is_neox: bool,
     ) -> Result<()> {
+        let cache = self.cache.reshape((self.cache.dims()[0], 2, self.cache.dims()[1]/2))?;
         match (
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
-            &*self.cache.storage_and_layout().0,
+            &*cache.storage_and_layout().0,
         ) {
             (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
                 return match (cache_storage.dtype(), q.dtype(), k.dtype()) {
