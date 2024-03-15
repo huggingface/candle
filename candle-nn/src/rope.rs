@@ -50,6 +50,67 @@ impl RotaryEmbedding {
         })
     }
 
+    fn run_kernel<T: CudaDType + WithDType + DeviceRepr>(
+        &self,
+        dev: &CudaDevice,
+        input: &Tensor,
+        inp_storage: &CudaStorage,
+        cos_storage: &CudaStorage,
+        sin_storage: &CudaStorage,
+        pos_storage: &Tensor,
+    ) -> Result<Tensor> {
+        use candle::{cuda_backend::WrapErr, from_storage_no_op};
+
+        let (s, b, h, d) = input.dims4()?;
+        let stride_s = input.stride()[0];
+        let stride_b = input.stride()[1];
+        let stride_h = input.stride()[2];
+        let stride_d = input.stride()[3];
+
+        let d2 = self.cos_unsqz.dims()[3];
+
+        let output = unsafe { dev.alloc::<T>(s * b * h * d) }.w()?; // this will be the same as input
+
+        let func = dev.get_or_load_func(
+            &kernel_name::<T>("rotary_embedding_kernel"),
+            kernels::FUSED_ROPE,
+        )?;
+
+        const WARP_SIZE: u32 = 32;
+
+        let cfg = LaunchConfig {
+            grid_dim: (s as u32, b as u32, 1),
+            block_dim: (WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),
+            shared_mem_bytes: 0,
+        };
+
+        let params = (
+            h,
+            d,
+            d2,
+            stride_s,
+            stride_b,
+            stride_h,
+            stride_d,
+            stride_s,
+            stride_b,
+            stride_h,
+            stride_d,
+            q_storage.as_cuda_slice::<T>()?,
+            cos_storage.as_cuda_slice::<f32>()?,
+            sin_storage.as_cuda_slice::<f32>()?,
+            &output,
+            &pos_storage,
+        );
+
+        // shape: (seqlen, bs, heads, head_dim)
+        Ok(from_storage_no_op(
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+            q.shape(),
+            false,
+        ))
+    }
+
     #[cfg(feature = "cuda")]
     fn execute_dtype<T: CudaDType + WithDType + DeviceRepr>(
         &self,
@@ -61,72 +122,24 @@ impl RotaryEmbedding {
         k: &Tensor,
         cos_storage: &CudaStorage,
         sin_storage: &CudaStorage,
-    ) -> Result<()> {
+    ) -> Result<(Tensor, Tensor)> {
         use candle::{cuda_backend::WrapErr, from_storage_no_op};
-
-        let (s, b, h, d) = q.dims4()?;
-        let stride_s_q = q.stride()[0];
-        let stride_b_q = q.stride()[1];
-        let stride_h_q = q.stride()[2];
-        let stride_d_q = q.stride()[3];
-
-        let d2 = self.cos_unsqz.dims()[3];
-        
-        let output = unsafe { dev.alloc::<T>(s*b*h*d) }.w()?; // this will be the same as input
-
-        let func = dev.get_or_load_func(
-            &kernel_name::<T>("rotary_embedding_kernel"),
-            kernels::FUSED_ROPE,
-        )?;
-
-        const WARP_SIZE: u32 = 32;
-
-        let cfg = LaunchConfig {
-            grid_dim: (s as u32, b as u32, 1),
-            block_dim: (WARP_SIZE, if h < 16 {
-                4
-            } else {
-                8
-            }, 1),
-            shared_mem_bytes: 0,
-        };
 
         let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
         let positions = Tensor::new(positions.as_slice(), q.device())?;
         let bdg = positions.storage_and_layout();
-        let pos_storage = match  &*bdg.0{
-            Storage::Cuda(storage) => {
-                storage
-            }
+        let pos_storage = match &*bdg.0 {
+            Storage::Cuda(storage) => storage,
             _ => {
                 unreachable!();
             }
         };
 
-        let params = (
-            h,d, d2,
-            stride_s_q,stride_b_q,stride_h_q,stride_d_q,
-            stride_s_q,stride_b_q,stride_h_q,stride_d_q,
-            q_storage.as_cuda_slice::<T>()?,
-            cos_storage.as_cuda_slice::<f32>()?,
-            sin_storage.as_cuda_slice::<f32>()?,
-            &output,
-            &pos_storage,
-        );
-        
-        // shape: (seqlen, bs, heads, head_dim)
-        let out = from_storage_no_op(
-            Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-            q.shape(),
-            false,
-        );
+        Ok((
+            self.run_kernel(dev, q, q_storage, cos_storage, sin_storage, pos_storage)?,
+            self.run_kernel(dev, k, k_storage, cos_storage, sin_storage, pos_storage)?,
+        ))
 
-        dbg!(&out);
-        dbg!(out.shape());
-        dbg!(&out + 1.);
-
-
-        todo!()
         /*use candle::cuda_backend::WrapErr;
 
         let num_tokens = q.elem_count() / q.dim(D::Minus1)?;
@@ -135,7 +148,7 @@ impl RotaryEmbedding {
         let num_kv_heads = k.dim(D::Minus1)? / self.head_size;
         let q_stride = q.stride()[q.stride().len() - 2];
         let k_stride = k.stride()[k.stride().len() - 2];
-        
+
         dbg!(num_heads);
         dbg!(num_kv_heads);
         dbg!(q_stride);
@@ -188,14 +201,19 @@ impl RotaryEmbedding {
         q: &Tensor,
         k: &Tensor,
         is_neox: bool,
-    ) -> Result<()> {
+    ) -> Result<(Tensor, Tensor)> {
         match (
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
             &*self.cos_unsqz.storage_and_layout().0,
             &*self.sin_unsqz.storage_and_layout().0,
         ) {
-            (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cos_storage), Storage::Cuda(sin_storage)) => {
+            (
+                Storage::Cuda(q_storage),
+                Storage::Cuda(k_storage),
+                Storage::Cuda(cos_storage),
+                Storage::Cuda(sin_storage),
+            ) => {
                 return match (q.dtype(), k.dtype()) {
                     (DType::BF16, DType::BF16) => self.execute_dtype::<half::bf16>(
                         &dev,
@@ -261,7 +279,13 @@ impl RotaryEmbedding {
                 // want (seqlen, bs, num_head, head_dim)
                 let q = q.permute((1, 0, 2, 3))?;
                 let k = k.permute((1, 0, 2, 3))?;
-                self.fused_rope(dev, positions, &q, &k, is_neox);
+                let (new_q, new_k) = self.fused_rope(dev, positions, &q, &k, is_neox)?;
+                // output is (seqlen, bs, num_head, head_dim)
+                // want (bs, seqlen, num_head, head_dim)
+                let new_q = new_q.permute((1, 0, 2, 3))?;
+                let new_k = new_k.permute((1, 0, 2, 3))?;
+                *q = new_q;
+                *k = new_q;
             }
 
             _ => {
