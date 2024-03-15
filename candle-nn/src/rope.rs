@@ -100,14 +100,16 @@ impl RotaryEmbedding {
             &pos_storage,
         );
 
-        return input.zeros_like();
-
-        // shape: (seqlen, bs, heads, head_dim)
-        Ok(from_storage_no_op(
+        let out = from_storage_no_op(
             Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
             input.shape(),
             false,
-        ))
+        );
+        
+        dbg!(out.mean_all()?);
+
+        // shape: (seqlen, bs, heads, head_dim)
+        Ok(out)
     }
 
     #[cfg(feature = "cuda")]
