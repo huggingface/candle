@@ -111,6 +111,7 @@ impl RotaryEmbedding {
             cos_storage.as_cuda_slice::<f32>()?,
             sin_storage.as_cuda_slice::<f32>()?,
             &output,
+            &pos_storage,
         );
         
         // shape: (seqlen, bs, heads, head_dim)

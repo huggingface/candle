@@ -238,8 +238,9 @@ __device__ void fused_rope_cached_forward(
     const int stride_b, const int stride_h, const int stride_d,
     const int o_stride_s, const int o_stride_b, const int o_stride_h,
     const int o_stride_d, const scalar_t_0* src, const scalar_t_1* cos,
-    const scalar_t_1* sin, scalar_t_0* dst) {
-  int s_id = blockIdx.x, b_id = blockIdx.y;
+    const scalar_t_1* sin, scalar_t_0* dst, int64_t* positions) {
+  int b_id = blockIdx.y;
+  int s_id = blockIdx.x + positions[b_id];
   int offset_block = s_id * stride_s + b_id * stride_b;
   int offset_block_dst = s_id * o_stride_s + b_id * o_stride_b;
 #pragma unroll
@@ -278,12 +279,13 @@ extern "C" __global__ void rotary_embedding_kernel_f32(
     const int stride_b, const int stride_h, const int stride_d,
     const int o_stride_s, const int o_stride_b, const int o_stride_h,
     const int o_stride_d, const float* src, const float* cos,
-    const float* sin, float* dst) {
+    const float* sin, float* dst, int64_t* positions) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
       o_stride_s, o_stride_b, o_stride_h, o_stride_d, 
-      src, cos, sin, dst);
+      src, cos, sin, dst,
+      positions);
 }
 
 extern "C" __global__ void rotary_embedding_kernel_f64(
@@ -291,12 +293,13 @@ extern "C" __global__ void rotary_embedding_kernel_f64(
     const int stride_b, const int stride_h, const int stride_d,
     const int o_stride_s, const int o_stride_b, const int o_stride_h,
     const int o_stride_d, const double* src, const float* cos,
-    const float* sin, double* dst) {
+    const float* sin, double* dst, int64_t* positions) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
       o_stride_s, o_stride_b, o_stride_h, o_stride_d, 
-      src, cos, sin, dst);
+      src, cos, sin, dst,
+      positions);
 }
 
 extern "C" __global__ void rotary_embedding_kernel_f16(
@@ -304,12 +307,13 @@ extern "C" __global__ void rotary_embedding_kernel_f16(
     const int stride_b, const int stride_h, const int stride_d,
     const int o_stride_s, const int o_stride_b, const int o_stride_h,
     const int o_stride_d, const __half* src, const float* cos,
-    const float* sin, __half* dst) {
+    const float* sin, __half* dst, int64_t* positions) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
       o_stride_s, o_stride_b, o_stride_h, o_stride_d, 
-      src, cos, sin, dst);
+      src, cos, sin, dst,
+      positions);
 }
 
 #if __CUDA_ARCH__ >= 800
@@ -319,11 +323,12 @@ extern "C" __global__ void rotary_embedding_kernel_bf16(
     const int stride_b, const int stride_h, const int stride_d,
     const int o_stride_s, const int o_stride_b, const int o_stride_h,
     const int o_stride_d, const __nv_bfloat16* src, const float* cos,
-    const float* sin, __nv_bfloat16* dst) {
+    const float* sin, __nv_bfloat16* dst, int64_t* positions) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
       o_stride_s, o_stride_b, o_stride_h, o_stride_d, 
-      src, cos, sin, dst);
+      src, cos, sin, dst,
+      positions);
 }
 #endif
