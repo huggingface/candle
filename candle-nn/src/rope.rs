@@ -89,8 +89,19 @@ impl RotaryEmbedding {
         dbg!(self.cache.shape());
 
         let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
+        let positions = Tensor::new(positions.as_slice(), device)?;
+        let pos_storage = match (
+            &*positions.storage_and_layout().0,
+        ) {
+            (Storage::Cuda(storage)) => {
+                storage
+            }
+            _ => {
+                unreachable!(;)
+            }
+        };
         let params = (
-            positions.as_ptr() as u64,
+            pos_storage.as_cuda_slice::<i64>()?,
             q_storage.as_cuda_slice::<T>()?,
             k_storage.as_cuda_slice::<T>()?,
             cache_storage.as_cuda_slice::<f32>()?,
