@@ -84,7 +84,7 @@ impl RotaryEmbedding {
             shared_mem_bytes: 0,
         };
 
-        let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
+        let positions = vec![0i64,100];//positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
         let positions = Tensor::new(positions.as_slice(), q.device())?;
         let bdg = positions.storage_and_layout();
         let pos_storage = match  &*bdg.0{
