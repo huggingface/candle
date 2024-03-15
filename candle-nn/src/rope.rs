@@ -136,8 +136,8 @@ impl RotaryEmbedding {
         };
 
         Ok((
-            self.run_kernel(dev, q, q_storage, cos_storage, sin_storage, pos_storage)?,
-            self.run_kernel(dev, k, k_storage, cos_storage, sin_storage, pos_storage)?,
+            self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, pos_storage)?,
+            self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, pos_storage)?,
         ))
 
         /*use candle::cuda_backend::WrapErr;
@@ -279,13 +279,13 @@ impl RotaryEmbedding {
                 // want (seqlen, bs, num_head, head_dim)
                 let in_q = q.permute((1, 0, 2, 3))?;
                 let in_k = k.permute((1, 0, 2, 3))?;
-                let (new_q, new_k) = self.fused_rope(dev, positions, &in_q, &ink, is_neox)?;
+                let (new_q, new_k) = self.fused_rope(dev, positions, &in_q, &in_k, is_neox)?;
                 // output is (seqlen, bs, num_head, head_dim)
                 // want (bs, seqlen, num_head, head_dim)
                 let new_q = new_q.permute((1, 0, 2, 3))?;
                 let new_k = new_k.permute((1, 0, 2, 3))?;
                 *q = new_q;
-                *k = new_q;
+                *k = new_k;
             }
 
             _ => {
