@@ -239,7 +239,7 @@ __device__ void fused_rope_cached_forward(
     const int o_stride_s, const int o_stride_b, const int o_stride_h,
     const int o_stride_d, const scalar_t_0* src, const scalar_t_1* cos,
     const scalar_t_1* sin, scalar_t_0* dst, int64_t* positions) {
-  int b_id = blockIdx.y;
+  /*int b_id = blockIdx.y;
   int s_id = blockIdx.x;
   int offset_block = s_id * stride_s + b_id * stride_b;
   int offset_block_dst = s_id * o_stride_s + b_id * o_stride_b;
@@ -271,7 +271,7 @@ __device__ void fused_rope_cached_forward(
             src[offset_head + d_id * stride_d];
       }
     }
-  }
+  }*/
 }
 
 extern "C" __global__ void rotary_embedding_kernel_f32(
