@@ -121,8 +121,8 @@ inline __device__ void apply_token_rotary_embedding(
     // GPT-NeoX style rotary embedding.
     x_index = rot_offset;
     y_index = embed_dim + rot_offset;
-    cos = LDG(cos_ptr + x_index);
-    sin = LDG(sin_ptr + x_index);
+    cos = 0;//LDG(cos_ptr + x_index);
+    sin = 0;//LDG(sin_ptr + x_index);
   } else {
     // GPT-J style rotary embedding.
     x_index = 2 * rot_offset;
