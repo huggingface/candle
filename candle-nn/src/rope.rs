@@ -127,7 +127,8 @@ impl RotaryEmbedding {
         let out = Tensor::cat(&things, 0)?;
         dbg!(out.stride());
 
-        let st = match &*out.storage_and_layout().0 {
+        let bdg = out.storage_and_layout();
+        let st = match &*bdg.0 {
             Storage::Cuda(st) => {
                 st
             }
