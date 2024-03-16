@@ -255,38 +255,34 @@ impl Device {
         self.rand_normal_f64(mean.to_f64(), std.to_f64(), shape, T::DTYPE)
     }
 
-    pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+    pub(crate) fn alloc(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        init_value: Option<u8>,
+    ) -> Result<Storage> {
         match self {
             Device::Cpu => {
-                let storage = CpuDevice.ones_impl(shape, dtype)?;
+                let storage = CpuDevice.alloc_impl(shape, dtype, init_value)?;
                 Ok(Storage::Cpu(storage))
             }
             Device::Cuda(device) => {
-                let storage = device.ones_impl(shape, dtype)?;
+                let storage = device.alloc_impl(shape, dtype, init_value)?;
                 Ok(Storage::Cuda(storage))
             }
             Device::Metal(device) => {
-                let storage = device.ones_impl(shape, dtype)?;
+                let storage = device.alloc_impl(shape, dtype, init_value)?;
                 Ok(Storage::Metal(storage))
             }
         }
     }
 
+    pub(crate) fn ones(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
+        self.alloc(shape, dtype, Some(1))
+    }
+
     pub(crate) fn zeros(&self, shape: &Shape, dtype: DType) -> Result<Storage> {
-        match self {
-            Device::Cpu => {
-                let storage = CpuDevice.zeros_impl(shape, dtype)?;
-                Ok(Storage::Cpu(storage))
-            }
-            Device::Cuda(device) => {
-                let storage = device.zeros_impl(shape, dtype)?;
-                Ok(Storage::Cuda(storage))
-            }
-            Device::Metal(device) => {
-                let storage = device.zeros_impl(shape, dtype)?;
-                Ok(Storage::Metal(storage))
-            }
-        }
+        self.alloc(shape, dtype, Some(0))
     }
 
     pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {

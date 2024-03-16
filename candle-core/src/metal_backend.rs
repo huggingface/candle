@@ -1629,6 +1629,18 @@ impl BackendDevice for MetalDevice {
         self.storage_from_cpu_storage(&cpu_storage)
     }
 
+    //TODO: fill buffer with init_value
+    fn alloc_impl(&self, shape: &Shape, dtype: DType, init_value: Option<u8>,) -> Result<MetalStorage> {
+        let size = shape.elem_count() * dtype.size_in_bytes();
+        let buffer = self.allocate_zeros(size)?;
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
         let (count, buffer) = match storage {
             CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),

@@ -181,6 +181,9 @@ struct Args {
     weight_files: Option<String>,
 
     #[arg(long)]
+    config_file: Option<String>,
+
+    #[arg(long)]
     quantized: bool,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
@@ -279,7 +282,11 @@ fn main() -> Result<()> {
     let config = match args.which {
         Which::V1Orig => Config::stablelm_3b_4e1t(args.use_flash_attn),
         Which::V1 | Which::V1Zephyr | Which::V2 | Which::V2Zephyr | Which::Code => {
-            let config_filename = repo.get("config.json")?;
+            let config_filename = match args.config_file {
+                Some(file) => std::path::PathBuf::from(file),
+                None => repo.get("config.json")?,
+            };
+            // let config_filename = repo.get("config.json")?;
             let config = std::fs::read_to_string(config_filename)?;
             let mut config: Config = serde_json::from_str(&config)?;
             config.set_use_flash_attn(args.use_flash_attn);
