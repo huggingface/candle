@@ -206,6 +206,7 @@ impl RotaryEmbedding {
     pub fn forward(
         &self,
         positions: &[usize],
+        positions_full: &[usize],
         q: &mut Tensor,
         k: &mut Tensor,
         is_neox: bool,
@@ -217,7 +218,7 @@ impl RotaryEmbedding {
                 // want (seqlen, bs, num_head, head_dim)
                 let in_q = q.permute((1, 0, 2, 3))?;
                 let in_k = k.permute((1, 0, 2, 3))?;
-                let (new_q, new_k) = self.fused_rope(dev, positions, &in_q, &in_k, is_neox)?;
+                let (new_q, new_k) = self.fused_rope(dev, positions_seq, &in_q, &in_k, is_neox)?;
                 // output is (seqlen, bs, num_head, head_dim)
                 // want (bs, seqlen, num_head, head_dim)
                 let new_q = new_q.permute((1, 0, 2, 3))?;
