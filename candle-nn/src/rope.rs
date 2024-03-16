@@ -217,6 +217,8 @@ impl RotaryEmbedding {
                 let in_k = k.permute((1, 0, 2, 3))?;
                 dbg!(&in_q);
                 dbg!(&in_k);
+                dbg!(&q);
+                dbg!(&k);
                 let (new_q, new_k) = self.fused_rope(dev, positions_kernel, &in_q, &in_k)?;
                 // output is (seqlen, bs, num_head, head_dim)
                 // want (bs, seqlen, num_head, head_dim)
