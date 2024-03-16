@@ -68,6 +68,25 @@ impl RotaryEmbedding {
 
         let output = unsafe { dev.alloc::<T>(s * b * h * d) }.w()?; // this will be the same as input
 
+        let out = from_storage_no_op(
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+            (s,b,h,d),
+            false,
+        );
+
+        let o_stride_s = out.stride()[0];
+        let o_stride_b = out.stride()[1];
+        let o_stride_h = out.stride()[2];
+        let o_stride_d = out.stride()[3];
+
+        let bdg = out.storage_and_layout();
+        let out_storage = match &*bdg.0 {
+            Storage::Cuda(storage) => storage,
+            _ => {
+                unreachable!();
+            }
+        };
+
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel"),
             kernels::FUSED_ROPE,
@@ -89,25 +108,21 @@ impl RotaryEmbedding {
             stride_b,
             stride_h,
             stride_d,
-            stride_s,
-            stride_b,
-            stride_h,
-            stride_d,
+            o_stride_s,
+            o_stride_b,
+            o_stride_h,
+            o_stride_d,
             inp_storage.as_cuda_slice::<T>()?,
             cos_storage.as_cuda_slice::<f32>()?,
             sin_storage.as_cuda_slice::<f32>()?,
-            &output,
+            &out_storage,
             &pos_storage,
-        );
-
-        let out = from_storage_no_op(
-            Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-            input.shape(),
-            false,
         );
         
         dbg!(input.mean_all()?);
         dbg!(out.mean_all()?);
+        dbg!(input.shape());
+        dbg!(out.shape());
 
         // shape: (seqlen, bs, heads, head_dim)
         Ok(out)
