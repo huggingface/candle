@@ -7,7 +7,9 @@ use candle::{
 
 #[cfg(feature = "cuda")]
 use candle::cuda_backend::{
-    cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig, DriverError, CudaStream, CudaFunction},
+    cudarc::driver::{
+        CudaFunction, CudaStream, DeviceRepr, DriverError, LaunchAsync, LaunchConfig,
+    },
     kernel_name, kernels, CudaDType,
 };
 
@@ -19,7 +21,6 @@ pub struct RotaryEmbedding {
     sin_unsqz: Tensor,
     head_size: usize,
 }
-
 
 impl RotaryEmbedding {
     pub fn new(
@@ -71,17 +72,9 @@ impl RotaryEmbedding {
 
         let out = from_storage_no_op(
             Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-            (s,b,h,d),
+            (s, b, h, d),
             false,
         );
-        
-        let bdg = out.storage_and_layout();
-        let out_storage = match &*bdg.0 {
-            Storage::Cuda(storage) => storage,
-            _ => {
-                unreachable!();
-            }
-        };
 
         let o_stride_s = out.stride()[0];
         let o_stride_b = out.stride()[1];
@@ -106,21 +99,31 @@ impl RotaryEmbedding {
             shared_mem_bytes: 0,
         };
 
-        {let params = (
-            h as i32,
-            d as i32,
-            d2 as i32,
-            stride_s as i32,
-            stride_b as i32,
-            stride_h as i32,
-            stride_d as i32,
-            inp_storage.as_cuda_slice::<T>()?,
-            cos_storage.as_cuda_slice::<f32>()?,
-            sin_storage.as_cuda_slice::<f32>()?,
-            out_storage.as_cuda_slice::<T>()?,
-            pos_storage.as_cuda_slice::<i64>()?,
-        );
-        unsafe { func.launch(cfg, params) }.w()?;}
+        {
+            let bdg = out.storage_and_layout();
+            let out_storage = match &*bdg.0 {
+                Storage::Cuda(storage) => storage,
+                _ => {
+                    unreachable!();
+                }
+            };
+
+            let params = (
+                h as i32,
+                d as i32,
+                d2 as i32,
+                stride_s as i32,
+                stride_b as i32,
+                stride_h as i32,
+                stride_d as i32,
+                inp_storage.as_cuda_slice::<T>()?,
+                cos_storage.as_cuda_slice::<f32>()?,
+                sin_storage.as_cuda_slice::<f32>()?,
+                out_storage.as_cuda_slice::<T>()?,
+                pos_storage.as_cuda_slice::<i64>()?,
+            );
+            unsafe { func.launch(cfg, params) }.w()?;
+        }
 
         dbg!(input.mean_all()?);
         dbg!(out.mean_all()?);
