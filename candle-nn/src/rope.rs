@@ -87,8 +87,8 @@ impl RotaryEmbedding {
         const WARP_SIZE: u32 = 32;
 
         let cfg = LaunchConfig {
-            grid_dim: (s as u32, b as u32, 1),
-            block_dim: (WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),
+            grid_dim: (WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),//(s as u32, b as u32, 1),
+            block_dim: (s as u32, b as u32, 1),//(WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),
             shared_mem_bytes: 0,
         };
 
