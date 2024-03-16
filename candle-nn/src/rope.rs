@@ -78,8 +78,6 @@ impl RotaryEmbedding {
 
         const WARP_SIZE: u32 = 32;
 
-        dbg!(s);
-
         let cfg = LaunchConfig {
             grid_dim: (s as u32, b as u32, 1),
             block_dim: (WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),
@@ -165,11 +163,6 @@ impl RotaryEmbedding {
         let q_stride = q.stride()[q.stride().len() - 2];
         let k_stride = k.stride()[k.stride().len() - 2];
         
-        dbg!(num_heads);
-        dbg!(num_kv_heads);
-        dbg!(q_stride);
-        dbg!(k_stride);
-
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel"),
             kernels::FUSED_ROPE,
@@ -181,14 +174,11 @@ impl RotaryEmbedding {
             shared_mem_bytes: 0,
         };
 
-        
-        dbg!(&positions);
         let mut things = Vec::new();
         for pos in positions {
             things.push(Tensor::from_slice(&pos, pos.len(), q.device())?.unsqueeze(0)?);
         }
         let out = Tensor::cat(&things, 0)?;
-        dbg!(out.stride());
         let pos_block_stride = out.stride()[0];
 
         let bdg = out.storage_and_layout();
@@ -212,10 +202,7 @@ impl RotaryEmbedding {
             num_kv_heads,
             self.head_size,
         );
-        dbg!(q.mean_all());
         unsafe { func.launch(cfg, params) }.w()?;
-
-        dbg!(q.mean_all());
 
         Ok(())
     }
