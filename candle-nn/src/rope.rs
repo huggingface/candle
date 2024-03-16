@@ -108,7 +108,7 @@ impl RotaryEmbedding {
                         st
                     }
                     _ => unreachable!()
-                }.as_cuda_slice::<i64>(),
+                }.as_cuda_slice::<i64>()?,
             );
             unsafe { func.launch(cfg, params) }.w()?;
         }
