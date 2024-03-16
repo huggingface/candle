@@ -127,6 +127,16 @@ pub enum Source {
     Quantized,
 }
 
+pub mod copy2d {
+    pub struct Kernel(pub &'static str);
+    pub const FLOAT: Kernel = Kernel("copy2d_f32");
+    pub const HALF: Kernel = Kernel("copy2d_f16");
+    pub const BFLOAT: Kernel = Kernel("copy2d_bf16");
+    pub const I64: Kernel = Kernel("copy2d_i64");
+    pub const U32: Kernel = Kernel("copy2d_u32");
+    pub const U8: Kernel = Kernel("copy2d_u8");
+}
+
 macro_rules! ops{
     ($($name:ident),+) => {
 
@@ -358,6 +368,36 @@ pub fn call_unary_contiguous(
     set_params!(encoder, (length, input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_copy2d(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: copy2d::Kernel,
+    input: &Buffer,
+    output: &Buffer,
+    d1: usize,
+    d2: usize,
+    src_s: usize,
+    dst_s: usize,
+    src_o: usize,
+    dst_o: usize,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Unary, name.0)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    set_params!(encoder, (d1, d2, src_s, dst_s, src_o, dst_o));
+
+    let width: usize = d1 * d2;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
+
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);

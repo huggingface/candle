@@ -1284,8 +1284,65 @@ impl BackendStorage for MetalStorage {
         ))
     }
 
-    fn copy2d(&self, _: &mut Self, _: usize, _: usize, _: usize, _: usize, _: usize) -> Result<()> {
-        todo!()
+    fn copy2d(
+        &self,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
+    ) -> Result<()> {
+        if self.dtype() != dst.dtype() {
+            crate::bail!(
+                "copy2d with inconsistent dtypes {:?} {:?}",
+                self.dtype(),
+                dst.dtype()
+            )
+        }
+        let command_buffer = self.device.command_buffer()?;
+        if src_s == d2 && dst_s == d2 {
+            command_buffer.set_label("copy2d_contiguous");
+            let blit = command_buffer.new_blit_command_encoder();
+            blit.set_label("copy2d_contiguous");
+            let src_offset = (src_o * self.dtype.size_in_bytes()) as NSUInteger;
+            let length = (d1 * d2 * self.dtype.size_in_bytes()) as NSUInteger;
+            let dst_offset = (dst_o * dst.dtype().size_in_bytes()) as NSUInteger;
+            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
+            blit.end_encoding();
+        } else {
+            let el_count = d1 * d2;
+            if el_count == 0 {
+                return Ok(());
+            }
+            let kernel_name = match self.dtype {
+                DType::F32 => candle_metal_kernels::copy2d::FLOAT,
+                DType::F16 => candle_metal_kernels::copy2d::HALF,
+                DType::BF16 => candle_metal_kernels::copy2d::BFLOAT,
+                DType::I64 => candle_metal_kernels::copy2d::I64,
+                DType::U32 => candle_metal_kernels::copy2d::U32,
+                DType::U8 => candle_metal_kernels::copy2d::U8,
+                dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
+            };
+            candle_metal_kernels::call_copy2d(
+                &self.device.device,
+                &command_buffer,
+                &self.device.kernels,
+                kernel_name,
+                &self.buffer,
+                &dst.buffer,
+                d1,
+                d2,
+                src_s,
+                dst_s,
+                src_o,
+                dst_o,
+            )
+            .map_err(MetalError::from)?;
+            command_buffer.set_label("copy2d");
+        }
+        Ok(())
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
