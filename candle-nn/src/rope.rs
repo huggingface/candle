@@ -7,7 +7,7 @@ use candle::{
 
 #[cfg(feature = "cuda")]
 use candle::cuda_backend::{
-    cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig},
+    cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig, DriverError, CudaStream, CudaFunction},
     kernel_name, kernels, CudaDType,
 };
 #[cfg(feature = "cuda")]
@@ -21,6 +21,7 @@ pub struct RotaryEmbedding {
     sin_unsqz: Tensor,
     head_size: usize,
 }
+
 macro_rules! impl_launch {
     ([$($Vars:tt),*], [$($Idx:tt),*]) => {
 unsafe impl<$($Vars: DeviceRepr),*> LaunchAsync<($($Vars, )*)> for CudaFunction {
@@ -29,7 +30,7 @@ unsafe impl<$($Vars: DeviceRepr),*> LaunchAsync<($($Vars, )*)> for CudaFunction 
         self,
         cfg: LaunchConfig,
         args: ($($Vars, )*)
-    ) -> std::result::Result<(), cudarc::driver::result::DriverError> {
+    ) -> std::result::Result<(), DriverError> {
         let params = &mut [$(args.$Idx.as_kernel_param(), )*];
         self.launch_async_impl(cfg, params)
     }
@@ -40,7 +41,7 @@ unsafe impl<$($Vars: DeviceRepr),*> LaunchAsync<($($Vars, )*)> for CudaFunction 
         stream: &CudaStream,
         cfg: LaunchConfig,
         args: ($($Vars, )*)
-    ) -> std::result::Result<(), cudarc::driver::result::DriverError> {
+    ) -> std::result::Result<(), DriverError> {
         let params = &mut [$(args.$Idx.as_kernel_param(), )*];
         self.par_launch_async_impl(stream, cfg, params)
     }
