@@ -166,7 +166,16 @@ impl crate::backend::BackendStorage for MetalStorage {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
-    fn copy2d(&self, _: &mut Self, _: usize, _: usize, _: usize, _: usize, _: usize) -> Result<()> {
+    fn copy2d(
+        &self,
+        _: &mut Self,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+    ) -> Result<()> {
         Err(Error::NotCompiledWithMetalSupport)
     }
 

@@ -702,6 +702,7 @@ impl Storage {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn copy2d(
         &self,
         dst: &mut Self,
@@ -709,13 +710,16 @@ impl Storage {
         d2: usize,
         src_s: usize,
         dst_s: usize,
+        src_o: usize,
         dst_o: usize,
     ) -> Result<()> {
         match (self, dst) {
-            (Self::Cpu(src), Self::Cpu(dst)) => src.copy2d(dst, d1, d2, src_s, dst_s, dst_o),
-            (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy2d(dst, d1, d2, src_s, dst_s, dst_o)?),
+            (Self::Cpu(src), Self::Cpu(dst)) => src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o),
+            (Self::Cuda(src), Self::Cuda(dst)) => {
+                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
+            }
             (Self::Metal(src), Self::Metal(dst)) => {
-                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, dst_o)?)
+                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),

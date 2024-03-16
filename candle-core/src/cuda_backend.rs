@@ -2152,18 +2152,43 @@ impl BackendStorage for CudaStorage {
         d2: usize,
         src_s: usize,
         dst_s: usize,
+        src_o: usize,
         dst_o: usize,
     ) -> Result<()> {
         let dev = &self.device;
         let d1 = d1 as u32;
         let d2 = d2 as u32;
         let (src, dst, elt_size) = match (&self.slice, &mut dst.slice) {
-            (S::U8(s), S::U8(d)) => (*s.device_ptr(), *d.slice(dst_o..).device_ptr(), 1),
-            (S::U32(s), S::U32(d)) => (*s.device_ptr(), *d.slice(dst_o..).device_ptr(), 4),
-            (S::BF16(s), S::BF16(d)) => (*s.device_ptr(), *d.slice(dst_o..).device_ptr(), 2),
-            (S::F16(s), S::F16(d)) => (*s.device_ptr(), *d.slice(dst_o..).device_ptr(), 2),
-            (S::F32(s), S::F32(d)) => (*s.device_ptr(), *d.slice(dst_o..).device_ptr(), 4),
-            (S::F64(s), S::F64(d)) => (*s.device_ptr(), *d.slice(dst_o..).device_ptr(), 8),
+            (S::U8(s), S::U8(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                1,
+            ),
+            (S::U32(s), S::U32(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                4,
+            ),
+            (S::BF16(s), S::BF16(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                2,
+            ),
+            (S::F16(s), S::F16(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                2,
+            ),
+            (S::F32(s), S::F32(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                4,
+            ),
+            (S::F64(s), S::F64(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                8,
+            ),
             _ => Err(CudaError::InternalError("dtype mismatch in copy2d"))?,
         };
         let func = dev.get_or_load_func("copy2d", kernels::FILL)?;
