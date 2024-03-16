@@ -2158,6 +2158,8 @@ impl BackendStorage for CudaStorage {
         let dev = &self.device;
         let d1 = d1 as u32;
         let d2 = d2 as u32;
+        let dst_s = dst_s as u32;
+        let src_s = src_s as u32;
         let (src, dst, elt_size) = match (&self.slice, &mut dst.slice) {
             (S::U8(s), S::U8(d)) => (
                 *s.slice(src_o..).device_ptr(),
@@ -2193,7 +2195,14 @@ impl BackendStorage for CudaStorage {
         };
         let func = dev.get_or_load_func("copy2d", kernels::FILL)?;
         let cfg = LaunchConfig::for_num_elems(d1);
-        let params = (src, dst, d1, d2 * elt_size, src_s as u32, dst_s as u32);
+        let params = (
+            src,
+            dst,
+            d1,
+            d2 * elt_size,
+            src_s * elt_size,
+            dst_s * elt_size,
+        );
         // SAFETY: ffi.
         unsafe { func.launch(cfg, params) }.w()?;
         Ok(())
