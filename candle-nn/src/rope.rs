@@ -212,7 +212,10 @@ impl RotaryEmbedding {
             num_kv_heads,
             self.head_size,
         );
+        dbg!(q.mean_all());
         unsafe { func.launch(cfg, params) }.w()?;
+
+        dbg!(q.mean_all());
 
         Ok(())
     }
