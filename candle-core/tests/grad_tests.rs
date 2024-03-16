@@ -1,3 +1,4 @@
+#![allow(clippy::approx_constant)]
 use anyhow::{Context, Result};
 use candle_core::{test_device, test_utils, Device, Shape, Tensor, Var};
 
@@ -100,7 +101,7 @@ fn unary_grad(device: &Device) -> Result<()> {
         [20.0855, 2.7183, 54.5982, 1.1618]
     );
     assert_eq!(
-        test_utils::to_vec1_round(&grad_x, 4)?,
+        test_utils::to_vec1_round(grad_x, 4)?,
         [20.0855, 2.7183, 54.5982, 1.1618]
     );
     let y = x.exp()?.sqr()?;
@@ -112,7 +113,7 @@ fn unary_grad(device: &Device) -> Result<()> {
     );
     // exp(x)^2 = exp(2*x)
     assert_eq!(
-        test_utils::to_vec1_round(&grad_x, 2)?,
+        test_utils::to_vec1_round(grad_x, 2)?,
         [806.86, 14.78, 5961.92, 2.7]
     );
     let y = x.sin()?;
