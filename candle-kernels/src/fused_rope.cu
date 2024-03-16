@@ -234,8 +234,8 @@ extern "C" __global__ void rotary_embedding_kernel_neox_bf16(
 // stride[0] is src, stride[1] is dst
 template <typename scalar_t_0, typename scalar_t_1>
 __device__ void fused_rope_cached_forward(
-    const int h, const int d, const int d2, const int* stride_s,
-    const int* stride_b, const int* stride_h, const int* stride_d,
+    const int h, const int d, const int d2, const int64_t* stride_s,
+    const int64_t* stride_b, const int64_t* stride_h, const int64_t* stride_d,
     const scalar_t_0* src, const scalar_t_1* cos,
     const scalar_t_1* sin, scalar_t_0* dst, int64_t* positions) {
   int b_id = blockIdx.y;
@@ -274,8 +274,8 @@ __device__ void fused_rope_cached_forward(
 }
 
 extern "C" __global__ void rotary_embedding_kernel_f32(
-    const int h, const int d, const int d2, const int* stride_s,
-    const int* stride_b, const int* stride_h, const int* stride_d,
+    const int h, const int d, const int d2, const int64_t* stride_s,
+    const int64_t* stride_b, const int64_t* stride_h, const int64_t* stride_d,
     const float* src, const float* cos,
     const float* sin, float* dst, int64_t* positions) {
     fused_rope_cached_forward(
@@ -286,8 +286,8 @@ extern "C" __global__ void rotary_embedding_kernel_f32(
 }
 
 extern "C" __global__ void rotary_embedding_kernel_f64(
-    const int h, const int d, const int d2, const int* stride_s,
-    const int* stride_b, const int* stride_h, const int* stride_d,
+    const int h, const int d, const int d2, const int64_t* stride_s,
+    const int64_t* stride_b, const int64_t* stride_h, const int64_t* stride_d,
     const double* src, const float* cos,
     const float* sin, double* dst, int64_t* positions) {
     fused_rope_cached_forward(
@@ -298,8 +298,8 @@ extern "C" __global__ void rotary_embedding_kernel_f64(
 }
 
 extern "C" __global__ void rotary_embedding_kernel_f16(
-    const int h, const int d, const int d2, const int* stride_s,
-    const int* stride_b, const int* stride_h, const int* stride_d,
+    const int h, const int d, const int d2, const int64_t* stride_s,
+    const int64_t* stride_b, const int64_t* stride_h, const int64_t* stride_d,
     const __half* src, const float* cos,
     const float* sin, __half* dst, int64_t* positions) {
     fused_rope_cached_forward(
@@ -312,8 +312,8 @@ extern "C" __global__ void rotary_embedding_kernel_f16(
 #if __CUDA_ARCH__ >= 800
 #include <cuda_bf16.h>
 extern "C" __global__ void rotary_embedding_kernel_bf16(
-    const int h, const int d, const int d2, const int* stride_s,
-    const int* stride_b, const int* stride_h, const int* stride_d,
+    const int h, const int d, const int d2, const int64_t* stride_s,
+    const int64_t* stride_b, const int64_t* stride_h, const int64_t* stride_d,
     const __nv_bfloat16* src, const float* cos,
     const float* sin, __nv_bfloat16* dst, int64_t* positions) {
     fused_rope_cached_forward(

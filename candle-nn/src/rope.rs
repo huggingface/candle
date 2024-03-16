@@ -103,10 +103,10 @@ impl RotaryEmbedding {
                 }
             };
 
-            let strides_s = [stride_s as i32, o_stride_s as i32];
-            let strides_b = [stride_b as i32, o_stride_b as i32];
-            let strides_h = [stride_h as i32, o_stride_h as i32];
-            let strides_d = [stride_d as i32, o_stride_d as i32];
+            let strides_s = [stride_s as i64, o_stride_s as i64];
+            let strides_b = [stride_b as i64, o_stride_b as i64];
+            let strides_h = [stride_h as i64, o_stride_h as i64];
+            let strides_d = [stride_d as i64, o_stride_d as i64];
 
             let strides_s = Tensor::new(strides_s.as_slice(), input.device())?;
             let bdg = strides_s.storage_and_layout();
@@ -148,10 +148,10 @@ impl RotaryEmbedding {
                 h as i32,
                 d as i32,
                 d2 as i32,
-                strides_s_storage.as_cuda_slice::<i32>()?,
-                strides_b_storage.as_cuda_slice::<i32>()?,
-                strides_h_storage.as_cuda_slice::<i32>()?,
-                strides_d_storage.as_cuda_slice::<i32>()?,
+                strides_s_storage.as_cuda_slice::<i64>()?,
+                strides_b_storage.as_cuda_slice::<i64>()?,
+                strides_h_storage.as_cuda_slice::<i64>()?,
+                strides_d_storage.as_cuda_slice::<i64>()?,
                 inp_storage.as_cuda_slice::<T>()?,
                 cos_storage.as_cuda_slice::<f32>()?,
                 sin_storage.as_cuda_slice::<f32>()?,
