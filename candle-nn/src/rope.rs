@@ -48,8 +48,8 @@ unsafe impl<$($Vars: DeviceRepr),*> LaunchAsync<($($Vars, )*)> for CudaFunction 
     };
 }
 impl_launch!(
-    [A, B, C, D, E, F, G, H, I, J, K, L],
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    [A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P],
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 );
 
 impl RotaryEmbedding {
