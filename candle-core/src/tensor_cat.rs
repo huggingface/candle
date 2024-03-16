@@ -163,7 +163,7 @@ impl Tensor {
         let dtype = arg0.dtype();
         let first_dims = arg0.shape().dims();
         let mut cat_dims = first_dims.to_vec();
-        cat_dims[0] = 0;
+        cat_dims[dim] = 0;
         for (arg_idx, arg) in args.iter().enumerate() {
             let arg = arg.as_ref();
             if arg.dtype() != dtype {
@@ -197,10 +197,10 @@ impl Tensor {
                 .zip(arg.shape().dims().iter())
                 .enumerate()
             {
-                if dim_idx == 0 {
-                    cat_dims[0] += v2;
+                if dim_idx == dim {
+                    cat_dims[dim] += v2;
                 }
-                if dim_idx != 0 && v1 != v2 {
+                if dim_idx != dim && v1 != v2 {
                     Err(Error::ShapeMismatchCat {
                         dim: dim_idx,
                         first_shape: arg0.shape().clone(),
