@@ -314,13 +314,11 @@ extern "C" __global__ void rotary_embedding_kernel_f16(
 extern "C" __global__ void rotary_embedding_kernel_bf16(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
-    const int o_stride_s, const int o_stride_b, const int o_stride_h,
-    const int o_stride_d, const __nv_bfloat16* src, const float* cos,
+    const __nv_bfloat16* src, const float* cos,
     const float* sin, __nv_bfloat16* dst, int64_t* positions) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
-      o_stride_s, o_stride_b, o_stride_h, o_stride_d, 
       src, cos, sin, dst,
       positions);
 }
