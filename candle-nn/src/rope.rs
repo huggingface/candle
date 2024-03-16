@@ -158,7 +158,7 @@ impl RotaryEmbedding {
     ) -> Result<()> {
         use candle::cuda_backend::WrapErr;
 
-        let num_tokens = /*q.dim(0)? * q.dim(1)?;*/ q.elem_count() / q.dim(D::Minus1)?;
+        let num_tokens = q.elem_count() / q.dim(D::Minus1)?;
         let rot_dim = self.cache.dim(1)?;
         let num_heads = q.dim(D::Minus1)? / self.head_size;
         let num_kv_heads = k.dim(D::Minus1)? / self.head_size;
@@ -171,7 +171,7 @@ impl RotaryEmbedding {
         dbg!(k_stride);
 
         let func = dev.get_or_load_func(
-            &kernel_name::<T>("rotary_embedding_kernel_neox"),
+            &kernel_name::<T>("rotary_embedding_kernel"),
             kernels::FUSED_ROPE,
         )?;
 
