@@ -1336,8 +1336,8 @@ impl BackendStorage for MetalStorage {
                 d2,
                 src_s,
                 dst_s,
-                src_o,
-                dst_o,
+                src_o * self.dtype.size_in_bytes(),
+                dst_o * self.dtype.size_in_bytes(),
             )
             .map_err(MetalError::from)?;
             command_buffer.set_label("copy2d");

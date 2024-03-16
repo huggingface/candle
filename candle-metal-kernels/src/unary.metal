@@ -108,8 +108,6 @@ kernel void FN_NAME( \
     constant size_t &d2, \
     constant size_t &src_s, \
     constant size_t &dst_s, \
-    constant size_t &src_o, \
-    constant size_t &dst_o, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
     uint tid [[ thread_position_in_grid ]] \
@@ -119,10 +117,10 @@ kernel void FN_NAME( \
     } \
     size_t idx1 = tid / d2; \
     size_t idx2 = tid - idx1 * d2; \
-    size_t src_idx = src_o + idx1 * src_s + idx2; \
-    size_t dst_idx = dst_o + idx1 * dst_s + idx2; \
+    size_t src_idx = idx1 * src_s + idx2; \
+    size_t dst_idx = idx1 * dst_s + idx2; \
     output[dst_idx] = input[src_idx]; \
-} \
+}
 
 COPY2D(copy2d_f32, float)
 COPY2D(copy2d_f16, half)

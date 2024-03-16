@@ -387,13 +387,23 @@ pub fn call_copy2d(
     d2: usize,
     src_s: usize,
     dst_s: usize,
-    src_o: usize,
-    dst_o: usize,
+    src_o_in_bytes: usize,
+    dst_o_in_bytes: usize,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, name.0)?;
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
-    set_params!(encoder, (d1, d2, src_s, dst_s, src_o, dst_o));
+    set_params!(
+        encoder,
+        (
+            d1,
+            d2,
+            src_s,
+            dst_s,
+            (input, src_o_in_bytes),
+            (output, dst_o_in_bytes)
+        )
+    );
 
     let width: usize = d1 * d2;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
