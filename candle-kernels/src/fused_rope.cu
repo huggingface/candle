@@ -255,7 +255,7 @@ __device__ void fused_rope_cached_forward(
       scalar_t_0 v_src_rotate =
           (d_id + d2 / 2 < d2) ? -src[offset_src + (d2 / 2) * stride_d]
                                : src[offset_src + (d2 / 2 - d2) * stride_d];
-      dst[offset_dst] = v_src;// * v_cos + v_src_rotate * v_sin;
+      dst[offset_dst] = 1;// * v_cos + v_src_rotate * v_sin;
     }
   }
 
