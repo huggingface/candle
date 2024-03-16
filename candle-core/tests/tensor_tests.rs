@@ -685,8 +685,8 @@ fn cat(device: &Device) -> Result<()> {
     let t3 = t3.t()?.contiguous()?.t()?;
     let t_cat2 = Tensor::cat(&[&t1, &t2, &t3], 1)?;
 
-    let diff = (&t_cat - &t_cat2)?.abs()?.flatten_all()?.max(0)?;
-    assert_eq!(diff.to_vec0::<i64>()?, 0);
+    let diff = t_cat.eq(&t_cat2)?.to_dtype(DType::F32)?.sum_all()?;
+    assert_eq!(diff.to_vec0::<f32>()?, 104.0);
     assert_eq!(t_cat.i((0, 0, 0))?.to_vec0::<i64>()?, 0);
     assert_eq!(t_cat.i((0, 4, 0))?.to_vec0::<i64>()?, 16);
     assert_eq!(t_cat.i((0, 5, 0))?.to_vec0::<i64>()?, 20);
