@@ -87,23 +87,23 @@ impl RotaryEmbedding {
         const WARP_SIZE: u32 = 32;
 
         let cfg = LaunchConfig {
-            grid_dim: (WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),//(s as u32, b as u32, 1),
-            block_dim: (s as u32, b as u32, 1),//(WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),
+            grid_dim: (s as u32, b as u32, 1),
+            block_dim: (WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),
             shared_mem_bytes: 0,
         };
 
         let params = (
-            h,
-            d,
-            d2,
-            stride_s,
-            stride_b,
-            stride_h,
-            stride_d,
-            o_stride_s,
-            o_stride_b,
-            o_stride_h,
-            o_stride_d,
+            h as i32,
+            d as i32,
+            d2 as i32,
+            stride_s as i32,
+            stride_b as i32,
+            stride_h as i32,
+            stride_d as i32,
+            o_stride_s as i32,
+            o_stride_b as i32,
+            o_stride_h as i32,
+            o_stride_d as i32,
             inp_storage.as_cuda_slice::<T>()?,
             cos_storage.as_cuda_slice::<f32>()?,
             sin_storage.as_cuda_slice::<f32>()?,
