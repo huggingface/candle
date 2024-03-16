@@ -67,6 +67,7 @@ pub mod shape;
 mod storage;
 mod strided_index;
 mod tensor;
+mod tensor_cat;
 pub mod test_utils;
 pub mod utils;
 mod variable;

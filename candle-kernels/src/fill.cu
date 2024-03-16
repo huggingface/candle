@@ -18,3 +18,11 @@ extern "C" __global__ void fill_f64(double *buf, double value, const size_t nume
 #include <cuda_bf16.h>
 extern "C" __global__ void fill_bf16(__nv_bfloat16 *buf, __nv_bfloat16 value, const size_t numel) { fill_with(buf, value, numel); }
 #endif
+
+extern "C" __global__ void copy2d(const uint8_t *src, uint8_t *dst, uint32_t d1, uint32_t d2, uint32_t src_s, uint32_t dst_s) {
+  uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= d1) {
+    return;
+  }
+  memcpy(dst + idx * dst_s, src + idx * src_s, d2);
+}
