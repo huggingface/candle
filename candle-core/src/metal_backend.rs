@@ -422,6 +422,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "powf_f32",
                 DType::F16 => "powf_f16",
+                DType::BF16 => "powf_bf16",
                 dtype => crate::bail!("Metal contiguous powf {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_powf(
@@ -439,6 +440,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "powf_f32_strided",
                 DType::F16 => "powf_f16_strided",
+                DType::BF16 => "powf_bf16_strided",
                 dtype => crate::bail!("Metal strided powf {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_powf_strided(
@@ -489,6 +491,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "elu_f32_strided",
                 DType::F16 => "elu_f16_strided",
+                DType::BF16 => "elu_bf16_strided",
                 dtype => crate::bail!("Metal strided elu {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_elu_strided(
