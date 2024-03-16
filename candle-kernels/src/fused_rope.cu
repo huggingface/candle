@@ -87,8 +87,8 @@ extern "C" __global__ void rotary_embedding_kernel_f16(
 extern "C" __global__ void rotary_embedding_kernel_bf16(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
-    const __nv_bfloat16* src, const float* cos,
-    float* sin,
+    __nv_bfloat16* src, const float* cos,
+    const float* sin,
     int64_t* positions, const int pos_block_stride) {
     fused_rope_cached_forward(
       h, d, d2,
