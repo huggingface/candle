@@ -103,12 +103,12 @@ impl RotaryEmbedding {
                 cos_storage.as_cuda_slice::<f32>()?,
                 sin_storage.as_cuda_slice::<f32>()?,
                 inp_storage.as_cuda_slice::<T>()?, //out
-                match &*out.storage_and_layout().0 {
+                {match &*out.storage_and_layout().0 {
                     Storage::Cuda(st) => {
                         st
                     }
                     _ => unreachable!()
-                }.as_cuda_slice::<i64>()?,
+                }.as_cuda_slice::<i64>()?},
             );
             unsafe { func.launch(cfg, params) }.w()?;
         }
