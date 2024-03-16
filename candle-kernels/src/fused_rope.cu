@@ -10,10 +10,11 @@ __device__ void fused_rope_cached_forward(
   int s_id = blockIdx.x;
   int offset_block = s_id * stride_s + b_id * stride_b;
   int offset_block_dst = s_id * stride_s + b_id * stride_b;
+  int pos = positions[b_id];
 #pragma unroll
-  for (int d_id = threadIdx.x; d_id < d2; d_id += blockDim.x) {
-    scalar_t_0 v_cos = cos[(s_id + positions[b_id]) * d2 + d_id];
-    scalar_t_0 v_sin = sin[(s_id + positions[b_id]) * d2 + d_id];
+  for (int d_id = (threadIdx.x + pos); d_id < d2; d_id += blockDim.x) {
+    scalar_t_0 v_cos = cos[s_id * d2 + d_id];
+    scalar_t_0 v_sin = sin[s_id * d2 + d_id];
 #pragma unroll
     for (int h_id = threadIdx.y; h_id < h; h_id += blockDim.y) {
       int offset_src = offset_block + h_id * stride_h + d_id * stride_d;
