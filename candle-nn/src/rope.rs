@@ -81,11 +81,6 @@ impl RotaryEmbedding {
         let o_stride_h = out.stride()[2];
         let o_stride_d = out.stride()[3];
 
-        assert_eq!(stride_s, o_stride_s);
-        assert_eq!(stride_b, o_stride_b);
-        assert_eq!(stride_h, o_stride_h);
-        assert_eq!(stride_d, o_stride_d);
-
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel"),
             kernels::FUSED_ROPE,
@@ -108,14 +103,55 @@ impl RotaryEmbedding {
                 }
             };
 
+            let strides_s = [stride_s as i32, o_stride_s as i32];
+            let strides_b = [stride_b as i32, o_stride_b as i32];
+            let strides_h = [stride_h as i32, o_stride_h as i32];
+            let strides_d = [stride_d as i32, o_stride_d as i32];
+
+            let strides_s = Tensor::new(strides_s.as_slice(), input.device())?;
+            let bdg = strides_s.storage_and_layout();
+            let strides_s_storage = match &*bdg.0 {
+                Storage::Cuda(storage) => storage,
+                _ => {
+                    unreachable!();
+                }
+            };
+
+            let strides_b = Tensor::new(strides_b.as_slice(), input.device())?;
+            let bdg = strides_b.storage_and_layout();
+            let strides_b_storage = match &*bdg.0 {
+                Storage::Cuda(storage) => storage,
+                _ => {
+                    unreachable!();
+                }
+            };
+
+            let strides_h: Tensor = Tensor::new(strides_h.as_slice(), input.device())?;
+            let bdg = strides_h.storage_and_layout();
+            let strides_h_storage = match &*bdg.0 {
+                Storage::Cuda(storage) => storage,
+                _ => {
+                    unreachable!();
+                }
+            };
+
+            let strides_d = Tensor::new(strides_d.as_slice(), input.device())?;
+            let bdg = strides_d.storage_and_layout();
+            let strides_d_storage = match &*bdg.0 {
+                Storage::Cuda(storage) => storage,
+                _ => {
+                    unreachable!();
+                }
+            };
+
             let params = (
                 h as i32,
                 d as i32,
                 d2 as i32,
-                stride_s as i32,
-                stride_b as i32,
-                stride_h as i32,
-                stride_d as i32,
+                strides_s_storage.as_cuda_slice::<i32>()?,
+                strides_b_storage.as_cuda_slice::<i32>()?,
+                strides_h_storage.as_cuda_slice::<i32>()?,
+                strides_d_storage.as_cuda_slice::<i32>()?,
                 inp_storage.as_cuda_slice::<T>()?,
                 cos_storage.as_cuda_slice::<f32>()?,
                 sin_storage.as_cuda_slice::<f32>()?,
