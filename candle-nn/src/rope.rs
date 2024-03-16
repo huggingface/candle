@@ -56,7 +56,7 @@ impl RotaryEmbedding {
         inp_storage: &CudaStorage,
         cos_storage: &CudaStorage,
         sin_storage: &CudaStorage,
-        pos_storage: *mut *mut i64,
+        pos_storage: &[Vec<i64>],
     ) -> Result<Tensor> {
         use candle::{cuda_backend::WrapErr, from_storage_no_op};
 
@@ -83,6 +83,12 @@ impl RotaryEmbedding {
             shared_mem_bytes: 0,
         };
 
+        let mut things = Vec::new();
+        for pos in pos_storage {
+            things.push(Tensor::from_slice(&pos, pos.len(), input.device())?.unsqueeze(0)?);
+        }
+        let out = Tensor::cat(&[things], 0)?;
+        
         {
             let params = (
                 h as i32,
@@ -96,7 +102,12 @@ impl RotaryEmbedding {
                 cos_storage.as_cuda_slice::<f32>()?,
                 sin_storage.as_cuda_slice::<f32>()?,
                 inp_storage.as_cuda_slice::<T>()?, //out
-                pos_storage as usize,
+                match &*out.storage_and_layout().0 {
+                    Storage::Cuda(st) => {
+                        st
+                    }
+                    _ => unreachable!()
+                }.as_cuda_slice::<i64>(),
             );
             unsafe { func.launch(cfg, params) }.w()?;
         }
@@ -120,15 +131,10 @@ impl RotaryEmbedding {
         use candle::{cuda_backend::WrapErr, from_storage_no_op};
 
         dbg!(&positions);
-        let mut ptr_positions = Vec::new();
-        for mut pos in positions {
-            ptr_positions.push(pos.as_mut_ptr())
-        }
-        let ptr = ptr_positions.as_mut_ptr();
 
         Ok((
-            self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, ptr)?,
-            self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, ptr)?,
+            self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, &positions)?,
+            self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, &positions)?,
         ))
     }
 
