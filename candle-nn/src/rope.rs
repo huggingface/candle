@@ -117,6 +117,7 @@ impl RotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         use candle::{cuda_backend::WrapErr, from_storage_no_op};
 
+        dbg!(&positions);
         let mut ptr_positions = Vec::new();
         for mut pos in positions {
             ptr_positions.push(pos.as_mut_ptr())
