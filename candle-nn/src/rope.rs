@@ -22,36 +22,6 @@ pub struct RotaryEmbedding {
     head_size: usize,
 }
 
-macro_rules! impl_launch {
-    ([$($Vars:tt),*], [$($Idx:tt),*]) => {
-unsafe impl<$($Vars: DeviceRepr),*> LaunchAsync<($($Vars, )*)> for CudaFunction {
-    #[inline(always)]
-    unsafe fn launch(
-        self,
-        cfg: LaunchConfig,
-        args: ($($Vars, )*)
-    ) -> std::result::Result<(), DriverError> {
-        let params = &mut [$(args.$Idx.as_kernel_param(), )*];
-        self.launch_async_impl(cfg, params)
-    }
-
-    #[inline(always)]
-    unsafe fn launch_on_stream(
-        self,
-        stream: &CudaStream,
-        cfg: LaunchConfig,
-        args: ($($Vars, )*)
-    ) -> std::result::Result<(), DriverError> {
-        let params = &mut [$(args.$Idx.as_kernel_param(), )*];
-        self.par_launch_async_impl(stream, cfg, params)
-    }
-}
-    };
-}
-impl_launch!(
-    [A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P],
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-);
 
 impl RotaryEmbedding {
     pub fn new(
@@ -148,8 +118,8 @@ impl RotaryEmbedding {
             inp_storage.as_cuda_slice::<T>()?,
             cos_storage.as_cuda_slice::<f32>()?,
             sin_storage.as_cuda_slice::<f32>()?,
-            out_storage.as_cuda_slice::<T>()?,
-            pos_storage.as_cuda_slice::<i64>()?,
+            out_storage,//.as_cuda_slice::<T>()?,
+            pos_storage,//.as_cuda_slice::<i64>()?,
         );
         unsafe { func.launch(cfg, params) }.w()?;}
 
