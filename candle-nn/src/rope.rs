@@ -79,14 +79,6 @@ impl RotaryEmbedding {
         let o_stride_h = out.stride()[2];
         let o_stride_d = out.stride()[3];
 
-        let bdg = out.storage_and_layout();
-        let out_storage = match &*bdg.0 {
-            Storage::Cuda(storage) => storage,
-            _ => {
-                unreachable!();
-            }
-        };
-
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel"),
             kernels::FUSED_ROPE,
@@ -115,10 +107,18 @@ impl RotaryEmbedding {
             inp_storage.as_cuda_slice::<T>()?,
             cos_storage.as_cuda_slice::<f32>()?,
             sin_storage.as_cuda_slice::<f32>()?,
-            &out_storage,
+            &{
+                let bdg = out.storage_and_layout();
+                let out_storage = match &*bdg.0 {
+                    Storage::Cuda(storage) => storage,
+                    _ => {
+                        unreachable!();
+                    }
+                }
+            },
             &pos_storage,
         );
-        
+
         dbg!(input.mean_all()?);
         dbg!(out.mean_all()?);
         dbg!(input.shape());
