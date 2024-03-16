@@ -10,8 +10,6 @@ use candle::cuda_backend::{
     cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig, DriverError, CudaStream, CudaFunction},
     kernel_name, kernels, CudaDType,
 };
-#[cfg(feature = "cuda")]
-pub use cudarc;
 
 #[derive(Debug, Clone)]
 pub struct RotaryEmbedding {
@@ -90,6 +88,11 @@ impl RotaryEmbedding {
         let o_stride_h = out.stride()[2];
         let o_stride_d = out.stride()[3];
 
+        assert_eq!(stride_s, o_stride_s);
+        assert_eq!(stride_b, o_stride_b);
+        assert_eq!(stride_h, o_stride_h);
+        assert_eq!(stride_d, o_stride_d);
+
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel"),
             kernels::FUSED_ROPE,
@@ -111,15 +114,11 @@ impl RotaryEmbedding {
             stride_b as i32,
             stride_h as i32,
             stride_d as i32,
-            o_stride_s as i32,
-            o_stride_b as i32,
-            o_stride_h as i32,
-            o_stride_d as i32,
             inp_storage.as_cuda_slice::<T>()?,
             cos_storage.as_cuda_slice::<f32>()?,
             sin_storage.as_cuda_slice::<f32>()?,
-            out_storage,//.as_cuda_slice::<T>()?,
-            pos_storage,//.as_cuda_slice::<i64>()?,
+            out_storage.as_cuda_slice::<T>()?,
+            pos_storage.as_cuda_slice::<i64>()?,
         );
         unsafe { func.launch(cfg, params) }.w()?;}
 
