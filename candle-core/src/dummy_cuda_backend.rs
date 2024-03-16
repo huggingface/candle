@@ -154,6 +154,10 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    fn copy2d(&self, _: &mut Self, _: usize, _: usize, _: usize, _: usize, _: usize) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }

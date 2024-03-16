@@ -1284,6 +1284,10 @@ impl BackendStorage for MetalStorage {
         ))
     }
 
+    fn copy2d(&self, _: &mut Self, _: usize, _: usize, _: usize, _: usize, _: usize) -> Result<()> {
+        todo!()
+    }
+
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         let command_buffer = self.device.command_buffer()?;
         if src_l.is_contiguous() && self.dtype == dst.dtype() {
