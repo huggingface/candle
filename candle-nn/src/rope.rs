@@ -75,6 +75,8 @@ impl RotaryEmbedding {
 
         const WARP_SIZE: u32 = 32;
 
+        dbg!(s);
+
         let cfg = LaunchConfig {
             grid_dim: (s as u32, b as u32, 1),
             block_dim: (WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),
