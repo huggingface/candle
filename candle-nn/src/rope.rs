@@ -68,18 +68,18 @@ impl RotaryEmbedding {
 
         let d2 = self.cos_unsqz.dims()[3];
 
-        let output = unsafe { dev.alloc::<T>(s * b * h * d) }.w()?; // this will be the same as input
+        /*let output = unsafe { dev.alloc::<T>(s * b * h * d) }.w()?; // this will be the same as input
 
         let out = from_storage_no_op(
             Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
             (s, b, h, d),
             false,
-        );
+        );*/
 
-        let o_stride_s = out.stride()[0];
-        let o_stride_b = out.stride()[1];
-        let o_stride_h = out.stride()[2];
-        let o_stride_d = out.stride()[3];
+        let o_stride_s = stride_s;//out.stride()[0];
+        let o_stride_b = stride_b;//out.stride()[1];
+        let o_stride_h = stride_h;//out.stride()[2];
+        let o_stride_d = stride_d;//out.stride()[3];
 
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel"),
@@ -95,13 +95,14 @@ impl RotaryEmbedding {
         };
 
         {
-            let bdg = out.storage_and_layout();
+            /*let bdg = out.storage_and_layout();
             let out_storage = match &*bdg.0 {
                 Storage::Cuda(storage) => storage,
                 _ => {
                     unreachable!();
                 }
             };
+            */
 
             let strides_s = [stride_s as i64, o_stride_s as i64];
             let strides_b = [stride_b as i64, o_stride_b as i64];
@@ -155,14 +156,14 @@ impl RotaryEmbedding {
                 inp_storage.as_cuda_slice::<T>()?,
                 cos_storage.as_cuda_slice::<f32>()?,
                 sin_storage.as_cuda_slice::<f32>()?,
-                out_storage.as_cuda_slice::<T>()?,
+                inp_storage.as_cuda_slice::<T>()?, //out
                 pos_storage.as_cuda_slice::<i64>()?,
             );
             unsafe { func.launch(cfg, params) }.w()?;
         }
 
         // shape: (seqlen, bs, heads, head_dim)
-        Ok(out)
+        Ok(input.clone())
     }
 
     #[cfg(feature = "cuda")]
