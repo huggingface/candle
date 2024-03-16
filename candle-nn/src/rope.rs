@@ -56,7 +56,7 @@ impl RotaryEmbedding {
         inp_storage: &CudaStorage,
         cos_storage: &CudaStorage,
         sin_storage: &CudaStorage,
-        pos_storage: &CudaStorage,
+        pos_storage: *mut *mut i64,
     ) -> Result<Tensor> {
         use candle::{cuda_backend::WrapErr, from_storage_no_op};
 
@@ -94,7 +94,7 @@ impl RotaryEmbedding {
                 cos_storage.as_cuda_slice::<f32>()?,
                 sin_storage.as_cuda_slice::<f32>()?,
                 inp_storage.as_cuda_slice::<T>()?, //out
-                pos_storage.as_cuda_slice::<i64>()?,
+                pos as usize,
             );
             unsafe { func.launch(cfg, params) }.w()?;
         }
@@ -107,7 +107,7 @@ impl RotaryEmbedding {
     fn execute_dtype<T: CudaDType + WithDType + DeviceRepr>(
         &self,
         dev: &CudaDevice,
-        positions: &[usize],
+        mut positions: Vec<Vec<i64>>,
         q_storage: &CudaStorage,
         k_storage: &CudaStorage,
         q: &Tensor,
@@ -117,19 +117,15 @@ impl RotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         use candle::{cuda_backend::WrapErr, from_storage_no_op};
 
-        let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
-        let positions = Tensor::new(positions.as_slice(), q.device())?;
-        let bdg = positions.storage_and_layout();
-        let pos_storage = match &*bdg.0 {
-            Storage::Cuda(storage) => storage,
-            _ => {
-                unreachable!();
-            }
-        };
+        let mut ptr_positions = Vec::new();
+        for mut pos in positions {
+            ptr_positions.push(pos.as_mut_ptr())
+        }
+        let ptr = ptr_positions.as_mut_ptr();
 
         Ok((
-            self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, pos_storage)?,
-            self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, pos_storage)?,
+            self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, ptr)?,
+            self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, ptr)?,
         ))
     }
 
@@ -137,10 +133,9 @@ impl RotaryEmbedding {
     fn fused_rope(
         &self,
         dev: &CudaDevice,
-        positions: &[usize],
+        positions: Vec<Vec<i64>>,
         q: &Tensor,
         k: &Tensor,
-        is_neox: bool,
     ) -> Result<(Tensor, Tensor)> {
         match (
             &*q.storage_and_layout().0,
@@ -206,10 +201,9 @@ impl RotaryEmbedding {
     pub fn forward(
         &self,
         positions: &[usize],
-        positions_full: &[usize],
+        positions_kernel: Vec<Vec<i64>>,
         q: &mut Tensor,
         k: &mut Tensor,
-        is_neox: bool,
     ) -> Result<()> {
         match (q.device(), k.device()) {
             #[cfg(feature = "cuda")]
@@ -218,7 +212,7 @@ impl RotaryEmbedding {
                 // want (seqlen, bs, num_head, head_dim)
                 let in_q = q.permute((1, 0, 2, 3))?;
                 let in_k = k.permute((1, 0, 2, 3))?;
-                let (new_q, new_k) = self.fused_rope(dev, positions_seq, &in_q, &in_k, is_neox)?;
+                let (new_q, new_k) = self.fused_rope(dev, positions_kernel, &in_q, &in_k)?;
                 // output is (seqlen, bs, num_head, head_dim)
                 // want (bs, seqlen, num_head, head_dim)
                 let new_q = new_q.permute((1, 0, 2, 3))?;

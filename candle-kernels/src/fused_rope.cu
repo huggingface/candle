@@ -5,16 +5,16 @@ __device__ void fused_rope_cached_forward(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
     const scalar_t_0* src, const scalar_t_1* cos,
-    const scalar_t_1* sin, scalar_t_0* dst, int64_t* positions) {
+    const scalar_t_1* sin, scalar_t_0* dst, int64_t** positions) {
   int b_id = blockIdx.y;
   int s_id = blockIdx.x;
   int offset_block = s_id * stride_s + b_id * stride_b;
   int offset_block_dst = s_id * stride_s + b_id * stride_b;
-  int pos = positions[s_id];
+  int pos = positions[b_id][s_id];
 #pragma unroll
   for (int d_id = threadIdx.x; d_id < d2; d_id += blockDim.x) {
-    scalar_t_0 v_cos = cos[s_id * d2 + d_id];
-    scalar_t_0 v_sin = sin[s_id * d2 + d_id];
+    scalar_t_0 v_cos = cos[pos * d2 + d_id];
+    scalar_t_0 v_sin = sin[pos * d2 + d_id];
 #pragma unroll
     for (int h_id = threadIdx.y; h_id < h; h_id += blockDim.y) {
       int offset_src = offset_block + h_id * stride_h + d_id * stride_d;
@@ -46,7 +46,7 @@ extern "C" __global__ void rotary_embedding_kernel_f32(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
     const float* src, const float* cos,
-    const float* sin, float* dst, int64_t* positions) {
+    const float* sin, float* dst, int64_t** positions) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
@@ -58,7 +58,7 @@ extern "C" __global__ void rotary_embedding_kernel_f64(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
     const double* src, const float* cos,
-    const float* sin, double* dst, int64_t* positions) {
+    const float* sin, double* dst, int64_t** positions) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
@@ -70,7 +70,7 @@ extern "C" __global__ void rotary_embedding_kernel_f16(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
     const __half* src, const float* cos,
-    const float* sin, __half* dst, int64_t* positions) {
+    const float* sin, __half* dst, int64_t** positions) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
@@ -84,7 +84,7 @@ extern "C" __global__ void rotary_embedding_kernel_bf16(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
     const __nv_bfloat16* src, const float* cos,
-    const float* sin, __nv_bfloat16* dst, int64_t* positions) {
+    const float* sin, __nv_bfloat16* dst, int64_t** positions) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
