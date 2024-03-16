@@ -471,6 +471,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "elu_f32",
                 DType::F16 => "elu_f16",
+                DType::BF16 => "elu_bf16",
                 dtype => crate::bail!("Metal contiguous elu {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_elu(

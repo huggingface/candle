@@ -262,17 +262,14 @@ fn unary_grad(device: &Device) -> Result<()> {
     let grads = y.backward()?;
     let grad_x = grads.get(&elu_x).context("no grad for x")?;
 
-    // TODO: fix this for metal.
-    if !device.is_metal() {
-        assert_eq!(
-            test_utils::to_vec1_round(&y, 4)?,
-            [-1.2642, 0.0000, -1.7293, 3.0000]
-        );
-        assert_eq!(
-            test_utils::to_vec1_round(grad_x, 4)?,
-            [0.7358, 2.0000, 0.2707, 1.0000]
-        );
-    }
+    assert_eq!(
+        test_utils::to_vec1_round(&y, 4)?,
+        [-1.2642, 0.0000, -1.7293, 3.0000]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [0.7358, 2.0000, 0.2707, 1.0000]
+    );
 
     // testing compared to pytorch nn.Silu()
     let y = x.silu()?;
