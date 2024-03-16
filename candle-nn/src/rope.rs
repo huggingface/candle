@@ -114,7 +114,7 @@ impl RotaryEmbedding {
                     _ => {
                         unreachable!();
                     }
-                }
+                };
             },
             &pos_storage,
         );
