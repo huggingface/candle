@@ -110,14 +110,14 @@ impl RotaryEmbedding {
             {
                 let bdg = out.storage_and_layout();
                 let out_storage = match &*bdg.0 {
-                    Storage::Cuda(storage) => storage,
+                    Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
                     _ => {
                         unreachable!();
                     }
                 };
                 out_storage
-            }.as_cuda_slice::<T>(),
-            pos_storage.as_cuda_slice::<i64>(),
+            },
+            pos_storage.as_cuda_slice::<i64>()?,
         );
 
         dbg!(input.mean_all()?);
