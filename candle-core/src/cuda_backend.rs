@@ -2171,6 +2171,11 @@ impl BackendStorage for CudaStorage {
                 *d.slice(dst_o..).device_ptr(),
                 4,
             ),
+            (S::I64(s), S::I64(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                8,
+            ),
             (S::BF16(s), S::BF16(d)) => (
                 *s.slice(src_o..).device_ptr(),
                 *d.slice(dst_o..).device_ptr(),
