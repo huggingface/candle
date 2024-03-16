@@ -27,7 +27,7 @@ unsafe impl<$($Vars: DeviceRepr),*> LaunchAsync<($($Vars, )*)> for CudaFunction 
         self,
         cfg: LaunchConfig,
         args: ($($Vars, )*)
-    ) -> Result<(), result::DriverError> {
+    ) -> Result<(), cudarc::driver::result::DriverError> {
         let params = &mut [$(args.$Idx.as_kernel_param(), )*];
         self.launch_async_impl(cfg, params)
     }
@@ -38,7 +38,7 @@ unsafe impl<$($Vars: DeviceRepr),*> LaunchAsync<($($Vars, )*)> for CudaFunction 
         stream: &CudaStream,
         cfg: LaunchConfig,
         args: ($($Vars, )*)
-    ) -> Result<(), result::DriverError> {
+    ) -> Result<(), cudarc::driver::result::DriverError> {
         let params = &mut [$(args.$Idx.as_kernel_param(), )*];
         self.par_launch_async_impl(stream, cfg, params)
     }
