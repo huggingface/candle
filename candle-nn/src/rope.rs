@@ -162,8 +162,8 @@ impl RotaryEmbedding {
         let rot_dim = self.cache.dim(1)?;
         let num_heads = q.dim(2)?;//q.dim(D::Minus1)? / self.head_size;
         let num_kv_heads = k.dim(2)?;//k.dim(D::Minus1)? / self.head_size;
-        let q_stride = q.stride()[q.stride().len() - 2];
-        let k_stride = k.stride()[k.stride().len() - 2];
+        let q_stride = q.stride()[1];//q.stride().len() - 2];
+        let k_stride = k.stride()[1];//k.stride().len() - 2];
         
         dbg!(num_heads);
         dbg!(num_kv_heads);
