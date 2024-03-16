@@ -121,8 +121,8 @@ impl RotaryEmbedding {
 
         dbg!(&positions);
         let mut things = Vec::new();
-        for pos in pos_storage {
-            things.push(Tensor::from_slice(&pos, pos.len(), input.device())?.unsqueeze(0)?);
+        for pos in &pos_storage {
+            things.push(Tensor::from_slice(&pos, pos.len(), q.device())?.unsqueeze(0)?);
         }
         let out = Tensor::cat(&things, 0)?;
         dbg!(out.stride());
