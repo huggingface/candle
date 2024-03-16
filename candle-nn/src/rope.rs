@@ -115,8 +115,8 @@ impl RotaryEmbedding {
                         unreachable!();
                     }
                 };
-                out_storage.as_cuda_slice::<T>()
-            },
+                out_storage
+            }.as_cuda_slice::<T>(),
             pos_storage.as_cuda_slice::<i64>(),
         );
 
