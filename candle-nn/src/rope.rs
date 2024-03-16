@@ -10,6 +10,8 @@ use candle::cuda_backend::{
     cudarc::driver::{DeviceRepr, LaunchAsync, LaunchConfig},
     kernel_name, kernels, CudaDType,
 };
+#[cfg(feature = "cuda")]
+pub use cudarc;
 
 #[derive(Debug, Clone)]
 pub struct RotaryEmbedding {
