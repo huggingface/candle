@@ -46,39 +46,39 @@ __device__ void fused_rope_cached_forward(
 extern "C" __global__ void rotary_embedding_kernel_f32(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
-    const float* src, const float* cos,
-    const float* sin, float* dst,
+    float* src, const float* cos,
+    const float* sin,
     int64_t* positions, const int pos_block_stride) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
-      src, cos, sin, dst,
+      src, cos, sin, src,
       positions, pos_block_stride);
 }
 
 extern "C" __global__ void rotary_embedding_kernel_f64(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
-    const double* src, const float* cos,
-    const float* sin, double* dst,
+    double* src, const float* cos,
+    const float* sin,
     int64_t* positions, const int pos_block_stride) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
-      src, cos, sin, dst,
+      src, cos, sin, src,
       positions, pos_block_stride);
 }
 
 extern "C" __global__ void rotary_embedding_kernel_f16(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
-    const __half* src, const float* cos,
-    const float* sin, __half* dst,
+    __half* src, const float* cos,
+    const float* sin,
     int64_t* positions, const int pos_block_stride) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
-      src, cos, sin, dst,
+      src, cos, sin, src,
       positions, pos_block_stride);
 }
 
@@ -88,12 +88,12 @@ extern "C" __global__ void rotary_embedding_kernel_bf16(
     const int h, const int d, const int d2, const int stride_s,
     const int stride_b, const int stride_h, const int stride_d,
     const __nv_bfloat16* src, const float* cos,
-    const float* sin, __nv_bfloat16* dst,
+    float* sin,
     int64_t* positions, const int pos_block_stride) {
     fused_rope_cached_forward(
       h, d, d2,
       stride_s, stride_b, stride_h, stride_d,
-      src, cos, sin, dst,
+      src, cos, sin, src,
       positions, pos_block_stride);
 }
 #endif

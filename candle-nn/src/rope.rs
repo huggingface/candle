@@ -96,7 +96,6 @@ impl RotaryEmbedding {
                 inp_storage.as_cuda_slice::<T>()?,
                 cos_storage.as_cuda_slice::<f32>()?,
                 sin_storage.as_cuda_slice::<f32>()?,
-                inp_storage.as_cuda_slice::<T>()?, //out
                 pos_storage.as_cuda_slice::<i64>()?,
                 pos_block_stride as i32,
             );
