@@ -19,6 +19,36 @@ pub struct RotaryEmbedding {
     sin_unsqz: Tensor,
     head_size: usize,
 }
+macro_rules! impl_launch {
+    ([$($Vars:tt),*], [$($Idx:tt),*]) => {
+unsafe impl<$($Vars: DeviceRepr),*> LaunchAsync<($($Vars, )*)> for CudaFunction {
+    #[inline(always)]
+    unsafe fn launch(
+        self,
+        cfg: LaunchConfig,
+        args: ($($Vars, )*)
+    ) -> Result<(), result::DriverError> {
+        let params = &mut [$(args.$Idx.as_kernel_param(), )*];
+        self.launch_async_impl(cfg, params)
+    }
+
+    #[inline(always)]
+    unsafe fn launch_on_stream(
+        self,
+        stream: &CudaStream,
+        cfg: LaunchConfig,
+        args: ($($Vars, )*)
+    ) -> Result<(), result::DriverError> {
+        let params = &mut [$(args.$Idx.as_kernel_param(), )*];
+        self.par_launch_async_impl(stream, cfg, params)
+    }
+}
+    };
+}
+impl_launch!(
+    [A, B, C, D, E, F, G, H, I, J, K, L],
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+);
 
 impl RotaryEmbedding {
     pub fn new(
