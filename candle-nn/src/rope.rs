@@ -57,6 +57,7 @@ impl RotaryEmbedding {
         cos_storage: &CudaStorage,
         sin_storage: &CudaStorage,
         pos_storage: &CudaStorage,
+        pos_block_stride: usize,
     ) -> Result<Tensor> {
         use candle::{cuda_backend::WrapErr, from_storage_no_op};
 
@@ -97,6 +98,7 @@ impl RotaryEmbedding {
                 sin_storage.as_cuda_slice::<f32>()?,
                 inp_storage.as_cuda_slice::<T>()?, //out
                 pos_storage.as_cuda_slice::<i64>()?,
+                pos_block_stride as i32,
             );
             unsafe { func.launch(cfg, params) }.w()?;
         }
@@ -126,6 +128,7 @@ impl RotaryEmbedding {
         }
         let out = Tensor::cat(&things, 0)?;
         dbg!(out.stride());
+        let pos_block_stride = out.stride()[0];
 
         let bdg = out.storage_and_layout();
         let st = match &*bdg.0 {
@@ -136,8 +139,8 @@ impl RotaryEmbedding {
         };
 
         Ok((
-            self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, &st)?,
-            self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, &st)?,
+            self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, &st, pos_block_stride)?,
+            self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, &st, pos_block_stride)?,
         ))
     }
 
