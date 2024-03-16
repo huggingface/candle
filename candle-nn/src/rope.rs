@@ -73,6 +73,14 @@ impl RotaryEmbedding {
             (s,b,h,d),
             false,
         );
+        
+        let bdg = out.storage_and_layout();
+        let out_storage = match &*bdg.0 {
+            Storage::Cuda(storage) => storage,
+            _ => {
+                unreachable!();
+            }
+        };
 
         let o_stride_s = out.stride()[0];
         let o_stride_b = out.stride()[1];
@@ -92,7 +100,7 @@ impl RotaryEmbedding {
             shared_mem_bytes: 0,
         };
 
-        let params = (
+        {let params = (
             h as i32,
             d as i32,
             d2 as i32,
@@ -107,18 +115,10 @@ impl RotaryEmbedding {
             inp_storage.as_cuda_slice::<T>()?,
             cos_storage.as_cuda_slice::<f32>()?,
             sin_storage.as_cuda_slice::<f32>()?,
-            {
-                let bdg = out.storage_and_layout();
-                let out_storage = match &*bdg.0 {
-                    Storage::Cuda(storage) => storage.as_cuda_slice::<T>()?,
-                    _ => {
-                        unreachable!();
-                    }
-                };
-                out_storage
-            },
+            out_storage.as_cuda_slice::<T>()?,
             pos_storage.as_cuda_slice::<i64>()?,
         );
+        unsafe { func.launch(cfg, params) }.w()?;}
 
         dbg!(input.mean_all()?);
         dbg!(out.mean_all()?);
