@@ -56,7 +56,7 @@ impl RotaryEmbedding {
         inp_storage: &CudaStorage,
         cos_storage: &CudaStorage,
         sin_storage: &CudaStorage,
-        pos_storage: &[Vec<i64>],
+        pos_storage: &CudaStorage,
     ) -> Result<Tensor> {
         use candle::{cuda_backend::WrapErr, from_storage_no_op};
 
@@ -82,13 +82,6 @@ impl RotaryEmbedding {
             block_dim: (WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),
             shared_mem_bytes: 0,
         };
-
-        let mut things = Vec::new();
-        for pos in pos_storage {
-            things.push(Tensor::from_slice(&pos, pos.len(), input.device())?.unsqueeze(0)?);
-        }
-        let out = Tensor::cat(&things, 0)?;
-        dbg!(out.stride());
         
         {
             let params = (
@@ -103,12 +96,7 @@ impl RotaryEmbedding {
                 cos_storage.as_cuda_slice::<f32>()?,
                 sin_storage.as_cuda_slice::<f32>()?,
                 inp_storage.as_cuda_slice::<T>()?, //out
-                {match &*out.storage_and_layout().0 {
-                    Storage::Cuda(st) => {
-                        st
-                    }
-                    _ => unreachable!()
-                }.as_cuda_slice::<i64>()?},
+                pos_storage.as_cuda_slice::<i64>()?,
             );
             unsafe { func.launch(cfg, params) }.w()?;
         }
@@ -132,10 +120,23 @@ impl RotaryEmbedding {
         use candle::{cuda_backend::WrapErr, from_storage_no_op};
 
         dbg!(&positions);
+        let mut things = Vec::new();
+        for pos in pos_storage {
+            things.push(Tensor::from_slice(&pos, pos.len(), input.device())?.unsqueeze(0)?);
+        }
+        let out = Tensor::cat(&things, 0)?;
+        dbg!(out.stride());
+
+        let st = match &*out.storage_and_layout().0 {
+            Storage::Cuda(st) => {
+                st
+            }
+            _ => unreachable!()
+        };
 
         Ok((
-            self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, &positions)?,
-            self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, &positions)?,
+            self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, &st)?,
+            self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, &st)?,
         ))
     }
 
