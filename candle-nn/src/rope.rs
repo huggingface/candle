@@ -94,7 +94,7 @@ impl RotaryEmbedding {
                 cos_storage.as_cuda_slice::<f32>()?,
                 sin_storage.as_cuda_slice::<f32>()?,
                 inp_storage.as_cuda_slice::<T>()?, //out
-                pos as usize,
+                pos_storage as usize,
             );
             unsafe { func.launch(cfg, params) }.w()?;
         }
