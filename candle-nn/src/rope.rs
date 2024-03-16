@@ -199,7 +199,7 @@ impl RotaryEmbedding {
             _ => unreachable!()
         };
 
-        
+
         let params = (
             st.as_cuda_slice::<i64>()?,
             q_storage.as_cuda_slice::<T>()?,
@@ -224,7 +224,7 @@ impl RotaryEmbedding {
         positions: Vec<Vec<i64>>,
         q: &Tensor,
         k: &Tensor,
-    ) -> Result<(Tensor, Tensor)> {
+    ) -> Result<()> { //Result<(Tensor, Tensor)> {
         match (
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
