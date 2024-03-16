@@ -68,19 +68,6 @@ impl RotaryEmbedding {
 
         let d2 = self.cos_unsqz.dims()[3];
 
-        /*let output = unsafe { dev.alloc::<T>(s * b * h * d) }.w()?; // this will be the same as input
-
-        let out = from_storage_no_op(
-            Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-            (s, b, h, d),
-            false,
-        );*/
-
-        let o_stride_s = stride_s;//out.stride()[0];
-        let o_stride_b = stride_b;//out.stride()[1];
-        let o_stride_h = stride_h;//out.stride()[2];
-        let o_stride_d = stride_d;//out.stride()[3];
-
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel"),
             kernels::FUSED_ROPE,
@@ -95,64 +82,14 @@ impl RotaryEmbedding {
         };
 
         {
-            /*let bdg = out.storage_and_layout();
-            let out_storage = match &*bdg.0 {
-                Storage::Cuda(storage) => storage,
-                _ => {
-                    unreachable!();
-                }
-            };
-            */
-
-            let strides_s = [stride_s as i64, o_stride_s as i64];
-            let strides_b = [stride_b as i64, o_stride_b as i64];
-            let strides_h = [stride_h as i64, o_stride_h as i64];
-            let strides_d = [stride_d as i64, o_stride_d as i64];
-
-            let strides_s = Tensor::new(strides_s.as_slice(), input.device())?;
-            let bdg = strides_s.storage_and_layout();
-            let strides_s_storage = match &*bdg.0 {
-                Storage::Cuda(storage) => storage,
-                _ => {
-                    unreachable!();
-                }
-            };
-
-            let strides_b = Tensor::new(strides_b.as_slice(), input.device())?;
-            let bdg = strides_b.storage_and_layout();
-            let strides_b_storage = match &*bdg.0 {
-                Storage::Cuda(storage) => storage,
-                _ => {
-                    unreachable!();
-                }
-            };
-
-            let strides_h: Tensor = Tensor::new(strides_h.as_slice(), input.device())?;
-            let bdg = strides_h.storage_and_layout();
-            let strides_h_storage = match &*bdg.0 {
-                Storage::Cuda(storage) => storage,
-                _ => {
-                    unreachable!();
-                }
-            };
-
-            let strides_d = Tensor::new(strides_d.as_slice(), input.device())?;
-            let bdg = strides_d.storage_and_layout();
-            let strides_d_storage = match &*bdg.0 {
-                Storage::Cuda(storage) => storage,
-                _ => {
-                    unreachable!();
-                }
-            };
-
             let params = (
                 h as i32,
                 d as i32,
                 d2 as i32,
-                strides_s_storage.as_cuda_slice::<i64>()?,
-                strides_b_storage.as_cuda_slice::<i64>()?,
-                strides_h_storage.as_cuda_slice::<i64>()?,
-                strides_d_storage.as_cuda_slice::<i64>()?,
+                strides_s as i32,
+                strides_b as i32,
+                strides_h as i32,
+                strides_d as i32,
                 inp_storage.as_cuda_slice::<T>()?,
                 cos_storage.as_cuda_slice::<f32>()?,
                 sin_storage.as_cuda_slice::<f32>()?,
@@ -194,58 +131,6 @@ impl RotaryEmbedding {
             self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, pos_storage)?,
             self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, pos_storage)?,
         ))
-
-        /*use candle::cuda_backend::WrapErr;
-
-        let num_tokens = q.elem_count() / q.dim(D::Minus1)?;
-        let rot_dim = self.cache.dim(1)?;
-        let num_heads = q.dim(D::Minus1)? / self.head_size;
-        let num_kv_heads = k.dim(D::Minus1)? / self.head_size;
-        let q_stride = q.stride()[q.stride().len() - 2];
-        let k_stride = k.stride()[k.stride().len() - 2];
-
-        dbg!(num_heads);
-        dbg!(num_kv_heads);
-        dbg!(q_stride);
-        dbg!(k_stride);
-
-        let func = dev.get_or_load_func(
-            &kernel_name::<T>("rotary_embedding_kernel_neox"),
-            kernels::FUSED_ROPE,
-        )?;
-
-        let cfg = LaunchConfig {
-            grid_dim: (num_tokens as u32, 1, 1),
-            block_dim: (512.min((num_heads * rot_dim / 2) as u32), 1, 1),
-            shared_mem_bytes: 0,
-        };
-
-        let positions = positions.iter().map(|x| *x as i64).collect::<Vec<_>>();
-        let positions = Tensor::new(positions.as_slice(), q.device())?;
-        let bdg = positions.storage_and_layout();
-        let pos_storage = match  &*bdg.0{
-            Storage::Cuda(storage) => {
-                storage
-            }
-            _ => {
-                unreachable!();
-            }
-        };
-        let params = (
-            pos_storage.as_cuda_slice::<i64>()?,
-            q_storage.as_cuda_slice::<T>()?,
-            k_storage.as_cuda_slice::<T>()?,
-            cache_storage.as_cuda_slice::<f32>()?,
-            rot_dim,
-            q_stride,
-            k_stride,
-            num_heads,
-            num_kv_heads,
-            self.head_size,
-        );
-        unsafe { func.launch(cfg, params) }.w()?;
-
-        Ok(())*/
     }
 
     #[cfg(feature = "cuda")]
