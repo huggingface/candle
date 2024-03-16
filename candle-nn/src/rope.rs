@@ -161,11 +161,6 @@ impl RotaryEmbedding {
             unsafe { func.launch(cfg, params) }.w()?;
         }
 
-        dbg!(input.mean_all()?);
-        dbg!(out.mean_all()?);
-        dbg!(input.shape());
-        dbg!(out.shape());
-
         // shape: (seqlen, bs, heads, head_dim)
         Ok(out)
     }
