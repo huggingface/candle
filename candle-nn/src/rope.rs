@@ -51,98 +51,6 @@ impl RotaryEmbedding {
         })
     }
 
-    fn run_kernel<T: CudaDType + WithDType + DeviceRepr>(
-        &self,
-        dev: &CudaDevice,
-        input: &Tensor,
-        inp_storage: &CudaStorage,
-        cos_storage: &CudaStorage,
-        sin_storage: &CudaStorage,
-        pos_storage: &CudaStorage,
-        pos_block_stride: usize,
-    ) -> Result<Tensor> {
-        use candle::{cuda_backend::WrapErr, from_storage_no_op};
-
-        let (s, b, h, d) = input.dims4()?;
-        let stride_s = input.stride()[0];
-        let stride_b = input.stride()[1];
-        let stride_h = input.stride()[2];
-        let stride_d = input.stride()[3];
-
-        let d2 = self.cos_unsqz.dims()[3];
-
-        let func = dev.get_or_load_func(
-            &kernel_name::<T>("rotary_embedding_kernel"),
-            kernels::FUSED_ROPE,
-        )?;
-
-        const WARP_SIZE: u32 = 32;
-
-        let cfg = LaunchConfig {
-            grid_dim: (s as u32, b as u32, 1),
-            block_dim: (WARP_SIZE, if h < 16 { 4 } else { 8 }, 1),
-            shared_mem_bytes: 0,
-        };
-        
-        {
-            let params = (
-                h as i32,
-                d as i32,
-                d2 as i32,
-                stride_s as i32,
-                stride_b as i32,
-                stride_h as i32,
-                stride_d as i32,
-                inp_storage.as_cuda_slice::<T>()?,
-                cos_storage.as_cuda_slice::<f32>()?,
-                sin_storage.as_cuda_slice::<f32>()?,
-                pos_storage.as_cuda_slice::<i64>()?,
-                pos_block_stride as i32,
-            );
-            unsafe { func.launch(cfg, params) }.w()?;
-        }
-
-        // shape: (seqlen, bs, heads, head_dim)
-        Ok(input.clone())
-    }
-
-    /*#[cfg(feature = "cuda")]
-    fn execute_dtype<T: CudaDType + WithDType + DeviceRepr>(
-        &self,
-        dev: &CudaDevice,
-        mut positions: Vec<Vec<i64>>,
-        q_storage: &CudaStorage,
-        k_storage: &CudaStorage,
-        q: &Tensor,
-        k: &Tensor,
-        cos_storage: &CudaStorage,
-        sin_storage: &CudaStorage,
-    ) -> Result<(Tensor, Tensor)> {
-        use candle::{cuda_backend::WrapErr, from_storage_no_op};
-
-        dbg!(&positions);
-        let mut things = Vec::new();
-        for pos in positions {
-            things.push(Tensor::from_slice(&pos, pos.len(), q.device())?.unsqueeze(0)?);
-        }
-        let out = Tensor::cat(&things, 0)?;
-        dbg!(out.stride());
-        let pos_block_stride = out.stride()[0];
-
-        let bdg = out.storage_and_layout();
-        let st = match &*bdg.0 {
-            Storage::Cuda(st) => {
-                st
-            }
-            _ => unreachable!()
-        };
-
-        Ok((
-            self.run_kernel::<T>(dev, q, q_storage, cos_storage, sin_storage, &st, pos_block_stride)?,
-            self.run_kernel::<T>(dev, k, k_storage, cos_storage, sin_storage, &st, pos_block_stride)?,
-        ))
-    }*/
-
     #[cfg(feature = "cuda")]
     fn execute_dtype<T: CudaDType + WithDType + DeviceRepr>(
         &self,
@@ -162,7 +70,7 @@ impl RotaryEmbedding {
         let num_kv_heads = k.dim(D::Minus1)? / self.head_size;
         let q_stride = q.stride()[q.stride().len() - 2];
         let k_stride = k.stride()[k.stride().len() - 2];
-        
+
         let func = dev.get_or_load_func(
             &kernel_name::<T>("rotary_embedding_kernel"),
             kernels::FUSED_ROPE,
@@ -183,12 +91,9 @@ impl RotaryEmbedding {
 
         let bdg = out.storage_and_layout();
         let st = match &*bdg.0 {
-            Storage::Cuda(st) => {
-                st
-            }
-            _ => unreachable!()
+            Storage::Cuda(st) => st,
+            _ => unreachable!(),
         };
-
 
         let params = (
             st.as_cuda_slice::<i64>()?,
@@ -214,17 +119,13 @@ impl RotaryEmbedding {
         positions: Vec<Vec<i64>>,
         q: &Tensor,
         k: &Tensor,
-    ) -> Result<()> { //Result<(Tensor, Tensor)> {
+    ) -> Result<()> {
         match (
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
             &*self.cache.storage_and_layout().0,
         ) {
-            (
-                Storage::Cuda(q_storage),
-                Storage::Cuda(k_storage),
-                Storage::Cuda(cache_storage),
-            ) => {
+            (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
                 return match (q.dtype(), k.dtype()) {
                     (DType::BF16, DType::BF16) => self.execute_dtype::<half::bf16>(
                         &dev,
@@ -283,22 +184,6 @@ impl RotaryEmbedding {
             #[cfg(feature = "cuda")]
             (Device::Cuda(dev), Device::Cuda(_)) => {
                 self.fused_rope(dev, positions_kernel, &*q, &*k);
-                /*
-                // input is (bs, seqlen, num_head, head_dim)
-                // want (seqlen, bs, num_head, head_dim)
-                let in_q = q.permute((1, 0, 2, 3))?;
-                let in_k = k.permute((1, 0, 2, 3))?;
-                dbg!(&in_q);
-                dbg!(&in_k);
-                dbg!(&q);
-                dbg!(&k);
-                let (new_q, new_k) = self.fused_rope(dev, positions_kernel, &in_q, &in_k)?;
-                // output is (seqlen, bs, num_head, head_dim)
-                // want (bs, seqlen, num_head, head_dim)
-                let new_q = new_q.permute((1, 0, 2, 3))?;
-                let new_k = new_k.permute((1, 0, 2, 3))?;
-                *q = new_q;
-                *k = new_k;*/
             }
 
             _ => {
