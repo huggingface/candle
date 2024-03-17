@@ -167,11 +167,16 @@ kernel void NAME( \
 
 INDEX_OP(is_u32_f32, uint, float)
 INDEX_OP(is_u32_f16, uint, half)
+
 GATHER_OP(gather_u32_f32, uint, float)
 GATHER_OP(gather_u32_f16, uint, half)
-SCATTER_ADD_OP(sa_u32_f32, uint, float)
-SCATTER_ADD_OP(sa_u32_f16, uint, half)
 
+SCATTER_ADD_OP(sa_u32_f32, uint32_t, float)
+SCATTER_ADD_OP(sa_u8_f32, uint8_t, float)
+SCATTER_ADD_OP(sa_i64_f32, int64_t, float)
+SCATTER_ADD_OP(sa_u32_f16, uint32_t, half)
+SCATTER_ADD_OP(sa_u8_f16, uint8_t, half)
+SCATTER_ADD_OP(sa_i64_f16, int64_t, half)
 
 #if defined(__HAVE_BFLOAT__)
 INDEX_OP(is_u32_bf16, uint32_t, bfloat)
@@ -180,6 +185,10 @@ INDEX_OP(is_u8_bf16, uint8_t, bfloat)
 INDEX_ADD_OP(ia_i64_bf16, int64_t, bfloat)
 INDEX_ADD_OP(ia_u32_bf16, uint32_t, bfloat)
 INDEX_ADD_OP(ia_u8_bf16, uint8_t, bfloat)
+
+SCATTER_ADD_OP(sa_u32_bf16, uint32_t, bfloat)
+SCATTER_ADD_OP(sa_u8_bf16, uint8_t, bfloat)
+SCATTER_ADD_OP(sa_i64_bf16, int64_t, bfloat)
 #endif
 
 INDEX_ADD_OP(ia_u32_f16, uint32_t, half)
