@@ -608,6 +608,34 @@ impl Map1 for Elu {
     }
 }
 
+struct Col2Im1D {
+    stride: usize,
+}
+
+impl Map1 for Col2Im1D {
+    fn f<T: DeviceRepr + WithDType>(
+        &self,
+        src: &CudaSlice<T>,
+        dev: &CudaDevice,
+        layout: &Layout,
+    ) -> Result<CudaSlice<T>> {
+        let (b_size, l_in, c_out, k_size) = layout.shape().dims4()?;
+        let stride = self.stride;
+        let l_out = (l_in - 1) * stride + k_size;
+
+        let dst_el = b_size * c_out * l_out;
+        let cfg = LaunchConfig::for_num_elems(dst_el as u32);
+        let src = &src.slice(layout.start_offset()..);
+        let func = dev.get_or_load_func(&kernel_name::<T>("col2im1d"), kernels::CONV)?;
+        // SAFETY: Set later by running the kernel.
+        let dst = unsafe { dev.alloc::<T>(dst_el) }.w()?;
+        let params = (l_in, l_out, c_out, k_size, b_size, stride, src, &dst);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }.w()?;
+        Ok(dst)
+    }
+}
+
 struct Im2Col1D {
     l_k: usize,
     stride: usize,
@@ -1865,9 +1893,55 @@ impl BackendStorage for CudaStorage {
         params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
         let device = self.device().clone();
-        let slice =
-            ConvTranspose1D(params).map(&self.slice, l, &kernel.slice, kernel_l, &device)?;
-        Ok(Self { slice, device })
+        const USE_COL2IM_CONV1D_TR: bool = true;
+
+        let can_use_col2im = kernel_l.is_contiguous()
+            && params.dilation == 1
+            && params.padding == 0
+            && params.output_padding == 0;
+        if !can_use_col2im || !USE_COL2IM_CONV1D_TR {
+            let slice =
+                ConvTranspose1D(params).map(&self.slice, l, &kernel.slice, kernel_l, &device)?;
+            return Ok(Self { slice, device });
+        }
+
+        let (b_size, c_in, l_in) = l.shape().dims3()?;
+        let (c_in2, c_out, k_size) = kernel_l.shape().dims3()?;
+        if !kernel_l.is_contiguous() {
+            crate::bail!("convtr1d: the second argument (kernel) has to be contiguous {kernel_l:?}")
+        }
+        if c_in != c_in2 {
+            crate::bail!(
+                "convtr1d: shape mismatch on c_in {:?} {:?}",
+                l.shape(),
+                kernel_l.shape()
+            )
+        }
+        let col = {
+            // This merges the last two dimensions of the kernel together.
+            let kernel_l_mm = Layout::new(
+                (b_size, c_in, k_size * c_out).into(),
+                vec![0, k_size * c_out, 1],
+                kernel_l.start_offset(),
+            );
+            self.matmul(
+                kernel,
+                (
+                    b_size,
+                    /* m */ l_in,
+                    /* n */ c_out * k_size,
+                    /* k */ c_in,
+                ),
+                &l.transpose(1, 2)?,
+                &kernel_l_mm,
+            )?
+        };
+        let col_l = Layout::contiguous((b_size, l_in, c_out, k_size));
+        Col2Im1D {
+            stride: params.stride,
+        }
+        .map(&col.slice, &device, &col_l)?;
+        Ok(col)
     }
 
     #[cfg(not(feature = "cudnn"))]

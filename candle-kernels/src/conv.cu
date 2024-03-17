@@ -52,6 +52,47 @@ __device__ void conv1d(
 }
 
 template <typename T>
+__device__ void col2im1d(
+    const size_t l_in,
+    const size_t l_out,
+    const size_t c_out,
+    const size_t k_size,
+    const size_t b_size,
+    const size_t stride,
+    const T *src,
+    T *dst
+) {
+  const size_t dst_i = blockIdx.x * blockDim.x + threadIdx.x;
+  // src: (b_size, l_in, c_out, k_size)
+  // dst: (b_size, c_out, l_out)
+  if (dst_i >= b_size * c_out * l_out) {
+    return;
+  }
+  const size_t dst_s0 = c_out * l_out;
+  const size_t dst_s1 = l_out;
+
+  // dst_idx = b_i * dst_s0 + c_i * dst_s1 + l_in_i * stride + k_i
+  const size_t b_i = dst_i / dst_s0;
+  const size_t dst_i2 = dst_i - b_i * dst_s0;
+  const size_t c_i = dst_i2 / dst_s1;
+  const size_t dst_i3 = dst_i2 - c_i * dst_s1; // l_in_i * stride + k_i
+
+  const size_t src_s0 = c_out * k_size * l_in;
+  const size_t src_s1 = c_out * k_size;
+  const size_t src_s2 = k_size;
+
+  dst[dst_i] = 0;
+  for (size_t k_i = 0; k_i < min(dst_i3, k_size); ++k_i) {
+    const size_t l_in_i_times_stride = dst_i3 - k_i;
+    const size_t l_in_i = l_in_i_times_stride / stride;
+    const size_t src_i = b_i * src_s0 + l_in_i * src_s1 + c_i * src_s2 + k_i;
+    if (l_in_i * stride == l_in_i_times_stride) {
+      dst[dst_i] += src[src_i];
+    }
+  }
+}
+
+template <typename T>
 __device__ void im2col1d(
     const size_t dst_numel,
     const size_t l_out,
