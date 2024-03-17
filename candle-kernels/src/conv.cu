@@ -86,7 +86,12 @@ __device__ void col2im1d(
   const size_t k_i = dst_i3 - stride * l_in_i;
   for (size_t k_i = 0; k_i < min(dst_i3 + 1, k_size); k_i += stride) {
     const size_t src_i = b_i * src_s0 + l_in_i * src_s1 + c_i * src_s2 + k_i;
-    d += src[src_i];
+    if (src_i < b_size * l_in * c_out * k_size) {
+      d += src[src_i];
+    }
+    if (l_in_i == 0) {
+      break;
+    }
     l_in_i -= 1;
   }
   dst[dst_i] = d;
