@@ -19,10 +19,9 @@ use candle::cuda_backend::{
 pub struct RotaryEmbedding {
     cos: Tensor,
     sin: Tensor,
-    cos_unsqz: Tensor,
-    sin_unsqz: Tensor,
     head_size: usize,
     cache: Tensor,
+    is_gpt_neox: bool,
 }
 
 impl RotaryEmbedding {
@@ -31,6 +30,7 @@ impl RotaryEmbedding {
         head_dim: usize,
         max_position_embeddings: usize,
         device: &Device,
+        is_gpt_neox: bool,
     ) -> Result<Self> {
         let theta: Vec<_> = (0..head_dim)
             .step_by(2)
@@ -47,9 +47,8 @@ impl RotaryEmbedding {
             head_size: head_dim,
             cos: cos.clone(),
             sin: sin.clone(),
-            cos_unsqz: cos.unsqueeze(1)?.unsqueeze(1)?,
-            sin_unsqz: sin.unsqueeze(1)?.unsqueeze(1)?,
             cache: Tensor::cat(&[cos.clone(), sin.clone()], D::Minus1)?.contiguous()?,
+            is_gpt_neox,
         })
     }
 
@@ -75,7 +74,11 @@ impl RotaryEmbedding {
         let k_stride = k.stride()[k.stride().len() - 2];
 
         let func = dev.get_or_load_func(
-            &kernel_name::<T>("rotary_embedding_kernel"),
+            &if is_gpt_neox {
+                kernel_name::<T>("rotary_embedding_kernel_neox")
+            } else {
+                kernel_name::<T>("rotary_embedding_kernel")
+            },
             kernels::FUSED_ROPE,
         )?;
 
