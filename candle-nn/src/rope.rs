@@ -73,7 +73,7 @@ impl RotaryEmbedding {
         let k_stride = k.stride()[k.stride().len() - 2];
 
         let func = dev.get_or_load_func(
-            &if is_gpt_neox {
+            &if self.is_gpt_neox {
                 kernel_name::<T>("rotary_embedding_kernel_neox")
             } else {
                 kernel_name::<T>("rotary_embedding_kernel")
