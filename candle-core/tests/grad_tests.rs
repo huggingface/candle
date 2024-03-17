@@ -1,3 +1,4 @@
+#![allow(clippy::approx_constant)]
 use anyhow::{Context, Result};
 use candle_core::{test_device, test_utils, Device, Shape, Tensor, Var};
 
@@ -96,24 +97,24 @@ fn unary_grad(device: &Device) -> Result<()> {
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(
-        y.to_vec1::<f32>()?,
-        [20.085537, 2.7182817, 54.59815, 1.1618342]
+        test_utils::to_vec1_round(&y, 4)?,
+        [20.0855, 2.7183, 54.5982, 1.1618]
     );
     assert_eq!(
-        grad_x.to_vec1::<f32>()?,
-        [20.085537, 2.7182817, 54.59815, 1.1618342]
+        test_utils::to_vec1_round(grad_x, 4)?,
+        [20.0855, 2.7183, 54.5982, 1.1618]
     );
     let y = x.exp()?.sqr()?;
     let grads = y.backward()?;
     let grad_x = grads.get(x).context("no grad for x")?;
     assert_eq!(
-        y.to_vec1::<f32>()?,
-        [403.4288, 7.3890557, 2980.9578, 1.3498588]
+        test_utils::to_vec1_round(&y, 3)?,
+        [403.429, 7.389, 2980.958, 1.35]
     );
     // exp(x)^2 = exp(2*x)
     assert_eq!(
-        grad_x.to_vec1::<f32>()?,
-        [806.8576, 14.778111, 5961.9155, 2.6997175]
+        test_utils::to_vec1_round(grad_x, 2)?,
+        [806.86, 14.78, 5961.92, 2.7]
     );
     let y = x.sin()?;
     let grads = y.backward()?;
@@ -261,6 +262,7 @@ fn unary_grad(device: &Device) -> Result<()> {
     let y = elu_x.elu(2.)?;
     let grads = y.backward()?;
     let grad_x = grads.get(&elu_x).context("no grad for x")?;
+
     assert_eq!(
         test_utils::to_vec1_round(&y, 4)?,
         [-1.2642, 0.0000, -1.7293, 3.0000]

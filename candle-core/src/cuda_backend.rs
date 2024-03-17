@@ -2145,6 +2145,67 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn copy2d(
+        &self,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
+    ) -> Result<()> {
+        let dev = &self.device;
+        let d1 = d1 as u32;
+        let d2 = d2 as u32;
+        let dst_s = dst_s as u32;
+        let src_s = src_s as u32;
+        let (src, dst, kname) = match (&self.slice, &mut dst.slice) {
+            (S::U8(s), S::U8(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_u8",
+            ),
+            (S::U32(s), S::U32(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_u32",
+            ),
+            (S::I64(s), S::I64(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_i64",
+            ),
+            (S::BF16(s), S::BF16(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_bf16",
+            ),
+            (S::F16(s), S::F16(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_f16",
+            ),
+            (S::F32(s), S::F32(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_f32",
+            ),
+            (S::F64(s), S::F64(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_f64",
+            ),
+            _ => Err(CudaError::InternalError("dtype mismatch in copy2d"))?,
+        };
+        let func = dev.get_or_load_func(kname, kernels::FILL)?;
+        let cfg = LaunchConfig::for_num_elems(d1 * d2);
+        let params = (src, dst, d1, d2, src_s, dst_s);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }.w()?;
+        Ok(())
+    }
+
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         let src_shape = src_l.shape();
         let dims = src_shape.dims();

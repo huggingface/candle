@@ -1023,6 +1023,26 @@ impl<'a, I: IntDType> Map2 for IndexAdd<'a, I> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn copy2d_<T: Copy>(
+    src: &[T],
+    dst: &mut [T],
+    d1: usize,
+    d2: usize,
+    src_stride1: usize,
+    dst_stride1: usize,
+    src_offset: usize,
+    dst_offset: usize,
+) {
+    for i1 in 0..d1 {
+        let dst_idx = i1 * dst_stride1 + dst_offset;
+        let src_idx = i1 * src_stride1 + src_offset;
+        let dst = &mut dst[dst_idx..dst_idx + d2];
+        let src = &src[src_idx..src_idx + d2];
+        dst.copy_from_slice(src)
+    }
+}
+
 fn copy_strided_src_<T: Copy>(src: &[T], dst: &mut [T], dst_offset: usize, src_l: &Layout) {
     match src_l.strided_blocks() {
         crate::StridedBlocks::SingleBlock { start_offset, len } => {
@@ -2450,6 +2470,48 @@ impl BackendStorage for CpuStorage {
                 .bt())
             }
         }
+    }
+
+    fn copy2d(
+        &self,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
+    ) -> Result<()> {
+        match (self, dst) {
+            (Self::U8(src), Self::U8(dst)) => copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o),
+            (Self::U32(src), Self::U32(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::I64(src), Self::I64(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::BF16(src), Self::BF16(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::F16(src), Self::F16(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::F32(src), Self::F32(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::F64(src), Self::F64(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (_, dst) => {
+                return Err(Error::DTypeMismatchBinaryOp {
+                    lhs: self.dtype(),
+                    rhs: dst.dtype(),
+                    op: "copy2d",
+                }
+                .bt());
+            }
+        }
+        Ok(())
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
