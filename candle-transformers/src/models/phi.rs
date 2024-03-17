@@ -106,7 +106,7 @@ impl Module for MLP {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Attention {
     q_proj: Linear,
     k_proj: Linear,
@@ -265,7 +265,7 @@ impl Attention {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct DecoderLayer {
     self_attn: Attention,
     mlp: MLP,
@@ -304,7 +304,7 @@ impl DecoderLayer {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
