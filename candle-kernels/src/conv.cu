@@ -81,15 +81,16 @@ __device__ void col2im1d(
   const size_t src_s1 = c_out * k_size;
   const size_t src_s2 = k_size;
 
-  dst[dst_i] = 0;
-  for (size_t k_i = 0; k_i < min(dst_i3, k_size); ++k_i) {
+  T d = 0;
+  for (size_t k_i = 0; k_i < min(dst_i3 + 1, k_size); ++k_i) {
     const size_t l_in_i_times_stride = dst_i3 - k_i;
     const size_t l_in_i = l_in_i_times_stride / stride;
     const size_t src_i = b_i * src_s0 + l_in_i * src_s1 + c_i * src_s2 + k_i;
     if (l_in_i * stride == l_in_i_times_stride) {
-      dst[dst_i] += src[src_i];
+      d += src[src_i];
     }
   }
+  dst[dst_i] = d;
 }
 
 template <typename T>
@@ -568,7 +569,7 @@ extern "C" __global__ void FN_NAME(  \
   conv2d<TYPENAME, TYPEACC>(src_numel, w_out, h_out, stride, padding, dilation, info, src, kernel, dst); \
 } \
 
-#define IM2COL1D_OP(TYPENAME, FN_NAME) \
+#define IM2COL1D_OP(TYPENAME, FN_NAME, FN_NAME2) \
 extern "C" __global__ void FN_NAME(  \
     const size_t dst_numel, \
     const size_t l_out, \
@@ -581,6 +582,18 @@ extern "C" __global__ void FN_NAME(  \
     TYPENAME *dst \
 ) {  \
   im2col1d<TYPENAME>(dst_numel, l_out, l_k, stride, padding, dilation, info, src, dst); \
+} \
+extern "C" __global__ void FN_NAME2(  \
+    const size_t l_in, \
+    const size_t l_out, \
+    const size_t c_out, \
+    const size_t k_size, \
+    const size_t b_size, \
+    const size_t stride, \
+    const TYPENAME *src, \
+    TYPENAME *dst \
+) {  \
+  col2im1d<TYPENAME>(l_in, l_out, c_out, k_size, b_size, stride, src, dst); \
 } \
 
 #define IM2COL_OP(TYPENAME, FN_NAME) \
@@ -683,7 +696,7 @@ AVG_POOL2D_OP(__nv_bfloat16, float, avg_pool2d_bf16)
 MAX_POOL2D_OP(__nv_bfloat16, max_pool2d_bf16)
 UPSAMPLE_NEAREST2D_OP(__nv_bfloat16, upsample_nearest2d_bf16)
 IM2COL_OP(__nv_bfloat16, im2col_bf16)
-IM2COL1D_OP(__nv_bfloat16, im2col1d_bf16)
+IM2COL1D_OP(__nv_bfloat16, im2col1d_bf16, col2im1d_bf16)
 #endif
 
 #if __CUDA_ARCH__ >= 530
@@ -695,7 +708,7 @@ AVG_POOL2D_OP(__half, float, avg_pool2d_f16)
 MAX_POOL2D_OP(__half, max_pool2d_f16)
 UPSAMPLE_NEAREST2D_OP(__half, upsample_nearest2d_f16)
 IM2COL_OP(__half, im2col_f16)
-IM2COL1D_OP(__half, im2col1d_f16)
+IM2COL1D_OP(__half, im2col1d_f16, col2im1d_f16)
 #endif
 
 CONV1D_OP(float, float, conv1d_f32)
@@ -738,7 +751,7 @@ IM2COL_OP(double, im2col_f64)
 IM2COL_OP(uint8_t, im2col_u8)
 IM2COL_OP(uint32_t, im2col_u32)
 
-IM2COL1D_OP(float, im2col1d_f32)
-IM2COL1D_OP(double, im2col1d_f64)
-IM2COL1D_OP(uint8_t, im2col1d_u8)
-IM2COL1D_OP(uint32_t, im2col1d_u32)
+IM2COL1D_OP(float, im2col1d_f32, col2im1d_f32)
+IM2COL1D_OP(double, im2col1d_f64, col2im1d_f64)
+IM2COL1D_OP(uint8_t, im2col1d_u8, col2im1d_u8)
+IM2COL1D_OP(uint32_t, im2col1d_u32, col2im1d_u32)

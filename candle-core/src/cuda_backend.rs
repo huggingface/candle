@@ -1937,11 +1937,11 @@ impl BackendStorage for CudaStorage {
             )?
         };
         let col_l = Layout::contiguous((b_size, l_in, c_out, k_size));
-        Col2Im1D {
+        let slice = Col2Im1D {
             stride: params.stride,
         }
         .map(&col.slice, &device, &col_l)?;
-        Ok(col)
+        Ok(Self { slice, device })
     }
 
     #[cfg(not(feature = "cudnn"))]
