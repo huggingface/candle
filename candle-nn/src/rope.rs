@@ -61,6 +61,7 @@ impl RotaryEmbedding {
         q: &Tensor,
         k: &Tensor,
         cache_storage: &CudaStorage,
+        pos_storage: &CudaStorage,
     ) -> Result<()> {
         use candle::cuda_backend::WrapErr;
 
@@ -82,21 +83,8 @@ impl RotaryEmbedding {
             shared_mem_bytes: 0,
         };
 
-        let mut things = Vec::new();
-        for pos in positions {
-            things.push(Tensor::from_slice(&pos, pos.len(), q.device())?.unsqueeze(0)?);
-        }
-        let out = Tensor::cat(&things, 0)?;
-        let pos_block_stride = out.stride()[0];
-
-        let bdg = out.storage_and_layout();
-        let st = match &*bdg.0 {
-            Storage::Cuda(st) => st,
-            _ => unreachable!(),
-        };
-
         let params = (
-            st.as_cuda_slice::<i64>()?,
+            pos_storage.as_cuda_slice::<i64>()?,
             q_storage.as_cuda_slice::<T>()?,
             k_storage.as_cuda_slice::<T>()?,
             cache_storage.as_cuda_slice::<f32>()?,
@@ -116,7 +104,7 @@ impl RotaryEmbedding {
     fn fused_rope(
         &self,
         dev: &CudaDevice,
-        positions: Vec<Vec<i64>>,
+        positions: &Tensor,
         q: &Tensor,
         k: &Tensor,
     ) -> Result<()> {
@@ -124,8 +112,9 @@ impl RotaryEmbedding {
             &*q.storage_and_layout().0,
             &*k.storage_and_layout().0,
             &*self.cache.storage_and_layout().0,
+            &*positions.storage_and_layout().0,
         ) {
-            (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage)) => {
+            (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage), Storage::Cuda(pos_storage)) => {
                 return match (q.dtype(), k.dtype()) {
                     (DType::BF16, DType::BF16) => self.execute_dtype::<half::bf16>(
                         &dev,
@@ -135,6 +124,7 @@ impl RotaryEmbedding {
                         q,
                         k,
                         cache_storage,
+                        pos_storage,
                     ),
                     (DType::F16, DType::F16) => self.execute_dtype::<half::f16>(
                         &dev,
@@ -144,6 +134,7 @@ impl RotaryEmbedding {
                         q,
                         k,
                         cache_storage,
+                        pos_storage,
                     ),
                     (DType::F32, DType::F32) => self.execute_dtype::<f32>(
                         &dev,
@@ -153,6 +144,7 @@ impl RotaryEmbedding {
                         q,
                         k,
                         cache_storage,
+                        pos_storage,
                     ),
                     (DType::F64, DType::F64) => self.execute_dtype::<f64>(
                         &dev,
@@ -162,6 +154,7 @@ impl RotaryEmbedding {
                         q,
                         k,
                         cache_storage,
+                        pos_storage,
                     ),
                     _ => candle::bail!("DType mismatch in fused RotaryEmbedding"),
                 }
@@ -174,7 +167,7 @@ impl RotaryEmbedding {
     pub fn forward(
         &self,
         positions: &[usize],
-        positions_kernel: Vec<Vec<i64>>,
+        positions_kernel: &Tensor,
         q: &mut Tensor,
         k: &mut Tensor,
     ) -> Result<()> {
