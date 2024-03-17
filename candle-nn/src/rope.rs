@@ -56,7 +56,6 @@ impl RotaryEmbedding {
     fn execute_dtype<T: CudaDType + WithDType + DeviceRepr>(
         &self,
         dev: &CudaDevice,
-        mut positions: Vec<Vec<i64>>,
         q_storage: &CudaStorage,
         k_storage: &CudaStorage,
         q: &Tensor,
@@ -128,7 +127,6 @@ impl RotaryEmbedding {
                 return match (q.dtype(), k.dtype()) {
                     (DType::BF16, DType::BF16) => self.execute_dtype::<half::bf16>(
                         &dev,
-                        positions,
                         q_storage,
                         k_storage,
                         q,
@@ -138,7 +136,6 @@ impl RotaryEmbedding {
                     ),
                     (DType::F16, DType::F16) => self.execute_dtype::<half::f16>(
                         &dev,
-                        positions,
                         q_storage,
                         k_storage,
                         q,
@@ -148,7 +145,6 @@ impl RotaryEmbedding {
                     ),
                     (DType::F32, DType::F32) => self.execute_dtype::<f32>(
                         &dev,
-                        positions,
                         q_storage,
                         k_storage,
                         q,
@@ -158,7 +154,6 @@ impl RotaryEmbedding {
                     ),
                     (DType::F64, DType::F64) => self.execute_dtype::<f64>(
                         &dev,
-                        positions,
                         q_storage,
                         k_storage,
                         q,
