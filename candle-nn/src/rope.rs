@@ -1,5 +1,6 @@
 use std::iter::zip;
 
+#[allow(unused_imports)]
 use candle::{
     backend::BackendStorage, CudaDevice, CudaStorage, DType, Device, IndexOp, Module, Result,
     Storage, Tensor, WithDType, D,
@@ -14,6 +15,7 @@ use candle::cuda_backend::{
 };
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RotaryEmbedding {
     cos: Tensor,
     sin: Tensor,
@@ -114,7 +116,12 @@ impl RotaryEmbedding {
             &*self.cache.storage_and_layout().0,
             &*positions.storage_and_layout().0,
         ) {
-            (Storage::Cuda(q_storage), Storage::Cuda(k_storage), Storage::Cuda(cache_storage), Storage::Cuda(pos_storage)) => {
+            (
+                Storage::Cuda(q_storage),
+                Storage::Cuda(k_storage),
+                Storage::Cuda(cache_storage),
+                Storage::Cuda(pos_storage),
+            ) => {
                 return match (q.dtype(), k.dtype()) {
                     (DType::BF16, DType::BF16) => self.execute_dtype::<half::bf16>(
                         &dev,
@@ -164,6 +171,7 @@ impl RotaryEmbedding {
     }
 
     /// This may modify the tensors in place!
+    #[allow(unused_variables)]
     pub fn forward(
         &self,
         positions: &[usize],
