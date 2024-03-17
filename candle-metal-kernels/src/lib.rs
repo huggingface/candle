@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::RwLock;
 
+const CANDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/candle.metallib"));
 const AFFINE: &str = include_str!("affine.metal");
 const INDEXING: &str = include_str!("indexing.metal");
 const UNARY: &str = include_str!("unary.metal");
@@ -13,7 +14,6 @@ const BINARY: &str = include_str!("binary.metal");
 const TERNARY: &str = include_str!("ternary.metal");
 const CAST: &str = include_str!("cast.metal");
 const CONV: &str = include_str!("conv.metal");
-const REDUCE: &str = include_str!("reduce.metal");
 const RANDOM: &str = include_str!("random.metal");
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
 const QUANTIZED: &str = include_str!("quantized.metal");
@@ -114,13 +114,13 @@ macro_rules! set_params {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
+    Candle,
     Affine,
     Indexing,
     Unary,
     Binary,
     Ternary,
     Cast,
-    Reduce,
     Mfa,
     Conv,
     Random,
@@ -206,7 +206,7 @@ pub enum MetalKernelError {
     LockError(String),
     #[error("Error while loading library: {0}")]
     LoadLibraryError(String),
-    #[error("Error while loading function: {0:?}")]
+    #[error("Error while loading function: {0}")]
     LoadFunctionError(String),
     #[error("Failed to create compute function")]
     FailedToCreateComputeFunction,
@@ -253,11 +253,10 @@ impl Kernels {
             Source::Ternary => TERNARY,
             Source::Indexing => INDEXING,
             Source::Cast => CAST,
-            Source::Reduce => REDUCE,
             Source::Conv => CONV,
             Source::Random => RANDOM,
             Source::Quantized => QUANTIZED,
-            Source::Mfa => panic!("Invalid lib"),
+            _ => panic!("Invalid lib"),
         }
     }
 
@@ -273,6 +272,14 @@ impl Kernels {
             Ok(lib.clone())
         } else {
             let lib = match source {
+                Source::Candle => {
+                    let source_data = CANDLE;
+                    device.new_library_with_data(source_data).map_err(|e| {
+                        MetalKernelError::LoadLibraryError(format!(
+                            "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
+                        ))
+                    })?
+                }
                 Source::Mfa => {
                     let source_data = MFA;
                     device.new_library_with_data(source_data).map_err(|e| {
@@ -610,15 +617,28 @@ pub fn call_reduce_contiguous(
     input_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
-    let elements_to_sum = length / out_length;
+    let work_per_threadgroup = length / out_length;
+
+    let (name, granularity) = if work_per_threadgroup % 4 == 0 {
+        (format!("{kernel_name}x4").leak(), 4)
+    } else if work_per_threadgroup % 2 == 0 {
+        (format!("{kernel_name}x2").leak(), 2)
+    } else {
+        (format!("{kernel_name}").leak(), 1)
+    };
+    let pipeline = kernels.load_pipeline(device, Source::Candle, name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
         encoder,
-        (length, elements_to_sum, (input, input_offset), output)
+        (
+            length as u32,
+            work_per_threadgroup as u32,
+            (input, input_offset),
+            output
+        )
     );
 
     let thread_group_count = MTLSize {
@@ -627,18 +647,23 @@ pub fn call_reduce_contiguous(
         depth: 1,
     };
 
+    let work_split = work_per_threadgroup / (2 * granularity);
+    let mut w = 2;
+    while w < work_split {
+        w *= 2;
+    }
+
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        (elements_to_sum as u64 + 2 - 1) / 2,
-    )
-    .next_power_of_two();
+        w as NSUInteger,
+    );
 
     let thread_group_size = MTLSize {
         width,
         height: 1,
         depth: 1,
     };
-
+    //println!("{kernel_name}: work_per_threadgroup:{work_per_threadgroup} g:1 l:{length} o:{out_length} width:{width} w:{w} tgc:{thread_group_count:?} tgs:{thread_group_size:?}");
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -659,8 +684,8 @@ pub fn call_reduce_strided(
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let length: usize = shape.iter().product();
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
-    let elements_to_sum = length / out_length;
+    let work_per_threadgroup = length / out_length;
+    let pipeline = kernels.load_pipeline(device, Source::Candle, kernel_name)?;
 
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -671,9 +696,10 @@ pub fn call_reduce_strided(
             shape.len(),
             shape,
             strides,
-            elements_to_sum,
+            work_per_threadgroup,
             (input, input_offset),
-            output
+            output,
+            out_length
         )
     );
 
@@ -683,18 +709,23 @@ pub fn call_reduce_strided(
         depth: 1,
     };
 
+    let work_split = work_per_threadgroup / 2;
+    let mut w = 2;
+    while w < work_split {
+        w *= 2;
+    }
+
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum as u64,
-    )
-    .next_power_of_two();
+        w as NSUInteger,
+    );
 
     let thread_group_size = MTLSize {
         width,
         height: 1,
         depth: 1,
     };
-
+    //println!("{kernel_name}: work_per_threadgroup:{work_per_threadgroup} g:{granularity} l:{length} o:{out_length} width:{width} w:{w} tgc:{thread_group_count:?} tgs:{thread_group_size:?}");
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -709,40 +740,55 @@ pub fn call_last_softmax(
     kernels: &Kernels,
     kernel_name: &'static str,
     length: usize,
-    elements_to_sum: usize,
+    elements: usize,
     input: &Buffer,
     input_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let work_per_threadgroup = elements;
+    let (name, granularity) = if work_per_threadgroup % 4 == 0 {
+        (format!("{kernel_name}x4").leak(), 4)
+    } else if work_per_threadgroup % 2 == 0 {
+        (format!("{kernel_name}x2").leak(), 2)
+    } else {
+        (format!("{kernel_name}").leak(), 1)
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::Candle, name)?;
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
     set_params!(
         encoder,
-        (length, elements_to_sum, (input, input_offset), output)
+        (length, work_per_threadgroup, (input, input_offset), output)
     );
 
-    let out_length = length / elements_to_sum;
+    let out_length = length / work_per_threadgroup;
 
     let thread_group_count = MTLSize {
-        width: out_length as u64,
+        width: out_length as NSUInteger,
         height: 1,
         depth: 1,
     };
 
+    let work_split = work_per_threadgroup / (2 * granularity);
+    let mut w = 2;
+    while w < work_split {
+        w *= 2;
+    }
+    w *= 2;
+
     let width = std::cmp::min(
         pipeline.max_total_threads_per_threadgroup(),
-        elements_to_sum as u64,
-    )
-    .next_power_of_two();
+        w as NSUInteger,
+    );
 
     let thread_group_size = MTLSize {
         width,
         height: 1,
         depth: 1,
     };
-
+    //println!("{kernel_name}: work_per_threadgroup:{work_per_threadgroup} g:1 l:{length} o:{out_length} width:{width} w:{w} tgc:{thread_group_count:?} tgs:{thread_group_size:?}");
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
