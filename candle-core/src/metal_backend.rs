@@ -609,28 +609,41 @@ impl BackendStorage for MetalStorage {
         let command_buffer = device.command_buffer()?;
         if layout.is_contiguous() && layout.start_offset() == 0 {
             let kernel_name = match (self.dtype, dtype) {
-                (DType::U32, DType::F32) => "cast_u32_f32",
-                (DType::U32, DType::U8) => "cast_u32_u8",
-                (DType::U32, DType::I64) => "cast_u32_i64",
                 (DType::U32, DType::BF16) => "cast_u32_bf16",
+                (DType::U32, DType::F16) => "cast_u32_f16",
+                (DType::U32, DType::F32) => "cast_u32_f32",
+                (DType::U32, DType::I64) => "cast_u32_i64",
+                (DType::U32, DType::U8) => "cast_u32_u8",
 
-                (DType::U8, DType::U32) => "cast_u8_u32",
+                (DType::U8, DType::BF16) => "cast_u8_bf16",
+                (DType::U8, DType::F16) => "cast_u8_f16",
                 (DType::U8, DType::F32) => "cast_u8_f32",
                 (DType::U8, DType::I64) => "cast_u8_i64",
-                (DType::U8, DType::BF16) => "cast_u8_bf16",
+                (DType::U8, DType::U32) => "cast_u8_u32",
 
-                (DType::F32, DType::F16) => "cast_f32_f16",
                 (DType::F32, DType::BF16) => "cast_f32_bf16",
+                (DType::F32, DType::F16) => "cast_f32_f16",
+                (DType::F32, DType::I64) => "cast_f32_i64",
+                (DType::F32, DType::U32) => "cast_f32_u32",
+                (DType::F32, DType::U8) => "cast_f32_u8",
 
+                (DType::I64, DType::BF16) => "cast_i64_bf16",
+                (DType::I64, DType::F16) => "cast_i64_f16",
                 (DType::I64, DType::F32) => "cast_i64_f32",
+                (DType::I64, DType::U32) => "cast_i64_u32",
+                (DType::I64, DType::U8) => "cast_i64_u8",
 
                 (DType::F16, DType::BF16) => "cast_f16_bf16",
                 (DType::F16, DType::F32) => "cast_f16_f32",
+                (DType::F16, DType::I64) => "cast_f16_i64",
+                (DType::F16, DType::U32) => "cast_f16_u32",
+                (DType::F16, DType::U8) => "cast_f16_u8",
 
-                (DType::BF16, DType::U8) => "cast_bf16_u8",
-                (DType::BF16, DType::U32) => "cast_bf16_u32",
                 (DType::BF16, DType::F16) => "cast_bf16_f16",
                 (DType::BF16, DType::F32) => "cast_bf16_f32",
+                (DType::BF16, DType::I64) => "cast_bf16_i64",
+                (DType::BF16, DType::U32) => "cast_bf16_u32",
+                (DType::BF16, DType::U8) => "cast_bf16_u8",
 
                 (left, right) => {
                     crate::bail!("Metal contiguous to_dtype {left:?} {right:?} not implemented")

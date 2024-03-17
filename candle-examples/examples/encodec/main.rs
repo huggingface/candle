@@ -109,8 +109,7 @@ fn main() -> Result<()> {
     let codes = match args.action {
         Action::CodeToAudio => {
             let codes = candle::safetensors::load(args.in_file, &device)?;
-            let codes = codes.get("codes").expect("no codes in input file").i(0)?;
-            codes
+            codes.get("codes").expect("no codes in input file").clone()
         }
         Action::AudioToCode | Action::AudioToAudio => {
             let (pcm, sample_rate) = pcm_decode(args.in_file)?;
