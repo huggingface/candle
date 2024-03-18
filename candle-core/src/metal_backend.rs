@@ -1044,7 +1044,12 @@ impl BackendStorage for MetalStorage {
         crate::bail!("Metal conv_tranpose2d not implemented")
     }
 
-    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
+    fn avg_pool2d(
+        &self,
+        inp_l: &Layout,
+        (w_k, h_k): (usize, usize),
+        (w_stride, h_stride): (usize, usize),
+    ) -> Result<Self> {
         let shape = inp_l.shape();
         let (b_size, channels, width, height) = shape.dims4()?;
         let strides = inp_l.stride();
