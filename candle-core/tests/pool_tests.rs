@@ -2,9 +2,6 @@ use candle_core::{test_device, test_utils, Device, IndexOp, Result, Tensor};
 
 // https://github.com/huggingface/candle/issues/364
 fn avg_pool2d(dev: &Device) -> Result<()> {
-    if dev.is_metal() {
-        return Ok(());
-    }
     let data: Vec<f32> = vec![
         1., 1., 1., 1., 0., 0., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.,
     ];
