@@ -263,7 +263,7 @@ impl MetalDevice {
                 }
             }
         }
-        return best_buffer.map(|b| b.clone());
+        best_buffer.cloned()
     }
 
     fn drop_unused_buffers(&self) -> Result<()> {
@@ -1051,15 +1051,12 @@ impl BackendStorage for MetalStorage {
     fn max_pool2d(
         &self,
         inp_l: &Layout,
-        k: (usize, usize),
-        stride: (usize, usize),
+        (w_k, h_k): (usize, usize),
+        (w_stride, h_stride): (usize, usize),
     ) -> Result<Self> {
         let shape = inp_l.shape();
-        let dims = shape.dims();
+        let (b_size, channels, width, height) = shape.dims4()?;
         let strides = inp_l.stride();
-        if dims.len() != 4 {
-            crate::bail!("unexpected input shape for maxpool2d {dims:?}")
-        }
         let name = match self.dtype {
             DType::F32 => "max_pool2d_f32",
             DType::F16 => "max_pool2d_f16",
@@ -1068,11 +1065,9 @@ impl BackendStorage for MetalStorage {
             DType::U32 => "max_pool2d_u32",
             dtype => crate::bail!("Metal upsample_nearest2d {dtype:?} not implemented"),
         };
-        let (w_k, h_k) = k;
-        let (w_stride, h_stride) = stride;
-        let out_w = (dims[2] - w_k) / w_stride + 1;
-        let out_h = (dims[3] - h_k) / h_stride + 1;
-        let dst_el = out_w * out_h * dims[0] * dims[1];
+        let out_w = (width - w_k) / w_stride + 1;
+        let out_h = (height - h_k) / h_stride + 1;
+        let dst_el = out_w * out_h * b_size * channels;
         let buffer = self.device.new_buffer(dst_el, self.dtype, "max_pool2d")?;
         let command_buffers = self.device.command_buffer()?;
         candle_metal_kernels::call_max_pool2d(
@@ -1080,7 +1075,7 @@ impl BackendStorage for MetalStorage {
             &command_buffers,
             &self.device.kernels,
             name,
-            dims,
+            inp_l.dims(),
             strides,
             out_w,
             out_h,

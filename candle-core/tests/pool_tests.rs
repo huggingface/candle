@@ -22,9 +22,6 @@ fn avg_pool2d(dev: &Device) -> Result<()> {
 }
 
 fn max_pool2d(dev: &Device) -> Result<()> {
-    if dev.is_metal() {
-        return Ok(());
-    }
     let data: Vec<f32> = vec![
         1., 2., 1., 3., 0., 0., 1., 1., 1., 1., 1., 1., 5., 1., 1., 1.,
     ];
