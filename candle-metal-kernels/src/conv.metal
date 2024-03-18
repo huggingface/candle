@@ -207,6 +207,67 @@ kernel void FN_NAME(  \
 } \
 
 template <typename T>
+METAL_FUNC void avg_pool2d(
+    constant size_t &w_k,
+    constant size_t &h_k,
+    constant size_t &w_stride,
+    constant size_t &h_stride,
+    constant size_t *src_dims,
+    constant size_t *src_strides,
+    device const T *src,
+    device T *dst,
+    uint tid [[ thread_position_in_grid ]]
+) {
+  const size_t c = src_dims[1];
+  const size_t w_in = src_dims[2];
+  const size_t h_in = src_dims[3];
+
+  const size_t w_out = (w_in - w_k) / w_stride + 1;
+  const size_t h_out = (h_in - h_k) / h_stride + 1;
+  if (tid >= src_dims[0] * c * w_out * h_out) {
+    return;
+  }
+
+  const size_t b_idx = tid / (w_out * h_out * c);
+  const size_t c_idx = (tid / (w_out * h_out)) % c;
+  const size_t dst_w = (tid / h_out) % w_out;
+  const size_t dst_h = tid % h_out;
+
+  const size_t src_idx0 = b_idx * src_strides[0];
+  T d = 0;
+  for (size_t w_offset = 0; w_offset < w_k; ++w_offset) {
+    size_t src_w = w_stride * dst_w + w_offset;
+    if (src_w >= w_in){
+      continue;
+    }
+    for (size_t h_offset = 0; h_offset < h_k; ++h_offset) {
+      size_t src_h = h_stride * dst_h + h_offset;
+      if (src_h >= h_in) {
+        continue;
+      }
+      const size_t src_idx = src_idx0 + c_idx * src_strides[1] + src_w * src_strides[2] + src_h * src_strides[3];
+      d += src[src_idx];
+    }
+  }
+  dst[tid] = d / (w_k * h_k);
+}
+
+#define AVGPOOL2D_OP(TYPENAME, FN_NAME) \
+kernel void FN_NAME( \
+    constant size_t &w_k, \
+    constant size_t &h_k, \
+    constant size_t &w_s, \
+    constant size_t &h_s, \
+    constant size_t *src_dims, \
+    constant size_t *src_s, \
+    device const TYPENAME *src, \
+    device TYPENAME *dst, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+  avg_pool2d<TYPENAME>(w_k, h_k, w_s, h_s, src_dims, src_s, src, dst, tid); \
+} \
+
+template <typename T>
 METAL_FUNC void max_pool2d(
     constant size_t &w_k,
     constant size_t &h_k,
@@ -292,4 +353,12 @@ MAXPOOL2D_OP(uint32_t, max_pool2d_u32)
 MAXPOOL2D_OP(uint8_t, max_pool2d_u8)
 #if defined(__HAVE_BFLOAT__)
 MAXPOOL2D_OP(bfloat, max_pool2d_bf16)
+#endif
+
+AVGPOOL2D_OP(float, avg_pool2d_f32)
+AVGPOOL2D_OP(half, avg_pool2d_f16)
+AVGPOOL2D_OP(uint32_t, avg_pool2d_u32)
+AVGPOOL2D_OP(uint8_t, avg_pool2d_u8)
+#if defined(__HAVE_BFLOAT__)
+AVGPOOL2D_OP(bfloat, avg_pool2d_bf16)
 #endif

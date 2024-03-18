@@ -1827,7 +1827,7 @@ fn divide(m: usize, b: usize) -> NSUInteger {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_max_pool2d(
+pub fn call_pool2d(
     device: &Device,
     command_buffer: &CommandBufferRef,
     kernels: &Kernels,
