@@ -1,6 +1,6 @@
 use super::*;
 use half::{bf16, f16};
-use metal::{Buffer, Device, MTLResourceOptions};
+use metal::MTLResourceOptions;
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;

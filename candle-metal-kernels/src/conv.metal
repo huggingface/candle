@@ -248,7 +248,7 @@ METAL_FUNC void max_pool2d(
       }
       const size_t src_idx = src_idx0 + c_idx * src_strides[1] + src_w * src_strides[2] + src_h * src_strides[3];
       if (set) {
-        d = max(d, src[src_idx]);
+        d = MAX(d, src[src_idx]);
       }
       else {
         d = src[src_idx];
@@ -287,4 +287,9 @@ UPSAMPLE_NEAREST2D_OP(uint8_t, upsample_nearest2d_u8)
 UPSAMPLE_NEAREST2D_OP(uint32_t, upsample_nearest2d_u32)
 
 MAXPOOL2D_OP(float, max_pool2d_f32)
+MAXPOOL2D_OP(half, max_pool2d_f16)
+MAXPOOL2D_OP(uint32_t, max_pool2d_u32)
 MAXPOOL2D_OP(uint8_t, max_pool2d_u8)
+#if defined(__HAVE_BFLOAT__)
+MAXPOOL2D_OP(bfloat, max_pool2d_bf16)
+#endif
