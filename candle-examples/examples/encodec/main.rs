@@ -60,12 +60,32 @@ fn main() -> Result<()> {
             codes.get("codes").expect("no codes in input file").clone()
         }
         Action::AudioToCode | Action::AudioToAudio => {
-            let (pcm, sample_rate) = audio_io::pcm_decode(args.in_file)?;
-            let pcm = if sample_rate != 24_000 {
-                println!("WARNING: encodec uses a 24khz sample rate, input uses {sample_rate}, resampling...");
-                audio_io::resample(&pcm, sample_rate as usize, 24_000)?
+            let pcm = if args.in_file == "-" {
+                println!(">>>> RECORDING AUDIO, PRESS ENTER ONCE DONE <<<<");
+                let (stream, input_audio) = audio_io::setup_input_stream()?;
+                let mut pcms = vec![];
+                let stdin = std::thread::spawn(|| {
+                    let mut s = String::new();
+                    std::io::stdin().read_line(&mut s)
+                });
+                while !stdin.is_finished() {
+                    let input = input_audio.lock().unwrap().take_all();
+                    if input.is_empty() {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
+                    }
+                    pcms.push(input)
+                }
+                drop(stream);
+                pcms.concat()
             } else {
-                pcm
+                let (pcm, sample_rate) = audio_io::pcm_decode(args.in_file)?;
+                if sample_rate != 24_000 {
+                    println!("WARNING: encodec uses a 24khz sample rate, input uses {sample_rate}, resampling...");
+                    audio_io::resample(&pcm, sample_rate as usize, 24_000)?
+                } else {
+                    pcm
+                }
             };
             let pcm_len = pcm.len();
             let pcm = Tensor::from_vec(pcm, (1, 1, pcm_len), &device)?;
