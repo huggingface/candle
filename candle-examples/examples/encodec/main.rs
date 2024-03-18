@@ -85,8 +85,26 @@ fn main() -> Result<()> {
             let pcm = pcm.i(0)?.i(0)?;
             let pcm = candle_examples::audio::normalize_loudness(&pcm, 24_000, true)?;
             let pcm = pcm.to_vec1::<f32>()?;
-            let mut output = std::fs::File::create(&args.out_file)?;
-            candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
+            if args.out_file == "-" {
+                let (stream, ad) = audio_io::setup_output_stream()?;
+                {
+                    let mut ad = ad.lock().unwrap();
+                    ad.push_samples(&pcm)?;
+                }
+                loop {
+                    let ad = ad.lock().unwrap();
+                    if ad.is_empty() {
+                        break;
+                    }
+                    // That's very weird, calling thread::sleep here triggers the stream to stop
+                    // playing (the callback doesn't seem to be called anymore).
+                    // std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                drop(stream)
+            } else {
+                let mut output = std::fs::File::create(&args.out_file)?;
+                candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
+            }
         }
     }
     Ok(())
