@@ -13,8 +13,8 @@ mod gym_env;
 mod vec_gym_env;
 
 mod ddpg;
-mod policy_gradient;
 mod dqn;
+mod policy_gradient;
 
 #[derive(Parser)]
 struct Args {
@@ -26,7 +26,7 @@ struct Args {
 enum Command {
     Pg,
     Ddpg,
-    Dqn
+    Dqn,
 }
 
 fn main() -> Result<()> {
@@ -34,7 +34,7 @@ fn main() -> Result<()> {
     match args.command {
         Command::Pg => policy_gradient::run()?,
         Command::Ddpg => ddpg::run()?,
-        Command::Dqn => dqn::run()?
+        Command::Dqn => dqn::run()?,
     }
     Ok(())
 }
