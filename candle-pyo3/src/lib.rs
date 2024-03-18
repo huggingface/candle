@@ -448,6 +448,12 @@ impl PyTensor {
         Ok(PyTensor(self.0.index_select(rhs, dim).map_err(wrap_err)?))
     }
 
+    /// Gathers values along an axis specified by dim.
+    fn gather(&self, index: &Self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        Ok(PyTensor(self.0.gather(index, dim).map_err(wrap_err)?))
+    }
+
     #[pyo3(text_signature = "(self, rhs:Tensor)")]
     /// Performs a matrix multiplication between the two tensors.
     /// &RETURNS&: Tensor
