@@ -857,7 +857,20 @@ fn where_cond() {
     assert_eq!(approx(results, 4), vec![-1.0f32, 2.0, -3.0, -4.0, 5.0, 6.0]);
 }
 
-fn run_gemm<T: Clone>(
+trait Gemmable: Clone {
+    const gemm_name: &'static str;
+}
+impl Gemmable for f32 {
+    const gemm_name: &'static str = "sgemm";
+}
+impl Gemmable for f16 {
+    const gemm_name: &'static str = "hgemm";
+}
+impl Gemmable for bf16 {
+    const gemm_name: &'static str = "bgemm";
+}
+
+fn run_gemm<T: Gemmable>(
     (b, m, n, k): (usize, usize, usize, usize),
     lhs: &[T],
     lhs_stride: Vec<usize>,
@@ -866,6 +879,7 @@ fn run_gemm<T: Clone>(
     rhs_stride: Vec<usize>,
     rhs_offset: usize,
 ) -> Vec<T> {
+
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
@@ -888,7 +902,7 @@ fn run_gemm<T: Clone>(
         &device,
         command_buffer,
         &kernels,
-        "sgemm",
+        T::gemm_name,
         (b, m, n, k),
         &lhs_stride,
         lhs_offset,
@@ -909,23 +923,23 @@ fn run_gemm<T: Clone>(
 fn gemm() {
     let (b, m, n, k) = (1, 2, 4, 3);
     let lhs_stride = vec![m * k, k, 1];
-    let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
+    let lhs: Vec<bf16> = (0..b * m * k).map(|f| bf16::from_f32(f as f32)).collect();
     let rhs_stride = vec![n * k, n, 1];
-    let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
+    let rhs: Vec<bf16> = (0..b * n * k).map(|f| bf16::from_f32(f as f32)).collect();
     let results = run_gemm((b, m, n, k), &lhs, lhs_stride, 0, &rhs, rhs_stride, 0);
     assert_eq!(
-        approx(results, 4),
+        approx_bf16(results, 4),
         vec![20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0]
     );
 
     let (b, m, n, k) = (2, 2, 4, 3);
     let lhs_stride = vec![m * k, k, 1];
-    let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
+    let lhs: Vec<bf16> = (0..b * m * k).map(|f| bf16::from_f32(f as f32)).collect();
     let rhs_stride = vec![n * k, n, 1];
-    let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
+    let rhs: Vec<bf16> = (0..b * n * k).map(|f| bf16::from_f32(f as f32)).collect();
     let results = run_gemm((b, m, n, k), &lhs, lhs_stride, 0, &rhs, rhs_stride, 0);
     assert_eq!(
-        approx(results, 4),
+        approx_bf16(results, 4),
         vec![
             20.0, 23.0, 26.0, 29.0, 56.0, 68.0, 80.0, 92.0, 344.0, 365.0, 386.0, 407.0, 488.0,
             518.0, 548.0, 578.0
@@ -935,13 +949,13 @@ fn gemm() {
     // OFFSET
     let (b, m, n, k) = (2, 2, 4, 3);
     let lhs_stride = vec![m * k, k, 1];
-    let lhs: Vec<f32> = (0..b * m * k).map(|f| f as f32).collect();
+    let lhs: Vec<bf16> = (0..b * m * k).map(|f| bf16::from_f32(f as f32)).collect();
     let rhs_stride = vec![n * k, n, 1];
-    let rhs: Vec<f32> = (0..b * n * k).map(|f| f as f32).collect();
+    let rhs: Vec<bf16> = (0..b * n * k).map(|f| bf16::from_f32(f as f32)).collect();
     // Manually set batch_size=1 and offset 12 elements * 4 the number of bytes for f32
     let results = run_gemm((1, m, n, k), &lhs, lhs_stride, 0, &rhs, rhs_stride, 12 * 4);
     assert_eq!(
-        approx(results, 4),
+        approx_bf16(results, 4),
         vec![56.0, 59.0, 62.0, 65.0, 200.0, 212.0, 224.0, 236.0]
     );
 }

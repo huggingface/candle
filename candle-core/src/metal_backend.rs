@@ -1254,6 +1254,7 @@ impl BackendStorage for MetalStorage {
         let name = match self.dtype {
             DType::F32 => "sgemm",
             DType::F16 => "hgemm",
+            DType::BF16 => "bgemm",
             dtype => {
                 return Err(MetalError::Message(format!("matmul doesn't support {dtype:?}")).into())
             }

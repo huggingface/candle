@@ -13,11 +13,11 @@ fn run_bench(c: &mut Criterion, device: &Device) {
     let n = 2048;
     let k = 2048;
 
-    let dtype = DType::F32;
+    let dtype = DType::BF16;
     let lhs = Tensor::zeros((b, m, k), dtype, device).unwrap();
     let rhs = Tensor::zeros((b, n, k), dtype, device).unwrap();
 
-    let flops = b * m * n * k;
+    let flops = b * m * n * k * dtype.size_in_bytes();
 
     let mut group = c.benchmark_group(device.bench_name("matmul"));
     group.throughput(Throughput::Bytes(flops as u64));

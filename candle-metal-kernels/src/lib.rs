@@ -1340,6 +1340,7 @@ pub fn call_gemm(
     let bytes = match name {
         "sgemm" => 4,
         "hgemm" => 2,
+        "bgemm" => 2,
         other => {
             return Err(MetalKernelError::LoadLibraryError(format!(
                 "{other} is not a valid kernel for gemm"
