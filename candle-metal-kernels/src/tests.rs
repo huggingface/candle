@@ -1772,18 +1772,19 @@ fn run_conv_transpose1d<T: Clone>(
     .unwrap();
     command_buffer.commit();
     command_buffer.wait_until_completed();
+
     read_to_vec(&output, dst_el)
 }
 
 #[test]
 fn conv_transpose1d_f32() {
     let input = vec![0.0f32, 1.0, 2.0, 3.0];
-    let input_shape = &[1, 2, 2];
-    let input_stride = &[2, 2, 1];
+    let input_shape = &[1, 1, 4];
+    let input_stride = &[4, 4, 1];
 
     let kernel = vec![0.0f32, 1.0, 2.0, 3.0];
-    let kernel_shape = &[1, 2, 2];
-    let kernel_stride = &[2, 2, 1];
+    let kernel_shape = &[1, 1, 2];
+    let kernel_stride = &[4, 4, 1];
 
     let results = run_conv_transpose1d(
         &input,
@@ -1799,6 +1800,6 @@ fn conv_transpose1d_f32() {
         "conv_transpose1d_f32",
     );
 
-    let expected = vec![0.0, 0.0, 1.0, 0.0, 4.0, 6.0, 4.0, 12.0, 9.0];
+    let expected = vec![0.0, 0.0, 1.0, 4.0, 12.0, 9.0];
     assert_eq!(results, expected);
 }
