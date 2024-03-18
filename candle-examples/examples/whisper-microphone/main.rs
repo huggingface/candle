@@ -10,7 +10,6 @@ use candle_nn::{ops::softmax, VarBuilder};
 use clap::{Parser, ValueEnum};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use rand::{distributions::Distribution, SeedableRng};
-use std::iter;
 use tokenizers::Tokenizer;
 
 mod multilingual;
@@ -631,7 +630,7 @@ pub fn main() -> Result<()> {
 
     // loop to process the audio data forever (until the user stops the program)
     println!("Transcribing audio...");
-    for (i, _) in iter::repeat(()).enumerate() {
+    for i in 0.. {
         std::thread::sleep(std::time::Duration::from_millis(1000));
         let data = audio_ring_buffer_2.lock().unwrap().clone();
         let pcm_data: Vec<_> = data[..data.len() / channel_count as usize]
