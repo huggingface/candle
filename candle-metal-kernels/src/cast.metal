@@ -73,6 +73,7 @@ kernel void FN_NAME_STRIDED( \
 } \
 
 CAST(cast_u32_f32, cast_u32_f32_strided, uint32_t, float)
+CAST(cast_u32_f16, cast_u32_f16_strided, uint32_t, half)
 CAST(cast_u32_u8, cast_u32_u8_strided, uint32_t, uint8_t)
 CAST(cast_u8_u32, cast_u8_u32_strided, uint8_t, uint32_t)
 CAST(cast_u8_f32, cast_u8_f32_strided, uint8_t, float)

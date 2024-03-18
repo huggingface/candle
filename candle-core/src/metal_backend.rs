@@ -588,6 +588,7 @@ impl BackendStorage for MetalStorage {
                 (DType::U32, DType::F32) => "cast_u32_f32",
                 (DType::U32, DType::U8) => "cast_u32_u8",
                 (DType::U32, DType::I64) => "cast_u32_i64",
+                (DType::U32, DType::F16) => "cast_u32_f16",
                 (DType::U32, DType::BF16) => "cast_u32_bf16",
 
                 (DType::U8, DType::U32) => "cast_u8_u32",

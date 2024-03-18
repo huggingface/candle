@@ -1,22 +1,22 @@
 use metal::{
-    Buffer, CommandBufferRef, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState,
-    Device, Function, FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
+    Buffer, CommandBufferRef, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
+    FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
 };
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::RwLock;
 
-const AFFINE: &str = include_str!("affine.metal");
-const INDEXING: &str = include_str!("indexing.metal");
-const UNARY: &str = include_str!("unary.metal");
-const BINARY: &str = include_str!("binary.metal");
-const TERNARY: &str = include_str!("ternary.metal");
-const CAST: &str = include_str!("cast.metal");
-const CONV: &str = include_str!("conv.metal");
-const REDUCE: &str = include_str!("reduce.metal");
-const RANDOM: &str = include_str!("random.metal");
+const AFFINE: &[u8] = include_bytes!("compiled/affine.metallib");
+const INDEXING: &[u8] = include_bytes!("compiled/indexing.metallib");
+const UNARY: &[u8] = include_bytes!("compiled/unary.metallib");
+const BINARY: &[u8] = include_bytes!("compiled/binary.metallib");
+const TERNARY: &[u8] = include_bytes!("compiled/ternary.metallib");
+const CAST: &[u8] = include_bytes!("compiled/cast.metallib");
+const CONV: &[u8] = include_bytes!("compiled/conv.metallib");
+const REDUCE: &[u8] = include_bytes!("compiled/reduce.metallib");
+const RANDOM: &[u8] = include_bytes!("compiled/random.metallib");
 const MFA: &[u8] = include_bytes!("libMetalFlashAttention.metallib");
-const QUANTIZED: &str = include_str!("quantized.metal");
+const QUANTIZED: &[u8] = include_bytes!("compiled/quantized.metallib");
 
 /// Most kernels apply similarly across the tensors
 /// This creates a strategy that uses the maximum amount of threads per threadgroup (capped at the
@@ -235,7 +235,7 @@ impl Kernels {
         }
     }
 
-    fn get_library_source(&self, source: Source) -> &'static str {
+    fn get_library_source(&self, source: Source) -> &'static [u8] {
         match source {
             Source::Affine => AFFINE,
             Source::Unary => UNARY,
@@ -247,7 +247,7 @@ impl Kernels {
             Source::Conv => CONV,
             Source::Random => RANDOM,
             Source::Quantized => QUANTIZED,
-            Source::Mfa => panic!("Invalid lib"),
+            Source::Mfa => MFA,
         }
     }
 
@@ -262,22 +262,12 @@ impl Kernels {
         if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
-            let lib = match source {
-                Source::Mfa => {
-                    let source_data = MFA;
-                    device.new_library_with_data(source_data).map_err(|e| {
-                        MetalKernelError::LoadLibraryError(format!(
-                            "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
-                        ))
-                    })?
-                }
-                source => {
-                    let source_content = self.get_library_source(source);
-                    device
-                        .new_library_with_source(source_content, &CompileOptions::new())
-                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
-                }
-            };
+            let source_data = self.get_library_source(source);
+            let lib = device.new_library_with_data(source_data).map_err(|e| {
+                MetalKernelError::LoadLibraryError(format!(
+                    "Candle metal requires macosx > 13.0 or higher, cannot load mfa: {e}"
+                ))
+            })?;
             libraries.insert(source, lib.clone());
             Ok(lib)
         }
