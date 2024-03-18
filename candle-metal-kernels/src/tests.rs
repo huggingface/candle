@@ -1445,3 +1445,163 @@ fn max_pool2d_f32() {
     let expected = vec![5.0, 7.0, 13.0, 15.0];
     assert_eq!(results, expected);
 }
+
+#[test]
+fn max_pool2d_f16() {
+    // kernel 2 stride 1
+    let v: Vec<half::f16> = (0..16).map(|v| half::f16::from_f32(v as f32)).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_max_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_f16",
+    );
+    let expected = vec![5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
+        .iter()
+        .map(|v| half::f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+
+    // kernel 2 stride 2
+    let v: Vec<half::f16> = (0..16).map(|v| half::f16::from_f32(v as f32)).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 2;
+    let results = run_max_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_f16",
+    );
+    let expected = vec![5.0, 7.0, 13.0, 15.0]
+        .iter()
+        .map(|v| half::f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn max_pool2d_bf16() {
+    // kernel 2 stride 1
+    let v: Vec<half::bf16> = (0..16).map(|v| half::bf16::from_f32(v as f32)).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_max_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_bf16",
+    );
+    let expected = vec![5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
+        .iter()
+        .map(|v| half::bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+
+    // kernel 2 stride 2
+    let v: Vec<half::bf16> = (0..16).map(|v| half::bf16::from_f32(v as f32)).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 2;
+    let results = run_max_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_bf16",
+    );
+    let expected = vec![5.0, 7.0, 13.0, 15.0]
+        .iter()
+        .map(|v| half::bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn max_pool2d_u8() {
+    // kernel 2 stride 1
+    let v: Vec<u8> = (0..16).map(|v| v as u8).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_max_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_u8",
+    );
+    let expected = vec![5, 6, 7, 9, 10, 11, 13, 14, 15];
+    assert_eq!(results, expected);
+
+    // kernel 2 stride 2
+    let v: Vec<u8> = (0..16).map(|v| v as u8).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 2;
+    let results = run_max_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_u8",
+    );
+    let expected = vec![5, 7, 13, 15];
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn max_pool2d_u32() {
+    // kernel 2 stride 1
+    let v: Vec<u32> = (0..16).map(|v| v as u32).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_max_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_u32",
+    );
+    let expected = vec![5, 6, 7, 9, 10, 11, 13, 14, 15];
+    assert_eq!(results, expected);
+
+    // kernel 2 stride 2
+    let v: Vec<u32> = (0..16).map(|v| v as u32).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 2;
+    let results = run_max_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_u32",
+    );
+    let expected = vec![5, 7, 13, 15];
+    assert_eq!(results, expected);
+}
