@@ -1859,5 +1859,55 @@ pub fn call_pool2d(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn call_conv_transpose1d(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    c_out: usize,
+    l_out: usize,
+    b_size: usize,
+    dilation: usize,
+    stride: usize,
+    padding: usize,
+    out_padding: usize,
+    src_shape: &[usize],
+    src_strides: &[usize],
+    kernel_shape: &[usize],
+    kernel_strides: &[usize],
+    input: &Buffer,
+    kernel: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let dst_el = c_out * l_out * b_size;
+    let pipeline: ComputePipelineState = kernels.load_pipeline(device, Source::Conv, name)?;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    set_params!(
+        encoder,
+        (
+            l_out,
+            stride,
+            padding,
+            out_padding,
+            dilation,
+            src_shape,
+            src_strides,
+            kernel_shape,
+            kernel_strides,
+            input,
+            kernel,
+            output
+        )
+    );
+    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

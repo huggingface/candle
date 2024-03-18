@@ -1717,3 +1717,88 @@ fn avg_pool2d_u32() {
     let expected = vec![2, 3, 4, 6, 7, 8, 10, 11, 12];
     assert_eq!(results, expected);
 }
+
+fn run_conv_transpose1d<T: Clone>(
+    input: &[T],
+    input_shape: &[usize],
+    input_stride: &[usize],
+    kernel: &[T],
+    kernel_shape: &[usize],
+    kernel_stride: &[usize],
+    dilation: usize,
+    stride: usize,
+    padding: usize,
+    out_padding: usize,
+    name: &'static str,
+) -> Vec<T> {
+    let device = device();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+
+    let c_in_k = kernel_shape[0];
+    let c_out = kernel_shape[1];
+    let k_size = kernel_shape[2];
+    let b_size = input_shape[0];
+    let c_in = input_shape[1];
+    let l_in = input_shape[2];
+    let l_out = (l_in - 1) * stride - 2 * padding + dilation * (k_size - 1) + out_padding + 1;
+    let dst_el = c_out * l_out * b_size;
+
+    let input = new_buffer(&device, input);
+    let kernel = new_buffer(&device, kernel);
+    let output = new_buffer(&device, &vec![0.0f32; dst_el]);
+    let kernels = Kernels::new();
+
+    call_conv_transpose1d(
+        &device,
+        command_buffer,
+        &kernels,
+        name,
+        c_out,
+        l_out,
+        b_size,
+        dilation,
+        stride,
+        padding,
+        out_padding,
+        input_shape,
+        input_stride,
+        kernel_shape,
+        kernel_stride,
+        &input,
+        &kernel,
+        &output,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+    read_to_vec(&output, dst_el)
+}
+
+#[test]
+fn conv_transpose1d_f32() {
+    let input = vec![0.0f32, 1.0, 2.0, 3.0];
+    let input_shape = &[1, 2, 2];
+    let input_stride = &[2, 2, 1];
+
+    let kernel = vec![0.0f32, 1.0, 2.0, 3.0];
+    let kernel_shape = &[1, 2, 2];
+    let kernel_stride = &[2, 2, 1];
+
+    let results = run_conv_transpose1d(
+        &input,
+        input_shape,
+        input_stride,
+        &kernel,
+        kernel_shape,
+        kernel_stride,
+        1,
+        1,
+        0,
+        0,
+        "conv_transpose1d_f32",
+    );
+
+    let expected = vec![0.0, 0.0, 1.0, 0.0, 4.0, 6.0, 4.0, 12.0, 9.0];
+    assert_eq!(results, expected);
+}
