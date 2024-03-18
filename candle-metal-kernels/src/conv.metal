@@ -1,3 +1,9 @@
+#include <metal_stdlib>
+
+using namespace metal;
+
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+
 template <typename T>
 METAL_FUNC void im2col(
     constant size_t &dst_numel,
@@ -200,6 +206,74 @@ kernel void FN_NAME(  \
   upsample_nearest2d<TYPENAME>(w_out, h_out, w_scale, h_scale, dims, strides, src, dst, tid); \
 } \
 
+template <typename T>
+METAL_FUNC void max_pool2d(
+    constant size_t &w_k,
+    constant size_t &h_k,
+    constant size_t &w_stride,
+    constant size_t &h_stride,
+    constant size_t *src_dims,
+    constant size_t *src_strides,
+    device const T *src,
+    device T *dst,
+    uint tid [[ thread_position_in_grid ]]
+) {
+  const size_t c = src_dims[1];
+  const size_t w_in = src_dims[2];
+  const size_t h_in = src_dims[3];
+
+  const size_t w_out = (w_in - w_k) / w_stride + 1;
+  const size_t h_out = (h_in - h_k) / h_stride + 1;
+  if (tid >= src_dims[0] * c * w_out * h_out) {
+    return;
+  }
+
+  const size_t b_idx = tid / (w_out * h_out * c);
+  const size_t c_idx = (tid / (w_out * h_out)) % c;
+  const size_t dst_w = (tid / h_out) % w_out;
+  const size_t dst_h = tid % h_out;
+
+  const size_t src_idx0 = b_idx * src_strides[0];
+  T d = 0;
+  bool set = false;
+  for (size_t w_offset = 0; w_offset < w_k; ++w_offset) {
+    size_t src_w = w_stride * dst_w + w_offset;
+    if (src_w >= w_in){
+      continue;
+    }
+    for (size_t h_offset = 0; h_offset < h_k; ++h_offset) {
+      size_t src_h = h_stride * dst_h + h_offset;
+      if (src_h >= h_in) {
+        continue;
+      }
+      const size_t src_idx = src_idx0 + c_idx * src_strides[1] + src_w * src_strides[2] + src_h * src_strides[3];
+      if (set) {
+        d = MAX(d, src[src_idx]);
+      }
+      else {
+        d = src[src_idx];
+        set = true;
+      }
+    }
+  }
+  dst[tid] = d;
+}
+
+#define MAXPOOL2D_OP(TYPENAME, FN_NAME) \
+kernel void FN_NAME( \
+    constant size_t &w_k, \
+    constant size_t &h_k, \
+    constant size_t &w_s, \
+    constant size_t &h_s, \
+    constant size_t *src_dims, \
+    constant size_t *src_s, \
+    device const TYPENAME *src, \
+    device TYPENAME *dst, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+  max_pool2d<TYPENAME>(w_k, h_k, w_s, h_s, src_dims, src_s, src, dst, tid); \
+} \
+
 IM2COL_OP(float, im2col_f32)
 IM2COL_OP(uint8_t, im2col_u8)
 IM2COL_OP(uint32_t, im2col_u32)
@@ -211,3 +285,11 @@ IM2COL1D_OP(uint32_t, im2col1d_u32)
 UPSAMPLE_NEAREST2D_OP(float, upsample_nearest2d_f32)
 UPSAMPLE_NEAREST2D_OP(uint8_t, upsample_nearest2d_u8)
 UPSAMPLE_NEAREST2D_OP(uint32_t, upsample_nearest2d_u32)
+
+MAXPOOL2D_OP(float, max_pool2d_f32)
+MAXPOOL2D_OP(half, max_pool2d_f16)
+MAXPOOL2D_OP(uint32_t, max_pool2d_u32)
+MAXPOOL2D_OP(uint8_t, max_pool2d_u8)
+#if defined(__HAVE_BFLOAT__)
+MAXPOOL2D_OP(bfloat, max_pool2d_bf16)
+#endif

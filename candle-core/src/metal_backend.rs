@@ -263,7 +263,7 @@ impl MetalDevice {
                 }
             }
         }
-        return best_buffer.map(|b| b.clone());
+        best_buffer.cloned()
     }
 
     fn drop_unused_buffers(&self) -> Result<()> {
@@ -1048,8 +1048,46 @@ impl BackendStorage for MetalStorage {
         crate::bail!("Metal avg_pool2d not implemented")
     }
 
-    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        crate::bail!("Metal max_pool2d not implemented")
+    fn max_pool2d(
+        &self,
+        inp_l: &Layout,
+        (w_k, h_k): (usize, usize),
+        (w_stride, h_stride): (usize, usize),
+    ) -> Result<Self> {
+        let shape = inp_l.shape();
+        let (b_size, channels, width, height) = shape.dims4()?;
+        let strides = inp_l.stride();
+        let name = match self.dtype {
+            DType::F32 => "max_pool2d_f32",
+            DType::F16 => "max_pool2d_f16",
+            DType::BF16 => "max_pool2d_bf16",
+            DType::U8 => "max_pool2d_u8",
+            DType::U32 => "max_pool2d_u32",
+            dtype => crate::bail!("Metal upsample_nearest2d {dtype:?} not implemented"),
+        };
+        let out_w = (width - w_k) / w_stride + 1;
+        let out_h = (height - h_k) / h_stride + 1;
+        let dst_el = out_w * out_h * b_size * channels;
+        let buffer = self.device.new_buffer(dst_el, self.dtype, "max_pool2d")?;
+        let command_buffers = self.device.command_buffer()?;
+        candle_metal_kernels::call_max_pool2d(
+            &self.device.device,
+            &command_buffers,
+            &self.device.kernels,
+            name,
+            inp_l.dims(),
+            strides,
+            out_w,
+            out_h,
+            w_k,
+            h_k,
+            w_stride,
+            h_stride,
+            &self.buffer,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+        Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
     fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {
