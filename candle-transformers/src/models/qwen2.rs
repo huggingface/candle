@@ -1,4 +1,4 @@
-use crate::models::with_tracing::{linear, linear_no_bias, Linear};
+use crate::models::with_tracing::{linear, linear_no_bias, Linear, RmsNorm};
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
@@ -19,27 +19,6 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub use_sliding_window: bool,
     pub hidden_act: Activation,
-}
-
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm,
-    span: tracing::Span,
-}
-
-impl RmsNorm {
-    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let inner = candle_nn::rms_norm(size, eps, vb)?;
-        Ok(Self { inner, span })
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
-    }
 }
 
 #[derive(Debug, Clone)]
