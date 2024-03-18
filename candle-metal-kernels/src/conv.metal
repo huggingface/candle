@@ -206,7 +206,7 @@ kernel void FN_NAME(  \
   upsample_nearest2d<TYPENAME>(w_out, h_out, w_scale, h_scale, dims, strides, src, dst, tid); \
 } \
 
-template <typename T>
+template <typename T, typename A>
 METAL_FUNC void avg_pool2d(
     constant size_t &w_k,
     constant size_t &h_k,
@@ -234,7 +234,7 @@ METAL_FUNC void avg_pool2d(
   const size_t dst_h = tid % h_out;
 
   const size_t src_idx0 = b_idx * src_strides[0];
-  T d = 0;
+  A d = 0;
   for (size_t w_offset = 0; w_offset < w_k; ++w_offset) {
     size_t src_w = w_stride * dst_w + w_offset;
     if (src_w >= w_in){
@@ -246,13 +246,13 @@ METAL_FUNC void avg_pool2d(
         continue;
       }
       const size_t src_idx = src_idx0 + c_idx * src_strides[1] + src_w * src_strides[2] + src_h * src_strides[3];
-      d += src[src_idx];
+      d += static_cast<A>(src[src_idx]);
     }
   }
-  dst[tid] = d / (w_k * h_k);
+  dst[tid] = static_cast<T>(d / (w_k * h_k));
 }
 
-#define AVGPOOL2D_OP(TYPENAME, FN_NAME) \
+#define AVGPOOL2D_OP(TYPENAME, TYPEACC, FN_NAME) \
 kernel void FN_NAME( \
     constant size_t &w_k, \
     constant size_t &h_k, \
@@ -264,7 +264,7 @@ kernel void FN_NAME( \
     device TYPENAME *dst, \
     uint tid [[ thread_position_in_grid ]] \
 ) { \
-  avg_pool2d<TYPENAME>(w_k, h_k, w_s, h_s, src_dims, src_s, src, dst, tid); \
+  avg_pool2d<TYPENAME, TYPEACC>(w_k, h_k, w_s, h_s, src_dims, src_s, src, dst, tid); \
 } \
 
 template <typename T>
@@ -355,10 +355,10 @@ MAXPOOL2D_OP(uint8_t, max_pool2d_u8)
 MAXPOOL2D_OP(bfloat, max_pool2d_bf16)
 #endif
 
-AVGPOOL2D_OP(float, avg_pool2d_f32)
-AVGPOOL2D_OP(half, avg_pool2d_f16)
-AVGPOOL2D_OP(uint32_t, avg_pool2d_u32)
-AVGPOOL2D_OP(uint8_t, avg_pool2d_u8)
+AVGPOOL2D_OP(float, float, avg_pool2d_f32)
+AVGPOOL2D_OP(half, float, avg_pool2d_f16)
+AVGPOOL2D_OP(uint32_t, uint32_t, avg_pool2d_u32)
+AVGPOOL2D_OP(uint8_t, uint8_t, avg_pool2d_u8)
 #if defined(__HAVE_BFLOAT__)
-AVGPOOL2D_OP(bfloat, avg_pool2d_bf16)
+AVGPOOL2D_OP(bfloat, float, avg_pool2d_bf16)
 #endif
