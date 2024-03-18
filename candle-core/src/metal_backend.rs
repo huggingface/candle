@@ -948,12 +948,56 @@ impl BackendStorage for MetalStorage {
 
     fn conv_transpose1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &ParamsConvTranspose1D,
+        layout: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &ParamsConvTranspose1D,
     ) -> Result<Self> {
-        crate::bail!("Metal conv_transpose1d not implemented")
+        let device = self.device().clone();
+
+        let input_shape = layout.dims();
+        let kernel_shape = kernel_l.dims();
+
+        let input_strides = layout.stride();
+        let kernel_strides = kernel_l.stride();
+
+        let stride = params.stride;
+        let dilation = params.dilation;
+        let padding = params.padding;
+        let k_size = params.k_size;
+        let out_padding = params.output_padding;
+        let l_out = (input_shape[2] - 1) * stride + dilation * (k_size - 1) + 1 - 2 * padding;
+        let dst_el = input_shape[0] * l_out * input_shape[1] * k_size;
+        let buffer = self
+            .device
+            .new_buffer(dst_el, self.dtype, "conv_transpose1d")?;
+
+        let command_buffer = self.device.command_buffer()?;
+        let name = match self.dtype {
+            DType::F32 => "conv_transpose1d_f32",
+            dtype => crate::bail!("Metal conv_transpose1d {dtype:?} not implemented"),
+        };
+
+        candle_metal_kernels::call_conv_transpose1d(
+            &self.device.device,
+            &command_buffer,
+            &self.device.kernels,
+            name,
+            dilation,
+            stride,
+            padding,
+            out_padding,
+            input_shape,
+            input_strides,
+            kernel_shape,
+            kernel_strides,
+            &self.buffer,
+            &kernel.buffer,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
     fn conv2d(

@@ -1735,11 +1735,9 @@ fn run_conv_transpose1d<T: Clone>(
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
 
-    let c_in_k = kernel_shape[0];
     let c_out = kernel_shape[1];
     let k_size = kernel_shape[2];
     let b_size = input_shape[0];
-    let c_in = input_shape[1];
     let l_in = input_shape[2];
     let l_out = (l_in - 1) * stride - 2 * padding + dilation * (k_size - 1) + out_padding + 1;
     let dst_el = c_out * l_out * b_size;
@@ -1754,9 +1752,6 @@ fn run_conv_transpose1d<T: Clone>(
         command_buffer,
         &kernels,
         name,
-        c_out,
-        l_out,
-        b_size,
         dilation,
         stride,
         padding,
@@ -1778,12 +1773,12 @@ fn run_conv_transpose1d<T: Clone>(
 
 #[test]
 fn conv_transpose1d_f32() {
-    let input = vec![0.0f32, 1.0, 2.0, 3.0];
+    let input = vec![1.0f32, 2.0, 3.0, 4.0];
     let input_shape = &[1, 1, 4];
     let input_stride = &[4, 4, 1];
 
-    let kernel = vec![0.0f32, 1.0, 2.0, 3.0];
-    let kernel_shape = &[1, 1, 2];
+    let kernel = vec![1.0f32, 2.0, 3.0, 4.0];
+    let kernel_shape = &[1, 1, 4];
     let kernel_stride = &[4, 4, 1];
 
     let results = run_conv_transpose1d(
@@ -1800,6 +1795,6 @@ fn conv_transpose1d_f32() {
         "conv_transpose1d_f32",
     );
 
-    let expected = vec![0.0, 0.0, 1.0, 4.0, 12.0, 9.0];
+    let expected = vec![1., 4., 10., 20., 25., 24., 16.];
     assert_eq!(results, expected);
 }
