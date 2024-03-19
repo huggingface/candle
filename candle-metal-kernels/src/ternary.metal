@@ -34,9 +34,20 @@ METAL_FUNC void where_cond(
     if (i >= numel){
        return;
     }
-    uint strided_i = get_strided_index(i, num_dims, dims, strides);
-    uint strided_i_t = get_strided_index(i, num_dims, dims, strides_t);
-    uint strided_i_f = get_strided_index(i, num_dims, dims, strides_f);
+
+    // while calculating the first stride, check if all other strides are the same as the first to skip later
+    bool strides_match = true;
+    uint strided_i = 0;
+    for (uint d = 0; d < num_dims; d++) {
+        if (strides_match && !(strides[d] == strides_t[d] && strides[d] == strides_f[d])) {
+            strides_match = false;
+        }
+        uint dim_idx = num_dims - 1 - d;
+        strided_i += (i % dims[dim_idx]) * strides[dim_idx];
+        i /= dims[dim_idx];
+    }
+    uint strided_i_t = strides_match ? strided_i : get_strided_index(i, num_dims, dims, strides_t);
+    uint strided_i_f = strides_match ? strided_i : get_strided_index(i, num_dims, dims, strides_f);
     out[i] = ids[strided_i] ? t[strided_i_t] : f[strided_i_f];
 }
 
