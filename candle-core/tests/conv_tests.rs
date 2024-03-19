@@ -54,11 +54,6 @@ fn conv1d(dev: &Device) -> Result<()> {
         [2.4509, 2.6357, -1.3336, 4.1393, 0.5657, 1.8091, -1.1784, 3.5675, 0.5069, 3.3352]
     );
 
-    // conv-transposes are not implemented for metal.
-    if dev.is_metal() {
-        return Ok(());
-    }
-
     let w = w.transpose(0, 1)?;
     // The CPU kernels applied in the contiguous and non contiguous cases are different.
     for w in [w.clone(), w.contiguous()?] {
