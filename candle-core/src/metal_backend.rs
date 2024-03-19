@@ -966,6 +966,10 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         let name = match self.dtype {
             DType::F32 => "conv_transpose1d_f32",
+            DType::F16 => "conv_transpose1d_f16",
+            DType::BF16 => "conv_transpose1d_bf16",
+            DType::U32 => "conv_transpose1d_u32",
+            DType::U8 => "conv_transpose1d_u8",
             dtype => crate::bail!("Metal conv_transpose1d {dtype:?} not implemented"),
         };
         candle_metal_kernels::call_conv_transpose1d(
