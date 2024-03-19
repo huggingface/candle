@@ -1,11 +1,10 @@
 use crate::quantized_nn::{layer_norm, linear, linear_no_bias, Embedding, Linear};
 pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Activation, LayerNorm};
+use candle_nn::{Activation, LayerNorm, RotaryEmbedding};
 use std::sync::Arc;
 
 pub use crate::models::stable_lm::Config;
-use crate::models::stable_lm::RotaryEmbedding;
 
 #[derive(Debug, Clone)]
 #[allow(clippy::upper_case_acronyms)]
@@ -237,7 +236,13 @@ impl Model {
         let vb_m = vb.pp("model");
         let embed_tokens =
             Embedding::new(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(DType::F32, cfg, vb_m.device())?);
+        let rotary_emb = Arc::new(RotaryEmbedding::new(
+            DType::F32,
+            cfg.rope_theta,
+            cfg.rotary_ndims(),
+            cfg.max_position_embeddings,
+            vb_m.device(),
+        )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
