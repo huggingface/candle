@@ -1803,3 +1803,133 @@ fn conv_transpose1d_f32() {
     let expected = vec![1., 4., 10., 20., 25., 24., 16.];
     assert_eq!(results, expected);
 }
+
+#[test]
+fn conv_transpose1d_f16() {
+    let input: Vec<f16> = vec![1.0, 2.0, 3.0, 4.0]
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect();
+    let input_shape = &[1, 1, 4];
+    let input_stride = &[4, 4, 1];
+
+    let kernel: Vec<f16> = vec![1.0, 2.0, 3.0, 4.0]
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect();
+    let kernel_shape = &[1, 1, 4];
+    let kernel_stride = &[4, 4, 1];
+
+    let results = run_conv_transpose1d(
+        &input,
+        input_shape,
+        input_stride,
+        &kernel,
+        kernel_shape,
+        kernel_stride,
+        1,
+        1,
+        0,
+        0,
+        "conv_transpose1d_f16",
+    );
+
+    let expected = vec![1., 4., 10., 20., 25., 24., 16.]
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn conv_transpose1d_bf16() {
+    let input: Vec<bf16> = vec![1.0, 2.0, 3.0, 4.0]
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect();
+    let input_shape = &[1, 1, 4];
+    let input_stride = &[4, 4, 1];
+
+    let kernel: Vec<bf16> = vec![1.0, 2.0, 3.0, 4.0]
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect();
+    let kernel_shape = &[1, 1, 4];
+    let kernel_stride = &[4, 4, 1];
+
+    let results = run_conv_transpose1d(
+        &input,
+        input_shape,
+        input_stride,
+        &kernel,
+        kernel_shape,
+        kernel_stride,
+        1,
+        1,
+        0,
+        0,
+        "conv_transpose1d_bf16",
+    );
+
+    let expected = vec![1., 4., 10., 20., 25., 24., 16.]
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn conv_transpose1d_u8() {
+    let input: Vec<u8> = vec![1, 2, 3, 4];
+    let input_shape = &[1, 1, 4];
+    let input_stride = &[4, 4, 1];
+
+    let kernel: Vec<u8> = vec![1, 2, 3, 4];
+    let kernel_shape = &[1, 1, 4];
+    let kernel_stride = &[4, 4, 1];
+
+    let results = run_conv_transpose1d(
+        &input,
+        input_shape,
+        input_stride,
+        &kernel,
+        kernel_shape,
+        kernel_stride,
+        1,
+        1,
+        0,
+        0,
+        "conv_transpose1d_u8",
+    );
+
+    let expected = vec![1, 4, 10, 20, 25, 24, 16];
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn conv_transpose1d_u32() {
+    let input: Vec<u32> = vec![1, 2, 3, 4];
+    let input_shape = &[1, 1, 4];
+    let input_stride = &[4, 4, 1];
+
+    let kernel: Vec<u32> = vec![1, 2, 3, 4];
+    let kernel_shape = &[1, 1, 4];
+    let kernel_stride = &[4, 4, 1];
+
+    let results = run_conv_transpose1d(
+        &input,
+        input_shape,
+        input_stride,
+        &kernel,
+        kernel_shape,
+        kernel_stride,
+        1,
+        1,
+        0,
+        0,
+        "conv_transpose1d_u32",
+    );
+
+    let expected = vec![1, 4, 10, 20, 25, 24, 16];
+    assert_eq!(results, expected);
+}

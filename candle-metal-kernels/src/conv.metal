@@ -434,3 +434,9 @@ AVGPOOL2D_OP(bfloat, float, avg_pool2d_bf16)
 #endif
 
 CONVT1D_OP(float, float, conv_transpose1d_f32)
+CONVT1D_OP(half, float, conv_transpose1d_f16)
+CONVT1D_OP(uint8_t, uint8_t, conv_transpose1d_u8)
+CONVT1D_OP(uint32_t, uint32_t, conv_transpose1d_u32)
+#if defined(__HAVE_BFLOAT__)
+CONVT1D_OP(bfloat, float, conv_transpose1d_bf16)
+#endif
