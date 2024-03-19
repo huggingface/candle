@@ -949,25 +949,16 @@ impl BackendStorage for MetalStorage {
     fn conv_transpose1d(
         &self,
         layout: &Layout,
-        kernel: &Self,
-        kernel_l: &Layout,
+        k: &Self,
+        k_layout: &Layout,
         params: &ParamsConvTranspose1D,
     ) -> Result<Self> {
         let device = self.device().clone();
 
-        let input_shape = layout.dims();
-        let kernel_shape = kernel_l.dims();
+        let l_out = params.l_out();
+        let dst_el = params.c_out * l_out * params.b_size;
 
-        let input_strides = layout.stride();
-        let kernel_strides = kernel_l.stride();
-
-        let stride = params.stride;
-        let dilation = params.dilation;
-        let padding = params.padding;
-        let k_size = params.k_size;
-        let out_padding = params.output_padding;
-        let l_out = (input_shape[2] - 1) * stride + dilation * (k_size - 1) + 1 - 2 * padding;
-        let dst_el = input_shape[0] * l_out * input_shape[1] * k_size;
+        let dst_el = params.c_out * l_out * params.b_size;
         let buffer = self
             .device
             .new_buffer(dst_el, self.dtype, "conv_transpose1d")?;
@@ -977,26 +968,29 @@ impl BackendStorage for MetalStorage {
             DType::F32 => "conv_transpose1d_f32",
             dtype => crate::bail!("Metal conv_transpose1d {dtype:?} not implemented"),
         };
-
         candle_metal_kernels::call_conv_transpose1d(
             &self.device.device,
             &command_buffer,
             &self.device.kernels,
             name,
-            dilation,
-            stride,
-            padding,
-            out_padding,
-            input_shape,
-            input_strides,
-            kernel_shape,
-            kernel_strides,
+            params.dilation,
+            params.stride,
+            params.padding,
+            params.output_padding,
+            params.c_out,
+            l_out,
+            params.b_size,
+            layout.dims(),
+            layout.stride(),
+            k_layout.dims(),
+            k_layout.stride(),
             &self.buffer,
-            &kernel.buffer,
+            layout.start_offset() * self.dtype.size_in_bytes(),
+            &k.buffer,
+            k_layout.start_offset() * k.dtype.size_in_bytes(),
             &buffer,
         )
         .map_err(MetalError::from)?;
-
         Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 

@@ -1869,19 +1869,19 @@ pub fn call_conv_transpose1d(
     stride: usize,
     padding: usize,
     out_padding: usize,
+    c_out: usize,
+    l_out: usize,
+    b_size: usize,
     src_shape: &[usize],
     src_strides: &[usize],
     kernel_shape: &[usize],
     kernel_strides: &[usize],
     input: &Buffer,
+    input_offset: usize,
     kernel: &Buffer,
+    kernel_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
-    let c_out = kernel_shape[1];
-    let k_size = kernel_shape[2];
-    let b_size = src_shape[0];
-    let l_in = src_shape[2];
-    let l_out = (l_in - 1) * stride - 2 * padding + dilation * (k_size - 1) + out_padding + 1;
     let dst_el = c_out * l_out * b_size;
     let pipeline: ComputePipelineState = kernels.load_pipeline(device, Source::Conv, name)?;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
@@ -1899,13 +1899,13 @@ pub fn call_conv_transpose1d(
             src_strides,
             kernel_shape,
             kernel_strides,
-            input,
-            kernel,
+            (input, input_offset),
+            (kernel, kernel_offset),
             output
         )
     );
-    encoder.use_resource(kernel, metal::MTLResourceUsage::Read);
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(kernel, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();

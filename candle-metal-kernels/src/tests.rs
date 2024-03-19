@@ -1756,12 +1756,17 @@ fn run_conv_transpose1d<T: Clone>(
         stride,
         padding,
         out_padding,
+        c_out,
+        l_out,
+        b_size,
         input_shape,
         input_stride,
         kernel_shape,
         kernel_stride,
         &input,
+        0,
         &kernel,
+        0,
         &output,
     )
     .unwrap();
