@@ -35,6 +35,14 @@ pub struct Linear {
 }
 
 impl Linear {
+    pub fn from_arc(
+        weight: std::sync::Arc<candle::quantized::QTensor>,
+        bias: Option<Tensor>,
+    ) -> Result<Self> {
+        let weight = QMatMul::from_weights(weight)?;
+        Ok(Self { weight, bias })
+    }
+
     pub fn from_weights(weight: QMatMul, bias: Option<Tensor>) -> Self {
         Self { weight, bias }
     }
@@ -48,6 +56,16 @@ impl Module for Linear {
             Some(bias) => x.broadcast_add(bias),
         }
     }
+}
+
+pub fn linear_b(in_dim: usize, out_dim: usize, bias: bool, vb: VarBuilder) -> Result<Linear> {
+    let bias = if bias {
+        Some(vb.get(out_dim, "bias")?.dequantize(vb.device())?)
+    } else {
+        None
+    };
+    let weight = QMatMul::new(in_dim, out_dim, vb)?;
+    Ok(Linear { weight, bias })
 }
 
 pub fn linear(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Linear> {

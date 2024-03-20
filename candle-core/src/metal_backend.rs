@@ -9,7 +9,7 @@ use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger}
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock, TryLockError};
+use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard, TryLockError};
 
 /// Simple way to catch lock error without
 /// depending on T
@@ -60,7 +60,8 @@ impl From<String> for MetalError {
     }
 }
 
-type AllocatedBuffers = Arc<RwLock<HashMap<(NSUInteger, MTLResourceOptions), Vec<Arc<Buffer>>>>>;
+type BufferMap = HashMap<(NSUInteger, MTLResourceOptions), Vec<Arc<Buffer>>>;
+type AllocatedBuffers = Arc<RwLock<BufferMap>>;
 
 #[derive(Clone)]
 pub struct MetalDevice {
@@ -68,7 +69,7 @@ pub struct MetalDevice {
     device: metal::Device,
 
     /// Single command queue for the entire device.
-    command_queue: metal::CommandQueue,
+    command_queue: CommandQueue,
     /// One command buffer at a time.
     /// The scheduler works by allowing multiple
     /// [ComputeCommandEncoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc)
@@ -78,7 +79,7 @@ pub struct MetalDevice {
     /// Despite what the documentation says, command buffers are NOT ordered. They are ordered
     /// for their START time, but there's no guarantee that command buffer1 will finish before
     /// command buffer2 starts (or there are metal bugs there)
-    command_buffer: Arc<RwLock<metal::CommandBuffer>>,
+    command_buffer: Arc<RwLock<CommandBuffer>>,
     /// Keeps track of the current amount of compute command encoders on the current
     /// command buffer
     /// Arc, RwLock because of the interior mutability.
@@ -87,7 +88,7 @@ pub struct MetalDevice {
     compute_per_buffer: usize,
     /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
     /// Heavily used by [`candle_metal_kernels`]
-    kernels: Arc<candle_metal_kernels::Kernels>,
+    kernels: Arc<Kernels>,
     /// Simple allocator struct.
     /// The buffers are stored in size buckets since ML tends to use similar shapes over and over.
     /// We store the buffers in [`Arc`] because it's much faster than Obj-c internal ref counting
@@ -99,7 +100,7 @@ pub struct MetalDevice {
     /// operation, so that this buffer is not being used by another kernel at the same time.
     /// Arc is the CPU reference count, it doesn't mean anything on the GPU side of things.
     ///
-    /// Whenever we actually allocate a new buffer, we make a full sweep to cleanup unused buffers
+    /// Whenever we actually allocate a new buffer, we make a full sweep to clean up unused buffers
     /// (strong_count = 1).
     buffers: AllocatedBuffers,
     /// Seed for random number generation.
@@ -145,6 +146,8 @@ impl MetalDevice {
             command_buffer = self.command_queue.new_command_buffer().to_owned();
             *command_buffer_lock = command_buffer.clone();
             *index = 0;
+
+            self.drop_unused_buffers()?;
         }
         *index += 1;
         Ok(command_buffer)
@@ -163,6 +166,7 @@ impl MetalDevice {
         command_buffer.commit();
         command_buffer.wait_until_completed();
         *command_buffer = self.command_queue.new_command_buffer().to_owned();
+
         Ok(())
     }
 
@@ -199,39 +203,25 @@ impl MetalDevice {
     }
 
     /// Creates a new buffer from data.
-    /// The buffer is [MTLPrivate](https://developer.apple.com/documentation/metal/mtlstoragemode)
+    /// The buffer is [MTLManaged](https://developer.apple.com/documentation/metal/mtlstoragemode)
     ///
-    /// This method will block the computation because of the
-    /// lack of lifetime management through the GPU.
-    /// Internal comment for technical details.
+    /// Does not require synchronization, as [newBufferWithBytes](https://developer.apple.com/documentation/metal/mtldevice/1433429-newbufferwithbytes)
+    /// allocates the buffer and copies over the existing data before returning the MTLBuffer.
     pub fn new_buffer_with_data<T>(&self, data: &[T]) -> Result<Arc<Buffer>> {
         let size = core::mem::size_of_val(data) as NSUInteger;
-        let tmp = self.device.new_buffer_with_data(
-            data.as_ptr() as *const core::ffi::c_void,
+        let new_buffer = self.device.new_buffer_with_data(
+            data.as_ptr() as *const c_void,
             size,
-            metal::MTLResourceOptions::StorageModeManaged,
+            MTLResourceOptions::StorageModeManaged,
         );
-        let real = self.allocate_buffer(
-            size,
-            metal::MTLResourceOptions::StorageModePrivate,
-            "with_data",
-        )?;
-        let command_buffer = self.command_buffer()?;
-        command_buffer.set_label("with_data");
-        let blit = command_buffer.new_blit_command_encoder();
-        blit.set_label("with_data_blit");
-        blit.copy_from_buffer(&tmp, 0, &real, 0, tmp.length());
-        blit.end_encoding();
+        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
+        let subbuffers = buffers
+            .entry((size, MTLResourceOptions::StorageModeManaged))
+            .or_insert(vec![]);
 
-        // This is necessary, for mmaped safetensors
-        // Because of the unsafe slice cast we're doing.
-        // The slice might not live long enough for metal
-        // To actually fill the GPU buffer.
-        // Putting this wait forces the GPU buffer to be filled
-        // with the actual data allowing the CPU storage to do
-        // deallocate properly.
-        self.wait_until_completed()?;
-        Ok(real)
+        let new_buffer = Arc::new(new_buffer);
+        subbuffers.push(new_buffer.clone());
+        Ok(new_buffer)
     }
 
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
@@ -255,6 +245,40 @@ impl MetalDevice {
         Ok(buffer)
     }
 
+    fn find_available_buffer(
+        &self,
+        size: NSUInteger,
+        option: MTLResourceOptions,
+        buffers: &RwLockWriteGuard<BufferMap>,
+    ) -> Option<Arc<Buffer>> {
+        let mut best_buffer: Option<&Arc<Buffer>> = None;
+        let mut best_buffer_size: NSUInteger = NSUInteger::MAX;
+        for ((buffer_size, buffer_option), subbuffers) in buffers.iter() {
+            if buffer_size >= &size && buffer_size < &best_buffer_size && buffer_option == &option {
+                for sub in subbuffers {
+                    if Arc::strong_count(sub) == 1 {
+                        best_buffer = Some(sub);
+                        best_buffer_size = *buffer_size;
+                    }
+                }
+            }
+        }
+        best_buffer.cloned()
+    }
+
+    fn drop_unused_buffers(&self) -> Result<()> {
+        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
+        for subbuffers in buffers.values_mut() {
+            let newbuffers = subbuffers
+                .iter()
+                .filter(|s| Arc::strong_count(*s) > 1)
+                .map(Arc::clone)
+                .collect();
+            *subbuffers = newbuffers;
+        }
+        Ok(())
+    }
+
     /// The critical allocator algorithm
     fn allocate_buffer(
         &self,
@@ -263,24 +287,18 @@ impl MetalDevice {
         _name: &str,
     ) -> Result<Arc<Buffer>> {
         let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
+        if let Some(b) = self.find_available_buffer(size, option, &buffers) {
+            // Cloning also ensures we increment the strong count
+            return Ok(b.clone());
+        }
+
+        let size = buf_size(size);
         let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
 
-        for sub in &mut *subbuffers {
-            if Arc::strong_count(sub) == 1 {
-                return Ok(sub.clone());
-            }
-        }
         let new_buffer = self.device.new_buffer(size as NSUInteger, option);
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
-        for subbuffers in buffers.values_mut() {
-            let newbuffers = subbuffers
-                .iter()
-                .filter(|s| Arc::strong_count(s) > 1)
-                .map(Arc::clone)
-                .collect();
-            *subbuffers = newbuffers;
-        }
+
         Ok(new_buffer)
     }
 
@@ -305,6 +323,8 @@ pub struct MetalStorage {
     buffer: Arc<metal::Buffer>,
     /// a reference to the device owning this buffer
     device: MetalDevice,
+    /// The count of allocated elements in the buffer
+    count: usize,
     /// The dtype is kept since buffers are untyped.
     dtype: DType,
 }
@@ -386,7 +406,7 @@ impl BackendStorage for MetalStorage {
             )
             .map_err(MetalError::from)?;
         }
-        Ok(Self::new(buffer, device.clone(), dtype))
+        Ok(Self::new(buffer, device.clone(), el, dtype))
     }
 
     fn powf(&self, layout: &Layout, pow: f64) -> Result<Self> {
@@ -402,6 +422,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "powf_f32",
                 DType::F16 => "powf_f16",
+                DType::BF16 => "powf_bf16",
                 dtype => crate::bail!("Metal contiguous powf {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_powf(
@@ -419,6 +440,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "powf_f32_strided",
                 DType::F16 => "powf_f16_strided",
+                DType::BF16 => "powf_bf16_strided",
                 dtype => crate::bail!("Metal strided powf {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_powf_strided(
@@ -435,7 +457,7 @@ impl BackendStorage for MetalStorage {
             )
             .map_err(MetalError::from)?;
         }
-        Ok(Self::new(buffer, device.clone(), dtype))
+        Ok(Self::new(buffer, device.clone(), el, dtype))
     }
 
     fn elu(&self, layout: &Layout, alpha: f64) -> Result<Self> {
@@ -451,6 +473,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "elu_f32",
                 DType::F16 => "elu_f16",
+                DType::BF16 => "elu_bf16",
                 dtype => crate::bail!("Metal contiguous elu {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_elu(
@@ -468,6 +491,7 @@ impl BackendStorage for MetalStorage {
             let name = match self.dtype {
                 DType::F32 => "elu_f32_strided",
                 DType::F16 => "elu_f16_strided",
+                DType::BF16 => "elu_bf16_strided",
                 dtype => crate::bail!("Metal strided elu {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_elu_strided(
@@ -484,7 +508,7 @@ impl BackendStorage for MetalStorage {
             )
             .map_err(MetalError::from)?;
         }
-        Ok(Self::new(buffer, device.clone(), dtype))
+        Ok(Self::new(buffer, device.clone(), el, dtype))
     }
 
     fn reduce_op(&self, op: ReduceOp, layout: &Layout, sum_dims: &[usize]) -> Result<Self> {
@@ -562,7 +586,7 @@ impl BackendStorage for MetalStorage {
         )
         .map_err(MetalError::from)?;
 
-        Ok(Self::new(buffer, device, dtype))
+        Ok(Self::new(buffer, device, dst_el, dtype))
     }
 
     fn cmp(&self, op: CmpOp, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout) -> Result<Self> {
@@ -585,28 +609,41 @@ impl BackendStorage for MetalStorage {
         let command_buffer = device.command_buffer()?;
         if layout.is_contiguous() && layout.start_offset() == 0 {
             let kernel_name = match (self.dtype, dtype) {
-                (DType::U32, DType::F32) => "cast_u32_f32",
-                (DType::U32, DType::U8) => "cast_u32_u8",
-                (DType::U32, DType::I64) => "cast_u32_i64",
                 (DType::U32, DType::BF16) => "cast_u32_bf16",
+                (DType::U32, DType::F16) => "cast_u32_f16",
+                (DType::U32, DType::F32) => "cast_u32_f32",
+                (DType::U32, DType::I64) => "cast_u32_i64",
+                (DType::U32, DType::U8) => "cast_u32_u8",
 
-                (DType::U8, DType::U32) => "cast_u8_u32",
+                (DType::U8, DType::BF16) => "cast_u8_bf16",
+                (DType::U8, DType::F16) => "cast_u8_f16",
                 (DType::U8, DType::F32) => "cast_u8_f32",
                 (DType::U8, DType::I64) => "cast_u8_i64",
-                (DType::U8, DType::BF16) => "cast_u8_bf16",
+                (DType::U8, DType::U32) => "cast_u8_u32",
 
-                (DType::F32, DType::F16) => "cast_f32_f16",
                 (DType::F32, DType::BF16) => "cast_f32_bf16",
+                (DType::F32, DType::F16) => "cast_f32_f16",
+                (DType::F32, DType::I64) => "cast_f32_i64",
+                (DType::F32, DType::U32) => "cast_f32_u32",
+                (DType::F32, DType::U8) => "cast_f32_u8",
 
+                (DType::I64, DType::BF16) => "cast_i64_bf16",
+                (DType::I64, DType::F16) => "cast_i64_f16",
                 (DType::I64, DType::F32) => "cast_i64_f32",
+                (DType::I64, DType::U32) => "cast_i64_u32",
+                (DType::I64, DType::U8) => "cast_i64_u8",
 
                 (DType::F16, DType::BF16) => "cast_f16_bf16",
                 (DType::F16, DType::F32) => "cast_f16_f32",
+                (DType::F16, DType::I64) => "cast_f16_i64",
+                (DType::F16, DType::U32) => "cast_f16_u32",
+                (DType::F16, DType::U8) => "cast_f16_u8",
 
-                (DType::BF16, DType::U8) => "cast_bf16_u8",
-                (DType::BF16, DType::U32) => "cast_bf16_u32",
                 (DType::BF16, DType::F16) => "cast_bf16_f16",
                 (DType::BF16, DType::F32) => "cast_bf16_f32",
+                (DType::BF16, DType::I64) => "cast_bf16_i64",
+                (DType::BF16, DType::U32) => "cast_bf16_u32",
+                (DType::BF16, DType::U8) => "cast_bf16_u8",
 
                 (left, right) => {
                     crate::bail!("Metal contiguous to_dtype {left:?} {right:?} not implemented")
@@ -654,7 +691,7 @@ impl BackendStorage for MetalStorage {
             .map_err(MetalError::from)?;
         }
         command_buffer.set_label("to_dtype");
-        Ok(Self::new(buffer, device.clone(), dtype))
+        Ok(Self::new(buffer, device.clone(), el_count, dtype))
     }
 
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
@@ -679,6 +716,7 @@ impl BackendStorage for MetalStorage {
                 ("ugelu", DType::F32) => contiguous::gelu::FLOAT,
                 ("ugelu_erf", DType::F32) => contiguous::gelu_erf::FLOAT,
                 ("uerf", DType::F32) => contiguous::erf::FLOAT,
+                ("usilu", DType::F32) => contiguous::silu::FLOAT,
                 ("uabs", DType::F32) => contiguous::abs::FLOAT,
                 ("uceil", DType::F32) => contiguous::ceil::FLOAT,
                 ("ufloor", DType::F32) => contiguous::floor::FLOAT,
@@ -696,6 +734,7 @@ impl BackendStorage for MetalStorage {
                 ("ugelu", DType::F16) => contiguous::gelu::HALF,
                 ("ugelu_erf", DType::F16) => contiguous::gelu_erf::HALF,
                 ("uerf", DType::F16) => contiguous::erf::HALF,
+                ("usilu", DType::F16) => contiguous::silu::HALF,
                 ("uabs", DType::F16) => contiguous::abs::HALF,
                 ("uceil", DType::F16) => contiguous::ceil::HALF,
                 ("ufloor", DType::F16) => contiguous::floor::HALF,
@@ -730,11 +769,13 @@ impl BackendStorage for MetalStorage {
                 ("ugelu", DType::F32) => strided::gelu::FLOAT,
                 ("ugelu_erf", DType::F32) => strided::gelu_erf::FLOAT,
                 ("uerf", DType::F32) => strided::erf::FLOAT,
+                ("usilu", DType::F32) => strided::silu::FLOAT,
                 ("uabs", DType::F32) => strided::abs::FLOAT,
                 ("uceil", DType::F32) => strided::ceil::FLOAT,
                 ("ufloor", DType::F32) => strided::floor::FLOAT,
                 ("urelu", DType::F32) => strided::relu::FLOAT,
                 ("uround", DType::F32) => strided::round::FLOAT,
+                ("utanh", DType::F32) => strided::tanh::FLOAT,
                 ("ucos", DType::F16) => strided::cos::HALF,
                 ("usin", DType::F16) => strided::sin::HALF,
                 ("usqr", DType::F16) => strided::sqr::HALF,
@@ -745,11 +786,13 @@ impl BackendStorage for MetalStorage {
                 ("ugelu", DType::F16) => strided::gelu::HALF,
                 ("ugelu_erf", DType::F16) => strided::gelu_erf::HALF,
                 ("uerf", DType::F16) => strided::erf::HALF,
+                ("usilu", DType::F16) => strided::silu::HALF,
                 ("uabs", DType::F16) => strided::abs::HALF,
                 ("uceil", DType::F16) => strided::ceil::HALF,
                 ("ufloor", DType::F16) => strided::floor::HALF,
                 ("urelu", DType::F16) => strided::relu::HALF,
                 ("uround", DType::F16) => strided::round::HALF,
+                ("utanh", DType::F16) => strided::tanh::HALF,
                 (name, dtype) => {
                     crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
                 }
@@ -768,7 +811,7 @@ impl BackendStorage for MetalStorage {
             )
             .map_err(MetalError::from)?;
         }
-        Ok(Self::new(buffer, device.clone(), dtype))
+        Ok(Self::new(buffer, device.clone(), el_count, dtype))
     }
 
     fn binary_impl<B: BinaryOpT>(
@@ -823,13 +866,13 @@ impl BackendStorage for MetalStorage {
                 layout.start_offset() * self.dtype.size_in_bytes(),
             ),
             &t.buffer,
-            (&t_l.stride(), t_l.start_offset() * t.dtype.size_in_bytes()),
+            (t_l.stride(), t_l.start_offset() * t.dtype.size_in_bytes()),
             &f.buffer,
-            (&f_l.stride(), f_l.start_offset() * f.dtype.size_in_bytes()),
+            (f_l.stride(), f_l.start_offset() * f.dtype.size_in_bytes()),
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, device, dtype))
+        Ok(Self::new(buffer, device, el, dtype))
     }
 
     fn conv1d(
@@ -874,6 +917,7 @@ impl BackendStorage for MetalStorage {
         let col = Self {
             buffer: dst,
             device,
+            count: dst_el,
             dtype: self.dtype,
         };
         let l_out = params.l_out();
@@ -904,12 +948,54 @@ impl BackendStorage for MetalStorage {
 
     fn conv_transpose1d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &ParamsConvTranspose1D,
+        layout: &Layout,
+        k: &Self,
+        k_layout: &Layout,
+        params: &ParamsConvTranspose1D,
     ) -> Result<Self> {
-        crate::bail!("Metal conv_transpose1d not implemented")
+        let device = self.device().clone();
+
+        let l_out = params.l_out();
+        let dst_el = params.c_out * l_out * params.b_size;
+
+        let dst_el = params.c_out * l_out * params.b_size;
+        let buffer = self
+            .device
+            .new_buffer(dst_el, self.dtype, "conv_transpose1d")?;
+
+        let command_buffer = self.device.command_buffer()?;
+        let name = match self.dtype {
+            DType::F32 => "conv_transpose1d_f32",
+            DType::F16 => "conv_transpose1d_f16",
+            DType::BF16 => "conv_transpose1d_bf16",
+            DType::U32 => "conv_transpose1d_u32",
+            DType::U8 => "conv_transpose1d_u8",
+            dtype => crate::bail!("Metal conv_transpose1d {dtype:?} not implemented"),
+        };
+        candle_metal_kernels::call_conv_transpose1d(
+            &self.device.device,
+            &command_buffer,
+            &self.device.kernels,
+            name,
+            params.dilation,
+            params.stride,
+            params.padding,
+            params.output_padding,
+            params.c_out,
+            l_out,
+            params.b_size,
+            layout.dims(),
+            layout.stride(),
+            k_layout.dims(),
+            k_layout.stride(),
+            &self.buffer,
+            layout.start_offset() * self.dtype.size_in_bytes(),
+            &k.buffer,
+            k_layout.start_offset() * k.dtype.size_in_bytes(),
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+        Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
     fn conv2d(
@@ -958,6 +1044,7 @@ impl BackendStorage for MetalStorage {
         let col = Self {
             buffer: dst,
             device,
+            count: dst_el,
             dtype: self.dtype,
         };
         let h_out = params.out_h();
@@ -999,12 +1086,88 @@ impl BackendStorage for MetalStorage {
         crate::bail!("Metal conv_tranpose2d not implemented")
     }
 
-    fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        crate::bail!("Metal avg_pool2d not implemented")
+    fn avg_pool2d(
+        &self,
+        inp_l: &Layout,
+        (w_k, h_k): (usize, usize),
+        (w_stride, h_stride): (usize, usize),
+    ) -> Result<Self> {
+        let shape = inp_l.shape();
+        let (b_size, channels, width, height) = shape.dims4()?;
+        let strides = inp_l.stride();
+        let name = match self.dtype {
+            DType::F32 => "avg_pool2d_f32",
+            DType::F16 => "avg_pool2d_f16",
+            DType::BF16 => "avg_pool2d_bf16",
+            DType::U8 => "avg_pool2d_u8",
+            DType::U32 => "avg_pool2d_u32",
+            dtype => crate::bail!("Metal avg_pool2d {dtype:?} not implemented"),
+        };
+        let out_w = (width - w_k) / w_stride + 1;
+        let out_h = (height - h_k) / h_stride + 1;
+        let dst_el = out_w * out_h * b_size * channels;
+        let buffer = self.device.new_buffer(dst_el, self.dtype, "avg_pool2d")?;
+        let command_buffers = self.device.command_buffer()?;
+        candle_metal_kernels::call_pool2d(
+            &self.device.device,
+            &command_buffers,
+            &self.device.kernels,
+            name,
+            inp_l.dims(),
+            strides,
+            out_w,
+            out_h,
+            w_k,
+            h_k,
+            w_stride,
+            h_stride,
+            &self.buffer,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+        Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
-    fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
-        crate::bail!("Metal max_pool2d not implemented")
+    fn max_pool2d(
+        &self,
+        inp_l: &Layout,
+        (w_k, h_k): (usize, usize),
+        (w_stride, h_stride): (usize, usize),
+    ) -> Result<Self> {
+        let shape = inp_l.shape();
+        let (b_size, channels, width, height) = shape.dims4()?;
+        let strides = inp_l.stride();
+        let name = match self.dtype {
+            DType::F32 => "max_pool2d_f32",
+            DType::F16 => "max_pool2d_f16",
+            DType::BF16 => "max_pool2d_bf16",
+            DType::U8 => "max_pool2d_u8",
+            DType::U32 => "max_pool2d_u32",
+            dtype => crate::bail!("Metal max_pool2d {dtype:?} not implemented"),
+        };
+        let out_w = (width - w_k) / w_stride + 1;
+        let out_h = (height - h_k) / h_stride + 1;
+        let dst_el = out_w * out_h * b_size * channels;
+        let buffer = self.device.new_buffer(dst_el, self.dtype, "max_pool2d")?;
+        let command_buffers = self.device.command_buffer()?;
+        candle_metal_kernels::call_pool2d(
+            &self.device.device,
+            &command_buffers,
+            &self.device.kernels,
+            name,
+            inp_l.dims(),
+            strides,
+            out_w,
+            out_h,
+            w_k,
+            h_k,
+            w_stride,
+            h_stride,
+            &self.buffer,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+        Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
     fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self> {
@@ -1043,7 +1206,7 @@ impl BackendStorage for MetalStorage {
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, self.device.clone(), self.dtype))
+        Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
     fn gather(&self, src_l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
@@ -1077,7 +1240,7 @@ impl BackendStorage for MetalStorage {
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, device.clone(), dtype))
+        Ok(Self::new(buffer, device.clone(), dst_el, dtype))
     }
 
     fn scatter_add(
@@ -1100,7 +1263,15 @@ impl BackendStorage for MetalStorage {
             None => Err(crate::Error::RequiresContiguous { op: "scatter-add" }.bt())?,
         };
         let name = match (ids.dtype, self.dtype) {
+            (DType::U8, DType::F32) => "sa_u8_f32",
+            (DType::U8, DType::F16) => "sa_u8_f16",
+            (DType::U8, DType::BF16) => "sa_u8_bf16",
             (DType::U32, DType::F32) => "sa_u32_f32",
+            (DType::U32, DType::F16) => "sa_u32_f16",
+            (DType::U32, DType::BF16) => "sa_u32_bf16",
+            (DType::I64, DType::F32) => "sa_i64_f32",
+            (DType::I64, DType::F16) => "sa_i64_f16",
+            (DType::I64, DType::BF16) => "sa_i64_bf16",
             _ => Err(MetalError::UnexpectedDType {
                 msg: "scatter-add ids should be u8/u32/i64",
                 expected: DType::U32,
@@ -1166,7 +1337,7 @@ impl BackendStorage for MetalStorage {
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, device.clone(), dtype))
+        Ok(Self::new(buffer, device.clone(), dst_el, dtype))
     }
 
     fn index_add(
@@ -1189,9 +1360,29 @@ impl BackendStorage for MetalStorage {
             None => Err(crate::Error::RequiresContiguous { op: "index-add" }.bt())?,
         };
         let name = match (ids.dtype, self.dtype) {
+            (DType::I64, DType::BF16) => "ia_i64_bf16",
+            (DType::I64, DType::F16) => "ia_i64_f16",
+            (DType::I64, DType::F32) => "ia_i64_f32",
+            (DType::I64, DType::I64) => "ia_i64_i64",
+            (DType::I64, DType::U32) => "ia_i64_u32",
+            (DType::I64, DType::U8) => "ia_i64_u8",
+
+            (DType::U32, DType::BF16) => "ia_u32_bf16",
+            (DType::U32, DType::F16) => "ia_u32_f16",
             (DType::U32, DType::F32) => "ia_u32_f32",
+            (DType::U32, DType::I64) => "ia_u32_i64",
+            (DType::U32, DType::U32) => "ia_u32_u32",
+            (DType::U32, DType::U8) => "ia_u32_u8",
+
+            (DType::U8, DType::BF16) => "ia_u8_bf16",
+            (DType::U8, DType::F16) => "ia_u8_f16",
+            (DType::U8, DType::F32) => "ia_u8_f32",
+            (DType::U8, DType::I64) => "ia_u8_i64",
+            (DType::U8, DType::U32) => "ia_u8_u32",
+            (DType::U8, DType::U8) => "ia_u8_u8",
+
             _ => Err(MetalError::UnexpectedDType {
-                msg: "index-add ids should be u32",
+                msg: "index-add ids should be u8/u32/i64",
                 expected: DType::U32,
                 got: ids.dtype(),
             })?,
@@ -1248,7 +1439,73 @@ impl BackendStorage for MetalStorage {
             &buffer,
         )
         .map_err(MetalError::from)?;
-        Ok(Self::new(buffer, self.device.clone(), self.dtype()))
+        Ok(Self::new(
+            buffer,
+            self.device.clone(),
+            b * m * n,
+            self.dtype(),
+        ))
+    }
+
+    fn copy2d(
+        &self,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
+    ) -> Result<()> {
+        if self.dtype() != dst.dtype() {
+            crate::bail!(
+                "copy2d with inconsistent dtypes {:?} {:?}",
+                self.dtype(),
+                dst.dtype()
+            )
+        }
+        let command_buffer = self.device.command_buffer()?;
+        if src_s == d2 && dst_s == d2 {
+            command_buffer.set_label("copy2d_contiguous");
+            let blit = command_buffer.new_blit_command_encoder();
+            blit.set_label("copy2d_contiguous");
+            let src_offset = (src_o * self.dtype.size_in_bytes()) as NSUInteger;
+            let length = (d1 * d2 * self.dtype.size_in_bytes()) as NSUInteger;
+            let dst_offset = (dst_o * dst.dtype().size_in_bytes()) as NSUInteger;
+            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
+            blit.end_encoding();
+        } else {
+            let el_count = d1 * d2;
+            if el_count == 0 {
+                return Ok(());
+            }
+            let kernel_name = match self.dtype {
+                DType::F32 => candle_metal_kernels::copy2d::FLOAT,
+                DType::F16 => candle_metal_kernels::copy2d::HALF,
+                DType::BF16 => candle_metal_kernels::copy2d::BFLOAT,
+                DType::I64 => candle_metal_kernels::copy2d::I64,
+                DType::U32 => candle_metal_kernels::copy2d::U32,
+                DType::U8 => candle_metal_kernels::copy2d::U8,
+                dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
+            };
+            candle_metal_kernels::call_copy2d(
+                &self.device.device,
+                &command_buffer,
+                &self.device.kernels,
+                kernel_name,
+                &self.buffer,
+                &dst.buffer,
+                d1,
+                d2,
+                src_s,
+                dst_s,
+                src_o * self.dtype.size_in_bytes(),
+                dst_o * self.dtype.size_in_bytes(),
+            )
+            .map_err(MetalError::from)?;
+            command_buffer.set_label("copy2d");
+        }
+        Ok(())
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
@@ -1260,7 +1517,7 @@ impl BackendStorage for MetalStorage {
             let src_offset = (src_l.start_offset() * self.dtype.size_in_bytes()) as NSUInteger;
             let length = (src_l.shape().elem_count() * self.dtype.size_in_bytes()) as NSUInteger;
             let dst_offset = (dst_offset * dst.dtype().size_in_bytes()) as NSUInteger;
-            blit.copy_from_buffer(&self.buffer, src_offset, &dst.buffer(), dst_offset, length);
+            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
             blit.end_encoding();
         } else {
             let src_shape = src_l.shape();
@@ -1297,10 +1554,11 @@ impl BackendStorage for MetalStorage {
 }
 
 impl MetalStorage {
-    pub fn new(buffer: Arc<Buffer>, device: MetalDevice, dtype: DType) -> Self {
+    pub fn new(buffer: Arc<Buffer>, device: MetalDevice, count: usize, dtype: DType) -> Self {
         Self {
             buffer,
             device,
+            count,
             dtype,
         }
     }
@@ -1515,29 +1773,23 @@ impl MetalStorage {
             (buffer, dtype)
         };
         command_buffer.set_label("binary");
-        Ok(Self::new(buffer, device.clone(), dtype))
+        Ok(Self::new(buffer, device.clone(), el_count, dtype))
     }
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
-        let length = self.buffer.length() as usize;
-        let size = self.dtype.size_in_bytes();
-        if length % size != 0 {
-            crate::bail!(
-                "The Metal buffer length is not aligned with dtype {:?}",
-                self.dtype
-            );
-        }
-        let buffer = self.device.new_buffer_managed(self.buffer.length())?;
+        let size = (self.count * self.dtype.size_in_bytes()) as NSUInteger;
+
+        let buffer = self.device.new_buffer_managed(size)?;
         {
             let command_buffer = self.device.command_buffer()?;
             command_buffer.set_label("to_cpu");
             let blit = command_buffer.new_blit_command_encoder();
             blit.set_label("blit_to_cpu");
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
             blit.end_encoding();
         }
         self.device.wait_until_completed()?;
-        Ok(read_to_vec(&buffer, length / size))
+        Ok(read_to_vec(&buffer, self.count))
     }
 }
 
@@ -1555,7 +1807,7 @@ impl BackendDevice for MetalDevice {
         let buffers = Arc::new(RwLock::new(HashMap::new()));
         let compute_per_buffer = match std::env::var("CANDLE_METAL_COMPUTE_PER_BUFFER") {
             Ok(val) => val.parse()?,
-            _ => 10,
+            _ => 50,
         };
         let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
             [299792458].as_ptr() as *const c_void,
@@ -1587,7 +1839,12 @@ impl BackendDevice for MetalDevice {
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
         let size = shape.elem_count() * dtype.size_in_bytes();
         let buffer = self.allocate_zeros(size)?;
-        Ok(MetalStorage::new(buffer, self.clone(), dtype))
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
     }
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
@@ -1597,16 +1854,21 @@ impl BackendDevice for MetalDevice {
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
-        let buffer = match storage {
-            CpuStorage::U8(storage) => self.new_buffer_with_data(storage),
-            CpuStorage::U32(storage) => self.new_buffer_with_data(storage),
-            CpuStorage::I64(storage) => self.new_buffer_with_data(storage),
-            CpuStorage::BF16(storage) => self.new_buffer_with_data(storage),
-            CpuStorage::F16(storage) => self.new_buffer_with_data(storage),
-            CpuStorage::F32(storage) => self.new_buffer_with_data(storage),
-            CpuStorage::F64(storage) => self.new_buffer_with_data(storage),
-        }?;
-        Ok(Self::Storage::new(buffer, self.clone(), storage.dtype()))
+        let (count, buffer) = match storage {
+            CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+        };
+        Ok(Self::Storage::new(
+            buffer?,
+            self.clone(),
+            count,
+            storage.dtype(),
+        ))
     }
 
     fn rand_uniform(
@@ -1632,12 +1894,17 @@ impl BackendDevice for MetalDevice {
             min as f32,
             max as f32,
             shape.elem_count(),
-            &*self.seed.lock().unwrap(),
+            &self.seed.lock().unwrap(),
             &buffer,
         )
         .map_err(MetalError::from)?;
 
-        Ok(Self::Storage::new(buffer, self.clone(), dtype))
+        Ok(Self::Storage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
     }
 
     fn rand_normal(
@@ -1663,12 +1930,17 @@ impl BackendDevice for MetalDevice {
             mean as f32,
             stddev as f32,
             shape.elem_count(),
-            &*self.seed.lock().unwrap(),
+            &self.seed.lock().unwrap(),
             &buffer,
         )
         .map_err(MetalError::from)?;
 
-        Ok(Self::Storage::new(buffer, self.clone(), dtype))
+        Ok(Self::Storage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
     }
 
     fn set_seed(&self, seed: u64) -> Result<()> {
@@ -1679,12 +1951,16 @@ impl BackendDevice for MetalDevice {
         let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
         let contents = seed_buffer.contents();
         unsafe {
-            std::ptr::copy([seed].as_ptr(), contents as *mut u32, 4);
+            std::ptr::copy([seed].as_ptr(), contents as *mut u32, 1);
         }
         seed_buffer.did_modify_range(metal::NSRange::new(0, 4));
 
         Ok(())
     }
+}
+
+fn buf_size(size: NSUInteger) -> NSUInteger {
+    (size - 1).next_power_of_two() as NSUInteger
 }
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {

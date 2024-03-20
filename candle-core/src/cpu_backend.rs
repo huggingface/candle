@@ -5,6 +5,7 @@ use half::{bf16, f16};
 use rayon::prelude::*;
 
 const USE_IM2COL_CONV1D: bool = true;
+const USE_IM2COL_CONV1D_TR: bool = true;
 const USE_IM2COL_CONV2D: bool = true;
 
 // TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
@@ -1022,6 +1023,26 @@ impl<'a, I: IntDType> Map2 for IndexAdd<'a, I> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn copy2d_<T: Copy>(
+    src: &[T],
+    dst: &mut [T],
+    d1: usize,
+    d2: usize,
+    src_stride1: usize,
+    dst_stride1: usize,
+    src_offset: usize,
+    dst_offset: usize,
+) {
+    for i1 in 0..d1 {
+        let dst_idx = i1 * dst_stride1 + dst_offset;
+        let src_idx = i1 * src_stride1 + src_offset;
+        let dst = &mut dst[dst_idx..dst_idx + d2];
+        let src = &src[src_idx..src_idx + d2];
+        dst.copy_from_slice(src)
+    }
+}
+
 fn copy_strided_src_<T: Copy>(src: &[T], dst: &mut [T], dst_offset: usize, src_l: &Layout) {
     match src_l.strided_blocks() {
         crate::StridedBlocks::SingleBlock { start_offset, len } => {
@@ -1256,6 +1277,34 @@ impl Map1 for Im2Col {
     }
 }
 
+struct Col2Im1D {
+    stride: usize,
+}
+
+impl Map1 for Col2Im1D {
+    fn f<T: WithDType>(&self, col: &[T], l: &Layout) -> Result<Vec<T>> {
+        let (b_size, l_in, c_out, k_size) = l.shape().dims4()?;
+        let stride = self.stride;
+        let l_out = (l_in - 1) * stride + k_size;
+        let mut im = vec![T::zero(); b_size * c_out * l_out];
+        let (dst_s0, dst_s1) = (c_out * l_out, l_out);
+        let (src_s0, src_s1, src_s2) = (c_out * k_size * l_in, c_out * k_size, k_size);
+        for l_in_i in 0..l_in {
+            for k_i in 0..k_size {
+                let l_out_i = l_in_i * stride + k_i;
+                for b_i in 0..b_size {
+                    for c_i in 0..c_out {
+                        let dst_idx = b_i * dst_s0 + c_i * dst_s1 + l_out_i;
+                        let src_idx = b_i * src_s0 + l_in_i * src_s1 + c_i * src_s2 + k_i;
+                        im[dst_idx] += col[src_idx]
+                    }
+                }
+            }
+        }
+        Ok(im)
+    }
+}
+
 struct ConvTranspose1D<'a>(&'a crate::conv::ParamsConvTranspose1D);
 
 impl<'a> Map2 for ConvTranspose1D<'a> {
@@ -1263,6 +1312,7 @@ impl<'a> Map2 for ConvTranspose1D<'a> {
     fn f<T: WithDType>(&self, inp: &[T], inp_l: &Layout, k: &[T], k_l: &Layout) -> Result<Vec<T>> {
         let p = self.0;
         let inp = &inp[inp_l.start_offset()..];
+        let k = &k[k_l.start_offset()..];
         let (inp_s0, inp_s1, inp_s2) = crate::shape::dims3(inp_l.stride())?;
         let (k_s0, k_s1, k_s2) = crate::shape::dims3(k_l.stride())?;
         let l_out = p.l_out();
@@ -2422,6 +2472,48 @@ impl BackendStorage for CpuStorage {
         }
     }
 
+    fn copy2d(
+        &self,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
+    ) -> Result<()> {
+        match (self, dst) {
+            (Self::U8(src), Self::U8(dst)) => copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o),
+            (Self::U32(src), Self::U32(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::I64(src), Self::I64(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::BF16(src), Self::BF16(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::F16(src), Self::F16(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::F32(src), Self::F32(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (Self::F64(src), Self::F64(dst)) => {
+                copy2d_(src, dst, d1, d2, src_s, dst_s, src_o, dst_o)
+            }
+            (_, dst) => {
+                return Err(Error::DTypeMismatchBinaryOp {
+                    lhs: self.dtype(),
+                    rhs: dst.dtype(),
+                    op: "copy2d",
+                }
+                .bt());
+            }
+        }
+        Ok(())
+    }
+
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         match (self, dst) {
             (Self::U8(src), Self::U8(dst)) => copy_strided_src_(src, dst, dst_offset, src_l),
@@ -2510,7 +2602,52 @@ impl BackendStorage for CpuStorage {
         kernel_l: &Layout,
         params: &crate::conv::ParamsConvTranspose1D,
     ) -> Result<Self> {
-        ConvTranspose1D(params).map(self, l, kernel, kernel_l)
+        let can_use_col2im = kernel_l.is_contiguous()
+            && params.dilation == 1
+            && params.padding == 0
+            && params.output_padding == 0;
+        if USE_IM2COL_CONV1D_TR && can_use_col2im {
+            let (b_size, c_in, l_in) = l.shape().dims3()?;
+            let (c_in2, c_out, k_size) = kernel_l.shape().dims3()?;
+            if !kernel_l.is_contiguous() {
+                crate::bail!(
+                    "convtr1d: the second argument (kernel) has to be contiguous {kernel_l:?}"
+                )
+            }
+            if c_in != c_in2 {
+                crate::bail!(
+                    "convtr1d: shape mismatch on c_in {:?} {:?}",
+                    l.shape(),
+                    kernel_l.shape()
+                )
+            }
+            let col = {
+                // This merges the last two dimensions of the kernel together.
+                let kernel_l_mm = Layout::new(
+                    (b_size, c_in, k_size * c_out).into(),
+                    vec![0, k_size * c_out, 1],
+                    kernel_l.start_offset(),
+                );
+                self.matmul(
+                    kernel,
+                    (
+                        b_size,
+                        /* m */ l_in,
+                        /* n */ c_out * k_size,
+                        /* k */ c_in,
+                    ),
+                    &l.transpose(1, 2)?,
+                    &kernel_l_mm,
+                )?
+            };
+            let col_l = Layout::contiguous((b_size, l_in, c_out, k_size));
+            Col2Im1D {
+                stride: params.stride,
+            }
+            .map(&col, &col_l)
+        } else {
+            ConvTranspose1D(params).map(self, l, kernel, kernel_l)
+        }
     }
 
     fn conv2d(
@@ -2574,7 +2711,7 @@ impl BackendStorage for CpuStorage {
             Self::U8(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
             Self::U32(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
             Self::I64(ids) => IndexSelect { ids, ids_l, dim }.map(self, l),
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-select")),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "index-select").bt()),
         }
     }
 
@@ -2583,7 +2720,7 @@ impl BackendStorage for CpuStorage {
             Self::U8(ids) => Gather { ids, ids_l, dim }.map(self, l),
             Self::U32(ids) => Gather { ids, ids_l, dim }.map(self, l),
             Self::I64(ids) => Gather { ids, ids_l, dim }.map(self, l),
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "gather")),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "gather").bt()),
         }
     }
 
@@ -2600,7 +2737,7 @@ impl BackendStorage for CpuStorage {
             Self::U8(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
             Self::U32(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
             Self::I64(ids) => ScatterAdd { ids, ids_l, dim }.map(self, l, src, src_l),
-            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter-add")),
+            _ => Err(Error::UnsupportedDTypeForOp(self.dtype(), "scatter-add").bt()),
         }
     }
 

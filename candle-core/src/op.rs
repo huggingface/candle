@@ -61,6 +61,7 @@ pub enum UnaryOp {
     GeluErf,
     Erf,
     Relu,
+    Silu,
     Tanh,
     Floor,
     Ceil,
@@ -131,7 +132,10 @@ pub enum Op {
         stride: (usize, usize),
     },
 
-    UpsampleNearest1D(Tensor),
+    UpsampleNearest1D {
+        arg: Tensor,
+        target_size: usize,
+    },
     UpsampleNearest2D {
         arg: Tensor,
         target_h: usize,
@@ -390,6 +394,7 @@ pub(crate) struct Gelu;
 pub(crate) struct GeluErf;
 pub(crate) struct Erf;
 pub(crate) struct Relu;
+pub(crate) struct Silu;
 pub(crate) struct Tanh;
 pub(crate) struct Floor;
 pub(crate) struct Ceil;
@@ -721,6 +726,77 @@ impl UnaryOpT for Erf {
     #[inline(always)]
     fn i64(_: i64) -> i64 {
         0
+    }
+}
+
+/// Silu operation
+impl UnaryOpT for Silu {
+    const NAME: &'static str = "silu";
+    const V: Self = Silu;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        v / (bf16::ONE + (-v).exp())
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        v / (f16::ONE + (-v).exp())
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        v / (1.0 + (-v).exp())
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        v / (1.0 + (-v).exp())
+    }
+    #[inline(always)]
+    fn u8(_: u8) -> u8 {
+        0
+    }
+    #[inline(always)]
+    fn u32(_: u32) -> u32 {
+        0
+    }
+    #[inline(always)]
+    fn i64(_: i64) -> i64 {
+        0
+    }
+    const KERNEL: &'static str = "usilu";
+
+    #[cfg(feature = "mkl")]
+    const F32_VEC: bool = true;
+
+    #[cfg(feature = "mkl")]
+    #[inline(always)]
+    fn f32_vec(xs: &[f32], ys: &mut [f32]) {
+        crate::mkl::vs_silu(xs, ys)
+    }
+
+    #[cfg(feature = "mkl")]
+    const F64_VEC: bool = true;
+
+    #[cfg(feature = "mkl")]
+    #[inline(always)]
+    fn f64_vec(xs: &[f64], ys: &mut [f64]) {
+        crate::mkl::vd_silu(xs, ys)
+    }
+
+    #[cfg(feature = "accelerate")]
+    const F32_VEC: bool = true;
+
+    #[cfg(feature = "accelerate")]
+    #[inline(always)]
+    fn f32_vec(xs: &[f32], ys: &mut [f32]) {
+        crate::accelerate::vs_silu(xs, ys)
+    }
+
+    #[cfg(feature = "accelerate")]
+    const F64_VEC: bool = true;
+
+    #[cfg(feature = "accelerate")]
+    #[inline(always)]
+    fn f64_vec(xs: &[f64], ys: &mut [f64]) {
+        crate::accelerate::vd_silu(xs, ys)
     }
 }
 

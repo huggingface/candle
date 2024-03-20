@@ -104,6 +104,7 @@ impl TextGeneration {
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
+                let t = t.replace("<|im_end|>", "\n");
                 print!("{t}");
                 std::io::stdout().flush()?;
             }

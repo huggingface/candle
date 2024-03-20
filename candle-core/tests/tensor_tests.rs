@@ -121,6 +121,13 @@ fn unary_op(device: &Device) -> Result<()> {
         ]
     );
     assert_eq!(
+        test_utils::to_vec2_round(&tensor.silu()?, 4)?,
+        [
+            [-0.1423, 0.7311, 3.9281, -0.0475, 0.3112],
+            [2.53, -0.2553, -0.1205, 1.5447, 2.6395]
+        ]
+    );
+    assert_eq!(
         test_utils::to_vec2_round(&tensor.ceil()?, 4)?,
         [[-3.0, 1.0, 4.0, -0.0, 1.0], [3.0, -1.0, -0.0, 2.0, 3.0]]
     );
@@ -665,6 +672,31 @@ fn cat(device: &Device) -> Result<()> {
             [2.0, 7.0, 1.0, 8.0, 2.0, 2.0, 7.0, 1.0, 8.0, 2.0]
         ]
     );
+
+    // 3D
+    let t1 = Tensor::arange(0, 48i64, device)?.reshape((2, 6, 4))?;
+    let t2 = Tensor::arange(100, 124i64, device)?.reshape((2, 3, 4))?;
+    let t3 = Tensor::arange(10000, 10032i64, device)?.reshape((2, 4, 4))?;
+
+    let t_cat = Tensor::cat(&[&t1, &t2, &t3], 1)?;
+
+    let t1 = t1.t()?.contiguous()?.t()?;
+    let t2 = t2.t()?.contiguous()?.t()?;
+    let t3 = t3.t()?.contiguous()?.t()?;
+    let t_cat2 = Tensor::cat(&[&t1, &t2, &t3], 1)?;
+
+    let diff = t_cat.eq(&t_cat2)?.to_dtype(DType::F32)?.sum_all()?;
+    assert_eq!(diff.to_vec0::<f32>()?, 104.0);
+    assert_eq!(t_cat.i((0, 0, 0))?.to_vec0::<i64>()?, 0);
+    assert_eq!(t_cat.i((0, 4, 0))?.to_vec0::<i64>()?, 16);
+    assert_eq!(t_cat.i((0, 5, 0))?.to_vec0::<i64>()?, 20);
+    assert_eq!(t_cat.i((1, 5, 0))?.to_vec0::<i64>()?, 44);
+    assert_eq!(t_cat.i((0, 6, 0))?.to_vec0::<i64>()?, 100);
+    assert_eq!(t_cat.i((1, 6, 0))?.to_vec0::<i64>()?, 112);
+    assert_eq!(t_cat.i((0, 6, 1))?.to_vec0::<i64>()?, 101);
+    assert_eq!(t_cat.i((0, 7, 1))?.to_vec0::<i64>()?, 105);
+    assert_eq!(t_cat.i((0, 12, 1))?.to_vec0::<i64>()?, 10013);
+    assert_eq!(t_cat.i((1, 12, 3))?.to_vec0::<i64>()?, 10031);
     Ok(())
 }
 
@@ -1073,8 +1105,33 @@ fn broadcasting(device: &Device) -> Result<()> {
 fn randn(device: &Device) -> Result<()> {
     let tensor = Tensor::randn(0f32, 1f32, (5, 3), device)?;
     assert_eq!(tensor.dims(), [5, 3]);
+    // Check that the seed gets updated by checking that
+    // a new series of numbers is generated each time
+    let tensor2 = Tensor::randn(0f32, 1f32, (5, 3), device)?;
+    assert_ne!(tensor.to_vec2::<f32>()?, tensor2.to_vec2::<f32>()?);
     let tensor = Tensor::rand(0f32, 1f32, (5, 3), device)?;
     assert_eq!(tensor.dims(), [5, 3]);
+    // Check that the seed gets updated by checking that
+    // a new series of numbers is generated each time
+    let tensor2 = Tensor::rand(0f32, 1f32, (5, 3), device)?;
+    assert_ne!(tensor.to_vec2::<f32>()?, tensor2.to_vec2::<f32>()?);
+    // We do not expect deterministic elements at any index.
+    // There once was a bug that had a deterministic zero element in evenly sized tensors.
+    const N: usize = 2;
+    let v = (0..100)
+        .map(|_| Tensor::randn(0f32, 1f32, N, device).and_then(|t| t.to_vec1::<f32>()))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(
+        (0..N).all(|i| v.windows(2).any(|pair| pair[0][i] != pair[1][i])),
+        "There are deterministic values in the randn tensors"
+    );
+    let v = (0..100)
+        .map(|_| Tensor::rand(0f32, 1f32, N, device).and_then(|t| t.to_vec1::<f32>()))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(
+        (0..N).all(|i| v.windows(2).any(|pair| pair[0][i] != pair[1][i])),
+        "There are deterministic values in the rand tensors"
+    );
     Ok(())
 }
 

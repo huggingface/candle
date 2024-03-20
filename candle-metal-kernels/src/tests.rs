@@ -1,6 +1,6 @@
 use super::*;
 use half::{bf16, f16};
-use metal::{Buffer, Device, MTLResourceOptions};
+use metal::MTLResourceOptions;
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
     let ptr = buffer.contents() as *const T;
@@ -232,6 +232,25 @@ fn gelu_f32() {
 }
 
 #[test]
+fn silu_f16() {
+    let v: Vec<f16> = [-10f32, -1.0, 0., 1., 2., 3., 10.0, 20.0]
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect();
+    let expected: Vec<f32> = vec![-0.0, -0.27, 0.0, 0.73, 1.76, 2.86, 10.0, 20.0];
+    let results = run(&v, unary::contiguous::silu::HALF);
+    assert_eq!(approx_f16(results, 2), expected);
+}
+
+#[test]
+fn silu_f32() {
+    let v: Vec<f32> = vec![-10f32, -1.0, 0., 1., 2., 3., 10.0, 20.0];
+    let expected: Vec<f32> = vec![-0.0, -0.269, 0.0, 0.731, 1.762, 2.858, 10.0, 20.0];
+    let results = run(&v, unary::contiguous::silu::FLOAT);
+    assert_eq!(approx(results, 3), expected);
+}
+
+#[test]
 fn binary_add_f32() {
     let left = vec![1.0f32, 2.0, 3.0];
     let right = vec![2.0f32, 3.1, 4.2];
@@ -273,7 +292,7 @@ fn binary_ops_bf16() {
     binary_op!(max, |x: bf16, y| x.max(y));
 }
 
-fn cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
+fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
     let device = device();
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
@@ -300,107 +319,189 @@ fn cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
 }
 
 #[test]
-fn cast_u32_f32() {
-    let v = vec![1u32, 2, 3];
-    let results = cast(&v, "cast_u32_f32");
-    let expected: Vec<_> = v.iter().map(|&v| v as f32).collect();
-    assert_eq!(approx(results, 4), vec![1.0f32, 2.0, 3.0]);
-    assert_eq!(approx(expected, 4), vec![1.0f32, 2.0, 3.0]);
+fn cast_f32() {
+    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
+    let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
+    let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
+    let v_u32: Vec<u32> = v_f64.iter().map(|&v| v as u32).collect();
+    let v_u8: Vec<u8> = v_f64.iter().map(|&v| v as u8).collect();
+    let v_i64: Vec<i64> = v_f64.iter().map(|&v| v as i64).collect();
 
-    let v = vec![1.0f32, 2.0, 3.0];
-    let input: Vec<f16> = v.iter().map(|v| f16::from_f32(*v)).collect();
-    let results: Vec<f32> = cast(&input, "cast_f16_f32");
-    assert_eq!(results, vec![1.0f32, 2.0, 3.0]);
+    // f32 -> f16
+    let results: Vec<half::f16> = run_cast(&v_f32, "cast_f32_f16");
+    assert_eq!(results, v_f16);
 
-    let v = vec![1.0f32; 10_000];
-    let input: Vec<f16> = v.iter().map(|v| f16::from_f32(*v)).collect();
-    let results: Vec<f32> = cast(&input, "cast_f16_f32");
-    assert_eq!(results.len(), 10_000);
-    assert_eq!(&results[..10], vec![1.0f32; 10]);
-    assert_eq!(results, vec![1.0f32; 10_000]);
+    // f32 -> bf16
+    let results: Vec<bf16> = run_cast(&v_f32, "cast_f32_bf16");
+    assert_eq!(results, v_bf16);
+
+    // f32 -> u32
+    let results: Vec<u32> = run_cast(&v_f32, "cast_f32_u32");
+    assert_eq!(results, v_u32);
+
+    // f32 -> u8
+    let results: Vec<u8> = run_cast(&v_f32, "cast_f32_u8");
+    assert_eq!(results, v_u8);
+
+    // f32 -> i64
+    let results: Vec<i64> = run_cast(&v_f32, "cast_f32_i64");
+    assert_eq!(results, v_i64);
 }
 
 #[test]
-fn it_cast_bf16_u32() {
-    let input: Vec<bf16> = (1..=3).map(|v| bf16::from_f32(v as f32)).collect();
+fn cast_f16() {
+    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
+    let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
+    let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
+    let v_u32: Vec<u32> = v_f64.iter().map(|&v| v as u32).collect();
+    let v_u8: Vec<u8> = v_f64.iter().map(|&v| v as u8).collect();
+    let v_i64: Vec<i64> = v_f64.iter().map(|&v| v as i64).collect();
 
-    let output: Vec<u32> = cast(&input, "cast_bf16_u32");
-    let expected: Vec<u32> = (1..=3).map(|v| v as u32).collect();
+    // f16 -> f32
+    let results: Vec<f32> = run_cast(&v_f16, "cast_f16_f32");
+    assert_eq!(results, v_f32);
 
-    assert_eq!(output, expected);
+    // f16 -> bf16
+    let results: Vec<bf16> = run_cast(&v_f16, "cast_f16_bf16");
+    assert_eq!(results, v_bf16);
+
+    // f16 -> u32
+    let results: Vec<u32> = run_cast(&v_f16, "cast_f16_u32");
+    assert_eq!(results, v_u32);
+
+    // f16 -> u8
+    let results: Vec<u8> = run_cast(&v_f16, "cast_f16_u8");
+    assert_eq!(results, v_u8);
+
+    // f16 -> i64
+    let results: Vec<i64> = run_cast(&v_f16, "cast_f16_i64");
+    assert_eq!(results, v_i64);
 }
 
 #[test]
-fn it_cast_bf16_f32() {
-    let input: Vec<bf16> = (1..=3).map(|v| bf16::from_f32(v as f32)).collect();
+fn cast_bf16() {
+    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
+    let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
+    let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
+    let v_u32: Vec<u32> = v_f64.iter().map(|&v| v as u32).collect();
+    let v_u8: Vec<u8> = v_f64.iter().map(|&v| v as u8).collect();
+    let v_i64: Vec<i64> = v_f64.iter().map(|&v| v as i64).collect();
 
-    let output: Vec<f32> = cast(&input, "cast_bf16_f32");
-    let expected: Vec<f32> = (1..=3).map(|v| v as f32).collect();
+    // bf16 -> f32
+    let results: Vec<f32> = run_cast(&v_bf16, "cast_bf16_f32");
+    assert_eq!(results, v_f32);
 
-    assert_eq!(output, expected);
+    // bf16 -> f16
+    let results: Vec<f16> = run_cast(&v_bf16, "cast_bf16_f16");
+    assert_eq!(results, v_f16);
+
+    // bf16 -> u32
+    let results: Vec<u32> = run_cast(&v_bf16, "cast_bf16_u32");
+    assert_eq!(results, v_u32);
+
+    // bf16 -> u8
+    let results: Vec<u8> = run_cast(&v_bf16, "cast_bf16_u8");
+    assert_eq!(results, v_u8);
+
+    // bf16 -> i64
+    let results: Vec<i64> = run_cast(&v_bf16, "cast_bf16_i64");
+    assert_eq!(results, v_i64);
 }
 
 #[test]
-fn it_cast_u8_bf16() {
-    let input: Vec<u8> = (1..=3).map(|v| v as u8).collect();
+fn cast_u32() {
+    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
+    let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
+    let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
+    let v_u32: Vec<u32> = v_f64.iter().map(|&v| v as u32).collect();
+    let v_u8: Vec<u8> = v_f64.iter().map(|&v| v as u8).collect();
+    let v_i64: Vec<i64> = v_f64.iter().map(|&v| v as i64).collect();
 
-    let output: Vec<bf16> = cast(&input, "cast_u8_bf16");
-    let expected: Vec<bf16> = input
-        .iter()
-        .map(|v| bf16::from_f32(*v as f32))
-        .collect::<Vec<_>>();
+    // u32 -> f32
+    let results: Vec<f32> = run_cast(&v_u32, "cast_u32_f32");
+    assert_eq!(results, v_f32);
 
-    assert_eq!(output, expected);
+    // u32 -> f16
+    let results: Vec<f16> = run_cast(&v_u32, "cast_u32_f16");
+    assert_eq!(results, v_f16);
+
+    // u32 -> bf16
+    let results: Vec<bf16> = run_cast(&v_u32, "cast_u32_bf16");
+    assert_eq!(results, v_bf16);
+
+    // u32 -> u8
+    let results: Vec<u8> = run_cast(&v_u32, "cast_u32_u8");
+    assert_eq!(results, v_u8);
+
+    // u32 -> i64
+    let results: Vec<i64> = run_cast(&v_u32, "cast_u32_i64");
+    assert_eq!(results, v_i64);
 }
 
 #[test]
-fn it_cast_u32_bf16() {
-    let input: Vec<u32> = (1..=3).map(|v| v as u32).collect();
+fn cast_u8() {
+    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
+    let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
+    let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
+    let v_u32: Vec<u32> = v_f64.iter().map(|&v| v as u32).collect();
+    let v_u8: Vec<u8> = v_f64.iter().map(|&v| v as u8).collect();
+    let v_i64: Vec<i64> = v_f64.iter().map(|&v| v as i64).collect();
 
-    let output: Vec<bf16> = cast(&input, "cast_u32_bf16");
-    let expected: Vec<bf16> = input.iter().map(|v| bf16::from_f32(*v as f32)).collect();
+    // u8 -> f32
+    let results: Vec<f32> = run_cast(&v_u8, "cast_u8_f32");
+    assert_eq!(results, v_f32);
 
-    assert_eq!(output, expected);
+    // u8 -> f16
+    let results: Vec<f16> = run_cast(&v_u8, "cast_u8_f16");
+    assert_eq!(results, v_f16);
+
+    // u8 -> bf16
+    let results: Vec<bf16> = run_cast(&v_u8, "cast_u8_bf16");
+    assert_eq!(results, v_bf16);
+
+    // u8 -> u32
+    let results: Vec<u32> = run_cast(&v_u8, "cast_u8_u32");
+    assert_eq!(results, v_u32);
+
+    // u8 -> i64
+    let results: Vec<i64> = run_cast(&v_u8, "cast_u8_i64");
+    assert_eq!(results, v_i64);
 }
 
 #[test]
-fn it_cast_f32_bf16() {
-    let input: Vec<f32> = (1..=3).map(|v| v as f32).collect();
+fn cast_i64() {
+    let v_f64 = vec![1.0f64, 2.0, 3.0];
+    let v_f32: Vec<f32> = v_f64.iter().map(|&v| v as f32).collect();
+    let v_f16: Vec<f16> = v_f64.iter().map(|&v| f16::from_f32(v as f32)).collect();
+    let v_bf16: Vec<bf16> = v_f64.iter().map(|&v| bf16::from_f32(v as f32)).collect();
+    let v_u32: Vec<u32> = v_f64.iter().map(|&v| v as u32).collect();
+    let v_u8: Vec<u8> = v_f64.iter().map(|&v| v as u8).collect();
+    let v_i64: Vec<i64> = v_f64.iter().map(|&v| v as i64).collect();
 
-    let output: Vec<bf16> = cast(&input, "cast_f32_bf16");
-    let expected: Vec<bf16> = input.iter().map(|v| bf16::from_f32(*v as f32)).collect();
+    // i64 -> f32
+    let results: Vec<f32> = run_cast(&v_i64, "cast_i64_f32");
+    assert_eq!(results, v_f32);
 
-    assert_eq!(output, expected);
-}
+    // i64 -> f16
+    let results: Vec<f16> = run_cast(&v_i64, "cast_i64_f16");
+    assert_eq!(results, v_f16);
 
-#[test]
-fn it_cast_bf16_u8() {
-    let input: Vec<bf16> = (1..=3).map(|v| bf16::from_f32(v as f32)).collect();
+    // i64 -> bf16
+    let results: Vec<bf16> = run_cast(&v_i64, "cast_i64_bf16");
+    assert_eq!(results, v_bf16);
 
-    let output: Vec<u8> = cast(&input, "cast_bf16_u8");
-    let expected: Vec<u8> = input.iter().map(|v| v.to_f32() as u8).collect();
+    // i64 -> u32
+    let results: Vec<u32> = run_cast(&v_i64, "cast_i64_u32");
+    assert_eq!(results, v_u32);
 
-    assert_eq!(output, expected);
-}
-
-#[test]
-fn it_cast_bf16_f16() {
-    let input: Vec<bf16> = (1..=3).map(|v| bf16::from_f32(v as f32)).collect();
-
-    let output: Vec<f16> = cast(&input, "cast_bf16_f16");
-    let expected: Vec<f16> = input.iter().map(|v| f16::from_f32(v.to_f32())).collect();
-
-    assert_eq!(output, expected);
-}
-
-#[test]
-fn it_cast_f16_bf16() {
-    let input: Vec<f16> = (1..=3).map(|v| f16::from_f32(v as f32)).collect();
-
-    let output: Vec<bf16> = cast(&input, "cast_f16_bf16");
-    let expected: Vec<bf16> = input.iter().map(|v| bf16::from_f32(v.to_f32())).collect();
-
-    assert_eq!(output, expected);
+    // i64 -> u8
+    let results: Vec<u8> = run_cast(&v_i64, "cast_i64_u8");
+    assert_eq!(results, v_u8);
 }
 
 fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
@@ -1046,4 +1147,789 @@ fn random() {
     validate_random!(f32);
     validate_random!(f16);
     validate_random!(bf16);
+}
+
+fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
+    input: &[T],
+    ids: &[I],
+    shape: &[usize],
+    dim: usize,
+    name: &'static str,
+) -> Vec<T> {
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let options = MTLResourceOptions::StorageModeManaged;
+    let input_buffer = new_buffer(&device, input);
+    let ids_buffer = new_buffer(&device, ids);
+    let output = device.new_buffer(std::mem::size_of_val(input) as u64, options);
+    call_scatter_add(
+        &device,
+        command_buffer,
+        &kernels,
+        name,
+        shape,
+        shape,
+        dim,
+        &input_buffer,
+        0,
+        &ids_buffer,
+        0,
+        &output,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+    read_to_vec(&output, input.len())
+}
+
+#[test]
+fn scatter_add() {
+    let ids_u8 = [0u8, 0, 1, 0, 2, 2, 3, 3];
+    let ids_u32 = [0u32, 0, 1, 0, 2, 2, 3, 3];
+    let ids_i64 = [0i64, 0, 1, 0, 2, 2, 3, 3];
+
+    let input_f32 = [5.0f32, 1.0, 7.0, 2.0, 3.0, 2.0, 1.0, 3.0];
+    let input_f16 = input_f32
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    let input_bf16 = input_f32
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+
+    let output_dim1_f32 = vec![8.0, 7.0, 5.0, 4.0, 0.0, 0.0, 0.0, 0.0];
+    let output_dim1_f16 = output_dim1_f32
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    let output_dim1_bf16 = output_dim1_f32
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+
+    let output_dim2_f32 = vec![5.0, 3.0, 7.0, 0.0, 3.0, 2.0, 1.0, 3.0];
+    let output_dim2_f16 = output_dim2_f32
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    let output_dim2_bf16 = output_dim2_f32
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+
+    for (shape, output_f32, output_f16, output_bf16) in [
+        (vec![8], output_dim1_f32, output_dim1_f16, output_dim1_bf16),
+        (
+            vec![4, 2],
+            output_dim2_f32,
+            output_dim2_f16,
+            output_dim2_bf16,
+        ),
+    ] {
+        for results in [
+            run_scatter_add(&input_f32, &ids_u8, &shape, 0, "sa_u8_f32"),
+            run_scatter_add(&input_f32, &ids_u32, &shape, 0, "sa_u32_f32"),
+            run_scatter_add(&input_f32, &ids_i64, &shape, 0, "sa_i64_f32"),
+        ] {
+            assert_eq!(results, output_f32);
+        }
+        for results in [
+            run_scatter_add(&input_f16, &ids_u8, &shape, 0, "sa_u8_f16"),
+            run_scatter_add(&input_f16, &ids_u32, &shape, 0, "sa_u32_f16"),
+            run_scatter_add(&input_f16, &ids_i64, &shape, 0, "sa_i64_f16"),
+        ] {
+            assert_eq!(results, output_f16);
+        }
+        for results in [
+            run_scatter_add(&input_bf16, &ids_u8, &shape, 0, "sa_u8_bf16"),
+            run_scatter_add(&input_bf16, &ids_u32, &shape, 0, "sa_u32_bf16"),
+            run_scatter_add(&input_bf16, &ids_i64, &shape, 0, "sa_i64_bf16"),
+        ] {
+            assert_eq!(results, output_bf16);
+        }
+    }
+}
+
+fn run_index_add<T: Clone, I: Clone + std::fmt::Debug>(
+    left: &[T],
+    right: &[T],
+    indices: &[I],
+    shape: &[usize],
+    dim: usize,
+    name: &'static str,
+) -> Vec<T> {
+    let device = device();
+    let kernels = Kernels::new();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let input_buffer = new_buffer(&device, right);
+    let output = new_buffer(&device, left);
+    let indices_buffer = new_buffer(&device, indices);
+    call_index_add(
+        &device,
+        command_buffer,
+        &kernels,
+        name,
+        shape,
+        shape,
+        shape,
+        dim,
+        &input_buffer,
+        0,
+        &indices_buffer,
+        0,
+        &output,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+    read_to_vec(&output, left.len())
+}
+
+#[test]
+fn index_add() {
+    let left = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let right = vec![1.0f32, 1.0, 1.0, 1.0, 1.0, 1.0];
+    let indices = vec![0u32, 1, 0, 1, 0, 1];
+    let shape = vec![6];
+
+    // u32, f32
+    {
+        let results = run_index_add(&left, &right, &indices, &shape, 0, "ia_u32_f32");
+        assert_eq!(results, vec![4.0, 5.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    // u32, f16
+    {
+        let left = left.iter().map(|v| f16::from_f32(*v)).collect::<Vec<_>>();
+        let right = right.iter().map(|v| f16::from_f32(*v)).collect::<Vec<_>>();
+        let results = run_index_add(&left, &right, &indices, &shape, 0, "ia_u32_f16");
+        assert_eq!(approx_f16(results, 4), vec![4.0, 5.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    // u32, bf16
+    {
+        let left = left.iter().map(|v| bf16::from_f32(*v)).collect::<Vec<_>>();
+        let right = right.iter().map(|v| bf16::from_f32(*v)).collect::<Vec<_>>();
+        let results = run_index_add(&left, &right, &indices, &shape, 0, "ia_u32_bf16");
+        assert_eq!(approx_bf16(results, 4), vec![4.0, 5.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    // u8, f32
+    {
+        let indices = indices.iter().map(|v| *v as u8).collect::<Vec<_>>();
+        let results = run_index_add(&left, &right, &indices, &shape, 0, "ia_u8_f32");
+        assert_eq!(results, vec![4.0, 5.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    // u8, f16
+    {
+        let indices = indices.iter().map(|v| *v as u8).collect::<Vec<_>>();
+        let left = left.iter().map(|v| f16::from_f32(*v)).collect::<Vec<_>>();
+        let right = right.iter().map(|v| f16::from_f32(*v)).collect::<Vec<_>>();
+        let results = run_index_add(&left, &right, &indices, &shape, 0, "ia_u8_f16");
+        assert_eq!(approx_f16(results, 4), vec![4.0, 5.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    // u8, bf16
+    {
+        let indices = indices.iter().map(|v| *v as u8).collect::<Vec<_>>();
+        let left = left.iter().map(|v| bf16::from_f32(*v)).collect::<Vec<_>>();
+        let right = right.iter().map(|v| bf16::from_f32(*v)).collect::<Vec<_>>();
+        let results = run_index_add(&left, &right, &indices, &shape, 0, "ia_u8_bf16");
+        assert_eq!(approx_bf16(results, 4), vec![4.0, 5.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    // i64, f32
+    {
+        let indices = indices.iter().map(|v| *v as i64).collect::<Vec<_>>();
+        let results = run_index_add(&left, &right, &indices, &shape, 0, "ia_i64_f32");
+        assert_eq!(results, vec![4.0, 5.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    // i64, f16
+    {
+        let indices = indices.iter().map(|v| *v as i64).collect::<Vec<_>>();
+        let left = left.iter().map(|v| f16::from_f32(*v)).collect::<Vec<_>>();
+        let right = right.iter().map(|v| f16::from_f32(*v)).collect::<Vec<_>>();
+        let results = run_index_add(&left, &right, &indices, &shape, 0, "ia_i64_f16");
+        assert_eq!(approx_f16(results, 4), vec![4.0, 5.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    // i64, bf16
+    {
+        let indices = indices.iter().map(|v| *v as i64).collect::<Vec<_>>();
+        let left = left.iter().map(|v| bf16::from_f32(*v)).collect::<Vec<_>>();
+        let right = right.iter().map(|v| bf16::from_f32(*v)).collect::<Vec<_>>();
+        let results = run_index_add(&left, &right, &indices, &shape, 0, "ia_i64_bf16");
+        assert_eq!(approx_bf16(results, 4), vec![4.0, 5.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+}
+
+fn run_pool2d<T: Clone>(
+    v: &[T],
+    (w_k, h_k): (usize, usize),
+    (w_stride, h_stride): (usize, usize),
+    shape: &[usize],
+    strides: &[usize],
+    name: &'static str,
+) -> Vec<T> {
+    let device = device();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+    let out_w = (shape[2] - w_k) / w_stride + 1;
+    let out_h = (shape[3] - h_k) / h_stride + 1;
+    let dst_el = out_w * out_h * shape[0] * shape[1];
+    let input = new_buffer(&device, v);
+    let output = new_buffer(&device, &vec![0.0f32; dst_el]);
+    let kernels = Kernels::new();
+    call_pool2d(
+        &device,
+        command_buffer,
+        &kernels,
+        name,
+        shape,
+        strides,
+        out_w,
+        out_h,
+        w_k,
+        h_k,
+        w_stride,
+        h_stride,
+        &input,
+        &output,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    read_to_vec(&output, dst_el)
+}
+
+#[test]
+fn max_pool2d_f32() {
+    // kernel 2 stride 1
+    let v: Vec<f32> = (0..16).map(|v| v as f32).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_f32",
+    );
+    let expected = vec![5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0];
+    assert_eq!(results, expected);
+
+    // kernel 2 stride 2
+    let v: Vec<f32> = (0..16).map(|v| v as f32).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 2;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_f32",
+    );
+    let expected = vec![5.0, 7.0, 13.0, 15.0];
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn max_pool2d_f16() {
+    // kernel 2 stride 1
+    let v: Vec<half::f16> = (0..16).map(|v| half::f16::from_f32(v as f32)).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_f16",
+    );
+    let expected = vec![5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
+        .iter()
+        .map(|v| half::f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+
+    // kernel 2 stride 2
+    let v: Vec<half::f16> = (0..16).map(|v| half::f16::from_f32(v as f32)).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 2;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_f16",
+    );
+    let expected = vec![5.0, 7.0, 13.0, 15.0]
+        .iter()
+        .map(|v| half::f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn max_pool2d_bf16() {
+    // kernel 2 stride 1
+    let v: Vec<half::bf16> = (0..16).map(|v| half::bf16::from_f32(v as f32)).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_bf16",
+    );
+    let expected = vec![5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 13.0, 14.0, 15.0]
+        .iter()
+        .map(|v| half::bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+
+    // kernel 2 stride 2
+    let v: Vec<half::bf16> = (0..16).map(|v| half::bf16::from_f32(v as f32)).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 2;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_bf16",
+    );
+    let expected = vec![5.0, 7.0, 13.0, 15.0]
+        .iter()
+        .map(|v| half::bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn max_pool2d_u8() {
+    // kernel 2 stride 1
+    let v: Vec<u8> = (0..16).map(|v| v as u8).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_u8",
+    );
+    let expected = vec![5, 6, 7, 9, 10, 11, 13, 14, 15];
+    assert_eq!(results, expected);
+
+    // kernel 2 stride 2
+    let v: Vec<u8> = (0..16).map(|v| v as u8).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 2;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_u8",
+    );
+    let expected = vec![5, 7, 13, 15];
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn max_pool2d_u32() {
+    // kernel 2 stride 1
+    let v: Vec<u32> = (0..16).map(|v| v as u32).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_u32",
+    );
+    let expected = vec![5, 6, 7, 9, 10, 11, 13, 14, 15];
+    assert_eq!(results, expected);
+
+    // kernel 2 stride 2
+    let v: Vec<u32> = (0..16).map(|v| v as u32).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 2;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "max_pool2d_u32",
+    );
+    let expected = vec![5, 7, 13, 15];
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn avg_pool2d_f32() {
+    // kernel 2 stride 1
+    let v: Vec<f32> = (0..16).map(|v| v as f32).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "avg_pool2d_f32",
+    );
+    let expected = vec![
+        2.5000, 3.5000, 4.5000, 6.5000, 7.5000, 8.5000, 10.5000, 11.5000, 12.5000,
+    ];
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn avg_pool2d_f16() {
+    // kernel 2 stride 1
+    let v: Vec<f16> = (0..16).map(|v| f16::from_f32(v as f32)).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "avg_pool2d_f16",
+    );
+    let expected = vec![
+        2.5000, 3.5000, 4.5000, 6.5000, 7.5000, 8.5000, 10.5000, 11.5000, 12.5000,
+    ]
+    .iter()
+    .map(|v| f16::from_f32(*v))
+    .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn avg_pool2d_bf16() {
+    // kernel 2 stride 1
+    let v: Vec<bf16> = (0..16).map(|v| bf16::from_f32(v as f32)).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "avg_pool2d_bf16",
+    );
+    let expected = vec![
+        2.5000, 3.5000, 4.5000, 6.5000, 7.5000, 8.5000, 10.5000, 11.5000, 12.5000,
+    ]
+    .iter()
+    .map(|v| bf16::from_f32(*v))
+    .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn avg_pool2d_u8() {
+    // kernel 2 stride 1
+    let v: Vec<u8> = (0..16).map(|v| v as u8).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "avg_pool2d_u8",
+    );
+    let expected = vec![2, 3, 4, 6, 7, 8, 10, 11, 12];
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn avg_pool2d_u32() {
+    // kernel 2 stride 1
+    let v: Vec<u32> = (0..16).map(|v| v as u32).collect();
+    let shape = vec![1, 1, 4, 4];
+    let strides = vec![16, 16, 4, 1];
+    let kernel = 2;
+    let stride = 1;
+    let results = run_pool2d(
+        &v,
+        (kernel, kernel),
+        (stride, stride),
+        &shape,
+        &strides,
+        "avg_pool2d_u32",
+    );
+    let expected = vec![2, 3, 4, 6, 7, 8, 10, 11, 12];
+    assert_eq!(results, expected);
+}
+
+fn run_conv_transpose1d<T: Clone>(
+    input: &[T],
+    input_shape: &[usize],
+    input_stride: &[usize],
+    kernel: &[T],
+    kernel_shape: &[usize],
+    kernel_stride: &[usize],
+    dilation: usize,
+    stride: usize,
+    padding: usize,
+    out_padding: usize,
+    name: &'static str,
+) -> Vec<T> {
+    let device = device();
+    let command_queue = device.new_command_queue();
+    let command_buffer = command_queue.new_command_buffer();
+
+    let c_out = kernel_shape[1];
+    let k_size = kernel_shape[2];
+    let b_size = input_shape[0];
+    let l_in = input_shape[2];
+    let l_out = (l_in - 1) * stride - 2 * padding + dilation * (k_size - 1) + out_padding + 1;
+    let dst_el = c_out * l_out * b_size;
+
+    let input = new_buffer(&device, input);
+    let kernel = new_buffer(&device, kernel);
+    let output = new_buffer(&device, &vec![0.0f32; dst_el]);
+    let kernels = Kernels::new();
+
+    call_conv_transpose1d(
+        &device,
+        command_buffer,
+        &kernels,
+        name,
+        dilation,
+        stride,
+        padding,
+        out_padding,
+        c_out,
+        l_out,
+        b_size,
+        input_shape,
+        input_stride,
+        kernel_shape,
+        kernel_stride,
+        &input,
+        0,
+        &kernel,
+        0,
+        &output,
+    )
+    .unwrap();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    read_to_vec(&output, dst_el)
+}
+
+#[test]
+fn conv_transpose1d_f32() {
+    let input = vec![1.0f32, 2.0, 3.0, 4.0];
+    let input_shape = &[1, 1, 4];
+    let input_stride = &[4, 4, 1];
+
+    let kernel = vec![1.0f32, 2.0, 3.0, 4.0];
+    let kernel_shape = &[1, 1, 4];
+    let kernel_stride = &[4, 4, 1];
+
+    let results = run_conv_transpose1d(
+        &input,
+        input_shape,
+        input_stride,
+        &kernel,
+        kernel_shape,
+        kernel_stride,
+        1,
+        1,
+        0,
+        0,
+        "conv_transpose1d_f32",
+    );
+
+    let expected = vec![1., 4., 10., 20., 25., 24., 16.];
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn conv_transpose1d_f16() {
+    let input: Vec<f16> = vec![1.0, 2.0, 3.0, 4.0]
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect();
+    let input_shape = &[1, 1, 4];
+    let input_stride = &[4, 4, 1];
+
+    let kernel: Vec<f16> = vec![1.0, 2.0, 3.0, 4.0]
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect();
+    let kernel_shape = &[1, 1, 4];
+    let kernel_stride = &[4, 4, 1];
+
+    let results = run_conv_transpose1d(
+        &input,
+        input_shape,
+        input_stride,
+        &kernel,
+        kernel_shape,
+        kernel_stride,
+        1,
+        1,
+        0,
+        0,
+        "conv_transpose1d_f16",
+    );
+
+    let expected = vec![1., 4., 10., 20., 25., 24., 16.]
+        .iter()
+        .map(|v| f16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn conv_transpose1d_bf16() {
+    let input: Vec<bf16> = vec![1.0, 2.0, 3.0, 4.0]
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect();
+    let input_shape = &[1, 1, 4];
+    let input_stride = &[4, 4, 1];
+
+    let kernel: Vec<bf16> = vec![1.0, 2.0, 3.0, 4.0]
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect();
+    let kernel_shape = &[1, 1, 4];
+    let kernel_stride = &[4, 4, 1];
+
+    let results = run_conv_transpose1d(
+        &input,
+        input_shape,
+        input_stride,
+        &kernel,
+        kernel_shape,
+        kernel_stride,
+        1,
+        1,
+        0,
+        0,
+        "conv_transpose1d_bf16",
+    );
+
+    let expected = vec![1., 4., 10., 20., 25., 24., 16.]
+        .iter()
+        .map(|v| bf16::from_f32(*v))
+        .collect::<Vec<_>>();
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn conv_transpose1d_u8() {
+    let input: Vec<u8> = vec![1, 2, 3, 4];
+    let input_shape = &[1, 1, 4];
+    let input_stride = &[4, 4, 1];
+
+    let kernel: Vec<u8> = vec![1, 2, 3, 4];
+    let kernel_shape = &[1, 1, 4];
+    let kernel_stride = &[4, 4, 1];
+
+    let results = run_conv_transpose1d(
+        &input,
+        input_shape,
+        input_stride,
+        &kernel,
+        kernel_shape,
+        kernel_stride,
+        1,
+        1,
+        0,
+        0,
+        "conv_transpose1d_u8",
+    );
+
+    let expected = vec![1, 4, 10, 20, 25, 24, 16];
+    assert_eq!(results, expected);
+}
+
+#[test]
+fn conv_transpose1d_u32() {
+    let input: Vec<u32> = vec![1, 2, 3, 4];
+    let input_shape = &[1, 1, 4];
+    let input_stride = &[4, 4, 1];
+
+    let kernel: Vec<u32> = vec![1, 2, 3, 4];
+    let kernel_shape = &[1, 1, 4];
+    let kernel_stride = &[4, 4, 1];
+
+    let results = run_conv_transpose1d(
+        &input,
+        input_shape,
+        input_stride,
+        &kernel,
+        kernel_shape,
+        kernel_stride,
+        1,
+        1,
+        0,
+        0,
+        "conv_transpose1d_u32",
+    );
+
+    let expected = vec![1, 4, 10, 20, 25, 24, 16];
+    assert_eq!(results, expected);
 }

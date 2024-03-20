@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 const MAX_SEQ_LEN: usize = 4096;
 
-// https://huggingface.co/microsoft/phi-1_5/blob/main/configuration_mixformer_sequential.py
+// https://huggingface.co/microsoft/phi-1_5/blob/d38e6f954ec29b96fe2cf033937dad64e279b5d9/configuration_mixformer_sequential.py
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
     pub(crate) vocab_size: usize,

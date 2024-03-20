@@ -127,6 +127,16 @@ pub enum Source {
     Quantized,
 }
 
+pub mod copy2d {
+    pub struct Kernel(pub &'static str);
+    pub const FLOAT: Kernel = Kernel("copy2d_f32");
+    pub const HALF: Kernel = Kernel("copy2d_f16");
+    pub const BFLOAT: Kernel = Kernel("copy2d_bf16");
+    pub const I64: Kernel = Kernel("copy2d_i64");
+    pub const U32: Kernel = Kernel("copy2d_u32");
+    pub const U8: Kernel = Kernel("copy2d_u8");
+}
+
 macro_rules! ops{
     ($($name:ident),+) => {
 
@@ -183,7 +193,7 @@ macro_rules! ops{
 pub mod unary {
     ops!(
         cos, sin, exp, sqr, sqrt, neg, log, gelu, abs, ceil, floor, relu, round, erf, gelu_erf,
-        tanh, recip
+        tanh, recip, silu
     );
 }
 pub mod binary {
@@ -358,6 +368,46 @@ pub fn call_unary_contiguous(
     set_params!(encoder, (length, input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_copy2d(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: copy2d::Kernel,
+    input: &Buffer,
+    output: &Buffer,
+    d1: usize,
+    d2: usize,
+    src_s: usize,
+    dst_s: usize,
+    src_o_in_bytes: usize,
+    dst_o_in_bytes: usize,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Unary, name.0)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    set_params!(
+        encoder,
+        (
+            d1,
+            d2,
+            src_s,
+            dst_s,
+            (input, src_o_in_bytes),
+            (output, dst_o_in_bytes)
+        )
+    );
+
+    let width: usize = d1 * d2;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
+
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -1558,8 +1608,10 @@ pub fn call_random_uniform(
 
     set_params!(encoder, (length, min, max, seed, buffer));
 
-    encoder.use_resource(seed, metal::MTLResourceUsage::Read);
-    encoder.use_resource(seed, metal::MTLResourceUsage::Write);
+    encoder.use_resource(
+        seed,
+        metal::MTLResourceUsage::Read | metal::MTLResourceUsage::Write,
+    );
     encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
@@ -1589,8 +1641,10 @@ pub fn call_random_normal(
 
     set_params!(encoder, (length, mean, stddev, seed, buffer));
 
-    encoder.use_resource(seed, metal::MTLResourceUsage::Read);
-    encoder.use_resource(seed, metal::MTLResourceUsage::Write);
+    encoder.use_resource(
+        seed,
+        metal::MTLResourceUsage::Read | metal::MTLResourceUsage::Write,
+    );
     encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
@@ -1770,6 +1824,92 @@ pub fn call_quantized_matmul_t(
 
 fn divide(m: usize, b: usize) -> NSUInteger {
     ((m + b - 1) / b) as NSUInteger
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_pool2d(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    shape: &[usize],
+    strides: &[usize],
+    out_w: usize,
+    out_h: usize,
+    w_k: usize,
+    h_k: usize,
+    w_stride: usize,
+    h_stride: usize,
+    input: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let dst_el = out_w * out_h * shape[0] * shape[1];
+    let pipeline: ComputePipelineState = kernels.load_pipeline(device, Source::Conv, name)?;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    set_params!(
+        encoder,
+        (w_k, h_k, w_stride, h_stride, shape, strides, input, output)
+    );
+    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_conv_transpose1d(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    dilation: usize,
+    stride: usize,
+    padding: usize,
+    out_padding: usize,
+    c_out: usize,
+    l_out: usize,
+    b_size: usize,
+    src_shape: &[usize],
+    src_strides: &[usize],
+    kernel_shape: &[usize],
+    kernel_strides: &[usize],
+    input: &Buffer,
+    input_offset: usize,
+    kernel: &Buffer,
+    kernel_offset: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let dst_el = c_out * l_out * b_size;
+    let pipeline: ComputePipelineState = kernels.load_pipeline(device, Source::Conv, name)?;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    set_params!(
+        encoder,
+        (
+            l_out,
+            stride,
+            padding,
+            out_padding,
+            dilation,
+            src_shape,
+            src_strides,
+            kernel_shape,
+            kernel_strides,
+            (input, input_offset),
+            (kernel, kernel_offset),
+            output
+        )
+    );
+    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(kernel, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
 }
 
 #[cfg(test)]

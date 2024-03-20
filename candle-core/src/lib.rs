@@ -67,6 +67,7 @@ pub mod shape;
 mod storage;
 mod strided_index;
 mod tensor;
+mod tensor_cat;
 pub mod test_utils;
 pub mod utils;
 mod variable;
@@ -126,6 +127,15 @@ pub trait Module {
 impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self(xs)
+    }
+}
+
+impl<M: Module> Module for Option<&M> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            None => Ok(xs.clone()),
+            Some(m) => m.forward(xs),
+        }
     }
 }
 

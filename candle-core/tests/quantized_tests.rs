@@ -178,10 +178,6 @@ test_device!(
 );
 
 fn quantize_q4_0(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
 
     let src = Tensor::from_slice(&src, (32 * 4,), device)?;
@@ -209,10 +205,6 @@ fn quantize_q4_0(device: &Device) -> Result<()> {
 }
 
 fn quantize_q4_1(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
     let src = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant = quantized::QTensor::quantize(&src, GgmlDType::Q4_1)?;
@@ -239,10 +231,6 @@ fn quantize_q4_1(device: &Device) -> Result<()> {
 }
 
 fn quantize_q5_0(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
     let src = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant = quantized::QTensor::quantize(&src, GgmlDType::Q5_0)?;
@@ -269,10 +257,6 @@ fn quantize_q5_0(device: &Device) -> Result<()> {
 }
 
 fn quantize_q5_1(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
     let src = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant = quantized::QTensor::quantize(&src, GgmlDType::Q5_1)?;
@@ -373,10 +357,6 @@ fn ggml_quantization_error_test(dtype: GgmlDType, device: &Device, max_error: f3
 }
 
 fn quantize_q2k(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let dtype = GgmlDType::Q2K;
 
     let src = get_test_vector2(0.5, 1024, device)?;
@@ -411,10 +391,6 @@ fn quantize_q2k(device: &Device) -> Result<()> {
 }
 
 fn quantize_q3k(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let dtype = GgmlDType::Q3K;
     let src = get_test_vector2(0.5, 1024, device)?;
     let quant = quantized::QTensor::quantize(&src, dtype)?;
@@ -448,10 +424,6 @@ fn quantize_q3k(device: &Device) -> Result<()> {
 }
 
 fn quantize_q4k(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let dtype = GgmlDType::Q4K;
     let src = get_test_vector2(0.5, 1024, device)?;
     let quant = quantized::QTensor::quantize(&src, dtype)?;
@@ -485,10 +457,6 @@ fn quantize_q4k(device: &Device) -> Result<()> {
 }
 
 fn quantize_q5k(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let dtype = GgmlDType::Q5K;
     let src = get_test_vector2(0.5, 1024, device)?;
     let quant = quantized::QTensor::quantize(&src, dtype)?;
@@ -522,10 +490,6 @@ fn quantize_q5k(device: &Device) -> Result<()> {
 }
 
 fn quantize_q6k(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let dtype = GgmlDType::Q6K;
     let src = get_test_vector2(0.5, 1024, device)?;
     let quant = quantized::QTensor::quantize(&src, dtype)?;
@@ -559,10 +523,6 @@ fn quantize_q6k(device: &Device) -> Result<()> {
 }
 
 fn quantize_q8k(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let dtype = GgmlDType::Q8K;
     let src = get_test_vector2(0.5, 1024, device)?;
     let quant = quantized::QTensor::quantize(&src, dtype)?;
@@ -778,10 +738,6 @@ macro_rules! quantized_matmul {
     // stable. https://github.com/rust-lang/rust/issues/29599
     ($fn_name: ident, $fn_name_cpu: ident, $fn_name_cuda: ident, $fn_name_metal: ident, $dtype: expr) => {
         fn $fn_name(device: &Device) -> Result<()> {
-            if device.is_cuda() {
-                // TODO Enable Cuda GGML sometime maybe.
-                return Ok(());
-            }
             test_matmul(device, (1, 3, 4, 256), $dtype)?;
             Ok(())
         }

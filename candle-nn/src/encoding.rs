@@ -124,7 +124,7 @@ fn set_at_index<D: WithDType, I: Into<i64>>(
     value: I,
     offset: usize,
     depth: usize,
-    v: &mut Vec<D>,
+    v: &mut [D],
     on_value: D,
 ) -> Result<()> {
     let value = value.into();

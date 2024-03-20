@@ -3,6 +3,7 @@ use candle::{Device, Result, Shape};
 use std::sync::Arc;
 
 // VarBuilder specialized for QTensors
+#[derive(Clone)]
 pub struct VarBuilder {
     data: Arc<std::collections::HashMap<String, Arc<QTensor>>>,
     path: Vec<String>,

@@ -19,7 +19,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.3"
+version = "0.4.2"
 edition = "2021"
 description = "Minimalist ML framework."
 repository = "https://github.com/huggingface/candle"
@@ -31,17 +31,18 @@ license = "MIT OR Apache-2.0"
 accelerate-src = { version = "0.3.2" }
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
-candle = { path = "./candle-core", package = "candle-core", version = "0.3.3" }
-candle-datasets = { path = "./candle-datasets", version = "0.3.3" }
-candle-flash-attn = { path = "./candle-flash-attn", version = "0.3.3" }
-candle-kernels = { path = "./candle-kernels", version = "0.3.3" }
-candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.3.3" }
-candle-nn = { path = "./candle-nn", version = "0.3.3" }
-candle-onnx = { path = "./candle-onnx", version = "0.3.3" }
-candle-transformers = { path = "./candle-transformers", version = "0.3.3" }
+candle = { path = "./candle-core", package = "candle-core", version = "0.4.2" }
+candle-datasets = { path = "./candle-datasets", version = "0.4.2" }
+candle-flash-attn = { path = "./candle-flash-attn", version = "0.4.2" }
+candle-kernels = { path = "./candle-kernels", version = "0.4.2" }
+candle-metal-kernels = { path = "./candle-metal-kernels", version = "0.4.2" }
+candle-nn = { path = "./candle-nn", version = "0.4.2" }
+candle-onnx = { path = "./candle-onnx", version = "0.4.2" }
+candle-transformers = { path = "./candle-transformers", version = "0.4.2" }
 clap = { version = "4.2.4", features = ["derive"] }
 criterion = { version = "0.5.1", default-features=false }
 cudarc = { version = "0.10.0", features = ["f16"] }
+fancy-regex = "0.13.0"
 gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
 hf-hub = "0.3.0"
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }

@@ -70,7 +70,7 @@ impl VarMap {
     ///
     /// If an error is returned, some of the variables might have already been set to their new
     /// values.
-    pub fn set<I: Iterator<Item = (K, V)>, K: AsRef<String>, V: AsRef<Tensor>>(
+    pub fn set<I: Iterator<Item = (K, V)>, K: AsRef<str>, V: AsRef<Tensor>>(
         &mut self,
         iter: I,
     ) -> Result<()> {

@@ -196,7 +196,7 @@ fn run_ls(
             }
         }
         Format::Pth => {
-            let mut tensors = candle_core::pickle::read_pth_tensor_info(file, verbose)?;
+            let mut tensors = candle_core::pickle::read_pth_tensor_info(file, verbose, None)?;
             tensors.sort_by(|a, b| a.name.cmp(&b.name));
             for tensor_info in tensors.iter() {
                 println!(

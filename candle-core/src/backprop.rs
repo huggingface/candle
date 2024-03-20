@@ -113,7 +113,7 @@ impl Tensor {
                     | Op::Unary(_node, UnaryOp::Floor)
                     | Op::Unary(_node, UnaryOp::Round) => nodes,
                     Op::Reshape(node)
-                    | Op::UpsampleNearest1D(node)
+                    | Op::UpsampleNearest1D { arg: node, .. }
                     | Op::UpsampleNearest2D { arg: node, .. }
                     | Op::AvgPool2D { arg: node, .. }
                     | Op::MaxPool2D { arg: node, .. }
@@ -175,7 +175,7 @@ impl Tensor {
             // the backprop graph of the backprop itself. This would be an issue for second order
             // derivatives but these are out of scope at the moment.
             let do_not_detach = CANDLE_GRAD_DO_NOT_DETACH.with(|b| *b);
-            let grad = if do_not_detach { grad } else { grad.detach()? };
+            let grad = if do_not_detach { grad } else { grad.detach() };
             if let Some(op) = node.op() {
                 match op {
                     Op::Binary(lhs, rhs, BinaryOp::Add) => {
@@ -250,6 +250,7 @@ impl Tensor {
                             out_padding,
                             *stride,
                             *dilation,
+                            /* groups */ 1,
                         )?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
@@ -347,9 +348,18 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
                     }
-                    Op::UpsampleNearest1D { .. } => Err(Error::BackwardNotSupported {
-                        op: "upsample-nearest1d",
-                    })?,
+                    Op::UpsampleNearest1D { arg, target_size } => {
+                        let (_n, c, size) = arg.dims3()?;
+                        if target_size % size != 0 {
+                            crate::bail!("backward not supported for non integer upscaling factors")
+                        }
+                        let scale = target_size / size;
+
+                        let kernel = Tensor::ones((c, 1, scale), arg.dtype(), arg.device())?;
+                        let conv_sum = grad.conv1d(&kernel, 0, scale, 1, c)?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = conv_sum;
+                    }
                     Op::UpsampleNearest2D {
                         arg,
                         target_h,
@@ -588,6 +598,13 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         let relu_grad = arg.ge(&arg.zeros_like()?)?.to_dtype(arg.dtype())?;
                         *sum_grad = sum_grad.add(&(&grad * relu_grad)?)?
+                    }
+                    Op::Unary(arg, UnaryOp::Silu) => {
+                        let sum_grad = grads.or_insert(arg)?;
+                        // d/dx silu = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
+                        let sigmoid_arg = (*node / arg)?;
+                        let silu_grad = (&sigmoid_arg * (1. + (arg * (1. - &sigmoid_arg)?)?)?)?;
+                        *sum_grad = sum_grad.add(&(&grad * silu_grad)?)?
                     }
                     Op::Elu(arg, alpha) => {
                         // d/dx elu(x) = 1 for x > 0, alpha * e^x for x <= 0
