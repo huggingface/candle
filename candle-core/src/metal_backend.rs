@@ -953,11 +953,7 @@ impl BackendStorage for MetalStorage {
         k_layout: &Layout,
         params: &ParamsConvTranspose1D,
     ) -> Result<Self> {
-        let device = self.device().clone();
-
         let l_out = params.l_out();
-        let dst_el = params.c_out * l_out * params.b_size;
-
         let dst_el = params.c_out * l_out * params.b_size;
         let buffer = self
             .device
