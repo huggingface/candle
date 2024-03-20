@@ -1,4 +1,4 @@
-use candle::{CpuStorage, Layout, Result, Shape, Tensor};
+use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -206,7 +206,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         storage: &candle::MetalStorage,
         layout: &Layout,
     ) -> Result<(candle::MetalStorage, Shape)> {
-        use candle::{backend::BackendStorage, DType};
+        use candle::backend::BackendStorage;
         let device = storage.device();
         let command_buffer = device.command_buffer()?;
         let kernels = device.kernels();
@@ -383,6 +383,19 @@ impl candle::CustomOp2 for RmsNorm {
         };
         Ok((dst, l1.shape().clone()))
     }
+}
+
+pub fn rms_norm_slow(x: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
+    let x_dtype = x.dtype();
+    let internal_dtype = match x_dtype {
+        DType::F16 | DType::BF16 => DType::F32,
+        d => d,
+    };
+    let hidden_size = x.dim(candle::D::Minus1)?;
+    let x = x.to_dtype(internal_dtype)?;
+    let norm_x = (x.sqr()?.sum_keepdim(candle::D::Minus1)? / hidden_size as f64)?;
+    let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
+    x_normed.to_dtype(x_dtype)?.broadcast_mul(alpha)
 }
 
 pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
