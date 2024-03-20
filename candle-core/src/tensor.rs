@@ -2093,8 +2093,19 @@ impl Tensor {
         let dim = dim.to_index(self.shape(), "squeeze")?;
         if dims[dim] == 1 {
             let mut dims = dims.to_vec();
+            let mut strides = self.stride().to_vec();
             dims.remove(dim);
-            self.reshape(dims)
+            strides.remove(dim);
+            let tensor_ = Tensor_ {
+                id: TensorId::new(),
+                storage: self.storage.clone(),
+                layout: Layout::new(dims.into(), strides, self.layout.start_offset()),
+                op: BackpropOp::new1(self, Op::Reshape),
+                is_variable: false,
+                dtype: self.dtype,
+                device: self.device.clone(),
+            };
+            Ok(Tensor(Arc::new(tensor_)))
         } else {
             Ok(self.clone())
         }
@@ -2115,10 +2126,24 @@ impl Tensor {
     /// ```
     pub fn unsqueeze<D: Dim>(&self, dim: D) -> Result<Self> {
         let mut dims = self.dims().to_vec();
+        let mut strides = self.stride().to_vec();
         let dim = dim.to_index_plus_one(self.shape(), "unsqueeze")?;
         // Cannot panic because to_index_plus_one already checks dimensions
         dims.insert(dim, 1);
-        self.reshape(dims)
+        // Any stride would work here, but we pick one so as to maximize the probability to remain
+        // C contiguous.
+        let stride = if dim < strides.len() { strides[dim] } else { 1 };
+        strides.insert(dim, stride);
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.clone(),
+            layout: Layout::new(dims.into(), strides, self.layout.start_offset()),
+            op: BackpropOp::new1(self, Op::Reshape),
+            is_variable: false,
+            dtype: self.dtype,
+            device: self.device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
     }
 
     /// Stacks two or more tensors along a particular dimension.
