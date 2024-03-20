@@ -72,6 +72,8 @@ fn rms_norm(device: &Device) -> Result<()> {
             [[0.4714, 0.4714, 4.9497], [1.206, 0.603, 3.6181]]
         ]
     );
+    let diff = (t - t2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert!(diff < 1e-5);
     Ok(())
 }
 
