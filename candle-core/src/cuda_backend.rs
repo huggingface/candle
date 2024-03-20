@@ -25,6 +25,17 @@ unsafe impl<T: DeviceRepr> DeviceRepr for &SlicePtrOrNull<T> {
     }
 }
 
+impl SlicePtrOrNull<usize> {
+    fn params_from_layout(dev: &CudaDevice, l: &Layout) -> Result<Self> {
+        let ds = if l.is_contiguous() {
+            SlicePtrOrNull::Null
+        } else {
+            SlicePtrOrNull::Ptr(dev.htod_copy([l.dims(), l.stride()].concat()).w()?)
+        };
+        Ok(ds)
+    }
+}
+
 /// cudarc related errors
 #[derive(thiserror::Error, Debug)]
 pub enum CudaError {
@@ -578,11 +589,7 @@ impl Map1 for Affine {
         let dims = shape.dims();
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
-        let ds = if layout.is_contiguous() {
-            SlicePtrOrNull::Null
-        } else {
-            SlicePtrOrNull::Ptr(dev.htod_copy([dims, layout.stride()].concat()).w()?)
-        };
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("affine"), kernels::AFFINE)?;
         // SAFETY: Set later by running the kernel.
@@ -614,11 +621,7 @@ impl Map1 for Elu {
         let dims = shape.dims();
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
-        let ds = if layout.is_contiguous() {
-            SlicePtrOrNull::Null
-        } else {
-            SlicePtrOrNull::Ptr(dev.htod_copy([dims, layout.stride()].concat()).w()?)
-        };
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("uelu"), kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
@@ -741,11 +744,7 @@ impl Map1 for Powf {
         let dims = shape.dims();
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
-        let ds = if layout.is_contiguous() {
-            SlicePtrOrNull::Null
-        } else {
-            SlicePtrOrNull::Ptr(dev.htod_copy([dims, layout.stride()].concat()).w()?)
-        };
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
@@ -878,11 +877,7 @@ impl<U: UnaryOpT> Map1 for U {
         let dims = shape.dims();
         let el_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el_count as u32);
-        let ds = if layout.is_contiguous() {
-            SlicePtrOrNull::Null
-        } else {
-            SlicePtrOrNull::Ptr(dev.htod_copy([dims, layout.stride()].concat()).w()?)
-        };
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
@@ -1432,9 +1427,14 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         let dims = shape.dims();
         let elem_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
-        let dims_and_strides = dev
-            .htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
-            .w()?;
+        let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
+            SlicePtrOrNull::Null
+        } else {
+            SlicePtrOrNull::Ptr(
+                dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
+                    .w()?,
+            )
+        };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::BINARY)?;
@@ -1461,9 +1461,14 @@ impl Map2Any for Cmp {
         let dims = shape.dims();
         let elem_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
-        let dims_and_strides = dev
-            .htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
-            .w()?;
+        let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
+            SlicePtrOrNull::Null
+        } else {
+            SlicePtrOrNull::Ptr(
+                dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
+                    .w()?,
+            )
+        };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
         let name = match self.0 {
@@ -1670,11 +1675,7 @@ impl BackendStorage for CudaStorage {
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let dev = self.device();
-        let ds = if layout.is_contiguous() {
-            SlicePtrOrNull::Null
-        } else {
-            SlicePtrOrNull::Ptr(dev.htod_copy([dims, layout.stride()].concat()).w()?)
-        };
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let start_o = layout.start_offset();
         // This returns an i64 rather than a &i64, this is useful to get around some temporary
         // lifetime issue and is safe as long as self.slice does not go out of scope before inp
@@ -2249,11 +2250,7 @@ impl BackendStorage for CudaStorage {
         }
         let cfg = LaunchConfig::for_num_elems(el_count as u32);
         let dev = &self.device;
-        let ds = if src_l.is_contiguous() {
-            SlicePtrOrNull::Null
-        } else {
-            SlicePtrOrNull::Ptr(dev.htod_copy([dims, src_l.stride()].concat()).w()?)
-        };
+        let ds = SlicePtrOrNull::params_from_layout(dev, src_l)?;
         match (&self.slice, &mut dst.slice) {
             (CudaStorageSlice::BF16(src), CudaStorageSlice::BF16(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);
