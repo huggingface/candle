@@ -11,7 +11,7 @@ __device__ void cast_(
 ) {
     const size_t *dims = info;
     const size_t *strides = info + num_dims;
-    if (is_contiguous(num_dims, dims, strides)) {
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
             out[i] = inp[i];
         }
@@ -34,7 +34,7 @@ __device__ void cast_through(
 ) {
     const size_t *dims = info;
     const size_t *strides = info + num_dims;
-    if (is_contiguous(num_dims, dims, strides)) {
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
             out[i] = static_cast<T>(static_cast<I>(inp[i]));
         }
