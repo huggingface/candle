@@ -361,7 +361,7 @@ impl candle::CustomOp2 for RmsNorm {
 
                 let cfg = LaunchConfig {
                     grid_dim: (n_rows as u32, 1, 1),
-                    block_dim: (1, 32, 1),
+                    block_dim: (1024, 1, 1),
                     shared_mem_bytes: 0,
                 };
                 let func = dev.get_or_load_func(&kernel_name::<T>("rmsnorm"), kernels::REDUCE)?;
@@ -383,6 +383,19 @@ impl candle::CustomOp2 for RmsNorm {
         };
         Ok((dst, l1.shape().clone()))
     }
+}
+
+pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
+    let hidden_size_xs = xs.dim(candle::D::Minus1)?;
+    let hidden_size_alpha = alpha.dims1()?;
+    if hidden_size_xs != hidden_size_alpha {
+        candle::bail!(
+            "shape mismatch in rms-norm {:?} {:?}",
+            xs.shape(),
+            alpha.shape()
+        )
+    }
+    xs.apply_op2_no_bwd(alpha, &RmsNorm { eps })
 }
 
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
