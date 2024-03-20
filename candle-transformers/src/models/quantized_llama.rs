@@ -512,7 +512,7 @@ impl ModelWeights {
             layer_in = x
         }
         let x = self.norm.forward(&layer_in)?;
-        let x = x.i((.., seq_len - 1, ..))?;
+        let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
         let _enter = self.span_output.enter();
         self.output.forward(&x)
     }

@@ -121,7 +121,7 @@ impl MambaBlock {
         // Algorithm 3.2 on page 6, https://arxiv.org/pdf/2312.00752.pdf
 
         let x_proj = self.x_proj.forward(&proj_for_conv)?;
-        let delta = x_proj.narrow(D::Minus1, 0, self.dt_rank)?;
+        let delta = x_proj.narrow(D::Minus1, 0, self.dt_rank)?.contiguous()?;
         let b = x_proj.narrow(D::Minus1, self.dt_rank, D_STATE)?;
         let c = x_proj.narrow(D::Minus1, self.dt_rank + D_STATE, D_STATE)?;
 
