@@ -248,6 +248,80 @@ pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
     xs.apply_op1_no_bwd(&SoftmaxLastDim)
 }
 
+#[derive(Debug, Clone)]
+struct RmsNorm {
+    eps: f32,
+}
+
+impl candle::CustomOp2 for RmsNorm {
+    fn name(&self) -> &'static str {
+        "rms-norm"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        use candle::backend::BackendStorage;
+
+        let eps = self.eps;
+        fn inner<
+            T: candle::WithDType
+                + num_traits::Float
+                + num_traits::AsPrimitive<f32>
+                + num_traits::FromPrimitive,
+        >(
+            src: &[T],
+            layout: &Layout,
+            alpha: &[T],
+            alpha_layout: &Layout,
+            eps: f32,
+        ) -> Result<(CpuStorage, Shape)> {
+            let src = match layout.contiguous_offsets() {
+                None => candle::bail!("input has to be contiguous"),
+                Some((o1, o2)) => &src[o1..o2],
+            };
+            let alpha = match alpha_layout.contiguous_offsets() {
+                None => candle::bail!("input has to be contiguous"),
+                Some((o1, o2)) => &alpha[o1..o2],
+            };
+            let el_count = layout.shape().elem_count();
+            let dims = layout.shape().dims();
+            let dim_m1 = dims[dims.len() - 1];
+            let mut dst = vec![T::zero(); el_count];
+            src.par_chunks(dim_m1)
+                .zip(dst.par_chunks_mut(dim_m1))
+                .for_each(|(src, dst)| {
+                    let sum2 = src
+                        .iter()
+                        .map(|&v| {
+                            let v = v.as_();
+                            v * v
+                        })
+                        .sum::<f32>();
+                    let m = (sum2 / dim_m1 as f32 + eps).sqrt();
+                    let m = T::from_f32(m).unwrap_or_else(T::nan);
+                    for ((d, s), alpha) in dst.iter_mut().zip(src.iter()).zip(alpha) {
+                        *d = *s / m * *alpha
+                    }
+                });
+            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            Ok((storage, Shape::from_dims(dims)))
+        }
+
+        use CpuStorage as C;
+        match (s1, s2) {
+            (C::BF16(s1), C::BF16(s2)) => inner::<half::bf16>(s1, l1, s2, l2, eps),
+            (C::F16(s1), C::F16(s2)) => inner::<half::f16>(s1, l1, s2, l2, eps),
+            (C::F32(s1), C::F32(s2)) => inner::<f32>(s1, l1, s2, l2, eps),
+            _ => candle::bail!("unsupported dtype for rmsnorm {:?}", s1.dtype()),
+        }
+    }
+}
+
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
 pub fn pixel_shuffle(xs: &Tensor, upscale_factor: usize) -> Result<Tensor> {
     let (b_size, c, h, w) = xs.dims4()?;
