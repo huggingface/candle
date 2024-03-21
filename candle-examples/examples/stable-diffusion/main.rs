@@ -292,6 +292,13 @@ fn text_embeddings(
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
+    if tokens.len() > sd_config.clip.max_position_embeddings {
+        anyhow::bail!(
+            "the prompt is too long, {} > max-tokens ({})",
+            tokens.len(),
+            sd_config.clip.max_position_embeddings
+        )
+    }
     while tokens.len() < sd_config.clip.max_position_embeddings {
         tokens.push(pad_id)
     }
@@ -319,6 +326,13 @@ fn text_embeddings(
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
+        if uncond_tokens.len() > sd_config.clip.max_position_embeddings {
+            anyhow::bail!(
+                "the negative prompt is too long, {} > max-tokens ({})",
+                uncond_tokens.len(),
+                sd_config.clip.max_position_embeddings
+            )
+        }
         while uncond_tokens.len() < sd_config.clip.max_position_embeddings {
             uncond_tokens.push(pad_id)
         }
