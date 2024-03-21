@@ -30,7 +30,7 @@ fn run_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
         .to_dtype(dtype)
         .unwrap();
 
-    let flops = 1 * 4 * 5 * 5 * dtype.size_in_bytes();
+    let flops = t.dims().iter().product::<usize>() * dtype.size_in_bytes();
 
     let mut group = c.benchmark_group(device.bench_name(name));
     group.throughput(Throughput::Bytes(flops as u64));
