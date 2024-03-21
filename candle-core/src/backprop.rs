@@ -311,9 +311,32 @@ impl Tensor {
                     Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
                         op: "conv-transpose1d",
                     })?,
-                    Op::ConvTranspose2D { .. } => Err(Error::BackwardNotSupported {
-                        op: "conv-transpose2d",
-                    })?,
+                    Op::ConvTranspose2D {
+                        arg,
+                        kernel,
+                        padding,
+                        stride,
+                        dilation,
+                        output_padding: _output_padding,
+                    } => {
+                        let grad_arg = grad.conv2d(kernel, *padding, *dilation, *stride, 1)?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad_arg)?;
+
+                        let grad_kernel = grad
+                            .transpose(0, 1)?
+                            .conv2d(&arg.transpose(0, 1)?, *padding, *stride, *dilation, 1)?
+                            .transpose(0, 1)?;
+                        let sum_grad = grads.or_insert(kernel)?;
+                        let (_, _, k0, k1) = kernel.dims4()?;
+                        let (_, _, g_k0, g_k1) = grad_kernel.dims4()?;
+                        let grad_kernel = if g_k0 != k0 || g_k1 != k1 {
+                            grad_kernel.narrow(2, 0, k0)?.narrow(3, 0, k1)?
+                        } else {
+                            grad_kernel
+                        };
+                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                    }
                     Op::AvgPool2D {
                         arg,
                         kernel_size,
