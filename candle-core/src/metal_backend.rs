@@ -1833,8 +1833,7 @@ impl BackendDevice for MetalDevice {
     }
 
     unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
-        let size = shape.elem_count() * dtype.size_in_bytes();
-        let buffer = self.allocate_zeros(size)?;
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "alloc-uninit")?;
         Ok(MetalStorage::new(
             buffer,
             self.clone(),
