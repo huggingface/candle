@@ -583,6 +583,36 @@ fn conv2d_grad(dev: &Device) -> Result<()> {
     );
 
     // Conv Transpose 2d Test
+    //tested against following python
+
+    // import torch
+    // torch.manual_seed(4242)
+    // padding = 4
+    // outpadding = 2
+    // dilation = 3
+    // stride = 3
+    // input = torch.randn((1, 4, 7, 5), requires_grad=True)
+    // kernel = torch.randn((4, 2, 3, 5), requires_grad=True)
+    // print("input", input.flatten())
+    // print("kernel", kernel.flatten())
+    // res = torch.nn.functional.conv_transpose2d(
+    //     input,
+    //     kernel,
+    //     stride=stride,
+    //     padding=padding,
+    //     dilation=dilation,
+    //     output_padding=outpadding,
+    // )
+    // res.retain_grad()
+    // print(res.shape)
+    // loss = (res**2).sum()
+    // print(loss)
+    // loss.backward()
+    // print(input.grad.shape)
+    // print("input grad", torch.round(input.grad, decimals=1))
+    // print(kernel.grad.shape)
+    // print("kernel grad", torch.round(kernel.grad.flatten(), decimals=1))
+
     let padding = 4;
     let outpadding = 2;
     let dilation = 3;
