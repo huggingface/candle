@@ -620,13 +620,13 @@ fn index_select() {
 
 #[test]
 fn index_select_strided() {
-    let embedding = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-    let shape = [5, 1];
-    let stride = [2, 2];
-    let ids = [0u32, 4, 2];
+    let embedding = (0..16).map(|x| x as f32).collect::<Vec<_>>();
+    let shape = [2, 2];
+    let stride = [2, 4];
+    let ids = [0u32];
     let dim = 0;
     let result = run_index_select_strided(&embedding, &shape, &stride, &ids, dim, "is_u32_f32");
-    assert_eq!(result, vec![1.0f32, 5.0, 3.0]);
+    assert_eq!(result, vec![0.0, 4.0]);
 }
 
 #[test]
