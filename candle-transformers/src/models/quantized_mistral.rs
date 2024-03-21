@@ -327,6 +327,7 @@ impl Model {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
         xs.narrow(1, seq_len - 1, 1)?
+            .contiguous()?
             .apply(&self.norm)?
             .apply(&self.lm_head)
     }
