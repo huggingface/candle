@@ -42,7 +42,7 @@ clap = { workspace = true }
 imageproc = { workspace = true }
 memmap2 = { workspace = true }
 rand = { workspace = true }
-rusttype = { workspace = true }
+ab_glyph = { workspace = true }
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
 tracing-subscriber = { workspace = true }

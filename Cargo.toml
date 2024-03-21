@@ -28,6 +28,7 @@ categories = ["science"]
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+ab_glyph = "0.2.23"
 accelerate-src = { version = "0.3.2" }
 anyhow = { version = "1", features = ["backtrace"] }
 byteorder = "1.4.3"
@@ -58,7 +59,6 @@ parquet = { version = "50.0.0" }
 rand = "0.8.5"
 rand_distr = "0.4.3"
 rayon = "1.7.0"
-rusttype = { version = "0.9", default-features = false }
 safetensors = "0.4.1"
 serde = { version = "1.0.171", features = ["derive"] }
 serde_plain = "1.0.2"
