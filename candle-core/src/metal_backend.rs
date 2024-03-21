@@ -1867,6 +1867,10 @@ impl BackendDevice for MetalDevice {
         ))
     }
 
+    fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<Self::Storage> {
+        self.storage_from_cpu_storage(&storage)
+    }
+
     fn rand_uniform(
         &self,
         shape: &Shape,

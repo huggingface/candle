@@ -2814,6 +2814,10 @@ impl BackendDevice for CpuDevice {
         Ok(s.clone())
     }
 
+    fn storage_from_cpu_storage_owned(&self, s: CpuStorage) -> Result<Self::Storage> {
+        Ok(s)
+    }
+
     fn new(_: usize) -> Result<Self> {
         Ok(Self)
     }

@@ -129,6 +129,8 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
 
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage>;
 
+    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage>;
+
     fn rand_uniform(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
 
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage>;
