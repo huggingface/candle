@@ -284,11 +284,6 @@ fn conv2d_small(dev: &Device) -> Result<()> {
         ]
     );
 
-    // conv-transposes are not implemented for metal
-    if dev.is_metal() {
-        return Ok(());
-    }
-
     let res = t.conv_transpose2d(&w.transpose(0, 1)?, 0, 0, 1, 1)?;
     assert_eq!(res.dims(), [1, 1, 3, 3]);
     assert_eq!(
@@ -391,9 +386,6 @@ print(w.grad[0])
 */
 fn conv2d_grad(dev: &Device) -> Result<()> {
     // conv-transposes are not implemented for metal
-    if dev.is_metal() {
-        return Ok(());
-    }
     use candle_core::Var;
     let t = Var::from_slice(
         &[
