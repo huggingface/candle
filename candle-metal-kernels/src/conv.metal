@@ -405,6 +405,86 @@ kernel void FN_NAME(  \
   conv_transpose1d<TYPENAME, TYPEACC>(l_out, stride, padding, out_padding, dilation, src_dims, src_strides, k_dims, k_strides, src, k, dst, tid); \
 } \
 
+template <typename T, typename A>
+METAL_FUNC void conv_transpose2d(
+  constant size_t &w_out,
+  constant size_t &h_out,
+  constant size_t &stride,
+  constant size_t &padding,
+  constant size_t &out_padding,
+  constant size_t &dilation,
+  constant size_t *input_dims,
+  constant size_t *input_stride,
+  constant size_t *k_dims,
+  constant size_t *k_stride,
+  device const T *src,
+  device const T *k,
+  device T *dst,
+  uint tid [[ thread_position_in_grid ]]
+) {
+  const size_t h_k = k_dims[2];
+  const size_t w_k = k_dims[3];
+  const size_t c_out = k_dims[1];
+  const size_t c_in = input_dims[1];
+  const size_t h_in = input_dims[2];
+  const size_t w_in = input_dims[3];
+  
+  if (tid >= input_dims[0] * c_out * w_out * h_out) {
+    return;
+  }
+
+  const size_t b_idx = tid / (w_out * h_out * c_out);
+  const size_t dst_c_idx = (tid / (w_out * h_out)) % c_out;
+  const size_t out_y = (tid / w_out) % h_out;
+  const size_t out_x = tid % w_out;
+
+  const size_t src_idx0 = b_idx * input_stride[0];
+
+  A d = 0;
+  for (int k_x = 0; k_x < (int)w_k; ++k_x) {
+      const int inp_x_stride = (int)(out_x + padding) - k_x * dilation;
+      if (inp_x_stride < 0 || inp_x_stride % stride) {
+          continue;
+      }
+      const int inp_x = inp_x_stride / stride;
+      if (inp_x >= w_in) continue;
+      for (int k_y = 0; k_y < (int)h_k; ++k_y) {
+          const int inp_y_stride = (int)(out_y + padding) - k_y * dilation;
+          if (inp_y_stride < 0 || inp_y_stride % stride) {
+              continue;
+          }
+          const int inp_y = inp_y_stride / stride;
+          if (inp_y >= h_in) continue;
+          for (size_t src_c_idx = 0; src_c_idx < c_in; ++src_c_idx) {
+              const size_t src_idx = src_idx0 + src_c_idx * input_stride[1] + inp_y * input_stride[2] + inp_x * input_stride[3];
+              const size_t k_idx = src_c_idx * k_stride[0] + dst_c_idx * k_stride[1] + k_y * k_stride[2] + k_x * k_stride[3];
+              d += static_cast<A>(src[src_idx]) * static_cast<A>(k[k_idx]);
+          }
+      }
+  }
+  dst[tid] = static_cast<T>(d);
+}
+
+#define CONVT2D_OP(TYPENAME, TYPEACC, FN_NAME) \
+kernel void FN_NAME(  \
+    constant size_t &w_out, \
+    constant size_t &h_out, \
+    constant size_t &stride, \
+    constant size_t &padding, \
+    constant size_t &out_padding, \
+    constant size_t &dilation, \
+    constant size_t *input_dims, \
+    constant size_t *input_stride, \
+    constant size_t *k_dims, \
+    constant size_t *k_stride, \
+    device const TYPENAME *src, \
+    device const TYPENAME *k, \
+    device TYPENAME *dst, \
+    uint tid [[ thread_position_in_grid ]] \
+) {  \
+  conv_transpose2d<TYPENAME, TYPEACC>(w_out, h_out, stride, padding, out_padding, dilation, input_dims, input_stride, k_dims, k_stride, src, k, dst, tid); \
+} \
+
 IM2COL_OP(float, im2col_f32)
 IM2COL_OP(uint8_t, im2col_u8)
 IM2COL_OP(uint32_t, im2col_u32)
@@ -439,4 +519,10 @@ CONVT1D_OP(uint8_t, uint8_t, conv_transpose1d_u8)
 CONVT1D_OP(uint32_t, uint32_t, conv_transpose1d_u32)
 #if defined(__HAVE_BFLOAT__)
 CONVT1D_OP(bfloat, float, conv_transpose1d_bf16)
+#endif
+
+CONVT2D_OP(float, float, conv_transpose2d_f32)
+CONVT2D_OP(half, float, conv_transpose2d_f16)
+#if defined(__HAVE_BFLOAT__)
+CONVT1D_OP(bfloat, float, conv_transpose2d_bf16)
 #endif
