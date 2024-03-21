@@ -1,3 +1,4 @@
+/// Methods for backpropagation of gradients.
 use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
 use crate::{Error, Result, Tensor, TensorId};
 use std::collections::HashMap;
@@ -690,30 +691,38 @@ impl Tensor {
     }
 }
 
+/// A store for gradients, associating a tensor id to the corresponding gradient tensor, used for back propagation.
 #[derive(Debug)]
 pub struct GradStore(HashMap<TensorId, Tensor>);
 
 impl GradStore {
+    /// Create a new gradient store
     fn new() -> Self {
         GradStore(HashMap::new())
     }
 
+    /// Get the gradient tensor corresponding to the given tensor id
     pub fn get_id(&self, id: TensorId) -> Option<&Tensor> {
         self.0.get(&id)
     }
 
+    /// Get the gradient tensor associated with the given tensor
     pub fn get(&self, tensor: &Tensor) -> Option<&Tensor> {
         self.0.get(&tensor.id())
     }
 
+    /// Remove the gradient tensor associated with the given tensor, returning it if it exists
     pub fn remove(&mut self, tensor: &Tensor) -> Option<Tensor> {
         self.0.remove(&tensor.id())
     }
 
+    /// Insert a gradient tensor associated with the given tensor, returning the previous gradient tensor if it existed
     pub fn insert(&mut self, tensor: &Tensor, grad: Tensor) -> Option<Tensor> {
         self.0.insert(tensor.id(), grad)
     }
 
+    /// Get the gradient tensor associated with the given tensor, or, if it does not exist,
+    /// insert a tensor of zeroes, with the same shape and type as the given tensors and return it
     fn or_insert(&mut self, tensor: &Tensor) -> Result<&mut Tensor> {
         use std::collections::hash_map::Entry;
         let grad = match self.0.entry(tensor.id()) {
