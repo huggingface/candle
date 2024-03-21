@@ -300,7 +300,8 @@ kernel void NAME(                                                               
     /* wait for shared_memory[0] to be filled */ \
     threadgroup_barrier(mem_flags::mem_threadgroup);                              \
                                                                                   \
-    float inv_norm = 1.0f / sqrt(shared_memory[0] + eps);                         \
+    float norm = sqrt(shared_memory[0] / float(el_to_sum_per_block) + eps);       \
+    float inv_norm = 1.0f / norm;                                                 \
     idx = start_idx + tid;                                                        \
     while (idx < stop_idx) {                                                      \
         float val = float(src[idx]) * inv_norm;                                   \
