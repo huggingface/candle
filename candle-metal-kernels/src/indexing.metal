@@ -45,7 +45,7 @@ METAL_FUNC void index(
     */ 
     const size_t src_i = left_rank_i * src_dim_size * right_size + input_i * right_size + right_rank_i; 
     const size_t strided_src_i = contiguous ? src_i : get_strided_index(src_i, src_dim_size, src_dims, src_strides);
-    output[tid] = input[src_i]; 
+    output[tid] = input[strided_src_i];
 }
 
 # define INDEX_OP(NAME, INDEX_TYPENAME, TYPENAME) \
