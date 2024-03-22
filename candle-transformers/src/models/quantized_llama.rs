@@ -362,7 +362,7 @@ impl ModelWeights {
         let embedding_length = md_get("llama.embedding_length")?.to_u32()? as usize;
         let rope_dim = md_get("llama.rope.dimension_count")?.to_u32()? as usize;
         // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
-        let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f64()?;
+        let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
 
         let rope_freq_base = md_get("llama.rope.freq_base")
             .and_then(|m| m.to_f32())
