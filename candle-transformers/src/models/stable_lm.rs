@@ -1,6 +1,6 @@
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Activation, LayerNorm, VarBuilder};
+use candle_nn::{Activation, LayerNorm, RotaryEmbedding, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -59,55 +59,6 @@ impl Config {
 
     pub fn set_use_flash_attn(&mut self, use_flash_attn: bool) {
         self.use_flash_attn = use_flash_attn
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
-}
-
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let xs = xs.chunk(2, D::Minus1)?;
-    Tensor::cat(&[&xs[1].neg()?, &xs[0]], D::Minus1)
-}
-
-impl RotaryEmbedding {
-    pub(crate) fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
-        let dim = cfg.rotary_ndims();
-        let max_seq_len = cfg.max_position_embeddings;
-        let inv_freq: Vec<_> = (0..dim)
-            .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
-        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
-            .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
-        Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
-        })
-    }
-
-    pub(crate) fn apply_rotary_emb_qkv(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
-        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
-        let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
-        Ok((q_embed, k_embed))
     }
 }
 
@@ -368,7 +319,13 @@ impl Model {
         let vb_m = vb.pp("model");
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb_m.device())?);
+        let rotary_emb = Arc::new(RotaryEmbedding::new(
+            vb.dtype(),
+            cfg.rope_theta,
+            cfg.rotary_ndims(),
+            cfg.max_position_embeddings,
+            vb_m.device(),
+        )?);
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
