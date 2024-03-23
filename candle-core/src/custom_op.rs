@@ -242,3 +242,136 @@ impl Tensor {
         self.apply_op3_arc(t2, t3, Arc::new(Box::new(c)))
     }
 }
+
+// In place ops.
+
+/// Unary ops that can be defined in user-land.
+/// These ops work in place and as such back-prop is unsupported.
+pub trait InplaceOp1 {
+    // Box<dyn> does not support const yet, so use a function to get the name.
+    fn name(&self) -> &'static str;
+
+    /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn cpu_fwd(&self, storage: &mut CpuStorage, layout: &Layout) -> Result<()>;
+
+    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn cuda_fwd(&self, _storage: &mut CudaStorage, _layout: &Layout) -> Result<()> {
+        Err(crate::Error::Cuda(
+            format!("no cuda implementation for {}", self.name()).into(),
+        ))
+    }
+
+    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn metal_fwd(&self, _storage: &mut MetalStorage, _layout: &Layout) -> Result<()> {
+        Err(crate::Error::Metal(
+            format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+}
+
+pub trait InplaceOp2 {
+    fn name(&self) -> &'static str;
+
+    /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn cpu_fwd(&self, s1: &mut CpuStorage, l1: &Layout, s2: &CpuStorage, l2: &Layout)
+        -> Result<()>;
+
+    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn cuda_fwd(&self, _: &mut CudaStorage, _: &Layout, _: &CudaStorage, _: &Layout) -> Result<()> {
+        Err(crate::Error::Cuda(
+            format!("no cuda implementation for {}", self.name()).into(),
+        ))
+    }
+
+    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn metal_fwd(
+        &self,
+        _: &mut MetalStorage,
+        _: &Layout,
+        _: &MetalStorage,
+        _: &Layout,
+    ) -> Result<()> {
+        Err(crate::Error::Metal(
+            format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+}
+
+pub trait InplaceOp3 {
+    fn name(&self) -> &'static str;
+
+    /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn cpu_fwd(
+        &self,
+        s1: &mut CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+        s3: &CpuStorage,
+        l3: &Layout,
+    ) -> Result<()>;
+
+    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn cuda_fwd(
+        &self,
+        _: &mut CudaStorage,
+        _: &Layout,
+        _: &CudaStorage,
+        _: &Layout,
+        _: &CudaStorage,
+        _: &Layout,
+    ) -> Result<()> {
+        Err(crate::Error::Cuda(
+            format!("no cuda implementation for {}", self.name()).into(),
+        ))
+    }
+
+    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn metal_fwd(
+        &self,
+        _: &mut MetalStorage,
+        _: &Layout,
+        _: &MetalStorage,
+        _: &Layout,
+        _: &MetalStorage,
+        _: &Layout,
+    ) -> Result<()> {
+        Err(crate::Error::Metal(
+            format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+}
+
+impl Tensor {
+    /// Applies a unary custom op in place.
+    pub fn inplace_op1<C: InplaceOp1>(&self, c: &C) -> Result<()> {
+        self.storage_mut().inplace_op1(self.layout(), c)
+    }
+
+    /// Applies a unary custom op in place (for the first tensor).
+    pub fn inplace_op2<C: InplaceOp2>(&self, rhs: &Self, c: &C) -> Result<()> {
+        self.storage_mut()
+            .inplace_op2(self.layout(), &rhs.storage(), rhs.layout(), c)
+    }
+
+    /// Applies a ternary custom op in place (for the first tensor).
+    pub fn inplace_op3<C: InplaceOp3>(&self, t2: &Self, t3: &Self, c: &C) -> Result<()> {
+        self.storage_mut().inplace_op3(
+            self.layout(),
+            &t2.storage(),
+            t2.layout(),
+            &t3.storage(),
+            t3.layout(),
+            c,
+        )
+    }
+}

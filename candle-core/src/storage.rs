@@ -1,7 +1,7 @@
 use crate::backend::BackendStorage;
 use crate::op::{self, CmpOp, ReduceOp};
 use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
-use crate::{CustomOp1, CustomOp2, CustomOp3};
+use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
 // out of memory. Instead try_clone should be used.
@@ -248,6 +248,51 @@ impl Storage {
             (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
                 Ok((Self::Metal(s), shape))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn inplace_op1(&mut self, l: &Layout, c: &dyn InplaceOp1) -> Result<()> {
+        match self {
+            Self::Cpu(storage) => c.cpu_fwd(storage, l),
+            Self::Cuda(storage) => c.cuda_fwd(storage, l),
+            Self::Metal(storage) => c.metal_fwd(storage, l),
+        }
+    }
+
+    pub(crate) fn inplace_op2(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        c: &dyn InplaceOp2,
+    ) -> Result<()> {
+        self.same_device(t2, c.name())?;
+        match (self, t2) {
+            (Self::Cpu(s1), Self::Cpu(s2)) => c.cpu_fwd(s1, l1, s2, l2),
+            (Self::Cuda(s1), Self::Cuda(s2)) => c.cuda_fwd(s1, l1, s2, l2),
+            (Self::Metal(s1), Self::Metal(s2)) => c.metal_fwd(s1, l1, s2, l2),
+            _ => unreachable!(),
+        }
+    }
+
+    pub(crate) fn inplace_op3(
+        &mut self,
+        l1: &Layout,
+        t2: &Self,
+        l2: &Layout,
+        t3: &Self,
+        l3: &Layout,
+        c: &dyn InplaceOp3,
+    ) -> Result<()> {
+        self.same_device(t2, c.name())?;
+        self.same_device(t3, c.name())?;
+        match (self, t2, t3) {
+            (Self::Cpu(s1), Self::Cpu(s2), Self::Cpu(s3)) => c.cpu_fwd(s1, l1, s2, l2, s3, l3),
+            (Self::Cuda(s1), Self::Cuda(s2), Self::Cuda(s3)) => c.cuda_fwd(s1, l1, s2, l2, s3, l3),
+            (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
+                c.metal_fwd(s1, l1, s2, l2, s3, l3)
             }
             _ => unreachable!(),
         }
