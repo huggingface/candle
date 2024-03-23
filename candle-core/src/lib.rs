@@ -74,7 +74,7 @@ pub mod utils;
 mod variable;
 
 pub use cpu_backend::CpuStorage;
-pub use custom_op::{CustomOp1, CustomOp2, CustomOp3};
+pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, FloatDType, IntDType, WithDType};
 pub use error::{Error, Result};
