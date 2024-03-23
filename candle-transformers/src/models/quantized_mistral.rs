@@ -287,7 +287,6 @@ impl Model {
 
     fn prepare_decoder_attention_mask(
         &self,
-        b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
@@ -310,16 +309,16 @@ impl Model {
         } else {
             mask
         };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
+        mask.expand((1, 1, tgt_len, tgt_len + seqlen_offset))?
             .to_dtype(DType::F32)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
-        let (b_size, seq_len) = input_ids.dims2()?;
+        let (_b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None
         } else {
-            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
+            let mask = self.prepare_decoder_attention_mask(seq_len, seqlen_offset)?;
             Some(mask)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
