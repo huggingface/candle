@@ -112,3 +112,34 @@ fn custom_op1_with_backward() -> Result<()> {
 
     Ok(())
 }
+
+impl candle_core::InplaceOp1 for Elu {
+    fn name(&self) -> &'static str {
+        "elu"
+    }
+
+    fn cpu_fwd(&self, s: &mut CpuStorage, _l: &Layout) -> Result<()> {
+        let alpha = self.alpha;
+        match s {
+            CpuStorage::BF16(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
+            CpuStorage::F16(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
+            CpuStorage::F32(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
+            CpuStorage::F64(s) => s.iter_mut().for_each(|v| *v = fwd(*v, alpha)),
+            _ => candle_core::bail!("unsupported dtype for inplace elu"),
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn inplace_op1() -> Result<()> {
+    let cpu = &Device::Cpu;
+    let t = Tensor::arange(0u32, 12u32, cpu)?.to_dtype(DType::F32)?;
+    let t = (t - 5.)?;
+    t.inplace_op1(&Elu { alpha: 1. })?;
+    assert_eq!(
+        to_vec1_round(&t, 4)?,
+        &[-0.9933, -0.9817, -0.9502, -0.8647, -0.6321, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+    Ok(())
+}
