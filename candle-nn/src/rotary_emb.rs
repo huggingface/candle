@@ -360,10 +360,18 @@ impl candle::CustomOp3 for RotaryEmb {
             let (b, h, t, d) = l_src.shape().dims4()?;
             let el = b * h * t * d;
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
-            let func = dev.get_or_load_func(&kernel_name::<T>("rope_i"), kernels::REDUCE)?;
+            let func = dev.get_or_load_func(&kernel_name::<T>("rope"), kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
             let dst = unsafe { dev.alloc::<T>(el) }.w()?;
-            let params = (&src, &cos, &sin, &dst, (b * h) as u32, (t * d) as u32);
+            let params = (
+                &src,
+                &cos,
+                &sin,
+                &dst,
+                (b * h) as u32,
+                (t * d) as u32,
+                d as u32,
+            );
             // SAFETY: ffi.
             unsafe { func.launch(cfg, params) }.w()?;
             Ok(dst)
