@@ -313,6 +313,26 @@ kernel void NAME(                                                               
     }                                                                             \
 }                                                                                 \
 
+#define ROPEI(FN_NAME, TYPENAME) \
+kernel void FN_NAME( \
+    constant size_t &bh, \
+    constant size_t &td, \
+    device const TYPENAME *src,  \
+    device const TYPENAME *cos,  \
+    device const TYPENAME *sin,  \
+    device TYPENAME *dst, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    if (2 * tid >= bh * td) { \
+        return; \
+    } \
+    size_t rope_idx = tid % (td / 2); \
+    TYPENAME c = cos[rope_idx]; \
+    TYPENAME s = sin[rope_idx]; \
+    dst[2 * tid] = src[2 * tid] * c - src[2 * tid + 1] * s; \
+    dst[2 * tid + 1] = src[2 * tid] * s + src[2 * tid + 1] * c; \
+}\
+
 REDUCE(x + y, fast_sum_f32_strided, float, 0)
 REDUCE(x + y, fast_sum_u32_strided, uint, 0)
 REDUCE(x + y, fast_sum_f16_strided, half, 0)
@@ -341,6 +361,8 @@ SOFTMAX(softmax_f32, float)
 SOFTMAX(softmax_f16, half)
 RMSNORM(rmsnorm_f32, float)
 RMSNORM(rmsnorm_f16, half)
+ROPEI(rope_i_f32, float)
+ROPEI(rope_i_f16, half)
 
 #if __METAL_VERSION__ >= 220
 REDUCE(x + y, fast_sum_i64_strided, int64_t, 0)
@@ -359,4 +381,5 @@ ARGMIN(fast_argmin_bf16, bfloat, HUGE_VALBF)
 ARGMAX(fast_argmax_bf16, bfloat, -HUGE_VALBF)
 SOFTMAX(softmax_bf16, bfloat)
 RMSNORM(rmsnorm_bf16, bfloat)
+ROPEI(rope_i_bf16, bfloat)
 #endif
