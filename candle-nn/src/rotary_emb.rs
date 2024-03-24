@@ -145,6 +145,57 @@ impl candle::CustomOp3 for RotaryEmbI {
         };
         Ok((dst, l1.shape().clone()))
     }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        src: &candle::MetalStorage,
+        l_src: &Layout,
+        cos: &candle::MetalStorage,
+        l_cos: &Layout,
+        sin: &candle::MetalStorage,
+        l_sin: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        let device = src.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+        if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
+            candle::bail!(
+                "dtype mismatch in rope-i {:?} {:?} {:?}",
+                src.dtype(),
+                cos.dtype(),
+                sin.dtype()
+            )
+        }
+        let name = match src.dtype() {
+            candle::DType::F32 => "rope_i_f32",
+            candle::DType::F16 => "rope_i_f16",
+            candle::DType::BF16 => "rope_i_bf16",
+            dtype => candle::bail!("rope-i is not implemented for {dtype:?}"),
+        };
+        let (b, h, t, d) = l_src.shape().dims4()?;
+        let el = b * h * t * d;
+        let output = device.new_buffer(el, src.dtype(), "rope-i")?;
+        candle_metal_kernels::call_rope_i(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            name,
+            b * h,
+            t * d,
+            src.buffer(),
+            l_src.start_offset() * src.dtype().size_in_bytes(),
+            cos.buffer(),
+            l_cos.start_offset() * cos.dtype().size_in_bytes(),
+            sin.buffer(),
+            l_sin.start_offset() * sin.dtype().size_in_bytes(),
+            &output,
+        )
+        .map_err(candle::Error::wrap)?;
+        let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
+        Ok((out, l_src.shape().clone()))
+    }
 }
 
 pub fn rope_i(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
