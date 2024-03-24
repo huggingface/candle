@@ -122,6 +122,18 @@ impl TextGeneration {
     }
 }
 
+#[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Which {
+    #[value(name = "7b-v0.1")]
+    Mistral7bV01,
+    #[value(name = "7b-v0.2")]
+    Mistral7bV02,
+    #[value(name = "7b-instruct-v0.1")]
+    Mistral7bInstructV01,
+    #[value(name = "7b-instruct-v0.2")]
+    Mistral7bInstructV02,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -155,6 +167,10 @@ struct Args {
     #[arg(long, short = 'n', default_value_t = 10000)]
     sample_len: usize,
 
+    /// The model size to use.
+    #[arg(long, default_value = "7b-v0.1")]
+    which: Which,
+
     #[arg(long)]
     model_id: Option<String>,
 
@@ -163,6 +179,9 @@ struct Args {
 
     #[arg(long)]
     tokenizer_file: Option<String>,
+
+    #[arg(long)]
+    config_file: Option<String>,
 
     #[arg(long)]
     weight_files: Option<String>,
@@ -211,9 +230,17 @@ fn main() -> Result<()> {
         Some(model_id) => model_id,
         None => {
             if args.quantized {
+                if args.which != Which::Mistral7bV01 {
+                    anyhow::bail!("only 7b-v0.1 is available as a quantized model for now")
+                }
                 "lmz/candle-mistral".to_string()
             } else {
-                "mistralai/Mistral-7B-v0.1".to_string()
+                match args.which {
+                    Which::Mistral7bV01 => "mistralai/Mistral-7B-v0.1".to_string(),
+                    Which::Mistral7bV02 => "mistralai/Mistral-7B-v0.2".to_string(),
+                    Which::Mistral7bInstructV01 => "mistralai/Mistral-7B-Instruct-v0.1".to_string(),
+                    Which::Mistral7bInstructV02 => "mistralai/Mistral-7B-Instruct-v0.2".to_string(),
+                }
             }
         }
     };
@@ -243,7 +270,17 @@ fn main() -> Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config = Config::config_7b_v0_1(args.use_flash_attn);
+    let config = match args.config_file {
+        Some(config_file) => serde_json::from_slice(&std::fs::read(config_file)?)?,
+        None => {
+            if args.quantized {
+                Config::config_7b_v0_1(args.use_flash_attn)
+            } else {
+                let config_file = repo.get("config.json")?;
+                serde_json::from_slice(&std::fs::read(config_file)?)?
+            }
+        }
+    };
     let device = candle_examples::device(args.cpu)?;
     let (model, device) = if args.quantized {
         let filename = &filenames[0];
