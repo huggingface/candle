@@ -107,7 +107,7 @@ fn ropei(device: &Device) -> Result<()> {
     let sum_diff = (rope1 - rope2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     if device.is_cpu() {
         assert_eq!(sum_diff, 0.);
-    } else if device.is_cuda() {
+    } else {
         assert!(sum_diff < 1e-4);
     }
     Ok(())
@@ -134,7 +134,7 @@ fn rope(device: &Device) -> Result<()> {
     let sum_diff = (rope1 - rope2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     if device.is_cpu() {
         assert_eq!(sum_diff, 0.);
-    } else if device.is_cuda() {
+    } else {
         assert!(sum_diff < 1e-4);
     }
     Ok(())

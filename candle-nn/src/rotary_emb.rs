@@ -415,28 +415,29 @@ impl candle::CustomOp3 for RotaryEmb {
         let kernels = device.kernels();
         if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
             candle::bail!(
-                "dtype mismatch in rope-i {:?} {:?} {:?}",
+                "dtype mismatch in rope {:?} {:?} {:?}",
                 src.dtype(),
                 cos.dtype(),
                 sin.dtype()
             )
         }
         let name = match src.dtype() {
-            candle::DType::F32 => "rope_i_f32",
-            candle::DType::F16 => "rope_i_f16",
-            candle::DType::BF16 => "rope_i_bf16",
-            dtype => candle::bail!("rope-i is not implemented for {dtype:?}"),
+            candle::DType::F32 => "rope_f32",
+            candle::DType::F16 => "rope_f16",
+            candle::DType::BF16 => "rope_bf16",
+            dtype => candle::bail!("rope is not implemented for {dtype:?}"),
         };
         let (b, h, t, d) = l_src.shape().dims4()?;
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope-i")?;
-        candle_metal_kernels::call_rope_i(
+        candle_metal_kernels::call_rope(
             device.metal_device(),
             &command_buffer,
             kernels,
             name,
             b * h,
             t * d,
+            d,
             src.buffer(),
             l_src.start_offset() * src.dtype().size_in_bytes(),
             cos.buffer(),

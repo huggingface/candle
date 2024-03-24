@@ -313,8 +313,8 @@ kernel void NAME(                                                               
     }                                                                             \
 }                                                                                 \
 
-#define ROPEI(FN_NAME, TYPENAME) \
-kernel void FN_NAME( \
+#define ROPEI(FN_NAME, FN_NAME_I, TYPENAME) \
+kernel void FN_NAME_I( \
     constant size_t &bh, \
     constant size_t &td, \
     device const TYPENAME *src,  \
@@ -331,6 +331,31 @@ kernel void FN_NAME( \
     TYPENAME s = sin[rope_idx]; \
     dst[2 * tid] = src[2 * tid] * c - src[2 * tid + 1] * s; \
     dst[2 * tid + 1] = src[2 * tid] * s + src[2 * tid + 1] * c; \
+}\
+kernel void FN_NAME( \
+    constant size_t &bh, \
+    constant size_t &td, \
+    constant size_t &d, \
+    device const TYPENAME *src,  \
+    device const TYPENAME *cos,  \
+    device const TYPENAME *sin,  \
+    device TYPENAME *dst, \
+    uint idx [[ thread_position_in_grid ]] \
+) { \
+    if (2 * idx >= bh * td) { \
+        return; \
+    } \
+    size_t i_bh = idx / (td / 2); \
+    size_t i_td = idx - (td / 2) * i_bh; \
+    size_t i_t = i_td / (d / 2); \
+    size_t i_d = i_td - (d / 2) * i_t; \
+    size_t i1 = i_bh * td + i_t * d + i_d; \
+    size_t i2 = i1 + d / 2; \
+    size_t i_cs = i_t * (d / 2) + i_d; \
+    TYPENAME c = cos[i_cs]; \
+    TYPENAME s = sin[i_cs]; \
+    dst[i1] = src[i1] * c - src[i2] * s; \
+    dst[i2] = src[i1] * s + src[i2] * c; \
 }\
 
 REDUCE(x + y, fast_sum_f32_strided, float, 0)
@@ -361,8 +386,8 @@ SOFTMAX(softmax_f32, float)
 SOFTMAX(softmax_f16, half)
 RMSNORM(rmsnorm_f32, float)
 RMSNORM(rmsnorm_f16, half)
-ROPEI(rope_i_f32, float)
-ROPEI(rope_i_f16, half)
+ROPEI(rope_f32, rope_i_f32, float)
+ROPEI(rope_f16, rope_i_f16, half)
 
 #if __METAL_VERSION__ >= 220
 REDUCE(x + y, fast_sum_i64_strided, int64_t, 0)
@@ -381,5 +406,5 @@ ARGMIN(fast_argmin_bf16, bfloat, HUGE_VALBF)
 ARGMAX(fast_argmax_bf16, bfloat, -HUGE_VALBF)
 SOFTMAX(softmax_bf16, bfloat)
 RMSNORM(rmsnorm_bf16, bfloat)
-ROPEI(rope_i_bf16, bfloat)
+ROPEI(rope_bf16, rope_i_bf16, bfloat)
 #endif
