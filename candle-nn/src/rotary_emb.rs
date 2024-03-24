@@ -1,5 +1,5 @@
 #![allow(unused)]
-use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
+use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Interleaved variant of rotary embeddings.
@@ -50,9 +50,10 @@ impl candle::CustomOp3 for RotaryEmbI {
             src.par_chunks(t * d)
                 .zip(dst.par_chunks_mut(t * d))
                 .for_each(|(src, dst)| {
-                    for i in (0..d).step_by(2) {
-                        dst[i] = src[i] * cos[i] - src[i + 1] * sin[i];
-                        dst[i + 1] = src[i] * sin[i] + src[i + 1] * cos[i];
+                    for i_over_2 in 0..t * d / 2 {
+                        let i = 2 * i_over_2;
+                        dst[i] = src[i] * cos[i_over_2] - src[i + 1] * sin[i_over_2];
+                        dst[i + 1] = src[i] * sin[i_over_2] + src[i + 1] * cos[i_over_2];
                     }
                 });
             let storage = candle::WithDType::to_cpu_storage_owned(dst);
@@ -74,4 +75,52 @@ impl candle::CustomOp3 for RotaryEmbI {
             ),
         }
     }
+}
+
+pub fn rope_i(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    let (b_sz, n_head, seq_len, n_embd) = xs.dims4()?;
+    let (cos_seq_len, cos_n_embd) = cos.dims2()?;
+    let (sin_seq_len, sin_n_embd) = cos.dims2()?;
+    if cos_n_embd * 2 != n_embd
+        || sin_n_embd * 2 != n_embd
+        || seq_len > cos_seq_len
+        || seq_len > sin_seq_len
+    {
+        candle::bail!(
+            "inconsistent last dim size in rope {:?} {:?} {:?}",
+            xs.shape(),
+            cos.shape(),
+            sin.shape()
+        )
+    }
+    if !xs.is_contiguous() {
+        candle::bail!("xs has to be contiguous in rope")
+    }
+    if !cos.is_contiguous() {
+        candle::bail!("cos has to be contiguous in rope")
+    }
+    if !sin.is_contiguous() {
+        candle::bail!("sin has to be contiguous in rope")
+    }
+    xs.apply_op3_no_bwd(cos, sin, &RotaryEmbI)
+}
+
+pub fn rope_i_slow(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    let (b_sz, n_head, seq_len, n_embd) = x.dims4()?;
+    let cos = cos
+        .narrow(0, 0, seq_len)?
+        .reshape((seq_len, n_embd / 2, 1))?;
+    let sin = sin
+        .narrow(0, 0, seq_len)?
+        .reshape((seq_len, n_embd / 2, 1))?;
+    let cos = cos.broadcast_as((b_sz, 1, seq_len, n_embd / 2, 1))?;
+    let sin = sin.broadcast_as((b_sz, 1, seq_len, n_embd / 2, 1))?;
+    let x = x.reshape((b_sz, n_head, seq_len, n_embd / 2, 2))?;
+    let x0 = x.narrow(D::Minus1, 0, 1)?;
+    let x1 = x.narrow(D::Minus1, 1, 1)?;
+    let y0 = (x0.broadcast_mul(&cos)? - x1.broadcast_mul(&sin)?)?;
+    let y1 = (x0.broadcast_mul(&sin)? + x1.broadcast_mul(&cos)?)?;
+    let rope = Tensor::cat(&[y0, y1], D::Minus1)?;
+    let rope = rope.flatten_from(D::Minus2)?;
+    Ok(rope)
 }

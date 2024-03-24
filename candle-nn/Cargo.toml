@@ -25,6 +25,7 @@ candle-metal-kernels = { workspace = true, optional = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+rand = { workspace = true }
 
 [features]
 default = []
