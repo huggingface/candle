@@ -1,5 +1,4 @@
-#![allow(unused)]
-use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor, D};
+use candle::{CpuStorage, Layout, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Interleaved variant of rotary embeddings.
@@ -89,7 +88,7 @@ impl candle::CustomOp3 for RotaryEmbI {
         use candle::cuda_backend::cudarc::driver::{
             CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
         };
-        use candle::cuda_backend::{kernel_name, kernels, Map1, WrapErr};
+        use candle::cuda_backend::{kernel_name, kernels, WrapErr};
         use candle::{CudaDevice, WithDType};
 
         fn inner<T: DeviceRepr + WithDType>(
@@ -115,7 +114,7 @@ impl candle::CustomOp3 for RotaryEmbI {
             };
             let (b, h, t, d) = l_src.shape().dims4()?;
             let el = b * h * t * d;
-            let cfg = LaunchConfig::for_num_elems(el as u32);
+            let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
             let func = dev.get_or_load_func(&kernel_name::<T>("rope_i"), kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
             let dst = unsafe { dev.alloc::<T>(el) }.w()?;
@@ -149,7 +148,7 @@ impl candle::CustomOp3 for RotaryEmbI {
 }
 
 pub fn rope_i(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-    let (b_sz, n_head, seq_len, n_embd) = xs.dims4()?;
+    let (_b_sz, _n_head, seq_len, n_embd) = xs.dims4()?;
     let (cos_seq_len, cos_n_embd) = cos.dims2()?;
     let (sin_seq_len, sin_n_embd) = cos.dims2()?;
     if cos_n_embd * 2 != n_embd

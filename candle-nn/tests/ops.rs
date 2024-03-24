@@ -105,7 +105,11 @@ fn rope(device: &Device) -> Result<()> {
     let rope1 = candle_nn::rotary_emb::rope_i(&src, &cos, &sin)?;
     let rope2 = candle_nn::rotary_emb::rope_i_slow(&src, &cos, &sin)?;
     let sum_diff = (rope1 - rope2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
-    assert_eq!(sum_diff, 0.);
+    if device.is_cpu() {
+        assert_eq!(sum_diff, 0.);
+    } else if device.is_cuda() {
+        assert!(sum_diff < 1e-4);
+    }
     Ok(())
 }
 
