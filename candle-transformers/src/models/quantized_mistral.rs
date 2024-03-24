@@ -257,7 +257,7 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Linear,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
     device: Device,
 }
 
@@ -290,11 +290,11 @@ impl Model {
         tgt_len: usize,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        // Sliding window mask?
+        let sliding_window = self.sliding_window.unwrap_or(tgt_len + 1);
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| {
                 (0..tgt_len).map(move |j| {
-                    if i < j || j + self.sliding_window < i {
+                    if i < j || j + sliding_window < i {
                         f32::NEG_INFINITY
                     } else {
                         0.
