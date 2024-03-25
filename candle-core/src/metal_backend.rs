@@ -1254,6 +1254,10 @@ impl BackendStorage for MetalStorage {
         }
         let name = match self.dtype {
             DType::F32 => "upsample_nearest2d_f32",
+            DType::F16 => "upsample_nearest2d_f16",
+            DType::BF16 => "upsample_nearest2d_bf16",
+            DType::U8 => "upsample_nearest2d_u8",
+            DType::U32 => "upsample_nearest2d_u32",
             dtype => crate::bail!("Metal upsample_nearest2d {dtype:?} not implemented"),
         };
 
