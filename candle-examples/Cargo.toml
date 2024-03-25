@@ -68,7 +68,7 @@ encodec = ["cpal", "symphonia", "rubato"]
 
 [[example]]
 name = "llama_multiprocess"
-required-features = ["cuda", "nccl", "flash-attn"]
+required-features = ["cuda", "nccl"]
 
 [[example]]
 name = "reinforcement-learning"

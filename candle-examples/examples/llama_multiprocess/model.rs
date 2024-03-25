@@ -4,6 +4,7 @@ use candle_nn::{Embedding, Linear, Module, RmsNorm};
 use cudarc::nccl::safe::{Comm, ReduceOp};
 use half::f16;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -93,19 +94,27 @@ fn shard(dim: usize, rank: usize, world_size: usize) -> candle_nn::var_builder::
 }
 
 impl TensorParallelColumnLinear {
-    fn load(vb: VarBuilder, comm: Rc<Comm>) -> Result<Self> {
+    fn load(vb: VarBuilder, comm: Rc<Comm>, shape: (usize, usize)) -> Result<Self> {
         let rank = comm.rank();
         let size = comm.world_size();
-        let weight = vb.get_with_hints((), "weight", shard(0, rank, size))?;
+        let weight = vb.get_with_hints(shape, "weight", shard(0, rank, size))?;
         Ok(Self::new(Linear::new(weight, None)))
     }
 
-    fn load_multi(vb: VarBuilder, prefixes: &[&str], comm: Rc<Comm>) -> Result<Self> {
+    fn _load_multi(
+        vb: VarBuilder,
+        prefixes: &[&str],
+        comm: Rc<Comm>,
+        shape: (usize, usize),
+    ) -> Result<Self> {
         let rank = comm.rank();
         let size = comm.world_size();
         let weights: Vec<_> = prefixes
             .iter()
-            .map(|p| vb.pp(p).get_with_hints((), "weight", shard(0, rank, size)))
+            .map(|p| {
+                vb.pp(p)
+                    .get_with_hints(shape, "weight", shard(0, rank, size))
+            })
             .collect::<Result<Vec<_>>>()?;
         let weight = Tensor::cat(&weights, 0)?;
         Ok(Self::new(Linear::new(weight, None)))
@@ -113,10 +122,10 @@ impl TensorParallelColumnLinear {
 }
 
 impl TensorParallelRowLinear {
-    fn load(vb: VarBuilder, comm: Rc<Comm>) -> Result<Self> {
+    fn load(vb: VarBuilder, comm: Rc<Comm>, shape: (usize, usize)) -> Result<Self> {
         let rank = comm.rank();
         let size = comm.world_size();
-        let weight = vb.get_with_hints((), "weight", shard(1, rank, size))?;
+        let weight = vb.get_with_hints(shape, "weight", shard(1, rank, size))?;
         Ok(Self::new(Linear::new(weight, None), comm))
     }
 }
@@ -134,6 +143,22 @@ pub struct Config {
     pub rope_theta: f32,
 }
 
+#[cfg(feature = "flash-attn")]
+fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    causal: bool,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
+}
+
+#[cfg(not(feature = "flash-attn"))]
+fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+    unimplemented!("compile with '--features flash-attn'")
+}
+
 fn default_rope() -> f32 {
     10_000.0
 }
@@ -144,6 +169,8 @@ pub struct Cache {
     kvs: Arc<Mutex<Vec<Option<(Tensor, Tensor)>>>>,
     cos: Tensor,
     sin: Tensor,
+    masks: Arc<Mutex<HashMap<usize, Tensor>>>,
+    device: Device,
 }
 
 impl Cache {
@@ -168,8 +195,31 @@ impl Cache {
             kvs: Arc::new(Mutex::new(vec![None; config.num_hidden_layers])),
             cos,
             sin,
+            masks: Arc::new(Mutex::new(HashMap::new())),
+            device: device.clone(),
         })
     }
+
+    fn mask(&self, t: usize) -> Result<Tensor> {
+        let mut masks = self.masks.lock().unwrap();
+        if let Some(mask) = masks.get(&t) {
+            Ok(mask.clone())
+        } else {
+            let mask: Vec<_> = (0..t)
+                .flat_map(|i| (0..t).map(move |j| u8::from(j > i)))
+                .collect();
+            let mask = Tensor::from_slice(&mask, (t, t), &self.device)?;
+            masks.insert(t, mask.clone());
+            Ok(mask)
+        }
+    }
+}
+
+fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
+    let shape = mask.shape();
+    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
+    let m = mask.where_cond(&on_true, on_false)?;
+    Ok(m)
 }
 
 fn silu(xs: &Tensor) -> Result<Tensor> {
@@ -187,7 +237,9 @@ fn embedding(cfg: &Config, vb: VarBuilder) -> Result<Embedding> {
 }
 
 struct CausalSelfAttention {
-    qkv_proj: TensorParallelColumnLinear,
+    q_proj: TensorParallelColumnLinear,
+    k_proj: TensorParallelColumnLinear,
+    v_proj: TensorParallelColumnLinear,
     o_proj: TensorParallelRowLinear,
     num_attention_heads: usize,
     num_key_value_heads: usize,
@@ -212,23 +264,11 @@ impl CausalSelfAttention {
     fn forward(&self, x: &Tensor, index_pos: usize, block_idx: usize) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.shape().dims3()?;
 
-        let qkv = self.qkv_proj.forward(x)?;
-        let hidden_size = self.num_attention_heads * self.head_dim;
+        let q = self.q_proj.forward(x)?;
+        let k = self.k_proj.forward(x)?;
+        let v = self.v_proj.forward(x)?;
 
-        let q = qkv.i((.., .., ..self.num_attention_heads * self.head_dim))?;
-        let k = qkv.i((
-            ..,
-            ..,
-            self.num_attention_heads * self.head_dim
-                ..self.num_attention_heads * self.head_dim
-                    + self.num_key_value_heads * self.head_dim,
-        ))?;
-        let v = qkv.i((
-            ..,
-            ..,
-            self.num_attention_heads * self.head_dim + self.num_key_value_heads * self.head_dim..,
-        ))?;
-        // todo!("Q {:?} K {:?} V {:?} - x {:?}", q.shape(), k.shape(), v.shape(), x.shape());
+        let hidden_size = self.num_attention_heads * self.head_dim;
 
         let q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
@@ -264,13 +304,25 @@ impl CausalSelfAttention {
 
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
-        let q = q.transpose(1, 2)?;
-        let k = k.transpose(1, 2)?;
-        let v = v.transpose(1, 2)?;
-        let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
-        let y = candle_flash_attn::flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?
-            .transpose(1, 2)?;
-        // Convert to contiguous as matmul doesn't support strided vs for now.
+
+        let y = if cfg!(feature = "flash-attn") {
+            let q = q.transpose(1, 2)?;
+            let k = k.transpose(1, 2)?;
+            let v = v.transpose(1, 2)?;
+            let softmax_scale = 1f32 / (self.head_dim as f32).sqrt();
+            flash_attn(&q, &k, &v, softmax_scale, seq_len > 1)?.transpose(1, 2)?
+        } else {
+            let in_dtype = q.dtype();
+            let q = q.to_dtype(DType::F32)?;
+            let k = k.to_dtype(DType::F32)?;
+            let v = v.to_dtype(DType::F32)?;
+            let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
+            let mask = self.cache.mask(seq_len)?.broadcast_as(att.shape())?;
+            let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
+            let att = candle_nn::ops::softmax(&att, D::Minus1)?;
+            // Convert to contiguous as matmul doesn't support strided vs for now.
+            att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
+        };
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, hidden_size])?;
         let y = self.o_proj.forward(&y)?;
         Ok(y)
@@ -285,20 +337,37 @@ impl CausalSelfAttention {
             let x = x
                 .unsqueeze(2)?
                 .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head, n_rep, seq_len, head_dim))?;
+                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
             Ok(x)
         }
     }
 
     fn load(vb: VarBuilder, cache: &Cache, cfg: &Config, comm: Rc<Comm>) -> Result<Self> {
-        let qkv_proj = TensorParallelColumnLinear::load_multi(
-            vb.clone(),
-            &["q_proj", "k_proj", "v_proj"],
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let q_proj = TensorParallelColumnLinear::load(
+            vb.pp("q_proj"),
             comm.clone(),
+            (cfg.hidden_size, cfg.num_attention_heads * head_dim),
         )?;
-        let o_proj = TensorParallelRowLinear::load(vb.pp("o_proj"), comm.clone())?;
+        let k_proj = TensorParallelColumnLinear::load(
+            vb.pp("k_proj"),
+            comm.clone(),
+            (cfg.num_key_value_heads * head_dim, cfg.hidden_size),
+        )?;
+        let v_proj = TensorParallelColumnLinear::load(
+            vb.pp("v_proj"),
+            comm.clone(),
+            (cfg.num_key_value_heads * head_dim, cfg.hidden_size),
+        )?;
+        let o_proj = TensorParallelRowLinear::load(
+            vb.pp("o_proj"),
+            comm.clone(),
+            (cfg.hidden_size, cfg.hidden_size),
+        )?;
         Ok(Self {
-            qkv_proj,
+            q_proj,
+            k_proj,
+            v_proj,
             o_proj,
             num_attention_heads: cfg.num_attention_heads / comm.world_size(),
             num_key_value_heads: cfg.num_key_value_heads / comm.world_size(),
@@ -332,10 +401,22 @@ impl Mlp {
         self.c_proj.forward(&x)
     }
 
-    fn load(vb: VarBuilder, _cfg: &Config, comm: Rc<Comm>) -> Result<Self> {
-        let c_fc1 = TensorParallelColumnLinear::load(vb.pp("gate_proj"), comm.clone())?;
-        let c_fc2 = TensorParallelColumnLinear::load(vb.pp("up_proj"), comm.clone())?;
-        let c_proj = TensorParallelRowLinear::load(vb.pp("down_proj"), comm)?;
+    fn load(vb: VarBuilder, cfg: &Config, comm: Rc<Comm>) -> Result<Self> {
+        let c_fc1 = TensorParallelColumnLinear::load(
+            vb.pp("gate_proj"),
+            comm.clone(),
+            (cfg.intermediate_size, cfg.hidden_size),
+        )?;
+        let c_fc2 = TensorParallelColumnLinear::load(
+            vb.pp("up_proj"),
+            comm.clone(),
+            (cfg.intermediate_size, cfg.hidden_size),
+        )?;
+        let c_proj = TensorParallelRowLinear::load(
+            vb.pp("down_proj"),
+            comm,
+            (cfg.hidden_size, cfg.intermediate_size),
+        )?;
         Ok(Self::new(c_fc1, c_fc2, c_proj))
     }
 }
