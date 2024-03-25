@@ -1135,6 +1135,16 @@ fn randn(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn allclose(device: &Device) -> Result<()> {
+    let t1 = Tensor::new(&[1.0004_f32, 1.0005], device)?;
+    let t2 = Tensor::new(&[1.0005_f32, 1.0004], device)?;
+    let x = t1.allclose(&t2, 0.001)?;
+    let y = t1.allclose(&t2, 0.00001)?;
+    assert_eq!(x, true);
+    assert_eq!(y, false);
+    Ok(())
+}
+
 test_device!(zeros, zeros_cpu, zeros_gpu, zeros_metal);
 test_device!(ones, ones_cpu, ones_gpu, ones_metal);
 test_device!(full, full_cpu, full_gpu, full_metal);
@@ -1190,6 +1200,7 @@ test_device!(
 test_device!(randn, randn_cpu, randn_gpu, randn_metal);
 test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
 test_device!(var, var_cpu, var_gpu, var_metal);
+test_device!(allclose, allclose_cpu, allclose_gpu, allclose_metal);
 
 // There was originally a bug on the CPU implementation for randn
 // https://github.com/huggingface/candle/issues/381
