@@ -115,6 +115,35 @@ __device__ void chunk_sum(
     }
 }
 
+__device__ __forceinline__ int GetBlockNum(void) {
+  return (gridDim.x * gridDim.y * gridDim.z);
+}
+
+__device__ __forceinline__ int GetBlockIdx(void) {
+  return (blockIdx.z * (gridDim.x * gridDim.y) + blockIdx.y * gridDim.x +
+          blockIdx.x);
+}
+
+__device__ __forceinline__ int GetThreadNumEachBlock(void) {
+  return (blockDim.x * blockDim.y * blockDim.z);
+}
+
+__device__ __forceinline__ int GetThreadNum(void) {
+  return GetBlockNum() * GetThreadNumEachBlock();
+}
+
+__device__ __forceinline__ int GetThreadIdxInBlock(void) {
+  return threadIdx.z * (blockDim.x * blockDim.y) +
+      threadIdx.y * blockDim.x + threadIdx.x;
+}
+
+__device__ __forceinline__ int GetThreadIdx(void) {
+  int blockIdx = GetBlockIdx();
+  int threadNumEachBlock = GetThreadNumEachBlock();
+
+  return blockIdx * threadNumEachBlock + GetThreadIdxInBlock();
+}
+
 __device__ __forceinline__ bool isnang(float a) { return isnan(a); }
 __device__ __forceinline__ bool isnang(double a) { return isnan(a); }
 __device__ __forceinline__ float recipg(float a) { return 1.0 / a; }
