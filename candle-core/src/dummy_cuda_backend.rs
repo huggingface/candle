@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Error, Layout, Result, Shape};
+use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
 pub struct CudaDevice;
@@ -29,7 +30,7 @@ impl crate::backend::BackendStorage for CudaStorage {
         fail!()
     }
 
-    fn to_cpu_storage(&self) -> Result<CpuStorage> {
+    fn to_cpu_storage(&self) -> Result<Cow<'_, CpuStorage>> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
