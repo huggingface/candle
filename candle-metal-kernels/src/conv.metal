@@ -486,16 +486,24 @@ kernel void FN_NAME(  \
 } \
 
 IM2COL_OP(float, im2col_f32)
+IM2COL_OP(half, im2col_f16)
 IM2COL_OP(uint8_t, im2col_u8)
 IM2COL_OP(uint32_t, im2col_u32)
+#if defined(__HAVE_BFLOAT__)
+IM2COL_OP(bfloat, im2col_bf16)
+#endif
 
 IM2COL1D_OP(float, im2col1d_f32)
 IM2COL1D_OP(uint8_t, im2col1d_u8)
 IM2COL1D_OP(uint32_t, im2col1d_u32)
 
 UPSAMPLE_NEAREST2D_OP(float, upsample_nearest2d_f32)
+UPSAMPLE_NEAREST2D_OP(half, upsample_nearest2d_f16)
 UPSAMPLE_NEAREST2D_OP(uint8_t, upsample_nearest2d_u8)
 UPSAMPLE_NEAREST2D_OP(uint32_t, upsample_nearest2d_u32)
+#if defined(__HAVE_BFLOAT__)
+UPSAMPLE_NEAREST2D_OP(bfloat, upsample_nearest2d_bf16)
+#endif
 
 MAXPOOL2D_OP(float, max_pool2d_f32)
 MAXPOOL2D_OP(half, max_pool2d_f16)
