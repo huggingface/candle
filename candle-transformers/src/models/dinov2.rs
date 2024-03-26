@@ -52,8 +52,8 @@ impl Module for Attention {
             .transpose(0, 1)? // 20134
             .transpose(2, 3)?; // 20314
         let q = (qkv.i(0)? * self.scale)?;
-        let k = qkv.i(1)?;
-        let v = qkv.i(2)?;
+        let k = qkv.i(1)?.contiguous()?;
+        let v = qkv.i(2)?.contiguous()?;
         let attn = candle_nn::ops::softmax(&q.matmul(&k.t()?)?, D::Minus1)?;
         let attn = attn.matmul(&v)?.transpose(1, 2)?.reshape((b, n, c))?;
         self.proj.forward(&attn)
