@@ -76,7 +76,7 @@ pub struct ConvTranspose1dConfig {
     pub output_padding: usize,
     pub stride: usize,
     pub dilation: usize,
-    // TODO: support groups.
+    pub groups: usize,
 }
 
 impl Default for ConvTranspose1dConfig {
@@ -86,6 +86,7 @@ impl Default for ConvTranspose1dConfig {
             output_padding: 0,
             stride: 1,
             dilation: 1,
+            groups: 1,
         }
     }
 }
@@ -109,6 +110,14 @@ impl ConvTranspose1d {
     pub fn config(&self) -> &ConvTranspose1dConfig {
         &self.config
     }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
 }
 
 impl crate::Module for ConvTranspose1d {
@@ -119,12 +128,13 @@ impl crate::Module for ConvTranspose1d {
             self.config.output_padding,
             self.config.stride,
             self.config.dilation,
+            self.config.groups,
         )?;
         match &self.bias {
             None => Ok(x),
             Some(bias) => {
                 let b = bias.dims1()?;
-                let bias = bias.reshape((1, b, 1, 1))?;
+                let bias = bias.reshape((1, b, 1))?;
                 Ok(x.broadcast_add(&bias)?)
             }
         }
@@ -258,6 +268,14 @@ impl ConvTranspose2d {
     pub fn config(&self) -> &ConvTranspose2dConfig {
         &self.config
     }
+
+    pub fn weight(&self) -> &Tensor {
+        &self.weight
+    }
+
+    pub fn bias(&self) -> Option<&Tensor> {
+        self.bias.as_ref()
+    }
 }
 
 impl crate::Module for ConvTranspose2d {
@@ -302,6 +320,22 @@ pub fn conv1d(
     Ok(Conv1d::new(ws, Some(bs), cfg))
 }
 
+pub fn conv1d_no_bias(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv1dConfig,
+    vb: crate::VarBuilder,
+) -> Result<Conv1d> {
+    let init_ws = crate::init::DEFAULT_KAIMING_NORMAL;
+    let ws = vb.get_with_hints(
+        (out_channels, in_channels / cfg.groups, kernel_size),
+        "weight",
+        init_ws,
+    )?;
+    Ok(Conv1d::new(ws, None, cfg))
+}
+
 pub fn conv_transpose1d(
     in_channels: usize,
     out_channels: usize,
@@ -314,7 +348,11 @@ pub fn conv_transpose1d(
         lo: -bound,
         up: bound,
     };
-    let ws = vb.get_with_hints((in_channels, out_channels, kernel_size), "weight", init)?;
+    let ws = vb.get_with_hints(
+        (in_channels, out_channels / cfg.groups, kernel_size),
+        "weight",
+        init,
+    )?;
     let bs = vb.get_with_hints(out_channels, "bias", init)?;
     Ok(ConvTranspose1d::new(ws, Some(bs), cfg))
 }
@@ -331,7 +369,11 @@ pub fn conv_transpose1d_no_bias(
         lo: -bound,
         up: bound,
     };
-    let ws = vb.get_with_hints((in_channels, out_channels, kernel_size), "weight", init)?;
+    let ws = vb.get_with_hints(
+        (in_channels, out_channels / cfg.groups, kernel_size),
+        "weight",
+        init,
+    )?;
     Ok(ConvTranspose1d::new(ws, None, cfg))
 }
 

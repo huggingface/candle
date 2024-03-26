@@ -19,7 +19,9 @@ METAL_FUNC uint get_strided_index(
 }
 
 template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
+template <typename T> METAL_FUNC T recip(T in){ return T(1.0 / in); }
 template <typename T> METAL_FUNC T neg(T in){ return -in; }
+
 template <typename T> METAL_FUNC T erf(T in){
     float x = (float) in;
     // constants
@@ -56,20 +58,27 @@ template <typename T> METAL_FUNC T gelu(T x) {
     T beta =  (static_cast<T>(M_2_SQRTPI_F * M_SQRT1_2_F) * alpha);
     return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + T(tanh(beta)));
 }
-
-
+template <typename T> METAL_FUNC T relu(T in){
+    if (in < 0) {
+        return 0;
+    }
+    return in;
+}
+template <typename T> METAL_FUNC T silu(T in){
+    return in / (static_cast<T>(1) + exp(-in));
+}
 
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
     constant size_t &dim, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint thread_position_in_grid [[ thread_position_in_grid ]] \
+    uint tid [[ thread_position_in_grid ]] \
 ) { \
-    if (thread_position_in_grid >= dim) { \
+    if (tid >= dim) { \
         return; \
     } \
-    output[thread_position_in_grid] = TYPENAME(FN(float(input[thread_position_in_grid]))); \
+    output[tid] = TYPENAME(FN(float(input[tid]))); \
 }\
 kernel void FN_NAME_STRIDED( \
     constant size_t &dim, \
@@ -78,12 +87,12 @@ kernel void FN_NAME_STRIDED( \
     constant size_t *strides, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint thread_position_in_grid [[ thread_position_in_grid ]] \
+    uint tid [[ thread_position_in_grid ]] \
 ) { \
-    if (thread_position_in_grid >= dim) { \
+    if (tid >= dim) { \
         return; \
     } \
-    output[thread_position_in_grid] = TYPENAME(FN(float(input[get_strided_index(thread_position_in_grid, num_dims, dims, strides)]))); \
+    output[tid] = TYPENAME(FN(float(input[get_strided_index(tid, num_dims, dims, strides)]))); \
 }
 
 #define UNARY_OP(NAME) \
@@ -93,6 +102,30 @@ UNARY(NAME, half, NAME##_f16, NAME##_f16_strided);
 #define BFLOAT_UNARY_OP(NAME) \
 UNARY(NAME, bfloat, NAME##_bf16, NAME##_bf16_strided);
 
+#define COPY2D(FN_NAME, TYPENAME) \
+kernel void FN_NAME( \
+    constant size_t &d1, \
+    constant size_t &d2, \
+    constant size_t &src_s, \
+    constant size_t &dst_s, \
+    device const TYPENAME *input,  \
+    device TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    if (tid >= d1 * d2) { \
+        return; \
+    } \
+    size_t idx1 = tid / d2; \
+    size_t idx2 = tid - idx1 * d2; \
+    size_t src_idx = idx1 * src_s + idx2; \
+    size_t dst_idx = idx1 * dst_s + idx2; \
+    output[dst_idx] = input[src_idx]; \
+}
+
+COPY2D(copy2d_f32, float)
+COPY2D(copy2d_f16, half)
+COPY2D(copy2d_u8, uint8_t)
+COPY2D(copy2d_u32, uint32_t)
 
 UNARY_OP(cos)
 UNARY_OP(sin)
@@ -102,18 +135,27 @@ UNARY_OP(neg)
 UNARY_OP(exp)
 UNARY_OP(log)
 UNARY_OP(gelu)
+UNARY_OP(silu)
+UNARY_OP(abs)
 UNARY_OP(ceil)
 UNARY_OP(floor)
 UNARY_OP(round)
 UNARY_OP(gelu_erf)
 UNARY_OP(erf)
 UNARY_OP(tanh)
+UNARY_OP(recip)
+UNARY_OP(relu)
 UNARY(id, float, copy_f32, copy_f32_strided)
 UNARY(id, half, copy_f16, copy_f16_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
 UNARY(id, uint32_t, copy_u32, copy_u32_strided)
 
-#if __METAL_VERSION__ >= 310
+#if __METAL_VERSION__ >= 220
+UNARY(id, int64_t, copy_i64, copy_i64_strided)
+COPY2D(copy2d_i64, int64_t)
+#endif
+
+#if defined(__HAVE_BFLOAT__)
 BFLOAT_UNARY_OP(cos)
 BFLOAT_UNARY_OP(sin)
 BFLOAT_UNARY_OP(sqr)
@@ -122,12 +164,18 @@ BFLOAT_UNARY_OP(neg)
 BFLOAT_UNARY_OP(exp)
 BFLOAT_UNARY_OP(log)
 BFLOAT_UNARY_OP(gelu)
+BFLOAT_UNARY_OP(silu)
+BFLOAT_UNARY_OP(abs)
 BFLOAT_UNARY_OP(ceil)
 BFLOAT_UNARY_OP(floor)
 BFLOAT_UNARY_OP(round)
 BFLOAT_UNARY_OP(gelu_erf)
 BFLOAT_UNARY_OP(erf)
 BFLOAT_UNARY_OP(tanh)
+BFLOAT_UNARY_OP(recip)
+BFLOAT_UNARY_OP(relu)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
+
+COPY2D(copy2d_bf64, bfloat)
 #endif

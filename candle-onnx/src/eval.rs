@@ -254,6 +254,12 @@ pub fn simple_eval(
                 let output = input0.broadcast_div(input1)?;
                 values.insert(node.output[0].clone(), output);
             }
+            "Pow" => {
+                let input0 = get(&node.input[0])?;
+                let input1 = get(&node.input[1])?;
+                let output = input0.broadcast_pow(input1)?;
+                values.insert(node.output[0].clone(), output);
+            }
             "Equal" => {
                 let input0 = get(&node.input[0])?;
                 let input1 = get(&node.input[1])?;
@@ -758,6 +764,16 @@ pub fn simple_eval(
                     .to_dtype(DType::U32)?
                     .to_vec0::<u32>()?;
                 let output = input.cumsum(axis as usize)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            //  https://github.com/onnx/onnx/blob/main/docs/Operators.md#flatten
+            "Flatten" => {
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(1) as usize;
+                let input = get(&node.input[0])?;
+                let first_part: usize = input.shape().dims().iter().take(axis).product();
+                let end_index = input.shape().dims().iter().product::<usize>();
+                let new_shape = (first_part, end_index / first_part);
+                let output = input.reshape(new_shape)?;
                 values.insert(node.output[0].clone(), output);
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),

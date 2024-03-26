@@ -12,8 +12,8 @@ readme = "README.md"
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
-candle-kernels = { path = "../candle-kernels", version = "0.3.2", optional = true }
-candle-metal-kernels = { path = "../candle-metal-kernels", version = "0.3.2", optional = true }
+candle-kernels = { workspace = true, optional = true }
+candle-metal-kernels = { workspace = true, optional = true }
 metal = { workspace = true, optional = true}
 cudarc = { workspace = true, optional = true }
 gemm = { workspace = true }
@@ -46,6 +46,5 @@ accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = ["dep:metal", "dep:candle-metal-kernels"]
 
 [[bench]]
-name = "matmul"
+name = "bench_main"
 harness = false
-

@@ -61,7 +61,7 @@ impl Model {
 
         let start = Date::now();
         let model: SelectedModel = if quantized {
-            let vb = quantized_blip::VarBuilder::from_gguf_buffer(&weights)?;
+            let vb = quantized_blip::VarBuilder::from_gguf_buffer(&weights, &device)?;
             let model = quantized_blip::BlipForConditionalGeneration::new(&config, vb)?;
             SelectedModel::Q(model)
         } else {

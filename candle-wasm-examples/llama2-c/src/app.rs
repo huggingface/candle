@@ -34,8 +34,8 @@ pub enum Msg {
     Run,
     UpdateStatus(String),
     SetModel(ModelData),
-    WorkerInMsg(WorkerInput),
-    WorkerOutMsg(Result<WorkerOutput, String>),
+    WorkerIn(WorkerInput),
+    WorkerOut(Result<WorkerOutput, String>),
 }
 
 pub struct CurrentDecode {
@@ -75,7 +75,7 @@ impl Component for App {
         let status = "loading weights".to_string();
         let cb = {
             let link = ctx.link().clone();
-            move |e| link.send_message(Self::Message::WorkerOutMsg(e))
+            move |e| link.send_message(Self::Message::WorkerOut(e))
         };
         let worker = Worker::bridge(std::rc::Rc::new(cb));
         Self {
@@ -128,11 +128,11 @@ impl Component for App {
                     let prompt = self.prompt.borrow().clone();
                     console_log!("temp: {}, top_p: {}, prompt: {}", temp, top_p, prompt);
                     ctx.link()
-                        .send_message(Msg::WorkerInMsg(WorkerInput::Run(temp, top_p, prompt)))
+                        .send_message(Msg::WorkerIn(WorkerInput::Run(temp, top_p, prompt)))
                 }
                 true
             }
-            Msg::WorkerOutMsg(output) => {
+            Msg::WorkerOut(output) => {
                 match output {
                     Ok(WorkerOutput::WeightsLoaded) => self.status = "weights loaded!".to_string(),
                     Ok(WorkerOutput::GenerationDone(Err(err))) => {
@@ -165,7 +165,7 @@ impl Component for App {
                 }
                 true
             }
-            Msg::WorkerInMsg(inp) => {
+            Msg::WorkerIn(inp) => {
                 self.worker.send(inp);
                 true
             }

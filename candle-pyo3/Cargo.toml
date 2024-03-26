@@ -15,9 +15,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { path = "../candle-core", version = "0.3.2", package = "candle-core" }
-candle-nn = { path = "../candle-nn", version = "0.3.2" }
-candle-onnx = {path= "../candle-onnx", version = "0.3.2", optional = true}
+candle = { workspace = true }
+candle-nn = { workspace = true }
+candle-onnx = { workspace = true, optional = true }
 half = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 pyo3 = { version = "0.20.0", features = ["extension-module", "abi3-py38"] }

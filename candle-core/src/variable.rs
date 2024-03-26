@@ -107,6 +107,10 @@ impl Var {
         Ok(Self(inner))
     }
 
+    pub fn as_detached_tensor(&self) -> Tensor {
+        self.0.detach()
+    }
+
     pub fn as_tensor(&self) -> &Tensor {
         &self.0
     }

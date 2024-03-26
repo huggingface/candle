@@ -311,7 +311,7 @@ impl MixFormerSequentialForCausalLM {
         let mut blocks = Vec::new();
         for i in 0..cfg.n_layer {
             let block = ParallelBlock::new(cfg, vb.pp(i + 1))?;
-            blocks.push(block)
+            blocks.push(block);
         }
         let head = CausalLMHead::new(cfg, vb.pp(cfg.n_layer + 1))?;
         Ok(Self {
@@ -332,7 +332,7 @@ impl MixFormerSequentialForCausalLM {
             Some(get_mask(seq_len, xs.device())?)
         };
         for block in self.blocks.iter_mut() {
-            xs = block.forward(&xs, mask.as_ref())?
+            xs = block.forward(&xs, mask.as_ref())?;
         }
         xs.narrow(1, seq_len - 1, 1)?.apply(&self.head)?.squeeze(1)
     }

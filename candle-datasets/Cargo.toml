@@ -11,8 +11,8 @@ readme = "README.md"
 
 [dependencies]
 byteorder = { workspace = true }
-candle = { path = "../candle-core", version = "0.3.2", package = "candle-core" }
-candle-nn = { path = "../candle-nn", version = "0.3.2" }
+candle = { workspace = true }
+candle-nn = { workspace = true }
 hf-hub = { workspace = true}
 intel-mkl-src = { workspace = true, optional = true }
 memmap2 = { workspace = true }

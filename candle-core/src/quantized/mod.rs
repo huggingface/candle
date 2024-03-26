@@ -1,21 +1,132 @@
-use crate::{Device, Result, Shape, Tensor};
+use crate::{CpuStorage, Device, Result, Shape, Storage, Tensor};
+use k_quants::*;
+use std::borrow::Cow;
 
 #[cfg(target_feature = "avx")]
 pub mod avx;
+mod dummy_cuda;
+mod dummy_metal;
 pub mod ggml_file;
 pub mod gguf_file;
 pub mod k_quants;
+#[cfg(feature = "metal")]
+pub mod metal;
+#[cfg(not(feature = "metal"))]
+mod metal {
+    pub use super::dummy_metal::*;
+}
+#[cfg(feature = "cuda")]
+pub mod cuda;
+#[cfg(not(feature = "cuda"))]
+mod cuda {
+    pub use super::dummy_cuda::*;
+}
+
 #[cfg(target_feature = "neon")]
 pub mod neon;
 #[cfg(target_feature = "simd128")]
 pub mod simd128;
 pub mod utils;
+use half::f16;
 
 pub use k_quants::GgmlType;
 
 pub struct QTensor {
-    data: Box<dyn QuantizedType>,
+    storage: QStorage,
     shape: Shape,
+}
+
+impl Device {
+    fn qzeros(&self, elem_count: usize, dtype: GgmlDType) -> Result<QStorage> {
+        match self {
+            Device::Cpu => {
+                let storage = dtype.cpu_zeros(elem_count);
+                Ok(QStorage::Cpu(storage))
+            }
+            Device::Metal(metal) => {
+                let storage = metal::QMetalStorage::zeros(metal, elem_count, dtype)?;
+                Ok(QStorage::Metal(storage))
+            }
+            Device::Cuda(cuda) => {
+                let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
+                Ok(QStorage::Cuda(storage))
+            }
+        }
+    }
+}
+
+pub enum QStorage {
+    Cpu(Box<dyn QuantizedType>),
+    Metal(metal::QMetalStorage),
+    Cuda(cuda::QCudaStorage),
+}
+
+impl QStorage {
+    fn block_size(&self) -> usize {
+        match self {
+            QStorage::Cpu(storage) => storage.block_size(),
+            QStorage::Metal(storage) => storage.dtype().block_size(),
+            QStorage::Cuda(storage) => storage.dtype().block_size(),
+        }
+    }
+
+    fn dtype(&self) -> GgmlDType {
+        match self {
+            QStorage::Cpu(storage) => storage.dtype(),
+            QStorage::Metal(storage) => storage.dtype(),
+            QStorage::Cuda(storage) => storage.dtype(),
+        }
+    }
+
+    fn device(&self) -> Device {
+        match self {
+            QStorage::Cpu(_storage) => Device::Cpu,
+            QStorage::Metal(storage) => Device::Metal(storage.device().clone()),
+            QStorage::Cuda(storage) => Device::Cuda(storage.device().clone()),
+        }
+    }
+
+    fn size_in_bytes(&self) -> usize {
+        match self {
+            QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
+            QStorage::Metal(storage) => storage.storage_size_in_bytes(),
+            QStorage::Cuda(storage) => storage.storage_size_in_bytes(),
+        }
+    }
+
+    fn quantize(&mut self, src: &Storage) -> Result<()> {
+        match (self, src) {
+            (QStorage::Cpu(storage), Storage::Cpu(src)) => {
+                storage.from_float(src.as_slice::<f32>()?)?;
+            }
+            (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
+            (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
+            _ => crate::bail!("Invalid dequantize storage locations do not match"),
+        }
+        Ok(())
+    }
+
+    fn dequantize(&self, elem_count: usize) -> Result<Storage> {
+        match self {
+            QStorage::Cpu(storage) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
+            QStorage::Metal(storage) => Ok(Storage::Metal(storage.dequantize(elem_count)?)),
+            QStorage::Cuda(storage) => Ok(Storage::Cuda(storage.dequantize(elem_count)?)),
+        }
+    }
+
+    fn data(&self) -> Result<Cow<[u8]>> {
+        match self {
+            QStorage::Cpu(storage) => {
+                let data_ptr = storage.as_ptr();
+                let size_in_bytes = storage.storage_size_in_bytes();
+                let data = unsafe { std::slice::from_raw_parts(data_ptr, size_in_bytes) };
+                Ok(Cow::from(data))
+            }
+            QStorage::Metal(_) | QStorage::Cuda(_) => {
+                crate::bail!("not implemented");
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -77,6 +188,25 @@ impl GgmlDType {
         }
     }
 
+    /// The block dtype
+    pub fn cpu_zeros(&self, elem_count: usize) -> Box<dyn QuantizedType> {
+        match self {
+            Self::F32 => Box::new(vec![f32::zeros(); elem_count]),
+            Self::F16 => Box::new(vec![f16::zeros(); elem_count]),
+            Self::Q4_0 => Box::new(vec![BlockQ4_0::zeros(); elem_count / BlockQ4_0::BLCK_SIZE]),
+            Self::Q4_1 => Box::new(vec![BlockQ4_1::zeros(); elem_count / BlockQ4_1::BLCK_SIZE]),
+            Self::Q5_0 => Box::new(vec![BlockQ5_0::zeros(); elem_count / BlockQ5_0::BLCK_SIZE]),
+            Self::Q5_1 => Box::new(vec![BlockQ5_1::zeros(); elem_count / BlockQ5_1::BLCK_SIZE]),
+            Self::Q8_0 => Box::new(vec![BlockQ8_0::zeros(); elem_count / BlockQ8_0::BLCK_SIZE]),
+            Self::Q8_1 => Box::new(vec![BlockQ8_1::zeros(); elem_count / BlockQ8_1::BLCK_SIZE]),
+            Self::Q2K => Box::new(vec![BlockQ2K::zeros(); elem_count / BlockQ2K::BLCK_SIZE]),
+            Self::Q3K => Box::new(vec![BlockQ3K::zeros(); elem_count / BlockQ3K::BLCK_SIZE]),
+            Self::Q4K => Box::new(vec![BlockQ4K::zeros(); elem_count / BlockQ4K::BLCK_SIZE]),
+            Self::Q5K => Box::new(vec![BlockQ5K::zeros(); elem_count / BlockQ5K::BLCK_SIZE]),
+            Self::Q6K => Box::new(vec![BlockQ6K::zeros(); elem_count / BlockQ6K::BLCK_SIZE]),
+            Self::Q8K => Box::new(vec![BlockQ8K::zeros(); elem_count / BlockQ8K::BLCK_SIZE]),
+        }
+    }
     /// The type size for blocks in bytes.
     pub fn type_size(&self) -> usize {
         use k_quants::*;
@@ -100,7 +230,7 @@ impl GgmlDType {
     }
 
     /// The block size, i.e. the number of elements stored in each block.
-    pub fn blck_size(&self) -> usize {
+    pub fn block_size(&self) -> usize {
         match self {
             Self::F32 => 1,
             Self::F16 => 1,
@@ -119,9 +249,13 @@ impl GgmlDType {
 pub trait QuantizedType: Send + Sync {
     fn dtype(&self) -> GgmlDType;
     fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()>;
-    fn to_float(&self, ys: &mut [f32]) -> Result<()>;
+    fn dequantize(&self, elem_count: usize) -> Result<CpuStorage>;
     fn storage_size_in_bytes(&self) -> usize;
     fn as_ptr(&self) -> *const u8;
+    fn block_size(&self) -> usize;
+    #[allow(clippy::wrong_self_convention)]
+    fn from_float(&mut self, xs: &[f32]) -> Result<()>;
+    fn size(&self) -> usize;
 }
 
 impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
@@ -129,12 +263,26 @@ impl<T: k_quants::GgmlType + Send + Sync> QuantizedType for Vec<T> {
         k_quants::matmul(mkn, lhs, self.as_slice(), dst)
     }
 
+    fn size(&self) -> usize {
+        self.len() * core::mem::size_of::<T>()
+    }
+
+    fn from_float(&mut self, xs: &[f32]) -> Result<()> {
+        T::from_float(xs, self)
+    }
+
     fn dtype(&self) -> GgmlDType {
         T::DTYPE
     }
 
-    fn to_float(&self, ys: &mut [f32]) -> Result<()> {
-        T::to_float(self.as_slice(), ys)
+    fn block_size(&self) -> usize {
+        T::BLCK_SIZE
+    }
+
+    fn dequantize(&self, elem_count: usize) -> Result<CpuStorage> {
+        let mut ys = vec![0.0f32; elem_count];
+        T::to_float(self.as_slice(), &mut ys)?;
+        Ok(CpuStorage::F32(ys))
     }
 
     fn storage_size_in_bytes(&self) -> usize {
@@ -152,56 +300,53 @@ impl std::fmt::Debug for QTensor {
     }
 }
 
-fn check_shape<T: k_quants::GgmlType>(shape: &Shape) -> Result<()> {
+fn check_shape(shape: &Shape, block_size: usize) -> Result<()> {
     let dims = shape.dims();
     if dims.is_empty() {
         crate::bail!("scalar tensor cannot be quantized {shape:?}")
     }
-    if dims[dims.len() - 1] % T::BLCK_SIZE != 0 {
+    if dims[dims.len() - 1] % block_size != 0 {
         crate::bail!(
             "quantized tensor must have their last dim divisible by block size {shape:?} {}",
-            T::BLCK_SIZE
+            block_size
         )
     }
     Ok(())
 }
 
 impl QTensor {
-    pub fn new<S: Into<Shape>, T: k_quants::GgmlType + Send + Sync + 'static>(
-        data: Vec<T>,
-        shape: S,
-    ) -> Result<Self> {
+    pub fn new<S: Into<Shape>>(storage: QStorage, shape: S) -> Result<Self> {
         let shape = shape.into();
-        check_shape::<T>(&shape)?;
-        Ok(Self {
-            data: Box::new(data),
-            shape,
-        })
+        check_shape(&shape, storage.block_size())?;
+        Ok(Self { storage, shape })
     }
 
-    pub fn quantize<T: k_quants::GgmlType + Send + Sync + 'static>(src: &Tensor) -> Result<Self> {
+    pub fn quantize(src: &Tensor, dtype: GgmlDType) -> Result<Self> {
         let shape = src.shape();
-        check_shape::<T>(shape)?;
-        let src = src
-            .to_dtype(crate::DType::F32)?
-            .flatten_all()?
-            .to_vec1::<f32>()?;
-        if src.len() % T::BLCK_SIZE != 0 {
+        let block_size = dtype.block_size();
+        check_shape(shape, block_size)?;
+        let src = src.to_dtype(crate::DType::F32)?.flatten_all()?;
+        let elem_count = shape.elem_count();
+        if elem_count % block_size != 0 {
             crate::bail!(
                 "tensor size ({shape:?}) is not divisible by block size {}",
-                T::BLCK_SIZE
+                block_size
             )
         }
-        let mut data = vec![T::zeros(); src.len() / T::BLCK_SIZE];
-        T::from_float(&src, &mut data)?;
+        let mut storage = src.device().qzeros(elem_count, dtype)?;
+        storage.quantize(&src.storage())?;
         Ok(Self {
-            data: Box::new(data),
+            storage,
             shape: shape.clone(),
         })
     }
 
     pub fn dtype(&self) -> GgmlDType {
-        self.data.dtype()
+        self.storage.dtype()
+    }
+
+    pub fn device(&self) -> Device {
+        self.storage.device()
     }
 
     pub fn rank(&self) -> usize {
@@ -213,21 +358,19 @@ impl QTensor {
     }
 
     pub fn dequantize(&self, device: &Device) -> Result<Tensor> {
-        let mut f32_data = vec![0f32; self.shape.elem_count()];
-        self.data.to_float(&mut f32_data)?;
-        Tensor::from_vec(f32_data, &self.shape, device)
-    }
-
-    pub fn matmul_t(&self, mkn: (usize, usize, usize), lhs: &[f32], dst: &mut [f32]) -> Result<()> {
-        self.data.matmul_t(mkn, lhs, dst)
+        let storage = self.storage.dequantize(self.shape.elem_count())?;
+        let none = crate::op::BackpropOp::none();
+        let is_variable = false;
+        crate::tensor::from_storage(storage, self.shape.clone(), none, is_variable)
+            .to_device(device)
     }
 
     pub fn storage_size_in_bytes(&self) -> usize {
-        self.data.storage_size_in_bytes()
+        self.storage.size_in_bytes()
     }
 
-    pub fn as_ptr(&self) -> *const u8 {
-        self.data.as_ptr()
+    pub fn data(&self) -> Result<Cow<'_, [u8]>> {
+        self.storage.data()
     }
 }
 
@@ -255,7 +398,7 @@ impl QMatMul {
             _ => DEQUANTIZE_ALL.with(|b| *b),
         };
         let t = if dequantize {
-            let tensor = qtensor.dequantize(&Device::Cpu)?;
+            let tensor = qtensor.dequantize(&qtensor.device())?;
             Self::Tensor(tensor)
         } else {
             Self::QTensor(qtensor)
@@ -294,16 +437,40 @@ impl crate::CustomOp1 for QTensor {
         }
         dst_shape.push(n);
         let dst_shape = Shape::from(dst_shape);
-        let storage = storage.as_slice::<f32>()?;
-        let storage =
-            &storage[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
+        #[allow(clippy::infallible_destructuring_match)]
+        let self_storage = match &self.storage {
+            QStorage::Cpu(storage) => storage,
+            QStorage::Metal(_) | QStorage::Cuda(_) => crate::bail!("Invalid storage"),
+        };
+        let slice = storage.as_slice::<f32>()?;
+        let slice = &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
         let mut dst_storage = vec![0f32; dst_shape.elem_count()];
-        self.matmul_t(
-            (dst_shape.elem_count() / n, k, n),
-            storage,
-            &mut dst_storage,
-        )?;
+        self_storage.matmul_t((dst_shape.elem_count() / n, k, n), slice, &mut dst_storage)?;
         Ok((crate::CpuStorage::F32(dst_storage), dst_shape))
+    }
+
+    fn metal_fwd(
+        &self,
+        storage: &crate::MetalStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::MetalStorage, Shape)> {
+        let self_storage = match &self.storage {
+            QStorage::Metal(metal) => metal,
+            _ => unreachable!("Cannot call metal matmul on non metal QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
+    }
+
+    fn cuda_fwd(
+        &self,
+        storage: &crate::CudaStorage,
+        layout: &crate::Layout,
+    ) -> Result<(crate::CudaStorage, Shape)> {
+        let self_storage = match &self.storage {
+            QStorage::Cuda(cuda) => cuda,
+            _ => unreachable!("Cannot call cuda matmul on non cuda QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
     }
 }
 

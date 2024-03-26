@@ -260,28 +260,144 @@ kernel void NAME(                                                               
     }                                                                             \
 }                                                                                 \
 
+#define RMSNORM(NAME, T)                                                          \
+kernel void NAME(                                                                 \
+    constant size_t &src_numel,                                                   \
+    constant size_t &el_to_sum_per_block,                                         \
+    device const T *src,                                                          \
+    device T *dst,                                                                \
+    device const T *alpha,                                                        \
+    constant float &eps,                                                          \
+                                                                                  \
+    uint id [[ thread_position_in_grid ]],                                        \
+    uint tid [[ thread_index_in_threadgroup ]],                                   \
+    uint dst_id [[ threadgroup_position_in_grid ]],                               \
+    uint block_dim [[ threads_per_threadgroup ]]                                  \
+) {                                                                               \
+    threadgroup float shared_memory[THREADGROUP_SIZE];                            \
+    shared_memory[tid] = 0;                                                       \
+    size_t start_idx = dst_id * el_to_sum_per_block;                              \
+    size_t stop_idx = min(start_idx + el_to_sum_per_block, src_numel);            \
+    size_t idx = start_idx + tid;                                                 \
+                                                                                  \
+                                                                                  \
+    float tmp = 0;                                                                \
+    while (idx < stop_idx) {                                                      \
+        tmp = tmp + float(src[idx]) * float(src[idx]);                            \
+        idx += block_dim;                                                         \
+    }                                                                             \
+    shared_memory[tid] = tmp;                                                     \
+                                                                                  \
+    threadgroup_barrier(mem_flags::mem_threadgroup);                              \
+                                                                                  \
+    for (uint s = block_dim / 2; s > 0; s >>= 1) {                                \
+        if (tid < s) {                                                            \
+            shared_memory[tid] = shared_memory[tid] + shared_memory[tid + s];     \
+        }                                                                         \
+        threadgroup_barrier(mem_flags::mem_threadgroup);                          \
+    }                                                                             \
+                                                                                  \
+    /* wait for shared_memory[0] to be filled */ \
+    threadgroup_barrier(mem_flags::mem_threadgroup);                              \
+                                                                                  \
+    float norm = sqrt(shared_memory[0] / float(el_to_sum_per_block) + eps);       \
+    float inv_norm = 1.0f / norm;                                                 \
+    idx = start_idx + tid;                                                        \
+    while (idx < stop_idx) {                                                      \
+        float val = float(src[idx]) * inv_norm;                                   \
+        if (alpha != nullptr) {                                                   \
+            val *= float(alpha[idx - start_idx]);                                 \
+        }                                                                         \
+        dst[idx] = T(val);                                                        \
+        idx += block_dim;                                                         \
+    }                                                                             \
+}                                                                                 \
+
+#define ROPEI(FN_NAME, FN_NAME_I, TYPENAME) \
+kernel void FN_NAME_I( \
+    constant size_t &bh, \
+    constant size_t &td, \
+    device const TYPENAME *src,  \
+    device const TYPENAME *cos,  \
+    device const TYPENAME *sin,  \
+    device TYPENAME *dst, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    if (2 * tid >= bh * td) { \
+        return; \
+    } \
+    size_t rope_idx = tid % (td / 2); \
+    TYPENAME c = cos[rope_idx]; \
+    TYPENAME s = sin[rope_idx]; \
+    dst[2 * tid] = src[2 * tid] * c - src[2 * tid + 1] * s; \
+    dst[2 * tid + 1] = src[2 * tid] * s + src[2 * tid + 1] * c; \
+}\
+kernel void FN_NAME( \
+    constant size_t &bh, \
+    constant size_t &td, \
+    constant size_t &d, \
+    device const TYPENAME *src,  \
+    device const TYPENAME *cos,  \
+    device const TYPENAME *sin,  \
+    device TYPENAME *dst, \
+    uint idx [[ thread_position_in_grid ]] \
+) { \
+    if (2 * idx >= bh * td) { \
+        return; \
+    } \
+    size_t i_bh = idx / (td / 2); \
+    size_t i_td = idx - (td / 2) * i_bh; \
+    size_t i_t = i_td / (d / 2); \
+    size_t i_d = i_td - (d / 2) * i_t; \
+    size_t i1 = i_bh * td + i_t * d + i_d; \
+    size_t i2 = i1 + d / 2; \
+    size_t i_cs = i_t * (d / 2) + i_d; \
+    TYPENAME c = cos[i_cs]; \
+    TYPENAME s = sin[i_cs]; \
+    dst[i1] = src[i1] * c - src[i2] * s; \
+    dst[i2] = src[i1] * s + src[i2] * c; \
+}\
+
 REDUCE(x + y, fast_sum_f32_strided, float, 0)
 REDUCE(x + y, fast_sum_u32_strided, uint, 0)
 REDUCE(x + y, fast_sum_f16_strided, half, 0)
+REDUCE(x + y, fast_sum_u8_strided, uint8_t, 0)
 REDUCE(x * y, fast_mul_f32_strided, float, 1)
 REDUCE(x * y, fast_mul_u32_strided, uint, 1)
 REDUCE(x * y, fast_mul_f16_strided, half, 1)
 REDUCE(MAX(x, y), fast_max_f32_strided, float, -HUGE_VALF)
 REDUCE(MAX(x, y), fast_max_u32_strided, uint, 0)
 REDUCE(MAX(x, y), fast_max_f16_strided, half, -HUGE_VALH)
+REDUCE(MAX(x, y), fast_max_u8_strided, uint8_t, 0)
 REDUCE(MIN(x, y), fast_min_f32_strided, float, HUGE_VALF)
 REDUCE(MIN(x, y), fast_min_u32_strided, uint, 0xFFFFFFFF)
 REDUCE(MIN(x, y), fast_min_f16_strided, half, HUGE_VALH)
+REDUCE(MIN(x, y), fast_min_u8_strided, uint8_t, 0xFF)
 ARGMIN(fast_argmin_f32_strided, float, HUGE_VALF)
 ARGMIN(fast_argmin_f16_strided, half, HUGE_VALH)
 ARGMIN(fast_argmin_u32_strided, uint, 0xFFFFFFFF)
+ARGMIN(fast_argmin_u8_strided, uint8_t, 0xFF)
 ARGMAX(fast_argmax_f32_strided, float, -HUGE_VALF)
 ARGMAX(fast_argmax_f16_strided, half, -HUGE_VALH)
 ARGMAX(fast_argmax_u32_strided, uint, 0)
+ARGMAX(fast_argmax_u8_strided, uint8_t, 0)
 
 SOFTMAX(softmax_f32, float)
 SOFTMAX(softmax_f16, half)
-#if __METAL_VERSION__ >= 310
+RMSNORM(rmsnorm_f32, float)
+RMSNORM(rmsnorm_f16, half)
+ROPEI(rope_f32, rope_i_f32, float)
+ROPEI(rope_f16, rope_i_f16, half)
+
+#if __METAL_VERSION__ >= 220
+REDUCE(x + y, fast_sum_i64_strided, int64_t, 0)
+REDUCE(MIN(x, y), fast_min_i64_strided, int64_t, INT_MAX)
+REDUCE(MAX(x, y), fast_max_i64_strided, int64_t, INT_MIN)
+ARGMIN(fast_argmin_i64_strided, int64_t, INT_MAX)
+ARGMAX(fast_argmax_i64_strided, int64_t, INT_MIN)
+#endif
+
+#if defined(__HAVE_BFLOAT__)
 REDUCE(x + y, fast_sum_bf16, bfloat, 0)
 REDUCE(x * y, fast_mul_bf16, bfloat, 1)
 REDUCE(MAX(x, y), fast_max_bf16, bfloat, -HUGE_VALBF)
@@ -289,4 +405,6 @@ REDUCE(MIN(x, y), fast_min_bf16, bfloat, HUGE_VALBF)
 ARGMIN(fast_argmin_bf16, bfloat, HUGE_VALBF)
 ARGMAX(fast_argmax_bf16, bfloat, -HUGE_VALBF)
 SOFTMAX(softmax_bf16, bfloat)
+RMSNORM(rmsnorm_bf16, bfloat)
+ROPEI(rope_bf16, rope_i_bf16, bfloat)
 #endif

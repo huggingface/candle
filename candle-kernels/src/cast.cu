@@ -11,7 +11,7 @@ __device__ void cast_(
 ) {
     const size_t *dims = info;
     const size_t *strides = info + num_dims;
-    if (is_contiguous(num_dims, dims, strides)) {
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
             out[i] = inp[i];
         }
@@ -34,7 +34,7 @@ __device__ void cast_through(
 ) {
     const size_t *dims = info;
     const size_t *strides = info + num_dims;
-    if (is_contiguous(num_dims, dims, strides)) {
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) {
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) {
             out[i] = static_cast<T>(static_cast<I>(inp[i]));
         }
@@ -83,6 +83,18 @@ CAST_OP(double,   __nv_bfloat16, cast_f64_bf16)
 CAST_THROUGH_OP(__nv_bfloat16, uint8_t, float, cast_bf16_u8)
 CAST_THROUGH_OP(__nv_bfloat16, __half,   float, cast_bf16_f16)
 CAST_THROUGH_OP(__half,   __nv_bfloat16, float, cast_f16_bf16)
+#else
+#include <cuda.h>
+#if CUDA_VERSION >= 11000
+CAST_OP(__nv_bfloat16, float,    cast_bf16_f32)
+CAST_OP(float,    __nv_bfloat16, cast_f32_bf16)
+CAST_THROUGH_OP(__nv_bfloat16, uint8_t, float, cast_bf16_u8)
+CAST_THROUGH_OP(__nv_bfloat16, __half,  float, cast_bf16_f16)
+CAST_THROUGH_OP(__nv_bfloat16, double,  float, cast_bf16_f64)
+CAST_THROUGH_OP(__half,   __nv_bfloat16, float, cast_f16_bf16)
+CAST_THROUGH_OP(double,   __nv_bfloat16, float, cast_f64_bf16)
+CAST_THROUGH_OP(uint8_t,   __nv_bfloat16, float, cast_u8_bf16)
+#endif
 #endif
 
 #if __CUDA_ARCH__ >= 530

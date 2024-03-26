@@ -222,7 +222,10 @@ impl Benchmark for QMatMul {
     type RunResult = Tensor;
     fn preprocess() -> Result<Self::PreProcessData> {
         let zeros = vec![candle::quantized::k_quants::BlockQ4_0::zeros(); 4096 * 11008 / 32];
-        let mm = candle::quantized::QTensor::new(zeros, (4096, 11008))?;
+        let mm = candle::quantized::QTensor::new(
+            candle::quantized::QStorage::Cpu(Box::new(zeros)),
+            (4096, 11008),
+        )?;
         let mm = candle::quantized::QMatMul::from_qtensor(mm)?;
         let arg = Tensor::randn(0f32, 1., (128, 11008), &Device::Cpu)?;
         Ok((mm, arg))
@@ -233,6 +236,23 @@ impl Benchmark for QMatMul {
     }
 
     const ITERS: usize = 100;
+}
+
+struct Cat;
+impl Benchmark for Cat {
+    type PreProcessData = (Tensor, Tensor);
+    type RunResult = Tensor;
+    fn preprocess() -> Result<Self::PreProcessData> {
+        let lhs = Tensor::randn(0f32, 1., (1, 32, 2000, 128), &Device::Cpu)?;
+        let rhs = Tensor::randn(0f32, 1., (1, 32, 1, 128), &Device::Cpu)?;
+        Ok((lhs, rhs))
+    }
+
+    fn run_one(d: &Self::PreProcessData) -> Result<Self::RunResult> {
+        Tensor::cat(&[&d.0, &d.1], 2)
+    }
+
+    const ITERS: usize = 1000;
 }
 
 struct Softmax;
@@ -292,6 +312,7 @@ enum Task {
     Qmatmul,
     Softmax,
     SoftmaxLastDim,
+    Cat,
 }
 
 #[derive(Parser, Debug)]
@@ -316,6 +337,7 @@ fn main() -> Result<()> {
         Task::Softmax => run::<Softmax>(args.iters)?,
         Task::SoftmaxLastDim => run::<SoftmaxLastDim>(args.iters)?,
         Task::Qmatmul => run::<QMatMul>(args.iters)?,
+        Task::Cat => run::<Cat>(args.iters)?,
     }
     Ok(())
 }

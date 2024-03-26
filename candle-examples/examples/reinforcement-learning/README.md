@@ -8,9 +8,16 @@ Python package with:
 pip install "gymnasium[accept-rom-license]"
 ```
 
-In order to run the example, use the following command. Note the additional
+In order to run the examples, use the following commands. Note the additional
 `--package` flag to ensure that there is no conflict with the `candle-pyo3`
 crate.
+
+For the Policy Gradient example:
 ```bash
-cargo run --example reinforcement-learning --features=pyo3 --package candle-examples
+cargo run --example reinforcement-learning --features=pyo3 --package candle-examples -- pg
+```
+
+For the Deep Deterministic Policy Gradient example:
+```bash
+cargo run --example reinforcement-learning --features=pyo3 --package candle-examples -- ddpg
 ```

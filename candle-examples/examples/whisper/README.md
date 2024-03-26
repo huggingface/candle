@@ -34,6 +34,7 @@ from the hub.
 - `--timestamps`: enable the timestamp mode where some timestamps are reported
   for each recognized audio extracts.
 - `--model`: the model to be used. Models that do not end with `-en` are
-  multilingual models, other ones are English only models. The supported models
-  are `tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`, `medium`,
-  `medium.en`, `large`, and `large-v2`.
+  multilingual models, other ones are English only models. The supported OpenAI 
+  Whisper models are `tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`,
+  `medium`, `medium.en`, `large`, `large-v2` and `large-v3`. The supported 
+  Distil-Whisper models are `distil-medium.en`, `distil-large-v2` and `distil-large-v3`.

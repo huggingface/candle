@@ -9,9 +9,9 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-candle = { path = "../../candle-core", version = "0.3.2", package = "candle-core" }
-candle-nn = { path = "../../candle-nn", version = "0.3.2" }
-candle-transformers = { path = "../../candle-transformers", version = "0.3.2" }
+candle = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
 num-traits = { workspace = true }
 tokenizers = { workspace = true, features = ["unstable_wasm"] }
 
@@ -27,7 +27,7 @@ safetensors = { workspace = true }
 # Wasm specific crates.
 console_error_panic_hook = "0.1.7"
 getrandom = { version = "0.2", features = ["js"] }
-gloo = "0.8"
+gloo = "0.11"
 js-sys = "0.3.64"
 wasm-bindgen = "0.2.87"
 serde-wasm-bindgen = "0.6.0"

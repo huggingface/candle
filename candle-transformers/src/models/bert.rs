@@ -1,6 +1,6 @@
 use super::with_tracing::{layer_norm, linear, LayerNorm, Linear};
 use candle::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, VarBuilder};
+use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use serde::Deserialize;
 
 pub const DTYPE: DType = DType::F32;
@@ -110,11 +110,6 @@ impl Config {
             model_type: Some("bert".to_string()),
         }
     }
-}
-
-fn embedding(vocab_size: usize, hidden_size: usize, vb: VarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get((vocab_size, hidden_size), "weight")?;
-    Ok(Embedding::new(embeddings, hidden_size))
 }
 
 struct Dropout {

@@ -204,12 +204,10 @@ class Module:
     T_destination = TypeVar("T_destination", bound=Dict[str, Any])
 
     @overload
-    def state_dict(self, *, destination: T_destination, prefix: str = ..., keep_vars: bool = ...) -> T_destination:
-        ...
+    def state_dict(self, *, destination: T_destination, prefix: str = ..., keep_vars: bool = ...) -> T_destination: ...
 
     @overload
-    def state_dict(self, *, prefix: str = ..., keep_vars: bool = ...) -> Dict[str, Any]:
-        ...
+    def state_dict(self, *, prefix: str = ..., keep_vars: bool = ...) -> Dict[str, Any]: ...
 
     def state_dict(self, *args, destination=None, prefix="", keep_vars=False):
         r"""Returns a dictionary containing references to the whole state of the module.
@@ -586,12 +584,10 @@ class Module:
         self: T,
         device: str = ...,
         dtype: Optional[Union[DType, str]] = ...,
-    ) -> T:
-        ...
+    ) -> T: ...
 
     @overload
-    def to(self: T, dtype: Union[DType, str]) -> T:
-        ...
+    def to(self: T, dtype: Union[DType, str]) -> T: ...
 
     def to(self, *args, **kwargs):
         r"""Moves and/or casts the parameters and buffers.

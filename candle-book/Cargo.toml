@@ -11,11 +11,11 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { path = "../candle-core", version = "0.3.2", package = "candle-core" }
-candle-datasets = { path = "../candle-datasets", version = "0.3.2" }
-candle-nn = { path = "../candle-nn", version = "0.3.2" }
-candle-transformers = { path = "../candle-transformers", version = "0.3.2" }
-candle-flash-attn = { path = "../candle-flash-attn", version = "0.3.2", optional = true }
+candle = { workspace = true }
+candle-datasets = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+candle-flash-attn = { workspace = true, optional = true }
 safetensors = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

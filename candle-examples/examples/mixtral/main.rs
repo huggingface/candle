@@ -143,7 +143,7 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 100)]
+    #[arg(long, short = 'n', default_value_t = 10000)]
     sample_len: usize,
 
     #[arg(long, default_value = "mistralai/Mixtral-8x7B-v0.1")]
@@ -209,29 +209,7 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => {
-            vec![
-                repo.get("model-00001-of-00019.safetensors")?,
-                repo.get("model-00002-of-00019.safetensors")?,
-                repo.get("model-00003-of-00019.safetensors")?,
-                repo.get("model-00004-of-00019.safetensors")?,
-                repo.get("model-00005-of-00019.safetensors")?,
-                repo.get("model-00006-of-00019.safetensors")?,
-                repo.get("model-00007-of-00019.safetensors")?,
-                repo.get("model-00008-of-00019.safetensors")?,
-                repo.get("model-00009-of-00019.safetensors")?,
-                repo.get("model-00010-of-00019.safetensors")?,
-                repo.get("model-00011-of-00019.safetensors")?,
-                repo.get("model-00012-of-00019.safetensors")?,
-                repo.get("model-00013-of-00019.safetensors")?,
-                repo.get("model-00014-of-00019.safetensors")?,
-                repo.get("model-00015-of-00019.safetensors")?,
-                repo.get("model-00016-of-00019.safetensors")?,
-                repo.get("model-00017-of-00019.safetensors")?,
-                repo.get("model-00018-of-00019.safetensors")?,
-                repo.get("model-00019-of-00019.safetensors")?,
-            ]
-        }
+        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;

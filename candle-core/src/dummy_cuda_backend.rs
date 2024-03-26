@@ -154,6 +154,19 @@ impl crate::backend::BackendStorage for CudaStorage {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    fn copy2d(
+        &self,
+        _: &mut Self,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+        _: usize,
+    ) -> Result<()> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn avg_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self> {
         Err(Error::NotCompiledWithCudaSupport)
     }
@@ -197,7 +210,15 @@ impl crate::backend::BackendDevice for CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

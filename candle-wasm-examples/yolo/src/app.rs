@@ -33,8 +33,8 @@ pub enum Msg {
     Run,
     UpdateStatus(String),
     SetModel(ModelData),
-    WorkerInMsg(WorkerInput),
-    WorkerOutMsg(Result<WorkerOutput, String>),
+    WorkerIn(WorkerInput),
+    WorkerOut(Result<WorkerOutput, String>),
 }
 
 pub struct CurrentDecode {
@@ -117,7 +117,7 @@ impl Component for App {
         let status = "loading weights".to_string();
         let cb = {
             let link = ctx.link().clone();
-            move |e| link.send_message(Self::Message::WorkerOutMsg(e))
+            move |e| link.send_message(Self::Message::WorkerOut(e))
         };
         let worker = Worker::bridge(std::rc::Rc::new(cb));
         Self {
@@ -166,7 +166,7 @@ impl Component for App {
                                 let status = format!("{err:?}");
                                 Msg::UpdateStatus(status)
                             }
-                            Ok(image_data) => Msg::WorkerInMsg(WorkerInput::RunData(RunData {
+                            Ok(image_data) => Msg::WorkerIn(WorkerInput::RunData(RunData {
                                 image_data,
                                 conf_threshold: 0.5,
                                 iou_threshold: 0.5,
@@ -176,7 +176,7 @@ impl Component for App {
                 }
                 true
             }
-            Msg::WorkerOutMsg(output) => {
+            Msg::WorkerOut(output) => {
                 match output {
                     Ok(WorkerOutput::WeightsLoaded) => self.status = "weights loaded!".to_string(),
                     Ok(WorkerOutput::ProcessingDone(Err(err))) => {
@@ -218,7 +218,7 @@ impl Component for App {
                 }
                 true
             }
-            Msg::WorkerInMsg(inp) => {
+            Msg::WorkerIn(inp) => {
                 self.worker.send(inp);
                 true
             }

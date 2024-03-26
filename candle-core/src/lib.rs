@@ -45,6 +45,7 @@ pub mod cpu_backend;
 pub mod cuda_backend;
 #[cfg(feature = "cudnn")]
 pub mod cudnn;
+mod custom_op;
 mod device;
 pub mod display;
 mod dtype;
@@ -67,17 +68,18 @@ pub mod shape;
 mod storage;
 mod strided_index;
 mod tensor;
+mod tensor_cat;
 pub mod test_utils;
 pub mod utils;
 mod variable;
 
 pub use cpu_backend::CpuStorage;
-pub use device::{Device, DeviceLocation};
+pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
+pub use device::{Device, DeviceLocation, NdArray};
 pub use dtype::{DType, FloatDType, IntDType, WithDType};
 pub use error::{Error, Result};
 pub use indexer::IndexOp;
 pub use layout::Layout;
-pub use op::{CustomOp1, CustomOp2, CustomOp3};
 pub use shape::{Shape, D};
 pub use storage::Storage;
 pub use strided_index::{StridedBlocks, StridedIndex};
@@ -126,6 +128,15 @@ pub trait Module {
 impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         self(xs)
+    }
+}
+
+impl<M: Module> Module for Option<&M> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            None => Ok(xs.clone()),
+            Some(m) => m.forward(xs),
+        }
     }
 }
 

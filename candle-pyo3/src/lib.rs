@@ -448,6 +448,12 @@ impl PyTensor {
         Ok(PyTensor(self.0.index_select(rhs, dim).map_err(wrap_err)?))
     }
 
+    /// Gathers values along an axis specified by dim.
+    fn gather(&self, index: &Self, dim: i64) -> PyResult<Self> {
+        let dim = actual_dim(self, dim).map_err(wrap_err)?;
+        Ok(PyTensor(self.0.gather(index, dim).map_err(wrap_err)?))
+    }
+
     #[pyo3(text_signature = "(self, rhs:Tensor)")]
     /// Performs a matrix multiplication between the two tensors.
     /// &RETURNS&: Tensor
@@ -938,8 +944,8 @@ impl PyTensor {
 
     /// Detach the tensor from the computation graph.
     /// &RETURNS&: Tensor
-    fn detach(&self) -> PyResult<Self> {
-        Ok(PyTensor(self.0.detach().map_err(wrap_err)?))
+    fn detach(&self) -> Self {
+        PyTensor(self.0.detach())
     }
 
     /// Returns a copy of the tensor.
@@ -1074,20 +1080,20 @@ impl PyTensor {
     fn quantize(&self, quantized_dtype: &str) -> PyResult<PyQTensor> {
         use ::candle::quantized;
         let res = match quantized_dtype.to_lowercase().as_str() {
-            "q2k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ2K>(self),
-            "q3k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ3K>(self),
-            "q4_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4_0>(self),
-            "q4_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4_1>(self),
-            "q4k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ4K>(self),
-            "q5_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5_0>(self),
-            "q5_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5_1>(self),
-            "q5k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ5K>(self),
-            "q6k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ6K>(self),
-            "q8_0" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8_0>(self),
-            "q8_1" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8_1>(self),
-            "q8k" => quantized::QTensor::quantize::<quantized::k_quants::BlockQ8K>(self),
-            "f16" => quantized::QTensor::quantize::<f16>(self),
-            "f32" => quantized::QTensor::quantize::<f32>(self),
+            "q2k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q2K),
+            "q3k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q3K),
+            "q4_0" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q4_0),
+            "q4_1" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q4_1),
+            "q4k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q4K),
+            "q5_0" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q5_0),
+            "q5_1" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q5_1),
+            "q5k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q5K),
+            "q6k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q6K),
+            "q8_0" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8_0),
+            "q8_1" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8_1),
+            "q8k" => quantized::QTensor::quantize(self, quantized::GgmlDType::Q8K),
+            "f16" => quantized::QTensor::quantize(self, quantized::GgmlDType::F16),
+            "f32" => quantized::QTensor::quantize(self, quantized::GgmlDType::F32),
             dt => {
                 return Err(PyErr::new::<PyValueError, _>(format!(
                     "unknown quantized-dtype {dt}"
@@ -1278,13 +1284,19 @@ fn save_safetensors(
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike])")]
+#[pyo3(text_signature = "(path:Union[str,PathLike], device: Optional[Device] = None)")]
 /// Load a GGML file. Returns a tuple of three objects: a dictionary mapping tensor names to tensors,
 /// a dictionary mapping hyperparameter names to hyperparameter values, and a vocabulary.
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any], List[str]]
-fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObject)> {
+fn load_ggml(
+    path: &str,
+    device: Option<PyDevice>,
+    py: Python<'_>,
+) -> PyResult<(PyObject, PyObject, PyObject)> {
     let mut file = std::fs::File::open(path)?;
-    let ggml = ::candle::quantized::ggml_file::Content::read(&mut file).map_err(wrap_err)?;
+    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
+    let ggml =
+        ::candle::quantized::ggml_file::Content::read(&mut file, &device).map_err(wrap_err)?;
     let tensors = ggml
         .tensors
         .into_iter()
@@ -1313,11 +1325,16 @@ fn load_ggml(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject, PyObje
 }
 
 #[pyfunction]
-#[pyo3(text_signature = "(path:Union[str,PathLike])")]
+#[pyo3(text_signature = "(path:Union[str,PathLike], device: Optional[Device] = None)")]
 /// Loads a GGUF file. Returns a tuple of two dictionaries: the first maps tensor names to tensors,
 /// and the second maps metadata keys to metadata values.
 /// &RETURNS&: Tuple[Dict[str,QTensor], Dict[str,Any]]
-fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+fn load_gguf(
+    path: &str,
+    device: Option<PyDevice>,
+    py: Python<'_>,
+) -> PyResult<(PyObject, PyObject)> {
+    let device = device.unwrap_or(PyDevice::Cpu).as_device()?;
     use ::candle::quantized::gguf_file;
     fn gguf_value_to_pyobject(v: &gguf_file::Value, py: Python<'_>) -> PyResult<PyObject> {
         let v: PyObject = match v {
@@ -1349,7 +1366,7 @@ fn load_gguf(path: &str, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
         .tensor_infos
         .keys()
         .map(|key| {
-            let qtensor = gguf.tensor(&mut file, key)?;
+            let qtensor = gguf.tensor(&mut file, key, &device)?;
             Ok((key, PyQTensor(Arc::new(qtensor)).into_py(py)))
         })
         .collect::<::candle::Result<Vec<_>>>()
