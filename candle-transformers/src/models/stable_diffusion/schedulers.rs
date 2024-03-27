@@ -5,7 +5,7 @@
 //! inference speed and quality.
 use candle::{Result, Tensor};
 
-pub trait SchedulerConfig: std::fmt::Debug {
+pub trait SchedulerConfig: std::fmt::Debug + Send {
     fn build(&self, inference_steps: usize) -> Result<Box<dyn Scheduler>>;
 }
 
