@@ -14,7 +14,7 @@
 //!
 //! ## Features
 //!
-//! - Simple syntax (looks and like PyTorch)
+//! - Simple syntax (looks and feels like PyTorch)
 //! - CPU and Cuda backends (and M1 support)
 //! - Enable serverless (CPU) small and fast deployments
 //! - Model training
