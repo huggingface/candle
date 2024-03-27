@@ -453,6 +453,11 @@ pub struct BertModel {
 
 impl BertModel {
     pub fn load(vb: VarBuilder, config: &Config) -> Result<Self> {
+        let vb = vb
+            .contains_tensor("bert")
+            .then(|| vb.pp("bert"))
+            .unwrap_or(vb);
+
         let (embeddings, encoder) = match (
             BertEmbeddings::load(vb.pp("embeddings"), config),
             BertEncoder::load(vb.pp("encoder"), config),

@@ -28,7 +28,7 @@
 //! ```
 //!
 //! [`Layer Normalization`]: https://arxiv.org/abs/1607.06450
-use candle::{DType, Result, Tensor, D};
+use candle::{DType, Error, Result, Tensor, D};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerNormConfig {
@@ -136,12 +136,28 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     vb: crate::VarBuilder,
 ) -> Result<LayerNorm> {
     let config = config.into();
-    let weight = vb.get_with_hints(size, "weight", crate::Init::Const(1.))?;
+
+    // Convert old format to new format if needed from a PyTorch state_dict
+    // Safetensors not always in new weight/bias format
+    // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_utils.py#L575
+    let weight_tensor_name = ["weight", "gamma"]
+        .iter()
+        .find(|&name| vb.contains_tensor(name))
+        .ok_or_else(|| Error::Msg("Failed to find weight tensor".into()))?;
+
+    let weight = vb.get_with_hints(size, weight_tensor_name, crate::Init::Const(1.))?;
+
+    let bias_tensor_name = ["bias", "beta"]
+        .iter()
+        .find(|&name| vb.contains_tensor(name))
+        .ok_or_else(|| Error::Msg("Failed to find weight tensor".into()))?;
+
     let bias = if config.affine {
-        Some(vb.get_with_hints(size, "bias", crate::Init::Const(0.))?)
+        Some(vb.get_with_hints(size, bias_tensor_name, crate::Init::Const(0.))?)
     } else {
         None
     };
+
     Ok(LayerNorm {
         weight,
         bias,
