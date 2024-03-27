@@ -187,6 +187,12 @@ kernel void NAME( \
 }
 
 
+INDEX_OP(is_i64_f32, int64_t, float)
+INDEX_OP(is_i64_f16, int64_t, half)
+#if defined(__HAVE_BFLOAT__)
+INDEX_OP(is_i64_bf16, int64_t, bfloat)
+#endif
+
 INDEX_OP(is_u32_f32, uint32_t, float)
 INDEX_OP(is_u32_f16, uint32_t, half)
 #if defined(__HAVE_BFLOAT__)
