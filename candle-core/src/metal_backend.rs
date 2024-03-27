@@ -1391,6 +1391,10 @@ impl BackendStorage for MetalStorage {
             (DType::U32, DType::F16) => "is_u32_f16",
             (DType::U32, DType::BF16) => "is_u32_bf16",
 
+            (DType::I64, DType::F32) => "is_i64_f32",
+            (DType::I64, DType::F16) => "is_i64_f16",
+            (DType::I64, DType::BF16) => "is_i64_bf16",
+
             (left, right) => {
                 crate::bail!("Metal contiguous index_select {left:?} {right:?} not implemented")
             }
