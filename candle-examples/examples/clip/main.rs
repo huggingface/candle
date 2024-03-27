@@ -22,9 +22,9 @@ struct Args {
     #[arg(long)]
     tokenizer: Option<String>,
 
-    #[arg(long)]
-    image: String,
-
+    #[arg(long, use_value_delimiter = true)]
+    images: Option<Vec<String>>,
+    
     #[arg(long)]
     cpu: bool,
 
@@ -47,12 +47,30 @@ fn load_image<T: AsRef<std::path::Path>>(path: T, image_size: usize) -> anyhow::
     let img = Tensor::from_vec(img, (height, width, 3), &Device::Cpu)?
         .permute((2, 0, 1))?
         .to_dtype(DType::F32)?
-        .affine(2. / 255., -1.)?
-        .unsqueeze(0)?;
+        .affine(2. / 255., -1.)?;
+    // .unsqueeze(0)?;
     Ok(img)
 }
 
+fn load_images<T: AsRef<std::path::Path>>(
+    paths: &Vec<T>,
+    image_size: usize,
+) -> anyhow::Result<Tensor> {
+    let mut images = vec![];
+
+    for path in paths {
+        let tensor = load_image(path, image_size)?;
+        images.push(tensor);
+    }
+
+    let images = Tensor::stack(&images, 0)?;
+
+    Ok(images)
+}
+
 pub fn main() -> anyhow::Result<()> {
+    // std::env::set_var("RUST_BACKTRACE", "full");
+
     let args = Args::parse();
 
     tracing_subscriber::fmt::init();
@@ -78,7 +96,16 @@ pub fn main() -> anyhow::Result<()> {
 
     let device = candle_examples::device(args.cpu)?;
 
-    let image = load_image(args.image, config.image_size)?.to_device(&device)?;
+    let vec_imgs = match args.images {
+        Some(imgs) => imgs,
+        None => vec![
+            "candle-examples/examples/clip/assets/cats.jpg".to_string(),
+            "candle-examples/examples/clip/assets/ferris.jpeg".to_string(),
+        ],
+    };
+
+    // let image = load_image(args.image, config.image_size)?.to_device(&device)?;
+    let images = load_images(&vec_imgs, config.image_size)?.to_device(&device)?;
 
     let vb =
         unsafe { VarBuilder::from_mmaped_safetensors(&[model_file.clone()], DType::F32, &device)? };
@@ -87,7 +114,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let (input_ids, vec_seq) = tokenize_sequences(args.sequences, &tokenizer, &device)?;
 
-    let (_logits_per_text, logits_per_image) = model.forward(&image, &input_ids)?;
+    let (_logits_per_text, logits_per_image) = model.forward(&images, &input_ids)?;
 
     let softmax_image = softmax(&logits_per_image, 1)?;
 
@@ -100,8 +127,17 @@ pub fn main() -> anyhow::Result<()> {
         .map(|v| v * 100.0)
         .collect::<Vec<f32>>();
 
-    for (i, seq) in vec_seq.iter().enumerate() {
-        info!("{}: {:?} {:?}", i, probability_vec[i], seq);
+    let probability_per_image = probability_vec.len() / vec_imgs.len();
+
+    for (i, img) in vec_imgs.iter().enumerate() {
+        let start = i * probability_per_image;
+        let end = start + probability_per_image;
+        let prob = &probability_vec[start..end];
+        info!("\n\nResults for image: {}\n", img);
+
+        for (i, p) in prob.iter().enumerate() {
+            info!("Probability: {:.3}% Text: {} ", p, vec_seq[i]);
+        }
     }
 
     Ok(())
@@ -134,15 +170,14 @@ pub fn tokenize_sequences(
         .get("<|endoftext|>")
         .ok_or(E::msg("No pad token"))?;
 
-    let vec_seq = if let Some(sequences) = sequences {
-        sequences
-    } else {
-        vec![
+    let vec_seq = match sequences {
+        Some(seq) => seq,
+        None => vec![
             "a painting of birds".to_string(),
             "a photo of two cats".to_string(),
             "a mechanical ferris".to_string(),
             "a ferris".to_string(),
-        ]
+        ],
     };
 
     let mut tokens = vec![];

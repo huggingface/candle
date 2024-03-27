@@ -6,7 +6,7 @@
 //! https://github.com/openai/CLIP
 //! https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip
 
-use candle::{Result, Shape, Tensor, D};
+use candle::{IndexOp, Result, Shape, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
 use nn::Conv2dConfig;
@@ -116,12 +116,9 @@ impl Module for ClipVisionEmbeddings {
 
         let embeddings = Tensor::cat(&[class_embeds, patch_embeds], 1)?;
 
-        let position_embedding = self
-            .position_embedding
-            .forward(&self.position_ids)?
-            .unsqueeze(0)?;
+        let position_embedding = self.position_embedding.forward(&self.position_ids)?;
 
-        let embeddings = embeddings.add(&position_embedding)?;
+        let embeddings = embeddings.broadcast_add(&position_embedding)?;
 
         Ok(embeddings)
     }
@@ -163,9 +160,9 @@ impl Module for ClipVisionTransformer {
 
         let encoder_outputs = self.encoder.forward(&hidden_states, None)?;
 
-        // TODO: check the right implementation based on pooled_output = last_hidden_state[:, 0, :]
         // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L787
-        let pooled_output = encoder_outputs.narrow(1, 0, 1)?.squeeze(0)?;
+        // pooled_output = encoder_outputs[:, 0, :]
+        let pooled_output = encoder_outputs.i((.., 0, ..))?;
 
         let output = self.final_layer_norm.forward(&pooled_output)?;
 

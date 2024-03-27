@@ -5,13 +5,13 @@
 //!
 //! https://github.com/openai/CLIP
 //! https://github.com/huggingface/transformers/tree/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip
-
 use self::{
     text_model::{Activation, ClipTextTransformer},
     vision_model::ClipVisionTransformer,
 };
 use candle::{Result, Tensor, D};
 use candle_nn::Module;
+
 use tracing::warn;
 
 pub mod text_model;
