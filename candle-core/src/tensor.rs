@@ -2007,6 +2007,16 @@ impl Tensor {
         }
     }
 
+    /// Returns a tensor that is in row major order. This always makes a copy.
+    pub fn force_contiguous(&self) -> Result<Tensor> {
+        let shape = self.shape();
+        let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
+        self.storage()
+            .copy_strided_src(&mut storage, 0, self.layout())?;
+        let op = BackpropOp::new1(self, Op::Copy);
+        Ok(from_storage(storage, shape.clone(), op, false))
+    }
+
     /// Create a variable based on the values currently stored in a tensor. The storage is always
     /// copied.
     pub(crate) fn make_var(&self) -> Result<Tensor> {
