@@ -2,7 +2,7 @@
 /// A fast implementation of mamba for inference only.
 /// This is based on: https://github.com/LaurentMazare/mamba.rs
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
-use candle::{quantized::ggml_file::Vocab, DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{RmsNorm, VarBuilder};
 
 const D_CONV: usize = 4;
@@ -10,10 +10,10 @@ const D_STATE: usize = 16;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
-    d_model: usize,
-    n_layer: usize,
-    vocab_size: usize,
-    pad_vocab_size_multiple: usize,
+    pub d_model: usize,
+    pub n_layer: usize,
+    pub vocab_size: usize,
+    pub pad_vocab_size_multiple: usize,
 }
 
 impl Config {
@@ -28,17 +28,6 @@ impl Config {
 
     fn d_inner(&self) -> usize {
         self.d_model * 2
-    }
-}
-
-impl Config {
-    pub fn config_2_8b() -> Self {
-        Self {
-            d_model: 768,
-            n_layer: 32,
-            vocab_size: 50_280,
-            pad_vocab_size_multiple: 1,
-        }
     }
 }
 
