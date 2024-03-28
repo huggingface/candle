@@ -18,6 +18,10 @@ Various model sizes are available via the `--model` argument, including the MoE
 variant.
 
 ```bash
-$ cargo run --example qwen --release  -- --prompt "Hello there " --model moe-a2.7b
+$ cargo run --example qwen --release  -- --prompt "Hello there " --model moe-a2.7b --prompt 'def print_prime(n: int): '
+def print_prime(n: int):  # n is the number of primes to be printed
+    for i in range(2, n + 1):
+        if all(i % j != 0 for j in range(2, i)):
+            print(i)
 ```
 
