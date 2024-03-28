@@ -5,6 +5,7 @@ use crate::{CpuStorage, DType, Layout, Result, Shape};
 use candle_metal_kernels::CallConvTranspose2dCfg;
 use candle_metal_kernels::Kernels;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
+use rand::RngCore;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
@@ -1890,8 +1891,10 @@ impl BackendDevice for MetalDevice {
             Ok(val) => val.parse()?,
             _ => 50,
         };
+        let mut seed_bytes = [0u8; 4];
+        rand::thread_rng().fill_bytes(&mut seed_bytes);
         let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
-            [299792458].as_ptr() as *const c_void,
+            seed_bytes.as_ptr() as *const c_void,
             4,
             MTLResourceOptions::StorageModeManaged,
         )));
