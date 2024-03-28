@@ -1,10 +1,35 @@
 use crate::models::phi::{Config as PhiConfig, Model as PhiModel};
 use candle::{IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm, linear_b, Linear, Module, VarBuilder};
+use candle_nn::{layer_norm, linear_b, Activation, Linear, Module, VarBuilder};
 
 pub struct Config {
     pub phi_config: PhiConfig,
     pub vision_config: VisionConfig,
+}
+
+impl Config {
+    pub fn v2() -> Self {
+        let phi_config = PhiConfig {
+            vocab_size: 51200,
+            hidden_size: 2048,
+            intermediate_size: 8192,
+            num_hidden_layers: 24,
+            num_attention_heads: 32,
+            num_key_value_heads: None, // Assuming it's optional and not provided in Python
+            hidden_act: Activation::NewGelu, // Assuming Activation is an enum and GeluNew is a variant
+            max_position_embeddings: 2048,
+            layer_norm_eps: 1e-5,
+            tie_word_embeddings: false,
+            rope_theta: 10000.0,
+            partial_rotary_factor: 0.5,
+            qk_layernorm: false,
+        };
+
+        Self {
+            phi_config,
+            vision_config: VisionConfig::v2(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -280,11 +305,11 @@ impl Model {
         })
     }
 
-    pub fn encode_image(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.apply(&self.vision_encoder)
+    pub fn vision_encoder(&self) -> &VisionEncoder {
+        &self.vision_encoder
     }
 
-    pub fn forward(&mut self, xs: &Tensor) -> Result<Tensor> {
-        self.text_model.forward(xs)
+    pub fn text_model(&mut self) -> &mut PhiModel {
+        &mut self.text_model
     }
 }
