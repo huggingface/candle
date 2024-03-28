@@ -49,7 +49,7 @@ impl ClipVisionConfig {
 }
 
 // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L112
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ClipVisionEmbeddings {
     patch_embedding: candle_nn::Conv2d,
     position_ids: Tensor,
@@ -63,7 +63,7 @@ impl ClipVisionEmbeddings {
         let class_embedding = if vs.contains_tensor("class_embedding") {
             vs.get(c.embed_dim, "class_embedding")?
         } else {
-            Tensor::randn(0f32, 1f32, &[c.embed_dim], vs.device())?
+            Tensor::randn(0f32, 1f32, c.embed_dim, vs.device())?
         };
 
         let num_patches = (c.image_size / c.patch_size).pow(2);
@@ -109,7 +109,7 @@ impl Module for ClipVisionEmbeddings {
 }
 
 // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L743
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ClipVisionTransformer {
     embeddings: ClipVisionEmbeddings,
     encoder: ClipEncoder,

@@ -14,6 +14,7 @@ use candle::{Result, Tensor, D};
 pub mod text_model;
 pub mod vision_model;
 
+#[derive(Clone, Debug)]
 pub struct ClipModel {
     text_model: ClipTextTransformer,
     vision_model: ClipVisionTransformer,
@@ -22,6 +23,7 @@ pub struct ClipModel {
     logit_scale: Tensor,
 }
 
+#[derive(Clone, Debug)]
 pub enum EncoderConfig {
     Text(text_model::ClipTextConfig),
     Vision(vision_model::ClipVisionConfig),
@@ -64,6 +66,7 @@ impl EncoderConfig {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ClipConfig {
     pub text_config: text_model::ClipTextConfig,
     pub vision_config: vision_model::ClipVisionConfig,
