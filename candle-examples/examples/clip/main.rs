@@ -24,7 +24,7 @@ struct Args {
 
     #[arg(long, use_value_delimiter = true)]
     images: Option<Vec<String>>,
-    
+
     #[arg(long)]
     cpu: bool,
 
@@ -99,8 +99,8 @@ pub fn main() -> anyhow::Result<()> {
     let vec_imgs = match args.images {
         Some(imgs) => imgs,
         None => vec![
-            "candle-examples/examples/clip/assets/cats.jpg".to_string(),
-            "candle-examples/examples/clip/assets/ferris.jpeg".to_string(),
+            "candle-examples/examples/stable-diffusion/assets/stable-diffusion-xl.jpg".to_string(),
+            "candle-examples/examples/yolo-v8/assets/bike.jpg".to_string(),
         ],
     };
 
@@ -136,7 +136,7 @@ pub fn main() -> anyhow::Result<()> {
         info!("\n\nResults for image: {}\n", img);
 
         for (i, p) in prob.iter().enumerate() {
-            info!("Probability: {:.3}% Text: {} ", p, vec_seq[i]);
+            info!("Probability: {:.4}% Text: {} ", p, vec_seq[i]);
         }
     }
 
@@ -173,10 +173,9 @@ pub fn tokenize_sequences(
     let vec_seq = match sequences {
         Some(seq) => seq,
         None => vec![
-            "a painting of birds".to_string(),
+            "a cycling race".to_string(),
             "a photo of two cats".to_string(),
-            "a mechanical ferris".to_string(),
-            "a ferris".to_string(),
+            "a robot holding a candle".to_string(),
         ],
     };
 
