@@ -90,11 +90,11 @@ impl ClipTextEmbeddings {
 
 impl Module for ClipTextEmbeddings {
     fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
-        let seq_length = input_ids.shape().dims().last().unwrap();
+        let seq_length = input_ids.dim(D::Minus1)?;
 
         let inputs_embeds = &self.token_embedding.forward(input_ids)?;
 
-        let postion_ids = &self.position_ids.narrow(1, 0, *seq_length)?;
+        let postion_ids = &self.position_ids.narrow(1, 0, seq_length)?;
 
         let position_embedding = &self.position_embedding.forward(&postion_ids)?;
 
@@ -338,20 +338,13 @@ impl ClipTextTransformer {
 impl Module for ClipTextTransformer {
     fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
         let output = self.forward_with_mask(input_ids, usize::MAX)?;
-        let batch_indices = Tensor::arange(0i64, output.dim(0)? as i64, output.device())?;
 
         let sequence_max_indices = input_ids.argmax(D::Minus1)?.to_dtype(DType::I64)?;
 
         let mut indices: Vec<Tensor> = Vec::new();
 
-        // TODO research slicing capabilities in candle
-        let batch_indices = batch_indices.to_vec1::<i64>()?;
-        let sequence_max_indices = sequence_max_indices.to_vec1::<i64>()?;
-
-        for (&batch_idx, &seq_idx) in batch_indices.iter().zip(sequence_max_indices.iter()) {
-            let index = output
-                .i((batch_idx as usize, seq_idx as usize))?
-                .unsqueeze(0)?;
+        for (batch_idx, &seq_idx) in sequence_max_indices.to_vec1::<i64>()?.iter().enumerate() {
+            let index = output.i((batch_idx, seq_idx as usize))?.unsqueeze(0)?;
             indices.push(index);
         }
 
