@@ -125,6 +125,8 @@ We also provide a some command line based examples using state of the art models
   [RepVGG](./candle-examples/examples/repvgg): computer vision models.
 - [BLIP](./candle-examples/examples/blip/): image to text model, can be used to
   generate captions for an image.
+- [CLIP](./candle-examples/examples/clip/): multi-model vision and language
+  model.
 - [TrOCR](./candle-examples/examples/trocr/): a transformer OCR model, with
   dedicated submodels for hand-writing and printed recognition.
 - [Marian-MT](./candle-examples/examples/marian-mt/): neural machine translation
@@ -206,7 +208,7 @@ If you have an addition to this list, please submit a pull request.
         - Replit-code-v1.5-3B.
         - Bert.
         - Yi-6B and Yi-34B.
-        - Qwen1.5.
+        - Qwen1.5, Qwen1.5 MoE.
         - RWKV v5 and v6.
     - Quantized LLMs.
         - Llama 7b, 13b, 70b, as well as the chat and code variants.
