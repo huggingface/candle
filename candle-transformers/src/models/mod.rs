@@ -3,6 +3,7 @@ pub mod bigcode;
 pub mod blip;
 pub mod blip_text;
 pub mod chatglm;
+pub mod clip;
 pub mod convmixer;
 pub mod convnext;
 pub mod dinov2;
