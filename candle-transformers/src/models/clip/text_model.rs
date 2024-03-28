@@ -91,16 +91,10 @@ impl ClipTextEmbeddings {
 impl Module for ClipTextEmbeddings {
     fn forward(&self, input_ids: &Tensor) -> Result<Tensor> {
         let seq_length = input_ids.dim(D::Minus1)?;
-
         let inputs_embeds = &self.token_embedding.forward(input_ids)?;
-
         let postion_ids = &self.position_ids.narrow(1, 0, seq_length)?;
-
-        let position_embedding = &self.position_embedding.forward(&postion_ids)?;
-
-        let inputs_embeds = inputs_embeds.broadcast_add(&position_embedding)?;
-
-        Ok(inputs_embeds)
+        let position_embedding = &self.position_embedding.forward(postion_ids)?;
+        inputs_embeds.broadcast_add(position_embedding)
     }
 }
 
@@ -166,15 +160,10 @@ impl ClipAttention {
         let src_len = key_states.dim(1)?;
 
         let attn_weights = if let Some(causal_attention_mask) = causal_attention_mask {
-            let attn_reshape =
-                attn_weights.reshape((bsz, self.num_attention_heads, seq_len, src_len))?;
-
-            let attn_weights = attn_reshape.broadcast_add(causal_attention_mask)?;
-
-            let attn_weights =
-                attn_weights.reshape((bsz * self.num_attention_heads, seq_len, src_len))?;
-
             attn_weights
+                .reshape((bsz, self.num_attention_heads, seq_len, src_len))?
+                .broadcast_add(causal_attention_mask)?
+                .reshape((bsz * self.num_attention_heads, seq_len, src_len))?
         } else {
             attn_weights
         };

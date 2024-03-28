@@ -10,7 +10,6 @@ use candle::{IndexOp, Result, Shape, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
 use nn::Conv2dConfig;
-use tracing::warn;
 
 use super::{
     text_model::{Activation, ClipEncoder},
@@ -64,14 +63,11 @@ impl ClipVisionEmbeddings {
         let class_embedding = if vs.contains_tensor("class_embedding") {
             vs.get(c.embed_dim, "class_embedding")?
         } else {
-            warn!("class_embedding not found in the. Initializing a new one.");
-            Tensor::randn(0.0 as f32, 1.0 as f32, &[c.embed_dim], vs.device())?
+            Tensor::randn(0f32, 1f32, &[c.embed_dim], vs.device())?
         };
 
         let num_patches = (c.image_size / c.patch_size).pow(2);
-
         let num_positions = num_patches + 1;
-
         let position_ids = Tensor::arange(0, num_positions as i64, vs.device())?;
 
         let conv2dconfig = Conv2dConfig {
@@ -80,7 +76,6 @@ impl ClipVisionEmbeddings {
         };
         let position_embedding =
             candle_nn::embedding(num_positions, c.embed_dim, vs.pp("position_embedding"))?;
-
         let patch_embedding = candle_nn::conv2d_no_bias(
             c.num_channels,
             c.embed_dim,
@@ -88,7 +83,6 @@ impl ClipVisionEmbeddings {
             conv2dconfig,
             vs.pp("patch_embedding"),
         )?;
-
         Ok(Self {
             patch_embedding,
             position_ids,
@@ -101,26 +95,16 @@ impl ClipVisionEmbeddings {
 impl Module for ClipVisionEmbeddings {
     fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
         let batch_size = pixel_values.shape().dims();
-
-        let patch_embeds = self.patch_embedding.forward(&pixel_values)?;
-
-        let patch_embeds = patch_embeds.flatten_from(2)?;
-
-        let patch_embeds = patch_embeds.transpose(1, 2)?;
-
-        let class_embedding = self.class_embedding.clone();
-
-        let shape = Shape::from(vec![batch_size[0], 1, class_embedding.dim(D::Minus1)?]);
-
-        let class_embeds = class_embedding.expand(shape)?;
-
+        let patch_embeds = self
+            .patch_embedding
+            .forward(pixel_values)?
+            .flatten_from(2)?
+            .transpose(1, 2)?;
+        let shape = Shape::from((batch_size[0], 1, self.class_embedding.dim(D::Minus1)?));
+        let class_embeds = self.class_embedding.expand(shape)?;
         let embeddings = Tensor::cat(&[class_embeds, patch_embeds], 1)?;
-
         let position_embedding = self.position_embedding.forward(&self.position_ids)?;
-
-        let embeddings = embeddings.broadcast_add(&position_embedding)?;
-
-        Ok(embeddings)
+        embeddings.broadcast_add(&position_embedding)
     }
 }
 
@@ -136,13 +120,9 @@ pub struct ClipVisionTransformer {
 impl ClipVisionTransformer {
     pub fn new(vs: candle_nn::VarBuilder, c: &ClipVisionConfig) -> Result<Self> {
         let embeddings = ClipVisionEmbeddings::new(vs.pp("embeddings"), c)?;
-
         let pre_layer_norm = candle_nn::layer_norm(c.embed_dim, 1e-5, vs.pp("pre_layrnorm"))?;
-
         let encoder = ClipEncoder::new(vs.pp("encoder"), &EncoderConfig::Vision(c.clone()))?;
-
         let final_layer_norm = candle_nn::layer_norm(c.embed_dim, 1e-5, vs.pp("post_layernorm"))?;
-
         Ok(Self {
             embeddings,
             encoder,
@@ -154,18 +134,14 @@ impl ClipVisionTransformer {
 
 impl Module for ClipVisionTransformer {
     fn forward(&self, pixel_values: &Tensor) -> Result<Tensor> {
-        let hidden_states = self.embeddings.forward(pixel_values)?;
-
-        let hidden_states = self.pre_layer_norm.forward(&hidden_states)?;
+        let hidden_states = pixel_values
+            .apply(&self.embeddings)?
+            .apply(&self.pre_layer_norm)?;
 
         let encoder_outputs = self.encoder.forward(&hidden_states, None)?;
-
         // https://github.com/huggingface/transformers/blob/f6fa0f0bf0796ac66f201f23bdb8585de1609add/src/transformers/models/clip/modeling_clip.py#L787
         // pooled_output = encoder_outputs[:, 0, :]
         let pooled_output = encoder_outputs.i((.., 0, ..))?;
-
-        let output = self.final_layer_norm.forward(&pooled_output)?;
-
-        Ok(output)
+        self.final_layer_norm.forward(&pooled_output)
     }
 }
