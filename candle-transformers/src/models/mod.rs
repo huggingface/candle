@@ -12,6 +12,7 @@ pub mod efficientvit;
 pub mod encodec;
 pub mod falcon;
 pub mod gemma;
+pub mod clip;
 pub mod jina_bert;
 pub mod llama;
 pub mod llama2_c;
