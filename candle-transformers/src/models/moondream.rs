@@ -15,8 +15,8 @@ impl Config {
             intermediate_size: 8192,
             num_hidden_layers: 24,
             num_attention_heads: 32,
-            num_key_value_heads: None, // Assuming it's optional and not provided in Python
-            hidden_act: Activation::NewGelu, // Assuming Activation is an enum and GeluNew is a variant
+            num_key_value_heads: None,
+            hidden_act: Activation::NewGelu,
             max_position_embeddings: 2048,
             layer_norm_eps: 1e-5,
             tie_word_embeddings: false,
