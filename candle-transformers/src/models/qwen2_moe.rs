@@ -306,7 +306,8 @@ impl Module for SparseMoeBlock {
             let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
             let selected_experts =
                 Tensor::new(selected_experts[expert_idx].as_slice(), xs.device())?
-                    .reshape(((), 1))?;
+                    .reshape(((), 1))?
+                    .to_dtype(xs.dtype())?;
             // Index the correct hidden states and compute the expert hidden state for
             // the current expert. We need to make sure to multiply the output hidden
             // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
@@ -317,8 +318,9 @@ impl Module for SparseMoeBlock {
             ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
         }
         let shared_expert_output = xs.apply(&self.shared_expert)?;
-        let shared_expert_output = (shared_expert_output
-            * candle_nn::ops::sigmoid(&xs.apply(&self.shared_expert_gate)?)?)?;
+        let shared_expert_output = shared_expert_output.broadcast_mul(&candle_nn::ops::sigmoid(
+            &xs.apply(&self.shared_expert_gate)?,
+        )?)?;
         let ys = (ys + shared_expert_output)?;
         let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
         Ok(ys)
