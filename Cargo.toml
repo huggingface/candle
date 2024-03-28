@@ -55,7 +55,7 @@ log = "0.4"
 memmap2 = { version = "0.9.3", features = ["stable_deref_trait"] }
 num_cpus = "1.15.0"
 num-traits = "0.2.15"
-parquet = { version = "50.0.0" }
+parquet = { version = "51.0.0" }
 rand = "0.8.5"
 rand_distr = "0.4.3"
 rayon = "1.7.0"
