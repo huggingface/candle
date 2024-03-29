@@ -10,9 +10,12 @@ use cudarc::driver::{
 use half::{bf16, f16};
 
 mod device;
-pub use device::CudaDevice;
+pub use device::{CudaDevice, DeviceId};
 mod utils;
 pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, S};
+
+#[cfg(feature = "cudnn")]
+pub mod cudnn;
 
 enum SlicePtrOrNull<T> {
     Ptr(CudaSlice<T>),
