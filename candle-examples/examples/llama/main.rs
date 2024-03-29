@@ -18,7 +18,7 @@ use clap::{Parser, ValueEnum};
 use candle::{DType, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use std::io::Write;
 
 use candle_transformers::models::llama as model;
@@ -96,6 +96,10 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
+
+    /// Hugging Face authentication token
+    #[arg(long)]
+    hf_auth_token: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -121,7 +125,7 @@ fn main() -> Result<()> {
         None => DType::F16,
     };
     let (llama, tokenizer_filename, mut cache) = {
-        let api = Api::new()?;
+        let api = ApiBuilder::new().with_token(args.hf_auth_token).build()?;
         let model_id = args.model_id.unwrap_or_else(|| match args.which {
             Which::V1 => "Narsil/amall-7b".to_string(),
             Which::V2 => "meta-llama/Llama-2-7b-hf".to_string(),
