@@ -206,8 +206,10 @@ impl CausalSelfAttention {
 
         if cache.use_kv_cache {
             if let Some((cache_k, cache_v)) = &cache.kvs[block_idx] {
-                k = Tensor::cat(&[cache_k, &k], 2)?.contiguous()?;
-                v = Tensor::cat(&[cache_v, &v], 2)?.contiguous()?;
+                // k = Tensor::cat(&[cache_k, &k], 2)?.contiguous()?;
+                // v = Tensor::cat(&[cache_v, &v], 2)?.contiguous()?;
+                k = candle_nn::kvconcat(&cache_k, &k, 2)?;
+                v = candle_nn::kvconcat(&cache_v, &v, 2)?;
                 let k_seq_len = k.dims()[1];
                 if k_seq_len > MAX_SEQ_LEN {
                     k = k

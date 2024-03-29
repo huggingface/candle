@@ -201,7 +201,8 @@ impl Attention {
             if let Some(kv_cache) = &self.kv_cache {
                 // TODO: we could trim the tensors to MAX_SEQ_LEN so that this would work for
                 // arbitrarily large sizes.
-                key_value = Tensor::cat(&[kv_cache, &key_value], D::Minus2)?.contiguous()?;
+                // key_value = Tensor::cat(&[kv_cache, &key_value], D::Minus2)?.contiguous()?;
+                key_value = candle_nn::kvconcat(&kv_cache, &key_value, 2)?;
             }
             self.kv_cache = Some(key_value.clone())
         }
