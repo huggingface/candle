@@ -10,10 +10,10 @@ const D_STATE: usize = 16;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
-    d_model: usize,
-    n_layer: usize,
-    vocab_size: usize,
-    pad_vocab_size_multiple: usize,
+    pub d_model: usize,
+    pub n_layer: usize,
+    pub vocab_size: usize,
+    pub pad_vocab_size_multiple: usize,
 }
 
 impl Config {
@@ -121,7 +121,7 @@ impl MambaBlock {
         // Algorithm 3.2 on page 6, https://arxiv.org/pdf/2312.00752.pdf
 
         let x_proj = self.x_proj.forward(&proj_for_conv)?;
-        let delta = x_proj.narrow(D::Minus1, 0, self.dt_rank)?;
+        let delta = x_proj.narrow(D::Minus1, 0, self.dt_rank)?.contiguous()?;
         let b = x_proj.narrow(D::Minus1, self.dt_rank, D_STATE)?;
         let c = x_proj.narrow(D::Minus1, self.dt_rank + D_STATE, D_STATE)?;
 

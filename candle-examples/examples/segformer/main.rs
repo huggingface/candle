@@ -5,7 +5,7 @@ use candle_transformers::models::segformer::{
     Config, ImageClassificationModel, SemanticSegmentationModel,
 };
 use clap::{Args, Parser, Subcommand};
-use image::Rgb;
+use imageproc::image::Rgb;
 use imageproc::integral_image::ArrayData;
 use std::collections::HashMap;
 use std::path::PathBuf;

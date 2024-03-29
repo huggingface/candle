@@ -2,14 +2,26 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
-use candle_metal_kernels;
+use candle_metal_kernels::CallConvTranspose2dCfg;
 use candle_metal_kernels::Kernels;
-use metal;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard, TryLockError};
+
+/// Unique identifier for cuda devices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DeviceId(usize);
+
+impl DeviceId {
+    fn new() -> Self {
+        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
+        use std::sync::atomic;
+        static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
+        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
+    }
+}
 
 /// Simple way to catch lock error without
 /// depending on T
@@ -65,6 +77,10 @@ type AllocatedBuffers = Arc<RwLock<BufferMap>>;
 
 #[derive(Clone)]
 pub struct MetalDevice {
+    /// Unique identifier, the registryID is not sufficient as it identifies the GPU rather than
+    /// the device itself.
+    id: DeviceId,
+
     /// Raw metal device: <https://developer.apple.com/documentation/metal/mtldevice?language=objc>
     device: metal::Device,
 
@@ -109,7 +125,7 @@ pub struct MetalDevice {
 
 impl std::fmt::Debug for MetalDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MetalDevice({:?})", self.device.registry_id())
+        write!(f, "MetalDevice({:?})", self.id)
     }
 }
 
@@ -122,8 +138,8 @@ impl std::ops::Deref for MetalDevice {
 }
 
 impl MetalDevice {
-    pub fn id(&self) -> NSUInteger {
-        self.registry_id()
+    pub fn id(&self) -> DeviceId {
+        self.id
     }
 
     pub fn metal_device(&self) -> &metal::Device {
@@ -953,11 +969,7 @@ impl BackendStorage for MetalStorage {
         k_layout: &Layout,
         params: &ParamsConvTranspose1D,
     ) -> Result<Self> {
-        let device = self.device().clone();
-
         let l_out = params.l_out();
-        let dst_el = params.c_out * l_out * params.b_size;
-
         let dst_el = params.c_out * l_out * params.b_size;
         let buffer = self
             .device
@@ -1026,6 +1038,10 @@ impl BackendStorage for MetalStorage {
         let command_buffer = self.device.command_buffer()?;
         let name = match self.dtype {
             DType::F32 => "im2col_f32",
+            DType::F16 => "im2col_f16",
+            DType::BF16 => "im2col_bf16",
+            DType::U8 => "im2col_u8",
+            DType::U32 => "im2col_u32",
             dtype => crate::bail!("Metal conv2d {dtype:?} not implemented"),
         };
         candle_metal_kernels::call_im2col_strided(
@@ -1078,12 +1094,66 @@ impl BackendStorage for MetalStorage {
 
     fn conv_transpose2d(
         &self,
-        _l: &Layout,
-        _kernel: &Self,
-        _kernel_l: &Layout,
-        _params: &ParamsConvTranspose2D,
+        l: &Layout,
+        kernel: &Self,
+        kernel_l: &Layout,
+        params: &ParamsConvTranspose2D,
     ) -> Result<Self> {
-        crate::bail!("Metal conv_tranpose2d not implemented")
+        // Kernel shape: (c_in_k, c_out, h_k, w_k)
+        // Input shape: (b_size, c_in, h_in, w_in)
+        let (out_w, out_h) = (params.out_w(), params.out_h());
+        let dst_el = params.c_out * out_w * out_h * params.b_size;
+
+        let dims = l.dims();
+        if dims.len() != 4 {
+            crate::bail!("unexpected input shape for conv_transpose2d {dims:?}, expected 4")
+        }
+
+        let k_dims = kernel_l.dims();
+        if k_dims.len() != 4 {
+            crate::bail!("unexpected kernel shape for conv_transpose2d {k_dims:?}, expected 4")
+        }
+
+        let buffer = self
+            .device
+            .new_buffer(dst_el, self.dtype, "conv_transpose2d")?;
+
+        let command_buffer = self.device.command_buffer()?;
+
+        let name = match self.dtype {
+            DType::F32 => "conv_transpose2d_f32",
+            DType::F16 => "conv_transpose2d_f16",
+            DType::BF16 => "conv_transpose2d_bf16",
+            dtype => crate::bail!("Metal conv_transpose2d {dtype:?} not implemented"),
+        };
+
+        candle_metal_kernels::call_conv_transpose2d(
+            &self.device.device,
+            &command_buffer,
+            &self.device.kernels,
+            name,
+            CallConvTranspose2dCfg {
+                dilation: params.dilation,
+                stride: params.stride,
+                padding: params.padding,
+                output_padding: params.output_padding,
+                c_out: params.c_out,
+                out_h,
+                out_w,
+                b_size: params.b_size,
+                input_dims: l.dims(),
+                input_stride: l.stride(),
+                kernel_dims: kernel_l.dims(),
+                kernel_stride: kernel_l.stride(),
+                input_offset: l.start_offset() * self.dtype.size_in_bytes(),
+                kernel_offset: kernel_l.start_offset() * kernel.dtype.size_in_bytes(),
+            },
+            &self.buffer,
+            &kernel.buffer,
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+        Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
     fn avg_pool2d(
@@ -1184,6 +1254,10 @@ impl BackendStorage for MetalStorage {
         }
         let name = match self.dtype {
             DType::F32 => "upsample_nearest2d_f32",
+            DType::F16 => "upsample_nearest2d_f16",
+            DType::BF16 => "upsample_nearest2d_bf16",
+            DType::U8 => "upsample_nearest2d_u8",
+            DType::U32 => "upsample_nearest2d_u32",
             dtype => crate::bail!("Metal upsample_nearest2d {dtype:?} not implemented"),
         };
 
@@ -1298,12 +1372,8 @@ impl BackendStorage for MetalStorage {
     }
 
     fn index_select(&self, ids: &Self, src_l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
-        if !(src_l.is_contiguous()
-            && src_l.start_offset() == 0
-            && ids_l.is_contiguous()
-            && ids_l.start_offset() == 0)
-        {
-            crate::bail!("Metal strided index_select not implemented");
+        if !ids_l.is_contiguous() {
+            crate::bail!("Metal index_select requires contiguous ids")
         }
         let left_size: usize = src_l.dims()[..dim].iter().product();
         let right_size: usize = src_l.dims()[dim + 1..].iter().product();
@@ -1314,10 +1384,16 @@ impl BackendStorage for MetalStorage {
         let buffer = device.new_buffer(dst_el, dtype, "index_select")?;
         let name = match (ids.dtype, self.dtype) {
             (DType::U8, DType::BF16) => "is_u8_bf16",
+            (DType::U8, DType::F32) => "is_u8_f32",
+            (DType::U8, DType::F16) => "is_u8_f16",
 
             (DType::U32, DType::F32) => "is_u32_f32",
             (DType::U32, DType::F16) => "is_u32_f16",
             (DType::U32, DType::BF16) => "is_u32_bf16",
+
+            (DType::I64, DType::F32) => "is_i64_f32",
+            (DType::I64, DType::F16) => "is_i64_f16",
+            (DType::I64, DType::BF16) => "is_i64_bf16",
 
             (left, right) => {
                 crate::bail!("Metal contiguous index_select {left:?} {right:?} not implemented")
@@ -1332,8 +1408,13 @@ impl BackendStorage for MetalStorage {
             src_l.dims(),
             ids_el,
             dim,
+            src_l.is_contiguous(),
+            src_l.dims(),
+            src_l.stride(),
             &self.buffer,
+            src_l.start_offset() * dtype.size_in_bytes(),
             &ids.buffer,
+            ids_l.start_offset() * ids.dtype.size_in_bytes(),
             &buffer,
         )
         .map_err(MetalError::from)?;
@@ -1815,6 +1896,7 @@ impl BackendDevice for MetalDevice {
             MTLResourceOptions::StorageModeManaged,
         )));
         Ok(Self {
+            id: DeviceId::new(),
             device,
             command_queue,
             command_buffer,
@@ -1833,7 +1915,17 @@ impl BackendDevice for MetalDevice {
     }
 
     fn same_device(&self, rhs: &Self) -> bool {
-        self.device.registry_id() == rhs.device.registry_id()
+        self.id == rhs.id
+    }
+
+    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "alloc-uninit")?;
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
     }
 
     fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
@@ -1869,6 +1961,10 @@ impl BackendDevice for MetalDevice {
             count,
             storage.dtype(),
         ))
+    }
+
+    fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<Self::Storage> {
+        self.storage_from_cpu_storage(&storage)
     }
 
     fn rand_uniform(

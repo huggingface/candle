@@ -210,7 +210,15 @@ impl crate::backend::BackendDevice for CudaDevice {
         Err(Error::NotCompiledWithCudaSupport)
     }
 
+    unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithCudaSupport)
+    }
+
+    fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithCudaSupport)
     }
 

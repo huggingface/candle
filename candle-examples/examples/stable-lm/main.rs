@@ -288,12 +288,12 @@ fn main() -> Result<()> {
     };
 
     let device = candle_examples::device(args.cpu)?;
-    let (model, device) = if args.quantized {
+    let model = if args.quantized {
         let filename = &filenames[0];
         let vb =
             candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
         let model = QStableLM::new(&config, vb)?;
-        (Model::Quantized(model), Device::Cpu)
+        Model::Quantized(model)
     } else {
         let dtype = if device.is_cuda() {
             DType::BF16
@@ -302,7 +302,7 @@ fn main() -> Result<()> {
         };
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
         let model = StableLM::new(&config, vb)?;
-        (Model::StableLM(model), device)
+        Model::StableLM(model)
     };
 
     println!("loaded the model in {:?}", start.elapsed());

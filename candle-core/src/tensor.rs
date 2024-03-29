@@ -1,9 +1,7 @@
 //! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::op::{
-    BackpropOp, BinaryOp, CmpOp, CustomOp1, CustomOp2, CustomOp3, Op, ReduceOp, UnaryOp,
-};
+use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
 use crate::shape::{Dim, Dims};
 use crate::{bail, storage::Storage, DType, Device, Error, Layout, Result, Shape};
@@ -1351,7 +1349,7 @@ impl Tensor {
             }
             .bt())?
         }
-        let mut storage = self.device().zeros(self.shape(), self.dtype())?;
+        let mut storage = unsafe { self.device().alloc_uninit(self.shape(), self.dtype())? };
         self.storage()
             .copy_strided_src(&mut storage, 0, self.layout())?;
         let offset = start * src.dims()[1..].iter().product::<usize>();
@@ -2001,7 +1999,7 @@ impl Tensor {
             Ok(self.clone())
         } else {
             let shape = self.shape();
-            let mut storage = self.device().zeros(shape, self.dtype())?;
+            let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
             self.storage()
                 .copy_strided_src(&mut storage, 0, self.layout())?;
             let op = BackpropOp::new1(self, Op::Copy);
@@ -2009,11 +2007,21 @@ impl Tensor {
         }
     }
 
+    /// Returns a tensor that is in row major order. This always makes a copy.
+    pub fn force_contiguous(&self) -> Result<Tensor> {
+        let shape = self.shape();
+        let mut storage = unsafe { self.device().alloc_uninit(shape, self.dtype())? };
+        self.storage()
+            .copy_strided_src(&mut storage, 0, self.layout())?;
+        let op = BackpropOp::new1(self, Op::Copy);
+        Ok(from_storage(storage, shape.clone(), op, false))
+    }
+
     /// Create a variable based on the values currently stored in a tensor. The storage is always
     /// copied.
     pub(crate) fn make_var(&self) -> Result<Tensor> {
         let shape = self.shape().clone();
-        let mut storage = self.device().zeros(&shape, self.dtype())?;
+        let mut storage = unsafe { self.device().alloc_uninit(&shape, self.dtype())? };
         self.storage()
             .copy_strided_src(&mut storage, 0, self.layout())?;
         Ok(from_storage(storage, shape, BackpropOp::none(), true))
@@ -2066,7 +2074,7 @@ impl Tensor {
             };
             Ok(Tensor(Arc::new(tensor_)))
         } else {
-            let mut storage = self.device().zeros(&shape, self.dtype())?;
+            let mut storage = unsafe { self.device().alloc_uninit(&shape, self.dtype())? };
             self.storage()
                 .copy_strided_src(&mut storage, 0, self.layout())?;
             Ok(from_storage(storage, shape, op, false))
@@ -2093,8 +2101,19 @@ impl Tensor {
         let dim = dim.to_index(self.shape(), "squeeze")?;
         if dims[dim] == 1 {
             let mut dims = dims.to_vec();
+            let mut strides = self.stride().to_vec();
             dims.remove(dim);
-            self.reshape(dims)
+            strides.remove(dim);
+            let tensor_ = Tensor_ {
+                id: TensorId::new(),
+                storage: self.storage.clone(),
+                layout: Layout::new(dims.into(), strides, self.layout.start_offset()),
+                op: BackpropOp::new1(self, Op::Reshape),
+                is_variable: false,
+                dtype: self.dtype,
+                device: self.device.clone(),
+            };
+            Ok(Tensor(Arc::new(tensor_)))
         } else {
             Ok(self.clone())
         }
@@ -2115,10 +2134,24 @@ impl Tensor {
     /// ```
     pub fn unsqueeze<D: Dim>(&self, dim: D) -> Result<Self> {
         let mut dims = self.dims().to_vec();
+        let mut strides = self.stride().to_vec();
         let dim = dim.to_index_plus_one(self.shape(), "unsqueeze")?;
         // Cannot panic because to_index_plus_one already checks dimensions
         dims.insert(dim, 1);
-        self.reshape(dims)
+        // Any stride would work here, but we pick one so as to maximize the probability to remain
+        // C contiguous.
+        let stride = if dim < strides.len() { strides[dim] } else { 1 };
+        strides.insert(dim, stride);
+        let tensor_ = Tensor_ {
+            id: TensorId::new(),
+            storage: self.storage.clone(),
+            layout: Layout::new(dims.into(), strides, self.layout.start_offset()),
+            op: BackpropOp::new1(self, Op::Reshape),
+            is_variable: false,
+            dtype: self.dtype,
+            device: self.device.clone(),
+        };
+        Ok(Tensor(Arc::new(tensor_)))
     }
 
     /// Stacks two or more tensors along a particular dimension.
@@ -2231,6 +2264,10 @@ impl Tensor {
         self.storage.read().unwrap()
     }
 
+    pub(crate) fn storage_mut(&self) -> std::sync::RwLockWriteGuard<'_, Storage> {
+        self.storage.write().unwrap()
+    }
+
     // If we extend the visibility of this function to be usable outside of this crate, we should
     // make it unsafe.
     pub(crate) fn storage_mut_and_layout(
@@ -2250,96 +2287,6 @@ impl Tensor {
         let lhs: &RwLock<Storage> = self.storage.as_ref();
         let rhs: &RwLock<Storage> = rhs.storage.as_ref();
         std::ptr::eq(lhs, rhs)
-    }
-
-    /// Applies a unary custom op without backward support
-    pub fn apply_op1_no_bwd<C: CustomOp1>(&self, c: &C) -> Result<Self> {
-        let (storage, shape) = self.storage().apply_op1(self.layout(), c)?;
-        Ok(from_storage(storage, shape, BackpropOp::none(), false))
-    }
-
-    /// Applies a binary custom op without backward support
-    pub fn apply_op2_no_bwd<C: CustomOp2>(&self, rhs: &Self, c: &C) -> Result<Self> {
-        let (storage, shape) =
-            self.storage()
-                .apply_op2(self.layout(), &rhs.storage(), rhs.layout(), c)?;
-        Ok(from_storage(storage, shape, BackpropOp::none(), false))
-    }
-
-    /// Applies a ternary custom op without backward support
-    pub fn apply_op3_no_bwd<C: CustomOp3>(&self, t2: &Self, t3: &Self, c: &C) -> Result<Self> {
-        let (storage, shape) = self.storage().apply_op3(
-            self.layout(),
-            &t2.storage(),
-            t2.layout(),
-            &t3.storage(),
-            t3.layout(),
-            c,
-        )?;
-        Ok(from_storage(storage, shape, BackpropOp::none(), false))
-    }
-
-    /// Applies a unary custom op.
-    pub fn apply_op1_arc(&self, c: Arc<Box<dyn CustomOp1 + Send + Sync>>) -> Result<Self> {
-        let (storage, shape) = self
-            .storage()
-            .apply_op1(self.layout(), c.as_ref().as_ref())?;
-        let op = BackpropOp::new1(self, |s| Op::CustomOp1(s, c.clone()));
-        Ok(from_storage(storage, shape, op, false))
-    }
-
-    pub fn apply_op1<C: 'static + CustomOp1 + Send + Sync>(&self, c: C) -> Result<Self> {
-        self.apply_op1_arc(Arc::new(Box::new(c)))
-    }
-
-    /// Applies a binary custom op.
-    pub fn apply_op2_arc(
-        &self,
-        rhs: &Self,
-        c: Arc<Box<dyn CustomOp2 + Send + Sync>>,
-    ) -> Result<Self> {
-        let (storage, shape) = self.storage().apply_op2(
-            self.layout(),
-            &rhs.storage(),
-            rhs.layout(),
-            c.as_ref().as_ref(),
-        )?;
-        let op = BackpropOp::new2(self, rhs, |t1, t2| Op::CustomOp2(t1, t2, c.clone()));
-        Ok(from_storage(storage, shape, op, false))
-    }
-
-    pub fn apply_op2<C: 'static + CustomOp2 + Send + Sync>(&self, r: &Self, c: C) -> Result<Self> {
-        self.apply_op2_arc(r, Arc::new(Box::new(c)))
-    }
-
-    /// Applies a ternary custom op.
-    pub fn apply_op3_arc(
-        &self,
-        t2: &Self,
-        t3: &Self,
-        c: Arc<Box<dyn CustomOp3 + Send + Sync>>,
-    ) -> Result<Self> {
-        let (storage, shape) = self.storage().apply_op3(
-            self.layout(),
-            &t2.storage(),
-            t2.layout(),
-            &t3.storage(),
-            t3.layout(),
-            c.as_ref().as_ref(),
-        )?;
-        let op = BackpropOp::new3(self, t2, t3, |t1, t2, t3| {
-            Op::CustomOp3(t1, t2, t3, c.clone())
-        });
-        Ok(from_storage(storage, shape, op, false))
-    }
-
-    pub fn apply_op3<C: 'static + CustomOp3 + Send + Sync>(
-        &self,
-        t2: &Self,
-        t3: &Self,
-        c: C,
-    ) -> Result<Self> {
-        self.apply_op3_arc(t2, t3, Arc::new(Box::new(c)))
     }
 
     /// Normalize a 'relative' axis value: positive values are kept, negative

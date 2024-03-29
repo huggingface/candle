@@ -751,6 +751,148 @@ pub fn call_last_softmax(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn call_rms_norm(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    kernel_name: &'static str,
+    length: usize,
+    elements_to_sum: usize,
+    eps: f32,
+    input: &Buffer,
+    input_offset: usize,
+    alpha: &Buffer,
+    alpha_offset: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            length,
+            elements_to_sum,
+            (input, input_offset),
+            output,
+            (alpha, alpha_offset),
+            eps
+        )
+    );
+
+    let out_length = length / elements_to_sum;
+
+    let thread_group_count = MTLSize {
+        width: out_length as u64,
+        height: 1,
+        depth: 1,
+    };
+
+    let width = std::cmp::min(
+        pipeline.max_total_threads_per_threadgroup(),
+        elements_to_sum as u64,
+    )
+    .next_power_of_two();
+
+    let thread_group_size = MTLSize {
+        width,
+        height: 1,
+        depth: 1,
+    };
+
+    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rope_i(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    kernel_name: &'static str,
+    bh: usize,
+    td: usize,
+    src: &Buffer,
+    src_offset: usize,
+    cos: &Buffer,
+    cos_offset: usize,
+    sin: &Buffer,
+    sin_offset: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            bh,
+            td,
+            (src, src_offset),
+            (cos, cos_offset),
+            (sin, sin_offset),
+            output
+        )
+    );
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, (bh * td) / 2);
+    encoder.use_resource(src, metal::MTLResourceUsage::Read);
+    encoder.use_resource(cos, metal::MTLResourceUsage::Read);
+    encoder.use_resource(sin, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rope(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    kernel_name: &'static str,
+    bh: usize,
+    td: usize,
+    d: usize,
+    src: &Buffer,
+    src_offset: usize,
+    cos: &Buffer,
+    cos_offset: usize,
+    sin: &Buffer,
+    sin_offset: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Reduce, kernel_name)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            bh,
+            td,
+            d,
+            (src, src_offset),
+            (cos, cos_offset),
+            (sin, sin_offset),
+            output
+        )
+    );
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, (bh * td) / 2);
+    encoder.use_resource(src, metal::MTLResourceUsage::Read);
+    encoder.use_resource(cos, metal::MTLResourceUsage::Read);
+    encoder.use_resource(sin, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn call_affine(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -1009,8 +1151,13 @@ pub fn call_index_select(
     shape: &[usize],
     ids_size: usize,
     dim: usize,
+    contiguous: bool,
+    src_dims: &[usize],
+    src_strides: &[usize],
     input: &Buffer,
+    src_offset: usize,
     ids: &Buffer,
+    ids_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let left_size: usize = shape[..dim].iter().product();
@@ -1032,8 +1179,11 @@ pub fn call_index_select(
             src_dim_size,
             right_size,
             ids_size,
-            input,
-            ids,
+            contiguous,
+            src_dims,
+            src_strides,
+            (input, src_offset),
+            (ids, ids_offset),
             output
         )
     );
@@ -1301,9 +1451,12 @@ pub fn call_gemm(
     let rhs_m2 = rhs_stride[rhs_stride.len() - 2];
     let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
     let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
-    let a_trans = if lhs_m1 == 1 && lhs_m2 == k {
+    // lhs has shape b, m, k
+    // We also allow for the case where the stride on the minor dimension is not as expected but
+    // there is a single element.
+    let a_trans = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
         false
-    } else if lhs_m1 == m && lhs_m2 == 1 {
+    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
         true
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
@@ -1312,9 +1465,10 @@ pub fn call_gemm(
             mnk: (m, n, k),
         })?;
     };
-    let b_trans = if rhs_m1 == 1 && rhs_m2 == n {
+    // rhs has shape b, k, n
+    let b_trans = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
         false
-    } else if rhs_m1 == k && rhs_m2 == 1 {
+    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
         true
     } else {
         return Err(MetalKernelError::MatMulNonContiguous {
@@ -1901,6 +2055,64 @@ pub fn call_conv_transpose1d(
             kernel_strides,
             (input, input_offset),
             (kernel, kernel_offset),
+            output
+        )
+    );
+    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(kernel, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+pub struct CallConvTranspose2dCfg<'a> {
+    pub dilation: usize,
+    pub stride: usize,
+    pub padding: usize,
+    pub output_padding: usize,
+    pub c_out: usize,
+    pub out_w: usize,
+    pub out_h: usize,
+    pub b_size: usize,
+    pub input_dims: &'a [usize],
+    pub input_stride: &'a [usize],
+    pub kernel_dims: &'a [usize],
+    pub kernel_stride: &'a [usize],
+    pub input_offset: usize,
+    pub kernel_offset: usize,
+}
+
+pub fn call_conv_transpose2d(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    name: &'static str,
+    cfg: CallConvTranspose2dCfg,
+    input: &Buffer,
+    kernel: &Buffer,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let dst_el = cfg.c_out * cfg.out_w * cfg.out_h * cfg.b_size;
+    let pipeline: ComputePipelineState = kernels.load_pipeline(device, Source::Conv, name)?;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
+    let encoder = command_buffer.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(&pipeline);
+    set_params!(
+        encoder,
+        (
+            cfg.out_w,
+            cfg.out_h,
+            cfg.stride,
+            cfg.padding,
+            cfg.output_padding,
+            cfg.dilation,
+            cfg.input_dims,
+            cfg.input_stride,
+            cfg.kernel_dims,
+            cfg.kernel_stride,
+            (input, cfg.input_offset),
+            (kernel, cfg.kernel_offset),
             output
         )
     );

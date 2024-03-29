@@ -13,7 +13,7 @@ extern "C" __global__ void FN_NAME(  \
 ) {  \
     const size_t *dims = info; \
     const size_t *strides = info + num_dims; \
-    if (is_contiguous(num_dims, dims, strides)) { \
+    if (info == nullptr || is_contiguous(num_dims, dims, strides)) { \
         for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
             TYPENAME x = inp ? inp[i] : out[i]; \
             out[i] = x * mul + add; \
