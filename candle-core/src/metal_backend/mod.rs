@@ -52,8 +52,8 @@ pub enum MetalError {
 
     #[error("matmul is only supported for contiguous tensors lstride: {lhs_stride:?} rstride: {rhs_stride:?} mnk: {mnk:?}")]
     MatMulNonContiguous {
-        lhs_stride: Vec<usize>,
-        rhs_stride: Vec<usize>,
+        lhs_stride: Layout,
+        rhs_stride: Layout,
         mnk: (usize, usize, usize),
     },
     #[error("{0:?}")]
