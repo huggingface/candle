@@ -125,6 +125,14 @@ enum Command {
         /// The file format to use, if unspecified infer from the file extension.
         #[arg(long, value_enum)]
         format: Option<Format>,
+
+        /// Print the whole content of each tensor.
+        #[arg(long)]
+        full: bool,
+
+        /// Line width for printing the tensors.
+        #[arg(long)]
+        line_width: Option<usize>,
     },
 
     Quantize {
@@ -164,8 +172,16 @@ fn run_print(
     file: &std::path::PathBuf,
     names: Vec<String>,
     format: Option<Format>,
+    full: bool,
+    line_width: Option<usize>,
     device: &Device,
 ) -> Result<()> {
+    if full {
+        candle_core::display::set_print_options_full();
+    }
+    if let Some(line_width) = line_width {
+        candle_core::display::set_line_width(line_width)
+    }
     let format = match format {
         Some(format) => format,
         None => match Format::infer(file) {
@@ -482,7 +498,9 @@ fn main() -> anyhow::Result<()> {
             file,
             names,
             format,
-        } => run_print(&file, names, format, &device)?,
+            full,
+            line_width,
+        } => run_print(&file, names, format, full, line_width, &device)?,
         Command::Quantize {
             in_file,
             out_file,
