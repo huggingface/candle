@@ -17,19 +17,12 @@ impl Config {
 }
 
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
-    let device = q.device();
-    let l = q.dim(D::Minus2)?;
-    let s = k.dim(D::Minus2)?;
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
-    let attn_bias = Tensor::zeros((l, s), q.dtype(), device)?;
-    let q_contiguous = q.contiguous()?;
-    let k_contiguous = k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
-    let mut attn_weights = (q_contiguous.matmul(&k_contiguous)? * scale_factor)?;
-    attn_weights = (&attn_weights + attn_bias.broadcast_as(attn_weights.shape())?)?;
+    let k = k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
+    let mut attn_weights = (q.contiguous()?.matmul(&k)? * scale_factor)?;
     attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?.contiguous()?;
-    let v_contiguous = v.contiguous()?;
-    let attn_weights = attn_weights.matmul(&v_contiguous)?;
+    let attn_weights = attn_weights.matmul(&v.contiguous()?)?;
     Ok(attn_weights)
 }
 
@@ -38,6 +31,11 @@ pub struct VisionConfig {
     image_embedding_dim: usize,
     model_dim: usize,
     hidden_dim: usize,
+    hidden_features: usize,
+    embed_len: usize,
+    embed_dim: usize,
+    num_blocks: usize,
+    num_heads: usize,
     act: candle_nn::Activation,
 }
 
@@ -47,6 +45,11 @@ impl VisionConfig {
             image_embedding_dim: 1152,
             model_dim: 2048,
             hidden_dim: 2048 * 4,
+            hidden_features: 4304,
+            embed_len: 729,
+            embed_dim: 1152,
+            num_blocks: 27,
+            num_heads: 16,
             act: candle_nn::Activation::Gelu,
         }
     }
@@ -94,9 +97,8 @@ impl Attention {
 impl Module for Attention {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b, n, c) = xs.dims3()?;
-        let qkv = self
-            .qkv
-            .forward(xs)?
+        let qkv = xs
+            .apply(&self.qkv)?
             .reshape((b, n, 3, self.num_heads, self.head_dim))?
             .permute((2, 0, 3, 1, 4))?;
         let (q, k, v) = (qkv.i(0)?, qkv.i(1)?, qkv.i(2)?);
@@ -117,7 +119,7 @@ struct VitBlock {
 impl VitBlock {
     fn new(vb: VarBuilder, dim: usize, num_heads: usize, cfg: &VisionConfig) -> Result<Self> {
         let attn = Attention::new(vb.pp("attn"), dim, num_heads)?;
-        let mlp = Mlp::new(vb.pp("mlp"), dim, 4304, dim, cfg.act)?;
+        let mlp = Mlp::new(vb.pp("mlp"), dim, cfg.hidden_features, dim, cfg.act)?;
         let norm1 = layer_norm(dim, 1e-5, vb.pp("norm1"))?;
         let norm2 = layer_norm(dim, 1e-5, vb.pp("norm2"))?;
         Ok(Self {
@@ -149,17 +151,19 @@ struct VisionTransformer {
 
 impl VisionTransformer {
     fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
-        let embed_len = 729;
-        let embed_dim = 1152;
-        let num_blocks = 27;
-        let num_heads = 16;
-
         let patch_embed = LinearPatchEmbedding::new(vb.pp("patch_embed"))?;
-        let pos_embed = (vb.get((1, embed_len, embed_dim), "pos_embed")? * 0.02)?;
-        let blocks = (0..num_blocks)
-            .map(|i| VitBlock::new(vb.pp(&format!("blocks.{}", i)), embed_dim, num_heads, cfg))
+        let pos_embed = vb.get((1, cfg.embed_len, cfg.embed_dim), "pos_embed")?;
+        let blocks = (0..cfg.num_blocks)
+            .map(|i| {
+                VitBlock::new(
+                    vb.pp(&format!("blocks.{}", i)),
+                    cfg.embed_dim,
+                    cfg.num_heads,
+                    cfg,
+                )
+            })
             .collect::<Result<_>>()?;
-        let norm = layer_norm(embed_dim, 1e-5, vb.pp("norm"))?;
+        let norm = layer_norm(cfg.embed_dim, 1e-5, vb.pp("norm"))?;
         Ok(Self {
             patch_embed,
             pos_embed,
@@ -285,7 +289,6 @@ pub struct Model {
 }
 
 impl Model {
-    /// Constructor for moondream
     pub fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
         let text_model = PhiModel::new_v2(&config.phi_config, vb.pp("text_model"))?;
         let vision_encoder = VisionEncoder::new(&config.vision_config, vb.pp("vision_encoder"))?;

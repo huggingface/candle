@@ -74,12 +74,12 @@ impl TextGeneration {
             let context_size = if index > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = if index == 0 {
+            let logits = if index > 0 {
+                self.model.text_model.forward(&input)?
+            } else {
                 self.model
                     .text_model
                     .forward_with_img(&input, &image_embeds)?
-            } else {
-                self.model.text_model.forward(&input)?
             };
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
@@ -145,7 +145,7 @@ struct Args {
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
 
-    #[arg(long)]
+    #[arg(long, default_value_t = 5000)]
     sample_len: usize,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
@@ -158,7 +158,7 @@ struct Args {
 }
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
-/// (3, 378, 378). OpenAI normalization is applied.
+/// (3, 378, 378).
 pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> candle::Result<Tensor> {
     let img = image::io::Reader::open(p)?
         .decode()
@@ -167,10 +167,8 @@ pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> candle::Result<Tensor> {
     let img = img.to_rgb8();
     let data = img.into_raw();
     let data = Tensor::from_vec(data, (378, 378, 3), &Device::Cpu)?.permute((2, 0, 1))?;
-    let mean =
-        Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], &Device::Cpu)?.reshape((3, 1, 1))?;
-    let std = Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1], &Device::Cpu)?
-        .reshape((3, 1, 1))?;
+    let mean = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
+    let std = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
     (data.to_dtype(candle::DType::F32)? / 255.)?
         .broadcast_sub(&mean)?
         .broadcast_div(&std)
