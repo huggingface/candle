@@ -41,6 +41,7 @@ pub mod quantized_rwkv_v6;
 pub mod quantized_stable_lm;
 pub mod quantized_t5;
 pub mod qwen2;
+pub mod qwen2_moe;
 pub mod repvgg;
 pub mod resnet;
 pub mod rwkv_v5;

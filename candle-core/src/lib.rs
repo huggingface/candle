@@ -14,7 +14,7 @@
 //!
 //! ## Features
 //!
-//! - Simple syntax (looks and like PyTorch)
+//! - Simple syntax (looks and feels like PyTorch)
 //! - CPU and Cuda backends (and M1 support)
 //! - Enable serverless (CPU) small and fast deployments
 //! - Model training
@@ -43,8 +43,6 @@ pub mod cpu;
 pub mod cpu_backend;
 #[cfg(feature = "cuda")]
 pub mod cuda_backend;
-#[cfg(feature = "cudnn")]
-pub mod cudnn;
 mod custom_op;
 mod device;
 pub mod display;
@@ -72,6 +70,9 @@ mod tensor_cat;
 pub mod test_utils;
 pub mod utils;
 mod variable;
+
+#[cfg(feature = "cudnn")]
+pub use cuda_backend::cudnn;
 
 pub use cpu_backend::CpuStorage;
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
