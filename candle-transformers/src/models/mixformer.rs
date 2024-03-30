@@ -438,6 +438,32 @@ impl MixFormerSequentialForCausalLM {
         xs.narrow(1, seq_len - 1, 1)?.apply(&self.head)?.squeeze(1)
     }
 
+    pub fn forward_with_img(&mut self, xs: &Tensor, img_embds: &Tensor) -> Result<Tensor> {
+        // xs dims: [batch_size, seq_len]
+        // img_embds dims: [batch_size, feature, embds]
+        let _enter = self.span.enter();
+        let (_b_size, seq_len) = xs.dims2()?;
+        let xs = xs.apply(&self.embedding)?;
+        println!("[forward_with_img] xs: {xs:?}");
+        let mut xs = Tensor::cat(&[img_embds.clone(), xs], 1)?; // new dims: [batch_size, seq_len, embds]
+        println!("[forward_with_img] cat xs: {xs:?}");
+        let mask = if seq_len <= 1 {
+            None
+        } else {
+            Some(get_mask(seq_len, xs.device())?)
+        };
+        for block in self.blocks.iter_mut() {
+            xs = block.forward(&xs, mask.as_ref())?
+        }
+        println!("[forward_with_img] xs: {xs:?}");
+        let xs = xs
+            .narrow(1, seq_len - 1, 1)?
+            .apply(&self.head)?
+            .squeeze(1)?;
+        println!("[forward_with_img] xs: {xs:?}");
+        Ok(xs)
+    }
+
     pub fn clear_kv_cache(&mut self) {
         self.blocks.iter_mut().for_each(|b| b.clear_kv_cache())
     }

@@ -1,6 +1,6 @@
-use crate::models::phi::{Config as PhiConfig, Model as PhiModel};
+use crate::models::mixformer::{Config as PhiConfig, MixFormerSequentialForCausalLM as PhiModel};
 use candle::{IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm, linear_b, Activation, Linear, Module, VarBuilder};
+use candle_nn::{layer_norm, linear_b, Linear, Module, VarBuilder};
 
 pub struct Config {
     pub phi_config: PhiConfig,
@@ -9,27 +9,28 @@ pub struct Config {
 
 impl Config {
     pub fn v2() -> Self {
-        let phi_config = PhiConfig {
-            vocab_size: 51200,
-            hidden_size: 2048,
-            intermediate_size: 8192,
-            num_hidden_layers: 24,
-            num_attention_heads: 32,
-            num_key_value_heads: None,
-            hidden_act: Activation::NewGelu,
-            max_position_embeddings: 2048,
-            layer_norm_eps: 1e-5,
-            tie_word_embeddings: false,
-            rope_theta: 10000.0,
-            partial_rotary_factor: 0.5,
-            qk_layernorm: false,
-        };
-
         Self {
-            phi_config,
+            phi_config: PhiConfig::v1_5(),
             vision_config: VisionConfig::v2(),
         }
     }
+}
+
+fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+    let device = q.device();
+    let l = q.dim(D::Minus2)?;
+    let s = k.dim(D::Minus2)?;
+    let dim = q.dim(D::Minus1)?;
+    let scale_factor = 1.0 / (dim as f64).sqrt();
+    let attn_bias = Tensor::zeros((l, s), q.dtype(), device)?;
+    let q_contiguous = q.contiguous()?;
+    let k_contiguous = k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
+    let mut attn_weights = (q_contiguous.matmul(&k_contiguous)? * scale_factor)?;
+    attn_weights = (&attn_weights + attn_bias.broadcast_as(attn_weights.shape())?)?;
+    attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?.contiguous()?;
+    let v_contiguous = v.contiguous()?;
+    let attn_weights = attn_weights.matmul(&v_contiguous)?;
+    Ok(attn_weights)
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -99,22 +100,9 @@ impl Module for Attention {
             .reshape((b, n, 3, self.num_heads, self.head_dim))?
             .permute((2, 0, 3, 1, 4))?;
         let (q, k, v) = (qkv.i(0)?, qkv.i(1)?, qkv.i(2)?);
-
-        // scaled_dot_product_attention
-        let device = q.device();
-        let l = q.dim(D::Minus2)?;
-        let s = k.dim(D::Minus2)?;
-        let dim = q.dim(D::Minus1)?;
-        let scale_factor = 1.0 / (dim as f64).sqrt();
-        let attn_bias = Tensor::zeros((l, s), q.dtype(), device)?;
-        let mut attn_weights =
-            (q.matmul(&k.transpose(D::Minus2, D::Minus1)?.contiguous()?)? * scale_factor)?;
-        attn_weights = (&attn_weights + attn_bias.broadcast_as(attn_weights.shape())?)?;
-        attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_weights = attn_weights.matmul(&v)?;
-
+        let attn_weights = scaled_dot_product_attention(&q, &k, &v)?;
         let attn_weights = attn_weights.transpose(1, 2)?.reshape((b, n, c))?;
-        self.proj.forward(&attn_weights)
+        attn_weights.apply(&self.proj)
     }
 }
 
@@ -143,8 +131,10 @@ impl VitBlock {
 
 impl Module for VitBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = (xs + xs.apply(&self.norm1)?.apply(&self.attn)?)?;
-        let xs = (&xs + &xs.apply(&self.norm2)?.apply(&self.mlp)?)?;
+        let ys = xs.apply(&self.norm1)?.apply(&self.attn)?;
+        let xs = (xs + &ys)?;
+        let ys = xs.apply(&self.norm2)?.apply(&self.mlp)?;
+        let xs = (&xs + &ys)?;
         Ok(xs)
     }
 }
@@ -165,7 +155,7 @@ impl VisionTransformer {
         let num_heads = 16;
 
         let patch_embed = LinearPatchEmbedding::new(vb.pp("patch_embed"))?;
-        let pos_embed = vb.get((1, embed_len, embed_dim), "pos_embed")?;
+        let pos_embed = (vb.get((1, embed_len, embed_dim), "pos_embed")? * 0.02)?;
         let blocks = (0..num_blocks)
             .map(|i| VitBlock::new(vb.pp(&format!("blocks.{}", i)), embed_dim, num_heads, cfg))
             .collect::<Result<_>>()?;
@@ -196,7 +186,7 @@ pub struct Encoder {
 
 impl Encoder {
     fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
-        let model = VisionTransformer::new(cfg, vb.pp("model"))?;
+        let model = VisionTransformer::new(cfg, vb.pp("model.visual"))?;
         Ok(Self { model })
     }
 }
@@ -266,7 +256,7 @@ pub struct VisionEncoder {
 
 impl VisionEncoder {
     pub fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
-        let encoder = Encoder::new(cfg, vb.pp("vision.trunk"))?;
+        let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
         let projection = VisionProjection::new(cfg, vb.pp("projection"))?;
         Ok(Self {
             encoder,
@@ -297,7 +287,7 @@ pub struct Model {
 impl Model {
     /// Constructor for moondream
     pub fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
-        let text_model = PhiModel::new(&config.phi_config, vb.pp("text_model"))?;
+        let text_model = PhiModel::new_v2(&config.phi_config, vb.pp("text_model"))?;
         let vision_encoder = VisionEncoder::new(&config.vision_config, vb.pp("vision_encoder"))?;
         Ok(Self {
             text_model,

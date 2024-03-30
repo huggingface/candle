@@ -30,15 +30,15 @@ struct Args {
 }
 
 /// Loads an image from disk using the image crate, this returns a tensor with shape
-/// (3, 384, 384). OpenAI normalization is applied.
+/// (3, 378, 378). OpenAI normalization is applied.
 pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
     let img = image::io::Reader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?
-        .resize_to_fill(384, 384, image::imageops::FilterType::Triangle);
+        .resize_to_fill(378, 378, image::imageops::FilterType::Triangle); // Adjusted to 378x378
     let img = img.to_rgb8();
     let data = img.into_raw();
-    let data = Tensor::from_vec(data, (384, 384, 3), &Device::Cpu)?.permute((2, 0, 1))?;
+    let data = Tensor::from_vec(data, (378, 378, 3), &Device::Cpu)?.permute((2, 0, 1))?;
     let mean =
         Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], &Device::Cpu)?.reshape((3, 1, 1))?;
     let std = Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1], &Device::Cpu)?
@@ -48,17 +48,18 @@ pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
         .broadcast_div(&std)
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     if args.prompt.is_empty() {
         return Err(E::msg("prompt cannot be empty"));
     }
 
-    let api = hf_hub::api::sync::Api::new()?;
+    let api = hf_hub::api::tokio::Api::new()?;
     let repo = api.model("vikhyatk/moondream2".to_string());
-    let model_file = repo.get("model.safetensors")?;
-    let tokenizer = repo.get("tokenizer.json")?;
+    let model_file = repo.get("model.safetensors").await?;
+    let tokenizer = repo.get("tokenizer.json").await?;
 
     let device = candle_examples::device(args.cpu)?;
 
@@ -72,29 +73,36 @@ fn main() -> anyhow::Result<()> {
     let image = load_image(args.image)?.to_device(&device)?;
     println!("Loaded image {image:?}");
 
-    // prompt template
-    let prompt = format!("Question: {0} Answer:", args.prompt);
+    let prompt = format!("\n\nQuestion: {0}\n\nAnswer:", args.prompt);
     let tokens = tokenizer.encode(prompt, true).map_err(E::msg)?;
 
+    let image_embeds = image.unsqueeze(0)?;
     let text_input = Tensor::new(tokens.get_ids(), &device)?.unsqueeze(0)?;
-    let image_embeds = image.unsqueeze(0)?.apply(model.vision_encoder())?;
-    let mut input = Tensor::cat(&[image_embeds.clone(), text_input], 1)?;
+    println!("text_input: {text_input:?}");
+    let image_embeds = image_embeds.apply(model.vision_encoder())?;
+    println!("image_embeds: {image_embeds:?}");
 
     let mut tokens = tokens.get_ids().to_vec();
     let mut generated_tokens = 0;
 
-    let eos_token = tokenizer
-        .get_vocab(true)
-        .get("<END>")
-        .copied()
-        .ok_or_else(|| anyhow::Error::msg("cannot find the endoftext token"))?;
+    let eos_token = match tokenizer.get_vocab(true).get("<|endoftext|>") {
+        Some(token) => *token,
+        None => anyhow::bail!("cannot find the endoftext token"),
+    };
 
     let start_gen = std::time::Instant::now();
+    println!("Generated text:");
     for _ in 0..args.sample_len {
-        let logits = model.text_model.forward(&input)?;
+        println!("input: {text_input:?}");
+        let logits = model
+            .text_model
+            .forward_with_img(&text_input, &image_embeds)?;
+        println!("{logits:?}");
         let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+        println!("{logits:?}");
 
         let next_token = logits_processor.sample(&logits)?;
+        println!("{next_token}");
         tokens.push(next_token);
         generated_tokens += 1;
         if next_token == eos_token {
@@ -103,10 +111,6 @@ fn main() -> anyhow::Result<()> {
         let token = tokenizer.decode(&[next_token], true).map_err(E::msg)?;
         print!("{token}");
         std::io::stdout().flush()?;
-
-        // Update only the text tokens part for the next iteration
-        let next_input = Tensor::new(&*tokens, &device)?.unsqueeze(0)?;
-        input = Tensor::cat(&[image_embeds.clone(), next_input], 1)?;
     }
 
     let dt = start_gen.elapsed();
