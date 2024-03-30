@@ -182,7 +182,11 @@ impl LayerWeights {
             .transpose(1, 2)?;
         let v = v
             .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            // This call to contiguous ensures that the fast kernel can be called below. It's
+            // actually a no-op except when processing the initial prompt so has no significant
+            // impact on performance.
+            .contiguous()?;
 
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
