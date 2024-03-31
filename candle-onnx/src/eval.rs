@@ -776,6 +776,11 @@ pub fn simple_eval(
                 let output = input.reshape(new_shape)?;
                 values.insert(node.output[0].clone(), output);
             }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#identity
+            "Identity" => {
+                let input = get(&node.input[0])?;
+                values.insert(node.output[0].clone(), input.clone());
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
