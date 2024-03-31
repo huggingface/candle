@@ -16,7 +16,31 @@ pub const MMQ_Y_Q4_0_AMPERE: usize = 32;
 pub const NWARPS_Q4_0_AMPERE: usize = 4;
 pub const GGML_CUDA_MMV_X: usize = 32;
 pub const GGML_CUDA_MMV_Y: usize = 1;
+pub const CUDA_QUANTIZE_BLOCK_SIZE: usize = 256;
 pub const CUDA_DEQUANTIZE_BLOCK_SIZE: usize = 256;
+pub const MATRIX_ROW_PADDING: usize = 512;
+
+pub fn quantize_q8_1(
+    src: &CudaSlice<f32>,
+    dst: &mut CudaSlice<u8>,
+    elem_count: usize,
+    dev: &CudaDevice,
+) -> Result<()> {
+    use cudarc::driver::LaunchAsync;
+
+    let kx = elem_count;
+    let kx_padded = (kx + MATRIX_ROW_PADDING - 1) / MATRIX_ROW_PADDING * MATRIX_ROW_PADDING;
+    let num_blocks = (kx_padded + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
+    let func = dev.get_or_load_func("quantize_q8_1", candle_kernels::QUANTIZED)?;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (num_blocks as u32, 1, 1),
+        block_dim: (CUDA_QUANTIZE_BLOCK_SIZE as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let params = (src, dst, kx as i32, kx_padded as i32);
+    unsafe { func.launch(cfg, params) }.w()?;
+    Ok(())
+}
 
 fn dequantize(
     data: &CudaSlice<u8>,
