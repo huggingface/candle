@@ -438,4 +438,27 @@ mod test {
         quantize_q8_1(&y.slice(..), &mut y_q8_1, el, &dev)?;
         Ok(())
     }
+
+    #[test]
+    fn cuda_mmv_q8_1() -> Result<()> {
+        let dev = CudaDevice::new(0)?;
+        let ncols = 256;
+        let vs: Vec<f32> = (0..ncols).map(|v| v as f32).collect();
+        let y = dev.htod_sync_copy(&vs).w()?;
+        let xs = QCudaStorage::zeros(&dev, ncols, GgmlDType::Q4_0)?;
+        let cuda_storage = mul_mat_vec_via_q8_1(
+            &xs.data,
+            &y.slice(..),
+            /* dtype */ GgmlDType::Q4_0,
+            /* ncols */ ncols,
+            /* nrows */ 1,
+            &dev,
+        )?;
+        let vs = cuda_storage.as_cuda_slice::<f32>()?;
+        let vs = dev.dtoh_sync_copy(&vs.slice(..)).unwrap();
+        // TODO: Fix this test.
+        assert_eq!(vs.len(), 1);
+        assert_eq!(vs[0], 0f32);
+        Ok(())
+    }
 }
