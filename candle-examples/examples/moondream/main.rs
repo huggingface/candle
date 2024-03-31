@@ -79,7 +79,7 @@ impl TextGeneration {
             } else {
                 self.model
                     .text_model
-                    .forward_with_img(&input, &image_embeds)?
+                    .forward_with_img(&input, image_embeds)?
             };
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
