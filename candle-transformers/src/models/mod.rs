@@ -24,6 +24,7 @@ pub mod mistral;
 pub mod mixformer;
 pub mod mixtral;
 pub mod mobileone;
+pub mod moondream;
 pub mod mpt;
 pub mod persimmon;
 pub mod phi;

@@ -131,6 +131,8 @@ We also provide a some command line based examples using state of the art models
   dedicated submodels for hand-writing and printed recognition.
 - [Marian-MT](./candle-examples/examples/marian-mt/): neural machine translation
   model, generates the translated text from the input text.
+- [Moondream](./candle-examples/examples/moondream/): tiny computer-vision model 
+  that can answer real-world questions about images.
 
 Run them using commands like:
 ```
