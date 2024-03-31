@@ -69,7 +69,7 @@ impl LinearPatchEmbedding {
 
 impl Module for LinearPatchEmbedding {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.linear.forward(xs)
+        xs.apply(&self.linear)
     }
 }
 
