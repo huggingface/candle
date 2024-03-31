@@ -438,10 +438,16 @@ impl MixFormerSequentialForCausalLM {
         xs.narrow(1, seq_len - 1, 1)?.apply(&self.head)?.squeeze(1)
     }
 
-    pub fn forward_with_img(&mut self, xs: &Tensor, img_embeds: &Tensor) -> Result<Tensor> {
+    pub fn forward_with_img(
+        &mut self,
+        bos_token: &Tensor,
+        xs: &Tensor,
+        img_embeds: &Tensor,
+    ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let xs = xs.apply(&self.embedding)?;
-        let mut xs = Tensor::cat(&[img_embeds.clone(), xs], 1)?;
+        let bos_token = bos_token.apply(&self.embedding)?;
+        let mut xs = Tensor::cat(&[bos_token, img_embeds.clone(), xs], 1)?;
         let (_b_size, seq_len, _embds) = xs.dims3()?;
         let mask = if seq_len <= 1 {
             None
