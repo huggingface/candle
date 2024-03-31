@@ -23,6 +23,14 @@ typedef float dfloat; // dequantize float
 typedef float2 dfloat2;
 typedef void (*dequantize_kernel_t)(const void * vx, const int ib, const int iqs, dfloat2 & v);
 
+static __device__ __forceinline__ float warp_reduce_sum(float x) {
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1) {
+        x += __shfl_xor_sync(0xffffffff, x, mask, 32);
+    }
+    return x;
+}
+
 static __device__ __forceinline__ int get_int_from_int8(const int8_t * x8, const int & i32) {
     const uint16_t * x16 = (const uint16_t *) (x8 + sizeof(int) * i32); // assume at least 2 byte alignment
 
@@ -2330,11 +2338,7 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1(
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & iqs);
 
 template <int ncols_y, int qk, int qi, typename block_q_t, int vdr, vec_dot_q_cuda_t vec_dot_q_cuda>
-#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
-// tell the compiler to use as many registers as it wants, see nwarps definition below
-__launch_bounds__((ncols_y <= 4 ? 4 : 2)*WARP_SIZE, 1)
-#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
-static __global__ void mul_mat_vec_q(
+static __device__ void mul_mat_vec_q(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -2405,4 +2409,84 @@ static __global__ void mul_mat_vec_q(
             dst[j*nrows_dst + row0 + threadIdx.x] = tmp[j][threadIdx.x];
         }
     }
+}
+
+extern "C" __global__ void mul_mat_vec_q4_0_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    mul_mat_vec_q<1, QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1>
+        (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+}
+
+extern "C" __global__ void mul_mat_vec_q4_1_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    mul_mat_vec_q<1, QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ, vec_dot_q4_1_q8_1>
+        (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+}
+
+extern "C" __global__ void mul_mat_vec_q5_0_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    mul_mat_vec_q<1, QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ, vec_dot_q5_0_q8_1>
+        (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+}
+
+extern "C" __global__ void mul_mat_vec_q5_1_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    mul_mat_vec_q<1, QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ, vec_dot_q5_1_q8_1>
+        (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+}
+
+extern "C" __global__ void mul_mat_vec_q8_0_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    mul_mat_vec_q<1, QK8_0, QI8_0, block_q8_0, VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1>
+        (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+}
+
+extern "C" __global__ void mul_mat_vec_q2_K_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    mul_mat_vec_q<1, QK_K, QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ, vec_dot_q2_K_q8_1>
+        (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+}
+
+extern "C" __global__ void mul_mat_vec_q3_K_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    mul_mat_vec_q<1, QK_K, QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ, vec_dot_q3_K_q8_1>
+        (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+}
+
+extern "C" __global__ void mul_mat_vec_q4_K_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    mul_mat_vec_q<1, QK_K, QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ, vec_dot_q4_K_q8_1>
+        (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+}
+
+extern "C" __global__ void mul_mat_vec_q5_K_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    mul_mat_vec_q<1, QK_K, QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ, vec_dot_q5_K_q8_1>
+        (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+}
+
+extern "C" __global__ void mul_mat_vec_q6_K_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    mul_mat_vec_q<1, QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ, vec_dot_q6_K_q8_1>
+        (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
