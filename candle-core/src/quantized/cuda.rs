@@ -445,7 +445,8 @@ mod test {
         let ncols = 256;
         let vs: Vec<f32> = (0..ncols).map(|v| v as f32).collect();
         let y = dev.htod_sync_copy(&vs).w()?;
-        let xs = QCudaStorage::zeros(&dev, ncols, GgmlDType::Q4_0)?;
+        let mut xs = QCudaStorage::zeros(&dev, ncols, GgmlDType::Q4_0)?;
+        xs.quantize(&CudaStorage::wrap_cuda_slice(y.clone(), dev.clone()))?;
         let cuda_storage = mul_mat_vec_via_q8_1(
             &xs.data,
             &y.slice(..),
@@ -456,9 +457,10 @@ mod test {
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
         let vs = dev.dtoh_sync_copy(&vs.slice(..)).unwrap();
-        // TODO: Fix this test.
         assert_eq!(vs.len(), 1);
-        assert_eq!(vs[0], 0f32);
+        // for n = 255, n.(n+1).(2n+1) / 6 = 5559680
+        // Q8 means 1/256 precision.
+        assert_eq!(vs[0], 5561664.5);
         Ok(())
     }
 }
