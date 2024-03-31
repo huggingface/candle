@@ -10,7 +10,7 @@ pub struct QCudaStorage {
     device: CudaDevice,
 }
 
-pub const FORCE_DMMV: bool = true;
+pub const FORCE_DMMV: bool = false;
 pub const WARP_SIZE: usize = 32;
 pub const MMQ_X_Q4_0_AMPERE: usize = 4;
 pub const MMQ_Y_Q4_0_AMPERE: usize = 32;
@@ -419,4 +419,23 @@ pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
         device: device.clone(),
         dtype: T::DTYPE,
     }))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn cuda_quantize_q8_1() -> Result<()> {
+        let dev = CudaDevice::new(0)?;
+        let el = 256;
+        let el_padded = (el + MATRIX_ROW_PADDING - 1) / MATRIX_ROW_PADDING * MATRIX_ROW_PADDING;
+        let y_size_in_bytes =
+            el_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
+        let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes).w()? };
+        let vs: Vec<f32> = (0..el).map(|v| v as f32).collect();
+        let y = dev.htod_sync_copy(&vs).w()?;
+        quantize_q8_1(&y.slice(..), &mut y_q8_1, el, &dev)?;
+        Ok(())
+    }
 }
