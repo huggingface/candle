@@ -10,7 +10,12 @@ pub struct QCudaStorage {
     device: CudaDevice,
 }
 
-pub const FORCE_DMMV: bool = false;
+static FORCE_DMMV: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_force_dmmv(f: bool) {
+    FORCE_DMMV.store(f, std::sync::atomic::Ordering::Relaxed)
+}
+
 pub const WARP_SIZE: usize = 32;
 pub const MMQ_X_Q4_0_AMPERE: usize = 4;
 pub const MMQ_Y_Q4_0_AMPERE: usize = 32;
@@ -360,7 +365,7 @@ impl QCudaStorage {
             crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", rhs_l.shape())
         }
 
-        let out = if FORCE_DMMV {
+        let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
             dequantize_mul_mat_vec(&self.data, &rhs, self.dtype, ncols, nrows, self.device())?
         } else {
             mul_mat_vec_via_q8_1(&self.data, &rhs, self.dtype, ncols, nrows, self.device())?

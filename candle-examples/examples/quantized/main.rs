@@ -235,6 +235,10 @@ struct Args {
     /// Group-Query Attention, use 8 for the 70B version of LLaMAv2.
     #[arg(long)]
     gqa: Option<usize>,
+
+    /// Use the (experimental) fast cuda kernels.
+    #[arg(long)]
+    fast_cuda: bool,
 }
 
 impl Args {
@@ -341,6 +345,10 @@ fn main() -> anyhow::Result<()> {
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
+
+    #[cfg(feature = "cuda")]
+    candle::quantized::cuda::set_force_dmmv(!args.fast_cuda);
+
     let temperature = if args.temperature == 0. {
         None
     } else {
