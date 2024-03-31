@@ -176,10 +176,9 @@ fn mul_mat_vec_via_q8_1(
     };
     let func = dev.get_or_load_func(kernel_name, candle_kernels::QUANTIZED)?;
     let dst = unsafe { dev.alloc::<f32>(nrows).w()? };
-    let block_num_y = (nrows + GGML_CUDA_MMV_Y - 1) / GGML_CUDA_MMV_Y;
     let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (block_num_y as u32, 1, 1),
-        block_dim: (WARP_SIZE as u32, GGML_CUDA_MMV_Y as u32, 1),
+        grid_dim: (nrows as u32, 1, 1),
+        block_dim: (WARP_SIZE as u32, 4, 1),
         shared_mem_bytes: 0,
     };
 
