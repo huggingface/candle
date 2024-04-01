@@ -25,7 +25,7 @@ hf-hub = { workspace = true, features = ["tokio"] }
 image = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
-pyo3 = { version = "0.20.0", features = ["auto-initialize"], optional = true }
+pyo3 = { version = "0.21.0", features = ["auto-initialize"], optional = true }
 rayon = { workspace = true }
 rubato = { version = "0.15.0", optional = true }
 safetensors = { workspace = true }
