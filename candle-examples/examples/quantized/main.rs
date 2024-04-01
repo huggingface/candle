@@ -236,9 +236,9 @@ struct Args {
     #[arg(long)]
     gqa: Option<usize>,
 
-    /// Use the (experimental) fast cuda kernels.
+    /// Use the slower dmmv cuda kernel.
     #[arg(long)]
-    fast_cuda: bool,
+    force_dmmv: bool,
 }
 
 impl Args {
@@ -347,7 +347,7 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     #[cfg(feature = "cuda")]
-    candle::quantized::cuda::set_force_dmmv(!args.fast_cuda);
+    candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
 
     let temperature = if args.temperature == 0. {
         None

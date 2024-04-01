@@ -196,6 +196,10 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
+
+    /// Use the slower dmmv cuda kernel.
+    #[arg(long)]
+    force_dmmv: bool,
 }
 
 fn main() -> Result<()> {
@@ -203,6 +207,9 @@ fn main() -> Result<()> {
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
+    #[cfg(feature = "cuda")]
+    candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
+
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
