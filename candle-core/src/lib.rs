@@ -37,7 +37,7 @@
 mod accelerate;
 pub mod backend;
 pub mod backprop;
-mod conv;
+pub mod conv;
 mod convert;
 pub mod cpu;
 pub mod cpu_backend;
@@ -57,7 +57,7 @@ pub mod metal_backend;
 #[cfg(feature = "mkl")]
 mod mkl;
 pub mod npy;
-mod op;
+pub mod op;
 pub mod pickle;
 pub mod quantized;
 pub mod safetensors;
