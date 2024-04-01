@@ -33,9 +33,7 @@ def has_mkl() -> bool:
     pass
 
 @staticmethod
-def load_ggml(
-    path: Union[str, PathLike], device: Optional[Device] = None
-) -> Tuple[Dict[str, QTensor], Dict[str, Any], List[str]]:
+def load_ggml(path: Union[str, PathLike]) -> Tuple[Dict[str, QTensor], Dict[str, Any], List[str]]:
     """
     Load a GGML file. Returns a tuple of three objects: a dictionary mapping tensor names to tensors,
     a dictionary mapping hyperparameter names to hyperparameter values, and a vocabulary.
@@ -43,9 +41,7 @@ def load_ggml(
     pass
 
 @staticmethod
-def load_gguf(
-    path: Union[str, PathLike], device: Optional[Device] = None
-) -> Tuple[Dict[str, QTensor], Dict[str, Any]]:
+def load_gguf(path: Union[str, PathLike]) -> Tuple[Dict[str, QTensor], Dict[str, Any]]:
     """
     Loads a GGUF file. Returns a tuple of two dictionaries: the first maps tensor names to tensors,
     and the second maps metadata keys to metadata values.

@@ -26,21 +26,21 @@ class i64(DType):
     pass
 
 @staticmethod
-def ones(*shape: Shape, dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+def ones(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor filled with ones.
     """
     pass
 
 @staticmethod
-def rand(*shape: Shape, device: Optional[Device] = None) -> Tensor:
+def rand(shape: Sequence[int], device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor with random values.
     """
     pass
 
 @staticmethod
-def randn(*shape: Shape, device: Optional[Device] = None) -> Tensor:
+def randn(shape: Sequence[int], device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor with random values from a normal distribution.
     """
@@ -67,7 +67,7 @@ class u8(DType):
     pass
 
 @staticmethod
-def zeros(*shape: Shape, dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
+def zeros(shape: Sequence[int], dtype: Optional[DType] = None, device: Optional[Device] = None) -> Tensor:
     """
     Creates a new tensor filled with zeros.
     """
@@ -208,12 +208,6 @@ class Tensor:
         """
         pass
 
-    def abs(self) -> Tensor:
-        """
-        Performs the `abs` operation on the tensor.
-        """
-        pass
-
     def argmax_keepdim(self, dim: int) -> Tensor:
         """
         Returns the indices of the maximum value(s) across the selected dimension.
@@ -232,7 +226,7 @@ class Tensor:
         """
         pass
 
-    def broadcast_as(self, *shape: Shape) -> Tensor:
+    def broadcast_as(self, shape: Sequence[int]) -> Tensor:
         """
         Broadcasts the tensor to the given shape.
         """
@@ -244,7 +238,7 @@ class Tensor:
         """
         pass
 
-    def broadcast_left(self, *shape: Shape) -> Tensor:
+    def broadcast_left(self, shape: Sequence[int]) -> Tensor:
         """
         Broadcasts the tensor to the given shape, adding new dimensions on the left.
         """
@@ -324,12 +318,6 @@ class Tensor:
         """
         pass
 
-    def gather(self, index, dim):
-        """
-        Gathers values along an axis specified by dim.
-        """
-        pass
-
     def get(self, index: int) -> Tensor:
         """
         Gets the value at the specified index.
@@ -397,13 +385,6 @@ class Tensor:
         """
         pass
 
-    @property
-    def nelement(self) -> int:
-        """
-        Gets the tensor's element count.
-        """
-        pass
-
     def powf(self, p: float) -> Tensor:
         """
         Performs the `pow` operation on the tensor with the given exponent.
@@ -429,7 +410,7 @@ class Tensor:
         """
         pass
 
-    def reshape(self, *shape: Shape) -> Tensor:
+    def reshape(self, shape: Sequence[int]) -> Tensor:
         """
         Reshapes the tensor to the given shape.
         """
@@ -491,12 +472,6 @@ class Tensor:
         """
         pass
 
-    def to(self, *args, **kwargs) -> Tensor:
-        """
-        Performs Tensor dtype and/or device conversion.
-        """
-        pass
-
     def to_device(self, device: Union[str, Device]) -> Tensor:
         """
         Move the tensor to a new device.
@@ -506,12 +481,6 @@ class Tensor:
     def to_dtype(self, dtype: Union[str, DType]) -> Tensor:
         """
         Convert the tensor to a new dtype.
-        """
-        pass
-
-    def to_torch(self) -> torch.Tensor:
-        """
-        Converts candle's tensor to pytorch's tensor
         """
         pass
 
