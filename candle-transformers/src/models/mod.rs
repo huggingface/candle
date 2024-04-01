@@ -35,6 +35,7 @@ pub mod quantized_llama2_c;
 pub mod quantized_metavoice;
 pub mod quantized_mistral;
 pub mod quantized_mixformer;
+pub mod quantized_moondream;
 pub mod quantized_mpt;
 pub mod quantized_rwkv_v5;
 pub mod quantized_rwkv_v6;

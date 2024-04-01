@@ -1,55 +1,14 @@
-use crate::models::mixformer::{Config as PhiConfig, MixFormerSequentialForCausalLM as PhiModel};
-use candle::{IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm, linear_b, Linear, Module, VarBuilder};
-
-pub struct Config {
-    pub phi_config: PhiConfig,
-    pub vision_config: VisionConfig,
-}
-
-impl Config {
-    pub fn v2() -> Self {
-        Self {
-            phi_config: PhiConfig::v1_5(),
-            vision_config: VisionConfig::v2(),
-        }
-    }
-}
+use crate::models::moondream::{Config, VisionConfig};
+use crate::models::quantized_mixformer::MixFormerSequentialForCausalLM as PhiModel;
+use crate::quantized_nn::{layer_norm, linear_b, Linear};
+use crate::quantized_var_builder::VarBuilder;
+use candle::{IndexOp, Module, Result, Tensor, D};
 
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
     let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
     candle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(v)
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
-pub struct VisionConfig {
-    pub(crate) image_embedding_dim: usize,
-    pub(crate) model_dim: usize,
-    pub(crate) hidden_dim: usize,
-    pub(crate) hidden_features: usize,
-    pub(crate) embed_len: usize,
-    pub(crate) embed_dim: usize,
-    pub(crate) num_blocks: usize,
-    pub(crate) num_heads: usize,
-    pub(crate) act: candle_nn::Activation,
-}
-
-impl VisionConfig {
-    pub fn v2() -> Self {
-        Self {
-            image_embedding_dim: 1152,
-            model_dim: 2048,
-            hidden_dim: 2048 * 4,
-            hidden_features: 4304,
-            embed_len: 729,
-            embed_dim: 1152,
-            num_blocks: 27,
-            num_heads: 16,
-            act: candle_nn::Activation::Gelu,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -154,11 +113,13 @@ struct VisionTransformer {
 impl VisionTransformer {
     fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
         let patch_embed = LinearPatchEmbedding::new(vb.pp("patch_embed"))?;
-        let pos_embed = vb.get((1, cfg.embed_len, cfg.embed_dim), "pos_embed")?;
+        let pos_embed = vb
+            .get((1, cfg.embed_len, cfg.embed_dim), "pos_embed")?
+            .dequantize(vb.device())?;
         let blocks = (0..cfg.num_blocks)
             .map(|i| {
                 VitBlock::new(
-                    vb.pp(&format!("blocks.{}", i)),
+                    vb.pp(format!("blocks.{}", i)),
                     cfg.embed_dim,
                     cfg.num_heads,
                     cfg,
