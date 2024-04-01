@@ -72,6 +72,10 @@ impl TextGeneration {
         let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = 0usize;
 
+        let bos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
+            Some(token) => *token,
+            None => anyhow::bail!("cannot find the BOS token"),
+        };
         let eos_token = match self.tokenizer.get_vocab(true).get("END") {
             Some(token) => *token,
             None => anyhow::bail!("cannot find the EOS token"),
@@ -82,6 +86,7 @@ impl TextGeneration {
             let context_size = if index > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
+            let bos_token = Tensor::new(&[bos_token], &self.device)?.unsqueeze(0)?;
             let logits = if index > 0 {
                 match self.model {
                     Model::Moondream(ref mut model) => model.text_model.forward(&input)?,
@@ -90,10 +95,14 @@ impl TextGeneration {
             } else {
                 match self.model {
                     Model::Moondream(ref mut model) => {
-                        model.text_model.forward_with_img(&input, image_embeds)?
+                        model
+                            .text_model
+                            .forward_with_img(&bos_token, &input, image_embeds)?
                     }
                     Model::Quantized(ref mut model) => {
-                        model.text_model.forward_with_img(&input, image_embeds)?
+                        model
+                            .text_model
+                            .forward_with_img(&bos_token, &input, image_embeds)?
                     }
                 }
             };
@@ -158,7 +167,7 @@ struct Args {
     top_p: Option<f64>,
 
     /// The seed to use when generating random samples.
-    #[arg(long, default_value_t = 299792458)]
+    #[arg(long, default_value_t = 0)]
     seed: u64,
 
     #[arg(long, default_value_t = 5000)]
