@@ -70,26 +70,26 @@ where
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
-    vocab_size: usize,
-    d_model: usize,
-    d_kv: usize,
-    d_ff: usize,
-    num_layers: usize,
-    num_decoder_layers: Option<usize>,
-    num_heads: usize,
-    relative_attention_num_buckets: usize,
+    pub vocab_size: usize,
+    pub d_model: usize,
+    pub d_kv: usize,
+    pub d_ff: usize,
+    pub num_layers: usize,
+    pub num_decoder_layers: Option<usize>,
+    pub num_heads: usize,
+    pub relative_attention_num_buckets: usize,
     #[serde(default = "default_relative_attention_max_distance")]
-    relative_attention_max_distance: usize,
-    dropout_rate: f64,
-    layer_norm_epsilon: f64,
-    initializer_factor: f64,
+    pub relative_attention_max_distance: usize,
+    pub dropout_rate: f64,
+    pub layer_norm_epsilon: f64,
+    pub initializer_factor: f64,
     #[serde(default, deserialize_with = "deserialize_feed_forward_proj_activation")]
-    feed_forward_proj: ActivationWithOptionalGating,
+    pub feed_forward_proj: ActivationWithOptionalGating,
     #[serde(default = "default_tie_word_embeddings")]
-    tie_word_embeddings: bool,
+    pub tie_word_embeddings: bool,
     #[serde(default = "default_is_decoder")]
-    is_decoder: bool,
-    is_encoder_decoder: bool,
+    pub is_decoder: bool,
+    pub is_encoder_decoder: bool,
     #[serde(default = "default_use_cache")]
     pub use_cache: bool,
     pub pad_token_id: usize,
