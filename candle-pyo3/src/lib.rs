@@ -1591,7 +1591,7 @@ fn candle_functional_m(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()>
 }
 
 #[cfg(feature = "onnx")]
-fn candle_onnx_m(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn candle_onnx_m(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     use onnx::{PyONNXModel, PyONNXTensorDescriptor};
     m.add_class::<PyONNXModel>()?;
     m.add_class::<PyONNXTensorDescriptor>()?;
@@ -1608,9 +1608,9 @@ fn candle(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_submodule(&nn)?;
     #[cfg(feature = "onnx")]
     {
-        let onnx = PyModule::new(py, "onnx")?;
-        candle_onnx_m(py, onnx)?;
-        m.add_submodule(onnx)?;
+        let onnx = PyModule::new_bound(py, "onnx")?;
+        candle_onnx_m(py, &onnx)?;
+        m.add_submodule(&onnx)?;
     }
     m.add_class::<PyTensor>()?;
     m.add_class::<PyQTensor>()?;
