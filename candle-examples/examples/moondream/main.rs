@@ -72,10 +72,14 @@ impl TextGeneration {
         let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = 0usize;
 
+        // Moondream tokenizer bos_token is "<|endoftext|>"
+        // https://huggingface.co/vikhyatk/moondream2/blob/main/special_tokens_map.json
         let bos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
             Some(token) => *token,
             None => anyhow::bail!("cannot find the BOS token"),
         };
+        // eos_token is "END"
+        // https://github.com/vikhyat/moondream/blob/a9d788a20d1543fb1479edc54106e88cff7759d3/moondream/moondream.py#L100
         let eos_token = match self.tokenizer.get_vocab(true).get("END") {
             Some(token) => *token,
             None => anyhow::bail!("cannot find the EOS token"),

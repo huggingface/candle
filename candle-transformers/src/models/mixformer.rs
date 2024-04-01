@@ -447,13 +447,11 @@ impl MixFormerSequentialForCausalLM {
         let _enter = self.span.enter();
         let xs = xs.apply(&self.embedding)?;
         let bos_token = bos_token.apply(&self.embedding)?;
+        // Python implementation sequence order is <bos token embedding><img embedding><rest of text embedding>
+        // https://github.com/vikhyat/moondream/blob/a9d788a20d1543fb1479edc54106e88cff7759d3/moondream/moondream.py#L43-L56
         let mut xs = Tensor::cat(&[bos_token, img_embeds.clone(), xs], 1)?;
         let (_b_size, seq_len, _embds) = xs.dims3()?;
-        let mask = if seq_len <= 1 {
-            None
-        } else {
-            Some(get_mask(seq_len, xs.device())?)
-        };
+        let mask = Some(get_mask(seq_len, xs.device())?);
         for block in self.blocks.iter_mut() {
             xs = block.forward(&xs, mask.as_ref())?
         }
