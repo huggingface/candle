@@ -263,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
         Some(m) => m.into(),
         None => {
             if args.quantized {
-                repo.get("model-q4k.gguf").await?
+                repo.get("model-q4_0.gguf").await?
             } else {
                 repo.get("model.safetensors").await?
             }
