@@ -1,4 +1,5 @@
 use super::{GgmlDType, QStorage};
+use crate::quantized::k_quants::GgmlType;
 use crate::{backend::BackendDevice, cuda_backend::WrapErr};
 use crate::{CudaDevice, CudaStorage, Result};
 
@@ -235,6 +236,12 @@ impl QCudaStorage {
     }
 
     pub fn dequantize(&self, elem_count: usize) -> Result<CudaStorage> {
+        fn deq<T: GgmlType>(buffer: &[u8], n: usize, dst: &mut [f32]) -> Result<()> {
+            let slice = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const T, n) };
+            let vec = slice.to_vec();
+            T::to_float(&vec, dst)
+        }
+
         let fast_kernel = matches!(
             self.dtype,
             GgmlDType::Q4_0
@@ -253,69 +260,25 @@ impl QCudaStorage {
             return dequantize(&self.data, self.dtype, elem_count, self.device());
         }
         // Run the dequantization on cpu.
-        use crate::quantized::k_quants::GgmlType;
 
         let buffer = self.device.dtoh_sync_copy(&self.data).w()?;
         let mut out = vec![0.0; elem_count];
         let block_len = elem_count / self.dtype.block_size();
         match self.dtype {
-            GgmlDType::F32 => {
-                let slice =
-                    unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const f32, block_len) };
-                out.copy_from_slice(slice)
-            }
-            GgmlDType::F16 => {
-                let vec: Vec<half::f16> = read_to_vec(&buffer, block_len);
-                half::f16::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q4_0 => {
-                let vec: Vec<crate::quantized::BlockQ4_0> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ4_0::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q4_1 => {
-                let vec: Vec<crate::quantized::BlockQ4_1> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ4_1::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q5_0 => {
-                let vec: Vec<crate::quantized::BlockQ5_0> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ5_0::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q5_1 => {
-                let vec: Vec<crate::quantized::BlockQ5_1> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ5_1::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q8_0 => {
-                let vec: Vec<crate::quantized::BlockQ8_0> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ8_0::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q8_1 => {
-                let vec: Vec<crate::quantized::BlockQ8_1> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ8_1::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q2K => {
-                let vec: Vec<crate::quantized::BlockQ2K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ2K::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q3K => {
-                let vec: Vec<crate::quantized::BlockQ3K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ3K::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q4K => {
-                let vec: Vec<crate::quantized::BlockQ4K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ4K::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q5K => {
-                let vec: Vec<crate::quantized::BlockQ5K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ5K::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q6K => {
-                let vec: Vec<crate::quantized::BlockQ6K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ6K::to_float(&vec, &mut out)?;
-            }
-            GgmlDType::Q8K => {
-                let vec: Vec<crate::quantized::BlockQ8K> = read_to_vec(&buffer, block_len);
-                crate::quantized::BlockQ8K::to_float(&vec, &mut out)?;
-            }
+            GgmlDType::F32 => deq::<f32>(&buffer, block_len, &mut out)?,
+            GgmlDType::F16 => deq::<half::f16>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q4_0 => deq::<crate::quantized::BlockQ4_0>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q4_1 => deq::<crate::quantized::BlockQ4_1>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q5_0 => deq::<crate::quantized::BlockQ5_0>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q5_1 => deq::<crate::quantized::BlockQ5_1>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q8_0 => deq::<crate::quantized::BlockQ8_0>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q8_1 => deq::<crate::quantized::BlockQ8_1>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q2K => deq::<crate::quantized::BlockQ2K>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q3K => deq::<crate::quantized::BlockQ3K>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q4K => deq::<crate::quantized::BlockQ4K>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q5K => deq::<crate::quantized::BlockQ5K>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q6K => deq::<crate::quantized::BlockQ6K>(&buffer, block_len, &mut out)?,
+            GgmlDType::Q8K => deq::<crate::quantized::BlockQ8K>(&buffer, block_len, &mut out)?,
         }
 
         self.device
@@ -418,11 +381,6 @@ impl QCudaStorage {
         out_shape.push(n);
         Ok((out, out_shape.into()))
     }
-}
-
-fn read_to_vec<T: Clone>(buffer: &[u8], n: usize) -> Vec<T> {
-    let slice = unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const T, n) };
-    slice.to_vec()
 }
 
 pub fn load_quantized<T: super::GgmlType + Send + Sync + 'static>(
