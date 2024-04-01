@@ -124,6 +124,13 @@ fn dequantize_mul_mat_vec(
 ) -> Result<CudaStorage> {
     use cudarc::driver::LaunchAsync;
 
+    let data_elems = data.len() / dtype.type_size() * dtype.block_size();
+    if data_elems < ncols * nrows {
+        crate::bail!("unexpected data size {}, ncols {ncols} {nrows}", data_elems)
+    }
+    if y.len() != ncols {
+        crate::bail!("unexpected y size {}, ncols {ncols} {nrows}", y.len())
+    }
     let kernel_name = match dtype {
         GgmlDType::Q4_0 => "dequantize_mul_mat_vec_q4_0_cuda",
         GgmlDType::Q4_1 => "dequantize_mul_mat_vec_q4_1_cuda",
@@ -161,6 +168,13 @@ fn mul_mat_vec_via_q8_1(
 ) -> Result<CudaStorage> {
     use cudarc::driver::LaunchAsync;
 
+    let data_elems = data.len() / dtype.type_size() * dtype.block_size();
+    if data_elems < ncols * nrows {
+        crate::bail!("unexpected data size {}, ncols {ncols} {nrows}", data_elems)
+    }
+    if y.len() != ncols {
+        crate::bail!("unexpected y size {}, ncols {ncols} {nrows}", y.len())
+    }
     // Start by quantizing y
     let ncols_padded = pad(ncols, MATRIX_ROW_PADDING);
     let y_size_in_bytes = ncols_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
@@ -203,7 +217,7 @@ fn mul_mat_vec_via_q8_1(
 
 impl QCudaStorage {
     pub fn zeros(device: &CudaDevice, el_count: usize, dtype: GgmlDType) -> Result<Self> {
-        let size_in_bytes = el_count * dtype.type_size() / dtype.block_size();
+        let size_in_bytes = ceil_div(el_count, dtype.block_size()) * dtype.type_size();
         let data = device.alloc_zeros::<u8>(size_in_bytes).w()?;
         Ok(QCudaStorage {
             data,
