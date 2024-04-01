@@ -22,6 +22,7 @@ const DTYPE: DType = DType::F32;
 enum Which {
     T5Base,
     T5Small,
+    T5Large,
     T5_3B,
     Mt5Base,
     Mt5Small,
@@ -108,6 +109,7 @@ impl T5ModelBuilder {
         let (default_model, default_revision) = match args.which {
             Which::T5Base => ("t5-base", "main"),
             Which::T5Small => ("t5-small", "refs/pr/15"),
+            Which::T5Large => ("t5-large", "main"),
             Which::T5_3B => ("t5-3b", "main"),
             Which::Mt5Base => ("google/mt5-base", "refs/pr/5"),
             Which::Mt5Small => ("google/mt5-small", "refs/pr/6"),
