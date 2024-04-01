@@ -119,7 +119,7 @@ impl VisionTransformer {
         let blocks = (0..cfg.num_blocks)
             .map(|i| {
                 VitBlock::new(
-                    vb.pp(&format!("blocks.{}", i)),
+                    vb.pp(format!("blocks.{}", i)),
                     cfg.embed_dim,
                     cfg.num_heads,
                     cfg,

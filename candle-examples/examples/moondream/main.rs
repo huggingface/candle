@@ -86,13 +86,13 @@ impl TextGeneration {
             let context_size = if index > 0 { 1 } else { tokens.len() };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let bos_token = Tensor::new(&[bos_token], &self.device)?.unsqueeze(0)?;
             let logits = if index > 0 {
                 match self.model {
                     Model::Moondream(ref mut model) => model.text_model.forward(&input)?,
                     Model::Quantized(ref mut model) => model.text_model.forward(&input)?,
                 }
             } else {
+                let bos_token = Tensor::new(&[bos_token], &self.device)?.unsqueeze(0)?;
                 match self.model {
                     Model::Moondream(ref mut model) => {
                         model
