@@ -9,11 +9,19 @@ use clap::Parser;
 
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use candle_transformers::{generation::LogitsProcessor, models::moondream};
+use candle_transformers::{
+    generation::LogitsProcessor,
+    models::{moondream, quantized_moondream},
+};
 use tokenizers::Tokenizer;
 
+enum Model {
+    Moondream(moondream::Model),
+    Quantized(quantized_moondream::Model),
+}
+
 struct TextGeneration {
-    model: moondream::Model,
+    model: Model,
     device: Device,
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
@@ -25,7 +33,7 @@ struct TextGeneration {
 impl TextGeneration {
     #[allow(clippy::too_many_arguments)]
     fn new(
-        model: moondream::Model,
+        model: Model,
         tokenizer: Tokenizer,
         seed: u64,
         temp: Option<f64>,
@@ -75,11 +83,19 @@ impl TextGeneration {
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
             let logits = if index > 0 {
-                self.model.text_model.forward(&input)?
+                match self.model {
+                    Model::Moondream(ref mut model) => model.text_model.forward(&input)?,
+                    Model::Quantized(ref mut model) => model.text_model.forward(&input)?,
+                }
             } else {
-                self.model
-                    .text_model
-                    .forward_with_img(&input, image_embeds)?
+                match self.model {
+                    Model::Moondream(ref mut model) => {
+                        model.text_model.forward_with_img(&input, image_embeds)?
+                    }
+                    Model::Quantized(ref mut model) => {
+                        model.text_model.forward_with_img(&input, image_embeds)?
+                    }
+                }
             };
             let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
@@ -156,11 +172,14 @@ struct Args {
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
 
-    #[arg(long, default_value = "vikhyatk/moondream2")]
-    model_id: String,
+    #[arg(long)]
+    model_id: Option<String>,
 
     #[arg(long, default_value = "main")]
     revision: String,
+
+    #[arg(long)]
+    quantized: bool,
 
     #[arg(long)]
     model_file: Option<String>,
@@ -216,14 +235,30 @@ async fn main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
     let api = hf_hub::api::tokio::Api::new()?;
+    let model_id = match args.model_id {
+        Some(model_id) => model_id.to_string(),
+        None => {
+            if args.quantized {
+                "santiagomed/candle-moondream".to_string()
+            } else {
+                "vikhyatk/moondream2".to_string()
+            }
+        }
+    };
     let repo = api.repo(hf_hub::Repo::with_revision(
-        args.model_id,
+        model_id,
         hf_hub::RepoType::Model,
         args.revision,
     ));
     let model_file = match args.model_file {
         Some(m) => m.into(),
-        None => repo.get("model.safetensors").await?,
+        None => {
+            if args.quantized {
+                repo.get("model-q4k.gguf").await?
+            } else {
+                repo.get("model.safetensors").await?
+            }
+        }
     };
     let tokenizer = match args.tokenizer_file {
         Some(m) => m.into(),
@@ -234,22 +269,35 @@ async fn main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
     let config = moondream::Config::v2();
-    let model = moondream::Model::new(&config, vb)?;
+    let model = if args.quantized {
+        let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
+            &model_file,
+            &device,
+        )?;
+        let model = quantized_moondream::Model::new(&config, vb)?;
+        Model::Quantized(model)
+    } else {
+        let vb =
+            unsafe { VarBuilder::from_mmaped_safetensors(&[model_file], DType::F32, &device)? };
+        let model = moondream::Model::new(&config, vb)?;
+        Model::Moondream(model)
+    };
     println!("loaded the model in {:?}", start.elapsed());
 
     let start = std::time::Instant::now();
     let image = load_image(args.image)?.to_device(&device)?;
     let image_embeds = image.unsqueeze(0)?;
-    let image_embeds = image_embeds.apply(model.vision_encoder())?;
+    let image_embeds = match model {
+        Model::Moondream(ref m) => image_embeds.apply(m.vision_encoder())?,
+        Model::Quantized(ref m) => image_embeds.apply(m.vision_encoder())?,
+    };
     println!(
         "loaded and encoded the image {image:?} in {:?}",
         start.elapsed()
     );
 
     let prompt = format!("\n\nQuestion: {0}\n\nAnswer:", args.prompt);
-
     let mut pipeline = TextGeneration::new(
         model,
         tokenizer,

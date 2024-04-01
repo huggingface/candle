@@ -337,6 +337,26 @@ impl MixFormerSequentialForCausalLM {
         xs.narrow(1, seq_len - 1, 1)?.apply(&self.head)?.squeeze(1)
     }
 
+    pub fn forward_with_img(&mut self, xs: &Tensor, img_embeds: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let xs = xs.apply(&self.embedding)?;
+        let mut xs = Tensor::cat(&[img_embeds.clone(), xs], 1)?;
+        let (_b_size, seq_len, _embds) = xs.dims3()?;
+        let mask = if seq_len <= 1 {
+            None
+        } else {
+            Some(get_mask(seq_len, xs.device())?)
+        };
+        for block in self.blocks.iter_mut() {
+            xs = block.forward(&xs, mask.as_ref())?
+        }
+        let xs = xs
+            .narrow(1, seq_len - 1, 1)?
+            .apply(&self.head)?
+            .squeeze(1)?;
+        Ok(xs)
+    }
+
     pub fn clear_kv_cache(&mut self) {
         self.blocks.iter_mut().for_each(|b| b.clear_kv_cache())
     }
