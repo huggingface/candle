@@ -4,6 +4,7 @@ use crate::{CudaDevice, CudaStorage, Result};
 
 use cudarc::driver::{CudaSlice, CudaView, DeviceSlice};
 
+#[derive(Clone, Debug)]
 pub struct QCudaStorage {
     data: CudaSlice<u8>,
     dtype: GgmlDType,
@@ -26,6 +27,14 @@ pub const CUDA_QUANTIZE_BLOCK_SIZE: usize = 256;
 pub const CUDA_DEQUANTIZE_BLOCK_SIZE: usize = 256;
 pub const MATRIX_ROW_PADDING: usize = 512;
 
+fn ceil_div(p: usize, q: usize) -> usize {
+    (p + q - 1) / q
+}
+
+fn pad(p: usize, q: usize) -> usize {
+    ceil_div(p, q) * q
+}
+
 fn quantize_q8_1(
     src: &CudaView<f32>,
     dst: &mut CudaSlice<u8>,
@@ -35,8 +44,8 @@ fn quantize_q8_1(
     use cudarc::driver::LaunchAsync;
 
     let kx = elem_count;
-    let kx_padded = (kx + MATRIX_ROW_PADDING - 1) / MATRIX_ROW_PADDING * MATRIX_ROW_PADDING;
-    let num_blocks = (kx_padded + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
+    let kx_padded = pad(kx, MATRIX_ROW_PADDING);
+    let num_blocks = ceil_div(kx_padded, CUDA_QUANTIZE_BLOCK_SIZE);
     let func = dev.get_or_load_func("quantize_q8_1", candle_kernels::QUANTIZED)?;
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (num_blocks as u32, 1, 1),
@@ -60,26 +69,18 @@ fn dequantize(
     let (kernel_name, is_k, block_dim, num_blocks) = match dtype {
         GgmlDType::Q4_0 => ("dequantize_block_q4_0", false, 32, nb),
         GgmlDType::Q4_1 => ("dequantize_block_q4_1", false, 32, nb),
-        GgmlDType::Q5_0 => {
-            let nb = (elem_count + 2 * CUDA_DEQUANTIZE_BLOCK_SIZE - 1)
-                / (2 * CUDA_DEQUANTIZE_BLOCK_SIZE);
-            (
-                "dequantize_block_q5_0",
-                false,
-                CUDA_DEQUANTIZE_BLOCK_SIZE,
-                nb,
-            )
-        }
-        GgmlDType::Q5_1 => {
-            let nb = (elem_count + 2 * CUDA_DEQUANTIZE_BLOCK_SIZE - 1)
-                / (2 * CUDA_DEQUANTIZE_BLOCK_SIZE);
-            (
-                "dequantize_block_q5_1",
-                false,
-                CUDA_DEQUANTIZE_BLOCK_SIZE,
-                nb,
-            )
-        }
+        GgmlDType::Q5_0 => (
+            "dequantize_block_q5_0",
+            false,
+            CUDA_DEQUANTIZE_BLOCK_SIZE,
+            ceil_div(elem_count, 2 * CUDA_DEQUANTIZE_BLOCK_SIZE),
+        ),
+        GgmlDType::Q5_1 => (
+            "dequantize_block_q5_1",
+            false,
+            CUDA_DEQUANTIZE_BLOCK_SIZE,
+            ceil_div(elem_count, 2 * CUDA_DEQUANTIZE_BLOCK_SIZE),
+        ),
         GgmlDType::Q8_0 => ("dequantize_block_q8_0", false, 32, nb),
         GgmlDType::Q2K => ("dequantize_block_q2_K", true, 64, nb),
         GgmlDType::Q3K => ("dequantize_block_q3_K", true, 64, nb),
@@ -138,7 +139,7 @@ fn dequantize_mul_mat_vec(
     };
     let func = dev.get_or_load_func(kernel_name, candle_kernels::QUANTIZED)?;
     let dst = unsafe { dev.alloc::<f32>(nrows).w()? };
-    let block_num_y = (nrows + GGML_CUDA_MMV_Y - 1) / GGML_CUDA_MMV_Y;
+    let block_num_y = ceil_div(nrows, GGML_CUDA_MMV_Y);
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (block_num_y as u32, 1, 1),
         block_dim: (WARP_SIZE as u32, GGML_CUDA_MMV_Y as u32, 1),
@@ -161,7 +162,7 @@ fn mul_mat_vec_via_q8_1(
     use cudarc::driver::LaunchAsync;
 
     // Start by quantizing y
-    let ncols_padded = (ncols + MATRIX_ROW_PADDING - 1) / MATRIX_ROW_PADDING * MATRIX_ROW_PADDING;
+    let ncols_padded = pad(ncols, MATRIX_ROW_PADDING);
     let y_size_in_bytes = ncols_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
     let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes).w()? };
     quantize_q8_1(y, &mut y_q8_1, ncols, dev)?;
@@ -433,7 +434,7 @@ mod test {
     fn cuda_quantize_q8_1() -> Result<()> {
         let dev = CudaDevice::new(0)?;
         let el = 256;
-        let el_padded = (el + MATRIX_ROW_PADDING - 1) / MATRIX_ROW_PADDING * MATRIX_ROW_PADDING;
+        let el_padded = pad(el, MATRIX_ROW_PADDING);
         let y_size_in_bytes =
             el_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
         let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes).w()? };
