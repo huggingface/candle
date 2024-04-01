@@ -178,15 +178,26 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         name: &str,
         hints: B::Hints,
     ) -> Result<Tensor> {
-        let path = self.path(name);
-        self.data
-            .backend
-            .get(s.into(), &path, hints, self.data.dtype, &self.data.device)
+        self.get_with_hints_dtype(s, name, hints, self.data.dtype)
     }
 
     /// Retrieve the tensor associated with the given name at the current path.
     pub fn get<S: Into<Shape>>(&self, s: S, name: &str) -> Result<Tensor> {
         self.get_with_hints(s, name, Default::default())
+    }
+
+    /// Retrieve the tensor associated with the given name & dtype at the current path.
+    pub fn get_with_hints_dtype<S: Into<Shape>>(
+        &self,
+        s: S,
+        name: &str,
+        hints: B::Hints,
+        dtype: DType,
+    ) -> Result<Tensor> {
+        let path = self.path(name);
+        self.data
+            .backend
+            .get(s.into(), &path, hints, dtype, &self.data.device)
     }
 }
 
