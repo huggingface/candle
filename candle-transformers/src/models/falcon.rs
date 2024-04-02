@@ -1,5 +1,6 @@
 use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, linear_b as linear, Embedding, LayerNorm, Linear, Module, VarBuilder};
+use serde::Deserialize;
 
 const MAX_SEQ_LEN: usize = 5000;
 
@@ -18,7 +19,7 @@ fn layer_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<LayerNorm> {
 }
 
 // https://raw.githubusercontent.com/huggingface/transformers/030c863aaa0165e98352b61697430bf69bf33755/src/transformers/models/falcon/configuration_falcon.py
-#[derive(Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub vocab_size: usize,
     pub hidden_size: usize,
