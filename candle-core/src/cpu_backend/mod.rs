@@ -1204,6 +1204,30 @@ impl MatMul {
         }))
         .bt()
     }
+
+    fn ab_skip(&self, lhs_l: &Layout, rhs_l: &Layout) -> Result<(usize, usize)> {
+        let lhs_stride = lhs_l.stride();
+        let rhs_stride = rhs_l.stride();
+        let rank = lhs_stride.len();
+        let (_b, m, n, k) = self.0;
+        let a_skip: usize = match lhs_stride[..rank - 2] {
+            [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
+            [_, stride] if lhs_l.dims()[0] == 1 => stride,
+            [stride, _] if lhs_l.dims()[1] == 1 => stride,
+            [stride] => stride,
+            [] => m * k,
+            _ => Err(self.striding_error(lhs_l, rhs_l, "non-contiguous lhs"))?,
+        };
+        let b_skip: usize = match rhs_stride[..rank - 2] {
+            [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
+            [_, stride] if rhs_l.dims()[0] == 1 => stride,
+            [stride, _] if rhs_l.dims()[1] == 1 => stride,
+            [stride] => stride,
+            [] => n * k,
+            _ => Err(self.striding_error(lhs_l, rhs_l, "non-contiguous rhs"))?,
+        };
+        Ok((a_skip, b_skip))
+    }
 }
 
 impl Map2 for MatMul {
@@ -1237,18 +1261,7 @@ impl Map2 for MatMul {
         let rhs_cs = rhs_stride[rank - 1];
         let rhs_rs = rhs_stride[rank - 2];
 
-        let a_skip: usize = match lhs_stride[..rank - 2] {
-            [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
-            [stride] => stride,
-            [] => m * k,
-            _ => Err(self.striding_error(lhs_l, rhs_l, "non-contiguous lhs"))?,
-        };
-        let b_skip: usize = match rhs_stride[..rank - 2] {
-            [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
-            [stride] => stride,
-            [] => n * k,
-            _ => Err(self.striding_error(lhs_l, rhs_l, "non-contiguous rhs"))?,
-        };
+        let (a_skip, b_skip) = self.ab_skip(lhs_l, rhs_l)?;
         let c_skip: usize = m * n;
 
         let dst_shape: Shape = (m, n).into();
@@ -1310,18 +1323,7 @@ impl Map2 for MatMul {
         let rhs_stride = rhs_l.stride();
         let rank = lhs_stride.len();
 
-        let a_skip: usize = match lhs_stride[..rank - 2] {
-            [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
-            [stride] => stride,
-            [] => m * k,
-            _ => Err(self.striding_error(lhs_l, rhs_l, "non-contiguous lhs"))?,
-        };
-        let b_skip: usize = match rhs_stride[..rank - 2] {
-            [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
-            [stride] => stride,
-            [] => n * k,
-            _ => Err(self.striding_error(lhs_l, rhs_l, "non-contiguous rhs"))?,
-        };
+        let (a_skip, b_skip) = self.ab_skip(lhs_l, rhs_l)?;
         let c_skip: usize = m * n;
 
         let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
@@ -1413,18 +1415,7 @@ impl Map2 for MatMul {
         let rhs_stride = rhs_l.stride();
         let rank = lhs_stride.len();
 
-        let a_skip: usize = match lhs_stride[..rank - 2] {
-            [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
-            [stride] => stride,
-            [] => m * k,
-            _ => Err(self.striding_error(lhs_l, rhs_l, "non-contiguous lhs"))?,
-        };
-        let b_skip: usize = match rhs_stride[..rank - 2] {
-            [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
-            [stride] => stride,
-            [] => n * k,
-            _ => Err(self.striding_error(lhs_l, rhs_l, "non-contiguous rhs"))?,
-        };
+        let (a_skip, b_skip) = self.ab_skip(lhs_l, rhs_l)?;
         let c_skip: usize = m * n;
 
         let rhs_m1 = rhs_stride[rhs_stride.len() - 1];
