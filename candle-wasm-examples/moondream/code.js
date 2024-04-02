@@ -38,7 +38,6 @@ async function generateSequence(controller) {
     const outGen = document.querySelector("#output-generation");
     const outCounter = document.querySelector("#output-counter");
 
-    console.log(data.status);
     switch (data.status) {
       case "loading":
         outStatus.hidden = false;
@@ -86,7 +85,6 @@ async function generateSequence(controller) {
     };
     const handleMessage = (event) => {
       const { status, error, message, prompt, sentence } = event.data;
-      console.log(event.data);
       if (status) updateStatus(event.data);
       if (error) {
         moodreamWorker.removeEventListener("message", handleMessage);
@@ -116,6 +114,8 @@ const canvas = document.querySelector("#canvas");
 const ctxCanvas = canvas.getContext("2d");
 const fileUpload = document.querySelector("#file-upload");
 const clearImgBtn = document.querySelector("#clear-img-btn");
+const imagesExamples = document.querySelector("#image-select");
+
 let currentImageURL = null;
 let runController = new AbortController();
 let isRunning = false;
@@ -136,6 +136,18 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
+imagesExamples.addEventListener("click", (e) => {
+  // if (isEmbedding || isSegmenting) {
+  //   return;
+  // }
+  const target = e.target;
+  if (target.nodeName === "IMG") {
+    const href = target.src;
+    clearImageCanvas();
+    currentImageURL = href;
+    drawImageCanvas(href);
+  }
+});
 modelSelect.addEventListener("change", (e) => {
   const query = new URLSearchParams(window.location.search);
   query.set("model", e.target.value);

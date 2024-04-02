@@ -49,6 +49,12 @@
             target="_blank"
             >Moondream 2</a
           >
+          by
+          <a href=" https://huggingface.co/vikhyatk" class="link">Vik</a>
+          and model implementation on Candle by
+          <a href="https://huggingface.co/santiagomed" class="link"
+            >Santiago Medina
+          </a>
         </p>
       </div>
 
@@ -56,8 +62,8 @@
         <p class="text-xs italic max-w-lg">
           <b>Note:</b>
           When first run, the app will download and cache the model, which could
-          take a few minutes. The models are <b>~800MB</b> or <b>~1.57GB</b> in
-          size.
+          take a few minutes. Then, the embeddings and generation will take a
+          few minutes to start 😔.
         </p>
       </div>
       <div>
@@ -190,7 +196,7 @@
                   id="clear-img-btn"
                   disabled
                   title="Clear Image"
-                  class="ml-auto text-xs bg-white rounded-md disabled:opacity-20 flex gap-1 items-center"
+                  class="ml-auto text-xs py-1 bg-white rounded-md disabled:opacity-20 flex gap-1 items-center"
                 >
                   <svg
                     class=""
@@ -266,6 +272,31 @@
               >No output yet</span
             >
           </div>
+        </div>
+      </div>
+      <div>
+        <div
+          class="flex gap-3 items-center overflow-x-scroll"
+          id="image-select"
+        >
+          <h3 class="font-medium">Examples:</h3>
+
+          <img
+            src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/candle/examples/sf.jpg"
+            class="cursor-pointer w-24 h-24 object-cover"
+          />
+          <img
+            src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/candle/examples/bike.jpeg"
+            class="cursor-pointer w-24 h-24 object-cover"
+          />
+          <img
+            src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/candle/examples/000000000077.jpg"
+            class="cursor-pointer w-24 h-24 object-cover"
+          />
+          <img
+            src="https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/candle/examples/demo-1.jpg"
+            class="cursor-pointer w-24 h-24 object-cover"
+          />
         </div>
       </div>
     </main>

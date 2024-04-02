@@ -24,8 +24,8 @@ pub struct Model {
     bos_token: u32,
     repeat_penalty: f32,
     repeat_last_n: usize,
-    image_embeddings: Option<Tensor>,
     index: usize,
+    image_embeddings: Option<Tensor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -84,8 +84,8 @@ impl Model {
         let image: Tensor = self.load_image(image)?.to_device(&device)?;
         console_log!("image loaded in {:?}s", (Date::now() - start) / 1000.);
         let start = Date::now();
-        let image_embeds = image.unsqueeze(0)?;
-        let image_embeds = match self.model {
+        let image_embeds = &image.unsqueeze(0)?;
+        let image_embeds = match &self.model {
             SelectedModel::Moondream(ref m) => image_embeds.apply(m.vision_encoder())?,
             SelectedModel::Quantized(ref m) => image_embeds.apply(m.vision_encoder())?,
         };
@@ -108,13 +108,7 @@ impl Model {
         repeat_last_n: usize,
         verbose_prompt: bool,
     ) -> Result<String, JsError> {
-        if self.image_embeddings.is_none() {
-            return Err(JsError::new("Image embeddings are not set."));
-        }
-
         let prompt = format!("\n\nQuestion: {0}\n\nAnswer:", prompt);
-        console_log!("Processing prompt: {:?}", prompt);
-
         match &mut self.model {
             SelectedModel::Moondream(m) => m.text_model.clear_kv_cache(),
             SelectedModel::Quantized(m) => m.text_model.clear_kv_cache(),
@@ -164,10 +158,12 @@ impl Model {
                 "".to_string()
             }
         };
+
         Ok(text)
     }
     #[wasm_bindgen]
     pub fn next_token(&mut self) -> Result<String, JsError> {
+        let start = Date::now();
         let last_token = *self.tokens.last().unwrap();
         let text = match self.process(&[last_token]) {
             Ok(token) => token,
@@ -176,6 +172,7 @@ impl Model {
                 "".to_string()
             }
         };
+        console_log!("next_token took {:?}", Date::now() - start);
         Ok(text)
     }
 }
@@ -208,7 +205,6 @@ impl Model {
         let device = Device::Cpu;
         let context_size = if self.index > 0 { 1 } else { tokens.len() };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
         let logits = if self.index > 0 {
             match self.model {
@@ -221,15 +217,16 @@ impl Model {
                 SelectedModel::Moondream(ref mut model) => {
                     model
                         .text_model
-                        .forward_with_img(&bos_token, &input, image_embeddings)?
+                        .forward_with_img(&bos_token, &input, &image_embeddings)?
                 }
                 SelectedModel::Quantized(ref mut model) => {
                     model
                         .text_model
-                        .forward_with_img(&bos_token, &input, image_embeddings)?
+                        .forward_with_img(&bos_token, &input, &image_embeddings)?
                 }
             }
         };
+
         let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
         let logits = if self.repeat_penalty == 1. {
             logits
@@ -251,7 +248,6 @@ impl Model {
             }
         };
         self.index += 1;
-        console_log!("token: {:?}: {:?}", token, next_token);
         Ok(token)
     }
 }

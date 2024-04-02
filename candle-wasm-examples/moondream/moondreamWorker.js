@@ -116,7 +116,6 @@ async function generate(data) {
     maxSeqLen,
     verbose_prompt,
   } = data;
-  console.log(data);
   try {
     self.postMessage({ status: "loading", message: "Starting Moondream" });
     const model = await Moondream.getInstance(
@@ -133,7 +132,10 @@ async function generate(data) {
 
     self.postMessage({ status: "embedding", message: "Creating Embeddings" });
     Moondream.setImageEmbeddings(imageArrayU8);
-
+    self.postMessage({
+      status: "complete-embedding",
+      message: "Embeddings Complete",
+    });
     const firstToken = model.init_with_image_prompt(
       prompt,
       BigInt(seed),
@@ -161,7 +163,8 @@ async function generate(data) {
           return;
         }
         const token = await model.next_token();
-        if (token === "END") {
+        console.log("Token: ", token);
+        if (token === "<|endoftext|>") {
           self.postMessage({
             status: "complete",
             message: "complete",
