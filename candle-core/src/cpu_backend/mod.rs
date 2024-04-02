@@ -1321,7 +1321,6 @@ impl Map2 for MatMul {
 
         let lhs_stride = lhs_l.stride();
         let rhs_stride = rhs_l.stride();
-        let rank = lhs_stride.len();
 
         let (a_skip, b_skip) = self.ab_skip(lhs_l, rhs_l)?;
         let c_skip: usize = m * n;
@@ -1413,7 +1412,6 @@ impl Map2 for MatMul {
 
         let lhs_stride = lhs_l.stride();
         let rhs_stride = rhs_l.stride();
-        let rank = lhs_stride.len();
 
         let (a_skip, b_skip) = self.ab_skip(lhs_l, rhs_l)?;
         let c_skip: usize = m * n;
