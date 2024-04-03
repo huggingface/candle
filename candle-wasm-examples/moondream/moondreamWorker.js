@@ -136,15 +136,16 @@ async function generate(data) {
       status: "complete-embedding",
       message: "Embeddings Complete",
     });
-    const { token, token_id } = model.init_with_image_prompt(
+    const { token, token_id } = model.init_with_image_prompt({
       prompt,
-      BigInt(seed),
-      temp,
-      top_p,
-      repeatPenalty,
-      64, //repeat_last_n
-      verbose_prompt
-    );
+      seed: BigInt(seed),
+      temp: parseFloat(temp),
+      top_p: parseFloat(top_p),
+      repeat_penalty: parseFloat(repeatPenalty),
+      repeat_last_n: 64,
+      verbose_prompt,
+    });
+
     const seq_len = 2048;
 
     let sentence = token;

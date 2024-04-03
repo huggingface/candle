@@ -17,9 +17,6 @@ const moodreamWorker = new Worker("./moondreamWorker.js", {
 });
 
 async function generateSequence(controller) {
-  if (prompt.value.trim() === "") {
-    return;
-  }
   const getValue = (id) => document.querySelector(`#${id}`).value;
   const modelID = getValue("model");
   const model = MODELS[modelID];
@@ -35,6 +32,10 @@ async function generateSequence(controller) {
   const repeatPenalty = getValue("repeat_penalty");
   const seed = getValue("seed");
   const maxSeqLen = getValue("max-seq");
+
+  if (prompt?.value?.trim() === "") {
+    return;
+  }
 
   function updateStatus(data) {
     const outStatus = document.querySelector("#output-status");

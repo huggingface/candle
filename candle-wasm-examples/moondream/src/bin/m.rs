@@ -33,6 +33,17 @@ struct Output {
     token: String,
     token_id: u32,
 }
+#[derive(Serialize, Deserialize)]
+struct InitInput {
+    prompt: String,
+    seed: u64,
+    temp: f64,
+    top_p: f64,
+    repeat_penalty: f32,
+    repeat_last_n: usize,
+    verbose_prompt: bool,
+}
+
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
@@ -97,16 +108,17 @@ impl Model {
     }
 
     #[wasm_bindgen]
-    pub fn init_with_image_prompt(
-        &mut self,
-        prompt: String,
-        seed: u64,
-        temp: f64,
-        top_p: f64,
-        repeat_penalty: f32,
-        repeat_last_n: usize,
-        verbose_prompt: bool,
-    ) -> Result<JsValue, JsError> {
+    pub fn init_with_image_prompt(&mut self, input: JsValue) -> Result<JsValue, JsError> {
+        let InitInput {
+            prompt,
+            seed,
+            temp,
+            top_p,
+            repeat_penalty,
+            repeat_last_n,
+            verbose_prompt,
+        } = serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
+
         let device = Device::Cpu;
         let prompt = format!("\n\nQuestion: {0}\n\nAnswer:", prompt);
         match &mut self.model {
@@ -167,7 +179,6 @@ impl Model {
     }
     #[wasm_bindgen]
     pub fn next_token(&mut self) -> Result<JsValue, JsError> {
-        let start = Date::now();
         let last_token = *self.tokens.last().unwrap();
         let text = match self.process(&[last_token]) {
             Ok(text) => text,
@@ -179,7 +190,6 @@ impl Model {
                 }
             }
         };
-        console_log!("next_token took {:?}", Date::now() - start);
         Ok(serde_wasm_bindgen::to_value(&text)?)
     }
 }
@@ -226,12 +236,12 @@ impl Model {
                 SelectedModel::Moondream(ref mut model) => {
                     model
                         .text_model
-                        .forward_with_img(&bos_token, &input, &image_embeddings)?
+                        .forward_with_img(bos_token, &input, image_embeddings)?
                 }
                 SelectedModel::Quantized(ref mut model) => {
                     model
                         .text_model
-                        .forward_with_img(&bos_token, &input, &image_embeddings)?
+                        .forward_with_img(bos_token, &input, image_embeddings)?
                 }
             }
         };
