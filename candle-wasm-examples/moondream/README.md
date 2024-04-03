@@ -1,6 +1,4 @@
-## Running [Microsoft phi 1.5](https://huggingface.co/microsoft/phi-1_5) Example
-
-Here, we provide two examples of how to run [Microsoft phi 1.5](https://huggingface.co/microsoft/phi-1_5) written in Rust using a Candle-compiled WASM binary and runtime.
+## Running [Moondream 2](https://huggingface.co/vikhyatk/moondream2) Model Example
 
 ### Vanilla JS and WebWorkers
 
