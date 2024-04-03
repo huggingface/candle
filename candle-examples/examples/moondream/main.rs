@@ -218,8 +218,7 @@ pub fn load_image<P: AsRef<std::path::Path>>(p: P) -> candle::Result<Tensor> {
         .broadcast_div(&std)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
@@ -247,7 +246,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let start = std::time::Instant::now();
-    let api = hf_hub::api::tokio::Api::new()?;
+    let api = hf_hub::api::sync::Api::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id.to_string(),
         None => {
@@ -267,15 +266,15 @@ async fn main() -> anyhow::Result<()> {
         Some(m) => m.into(),
         None => {
             if args.quantized {
-                repo.get("model-q4_0.gguf").await?
+                repo.get("model-q4_0.gguf")?
             } else {
-                repo.get("model.safetensors").await?
+                repo.get("model.safetensors")?
             }
         }
     };
     let tokenizer = match args.tokenizer_file {
         Some(m) => m.into(),
-        None => repo.get("tokenizer.json").await?,
+        None => repo.get("tokenizer.json")?,
     };
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
