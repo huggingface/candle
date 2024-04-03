@@ -29,3 +29,4 @@ serde_json = { workspace = true }
 console_error_panic_hook = "0.1.7"
 wasm-bindgen = "0.2.87"
 js-sys = "0.3.64"
+serde-wasm-bindgen = "0.6.5"

@@ -136,7 +136,7 @@ async function generate(data) {
       status: "complete-embedding",
       message: "Embeddings Complete",
     });
-    const firstToken = model.init_with_image_prompt(
+    const { token, token_id } = model.init_with_image_prompt(
       prompt,
       BigInt(seed),
       temp,
@@ -147,7 +147,7 @@ async function generate(data) {
     );
     const seq_len = 2048;
 
-    let sentence = firstToken;
+    let sentence = token;
     let maxTokens = maxSeqLen ? maxSeqLen : seq_len - prompt.length - 1;
     let startTime = performance.now();
     let tokensCount = 0;
@@ -162,9 +162,9 @@ async function generate(data) {
           });
           return;
         }
-        const token = await model.next_token();
-        console.log("Token: ", token);
-        if (token === "<|endoftext|>") {
+        const { token, token_id } = await model.next_token();
+        if (token_id === 50256) {
+          // <|endoftext|>
           self.postMessage({
             status: "complete",
             message: "complete",

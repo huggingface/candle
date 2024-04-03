@@ -21,13 +21,18 @@ pub struct Model {
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
     tokens: Vec<u32>,
-    bos_token: u32,
     repeat_penalty: f32,
     repeat_last_n: usize,
     index: usize,
+    bos_token: Option<Tensor>,
     image_embeddings: Option<Tensor>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Output {
+    token: String,
+    token_id: u32,
+}
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 
 pub struct ModelName {
@@ -67,10 +72,10 @@ impl Model {
             model,
             tokenizer,
             tokens: vec![],
-            bos_token: 0,
             logits_processor,
             repeat_penalty: 1.,
             repeat_last_n: 64,
+            bos_token: None,
             image_embeddings: None,
             index: 0,
         })
@@ -107,7 +112,8 @@ impl Model {
         repeat_penalty: f32,
         repeat_last_n: usize,
         verbose_prompt: bool,
-    ) -> Result<String, JsError> {
+    ) -> Result<JsValue, JsError> {
+        let device = Device::Cpu;
         let prompt = format!("\n\nQuestion: {0}\n\nAnswer:", prompt);
         match &mut self.model {
             SelectedModel::Moondream(m) => m.text_model.clear_kv_cache(),
@@ -128,10 +134,12 @@ impl Model {
 
         // Moondream tokenizer bos_token is "<|endoftext|>"
         // https://huggingface.co/vikhyatk/moondream2/blob/main/special_tokens_map.json
-        self.bos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
+        let special_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
             Some(token) => *token,
             None => return Err(JsError::new("BOS token not found in the tokenizer.")),
         };
+
+        self.bos_token = Some(Tensor::new(&[special_token], &device)?.unsqueeze(0)?);
 
         let tokens = self
             .tokenizer
@@ -152,28 +160,33 @@ impl Model {
         }
         let tokens = tokens.get_ids().to_vec();
         let text = match self.process(&tokens) {
-            Ok(token) => token,
+            Ok(text) => text,
             Err(_e) => {
                 console_log!("error decoding token");
-                "".to_string()
+                Output {
+                    token: "".to_string(),
+                    token_id: 0,
+                }
             }
         };
-
-        Ok(text)
+        Ok(serde_wasm_bindgen::to_value(&text)?)
     }
     #[wasm_bindgen]
-    pub fn next_token(&mut self) -> Result<String, JsError> {
+    pub fn next_token(&mut self) -> Result<JsValue, JsError> {
         let start = Date::now();
         let last_token = *self.tokens.last().unwrap();
         let text = match self.process(&[last_token]) {
-            Ok(token) => token,
+            Ok(text) => text,
             Err(_e) => {
-                console_log!("error decoding last_token");
-                "".to_string()
+                console_log!("error decoding token");
+                Output {
+                    token: "".to_string(),
+                    token_id: 0,
+                }
             }
         };
         console_log!("next_token took {:?}", Date::now() - start);
-        Ok(text)
+        Ok(serde_wasm_bindgen::to_value(&text)?)
     }
 }
 impl Model {
@@ -196,12 +209,15 @@ impl Model {
 }
 
 impl Model {
-    fn process(&mut self, tokens: &[u32]) -> Result<String, JsError> {
+    fn process(&mut self, tokens: &[u32]) -> Result<Output, JsError> {
         let image_embeddings = match &self.image_embeddings {
             Some(embeddings) => embeddings,
             None => return Err(JsError::new("Image embeddings are not set.")),
         };
-
+        let bos_token = match &self.bos_token {
+            Some(token) => token,
+            None => return Err(JsError::new("BOS token is not set.")),
+        };
         let device = Device::Cpu;
         let context_size = if self.index > 0 { 1 } else { tokens.len() };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
@@ -212,7 +228,6 @@ impl Model {
                 SelectedModel::Quantized(ref mut model) => model.text_model.forward(&input)?,
             }
         } else {
-            let bos_token = Tensor::new(&[self.bos_token], &device)?.unsqueeze(0)?;
             match self.model {
                 SelectedModel::Moondream(ref mut model) => {
                     model
@@ -248,7 +263,10 @@ impl Model {
             }
         };
         self.index += 1;
-        Ok(token)
+        Ok(Output {
+            token,
+            token_id: next_token,
+        })
     }
 }
 

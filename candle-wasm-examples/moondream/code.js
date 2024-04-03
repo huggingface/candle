@@ -17,6 +17,9 @@ const moodreamWorker = new Worker("./moondreamWorker.js", {
 });
 
 async function generateSequence(controller) {
+  if (prompt.value.trim() === "") {
+    return;
+  }
   const getValue = (id) => document.querySelector(`#${id}`).value;
   const modelID = getValue("model");
   const model = MODELS[modelID];
