@@ -99,7 +99,7 @@ pub trait WrapErr<O> {
 
 impl<O, E: Into<CudaError>> WrapErr<O> for std::result::Result<O, E> {
     fn w(self) -> std::result::Result<O, crate::Error> {
-        self.map_err(|e| crate::Error::Cuda(Box::new(e.into())))
+        self.map_err(|e| crate::Error::Cuda(Box::new(e.into())).bt())
     }
 }
 
@@ -1761,6 +1761,11 @@ impl BackendStorage for CudaStorage {
         let dev = &self.device;
         let d1 = d1 as u32;
         let d2 = d2 as u32;
+        // Nothing to copy so we exit early to avoid launching a kernel and some potential invalid
+        // argument with a null pointer.
+        if d1 == 0 || d2 == 0 {
+            return Ok(());
+        }
         let dst_s = dst_s as u32;
         let src_s = src_s as u32;
         let (src, dst, kname) = match (&self.slice, &mut dst.slice) {
