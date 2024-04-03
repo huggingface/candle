@@ -6,7 +6,7 @@ use candle_transformers::{
 };
 use candle_wasm_example_moondream::console_log;
 use js_sys::Date;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
 
@@ -28,17 +28,11 @@ pub struct Model {
     image_embeddings: Option<Tensor>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct Output {
     token: String,
     token_id: u32,
 }
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-
-pub struct ModelName {
-    pub _name_or_path: String,
-}
-
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
