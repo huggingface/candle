@@ -218,7 +218,8 @@ impl PromptEncoder {
             (Some(se_points), None) => se_points,
             (None, Some(se_boxes)) => se_boxes,
             (None, None) => {
-                Tensor::zeros((1, 0, self.embed_dim), DType::F32, &candle::Device::Cpu)?
+                let dev = self.no_mask_embed.embeddings().device();
+                Tensor::zeros((1, 0, self.embed_dim), DType::F32, dev)?
             }
         };
 
