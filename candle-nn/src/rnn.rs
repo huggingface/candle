@@ -31,7 +31,7 @@ pub trait RNN {
         let (_b_size, seq_len, _features) = input.dims3()?;
         let mut output = Vec::with_capacity(seq_len);
         for seq_index in 0..seq_len {
-            let input = input.i((.., seq_index, ..))?;
+            let input = input.i((.., seq_index, ..))?.contiguous()?;
             let state = if seq_index == 0 {
                 self.step(&input, init_state)?
             } else {
