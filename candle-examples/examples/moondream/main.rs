@@ -195,6 +195,9 @@ struct Args {
     quantized: bool,
 
     #[arg(long)]
+    f16: bool,
+
+    #[arg(long)]
     model_file: Option<String>,
 
     #[arg(long)]
@@ -283,7 +286,10 @@ async fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
     let config = moondream::Config::v2();
-    let dtype = if device.is_cuda() && !args.quantized {
+    let dtype = if device.is_cuda() || args.f16 {
+        if args.quantized {
+            anyhow::bail!("Quantized model does not support f16");
+        }
         DType::F16
     } else {
         DType::F32
