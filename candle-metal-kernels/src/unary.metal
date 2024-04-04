@@ -18,8 +18,6 @@ METAL_FUNC uint get_strided_index(
     return strided_i;
 }
 
-template <typename T> METAL_FUNC T sign(T in) { return sign(in); }
-
 template <typename T> METAL_FUNC T sqr(T in){ return in * in; }
 template <typename T> METAL_FUNC T recip(T in){ return T(1.0 / in); }
 template <typename T> METAL_FUNC T neg(T in){ return -in; }
