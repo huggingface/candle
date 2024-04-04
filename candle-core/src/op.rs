@@ -934,68 +934,30 @@ impl UnaryOpT for Sign {
     const V: Self = Sign;
     #[inline(always)]
     fn bf16(v: bf16) -> bf16 {
-        if v.is_nan() {
-            bf16::NAN
-        } else if v == bf16::ZERO {
-            bf16::ZERO
-        } else if v.is_sign_positive() {
-            bf16::ONE
-        } else {
-            bf16::NEG_ONE
-        }
+        bf16::from((v > bf16::ZERO) as i8) - bf16::from((v < bf16::ZERO) as i8)
     }
     #[inline(always)]
     fn f16(v: f16) -> f16 {
-        if v.is_nan() {
-            f16::NAN
-        } else if v == f16::ZERO {
-            f16::ZERO
-        } else if v.is_sign_positive() {
-            f16::ONE
-        } else {
-            f16::NEG_ONE
-        }
+        f16::from((v > f16::ZERO) as i8) - f16::from((v < f16::ZERO) as i8)
     }
     #[inline(always)]
     fn f32(v: f32) -> f32 {
-        if v.is_nan() {
-            f32::NAN
-        } else if v == 0.0 {
-            0.0
-        } else if v.is_sign_positive() {
-            1.0
-        } else {
-            -1.0
-        }
+        f32::from(v > 0.) - f32::from(v < 0.)
     }
     #[inline(always)]
     fn f64(v: f64) -> f64 {
-        if v.is_nan() {
-            f64::NAN
-        } else if v == 0.0 {
-            0.0
-        } else if v.is_sign_positive() {
-            1.0
-        } else {
-            -1.0
-        }
+        f64::from(v > 0.) - f64::from(v < 0.)
     }
     #[inline(always)]
-    fn u8(_v: u8) -> u8 {
-        1
+    fn u8(v: u8) -> u8 {
+        u8::min(1, v)
     }
     #[inline(always)]
-    fn u32(_v: u32) -> u32 {
-        1
+    fn u32(v: u32) -> u32 {
+        u32::min(1, v)
     }
     #[inline(always)]
     fn i64(v: i64) -> i64 {
-        if v > 0 {
-            1
-        } else if v < 0 {
-            -1
-        } else {
-            0
-        }
+        (v > 0) as i64 - (v < 0) as i64
     }
 }
