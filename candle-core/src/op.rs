@@ -66,6 +66,7 @@ pub enum UnaryOp {
     Floor,
     Ceil,
     Round,
+    Sign,
 }
 
 #[derive(Clone)]
@@ -254,6 +255,7 @@ pub(crate) struct Tanh;
 pub(crate) struct Floor;
 pub(crate) struct Ceil;
 pub(crate) struct Round;
+pub(crate) struct Sign;
 
 macro_rules! bin_op {
     ($op:ident, $name: literal, $e: expr, $f32_vec: ident, $f64_vec: ident) => {
@@ -923,5 +925,39 @@ impl std::ops::Deref for BackpropOp {
     type Target = Option<Op>;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl UnaryOpT for Sign {
+    const NAME: &'static str = "sign";
+    const KERNEL: &'static str = "usign";
+    const V: Self = Sign;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        bf16::from((v > bf16::ZERO) as i8) - bf16::from((v < bf16::ZERO) as i8)
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        f16::from((v > f16::ZERO) as i8) - f16::from((v < f16::ZERO) as i8)
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        f32::from(v > 0.) - f32::from(v < 0.)
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        f64::from(v > 0.) - f64::from(v < 0.)
+    }
+    #[inline(always)]
+    fn u8(v: u8) -> u8 {
+        u8::min(1, v)
+    }
+    #[inline(always)]
+    fn u32(v: u32) -> u32 {
+        u32::min(1, v)
+    }
+    #[inline(always)]
+    fn i64(v: i64) -> i64 {
+        (v > 0) as i64 - (v < 0) as i64
     }
 }
