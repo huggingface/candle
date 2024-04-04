@@ -589,9 +589,7 @@ impl Tensor {
                     Op::Unary(_, UnaryOp::Floor) => {
                         Err(Error::BackwardNotSupported { op: "floor" })?
                     }
-                    Op::Unary(_, UnaryOp::Round) => {
-                        Err(Error::BackwardNotSupported { op: "round" })?
-                    }
+                    Op::Unary(_, UnaryOp::Round) => {}
                     Op::Unary(arg, UnaryOp::Gelu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let cube = arg.powf(3.)?;
@@ -707,9 +705,7 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
-                    Op::Unary(_arg, UnaryOp::Sign) => {
-                        Err(Error::BackwardNotSupported { op: "sign" })?
-                    }
+                    Op::Unary(_arg, UnaryOp::Sign) => {}
                 };
             }
         }
