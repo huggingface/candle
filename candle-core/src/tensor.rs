@@ -510,6 +510,7 @@ impl Tensor {
     unary_op!(ceil, Ceil);
     unary_op!(floor, Floor);
     unary_op!(round, Round);
+    unary_op!(sign, Sign);
 
     /// Round element of the input tensor to the nearest integer.
     ///

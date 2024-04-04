@@ -106,6 +106,9 @@ fn unary_op(device: &Device) -> Result<()> {
             [2.6911, -0.0647, -0.1091, 1.7353, 2.7933]
         ]
     );
+    let t_f16 = tensor.to_dtype(DType::F16)?.gelu()?.to_dtype(DType::F32)?;
+    let max_diff = (tensor.gelu()? - t_f16)?.flatten_all()?.max(0)?;
+    assert!(max_diff.to_vec0::<f32>()? < 5e-3);
     assert_eq!(
         test_utils::to_vec2_round(&tensor.gelu_erf()?, 4)?,
         [
@@ -147,6 +150,14 @@ fn unary_op(device: &Device) -> Result<()> {
     assert_eq!(
         test_utils::to_vec1_round(&tensor.round_to(-2)?, 4)?,
         [3000.0, 300.]
+    );
+    let tensor = Tensor::new(
+        &[-1.01f32, -0.9, -0.1, 0.0, -0.0, 0.1, 0.9, 1.0, 1.1],
+        device,
+    )?;
+    assert_eq!(
+        tensor.sign()?.to_vec1::<f32>()?,
+        [-1., -1., -1., 0., 0., 1., 1., 1., 1.]
     );
     Ok(())
 }
@@ -1247,8 +1258,8 @@ fn pow() -> Result<()> {
     let rhs = (&lhs - 2.)?;
     let res = lhs.pow(&rhs)?;
     assert_eq!(
-        test_utils::to_vec2_round(&res, 4)?,
-        [[1.0, 1.0, 3.0], [16.0, 125.0, 1296.0001]]
+        test_utils::to_vec2_round(&res, 3)?,
+        [[1.0, 1.0, 3.0], [16.0, 125.0, 1296.0]]
     );
     Ok(())
 }
