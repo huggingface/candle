@@ -611,20 +611,14 @@ impl candle::CustomOp3 for RotaryEmbThd {
                 None => candle::bail!("sin input has to be contiguous"),
                 Some((o1, o2)) => sin.slice(o1..o2),
             };
-            let (b, h, t, d) = l_src.shape().dims4()?;
+            let (b, t, h, d) = l_src.shape().dims4()?;
             let el = b * h * t * d;
             let cfg = LaunchConfig::for_num_elems((el / 2) as u32);
-            let func = dev.get_or_load_func(&kernel_name::<T>("rope"), kernels::REDUCE)?;
+            let func = dev.get_or_load_func(&kernel_name::<T>("rope_thd"), kernels::REDUCE)?;
             // SAFETY: Set later by running the kernel.
             let dst = unsafe { dev.alloc::<T>(el) }.w()?;
             let params = (
-                &src,
-                &cos,
-                &sin,
-                &dst,
-                (b * h) as u32,
-                (t * d) as u32,
-                d as u32,
+                &src, &cos, &sin, &dst, b as u32, t as u32, h as u32, d as u32,
             );
             // SAFETY: ffi.
             unsafe { func.launch(cfg, params) }.w()?;
@@ -676,21 +670,22 @@ impl candle::CustomOp3 for RotaryEmbThd {
             )
         }
         let name = match src.dtype() {
-            candle::DType::F32 => "rope_f32",
-            candle::DType::F16 => "rope_f16",
-            candle::DType::BF16 => "rope_bf16",
-            dtype => candle::bail!("rope is not implemented for {dtype:?}"),
+            candle::DType::F32 => "rope_thd_f32",
+            candle::DType::F16 => "rope_thd_f16",
+            candle::DType::BF16 => "rope_thd_bf16",
+            dtype => candle::bail!("rope_thd is not implemented for {dtype:?}"),
         };
-        let (b, h, t, d) = l_src.shape().dims4()?;
+        let (b, t, h, d) = l_src.shape().dims4()?;
         let el = b * h * t * d;
-        let output = device.new_buffer(el, src.dtype(), "rope-i")?;
-        candle_metal_kernels::call_rope(
+        let output = device.new_buffer(el, src.dtype(), "rope-thd")?;
+        candle_metal_kernels::call_rope_thd(
             device.metal_device(),
             &command_buffer,
             kernels,
             name,
-            b * h,
-            t * d,
+            b,
+            t,
+            h,
             d,
             src.buffer(),
             l_src.start_offset() * src.dtype().size_in_bytes(),
