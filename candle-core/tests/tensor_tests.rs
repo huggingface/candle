@@ -142,10 +142,6 @@ fn unary_op(device: &Device) -> Result<()> {
         test_utils::to_vec2_round(&tensor.round()?, 4)?,
         [[-3.0, 1.0, 4.0, -0.0, 1.0], [3.0, -2.0, -0.0, 2.0, 3.0]]
     );
-    assert_eq!(
-        test_utils::to_vec2_round(&tensor.sign()?, 4)?,
-        [[-1.0, 1.0, 1.0, -1.0, 1.0], [1.0, -1.0, -1.0, 1.0, 1.0]]
-    );
     let tensor = Tensor::new(&[2997.9246, 314.15926f32], device)?;
     assert_eq!(
         test_utils::to_vec1_round(&tensor.round_to(2)?, 4)?,
@@ -154,6 +150,14 @@ fn unary_op(device: &Device) -> Result<()> {
     assert_eq!(
         test_utils::to_vec1_round(&tensor.round_to(-2)?, 4)?,
         [3000.0, 300.]
+    );
+    let tensor = Tensor::new(
+        &[-1.01f32, -0.9, -0.1, 0.0, -0.0, 0.1, 0.9, 1.0, 1.1],
+        device,
+    )?;
+    assert_eq!(
+        tensor.sign()?.to_vec1::<f32>()?,
+        [-1., -1., -1., 0., 0., 1., 1., 1., 1.]
     );
     Ok(())
 }
