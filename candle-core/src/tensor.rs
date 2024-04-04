@@ -1,5 +1,7 @@
 //! Tensors are N-dimensional matrixes of elements using a single data type.
 #![allow(clippy::redundant_closure_call)]
+use candle_metal_kernels::unary;
+
 use crate::backend::{BackendDevice, BackendStorage};
 use crate::op::{BackpropOp, BinaryOp, CmpOp, Op, ReduceOp, UnaryOp};
 use crate::scalar::TensorOrScalar;
@@ -510,6 +512,7 @@ impl Tensor {
     unary_op!(ceil, Ceil);
     unary_op!(floor, Floor);
     unary_op!(round, Round);
+    unary_op!(sign, Sign);
 
     /// Round element of the input tensor to the nearest integer.
     ///

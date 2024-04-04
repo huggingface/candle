@@ -707,6 +707,9 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
+                    Op::Unary(_arg, UnaryOp::Sign) => {
+                        Err(Error::BackwardNotSupported { op: "sign" })?
+                    }
                 };
             }
         }

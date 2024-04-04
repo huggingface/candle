@@ -497,6 +497,10 @@ impl BackendStorage for MetalStorage {
                 ("utanh", DType::F16) => contiguous::tanh::HALF,
                 ("utanh", DType::F32) => contiguous::tanh::FLOAT,
                 ("utanh", DType::BF16) => contiguous::tanh::BFLOAT,
+                ("usign", DType::F16) => contiguous::sign::HALF,
+                ("usign", DType::F32) => contiguous::sign::FLOAT,
+                ("usign", DType::BF16) => contiguous::sign::BFLOAT,
+                ("usign", DType::I64) => contiguous::sign::I64,
                 (name, dtype) => {
                     crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
                 }

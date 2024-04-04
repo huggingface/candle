@@ -1,91 +1,104 @@
 #define _USE_MATH_DEFINES
-#include<math.h>
-#include<stdint.h>
+#include <math.h>
+#include <stdint.h>
 #include "cuda_utils.cuh"
 
-#define UNARY_OP(TYPENAME, FN_NAME, FUNC) \
-extern "C" __global__ void FN_NAME( \
-    const size_t numel, \
-    const size_t num_dims, \
-    const size_t *info, \
-    const TYPENAME *inp, \
-    TYPENAME *out \
-) { \
-    const size_t *dims = info; \
-    const size_t *strides = info + num_dims; \
-    if (info == nullptr || is_contiguous(num_dims, dims, strides)) { \
-        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
-            TYPENAME x = inp ? inp[i] : out[i]; \
-            out[i] = FUNC; \
-        } \
-    } \
-    else { \
-        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
-            unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
-            TYPENAME x = inp ? inp[strided_i] : out[i]; \
-            out[i] = FUNC; \
-        } \
-    } \
-} \
+#define UNARY_OP(TYPENAME, FN_NAME, FUNC)                                                                        \
+    extern "C" __global__ void FN_NAME(                                                                          \
+        const size_t numel,                                                                                      \
+        const size_t num_dims,                                                                                   \
+        const size_t *info,                                                                                      \
+        const TYPENAME *inp,                                                                                     \
+        TYPENAME *out)                                                                                           \
+    {                                                                                                            \
+        const size_t *dims = info;                                                                               \
+        const size_t *strides = info + num_dims;                                                                 \
+        if (info == nullptr || is_contiguous(num_dims, dims, strides))                                           \
+        {                                                                                                        \
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) \
+            {                                                                                                    \
+                TYPENAME x = inp ? inp[i] : out[i];                                                              \
+                out[i] = FUNC;                                                                                   \
+            }                                                                                                    \
+        }                                                                                                        \
+        else                                                                                                     \
+        {                                                                                                        \
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) \
+            {                                                                                                    \
+                unsigned strided_i = get_strided_index(i, num_dims, dims, strides);                              \
+                TYPENAME x = inp ? inp[strided_i] : out[i];                                                      \
+                out[i] = FUNC;                                                                                   \
+            }                                                                                                    \
+        }                                                                                                        \
+    }
 
-template<typename T>
-__device__ __forceinline__ T gelu_erf_fwd(T x) {
-  return x * normcdfg(x);
+template <typename T>
+__device__ __forceinline__ T gelu_erf_fwd(T x)
+{
+    return x * normcdfg(x);
 }
 
-template<typename T>
-__device__ __forceinline__ T gelu_fwd(T x) {
+template <typename T>
+__device__ __forceinline__ T gelu_fwd(T x)
+{
     T x_sq = x * x;
     T x_cube = x_sq * x;
     T alpha = x + static_cast<T>(0.044715) * x_cube;
     return static_cast<T>(0.5) * x * (static_cast<T>(1.0) + tanhg(static_cast<T>(M_2_SQRTPI * M_SQRT1_2) * alpha));
 }
 
-template<typename T>
-__device__ __forceinline__ T elu_fwd(T x, T alpha) {
-  if (x > static_cast<T>(0)) {
-    return x;
-  }
-  return alpha * (expg(x) - static_cast<T>(1));
+template <typename T>
+__device__ __forceinline__ T elu_fwd(T x, T alpha)
+{
+    if (x > static_cast<T>(0))
+    {
+        return x;
+    }
+    return alpha * (expg(x) - static_cast<T>(1));
 }
 
-template<typename T>
-__device__ __forceinline__ T relu_fwd(T x) {
+template <typename T>
+__device__ __forceinline__ T relu_fwd(T x)
+{
     T zero = 0.;
     return maxg(x, zero);
 }
 
-template<typename T>
-__device__ __forceinline__ T silu_fwd(T x) {
+template <typename T>
+__device__ __forceinline__ T silu_fwd(T x)
+{
     return x / (static_cast<T>(1) + expg(-x));
 }
 
-#define UNARY_OP1(TYPENAME, FN_NAME, FUNC) \
-extern "C" __global__ void FN_NAME( \
-    const size_t numel, \
-    const size_t num_dims, \
-    const size_t *info, \
-    const TYPENAME param, \
-    const TYPENAME *inp, \
-    TYPENAME *out \
-) { \
-    const size_t *dims = info; \
-    const size_t *strides = info + num_dims; \
-    if (info == nullptr || is_contiguous(num_dims, dims, strides)) { \
-        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
-            TYPENAME x = inp ? inp[i] : out[i]; \
-            out[i] = FUNC; \
-        } \
-    } \
-    else { \
-        for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) { \
-            unsigned strided_i = get_strided_index(i, num_dims, dims, strides); \
-            TYPENAME x = inp ? inp[strided_i] : out[i]; \
-            out[i] = FUNC; \
-        } \
-    } \
-} \
-
+#define UNARY_OP1(TYPENAME, FN_NAME, FUNC)                                                                       \
+    extern "C" __global__ void FN_NAME(                                                                          \
+        const size_t numel,                                                                                      \
+        const size_t num_dims,                                                                                   \
+        const size_t *info,                                                                                      \
+        const TYPENAME param,                                                                                    \
+        const TYPENAME *inp,                                                                                     \
+        TYPENAME *out)                                                                                           \
+    {                                                                                                            \
+        const size_t *dims = info;                                                                               \
+        const size_t *strides = info + num_dims;                                                                 \
+        if (info == nullptr || is_contiguous(num_dims, dims, strides))                                           \
+        {                                                                                                        \
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) \
+            {                                                                                                    \
+                TYPENAME x = inp ? inp[i] : out[i];                                                              \
+                out[i] = FUNC;                                                                                   \
+            }                                                                                                    \
+        }                                                                                                        \
+        else                                                                                                     \
+        {                                                                                                        \
+            for (unsigned int i = blockIdx.x * blockDim.x + threadIdx.x; i < numel; i += blockDim.x * gridDim.x) \
+            {                                                                                                    \
+                unsigned strided_i = get_strided_index(i, num_dims, dims, strides);                              \
+                TYPENAME x = inp ? inp[strided_i] : out[i];                                                      \
+                out[i] = FUNC;                                                                                   \
+            }                                                                                                    \
+        }                                                                                                        \
+    }
 
 #if __CUDA_ARCH__ >= 800
 UNARY_OP(__nv_bfloat16, ucopy_bf16, x)
@@ -102,7 +115,7 @@ UNARY_OP(__nv_bfloat16, ufloor_bf16, floorg(x))
 UNARY_OP(__nv_bfloat16, uround_bf16, roundg(x))
 UNARY_OP(__nv_bfloat16, unormcdf_bf16, normcdfg(x))
 UNARY_OP(__nv_bfloat16, uabs_bf16, absg(x))
-UNARY_OP(__nv_bfloat16, usqr_bf16, x*x)
+UNARY_OP(__nv_bfloat16, usqr_bf16, x *x)
 UNARY_OP(__nv_bfloat16, usqrt_bf16, sqrtg(x))
 UNARY_OP(__nv_bfloat16, ugelu_bf16, gelu_fwd(x))
 UNARY_OP(__nv_bfloat16, ugelu_erf_bf16, gelu_erf_fwd(x))
@@ -110,6 +123,7 @@ UNARY_OP(__nv_bfloat16, urelu_bf16, relu_fwd(x))
 UNARY_OP1(__nv_bfloat16, uelu_bf16, elu_fwd(x, param))
 UNARY_OP(__nv_bfloat16, usilu_bf16, silu_fwd(x))
 UNARY_OP1(__nv_bfloat16, upowf_bf16, powg(x, param))
+UNARY_OP(__nv_bfloat16, usign_bf16, sign(x))
 #endif
 
 #if __CUDA_ARCH__ >= 530
@@ -127,7 +141,7 @@ UNARY_OP(__half, ufloor_f16, floorg(x))
 UNARY_OP(__half, uround_f16, roundg(x))
 UNARY_OP(__half, unormcdf_f16, normcdfg(x))
 UNARY_OP(__half, uabs_f16, absg(x))
-UNARY_OP(__half, usqr_f16, x*x)
+UNARY_OP(__half, usqr_f16, x *x)
 UNARY_OP(__half, usqrt_f16, sqrtg(x))
 UNARY_OP(__half, ugelu_f16, gelu_fwd(x))
 UNARY_OP(__half, ugelu_erf_f16, gelu_erf_fwd(x))
@@ -135,6 +149,7 @@ UNARY_OP(__half, urelu_f16, relu_fwd(x))
 UNARY_OP1(__half, uelu_f16, elu_fwd(x, param))
 UNARY_OP(__half, usilu_f16, silu_fwd(x))
 UNARY_OP1(__half, upowf_f16, powg(x, param))
+UNARY_OP(__half, usign_f16, sign(x))
 #endif
 
 UNARY_OP(uint8_t, ucopy_u8, x)
@@ -184,3 +199,5 @@ UNARY_OP(float, usilu_f32, silu_fwd(x))
 UNARY_OP(double, usilu_f64, silu_fwd(x))
 UNARY_OP1(float, upowf_f32, powg(x, param))
 UNARY_OP1(double, upowf_f64, powg(x, param))
+UNARY_OP(float, usign_f32, sign(x))
+UNARY_OP(double, usign_f64, sign(x))

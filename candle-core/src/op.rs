@@ -66,6 +66,7 @@ pub enum UnaryOp {
     Floor,
     Ceil,
     Round,
+    Sign,
 }
 
 #[derive(Clone)]
@@ -254,6 +255,7 @@ pub(crate) struct Tanh;
 pub(crate) struct Floor;
 pub(crate) struct Ceil;
 pub(crate) struct Round;
+pub(crate) struct Sign;
 
 macro_rules! bin_op {
     ($op:ident, $name: literal, $e: expr, $f32_vec: ident, $f64_vec: ident) => {
@@ -456,6 +458,7 @@ unary_op!(Neg, "neg", v, -v);
 unary_op!(Recip, "recip", v, v.recip());
 unary_op!(Sqr, "sqr", v, v * v, vs_sqr, vd_sqr);
 unary_op!(Sqrt, "sqrt", v, v.sqrt(), vs_sqrt, vd_sqrt);
+unary_op!(Sign, "sign", v, v.signum());
 
 // Hardcode the value for sqrt(2/pi)
 // https://github.com/huggingface/candle/issues/1982
