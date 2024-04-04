@@ -73,20 +73,7 @@ fn squeeze_mm(device: &Device) -> Result<()> {
     let seq_len = 8_usize;
     let a = Tensor::zeros((1, seq_len, 16), DType::F32, device)?;
     let x = a.i((.., seq_len - 1, ..))?;
-    println!(
-        "x shape:{:?}, stride:{:?}, is_contiguous:{}",
-        x.shape(),
-        x.stride(),
-        x.is_contiguous()
-    );
-
     let w = Tensor::zeros((32, 16), DType::F32, device)?.t()?;
-    println!(
-        "w shape:{:?}, stride:{:?}, is_contiguous:{}",
-        w.shape(),
-        w.stride(),
-        w.is_contiguous()
-    );
     let x = x.matmul(&w)?;
     assert_eq!(x.dims(), &[1, 32]);
     Ok(())
