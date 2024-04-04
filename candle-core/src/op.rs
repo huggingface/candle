@@ -981,11 +981,11 @@ impl UnaryOpT for Sign {
         }
     }
     #[inline(always)]
-    fn u8(v: u8) -> u8 {
+    fn u8(_v: u8) -> u8 {
         1
     }
     #[inline(always)]
-    fn u32(v: u32) -> u32 {
+    fn u32(_v: u32) -> u32 {
         1
     }
     #[inline(always)]
