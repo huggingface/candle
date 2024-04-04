@@ -14,7 +14,7 @@ __device__ bool is_contiguous(
     size_t acc = 1;
     for (unsigned int d = 0; d < num_dims; d++) {
         unsigned int dim_idx = num_dims - 1 - d;
-        if (acc != strides[dim_idx]) {
+        if (dims[dim_idx] > 1 && acc != strides[dim_idx]) {
             return false;
         }
         acc *= dims[dim_idx];
