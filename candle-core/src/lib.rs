@@ -77,7 +77,7 @@ pub use cuda_backend::cudnn;
 pub use cpu_backend::CpuStorage;
 pub use custom_op::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 pub use device::{Device, DeviceLocation, NdArray};
-pub use dtype::{DType, FloatDType, IntDType, WithDType};
+pub use dtype::{DType, DTypeParseError, FloatDType, IntDType, WithDType};
 pub use error::{Error, Result};
 pub use indexer::IndexOp;
 pub use layout::Layout;
