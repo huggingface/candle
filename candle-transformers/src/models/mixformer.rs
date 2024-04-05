@@ -198,6 +198,7 @@ struct MLP {
     fc1: Linear,
     fc2: Linear,
     act: Activation,
+    span: tracing::Span,
 }
 
 impl MLP {
@@ -209,12 +210,14 @@ impl MLP {
             fc1,
             fc2,
             act: cfg.activation_function,
+            span: tracing::span!(tracing::Level::TRACE, "mlp"),
         })
     }
 }
 
 impl Module for MLP {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
         xs.apply(&self.fc1)?.apply(&self.act)?.apply(&self.fc2)
     }
 }
@@ -252,6 +255,9 @@ struct MHA {
     n_head: usize,
     softmax_scale: f64,
     span: tracing::Span,
+    span_rope: tracing::Span,
+    span_mask: tracing::Span,
+    span_softmax: tracing::Span,
 }
 
 impl MHA {
@@ -272,6 +278,9 @@ impl MHA {
             rotary_emb,
             softmax_scale,
             span: tracing::span!(tracing::Level::TRACE, "mha"),
+            span_rope: tracing::span!(tracing::Level::TRACE, "rope"),
+            span_mask: tracing::span!(tracing::Level::TRACE, "mask"),
+            span_softmax: tracing::span!(tracing::Level::TRACE, "softmax"),
         })
     }
 
@@ -287,7 +296,10 @@ impl MHA {
             Some((prev_k, _)) => prev_k.dim(1)?,
         };
         // In the python implementation, a single tensor is returned with the third axis of size 3.
-        let (q, k, v) = self.rotary_emb.apply_rotary_emb_qkv(&qkv, seqlen_offset)?;
+        let (q, k, v) = {
+            let _enter = self.span_rope.enter();
+            self.rotary_emb.apply_rotary_emb_qkv(&qkv, seqlen_offset)?
+        };
         let (k, v) = match &self.kv_cache {
             None => (k, v),
             Some((prev_k, prev_v)) => {
@@ -307,13 +319,19 @@ impl MHA {
         // scores = scores + causal_mask.to(dtype=scores.dtype)
         let attn_weights = match mask {
             None => attn_weights,
-            Some(mask) => masked_fill(
-                &attn_weights,
-                &mask.broadcast_left(b_size * self.n_head)?,
-                f32::NEG_INFINITY,
-            )?,
+            Some(mask) => {
+                let _enter = self.span_mask.enter();
+                masked_fill(
+                    &attn_weights,
+                    &mask.broadcast_left(b_size * self.n_head)?,
+                    f32::NEG_INFINITY,
+                )?
+            }
         };
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+        let attn_weights = {
+            let _enter = self.span_softmax.enter();
+            candle_nn::ops::softmax_last_dim(&attn_weights)?
+        };
 
         // output = torch.einsum('bhts,bshd->bthd', attention_drop, v)
         // attn_weights: b*h,t,s, v: b*h,s,d
