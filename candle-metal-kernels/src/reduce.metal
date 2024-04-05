@@ -418,7 +418,34 @@ METAL_FUNC void rope(
     dst[i2] = src[i1] * s + src[i2] * c;
 }
 
-#define ROPEI(FN_NAME, FN_NAME_I, TYPENAME) \
+template<typename T>
+METAL_FUNC void rope_thd(
+    constant size_t &b,
+    constant size_t &t,
+    constant size_t &h,
+    constant size_t &d,
+    device const T *src,
+    device const T *cos,
+    device const T *sin,
+    device T *dst,
+    uint idx
+) {
+    if (2 * idx >= b * t * h * d) {
+        return;
+    }
+    const size_t i_bth = idx / (d / 2);
+    const size_t i_d = idx - (d / 2) * i_bth;
+    const size_t i_t = (i_bth / h) % t;
+    const size_t i1 = i_bth * d + i_d;
+    const size_t i2 = i1 + d / 2;
+    const size_t i_cs = i_t * (d / 2) + i_d;
+     T c = cos[i_cs];
+    T s = sin[i_cs];
+    dst[i1] = src[i1] * c - src[i2] * s;
+    dst[i2] = src[i1] * s + src[i2] * c;
+}
+
+#define ROPE(FN_NAME, FN_NAME_I, FN_NAME_THD, TYPENAME) \
 kernel void FN_NAME_I( \
     constant size_t &bh, \
     constant size_t &td, \
@@ -441,6 +468,19 @@ kernel void FN_NAME( \
     uint idx [[ thread_position_in_grid ]] \
 ) { \
     rope<TYPENAME>(bh, td, d, src, cos, sin, dst, idx); \
+}\
+kernel void FN_NAME_THD( \
+    constant size_t &b, \
+    constant size_t &t, \
+    constant size_t &h, \
+    constant size_t &d, \
+    device const TYPENAME *src,  \
+    device const TYPENAME *cos,  \
+    device const TYPENAME *sin,  \
+    device TYPENAME *dst, \
+    uint idx [[ thread_position_in_grid ]] \
+) { \
+    rope_thd<TYPENAME>(b, t, h, d, src, cos, sin, dst, idx); \
 }\
 
 REDUCE(x + y, fast_sum_f32_strided, float, 0)
@@ -471,8 +511,8 @@ SOFTMAX(softmax_f32, float)
 SOFTMAX(softmax_f16, half)
 RMSNORM(rmsnorm_f32, float)
 RMSNORM(rmsnorm_f16, half)
-ROPEI(rope_f32, rope_i_f32, float)
-ROPEI(rope_f16, rope_i_f16, half)
+ROPE(rope_f32, rope_i_f32, rope_thd_f32, float)
+ROPE(rope_f16, rope_i_f16, rope_thd_f16, half)
 
 #if __METAL_VERSION__ >= 220
 REDUCE(x + y, fast_sum_i64_strided, int64_t, 0)
@@ -495,5 +535,5 @@ ARGMIN(fast_argmin_bf16, bfloat, HUGE_VALBF)
 ARGMAX(fast_argmax_bf16, bfloat, -HUGE_VALBF)
 SOFTMAX(softmax_bf16, bfloat)
 RMSNORM(rmsnorm_bf16, bfloat)
-ROPEI(rope_bf16, rope_i_bf16, bfloat)
+ROPE(rope_bf16, rope_i_bf16, rope_thd_bf16, bfloat)
 #endif
