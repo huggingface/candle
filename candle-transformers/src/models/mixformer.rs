@@ -310,7 +310,7 @@ impl MHA {
             None => attn_weights,
             Some(mask) => {
                 let _enter = self.span_mask.enter();
-                attn_weights.broadcast_add(&mask)?
+                attn_weights.broadcast_add(mask)?
             }
         };
         let attn_weights = {
