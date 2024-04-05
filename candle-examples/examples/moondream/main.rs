@@ -194,6 +194,7 @@ struct Args {
     #[arg(long)]
     quantized: bool,
 
+    /// Use f16 precision for all the computations rather than f32.
     #[arg(long)]
     f16: bool,
 
@@ -286,10 +287,12 @@ async fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
     let config = moondream::Config::v2();
-    let dtype = if device.is_cuda() || args.f16 {
-        if args.quantized {
+    let dtype = if args.quantized {
+        if args.f16 {
             anyhow::bail!("Quantized model does not support f16");
         }
+        DType::F32
+    } else if device.is_cuda() || args.f16 {
         DType::F16
     } else {
         DType::F32
