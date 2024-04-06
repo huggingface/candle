@@ -406,7 +406,7 @@ pub fn call_copy2d(
     );
 
     let width: usize = d1 * d2;
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width / 4);
 
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
