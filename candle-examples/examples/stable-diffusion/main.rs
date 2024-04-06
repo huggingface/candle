@@ -108,6 +108,7 @@ enum StableDiffusionVersion {
     V2_1,
     Xl,
     Turbo,
+    Lightning,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +128,7 @@ impl StableDiffusionVersion {
             Self::V2_1 => "stabilityai/stable-diffusion-2-1",
             Self::V1_5 => "runwayml/stable-diffusion-v1-5",
             Self::Turbo => "stabilityai/sdxl-turbo",
+            Self::Lightning => "stabilityai/sdxl-lightning",
         }
     }
 
