@@ -11,6 +11,7 @@ fn default_max_position_embeddings() -> usize {
 pub struct Config {
     pub attention_bias: bool,
     pub head_dim: usize,
+    #[serde(alias = "hidden_activation")]
     pub hidden_act: candle_nn::Activation,
     pub hidden_size: usize,
     pub intermediate_size: usize,
