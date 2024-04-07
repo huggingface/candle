@@ -853,7 +853,7 @@ pub fn call_affine(
     kernels: &Kernels,
     name: &'static str,
     size: usize,
-    input: &Buffer,
+    input: BufferOffset,
     output: &Buffer,
     mul: f32,
     add: f32,
@@ -863,10 +863,10 @@ pub fn call_affine(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (size, mul, add, input, output));
+    set_params!(encoder, (size, mul, add, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
@@ -880,9 +880,8 @@ pub fn call_affine_strided(
     kernels: &Kernels,
     name: &'static str,
     shape: &[usize],
-    input: &Buffer,
+    input: BufferOffset,
     input_stride: &[usize],
-    input_offset: usize,
     output: &Buffer,
     mul: f32,
     add: f32,
@@ -902,13 +901,13 @@ pub fn call_affine_strided(
             input_stride,
             mul,
             add,
-            (input, input_offset),
+            &input,
             output
         )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();

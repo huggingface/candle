@@ -101,6 +101,15 @@ pub struct BufferOffset<'a> {
     pub offset_in_bytes: usize,
 }
 
+impl<'a> BufferOffset<'a> {
+    pub fn zero_offset(buffer: &'a Buffer) -> Self {
+        Self {
+            buffer,
+            offset_in_bytes: 0,
+        }
+    }
+}
+
 impl<T> EncoderParam for &[T] {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
         encoder.set_bytes(

@@ -101,6 +101,10 @@ impl BackendStorage for MetalStorage {
 
         let buffer = device.new_buffer(el, self.dtype, "affine")?;
         let command_buffer = self.device.command_buffer()?;
+        let src = BufferOffset {
+            buffer: &self.buffer,
+            offset_in_bytes: layout.start_offset() * dtype.size_in_bytes(),
+        };
         if layout.is_contiguous() && layout.start_offset() == 0 {
             let name = match self.dtype {
                 DType::F32 => "affine_f32",
@@ -114,7 +118,7 @@ impl BackendStorage for MetalStorage {
                 &device.kernels,
                 name,
                 el,
-                &self.buffer,
+                src,
                 &buffer,
                 mul as f32,
                 add as f32,
@@ -133,9 +137,8 @@ impl BackendStorage for MetalStorage {
                 &device.kernels,
                 name,
                 layout.dims(),
-                &self.buffer,
+                src,
                 layout.stride(),
-                layout.start_offset() * dtype.size_in_bytes(),
                 &buffer,
                 mul as f32,
                 add as f32,
@@ -438,6 +441,11 @@ impl BackendStorage for MetalStorage {
         let buffer = device.new_buffer(el_count, dtype, B::KERNEL)?;
         let command_buffer = device.command_buffer()?;
         command_buffer.set_label(B::KERNEL);
+        let src = BufferOffset {
+            buffer: &self.buffer,
+            offset_in_bytes: layout.start_offset() * self.dtype.size_in_bytes(),
+        };
+
         if layout.is_contiguous() {
             use candle_metal_kernels::unary::contiguous;
 
@@ -504,10 +512,6 @@ impl BackendStorage for MetalStorage {
                     crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
                 }
             };
-            let src = BufferOffset {
-                buffer: &self.buffer,
-                offset_in_bytes: layout.start_offset() * self.dtype.size_in_bytes(),
-            };
             candle_metal_kernels::call_unary_contiguous(
                 &device.device,
                 &command_buffer,
@@ -558,10 +562,6 @@ impl BackendStorage for MetalStorage {
                 (name, dtype) => {
                     crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
                 }
-            };
-            let src = BufferOffset {
-                buffer: &self.buffer,
-                offset_in_bytes: layout.start_offset() * self.dtype.size_in_bytes(),
             };
             let dst = BufferOffset {
                 buffer: &buffer,
