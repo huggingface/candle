@@ -12,7 +12,7 @@ fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
 fn new_buffer<T>(device: &Device, data: &[T]) -> Buffer {
     let options = MTLResourceOptions::StorageModeManaged;
     let ptr = data.as_ptr() as *const c_void;
-    let size = (data.len() * std::mem::size_of::<T>()) as u64;
+    let size = std::mem::size_of_val(data) as u64;
     device.new_buffer_with_data(ptr, size, options)
 }
 
@@ -643,7 +643,7 @@ fn index_select_strided() {
 fn index_select_f16() {
     let embedding: Vec<_> = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
         .into_iter()
-        .map(|x| f16::from_f32(x))
+        .map(f16::from_f32)
         .collect();
     let shape = [5, 2];
     let stride = [2, 1];
@@ -710,8 +710,8 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
 
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
-    let embeddings_buffer = new_buffer(&device, &embeddings);
-    let ids_buffer = new_buffer(&device, &ids);
+    let embeddings_buffer = new_buffer(&device, embeddings);
+    let ids_buffer = new_buffer(&device, ids);
 
     let left_size: usize = shape[..dim].iter().product();
     let right_size: usize = shape[dim + 1..].iter().product();
@@ -721,7 +721,7 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
     let kernels = Kernels::new();
     call_index_select(
         &device,
-        &command_buffer,
+        command_buffer,
         &kernels,
         name,
         shape,
@@ -756,8 +756,8 @@ fn run_index_select_strided<T: Clone, I: Clone + std::fmt::Debug>(
 
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
-    let embeddings_buffer = new_buffer(&device, &embeddings);
-    let ids_buffer = new_buffer(&device, &ids);
+    let embeddings_buffer = new_buffer(&device, embeddings);
+    let ids_buffer = new_buffer(&device, ids);
 
     let left_size: usize = shape[..dim].iter().product();
     let right_size: usize = shape[dim + 1..].iter().product();
@@ -767,7 +767,7 @@ fn run_index_select_strided<T: Clone, I: Clone + std::fmt::Debug>(
     let kernels = Kernels::new();
     call_index_select(
         &device,
-        &command_buffer,
+        command_buffer,
         &kernels,
         name,
         shape,
@@ -941,6 +941,7 @@ fn softmax() {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_where_cond<I: Clone, T: Clone>(
     shape: &[usize],
     cond: &[I],
@@ -1158,7 +1159,7 @@ fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b:
 #[test]
 fn random() {
     fn calc_mean(data: &[f32]) -> f32 {
-        let sum = data.iter().sum::<f32>() as f32;
+        let sum = data.iter().sum::<f32>();
         let count = data.len();
         assert!(count > 0);
         sum / count as f32
@@ -1172,7 +1173,7 @@ fn random() {
         let variance = data
             .iter()
             .map(|value| {
-                let diff = mean - (*value as f32);
+                let diff = mean - *value;
                 diff * diff
             })
             .sum::<f32>()
@@ -1797,6 +1798,7 @@ fn avg_pool2d_u32() {
     assert_eq!(results, expected);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_conv_transpose1d<T: Clone>(
     input: &[T],
     input_shape: &[usize],

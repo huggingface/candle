@@ -145,6 +145,12 @@ pub struct Kernels {
     pipelines: RwLock<Pipelines>,
 }
 
+impl Default for Kernels {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Kernels {
     pub fn new() -> Self {
         let libraries = RwLock::new(Libraries::new());
@@ -500,6 +506,7 @@ pub fn call_cast_strided(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn call_reduce_contiguous(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -547,6 +554,7 @@ pub fn call_reduce_contiguous(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn call_reduce_strided(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -1039,6 +1047,7 @@ pub fn call_elu_strided(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn call_where_cond_strided(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -1194,6 +1203,7 @@ pub fn call_gather(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn call_scatter_add(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -1244,6 +1254,7 @@ pub fn call_scatter_add(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn call_index_add(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -1770,6 +1781,7 @@ pub enum GgmlDType {
     F32,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn call_quantized_matmul_t(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -1785,16 +1797,16 @@ pub fn call_quantized_matmul_t(
     let ne00 = k as i64;
     let ne01 = n as i64;
     let ne02 = b as i64;
-    let ne03 = 1 as i64;
+    let ne03 = 1i64;
 
     let nb00 = 0i64;
-    let nb01 = 0 as i64;
-    let nb02 = 0 as i64;
+    let nb01 = 0i64;
+    let nb02 = 0i64;
 
     let ne10 = k as i64;
     let ne11 = m as i64;
     let ne12 = b as i64;
-    let ne13 = 1 as i64;
+    let ne13 = 1i64;
 
     let nb10 = 0i64;
     let nb11 = 0i64;
@@ -2029,6 +2041,7 @@ pub struct CallConvTranspose2dCfg<'a> {
     pub kernel_offset: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn call_conv_transpose2d(
     device: &Device,
     command_buffer: &CommandBufferRef,
