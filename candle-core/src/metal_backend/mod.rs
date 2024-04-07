@@ -160,7 +160,8 @@ impl BackendStorage for MetalStorage {
 
         let buffer = device.new_buffer(el, self.dtype, "powf")?;
         let command_buffer = self.device.command_buffer()?;
-        if layout.is_contiguous() && layout.start_offset() == 0 {
+        let src = buffer_o(&self.buffer, layout, dtype);
+        if layout.is_contiguous() {
             let name = match self.dtype {
                 DType::F32 => "powf_f32",
                 DType::F16 => "powf_f16",
@@ -173,7 +174,7 @@ impl BackendStorage for MetalStorage {
                 &device.kernels,
                 name,
                 el,
-                &self.buffer,
+                src,
                 &buffer,
                 pow as f32,
             )
@@ -191,9 +192,8 @@ impl BackendStorage for MetalStorage {
                 &device.kernels,
                 name,
                 layout.dims(),
-                &self.buffer,
+                src,
                 layout.stride(),
-                layout.start_offset() * dtype.size_in_bytes(),
                 &buffer,
                 pow as f32,
             )
@@ -211,7 +211,8 @@ impl BackendStorage for MetalStorage {
 
         let buffer = device.new_buffer(el, self.dtype, "elu")?;
         let command_buffer = self.device.command_buffer()?;
-        if layout.is_contiguous() && layout.start_offset() == 0 {
+        let src = buffer_o(&self.buffer, layout, self.dtype);
+        if layout.is_contiguous() {
             let name = match self.dtype {
                 DType::F32 => "elu_f32",
                 DType::F16 => "elu_f16",
@@ -224,7 +225,7 @@ impl BackendStorage for MetalStorage {
                 &device.kernels,
                 name,
                 el,
-                &self.buffer,
+                src,
                 &buffer,
                 alpha as f32,
             )
@@ -242,9 +243,8 @@ impl BackendStorage for MetalStorage {
                 &device.kernels,
                 name,
                 layout.dims(),
-                &self.buffer,
+                src,
                 layout.stride(),
-                layout.start_offset() * dtype.size_in_bytes(),
                 &buffer,
                 alpha as f32,
             )
@@ -350,7 +350,7 @@ impl BackendStorage for MetalStorage {
         let buffer = device.new_buffer(el_count, dtype, "todtype")?;
         let command_buffer = device.command_buffer()?;
         let src = buffer_o(&self.buffer, layout, self.dtype);
-        if layout.is_contiguous() && layout.start_offset() == 0 {
+        if layout.is_contiguous() {
             let kernel_name = match (self.dtype, dtype) {
                 (DType::U32, DType::BF16) => "cast_u32_bf16",
                 (DType::U32, DType::F16) => "cast_u32_f16",
