@@ -123,7 +123,7 @@ impl TextGeneration {
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             generated_tokens += 1;
-            if next_token == eos_token {
+            if next_token == eos_token || tokens.ends_with(&[27, 10619, 29] /* <END> */) {
                 break;
             }
             let token = self.tokenizer.decode(&[next_token], true).map_err(E::msg)?;
