@@ -371,8 +371,8 @@ pub fn call_binary_contiguous(
     kernels: &Kernels,
     kernel_name: binary::contiguous::Kernel,
     length: usize,
-    left: &Buffer,
-    right: &Buffer,
+    left: BufferOffset,
+    right: BufferOffset,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Binary, kernel_name.0)?;
@@ -380,12 +380,12 @@ pub fn call_binary_contiguous(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (length, left, right, output));
+    set_params!(encoder, (length, &left, &right, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
-    encoder.use_resource(left, metal::MTLResourceUsage::Read);
-    encoder.use_resource(right, metal::MTLResourceUsage::Read);
+    encoder.use_resource(left.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(right.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
@@ -399,12 +399,10 @@ pub fn call_binary_strided(
     kernels: &Kernels,
     name: binary::strided::Kernel,
     shape: &[usize],
-    left_input: &Buffer,
+    left_input: BufferOffset,
     left_strides: &[usize],
-    left_offset: usize,
-    right_input: &Buffer,
+    right_input: BufferOffset,
     right_strides: &[usize],
-    right_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Binary, name.0)?;
@@ -424,16 +422,16 @@ pub fn call_binary_strided(
             shape,
             left_strides,
             right_strides,
-            (left_input, left_offset),
-            (right_input, right_offset),
+            &left_input,
+            &right_input,
             output
         )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
 
-    encoder.use_resource(left_input, metal::MTLResourceUsage::Read);
-    encoder.use_resource(right_input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(left_input.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(right_input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();

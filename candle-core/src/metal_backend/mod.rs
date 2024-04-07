@@ -1417,10 +1417,16 @@ impl MetalStorage {
         let shape = lhs_l.shape();
         let el_count = shape.elem_count();
         let command_buffer = device.command_buffer()?;
-        let (buffer, dtype) = if (lhs_l.is_contiguous() && lhs_l.start_offset() == 0)
-            && (rhs_l.is_contiguous() && rhs_l.start_offset() == 0)
-            && &op[..1] != "b"
-        {
+        let lhs = BufferOffset {
+            buffer: &self.buffer,
+            offset_in_bytes: lhs_l.start_offset() * self.dtype.size_in_bytes(),
+        };
+        let rhs = BufferOffset {
+            buffer: &rhs.buffer,
+            offset_in_bytes: rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
+        };
+
+        let (buffer, dtype) = if lhs_l.is_contiguous() && rhs_l.is_contiguous() && &op[..1] != "b" {
             use candle_metal_kernels::binary::contiguous;
 
             let (kernel_name, dtype) = match (op, self.dtype) {
@@ -1501,8 +1507,8 @@ impl MetalStorage {
                 &device.kernels,
                 kernel_name,
                 el_count,
-                &self.buffer,
-                &rhs.buffer,
+                lhs,
+                rhs,
                 &buffer,
             )
             .map_err(MetalError::from)?;
@@ -1600,12 +1606,10 @@ impl MetalStorage {
                 &device.kernels,
                 kernel_name,
                 lhs_l.dims(),
-                &self.buffer,
+                lhs,
                 lhs_l.stride(),
-                lhs_l.start_offset() * self.dtype.size_in_bytes(),
-                &rhs.buffer,
+                rhs,
                 rhs_l.stride(),
-                rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
                 &buffer,
             )
             .map_err(MetalError::from)?;

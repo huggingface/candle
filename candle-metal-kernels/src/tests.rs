@@ -76,8 +76,8 @@ fn run_binary<T: Clone>(x: &[T], y: &[T], name: binary::contiguous::Kernel) -> V
         &kernels,
         name,
         x.len(),
-        &left,
-        &right,
+        BufferOffset::zero_offset(&left),
+        BufferOffset::zero_offset(&right),
         &output,
     )
     .unwrap();
