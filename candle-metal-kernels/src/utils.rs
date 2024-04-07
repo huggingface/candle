@@ -96,6 +96,11 @@ primitive!(u32);
 primitive!(u64);
 primitive!(f32);
 
+pub struct BufferOffset<'a> {
+    pub buffer: &'a Buffer,
+    pub offset_in_bytes: usize,
+}
+
 impl<T> EncoderParam for &[T] {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
         encoder.set_bytes(
@@ -111,16 +116,25 @@ impl EncoderParam for &Buffer {
         encoder.set_buffer(position, Some(data), 0);
     }
 }
+
 impl EncoderParam for (&Buffer, usize) {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
         encoder.set_buffer(position, Some(data.0), data.1 as u64);
     }
 }
+
+impl<'a> EncoderParam for &BufferOffset<'a> {
+    fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+        encoder.set_buffer(position, Some(data.buffer), data.offset_in_bytes as u64);
+    }
+}
+
 impl EncoderParam for &mut Buffer {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
         encoder.set_buffer(position, Some(data), 0);
     }
 }
+
 impl EncoderParam for (&mut Buffer, usize) {
     fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
         encoder.set_buffer(position, Some(data.0), data.1 as u64);
@@ -132,7 +146,7 @@ macro_rules! set_params {
     ($encoder:ident, ($($param:expr),+)) => (
         let mut _index = 0;
         $(
-            crate::utils::set_param($encoder, _index, $param);
+            $crate::utils::set_param($encoder, _index, $param);
             _index += 1;
         )*
     );

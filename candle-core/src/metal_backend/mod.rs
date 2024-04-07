@@ -2,8 +2,7 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
-use candle_metal_kernels::CallConvTranspose2dCfg;
-use candle_metal_kernels::Kernels;
+use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg, Kernels};
 use metal::{Buffer, MTLResourceOptions, NSUInteger};
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -439,7 +438,7 @@ impl BackendStorage for MetalStorage {
         let buffer = device.new_buffer(el_count, dtype, B::KERNEL)?;
         let command_buffer = device.command_buffer()?;
         command_buffer.set_label(B::KERNEL);
-        if layout.is_contiguous() && layout.start_offset() == 0 {
+        if layout.is_contiguous() {
             use candle_metal_kernels::unary::contiguous;
 
             let kernel_name = match (B::KERNEL, dtype) {
@@ -505,13 +504,17 @@ impl BackendStorage for MetalStorage {
                     crate::bail!("Metal contiguous unary {name} {dtype:?} not implemented")
                 }
             };
+            let src = BufferOffset {
+                buffer: &self.buffer,
+                offset_in_bytes: layout.start_offset() * self.dtype.size_in_bytes(),
+            };
             candle_metal_kernels::call_unary_contiguous(
                 &device.device,
                 &command_buffer,
                 &device.kernels,
                 kernel_name,
                 el_count,
-                &self.buffer,
+                src,
                 &buffer,
             )
             .map_err(MetalError::from)?;
@@ -556,17 +559,23 @@ impl BackendStorage for MetalStorage {
                     crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
                 }
             };
+            let src = BufferOffset {
+                buffer: &self.buffer,
+                offset_in_bytes: layout.start_offset() * self.dtype.size_in_bytes(),
+            };
+            let dst = BufferOffset {
+                buffer: &buffer,
+                offset_in_bytes: 0,
+            };
             candle_metal_kernels::call_unary_strided(
                 &device.device,
                 &command_buffer,
                 &device.kernels,
                 kernel_name,
                 layout.dims(),
-                &self.buffer,
+                src,
                 layout.stride(),
-                layout.start_offset() * self.dtype.size_in_bytes(),
-                &buffer,
-                0,
+                dst,
             )
             .map_err(MetalError::from)?;
         }
@@ -1358,17 +1367,23 @@ impl BackendStorage for MetalStorage {
                 DType::U8 => candle_metal_kernels::unary::strided::copy::U8,
                 dtype => crate::bail!("Metal copy_strided {dtype:?} not implemented"),
             };
+            let src = BufferOffset {
+                buffer: &self.buffer,
+                offset_in_bytes: src_l.start_offset() * self.dtype.size_in_bytes(),
+            };
+            let dst = BufferOffset {
+                buffer: &dst.buffer,
+                offset_in_bytes: dst_offset * dst.dtype.size_in_bytes(),
+            };
             candle_metal_kernels::call_unary_strided(
                 &self.device.device,
                 &command_buffer,
                 &self.device.kernels,
                 kernel_name,
                 src_l.dims(),
-                &self.buffer,
+                src,
                 src_l.stride(),
-                src_l.start_offset() * self.dtype.size_in_bytes(),
-                &dst.buffer,
-                dst_offset * dst.dtype.size_in_bytes(),
+                dst,
             )
             .map_err(MetalError::from)?;
             command_buffer.set_label("copy_strided");

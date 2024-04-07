@@ -7,6 +7,7 @@ use std::ffi::c_void;
 use std::sync::RwLock;
 
 mod utils;
+pub use utils::BufferOffset;
 use utils::{get_block_dims, linear_split};
 
 const AFFINE: &str = include_str!("affine.metal");
@@ -267,17 +268,17 @@ pub fn call_unary_contiguous(
     kernels: &Kernels,
     kernel_name: unary::contiguous::Kernel,
     length: usize,
-    input: &Buffer,
+    input: BufferOffset,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (length, input, output));
+    set_params!(encoder, (length, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
@@ -334,11 +335,9 @@ pub fn call_unary_strided(
     kernels: &Kernels,
     name: unary::strided::Kernel,
     shape: &[usize],
-    input: &Buffer,
+    input: BufferOffset,
     strides: &[usize],
-    offset: usize,
-    output: &Buffer,
-    output_offset: usize,
+    output: BufferOffset,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, name.0)?;
 
@@ -347,23 +346,13 @@ pub fn call_unary_strided(
     encoder.set_compute_pipeline_state(&pipeline);
 
     let length: usize = shape.iter().product();
-    set_params!(
-        encoder,
-        (
-            length,
-            num_dims,
-            shape,
-            strides,
-            (input, offset),
-            (output, output_offset)
-        )
-    );
+    set_params!(encoder, (length, num_dims, shape, strides, &input, &output));
 
     let width: usize = shape.iter().product();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
 
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output.buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
     Ok(())

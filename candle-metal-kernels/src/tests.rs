@@ -41,6 +41,10 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
+    let input = BufferOffset {
+        buffer: &input,
+        offset_in_bytes: 0,
+    };
     let output = new_buffer(&device, v);
     call_unary_contiguous(
         &device,
@@ -48,7 +52,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
         &kernels,
         name,
         v.len(),
-        &input,
+        input,
         &output,
     )
     .unwrap();
@@ -93,7 +97,15 @@ fn run_strided<T: Clone>(
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
     let input = new_buffer(&device, v);
-    let output = new_buffer(&device, v);
+    let input = BufferOffset {
+        buffer: &input,
+        offset_in_bytes: offset,
+    };
+    let output_b = new_buffer(&device, v);
+    let output = BufferOffset {
+        buffer: &output_b,
+        offset_in_bytes: 0,
+    };
     let kernels = Kernels::new();
     call_unary_strided(
         &device,
@@ -101,16 +113,14 @@ fn run_strided<T: Clone>(
         &kernels,
         kernel,
         shape,
-        &input,
+        input,
         strides,
-        offset,
-        &output,
-        0,
+        output,
     )
     .unwrap();
     command_buffer.commit();
     command_buffer.wait_until_completed();
-    read_to_vec(&output, v.len())
+    read_to_vec(&output_b, v.len())
 }
 
 #[test]
