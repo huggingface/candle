@@ -104,21 +104,17 @@ UNARY(NAME, bfloat, NAME##_bf16, NAME##_bf16_strided);
 
 #define COPY2D(FN_NAME, TYPENAME) \
 kernel void FN_NAME( \
-    constant size_t &d1, \
-    constant size_t &d2, \
-    constant size_t &src_s, \
-    constant size_t &dst_s, \
+    constant int64_t &d1, \
+    constant int64_t &d2, \
+    constant int64_t &src_s, \
+    constant int64_t &dst_s, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
+    uint2 idx [[thread_position_in_grid]] \
 ) { \
-    if (tid >= d1 * d2) { \
-        return; \
-    } \
-    size_t idx1 = tid / d2; \
-    size_t idx2 = tid - idx1 * d2; \
-    size_t src_idx = idx1 * src_s + idx2; \
-    size_t dst_idx = idx1 * dst_s + idx2; \
+    if (idx.x >= d1 || idx.y >= d2) return; \
+    int64_t src_idx = idx.x * src_s + idx.y; \
+    int64_t dst_idx = idx.x * dst_s + idx.y; \
     output[dst_idx] = input[src_idx]; \
 }
 
