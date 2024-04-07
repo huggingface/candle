@@ -11,6 +11,12 @@ use std::sync::{Arc, Mutex, RwLock, TryLockError};
 mod device;
 pub use device::{DeviceId, MetalDevice};
 
+fn buffer_o<'a>(buffer: &'a Buffer, l: &Layout, dtype: DType) -> BufferOffset<'a> {
+    BufferOffset {
+        buffer,
+        offset_in_bytes: l.start_offset() * dtype.size_in_bytes(),
+    }
+}
 /// Simple way to catch lock error without
 /// depending on T
 #[derive(thiserror::Error, Debug)]
@@ -101,11 +107,8 @@ impl BackendStorage for MetalStorage {
 
         let buffer = device.new_buffer(el, self.dtype, "affine")?;
         let command_buffer = self.device.command_buffer()?;
-        let src = BufferOffset {
-            buffer: &self.buffer,
-            offset_in_bytes: layout.start_offset() * dtype.size_in_bytes(),
-        };
-        if layout.is_contiguous() && layout.start_offset() == 0 {
+        let src = buffer_o(&self.buffer, layout, dtype);
+        if layout.is_contiguous() {
             let name = match self.dtype {
                 DType::F32 => "affine_f32",
                 DType::F16 => "affine_f16",
@@ -346,6 +349,7 @@ impl BackendStorage for MetalStorage {
         let el_count = shape.elem_count();
         let buffer = device.new_buffer(el_count, dtype, "todtype")?;
         let command_buffer = device.command_buffer()?;
+        let src = buffer_o(&self.buffer, layout, self.dtype);
         if layout.is_contiguous() && layout.start_offset() == 0 {
             let kernel_name = match (self.dtype, dtype) {
                 (DType::U32, DType::BF16) => "cast_u32_bf16",
@@ -394,8 +398,7 @@ impl BackendStorage for MetalStorage {
                 &device.kernels,
                 kernel_name,
                 el_count,
-                &self.buffer,
-                layout.start_offset() * self.dtype.size_in_bytes(),
+                src,
                 &buffer,
             )
             .map_err(MetalError::from)?;
@@ -422,9 +425,8 @@ impl BackendStorage for MetalStorage {
                 &device.kernels,
                 kernel_name,
                 layout.dims(),
-                &self.buffer,
+                src,
                 layout.stride(),
-                layout.start_offset() * self.dtype.size_in_bytes(),
                 &buffer,
             )
             .map_err(MetalError::from)?;
@@ -441,11 +443,7 @@ impl BackendStorage for MetalStorage {
         let buffer = device.new_buffer(el_count, dtype, B::KERNEL)?;
         let command_buffer = device.command_buffer()?;
         command_buffer.set_label(B::KERNEL);
-        let src = BufferOffset {
-            buffer: &self.buffer,
-            offset_in_bytes: layout.start_offset() * self.dtype.size_in_bytes(),
-        };
-
+        let src = buffer_o(&self.buffer, layout, self.dtype);
         if layout.is_contiguous() {
             use candle_metal_kernels::unary::contiguous;
 
@@ -563,10 +561,7 @@ impl BackendStorage for MetalStorage {
                     crate::bail!("Metal strided unary {name} {dtype:?} not implemented")
                 }
             };
-            let dst = BufferOffset {
-                buffer: &buffer,
-                offset_in_bytes: 0,
-            };
+            let dst = BufferOffset::zero_offset(&buffer);
             candle_metal_kernels::call_unary_strided(
                 &device.device,
                 &command_buffer,
@@ -1367,10 +1362,7 @@ impl BackendStorage for MetalStorage {
                 DType::U8 => candle_metal_kernels::unary::strided::copy::U8,
                 dtype => crate::bail!("Metal copy_strided {dtype:?} not implemented"),
             };
-            let src = BufferOffset {
-                buffer: &self.buffer,
-                offset_in_bytes: src_l.start_offset() * self.dtype.size_in_bytes(),
-            };
+            let src = buffer_o(&self.buffer, src_l, self.dtype);
             let dst = BufferOffset {
                 buffer: &dst.buffer,
                 offset_in_bytes: dst_offset * dst.dtype.size_in_bytes(),
@@ -1417,15 +1409,8 @@ impl MetalStorage {
         let shape = lhs_l.shape();
         let el_count = shape.elem_count();
         let command_buffer = device.command_buffer()?;
-        let lhs = BufferOffset {
-            buffer: &self.buffer,
-            offset_in_bytes: lhs_l.start_offset() * self.dtype.size_in_bytes(),
-        };
-        let rhs = BufferOffset {
-            buffer: &rhs.buffer,
-            offset_in_bytes: rhs_l.start_offset() * rhs.dtype.size_in_bytes(),
-        };
-
+        let lhs = buffer_o(&self.buffer, lhs_l, self.dtype);
+        let rhs = buffer_o(&rhs.buffer, rhs_l, rhs.dtype);
         let (buffer, dtype) = if lhs_l.is_contiguous() && rhs_l.is_contiguous() && &op[..1] != "b" {
             use candle_metal_kernels::binary::contiguous;
 

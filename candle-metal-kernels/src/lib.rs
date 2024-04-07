@@ -445,8 +445,7 @@ pub fn call_cast_contiguous(
     kernels: &Kernels,
     kernel_name: &'static str,
     length: usize,
-    input: &Buffer,
-    input_offset: usize,
+    input: BufferOffset,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Cast, kernel_name)?;
@@ -454,10 +453,10 @@ pub fn call_cast_contiguous(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (length, (input, input_offset), output));
+    set_params!(encoder, (length, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
@@ -471,9 +470,8 @@ pub fn call_cast_strided(
     kernels: &Kernels,
     kernel_name: &'static str,
     shape: &[usize],
-    input: &Buffer,
+    input: BufferOffset,
     input_strides: &[usize],
-    input_offset: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Cast, kernel_name)?;
@@ -485,19 +483,12 @@ pub fn call_cast_strided(
 
     set_params!(
         encoder,
-        (
-            length,
-            shape.len(),
-            shape,
-            input_strides,
-            (input, input_offset),
-            output
-        )
+        (length, shape.len(), shape, input_strides, &input, output)
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
-    encoder.use_resource(input, metal::MTLResourceUsage::Read);
+    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();

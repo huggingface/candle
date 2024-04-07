@@ -318,8 +318,7 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
         &kernels,
         name,
         v.len(),
-        &input,
-        0,
+        BufferOffset::zero_offset(&input),
         &output,
     )
     .unwrap();
