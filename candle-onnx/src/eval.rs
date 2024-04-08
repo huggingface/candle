@@ -514,7 +514,7 @@ pub fn simple_eval(
                 let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(0);
                 let axis = xs.normalize_axis(axis)?;
 
-                // In Pytorch or Numpy this can be done by indesing the xs tensor using the indices
+                // In Pytorch or Numpy this can be done by indexing the xs tensor using the indices
                 // tensor directly, but candle does not support tensor indexing at the moment, so
                 // some workarounds must be done.
                 let xs = match indices.dims() {
