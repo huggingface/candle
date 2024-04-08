@@ -728,10 +728,8 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
         true,
         shape,
         stride,
-        &embeddings_buffer,
-        0,
-        &ids_buffer,
-        0,
+        BufferOffset::zero_offset(&embeddings_buffer),
+        BufferOffset::zero_offset(&ids_buffer),
         &dst_buffer,
     )
     .unwrap();
@@ -774,10 +772,8 @@ fn run_index_select_strided<T: Clone, I: Clone + std::fmt::Debug>(
         false,
         shape,
         stride,
-        &embeddings_buffer,
-        0,
-        &ids_buffer,
-        0,
+        BufferOffset::zero_offset(&embeddings_buffer),
+        BufferOffset::zero_offset(&ids_buffer),
         &dst_buffer,
     )
     .unwrap();
@@ -1249,10 +1245,8 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
         shape,
         shape,
         dim,
-        &input_buffer,
-        0,
-        &ids_buffer,
-        0,
+        BufferOffset::zero_offset(&input_buffer),
+        BufferOffset::zero_offset(&ids_buffer),
         &output,
     )
     .unwrap();
@@ -1354,10 +1348,8 @@ fn run_index_add<T: Clone, I: Clone + std::fmt::Debug>(
         shape,
         shape,
         dim,
-        &input_buffer,
-        0,
-        &indices_buffer,
-        0,
+        BufferOffset::zero_offset(&input_buffer),
+        BufferOffset::zero_offset(&indices_buffer),
         &output,
     )
     .unwrap();
