@@ -819,8 +819,7 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
         &dims,
         &strides,
         out_length,
-        &input,
-        0,
+        BufferOffset::zero_offset(&input),
         &output,
     )
     .unwrap();

@@ -314,6 +314,7 @@ impl BackendStorage for MetalStorage {
         let dtype = if return_index { DType::U32 } else { self.dtype };
         let buffer = device.new_buffer(dst_el, dtype, "reduce")?;
         let command_buffer = self.device.command_buffer()?;
+        let src = buffer_o(&self.buffer, layout, self.dtype);
         candle_metal_kernels::call_reduce_strided(
             &device.device,
             &command_buffer,
@@ -322,8 +323,7 @@ impl BackendStorage for MetalStorage {
             &dims,
             &stride,
             dst_el,
-            &self.buffer,
-            layout.start_offset() * self.dtype.size_in_bytes(),
+            src,
             &buffer,
         )
         .map_err(MetalError::from)?;
@@ -664,6 +664,7 @@ impl BackendStorage for MetalStorage {
             DType::F32 => "im2col1d_f32",
             dtype => crate::bail!("Metal conv1d {dtype:?} not implemented"),
         };
+        let src = buffer_o(&self.buffer, layout, self.dtype);
         candle_metal_kernels::call_im2col1d_strided(
             &self.device.device,
             &command_buffer,
@@ -672,8 +673,7 @@ impl BackendStorage for MetalStorage {
             layout.shape().dims(),
             strides,
             (k_size, stride, padding, dilation),
-            &self.buffer,
-            layout.start_offset() * self.dtype.size_in_bytes(),
+            src,
             &dst,
         )
         .map_err(MetalError::from)?;
@@ -791,6 +791,7 @@ impl BackendStorage for MetalStorage {
             DType::U32 => "im2col_u32",
             dtype => crate::bail!("Metal conv2d {dtype:?} not implemented"),
         };
+        let src = buffer_o(&self.buffer, layout, self.dtype);
         candle_metal_kernels::call_im2col_strided(
             &self.device.device,
             &command_buffer,
@@ -799,8 +800,7 @@ impl BackendStorage for MetalStorage {
             layout.shape().dims(),
             layout.stride(),
             (h_k, w_k, stride, padding, dilation),
-            &self.buffer,
-            layout.start_offset() * self.dtype.size_in_bytes(),
+            src,
             &dst,
         )
         .map_err(MetalError::from)?;
