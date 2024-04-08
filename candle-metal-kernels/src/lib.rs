@@ -1012,12 +1012,12 @@ pub fn call_where_cond_strided(
     kernels: &Kernels,
     name: &'static str,
     shape: &[usize],
-    cond: &Buffer,
-    (cond_stride, cond_offset): (&[usize], usize),
-    left: &Buffer,
-    (left_stride, left_offset): (&[usize], usize),
-    right: &Buffer,
-    (right_stride, right_offset): (&[usize], usize),
+    cond: BufferOffset,
+    cond_stride: &[usize],
+    left: BufferOffset,
+    left_stride: &[usize],
+    right: BufferOffset,
+    right_stride: &[usize],
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Ternary, name)?;
@@ -1037,18 +1037,18 @@ pub fn call_where_cond_strided(
             cond_stride,
             left_stride,
             right_stride,
-            (cond, cond_offset),
-            (left, left_offset),
-            (right, right_offset),
+            &cond,
+            &left,
+            &right,
             output
         )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
 
-    encoder.use_resource(cond, metal::MTLResourceUsage::Read);
-    encoder.use_resource(left, metal::MTLResourceUsage::Read);
-    encoder.use_resource(right, metal::MTLResourceUsage::Read);
+    encoder.use_resource(cond.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(left.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(right.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();

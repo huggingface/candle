@@ -617,21 +617,21 @@ impl BackendStorage for MetalStorage {
             (DType::U8, DType::U8) => "where_u8_u8",
             (left, right) => crate::bail!("Metal where_cond {left:?} {right:?} not implemented"),
         };
+        let src = buffer_o(&self.buffer, layout, self.dtype);
+        let t = buffer_o(&t.buffer, t_l, t.dtype);
+        let f = buffer_o(&f.buffer, f_l, f.dtype);
         candle_metal_kernels::call_where_cond_strided(
             &device.device,
             &command_buffer,
             &device.kernels,
             name,
             dims,
-            &self.buffer,
-            (
-                layout.stride(),
-                layout.start_offset() * self.dtype.size_in_bytes(),
-            ),
-            &t.buffer,
-            (t_l.stride(), t_l.start_offset() * t.dtype.size_in_bytes()),
-            &f.buffer,
-            (f_l.stride(), f_l.start_offset() * f.dtype.size_in_bytes()),
+            src,
+            layout.stride(),
+            t,
+            t_l.stride(),
+            f,
+            f_l.stride(),
             &buffer,
         )
         .map_err(MetalError::from)?;

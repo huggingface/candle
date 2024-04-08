@@ -969,18 +969,30 @@ fn run_where_cond<I: Clone, T: Clone>(
     );
 
     let output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
+    let cond = BufferOffset {
+        buffer: &cond,
+        offset_in_bytes: cond_offset,
+    };
+    let left = BufferOffset {
+        buffer: &left,
+        offset_in_bytes: left_offset,
+    };
+    let right = BufferOffset {
+        buffer: &right,
+        offset_in_bytes: cond_offset,
+    };
     call_where_cond_strided(
         &device,
         command_buffer,
         &kernels,
         name,
         shape,
-        &cond,
-        (&cond_stride, cond_offset),
-        &left,
-        (&left_stride, left_offset),
-        &right,
-        (&cond_stride, cond_offset),
+        cond,
+        &cond_stride,
+        left,
+        &left_stride,
+        right,
+        &cond_stride,
         &output,
     )
     .unwrap();
