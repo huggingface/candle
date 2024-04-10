@@ -1,4 +1,5 @@
-use crate::{DType, Result};
+use crate::backend::{BackendDevice, BackendStorage};
+use crate::{CpuStorage, DType, Result, Shape};
 use candle_metal_kernels::Kernels;
 use metal::{Buffer, CommandBuffer, CommandQueue, MTLResourceOptions, NSUInteger};
 use std::collections::HashMap;
@@ -6,6 +7,7 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard};
 
+use super::storage::MetalStorage;
 use super::MetalError;
 
 /// Unique identifier for cuda devices.
@@ -289,4 +291,188 @@ impl MetalDevice {
 
 fn buf_size(size: NSUInteger) -> NSUInteger {
     (size - 1).next_power_of_two() as NSUInteger
+}
+
+impl BackendDevice for MetalDevice {
+    type Storage = MetalStorage;
+
+    fn new(ordinal: usize) -> Result<Self> {
+        let device = metal::Device::all().swap_remove(ordinal);
+        let command_queue = device.new_command_queue();
+
+        // Setup a new command buffer, the call to enqueue is necessary because of ???
+        let command_buffer = command_queue.new_command_buffer().to_owned();
+
+        // Setup a new command encoder for the compute operations, any blit encoder will require management and creation of it's own buffer
+        // since only one encoder can be present on a buffer
+        let command_encoder = command_buffer.new_compute_command_encoder().to_owned();
+
+        // Wrap the buffer and encoder in an Arc to allow sharing between threads
+        let command_buffer = Arc::new(RwLock::new(command_buffer));
+        let command_encoder = Arc::new(RwLock::new(command_encoder.into()));
+
+        let kernels = Arc::new(Kernels::new());
+        let buffers = Arc::new(RwLock::new(HashMap::new()));
+        let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
+            [299792458].as_ptr() as *const c_void,
+            4,
+            MTLResourceOptions::StorageModeManaged,
+        )));
+        Ok(Self {
+            id: DeviceId::new(),
+            device,
+            command_queue,
+            command_buffer,
+            command_encoder,
+            buffers,
+            kernels,
+            seed,
+        })
+    }
+
+    fn location(&self) -> crate::DeviceLocation {
+        crate::DeviceLocation::Metal {
+            gpu_id: self.registry_id() as usize,
+        }
+    }
+
+    fn same_device(&self, rhs: &Self) -> bool {
+        self.id == rhs.id
+    }
+
+    unsafe fn alloc_uninit(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "alloc-uninit")?;
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
+    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<MetalStorage> {
+        let size = shape.elem_count() * dtype.size_in_bytes();
+        let buffer = self.allocate_zeros(size)?;
+        Ok(MetalStorage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
+    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
+        // TODO Is there a faster way ?
+        let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
+        self.storage_from_cpu_storage(&cpu_storage)
+    }
+
+    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
+        let (count, buffer) = match storage {
+            CpuStorage::U8(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::U32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::I64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::BF16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F16(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F32(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+            CpuStorage::F64(storage) => (storage.len(), self.new_buffer_with_data(storage)),
+        };
+        Ok(Self::Storage::new(
+            buffer?,
+            self.clone(),
+            count,
+            storage.dtype(),
+        ))
+    }
+
+    fn storage_from_cpu_storage_owned(&self, storage: CpuStorage) -> Result<Self::Storage> {
+        self.storage_from_cpu_storage(&storage)
+    }
+
+    fn rand_uniform(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        min: f64,
+        max: f64,
+    ) -> Result<Self::Storage> {
+        let name = match dtype {
+            DType::F32 => "rand_uniform_f32",
+            DType::F16 => "rand_uniform_f16",
+            DType::BF16 => "rand_uniform_bf16",
+            dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
+        };
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_uniform")?;
+        let command_encoder = self.command_encoder()?;
+        candle_metal_kernels::call_random_uniform(
+            &self.device,
+            &command_encoder,
+            &self.kernels,
+            name,
+            min as f32,
+            max as f32,
+            shape.elem_count(),
+            &self.seed.lock().unwrap(),
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(Self::Storage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
+    fn rand_normal(
+        &self,
+        shape: &Shape,
+        dtype: DType,
+        mean: f64,
+        stddev: f64,
+    ) -> Result<Self::Storage> {
+        let name = match dtype {
+            DType::F32 => "rand_normal_f32",
+            DType::F16 => "rand_normal_f16",
+            DType::BF16 => "rand_normal_bf16",
+            dtype => crate::bail!("rand_uniform not implemented for {dtype:?}"),
+        };
+        let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_normal")?;
+        let command_encoder = self.command_encoder()?;
+        candle_metal_kernels::call_random_normal(
+            &self.device,
+            &command_encoder,
+            &self.kernels,
+            name,
+            mean as f32,
+            stddev as f32,
+            shape.elem_count(),
+            &self.seed.lock().unwrap(),
+            &buffer,
+        )
+        .map_err(MetalError::from)?;
+
+        Ok(Self::Storage::new(
+            buffer,
+            self.clone(),
+            shape.elem_count(),
+            dtype,
+        ))
+    }
+
+    fn set_seed(&self, seed: u64) -> Result<()> {
+        let seed: u32 = seed.try_into().map_err(|_| {
+            MetalError::Message("Metal seed must be less than or equal to u32::MAX".to_string())
+        })?;
+
+        let seed_buffer = self.seed.try_lock().map_err(MetalError::from)?;
+        let contents = seed_buffer.contents();
+        unsafe {
+            std::ptr::copy([seed].as_ptr(), contents as *mut u32, 1);
+        }
+        seed_buffer.did_modify_range(metal::NSRange::new(0, 4));
+
+        Ok(())
+    }
 }
