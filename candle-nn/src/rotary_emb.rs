@@ -158,7 +158,7 @@ impl candle::CustomOp3 for RotaryEmbI {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = src.device();
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = device.command_encoder()?;
         let kernels = device.kernels();
         if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
             candle::bail!(
@@ -179,7 +179,7 @@ impl candle::CustomOp3 for RotaryEmbI {
         let output = device.new_buffer(el, src.dtype(), "rope-i")?;
         candle_metal_kernels::call_rope_i(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             b * h,
@@ -411,7 +411,7 @@ impl candle::CustomOp3 for RotaryEmb {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = src.device();
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = device.command_encoder()?;
         let kernels = device.kernels();
         if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
             candle::bail!(
@@ -432,7 +432,7 @@ impl candle::CustomOp3 for RotaryEmb {
         let output = device.new_buffer(el, src.dtype(), "rope-i")?;
         candle_metal_kernels::call_rope(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             b * h,
@@ -659,7 +659,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = src.device();
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = device.command_encoder()?;
         let kernels = device.kernels();
         if cos.dtype() != src.dtype() || sin.dtype() != src.dtype() {
             candle::bail!(
@@ -680,7 +680,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
         let output = device.new_buffer(el, src.dtype(), "rope-thd")?;
         candle_metal_kernels::call_rope_thd(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             b,

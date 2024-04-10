@@ -208,7 +208,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = storage.device();
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = device.command_encoder()?;
         let kernels = device.kernels();
         let name = match storage.dtype() {
             DType::F32 => "softmax_f32",
@@ -227,7 +227,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         let output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
         candle_metal_kernels::call_last_softmax(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             elem_count,
@@ -394,7 +394,7 @@ impl candle::CustomOp2 for RmsNorm {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = s1.device();
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = device.command_encoder()?;
         let kernels = device.kernels();
         let name = match (s1.dtype(), s2.dtype()) {
             (DType::F32, DType::F32) => "rmsnorm_f32",
@@ -412,7 +412,7 @@ impl candle::CustomOp2 for RmsNorm {
         let output = device.new_buffer(elem_count, s1.dtype(), "rmsnorm")?;
         candle_metal_kernels::call_rms_norm(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             elem_count,
