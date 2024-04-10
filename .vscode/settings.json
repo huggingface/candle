@@ -7,6 +7,5 @@
         "candle-pyo3"
     ],
     "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true,
-    "rust-analyzer.showUnlinkedFileNotification": false
+    "python.testing.pytestEnabled": true
 }

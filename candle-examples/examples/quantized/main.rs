@@ -9,7 +9,7 @@ use std::io::Write;
 use tokenizers::Tokenizer;
 
 use candle::quantized::{ggml_file, gguf_file};
-use candle::Tensor;
+use candle::{Device, MetalDevice, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -545,6 +545,15 @@ fn main() -> anyhow::Result<()> {
         let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
+
+        // Start metal capture
+        #[cfg(feature = "metal")]
+        {
+            if let Device::Metal(metal_device) = device.clone() {
+                metal_device.capture("/tmp/candle.gputrace")?;
+            };
+        };
+
         for index in 0..to_sample {
             let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
             let logits = model.forward(&input, prompt_tokens.len() + index)?;
