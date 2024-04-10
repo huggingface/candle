@@ -54,6 +54,7 @@ impl TextGeneration {
     fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
         use std::io::Write;
         self.tokenizer.clear();
+        let dtype = self.model.dtype();
         let mut tokens = self
             .tokenizer
             .tokenizer()
@@ -66,7 +67,7 @@ impl TextGeneration {
             Some(token) => token,
             None => anyhow::bail!("cannot find the </s> token"),
         };
-        let mut state = State::new(1, &self.config, &self.device)?;
+        let mut state = State::new(1, &self.config, dtype, &self.device)?;
         let mut next_logits = None;
         for &t in tokens.iter() {
             let input = Tensor::new(&[t], &self.device)?;
@@ -84,7 +85,7 @@ impl TextGeneration {
                 Some(logits) => logits,
                 None => anyhow::bail!("cannot work on an empty prompt"),
             };
-            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+            let logits = logits.squeeze(0)?.to_dtype(dtype)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
             } else {
