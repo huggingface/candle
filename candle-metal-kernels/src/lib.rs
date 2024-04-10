@@ -283,10 +283,12 @@ pub fn call_unary_contiguous(
     set_params!(encoder, (length, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
+
     Ok(())
 }
 
@@ -326,10 +328,12 @@ pub fn call_copy2d(
         depth: 1,
     };
     let group_dims = get_block_dims(d1 as u64, d2 as u64, 1);
+
+    encoder.memory_barrier_with_resources(&[input]);
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_threads(grid_dims, group_dims);
-    encoder.memory_barrier_with_resources(&[input, output]);
+
     Ok(())
 }
 
@@ -355,11 +359,10 @@ pub fn call_unary_strided(
 
     let width: usize = shape.iter().product();
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
-
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output.buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output.buffer]);
 
     Ok(())
 }
@@ -383,11 +386,11 @@ pub fn call_binary_contiguous(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
+    encoder.memory_barrier_with_resources(&[left.buffer, right.buffer]);
     encoder.use_resource(left.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(right.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[left.buffer, right.buffer, output]);
 
     Ok(())
 }
@@ -430,11 +433,11 @@ pub fn call_binary_strided(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
 
+    encoder.memory_barrier_with_resources(&[left_input.buffer, right_input.buffer]);
     encoder.use_resource(left_input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(right_input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[left_input.buffer, right_input.buffer, output]);
 
     Ok(())
 }
@@ -456,10 +459,11 @@ pub fn call_cast_contiguous(
     set_params!(encoder, (length, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -488,10 +492,10 @@ pub fn call_cast_strided(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
 
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -529,10 +533,10 @@ pub fn call_reduce_contiguous(
         height: 1,
         depth: 1,
     };
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -578,10 +582,10 @@ pub fn call_reduce_strided(
         depth: 1,
     };
 
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -627,10 +631,10 @@ pub fn call_last_softmax(
         depth: 1,
     };
 
+    encoder.memory_barrier_with_resources(&[input]);
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input, output]);
 
     Ok(())
 }
@@ -686,10 +690,10 @@ pub fn call_rms_norm(
         depth: 1,
     };
 
+    encoder.memory_barrier_with_resources(&[input]);
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input, output]);
 
     Ok(())
 }
@@ -726,12 +730,13 @@ pub fn call_rope_i(
         )
     );
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, (bh * td) / 2);
+
+    encoder.memory_barrier_with_resources(&[src, cos, sin]);
     encoder.use_resource(src, metal::MTLResourceUsage::Read);
     encoder.use_resource(cos, metal::MTLResourceUsage::Read);
     encoder.use_resource(sin, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[src, cos, sin, output]);
 
     Ok(())
 }
@@ -772,12 +777,13 @@ pub fn call_rope_thd(
         )
     );
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, (b * t * h * d) / 2);
+
+    encoder.memory_barrier_with_resources(&[src, cos, sin]);
     encoder.use_resource(src, metal::MTLResourceUsage::Read);
     encoder.use_resource(cos, metal::MTLResourceUsage::Read);
     encoder.use_resource(sin, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[src, cos, sin, output]);
 
     Ok(())
 }
@@ -816,12 +822,13 @@ pub fn call_rope(
         )
     );
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, (bh * td) / 2);
+
+    encoder.memory_barrier_with_resources(&[src, cos, sin]);
     encoder.use_resource(src, metal::MTLResourceUsage::Read);
     encoder.use_resource(cos, metal::MTLResourceUsage::Read);
     encoder.use_resource(sin, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[src, cos, sin, output]);
 
     Ok(())
 }
@@ -845,10 +852,11 @@ pub fn call_affine(
     set_params!(encoder, (size, mul, add, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -886,10 +894,11 @@ pub fn call_affine_strided(
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -912,10 +921,11 @@ pub fn call_powf(
     set_params!(encoder, (size, mul, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -943,10 +953,11 @@ pub fn call_powf_strided(
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -969,10 +980,11 @@ pub fn call_elu(
     set_params!(encoder, (size, mul, &input, output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -1000,10 +1012,11 @@ pub fn call_elu_strided(
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
+
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -1048,12 +1061,12 @@ pub fn call_where_cond_strided(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, size);
 
+    encoder.memory_barrier_with_resources(&[cond.buffer, left.buffer, right.buffer]);
     encoder.use_resource(cond.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(left.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(right.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[cond.buffer, left.buffer, right.buffer, output]);
 
     Ok(())
 }
@@ -1102,11 +1115,11 @@ pub fn call_index_select(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
+    encoder.memory_barrier_with_resources(&[input.buffer, ids.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, ids.buffer, output]);
 
     Ok(())
 }
@@ -1149,11 +1162,11 @@ pub fn call_gather(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
+    encoder.memory_barrier_with_resources(&[input.buffer, ids.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, ids.buffer, output]);
 
     Ok(())
 }
@@ -1197,11 +1210,11 @@ pub fn call_scatter_add(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
+    encoder.memory_barrier_with_resources(&[input.buffer, ids.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, ids.buffer, output]);
 
     Ok(())
 }
@@ -1248,11 +1261,11 @@ pub fn call_index_add(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
 
+    encoder.memory_barrier_with_resources(&[input.buffer, ids.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, ids.buffer, output]);
 
     Ok(())
 }
@@ -1459,6 +1472,7 @@ pub fn call_gemm(
     };
     let block_bytes = block_elements * bytes;
 
+    encoder.memory_barrier_with_resources(&[lhs_buffer, rhs_buffer]);
     encoder.set_compute_pipeline_state(&pipeline);
     encoder.set_threadgroup_memory_length(0, block_bytes.into());
     encoder.set_buffer(0, Some(lhs_buffer), lhs_offset as NSUInteger);
@@ -1501,7 +1515,6 @@ pub fn call_gemm(
     encoder.use_resource(rhs_buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(grid_size, group_size);
-    encoder.memory_barrier_with_resources(&[lhs_buffer, rhs_buffer, output]);
 
     Ok(())
 }
@@ -1523,6 +1536,8 @@ pub fn call_im2col1d_strided(
     let dst_el = shape[0] * l_out * shape[1] * k_size;
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
+
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
@@ -1531,7 +1546,6 @@ pub fn call_im2col1d_strided(
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -1566,10 +1580,10 @@ pub fn call_im2col_strided(
             output
         )
     );
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -1598,10 +1612,10 @@ pub fn call_upsample_nearest_2d(
         encoder,
         (out_w, out_h, scale_w, scale_h, shape, strides, &input, output)
     );
+    encoder.memory_barrier_with_resources(&[input.buffer]);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input.buffer, output]);
 
     Ok(())
 }
@@ -1632,13 +1646,13 @@ pub fn call_random_uniform(
 
     set_params!(encoder, (length, min, max, seed, buffer));
 
+    encoder.memory_barrier_with_resources(&[seed]);
     encoder.use_resource(
         seed,
         metal::MTLResourceUsage::Read | metal::MTLResourceUsage::Write,
     );
     encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[seed, buffer]);
 
     Ok(())
 }
@@ -1664,13 +1678,13 @@ pub fn call_random_normal(
 
     set_params!(encoder, (length, mean, stddev, seed, buffer));
 
+    encoder.memory_barrier_with_resources(&[seed]);
     encoder.use_resource(
         seed,
         metal::MTLResourceUsage::Read | metal::MTLResourceUsage::Write,
     );
     encoder.use_resource(buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[seed, buffer]);
 
     Ok(())
 }
@@ -1836,12 +1850,11 @@ pub fn call_quantized_matmul_t(
         )
     );
     encoder.set_threadgroup_memory_length(0, 8192);
+    encoder.memory_barrier_with_resources(&[lhs, rhs]);
     encoder.use_resource(lhs, metal::MTLResourceUsage::Read);
     encoder.use_resource(rhs, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
-
     encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
-    encoder.memory_barrier_with_resources(&[lhs, rhs, output]);
 
     Ok(())
 }
@@ -1876,10 +1889,10 @@ pub fn call_pool2d(
         encoder,
         (w_k, h_k, w_stride, h_stride, shape, strides, input, output)
     );
+    encoder.memory_barrier_with_resources(&[input]);
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input, output]);
 
     Ok(())
 }
@@ -1929,11 +1942,11 @@ pub fn call_conv_transpose1d(
             output
         )
     );
+    encoder.memory_barrier_with_resources(&[input, kernel]);
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(kernel, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input, kernel, output]);
 
     Ok(())
 }
@@ -1989,11 +2002,11 @@ pub fn call_conv_transpose2d(
             output
         )
     );
+    encoder.memory_barrier_with_resources(&[input, kernel]);
     encoder.use_resource(input, metal::MTLResourceUsage::Read);
     encoder.use_resource(kernel, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.memory_barrier_with_resources(&[input, kernel, output]);
 
     Ok(())
 }
