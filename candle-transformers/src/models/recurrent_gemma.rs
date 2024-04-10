@@ -64,8 +64,29 @@ impl Embedder {
 }
 
 #[derive(Debug, Clone)]
+struct FfwUp {
+    w: Tensor,
+    b: Tensor,
+}
+
+impl FfwUp {
+    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let e = cfg.mlp_expanded_width;
+        let w = vb.get((2, cfg.width, e), "w")?;
+        let b = vb.get((2, 1, 1, e), "b")?;
+        Ok(Self { w, b })
+    }
+}
+
+impl Module for FfwUp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone)]
 struct MlpBlock {
-    ffw_up: Linear,
+    ffw_up: FfwUp,
     ffw_down: Linear,
 }
 
@@ -73,9 +94,16 @@ impl MlpBlock {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let width = cfg.width;
         let expanded_width = cfg.mlp_expanded_width;
-        let ffw_up = linear(width, expanded_width, true, vb.pp("ffw_up"))?;
+        let ffw_up = FfwUp::new(cfg, vb.pp("ffw_up"))?;
         let ffw_down = linear(expanded_width, width, true, vb.pp("ffw_down"))?;
         Ok(Self { ffw_up, ffw_down })
+    }
+}
+
+impl Module for MlpBlock {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let out = xs.apply(&self.ffw_up)?;
+        todo!()
     }
 }
 
