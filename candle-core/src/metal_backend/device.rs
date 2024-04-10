@@ -116,26 +116,28 @@ impl MetalDevice {
     }
 
     /// Synchoronizes memory in the device
-    /// Users must call this function after they have ended the encoding, this function will not call it for the user
     pub fn synchronize(&self) -> Result<()> {
+        {
+            let command_encoder = self.command_encoder()?;
+            command_encoder.end_encoding();
+        }
+
         let mut command_buffer_lock = self.command_buffer.try_write().map_err(MetalError::from)?;
-        let mut command_encoder_lock =
-            self.command_encoder.try_write().map_err(MetalError::from)?;
 
         let command_buffer = command_buffer_lock.to_owned();
-
+        // Execute the command buffer and initialize the next command buffers
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
+        // Setup the next command buffer
         let command_queue = self.command_queue();
-
         let new_command_buffer = command_queue.new_command_buffer().to_owned();
+        let new_command_encoder = new_command_buffer.new_compute_command_encoder().to_owned();
+        let mut command_encoder = self.command_encoder.try_write().map_err(|_| {
+            MetalError::Message("Failed to lock command encoder for to_cpu".to_string())
+        })?;
         *command_buffer_lock = new_command_buffer;
-
-        let new_command_encoder = command_buffer.new_compute_command_encoder().to_owned();
-        *command_encoder_lock = ComputeCommandEncoder {
-            inner: new_command_encoder,
-        };
+        *command_encoder = ComputeCommandEncoder::from(new_command_encoder);
 
         self.drop_unused_buffers()?;
 
