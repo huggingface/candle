@@ -40,6 +40,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let input = new_buffer(&device, v);
     let input = BufferOffset {
         buffer: &input,
@@ -48,7 +49,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
     let output = new_buffer(&device, v);
     call_unary_contiguous(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         v.len(),
@@ -56,6 +57,7 @@ fn run<T: Clone>(v: &[T], name: unary::contiguous::Kernel) -> Vec<T> {
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
     read_to_vec(&output, v.len())
@@ -66,13 +68,14 @@ fn run_binary<T: Clone>(x: &[T], y: &[T], name: binary::contiguous::Kernel) -> V
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let options = MTLResourceOptions::StorageModeManaged;
     let left = new_buffer(&device, x);
     let right = new_buffer(&device, y);
     let output = device.new_buffer(std::mem::size_of_val(x) as u64, options);
     call_binary_contiguous(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         x.len(),
@@ -81,6 +84,7 @@ fn run_binary<T: Clone>(x: &[T], y: &[T], name: binary::contiguous::Kernel) -> V
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
     read_to_vec(&output, x.len())
@@ -96,6 +100,7 @@ fn run_strided<T: Clone>(
     let device = device();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let input = new_buffer(&device, v);
     let input = BufferOffset {
         buffer: &input,
@@ -109,7 +114,7 @@ fn run_strided<T: Clone>(
     let kernels = Kernels::new();
     call_unary_strided(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         kernel,
         shape,
@@ -118,6 +123,7 @@ fn run_strided<T: Clone>(
         output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
     read_to_vec(&output_b, v.len())
@@ -307,6 +313,7 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let input = new_buffer(&device, v);
     let options = MTLResourceOptions::StorageModeManaged;
     let size = (v.len() * std::mem::size_of::<U>()) as u64;
@@ -314,7 +321,7 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
 
     call_cast_contiguous(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         v.len(),
@@ -322,6 +329,7 @@ fn run_cast<T: Clone, U: Clone>(v: &[T], name: &'static str) -> Vec<U> {
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
     read_to_vec(&output, v.len())
@@ -518,6 +526,7 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
 
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
@@ -526,7 +535,7 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
 
     call_affine(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         "affine_f32",
         size,
@@ -536,6 +545,7 @@ fn run_affine<T: Clone>(v: &[T], mul: f64, add: f64) -> Vec<T> {
         add as f32,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -553,13 +563,14 @@ fn run_affine_strided<T: Clone>(
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
 
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
 
     call_affine_strided(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         "affine_f32_strided",
         shape,
@@ -570,6 +581,7 @@ fn run_affine_strided<T: Clone>(
         add as f32,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -708,6 +720,7 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
 
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let embeddings_buffer = new_buffer(&device, embeddings);
     let ids_buffer = new_buffer(&device, ids);
 
@@ -719,7 +732,7 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
     let kernels = Kernels::new();
     call_index_select(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         shape,
@@ -734,6 +747,7 @@ fn run_index_select<T: Clone, I: Clone + std::fmt::Debug>(
     )
     .unwrap();
 
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -752,6 +766,7 @@ fn run_index_select_strided<T: Clone, I: Clone + std::fmt::Debug>(
 
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let embeddings_buffer = new_buffer(&device, embeddings);
     let ids_buffer = new_buffer(&device, ids);
 
@@ -763,7 +778,7 @@ fn run_index_select_strided<T: Clone, I: Clone + std::fmt::Debug>(
     let kernels = Kernels::new();
     call_index_select(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         shape,
@@ -778,6 +793,7 @@ fn run_index_select_strided<T: Clone, I: Clone + std::fmt::Debug>(
     )
     .unwrap();
 
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -801,6 +817,7 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let input = new_buffer(&device, v);
 
     let options = MTLResourceOptions::StorageModeManaged;
@@ -809,7 +826,7 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
     let strides = vec![1];
     call_reduce_strided(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         &dims,
@@ -819,6 +836,7 @@ fn run_reduce<T: Clone>(v: &[T], out_length: usize, name: &'static str) -> Vec<T
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -830,11 +848,12 @@ fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'sta
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let input = new_buffer(&device, v);
     let output = new_buffer(&device, v);
     call_last_softmax(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         v.len(),
@@ -844,6 +863,7 @@ fn run_softmax<T: Clone + std::fmt::Debug>(v: &[T], last_dim: usize, name: &'sta
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -949,6 +969,7 @@ fn run_where_cond<I: Clone, T: Clone>(
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let options = MTLResourceOptions::StorageModeManaged;
 
     let length = cond.len();
@@ -983,7 +1004,7 @@ fn run_where_cond<I: Clone, T: Clone>(
     };
     call_where_cond_strided(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         shape,
@@ -996,6 +1017,7 @@ fn run_where_cond<I: Clone, T: Clone>(
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -1037,6 +1059,7 @@ fn run_gemm<T: Clone>(
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let options = MTLResourceOptions::StorageModeManaged;
 
     let lhs = device.new_buffer_with_data(
@@ -1053,7 +1076,7 @@ fn run_gemm<T: Clone>(
     let output = device.new_buffer((length * core::mem::size_of::<T>()) as u64, options);
     call_gemm(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         "sgemm",
         (b, m, n, k),
@@ -1066,6 +1089,7 @@ fn run_gemm<T: Clone>(
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -1118,6 +1142,7 @@ fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b:
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
 
     let options = MTLResourceOptions::StorageModeManaged;
     let output = device.new_buffer((length * core::mem::size_of::<T>()) as NSUInteger, options);
@@ -1131,7 +1156,7 @@ fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b:
     if name.starts_with("rand_uniform") {
         call_random_uniform(
             &device,
-            command_buffer,
+            command_encoder,
             &kernels,
             name,
             a,
@@ -1144,7 +1169,7 @@ fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b:
     } else {
         call_random_normal(
             &device,
-            command_buffer,
+            command_encoder,
             &kernels,
             name,
             a,
@@ -1155,6 +1180,7 @@ fn run_random<T: Clone>(name: &'static str, seed: u32, length: usize, a: f32, b:
         )
         .unwrap();
     }
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -1245,13 +1271,14 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let options = MTLResourceOptions::StorageModeManaged;
     let input_buffer = new_buffer(&device, input);
     let ids_buffer = new_buffer(&device, ids);
     let output = device.new_buffer(std::mem::size_of_val(input) as u64, options);
     call_scatter_add(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         shape,
@@ -1262,6 +1289,7 @@ fn run_scatter_add<T: Clone, I: Clone + std::fmt::Debug>(
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
     read_to_vec(&output, input.len())
@@ -1348,12 +1376,13 @@ fn run_index_add<T: Clone, I: Clone + std::fmt::Debug>(
     let kernels = Kernels::new();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let input_buffer = new_buffer(&device, right);
     let output = new_buffer(&device, left);
     let indices_buffer = new_buffer(&device, indices);
     call_index_add(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         shape,
@@ -1365,6 +1394,7 @@ fn run_index_add<T: Clone, I: Clone + std::fmt::Debug>(
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
     read_to_vec(&output, left.len())
@@ -1461,6 +1491,7 @@ fn run_pool2d<T: Clone>(
     let device = device();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
     let out_w = (shape[2] - w_k) / w_stride + 1;
     let out_h = (shape[3] - h_k) / h_stride + 1;
     let dst_el = out_w * out_h * shape[0] * shape[1];
@@ -1469,7 +1500,7 @@ fn run_pool2d<T: Clone>(
     let kernels = Kernels::new();
     call_pool2d(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         shape,
@@ -1484,6 +1515,7 @@ fn run_pool2d<T: Clone>(
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
@@ -1816,6 +1848,7 @@ fn run_conv_transpose1d<T: Clone>(
     let device = device();
     let command_queue = device.new_command_queue();
     let command_buffer = command_queue.new_command_buffer();
+    let command_encoder = command_buffer.new_compute_command_encoder();
 
     let c_out = kernel_shape[1];
     let k_size = kernel_shape[2];
@@ -1831,7 +1864,7 @@ fn run_conv_transpose1d<T: Clone>(
 
     call_conv_transpose1d(
         &device,
-        command_buffer,
+        command_encoder,
         &kernels,
         name,
         dilation,
@@ -1852,6 +1885,7 @@ fn run_conv_transpose1d<T: Clone>(
         &output,
     )
     .unwrap();
+    command_encoder.end_encoding();
     command_buffer.commit();
     command_buffer.wait_until_completed();
 
