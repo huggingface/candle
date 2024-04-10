@@ -9,7 +9,7 @@ use std::io::Write;
 use tokenizers::Tokenizer;
 
 use candle::quantized::{ggml_file, gguf_file};
-use candle::{Device, Tensor};
+use candle::Tensor;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -385,6 +385,7 @@ fn main() -> anyhow::Result<()> {
     // Start metal capture
     #[cfg(feature = "metal")]
     if args.metal_tracing {
+        use candle::Device;
         if let Device::Metal(metal_device) = device.clone() {
             metal_device.capture("/tmp/candle.gputrace")?;
         };
