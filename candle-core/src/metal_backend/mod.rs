@@ -1279,9 +1279,6 @@ impl BackendStorage for MetalStorage {
             )
         }
         if src_s == d2 && dst_s == d2 {
-            // await current operations to complete
-            self.device.wait_until_completed()?;
-
             // create a new command buffer and use the blit encoder to copy data out of the buffer
             let command_buffer = self.device.command_queue().new_command_buffer();
             command_buffer.set_label("copy2d_contiguous");
@@ -1291,6 +1288,7 @@ impl BackendStorage for MetalStorage {
             let length = (d1 * d2 * self.dtype.size_in_bytes()) as NSUInteger;
             let dst_offset = (dst_o * dst.dtype().size_in_bytes()) as NSUInteger;
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
+            self.device.wait_until_completed()?;
             blit.end_encoding();
             command_buffer.commit();
             command_buffer.wait_until_completed();
@@ -1330,9 +1328,6 @@ impl BackendStorage for MetalStorage {
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         if src_l.is_contiguous() && self.dtype == dst.dtype() {
-            // Wait for current operations to complete
-            self.device.wait_until_completed()?;
-
             // Create a new command buffer and use the blit encoder to copy data out of the buffer
             let src_offset = (src_l.start_offset() * self.dtype.size_in_bytes()) as NSUInteger;
             let length = (src_l.shape().elem_count() * self.dtype.size_in_bytes()) as NSUInteger;
@@ -1342,6 +1337,7 @@ impl BackendStorage for MetalStorage {
             let blit = command_buffer.new_blit_command_encoder();
             blit.set_label("copy_contiguous");
             blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
+            self.device.wait_until_completed()?;
             blit.end_encoding();
             command_buffer.commit();
             command_buffer.wait_until_completed();
@@ -1603,7 +1599,6 @@ impl MetalStorage {
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
         // Ensure all operations have been completed and the output buffer is ready for copying
-        self.device.wait_until_completed()?;
 
         // Start copying the buffer to the CPU
         let size = (self.count * self.dtype.size_in_bytes()) as NSUInteger;
@@ -1613,6 +1608,11 @@ impl MetalStorage {
             let blit = command_buffer.new_blit_command_encoder();
             blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
+
+            // Ensure the compute operations are completed before copying the buffer
+            self.device.wait_until_completed()?;
+
+            // Commit the command buffer and wait for it to complete
             blit.end_encoding();
             command_buffer.commit();
             command_buffer.wait_until_completed();

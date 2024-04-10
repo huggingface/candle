@@ -204,8 +204,6 @@ impl MetalDevice {
     }
 
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
-        self.wait_until_completed()?;
-
         let buffer = self.allocate_buffer(
             size_in_bytes as NSUInteger,
             MTLResourceOptions::StorageModePrivate,
@@ -222,6 +220,7 @@ impl MetalDevice {
             },
             0,
         );
+        self.wait_until_completed()?;
         blit.end_encoding();
         command_buffer.commit();
         command_buffer.wait_until_completed();

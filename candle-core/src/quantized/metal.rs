@@ -35,8 +35,6 @@ impl QMetalStorage {
 
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
         use crate::quantized::k_quants::GgmlType;
-        self.device.wait_until_completed()?;
-
         let buffer = self.device.new_buffer_managed(self.buffer.length())?;
 
         let command_buffer = self.device.command_queue().new_command_buffer();
@@ -44,6 +42,7 @@ impl QMetalStorage {
         let blit = command_buffer.new_blit_command_encoder();
         blit.set_label("blit_to_cpu");
         blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+        self.device.wait_until_completed()?;
         blit.end_encoding();
         command_buffer.commit();
         command_buffer.wait_until_completed();
