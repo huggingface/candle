@@ -117,6 +117,19 @@ impl MetalDevice {
         Ok(command_encoder.inner.to_owned())
     }
 
+    fn drop_unused_buffers(&self) -> Result<()> {
+        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
+        for subbuffers in buffers.values_mut() {
+            let newbuffers = subbuffers
+                .iter()
+                .filter(|s| Arc::strong_count(*s) > 1)
+                .map(Arc::clone)
+                .collect();
+            *subbuffers = newbuffers;
+        }
+        Ok(())
+    }
+
     /// Handles closing the command encoder and committing the command buffer and then allocating a new one
     pub fn wait_until_completed(&self) -> Result<()> {
         let mut command_buffer = self.command_buffer.try_write().map_err(MetalError::from)?;
@@ -145,6 +158,9 @@ impl MetalDevice {
         *command_encoder = ComputeCommandEncoder {
             inner: new_command_encoder,
         };
+
+        // Drop unused buffers now that we are done with the command buffer
+        self.drop_unused_buffers()?;
 
         Ok(())
     }

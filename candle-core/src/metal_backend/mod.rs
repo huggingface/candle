@@ -1278,102 +1278,73 @@ impl BackendStorage for MetalStorage {
                 dst.dtype()
             )
         }
-        if src_s == d2 && dst_s == d2 {
-            // create a new command buffer and use the blit encoder to copy data out of the buffer
-            let command_buffer = self.device.command_queue().new_command_buffer();
-            command_buffer.set_label("copy2d_contiguous");
-            let blit = command_buffer.new_blit_command_encoder();
-            blit.set_label("copy2d_contiguous");
-            let src_offset = (src_o * self.dtype.size_in_bytes()) as NSUInteger;
-            let length = (d1 * d2 * self.dtype.size_in_bytes()) as NSUInteger;
-            let dst_offset = (dst_o * dst.dtype().size_in_bytes()) as NSUInteger;
-            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
-            self.device.wait_until_completed()?;
-            blit.end_encoding();
-            command_buffer.commit();
-            command_buffer.wait_until_completed();
-        } else {
-            let command_encoder = self.device.command_encoder()?;
-            let el_count = d1 * d2;
-            if el_count == 0 {
-                return Ok(());
-            }
-            let kernel_name = match self.dtype {
-                DType::F32 => candle_metal_kernels::copy2d::FLOAT,
-                DType::F16 => candle_metal_kernels::copy2d::HALF,
-                DType::BF16 => candle_metal_kernels::copy2d::BFLOAT,
-                DType::I64 => candle_metal_kernels::copy2d::I64,
-                DType::U32 => candle_metal_kernels::copy2d::U32,
-                DType::U8 => candle_metal_kernels::copy2d::U8,
-                dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
-            };
-            candle_metal_kernels::call_copy2d(
-                &self.device.device,
-                &command_encoder,
-                &self.device.kernels,
-                kernel_name,
-                &self.buffer,
-                &dst.buffer,
-                d1,
-                d2,
-                src_s,
-                dst_s,
-                src_o * self.dtype.size_in_bytes(),
-                dst_o * self.dtype.size_in_bytes(),
-            )
-            .map_err(MetalError::from)?;
+
+        let command_encoder = self.device.command_encoder()?;
+        let el_count = d1 * d2;
+        if el_count == 0 {
+            return Ok(());
         }
+        let kernel_name = match self.dtype {
+            DType::F32 => candle_metal_kernels::copy2d::FLOAT,
+            DType::F16 => candle_metal_kernels::copy2d::HALF,
+            DType::BF16 => candle_metal_kernels::copy2d::BFLOAT,
+            DType::I64 => candle_metal_kernels::copy2d::I64,
+            DType::U32 => candle_metal_kernels::copy2d::U32,
+            DType::U8 => candle_metal_kernels::copy2d::U8,
+            dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
+        };
+        candle_metal_kernels::call_copy2d(
+            &self.device.device,
+            &command_encoder,
+            &self.device.kernels,
+            kernel_name,
+            &self.buffer,
+            &dst.buffer,
+            d1,
+            d2,
+            src_s,
+            dst_s,
+            src_o * self.dtype.size_in_bytes(),
+            dst_o * self.dtype.size_in_bytes(),
+        )
+        .map_err(MetalError::from)?;
+
         Ok(())
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
-        if src_l.is_contiguous() && self.dtype == dst.dtype() {
-            // Create a new command buffer and use the blit encoder to copy data out of the buffer
-            let src_offset = (src_l.start_offset() * self.dtype.size_in_bytes()) as NSUInteger;
-            let length = (src_l.shape().elem_count() * self.dtype.size_in_bytes()) as NSUInteger;
-            let dst_offset = (dst_offset * dst.dtype().size_in_bytes()) as NSUInteger;
-            let command_buffer = self.device.command_queue().new_command_buffer();
-            command_buffer.set_label("copy_contiguous");
-            let blit = command_buffer.new_blit_command_encoder();
-            blit.set_label("copy_contiguous");
-            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
-            self.device.wait_until_completed()?;
-            blit.end_encoding();
-            command_buffer.commit();
-            command_buffer.wait_until_completed();
-        } else {
-            let command_encoder = self.device.command_encoder()?;
-            let src_shape = src_l.shape();
-            let el_count = src_shape.elem_count();
-            if el_count == 0 {
-                return Ok(());
-            }
-            let kernel_name = match self.dtype {
-                DType::F32 => candle_metal_kernels::unary::strided::copy::FLOAT,
-                DType::F16 => candle_metal_kernels::unary::strided::copy::HALF,
-                DType::BF16 => candle_metal_kernels::unary::strided::copy::BFLOAT,
-                DType::I64 => candle_metal_kernels::unary::strided::copy::I64,
-                DType::U32 => candle_metal_kernels::unary::strided::copy::U32,
-                DType::U8 => candle_metal_kernels::unary::strided::copy::U8,
-                dtype => crate::bail!("Metal copy_strided {dtype:?} not implemented"),
-            };
-            let src = buffer_o(&self.buffer, src_l, self.dtype);
-            let dst = BufferOffset {
-                buffer: &dst.buffer,
-                offset_in_bytes: dst_offset * dst.dtype.size_in_bytes(),
-            };
-            candle_metal_kernels::call_unary_strided(
-                &self.device.device,
-                &command_encoder,
-                &self.device.kernels,
-                kernel_name,
-                src_l.dims(),
-                src,
-                src_l.stride(),
-                dst,
-            )
-            .map_err(MetalError::from)?;
+        let command_encoder = self.device.command_encoder()?;
+        let src_shape = src_l.shape();
+        let el_count = src_shape.elem_count();
+        if el_count == 0 {
+            return Ok(());
         }
+        let kernel_name = match self.dtype {
+            DType::F32 => candle_metal_kernels::unary::strided::copy::FLOAT,
+            DType::F16 => candle_metal_kernels::unary::strided::copy::HALF,
+            DType::BF16 => candle_metal_kernels::unary::strided::copy::BFLOAT,
+            DType::I64 => candle_metal_kernels::unary::strided::copy::I64,
+            DType::U32 => candle_metal_kernels::unary::strided::copy::U32,
+            DType::U8 => candle_metal_kernels::unary::strided::copy::U8,
+            dtype => crate::bail!("Metal copy_strided {dtype:?} not implemented"),
+        };
+        let src = buffer_o(&self.buffer, src_l, self.dtype);
+        let dst = BufferOffset {
+            buffer: &dst.buffer,
+            offset_in_bytes: dst_offset * dst.dtype.size_in_bytes(),
+        };
+        candle_metal_kernels::call_unary_strided(
+            &self.device.device,
+            &command_encoder,
+            &self.device.kernels,
+            kernel_name,
+            src_l.dims(),
+            src,
+            src_l.stride(),
+            dst,
+        )
+        .map_err(MetalError::from)?;
+
         Ok(())
     }
 }
