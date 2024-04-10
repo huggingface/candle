@@ -12,6 +12,24 @@ use super::MetalError;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DeviceId(usize);
 
+/// Wrapped struct to control drop behaviour
+#[derive(Debug, Clone)]
+pub struct ComputeCommandEncoder {
+    inner: metal::ComputeCommandEncoder,
+}
+
+impl From<metal::ComputeCommandEncoder> for ComputeCommandEncoder {
+    fn from(inner: metal::ComputeCommandEncoder) -> Self {
+        Self { inner }
+    }
+}
+
+impl Drop for ComputeCommandEncoder {
+    fn drop(&mut self) {
+        self.inner.end_encoding();
+    }
+}
+
 impl DeviceId {
     pub(crate) fn new() -> Self {
         // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
@@ -35,22 +53,10 @@ pub struct MetalDevice {
 
     /// Single command queue for the entire device.
     pub(crate) command_queue: CommandQueue,
-    /// One command buffer at a time.
-    /// The scheduler works by allowing multiple
-    /// [ComputeCommandEncoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc)
-    /// on a single command buffer. Using a single command buffer would be fastest on the GPU but
-    /// prevents overlapping of CPU and GPU commands (because command buffer needs to be committed
-    /// to start to work).
-    /// Despite what the documentation says, command buffers are NOT ordered. They are ordered
-    /// for their START time, but there's no guarantee that command buffer1 will finish before
-    /// command buffer2 starts (or there are metal bugs there)
+    /// Single command buffer for the entire device.
     pub(crate) command_buffer: Arc<RwLock<CommandBuffer>>,
-    /// Keeps track of the current amount of compute command encoders on the current
-    /// command buffer
-    /// Arc, RwLock because of the interior mutability.
-    pub(crate) command_buffer_index: Arc<RwLock<usize>>,
-    /// The maximum amount of [compute command encoder](https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc) per [command buffer](https://developer.apple.com/documentation/metal/mtlcommandbuffer?language=objc)
-    pub(crate) compute_per_buffer: usize,
+    /// Single command encoder for the entire device.
+    pub(crate) command_encoder: Arc<RwLock<ComputeCommandEncoder>>,
     /// Simple keeper struct to keep track of the already compiled kernels so we can reuse them.
     /// Heavily used by [`candle_metal_kernels`]
     pub(crate) kernels: Arc<Kernels>,
@@ -100,26 +106,21 @@ impl MetalDevice {
     }
 
     pub fn command_buffer(&self) -> Result<CommandBuffer> {
-        let mut command_buffer_lock = self.command_buffer.try_write().map_err(MetalError::from)?;
-        let mut command_buffer = command_buffer_lock.to_owned();
-        let mut index = self
-            .command_buffer_index
-            .try_write()
-            .map_err(MetalError::from)?;
-        if *index > self.compute_per_buffer {
-            command_buffer.commit();
-            command_buffer = self.command_queue.new_command_buffer().to_owned();
-            *command_buffer_lock = command_buffer.clone();
-            *index = 0;
-
-            self.drop_unused_buffers()?;
-        }
-        *index += 1;
+        // Return a read locked command buffer
+        let command_buffer_lock = self.command_buffer.try_read().map_err(MetalError::from)?;
+        let command_buffer = command_buffer_lock.to_owned();
         Ok(command_buffer)
     }
 
+    pub fn command_encoder(&self) -> Result<metal::ComputeCommandEncoder> {
+        let command_encoder = self.command_encoder.try_read().map_err(MetalError::from)?;
+        Ok(command_encoder.inner.to_owned())
+    }
+
+    /// Handles closing the command encoder and committing the command buffer and then allocating a new one
     pub fn wait_until_completed(&self) -> Result<()> {
         let mut command_buffer = self.command_buffer.try_write().map_err(MetalError::from)?;
+        let mut command_encoder = self.command_encoder.try_write().map_err(MetalError::from)?;
         match command_buffer.status() {
             metal::MTLCommandBufferStatus::Committed
             | metal::MTLCommandBufferStatus::Scheduled
@@ -127,10 +128,23 @@ impl MetalDevice {
                 panic!("Already committed");
             }
             _ => {}
-        }
+        };
+
+        // Run cleanup operations and wait for all ops to complete
+        command_encoder.inner.end_encoding();
         command_buffer.commit();
         command_buffer.wait_until_completed();
-        *command_buffer = self.command_queue.new_command_buffer().to_owned();
+
+        // Allocate a new command buffer and encoder
+        let new_command_buffer = self.command_queue.new_command_buffer().to_owned();
+        new_command_buffer.set_label("candle");
+        *command_buffer = new_command_buffer;
+
+        let new_command_encoder = command_buffer.new_compute_command_encoder().to_owned();
+        new_command_encoder.set_label("candle");
+        *command_encoder = ComputeCommandEncoder {
+            inner: new_command_encoder,
+        };
 
         Ok(())
     }
@@ -190,12 +204,14 @@ impl MetalDevice {
     }
 
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
+        self.wait_until_completed()?;
+
         let buffer = self.allocate_buffer(
             size_in_bytes as NSUInteger,
             MTLResourceOptions::StorageModePrivate,
             "allocate_zeros",
         )?;
-        let command_buffer = self.command_buffer()?;
+        let command_buffer = self.command_queue().new_command_buffer();
         command_buffer.set_label("zeros");
         let blit = command_buffer.new_blit_command_encoder();
         blit.fill_buffer(
@@ -207,6 +223,8 @@ impl MetalDevice {
             0,
         );
         blit.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
         Ok(buffer)
     }
 
@@ -229,19 +247,6 @@ impl MetalDevice {
             }
         }
         best_buffer.cloned()
-    }
-
-    fn drop_unused_buffers(&self) -> Result<()> {
-        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
-        for subbuffers in buffers.values_mut() {
-            let newbuffers = subbuffers
-                .iter()
-                .filter(|s| Arc::strong_count(*s) > 1)
-                .map(Arc::clone)
-                .collect();
-            *subbuffers = newbuffers;
-        }
-        Ok(())
     }
 
     /// The critical allocator algorithm

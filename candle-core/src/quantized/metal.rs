@@ -35,15 +35,19 @@ impl QMetalStorage {
 
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
         use crate::quantized::k_quants::GgmlType;
+        self.device.wait_until_completed()?;
 
         let buffer = self.device.new_buffer_managed(self.buffer.length())?;
-        let command_buffer = self.device.command_buffer()?;
+
+        let command_buffer = self.device.command_queue().new_command_buffer();
         command_buffer.set_label("to_cpu");
         let blit = command_buffer.new_blit_command_encoder();
         blit.set_label("blit_to_cpu");
         blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
         blit.end_encoding();
-        self.device.wait_until_completed()?;
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
         let mut out = vec![0.0; elem_count];
         let block_len = elem_count / self.dtype.block_size();
         match self.dtype {
@@ -165,10 +169,10 @@ impl QMetalStorage {
         let dst_shape = Shape::from(dst_shape);
         let device = storage.device().clone();
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = self.device.command_encoder()?;
         candle_metal_kernels::call_quantized_matmul_t(
             device.device(),
-            &command_buffer,
+            &command_encoder,
             device.kernels(),
             self.dtype.into(),
             (b, m, n, k),
