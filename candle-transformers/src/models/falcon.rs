@@ -179,9 +179,7 @@ impl FalconRotaryEmbedding {
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor> {
     let shape = mask.shape();
-    let on_true = Tensor::new(on_true, on_false.device())?
-        .to_dtype(on_false.dtype())?
-        .broadcast_as(shape.dims())?;
+    let on_true = Tensor::new(on_true, on_false.device())?.broadcast_as(shape.dims())?;
     let m = mask.where_cond(&on_true, on_false)?;
     Ok(m)
 }
