@@ -1,6 +1,7 @@
 use super::{GgmlDType, QStorage};
 use crate::backend::BackendStorage;
-use crate::{DType, MetalDevice, MetalStorage, Result, Shape};
+use crate::metal_backend::device::ComputeCommandEncoder;
+use crate::{DType, MetalDevice, MetalError, MetalStorage, Result, Shape};
 use metal::Buffer;
 use std::sync::Arc;
 
@@ -37,15 +38,33 @@ impl QMetalStorage {
         use crate::quantized::k_quants::GgmlType;
         let buffer = self.device.new_buffer_managed(self.buffer.length())?;
 
-        let command_buffer = self.device.command_queue().new_command_buffer();
-        command_buffer.set_label("to_cpu");
-        let blit = command_buffer.new_blit_command_encoder();
-        blit.set_label("blit_to_cpu");
-        blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
-        self.device.wait_until_completed()?;
-        blit.end_encoding();
-        command_buffer.commit();
-        command_buffer.wait_until_completed();
+        {
+            let mut command_buffer_lock = self.device.command_buffer.try_write().map_err(|_| {
+                MetalError::Message("Failed to lock command buffer for to_cpu".to_string())
+            })?;
+            let command_buffer = command_buffer_lock.to_owned();
+
+            self.device.end_compute_encoding()?;
+
+            // Setup the blit encoder to perform the copy operation
+            let blit = command_buffer.new_blit_command_encoder();
+            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+            blit.end_encoding();
+
+            // Execute the command buffer and initialize the next command buffers
+            command_buffer.commit();
+            command_buffer.wait_until_completed();
+
+            // Setup the next command buffer
+            let command_queue = self.device.command_queue();
+            let new_command_buffer = command_queue.new_command_buffer().to_owned();
+            let new_command_encoder = new_command_buffer.new_compute_command_encoder().to_owned();
+            let mut command_encoder = self.device.command_encoder.try_write().map_err(|_| {
+                MetalError::Message("Failed to lock command encoder for to_cpu".to_string())
+            })?;
+            *command_buffer_lock = new_command_buffer;
+            *command_encoder = ComputeCommandEncoder::from(new_command_encoder);
+        }
 
         let mut out = vec![0.0; elem_count];
         let block_len = elem_count / self.dtype.block_size();
@@ -139,8 +158,6 @@ impl QMetalStorage {
         storage: &MetalStorage,
         layout: &crate::Layout,
     ) -> Result<(MetalStorage, Shape)> {
-        use crate::MetalError;
-
         if !layout.is_contiguous() {
             crate::bail!("input tensor is not contiguous {layout:?}")
         }

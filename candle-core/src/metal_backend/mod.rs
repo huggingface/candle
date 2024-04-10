@@ -8,8 +8,10 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, RwLock, TryLockError};
 
-mod device;
+pub mod device;
 pub use device::{DeviceId, MetalDevice};
+
+use self::device::ComputeCommandEncoder;
 
 fn buffer_o<'a>(buffer: &'a Buffer, l: &Layout, dtype: DType) -> BufferOffset<'a> {
     BufferOffset {
@@ -1569,25 +1571,42 @@ impl MetalStorage {
     }
 
     pub(crate) fn to_cpu<T: Clone>(&self) -> Result<Vec<T>> {
-        // Ensure all operations have been completed and the output buffer is ready for copying
-
         // Start copying the buffer to the CPU
         let size = (self.count * self.dtype.size_in_bytes()) as NSUInteger;
         let buffer = self.device.new_buffer_managed(size)?;
+
+        // Handle the creation and initialization of a new command buffer
         {
-            let command_buffer = self.device.command_queue().new_command_buffer();
+            let mut command_buffer_lock = self.device.command_buffer.try_write().map_err(|_| {
+                MetalError::Message("Failed to lock command buffer for to_cpu".to_string())
+            })?;
+            let command_buffer = command_buffer_lock.to_owned();
+
+            // Finalize current compute operations
+            self.device.end_compute_encoding()?;
+
+            // Setup the blit encoder to perform the copy operation
             let blit = command_buffer.new_blit_command_encoder();
-            blit.set_label("blit_to_cpu");
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
-
-            // Ensure the compute operations are completed before copying the buffer
-            self.device.wait_until_completed()?;
-
-            // Commit the command buffer and wait for it to complete
             blit.end_encoding();
+
+            // Execute the command buffer and initialize the next command buffers
             command_buffer.commit();
             command_buffer.wait_until_completed();
+
+            // Setup the next command buffer
+            let command_queue = self.device.command_queue();
+            let new_command_buffer = command_queue.new_command_buffer().to_owned();
+            let new_command_encoder = new_command_buffer.new_compute_command_encoder().to_owned();
+            let mut command_encoder = self.device.command_encoder.try_write().map_err(|_| {
+                MetalError::Message("Failed to lock command encoder for to_cpu".to_string())
+            })?;
+            *command_buffer_lock = new_command_buffer;
+            *command_encoder = ComputeCommandEncoder::from(new_command_encoder);
+
+            self.device.drop_unused_buffers()?;
         }
+
         let result = read_to_vec(&buffer, self.count);
         Ok(result)
     }

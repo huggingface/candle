@@ -106,10 +106,8 @@ impl MetalDevice {
     }
 
     pub fn command_buffer(&self) -> Result<CommandBuffer> {
-        // Return a read locked command buffer
         let command_buffer_lock = self.command_buffer.try_read().map_err(MetalError::from)?;
-        let command_buffer = command_buffer_lock.to_owned();
-        Ok(command_buffer)
+        Ok(command_buffer_lock.to_owned())
     }
 
     pub fn command_encoder(&self) -> Result<metal::ComputeCommandEncoder> {
@@ -117,7 +115,61 @@ impl MetalDevice {
         Ok(command_encoder.inner.to_owned())
     }
 
-    fn drop_unused_buffers(&self) -> Result<()> {
+    /// Synchoronizes memory in the device
+    /// Users must call this function after they have ended the encoding, this function will not call it for the user
+    pub fn synchronize(&self) -> Result<()> {
+        let mut command_buffer_lock = self.command_buffer.try_write().map_err(MetalError::from)?;
+        let mut command_encoder_lock =
+            self.command_encoder.try_write().map_err(MetalError::from)?;
+
+        let command_buffer = command_buffer_lock.to_owned();
+
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        let command_queue = self.command_queue();
+
+        let new_command_buffer = command_queue.new_command_buffer().to_owned();
+        *command_buffer_lock = new_command_buffer;
+
+        let new_command_encoder = command_buffer.new_compute_command_encoder().to_owned();
+        *command_encoder_lock = ComputeCommandEncoder {
+            inner: new_command_encoder,
+        };
+
+        self.drop_unused_buffers()?;
+
+        Ok(())
+    }
+
+    /// Sets up a new command buffer and command encoder for the device.
+    pub fn start_compute(&self) -> Result<()> {
+        let command_buffer = self.command_queue.new_command_buffer().to_owned();
+        let mut command_buffer_lock = self.command_buffer.try_write().map_err(MetalError::from)?;
+        *command_buffer_lock = command_buffer;
+        self.start_compute_encoding()?;
+        Ok(())
+    }
+
+    /// Ends the current encoder's encoding, this does not setup a new encoder, the consumer must do that.
+    pub fn end_compute_encoding(&self) -> Result<()> {
+        let command_encoder = self.command_encoder.try_write().map_err(MetalError::from)?;
+        command_encoder.inner.end_encoding();
+        Ok(())
+    }
+
+    /// Sets up a new compute encoder, this will overwrite the current encoder if it exists, as such end_compute_encoding should be called first.
+    pub fn start_compute_encoding(&self) -> Result<()> {
+        let command_buffer = self.command_buffer.try_write().map_err(MetalError::from)?;
+        let new_command_encoder = command_buffer.new_compute_command_encoder().to_owned();
+        let mut command_encoder = self.command_encoder.try_write().map_err(MetalError::from)?;
+        *command_encoder = ComputeCommandEncoder {
+            inner: new_command_encoder,
+        };
+        Ok(())
+    }
+
+    pub fn drop_unused_buffers(&self) -> Result<()> {
         let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
         for subbuffers in buffers.values_mut() {
             let newbuffers = subbuffers
@@ -127,41 +179,6 @@ impl MetalDevice {
                 .collect();
             *subbuffers = newbuffers;
         }
-        Ok(())
-    }
-
-    /// Handles closing the command encoder and committing the command buffer and then allocating a new one
-    pub fn wait_until_completed(&self) -> Result<()> {
-        let mut command_buffer = self.command_buffer.try_write().map_err(MetalError::from)?;
-        let mut command_encoder = self.command_encoder.try_write().map_err(MetalError::from)?;
-        match command_buffer.status() {
-            metal::MTLCommandBufferStatus::Committed
-            | metal::MTLCommandBufferStatus::Scheduled
-            | metal::MTLCommandBufferStatus::Completed => {
-                panic!("Already committed");
-            }
-            _ => {}
-        };
-
-        // Run cleanup operations and wait for all ops to complete
-        command_encoder.inner.end_encoding();
-        command_buffer.commit();
-        command_buffer.wait_until_completed();
-
-        // Allocate a new command buffer and encoder
-        let new_command_buffer = self.command_queue.new_command_buffer().to_owned();
-        new_command_buffer.set_label("candle");
-        *command_buffer = new_command_buffer;
-
-        let new_command_encoder = command_buffer.new_compute_command_encoder().to_owned();
-        new_command_encoder.set_label("candle");
-        *command_encoder = ComputeCommandEncoder {
-            inner: new_command_encoder,
-        };
-
-        // Drop unused buffers now that we are done with the command buffer
-        self.drop_unused_buffers()?;
-
         Ok(())
     }
 
@@ -225,8 +242,8 @@ impl MetalDevice {
             MTLResourceOptions::StorageModePrivate,
             "allocate_zeros",
         )?;
-        let command_buffer = self.command_queue().new_command_buffer();
-        command_buffer.set_label("zeros");
+        let command_buffer = self.command_buffer()?;
+        self.end_compute_encoding()?;
         let blit = command_buffer.new_blit_command_encoder();
         blit.fill_buffer(
             &buffer,
@@ -236,10 +253,8 @@ impl MetalDevice {
             },
             0,
         );
-        self.wait_until_completed()?;
         blit.end_encoding();
-        command_buffer.commit();
-        command_buffer.wait_until_completed();
+        self.start_compute_encoding()?;
         Ok(buffer)
     }
 
