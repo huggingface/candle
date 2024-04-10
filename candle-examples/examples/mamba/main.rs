@@ -211,6 +211,9 @@ struct Args {
     #[arg(long)]
     config_file: Option<String>,
 
+    #[arg(long, default_value = "f32")]
+    dtype: String,
+
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
     #[arg(long, default_value_t = 1.1)]
     repeat_penalty: f32,
@@ -221,6 +224,7 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    use std::str::FromStr;
     use tracing_chrome::ChromeLayerBuilder;
     use tracing_subscriber::prelude::*;
 
@@ -280,7 +284,8 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
     let device = candle_examples::device(args.cpu)?;
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, DType::F32, &device)? };
+    let dtype = DType::from_str(&args.dtype)?;
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
     let model = Model::new(&config, vb.pp("backbone"))?;
     println!("loaded the model in {:?}", start.elapsed());
 
