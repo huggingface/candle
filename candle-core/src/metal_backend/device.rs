@@ -289,6 +289,12 @@ impl MetalDevice {
             .map_err(MetalError::from)?;
         Ok(())
     }
+
+    pub fn synchronize(&self) -> Result<()> {
+        self.end_compute_encoding()?;
+        self.close_compute_buffer()?;
+        Ok(())
+    }
 }
 
 fn buf_size(size: NSUInteger) -> NSUInteger {
