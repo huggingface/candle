@@ -239,14 +239,7 @@ fn main() -> Result<()> {
     ));
     let tokenizer_filename = match args.tokenizer_file {
         Some(file) => std::path::PathBuf::from(file),
-        None => match args.which {
-            Which::V1Orig | Which::V1 | Which::V1Zephyr | Which::Code => {
-                repo.get("tokenizer.json")?
-            }
-            Which::V2 | Which::V2Zephyr => api
-                .model("lmz/candle-stablelm".to_string())
-                .get("tokenizer-gpt4.json")?,
-        },
+        None => repo.get("tokenizer.json")?,
     };
     let filenames = match args.weight_files {
         Some(files) => files
@@ -295,12 +288,12 @@ fn main() -> Result<()> {
     };
 
     let device = candle_examples::device(args.cpu)?;
-    let (model, device) = if args.quantized {
+    let model = if args.quantized {
         let filename = &filenames[0];
         let vb =
             candle_transformers::quantized_var_builder::VarBuilder::from_gguf(filename, &device)?;
         let model = QStableLM::new(&config, vb)?;
-        (Model::Quantized(model), Device::Cpu)
+        Model::Quantized(model)
     } else {
         let dtype = if device.is_cuda() {
             DType::BF16
@@ -309,7 +302,7 @@ fn main() -> Result<()> {
         };
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
         let model = StableLM::new(&config, vb)?;
-        (Model::StableLM(model), device)
+        Model::StableLM(model)
     };
 
     println!("loaded the model in {:?}", start.elapsed());

@@ -1,5 +1,5 @@
-use candle_core::quantized::{gguf_file, GgmlDType, QTensor};
-use candle_core::{Device, Result};
+use candle::quantized::{gguf_file, GgmlDType, QTensor};
+use candle::{Device, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use rayon::prelude::*;
 
@@ -117,6 +117,24 @@ enum Command {
         verbose: bool,
     },
 
+    Print {
+        file: std::path::PathBuf,
+
+        names: Vec<String>,
+
+        /// The file format to use, if unspecified infer from the file extension.
+        #[arg(long, value_enum)]
+        format: Option<Format>,
+
+        /// Print the whole content of each tensor.
+        #[arg(long)]
+        full: bool,
+
+        /// Line width for printing the tensors.
+        #[arg(long)]
+        line_width: Option<usize>,
+    },
+
     Quantize {
         /// The input file(s), in safetensors format.
         in_file: Vec<std::path::PathBuf>,
@@ -150,6 +168,105 @@ struct Args {
     command: Command,
 }
 
+fn run_print(
+    file: &std::path::PathBuf,
+    names: Vec<String>,
+    format: Option<Format>,
+    full: bool,
+    line_width: Option<usize>,
+    device: &Device,
+) -> Result<()> {
+    if full {
+        candle::display::set_print_options_full();
+    }
+    if let Some(line_width) = line_width {
+        candle::display::set_line_width(line_width)
+    }
+    let format = match format {
+        Some(format) => format,
+        None => match Format::infer(file) {
+            Some(format) => format,
+            None => {
+                println!(
+                    "{file:?}: cannot infer format from file extension, use the --format flag"
+                );
+                return Ok(());
+            }
+        },
+    };
+    match format {
+        Format::Npz => {
+            let tensors = candle::npy::NpzTensors::new(file)?;
+            for name in names.iter() {
+                println!("==== {name} ====");
+                match tensors.get(name)? {
+                    Some(tensor) => println!("{tensor}"),
+                    None => println!("not found"),
+                }
+            }
+        }
+        Format::Safetensors => {
+            use candle::safetensors::Load;
+            let tensors = unsafe { candle::safetensors::MmapedSafetensors::new(file)? };
+            let tensors: std::collections::HashMap<_, _> = tensors.tensors().into_iter().collect();
+            for name in names.iter() {
+                println!("==== {name} ====");
+                match tensors.get(name) {
+                    Some(tensor_view) => {
+                        let tensor = tensor_view.load(device)?;
+                        println!("{tensor}")
+                    }
+                    None => println!("not found"),
+                }
+            }
+        }
+        Format::Pth => {
+            let pth_file = candle::pickle::PthTensors::new(file, None)?;
+            for name in names.iter() {
+                println!("==== {name} ====");
+                match pth_file.get(name)? {
+                    Some(tensor) => {
+                        println!("{tensor}")
+                    }
+                    None => println!("not found"),
+                }
+            }
+        }
+        Format::Pickle => {
+            candle::bail!("pickle format is not supported for print")
+        }
+        Format::Ggml => {
+            let mut file = std::fs::File::open(file)?;
+            let content = candle::quantized::ggml_file::Content::read(&mut file, device)?;
+            for name in names.iter() {
+                println!("==== {name} ====");
+                match content.tensors.get(name) {
+                    Some(tensor) => {
+                        let tensor = tensor.dequantize(device)?;
+                        println!("{tensor}")
+                    }
+                    None => println!("not found"),
+                }
+            }
+        }
+        Format::Gguf => {
+            let mut file = std::fs::File::open(file)?;
+            let content = gguf_file::Content::read(&mut file)?;
+            for name in names.iter() {
+                println!("==== {name} ====");
+                match content.tensor(&mut file, name, device) {
+                    Ok(tensor) => {
+                        let tensor = tensor.dequantize(device)?;
+                        println!("{tensor}")
+                    }
+                    Err(_) => println!("not found"),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn run_ls(
     file: &std::path::PathBuf,
     format: Option<Format>,
@@ -170,7 +287,7 @@ fn run_ls(
     };
     match format {
         Format::Npz => {
-            let tensors = candle_core::npy::NpzTensors::new(file)?;
+            let tensors = candle::npy::NpzTensors::new(file)?;
             let mut names = tensors.names();
             names.sort();
             for name in names {
@@ -182,12 +299,12 @@ fn run_ls(
             }
         }
         Format::Safetensors => {
-            let tensors = unsafe { candle_core::safetensors::MmapedSafetensors::new(file)? };
+            let tensors = unsafe { candle::safetensors::MmapedSafetensors::new(file)? };
             let mut tensors = tensors.tensors();
             tensors.sort_by(|a, b| a.0.cmp(&b.0));
             for (name, view) in tensors.iter() {
                 let dtype = view.dtype();
-                let dtype = match candle_core::DType::try_from(dtype) {
+                let dtype = match candle::DType::try_from(dtype) {
                     Ok(dtype) => format!("{dtype:?}"),
                     Err(_) => format!("{dtype:?}"),
                 };
@@ -196,7 +313,7 @@ fn run_ls(
             }
         }
         Format::Pth => {
-            let mut tensors = candle_core::pickle::read_pth_tensor_info(file, verbose, None)?;
+            let mut tensors = candle::pickle::read_pth_tensor_info(file, verbose, None)?;
             tensors.sort_by(|a, b| a.name.cmp(&b.name));
             for tensor_info in tensors.iter() {
                 println!(
@@ -213,7 +330,7 @@ fn run_ls(
         Format::Pickle => {
             let file = std::fs::File::open(file)?;
             let mut reader = std::io::BufReader::new(file);
-            let mut stack = candle_core::pickle::Stack::empty();
+            let mut stack = candle::pickle::Stack::empty();
             stack.read_loop(&mut reader)?;
             for (i, obj) in stack.stack().iter().enumerate() {
                 println!("{i} {obj:?}");
@@ -221,7 +338,7 @@ fn run_ls(
         }
         Format::Ggml => {
             let mut file = std::fs::File::open(file)?;
-            let content = candle_core::quantized::ggml_file::Content::read(&mut file, device)?;
+            let content = candle::quantized::ggml_file::Content::read(&mut file, device)?;
             let mut tensors = content.tensors.into_iter().collect::<Vec<_>>();
             tensors.sort_by(|a, b| a.0.cmp(&b.0));
             for (name, qtensor) in tensors.iter() {
@@ -257,7 +374,7 @@ fn run_quantize_safetensors(
     let mut out_file = std::fs::File::create(out_file)?;
     let mut tensors = std::collections::HashMap::new();
     for in_file in in_files.iter() {
-        let in_tensors = candle_core::safetensors::load(in_file, &Device::Cpu)?;
+        let in_tensors = candle::safetensors::load(in_file, &Device::Cpu)?;
         tensors.extend(in_tensors)
     }
     println!("tensors: {}", tensors.len());
@@ -299,7 +416,7 @@ fn run_dequantize(
         let tensor = tensor.dequantize(device)?;
         tensors.insert(tensor_name.to_string(), tensor);
     }
-    candle_core::safetensors::save(&tensors, out_file)?;
+    candle::safetensors::save(&tensors, out_file)?;
     Ok(())
 }
 
@@ -311,11 +428,11 @@ fn run_quantize(
     device: &Device,
 ) -> Result<()> {
     if in_files.is_empty() {
-        candle_core::bail!("no specified input files")
+        candle::bail!("no specified input files")
     }
     if let Some(extension) = out_file.extension() {
         if extension == "safetensors" {
-            candle_core::bail!("the generated file cannot use the safetensors extension")
+            candle::bail!("the generated file cannot use the safetensors extension")
         }
     }
     if let Some(extension) = in_files[0].extension() {
@@ -325,7 +442,7 @@ fn run_quantize(
     }
 
     if in_files.len() != 1 {
-        candle_core::bail!("only a single in-file can be used when quantizing gguf files")
+        candle::bail!("only a single in-file can be used when quantizing gguf files")
     }
 
     // Open the out file early so as to fail directly on missing directories etc.
@@ -377,6 +494,13 @@ fn main() -> anyhow::Result<()> {
                 run_ls(file, format.clone(), verbose, &device)?
             }
         }
+        Command::Print {
+            file,
+            names,
+            format,
+            full,
+            line_width,
+        } => run_print(&file, names, format, full, line_width, &device)?,
         Command::Quantize {
             in_file,
             out_file,

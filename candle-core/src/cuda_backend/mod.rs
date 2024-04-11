@@ -5,395 +5,41 @@ pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::cublas::{Gemm, GemmConfig, StridedBatchedConfig};
 use cudarc::driver::{
-    CudaFunction, CudaSlice, DevicePtr, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig,
-    ValidAsZeroBits,
+    CudaSlice, DevicePtr, DeviceRepr, DeviceSlice, LaunchAsync, LaunchConfig, ValidAsZeroBits,
 };
 use half::{bf16, f16};
-use std::sync::{Arc, Mutex};
 
-/// cudarc related errors
-#[derive(thiserror::Error, Debug)]
-pub enum CudaError {
-    #[error(transparent)]
-    Cuda(#[from] cudarc::driver::DriverError),
+#[cfg(feature = "cudnn")]
+pub mod cudnn;
+mod device;
+mod error;
+mod utils;
+pub use device::{CudaDevice, DeviceId};
+pub use error::{CudaError, WrapErr};
+pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, S};
 
-    #[error(transparent)]
-    Compiler(#[from] cudarc::nvrtc::CompileError),
-
-    #[error(transparent)]
-    Cublas(#[from] cudarc::cublas::result::CublasError),
-
-    #[error(transparent)]
-    Curand(#[from] cudarc::curand::result::CurandError),
-
-    #[error("missing kernel '{module_name}'")]
-    MissingKernel { module_name: String },
-
-    #[error("unsupported dtype {dtype:?} for {op}")]
-    UnsupportedDtype { dtype: DType, op: &'static str },
-
-    #[error("internal error '{0}'")]
-    InternalError(&'static str),
-
-    #[error("matmul is only supported for contiguous tensors lstride: {lhs_stride:?} rstride: {rhs_stride:?} mnk: {mnk:?}")]
-    MatMulNonContiguous {
-        lhs_stride: Vec<usize>,
-        rhs_stride: Vec<usize>,
-        mnk: (usize, usize, usize),
-    },
-
-    #[error("{msg}, expected: {expected:?}, got: {got:?}")]
-    UnexpectedDType {
-        msg: &'static str,
-        expected: DType,
-        got: DType,
-    },
-
-    #[error("{cuda} when loading {module_name}")]
-    Load {
-        cuda: cudarc::driver::DriverError,
-        module_name: String,
-    },
+enum SlicePtrOrNull<T> {
+    Ptr(CudaSlice<T>),
+    Null,
 }
 
-impl From<CudaError> for crate::Error {
-    fn from(val: CudaError) -> Self {
-        crate::Error::Cuda(Box::new(val)).bt()
-    }
-}
-
-/// Unique identifier for cuda devices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct DeviceId(usize);
-
-impl DeviceId {
-    fn new() -> Self {
-        // https://users.rust-lang.org/t/idiomatic-rust-way-to-generate-unique-id/33805
-        use std::sync::atomic;
-        static COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(1);
-        Self(COUNTER.fetch_add(1, atomic::Ordering::Relaxed))
-    }
-}
-
-struct CudaRng(cudarc::curand::CudaRng);
-unsafe impl Send for CudaRng {}
-
-#[derive(Clone)]
-pub struct CudaDevice {
-    id: DeviceId,
-    device: Arc<cudarc::driver::CudaDevice>,
-    blas: Arc<cudarc::cublas::CudaBlas>,
-    curand: Arc<Mutex<CudaRng>>,
-}
-
-impl std::fmt::Debug for CudaDevice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CudaDevice({:?})", self.id)
-    }
-}
-
-impl std::ops::Deref for CudaDevice {
-    type Target = Arc<cudarc::driver::CudaDevice>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.device
-    }
-}
-
-pub trait WrapErr<O> {
-    fn w(self) -> std::result::Result<O, crate::Error>;
-}
-
-impl<O, E: Into<CudaError>> WrapErr<O> for std::result::Result<O, E> {
-    fn w(self) -> std::result::Result<O, crate::Error> {
-        self.map_err(|e| crate::Error::Cuda(Box::new(e.into())))
-    }
-}
-
-impl CudaDevice {
-    pub fn cuda_device(&self) -> Arc<cudarc::driver::CudaDevice> {
-        self.device.clone()
-    }
-
-    pub fn id(&self) -> DeviceId {
-        self.id
-    }
-
-    fn const_impl(&self, v: f64, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
-        let elem_count = shape.elem_count();
-        let cfg = LaunchConfig::for_num_elems(elem_count as u32);
-        let slice = match dtype {
-            DType::U8 => {
-                // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<u8>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_u8", kernels::FILL)?;
-                let params = (&data, v as u8, elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
-                CudaStorageSlice::U8(data)
-            }
-            DType::U32 => {
-                // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<u32>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_u32", kernels::FILL)?;
-                let params = (&data, v as u32, elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
-                CudaStorageSlice::U32(data)
-            }
-            DType::I64 => {
-                // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<i64>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_i64", kernels::FILL)?;
-                let params = (&data, v as i64, elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
-                CudaStorageSlice::I64(data)
-            }
-            DType::BF16 => {
-                // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<bf16>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_bf16", kernels::FILL)?;
-                let params = (&data, bf16::from_f64(v), elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
-                CudaStorageSlice::BF16(data)
-            }
-            DType::F16 => {
-                // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<f16>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_f16", kernels::FILL)?;
-                let params = (&data, f16::from_f64(v), elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
-                CudaStorageSlice::F16(data)
-            }
-            DType::F32 => {
-                // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<f32>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_f32", kernels::FILL)?;
-                let params = (&data, v as f32, elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
-                CudaStorageSlice::F32(data)
-            }
-            DType::F64 => {
-                // SAFETY: Set later by running the fill kernel.
-                let data = unsafe { self.alloc::<f64>(elem_count) }.w()?;
-                let func = self.get_or_load_func("fill_f64", kernels::FILL)?;
-                let params = (&data, v, elem_count);
-                unsafe { func.launch(cfg, params) }.w()?;
-                CudaStorageSlice::F64(data)
-            }
-        };
-        Ok(CudaStorage {
-            slice,
-            device: self.clone(),
-        })
-    }
-
-    pub fn get_or_load_func(&self, module_name: &str, ptx: &'static str) -> Result<CudaFunction> {
-        if !self.has_func(module_name, module_name) {
-            // Leaking the string here is a bit sad but we need a &'static str and this is only
-            // done once per kernel name.
-            let static_module_name = Box::leak(module_name.to_string().into_boxed_str());
-            self.load_ptx(ptx.into(), module_name, &[static_module_name])
-                .map_err(|cuda| CudaError::Load {
-                    cuda,
-                    module_name: module_name.to_string(),
-                })
-                .w()?;
-        }
-        self.get_func(module_name, module_name)
-            // Clippy recommends this `ok_or` rather than `ok_or_else` so hopefully the compiler is
-            // able to only build the error value if needed.
-            .ok_or(CudaError::MissingKernel {
-                module_name: module_name.to_string(),
-            })
-            .w()
-    }
-}
-
-impl BackendDevice for CudaDevice {
-    type Storage = CudaStorage;
-
-    fn new(ordinal: usize) -> Result<Self> {
-        let device = cudarc::driver::CudaDevice::new(ordinal).w()?;
-        let blas = cudarc::cublas::CudaBlas::new(device.clone()).w()?;
-        let curand = cudarc::curand::CudaRng::new(299792458, device.clone()).w()?;
-        Ok(Self {
-            id: DeviceId::new(),
-            device,
-            blas: Arc::new(blas),
-            curand: Arc::new(Mutex::new(CudaRng(curand))),
-        })
-    }
-
-    fn set_seed(&self, seed: u64) -> Result<()> {
-        // We do not call set_seed but instead create a new curand object. This ensures that the
-        // state will be identical and the same random numbers will be generated.
-        let mut curand = self.curand.lock().unwrap();
-        curand.0 = cudarc::curand::CudaRng::new(seed, self.device.clone()).w()?;
-        Ok(())
-    }
-
-    fn location(&self) -> crate::DeviceLocation {
-        crate::DeviceLocation::Cuda {
-            gpu_id: self.device.ordinal(),
+unsafe impl<T: DeviceRepr> DeviceRepr for &SlicePtrOrNull<T> {
+    fn as_kernel_param(&self) -> *mut std::ffi::c_void {
+        match self {
+            SlicePtrOrNull::Ptr(slice) => slice.as_kernel_param(),
+            SlicePtrOrNull::Null => 0usize.as_kernel_param(),
         }
     }
+}
 
-    fn same_device(&self, rhs: &Self) -> bool {
-        self.id == rhs.id
-    }
-
-    fn zeros_impl(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
-        let elem_count = shape.elem_count();
-        let slice = match dtype {
-            DType::U8 => {
-                let data = self.alloc_zeros::<u8>(elem_count).w()?;
-                CudaStorageSlice::U8(data)
-            }
-            DType::U32 => {
-                let data = self.alloc_zeros::<u32>(elem_count).w()?;
-                CudaStorageSlice::U32(data)
-            }
-            DType::I64 => {
-                let data = self.alloc_zeros::<i64>(elem_count).w()?;
-                CudaStorageSlice::I64(data)
-            }
-            DType::BF16 => {
-                let data = self.alloc_zeros::<bf16>(elem_count).w()?;
-                CudaStorageSlice::BF16(data)
-            }
-            DType::F16 => {
-                let data = self.alloc_zeros::<f16>(elem_count).w()?;
-                CudaStorageSlice::F16(data)
-            }
-            DType::F32 => {
-                let data = self.alloc_zeros::<f32>(elem_count).w()?;
-                CudaStorageSlice::F32(data)
-            }
-            DType::F64 => {
-                let data = self.alloc_zeros::<f64>(elem_count).w()?;
-                CudaStorageSlice::F64(data)
-            }
-        };
-        Ok(CudaStorage {
-            slice,
-            device: self.clone(),
-        })
-    }
-
-    fn rand_uniform(&self, shape: &Shape, dtype: DType, lo: f64, up: f64) -> Result<CudaStorage> {
-        let elem_count = shape.elem_count();
-        let curand = self.curand.lock().unwrap();
-        let slice = match dtype {
-            // TODO: Add support for F16 and BF16 though this is likely to require some upstream
-            // cudarc changes.
-            DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::BF16 => {
-                Err(CudaError::UnsupportedDtype {
-                    dtype,
-                    op: "rand_uniform",
-                })
-                .w()?
-            }
-            DType::F32 => {
-                let mut data = unsafe { self.alloc::<f32>(elem_count) }.w()?;
-                curand.0.fill_with_uniform(&mut data).w()?;
-                CudaStorageSlice::F32(data)
-            }
-            DType::F64 => {
-                let mut data = unsafe { self.alloc::<f64>(elem_count) }.w()?;
-                curand.0.fill_with_uniform(&mut data).w()?;
-                CudaStorageSlice::F64(data)
-            }
-        };
-        let slice = if lo == 0. && up == 1.0 {
-            slice
+impl SlicePtrOrNull<usize> {
+    fn params_from_layout(dev: &CudaDevice, l: &Layout) -> Result<Self> {
+        let ds = if l.is_contiguous() {
+            SlicePtrOrNull::Null
         } else {
-            let layout = Layout::contiguous(shape);
-            Affine(up - lo, lo).map(&slice, self, &layout)?
+            SlicePtrOrNull::Ptr(dev.htod_copy([l.dims(), l.stride()].concat()).w()?)
         };
-        Ok(CudaStorage {
-            slice,
-            device: self.clone(),
-        })
-    }
-
-    fn rand_normal(&self, shape: &Shape, dtype: DType, mean: f64, std: f64) -> Result<CudaStorage> {
-        // TODO: Add support for F16 and BF16 though this is likely to require some upstream
-        // cudarc changes.
-        let elem_count = shape.elem_count();
-        let curand = self.curand.lock().unwrap();
-        // curand can only generate an odd number of values.
-        // https://github.com/huggingface/candle/issues/734
-        let elem_count_round = if elem_count % 2 == 1 {
-            elem_count + 1
-        } else {
-            elem_count
-        };
-        let slice = match dtype {
-            DType::U8 | DType::U32 | DType::I64 | DType::F16 | DType::BF16 => {
-                Err(CudaError::UnsupportedDtype {
-                    dtype,
-                    op: "rand_normal",
-                })
-                .w()?
-            }
-            DType::F32 => {
-                let mut data = unsafe { self.alloc::<f32>(elem_count_round) }.w()?;
-                curand
-                    .0
-                    .fill_with_normal(&mut data, mean as f32, std as f32)
-                    .w()?;
-                CudaStorageSlice::F32(data)
-            }
-            DType::F64 => {
-                let mut data = unsafe { self.alloc::<f64>(elem_count_round) }.w()?;
-                curand.0.fill_with_normal(&mut data, mean, std).w()?;
-                CudaStorageSlice::F64(data)
-            }
-        };
-        Ok(CudaStorage {
-            slice,
-            device: self.clone(),
-        })
-    }
-
-    fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<CudaStorage> {
-        self.const_impl(1., shape, dtype)
-    }
-
-    fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<CudaStorage> {
-        let slice = match storage {
-            CpuStorage::U8(storage) => {
-                let data = self.htod_sync_copy(storage).w()?;
-                CudaStorageSlice::U8(data)
-            }
-            CpuStorage::U32(storage) => {
-                let data = self.htod_sync_copy(storage).w()?;
-                CudaStorageSlice::U32(data)
-            }
-            CpuStorage::I64(storage) => {
-                let data = self.htod_sync_copy(storage).w()?;
-                CudaStorageSlice::I64(data)
-            }
-            CpuStorage::BF16(storage) => {
-                let data = self.htod_sync_copy(storage).w()?;
-                CudaStorageSlice::BF16(data)
-            }
-            CpuStorage::F16(storage) => {
-                let data = self.htod_sync_copy(storage).w()?;
-                CudaStorageSlice::F16(data)
-            }
-            CpuStorage::F32(storage) => {
-                let data = self.htod_sync_copy(storage).w()?;
-                CudaStorageSlice::F32(data)
-            }
-            CpuStorage::F64(storage) => {
-                let data = self.htod_sync_copy(storage).w()?;
-                CudaStorageSlice::F64(data)
-            }
-        };
-        Ok(CudaStorage {
-            slice,
-            device: self.clone(),
-        })
+        Ok(ds)
     }
 }
 
@@ -406,133 +52,6 @@ pub enum CudaStorageSlice {
     F16(CudaSlice<f16>),
     F32(CudaSlice<f32>),
     F64(CudaSlice<f64>),
-}
-type S = CudaStorageSlice;
-
-pub trait Map1 {
-    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
-        &self,
-        src: &CudaSlice<T>,
-        dev: &CudaDevice,
-        layout: &Layout,
-    ) -> Result<CudaSlice<T>>;
-
-    fn map(&self, s: &S, d: &CudaDevice, l: &Layout) -> Result<S> {
-        let out = match s {
-            S::U8(s) => S::U8(self.f(s, d, l)?),
-            S::U32(s) => S::U32(self.f(s, d, l)?),
-            S::I64(s) => S::I64(self.f(s, d, l)?),
-            S::BF16(s) => S::BF16(self.f(s, d, l)?),
-            S::F16(s) => S::F16(self.f(s, d, l)?),
-            S::F32(s) => S::F32(self.f(s, d, l)?),
-            S::F64(s) => S::F64(self.f(s, d, l)?),
-        };
-        Ok(out)
-    }
-}
-
-pub trait Map2 {
-    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
-        &self,
-        src1: &CudaSlice<T>,
-        layout1: &Layout,
-        src2: &CudaSlice<T>,
-        layout2: &Layout,
-        dev: &CudaDevice,
-    ) -> Result<CudaSlice<T>>;
-
-    fn map(&self, s1: &S, l1: &Layout, s2: &S, l2: &Layout, d: &CudaDevice) -> Result<S> {
-        let out = match (s1, s2) {
-            (S::U8(s1), S::U8(s2)) => S::U8(self.f(s1, l1, s2, l2, d)?),
-            (S::U32(s1), S::U32(s2)) => S::U32(self.f(s1, l1, s2, l2, d)?),
-            (S::I64(s1), S::I64(s2)) => S::I64(self.f(s1, l1, s2, l2, d)?),
-            (S::BF16(s1), S::BF16(s2)) => S::BF16(self.f(s1, l1, s2, l2, d)?),
-            (S::F16(s1), S::F16(s2)) => S::F16(self.f(s1, l1, s2, l2, d)?),
-            (S::F32(s1), S::F32(s2)) => S::F32(self.f(s1, l1, s2, l2, d)?),
-            (S::F64(s1), S::F64(s2)) => S::F64(self.f(s1, l1, s2, l2, d)?),
-            _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
-        };
-        Ok(out)
-    }
-}
-
-pub trait Map2InPlace {
-    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
-        &self,
-        dst: &mut CudaSlice<T>,
-        dst_shape: &Shape,
-        src: &CudaSlice<T>,
-        src_l: &Layout,
-        dev: &CudaDevice,
-    ) -> Result<()>;
-
-    fn map(
-        &self,
-        dst: &mut S,
-        dst_s: &Shape,
-        src: &S,
-        src_l: &Layout,
-        d: &CudaDevice,
-    ) -> Result<()> {
-        match (dst, src) {
-            (S::U8(dst), S::U8(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::U32(dst), S::U32(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::I64(dst), S::I64(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::BF16(dst), S::BF16(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::F16(dst), S::F16(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::F32(dst), S::F32(src)) => self.f(dst, dst_s, src, src_l, d),
-            (S::F64(dst), S::F64(src)) => self.f(dst, dst_s, src, src_l, d),
-            _ => Err(CudaError::InternalError("dtype mismatch in binary op"))?,
-        }
-    }
-}
-
-pub trait Map1Any {
-    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits, W: Fn(CudaSlice<T>) -> S>(
-        &self,
-        src: &CudaSlice<T>,
-        dev: &CudaDevice,
-        layout: &Layout,
-        wrap: W,
-    ) -> Result<S>;
-
-    fn map(&self, s: &S, d: &CudaDevice, l: &Layout) -> Result<S> {
-        let out = match s {
-            S::U8(s) => self.f(s, d, l, S::U8)?,
-            S::U32(s) => self.f(s, d, l, S::U32)?,
-            S::I64(s) => self.f(s, d, l, S::I64)?,
-            S::BF16(s) => self.f(s, d, l, S::BF16)?,
-            S::F16(s) => self.f(s, d, l, S::F16)?,
-            S::F32(s) => self.f(s, d, l, S::F32)?,
-            S::F64(s) => self.f(s, d, l, S::F64)?,
-        };
-        Ok(out)
-    }
-}
-
-pub trait Map2Any {
-    fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
-        &self,
-        src1: &CudaSlice<T>,
-        layout1: &Layout,
-        src2: &CudaSlice<T>,
-        layout2: &Layout,
-        dev: &CudaDevice,
-    ) -> Result<S>;
-
-    fn map(&self, s1: &S, l1: &Layout, s2: &S, l2: &Layout, d: &CudaDevice) -> Result<S> {
-        let out = match (s1, s2) {
-            (S::U8(s1), S::U8(s2)) => self.f(s1, l1, s2, l2, d)?,
-            (S::U32(s1), S::U32(s2)) => self.f(s1, l1, s2, l2, d)?,
-            (S::I64(s1), S::I64(s2)) => self.f(s1, l1, s2, l2, d)?,
-            (S::BF16(s1), S::BF16(s2)) => self.f(s1, l1, s2, l2, d)?,
-            (S::F16(s1), S::F16(s2)) => self.f(s1, l1, s2, l2, d)?,
-            (S::F32(s1), S::F32(s2)) => self.f(s1, l1, s2, l2, d)?,
-            (S::F64(s1), S::F64(s2)) => self.f(s1, l1, s2, l2, d)?,
-            _ => Err(CudaError::InternalError("dtype mismatch in binary op")).w()?,
-        };
-        Ok(out)
-    }
 }
 
 struct Clone;
@@ -564,7 +83,7 @@ impl Map1 for Affine {
         let dims = shape.dims();
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
-        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("affine"), kernels::AFFINE)?;
         // SAFETY: Set later by running the kernel.
@@ -596,7 +115,7 @@ impl Map1 for Elu {
         let dims = shape.dims();
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
-        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("uelu"), kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
@@ -719,7 +238,7 @@ impl Map1 for Powf {
         let dims = shape.dims();
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
-        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>("upowf"), kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
@@ -852,7 +371,7 @@ impl<U: UnaryOpT> Map1 for U {
         let dims = shape.dims();
         let el_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el_count as u32);
-        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let src = &src.slice(layout.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::UNARY)?;
         // SAFETY: Set later by running the kernel.
@@ -1402,9 +921,14 @@ impl<U: crate::op::BinaryOpT> Map2 for U {
         let dims = shape.dims();
         let elem_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
-        let dims_and_strides = dev
-            .htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
-            .w()?;
+        let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
+            SlicePtrOrNull::Null
+        } else {
+            SlicePtrOrNull::Ptr(
+                dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
+                    .w()?,
+            )
+        };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
         let func = dev.get_or_load_func(&kernel_name::<T>(U::KERNEL), kernels::BINARY)?;
@@ -1431,9 +955,14 @@ impl Map2Any for Cmp {
         let dims = shape.dims();
         let elem_count = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(elem_count as u32);
-        let dims_and_strides = dev
-            .htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
-            .w()?;
+        let dims_and_strides = if lhs_l.is_contiguous() && rhs_l.is_contiguous() {
+            SlicePtrOrNull::Null
+        } else {
+            SlicePtrOrNull::Ptr(
+                dev.htod_copy([dims, lhs_l.stride(), rhs_l.stride()].concat())
+                    .w()?,
+            )
+        };
         let lhs = &lhs.slice(lhs_l.start_offset()..);
         let rhs = &rhs.slice(rhs_l.start_offset()..);
         let name = match self.0 {
@@ -1541,26 +1070,30 @@ fn gemm_config<T>(
     let lhs_m1 = lhs_stride[lhs_stride.len() - 1];
     let lhs_m2 = lhs_stride[lhs_stride.len() - 2];
     // The a tensor has dims batching, k, n (rhs)
-    let (lda, transa) = if rhs_m1 == 1 && rhs_m2 == n {
+    // We also allow for the case where the stride on the minor dimension is not as expected but
+    // there is a single element.
+    let (lda, transa) = if (rhs_m1 == 1 || n == 1) && (rhs_m2 == n || k == 1) {
         (n as i32, cublasOperation_t::CUBLAS_OP_N)
-    } else if rhs_m1 == k && rhs_m2 == 1 {
+    } else if (rhs_m1 == k || n == 1) && (rhs_m2 == 1 || k == 1) {
         (k as i32, cublasOperation_t::CUBLAS_OP_T)
     } else {
         Err(CudaError::MatMulNonContiguous {
-            lhs_stride: lhs_stride.to_vec(),
-            rhs_stride: rhs_stride.to_vec(),
+            lhs_stride: lhs_l.clone(),
+            rhs_stride: rhs_l.clone(),
             mnk: (m, n, k),
         })?
     };
     // The b tensor has dims batching, m, k (lhs)
-    let (ldb, transb) = if lhs_m1 == 1 && lhs_m2 == k {
+    // We also allow for the case where the stride on the minor dimension is not as expected but
+    // there is a single element.
+    let (ldb, transb) = if (lhs_m1 == 1 || k == 1) && (lhs_m2 == k || m == 1) {
         (k as i32, cublasOperation_t::CUBLAS_OP_N)
-    } else if lhs_m1 == m && lhs_m2 == 1 {
+    } else if (lhs_m1 == m || k == 1) && (lhs_m2 == 1 || m == 1) {
         (m as i32, cublasOperation_t::CUBLAS_OP_T)
     } else {
         Err(CudaError::MatMulNonContiguous {
-            lhs_stride: lhs_stride.to_vec(),
-            rhs_stride: rhs_stride.to_vec(),
+            lhs_stride: lhs_l.clone(),
+            rhs_stride: rhs_l.clone(),
             mnk: (m, n, k),
         })?
     };
@@ -1581,21 +1114,25 @@ fn gemm_config<T>(
 
     let stride_b: usize = match lhs_stride[..lhs_stride.len() - 2] {
         [s1, stride] if s1 == stride * lhs_l.dims()[1] => stride,
+        [_, stride] if lhs_l.dims()[0] == 1 => stride,
+        [stride, _] if lhs_l.dims()[1] == 1 => stride,
         [stride] => stride,
         [] => m * k,
         _ => Err(CudaError::MatMulNonContiguous {
-            lhs_stride: lhs_stride.to_vec(),
-            rhs_stride: rhs_stride.to_vec(),
+            lhs_stride: lhs_l.clone(),
+            rhs_stride: rhs_l.clone(),
             mnk: (m, n, k),
         })?,
     };
     let stride_a: usize = match rhs_stride[..rhs_stride.len() - 2] {
         [s1, stride] if s1 == stride * rhs_l.dims()[1] => stride,
+        [_, stride] if rhs_l.dims()[0] == 1 => stride,
+        [stride, _] if rhs_l.dims()[1] == 1 => stride,
         [stride] => stride,
         [] => n * k,
         _ => Err(CudaError::MatMulNonContiguous {
-            lhs_stride: lhs_stride.to_vec(),
-            rhs_stride: rhs_stride.to_vec(),
+            lhs_stride: lhs_l.clone(),
+            rhs_stride: rhs_l.clone(),
             mnk: (m, n, k),
         })?,
     };
@@ -1640,7 +1177,7 @@ impl BackendStorage for CudaStorage {
         let el = shape.elem_count();
         let cfg = LaunchConfig::for_num_elems(el as u32);
         let dev = self.device();
-        let ds = dev.htod_copy([dims, layout.stride()].concat()).w()?;
+        let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
         let start_o = layout.start_offset();
         // This returns an i64 rather than a &i64, this is useful to get around some temporary
         // lifetime issue and is safe as long as self.slice does not go out of scope before inp
@@ -1844,7 +1381,10 @@ impl BackendStorage for CudaStorage {
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
-            let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
+            let mut kernel_c = unsafe {
+                self.device()
+                    .alloc_uninit(kernel_l.shape(), kernel.dtype())?
+            };
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
@@ -1852,7 +1392,7 @@ impl BackendStorage for CudaStorage {
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         };
         let res_l = Layout::contiguous((b, l_out, n)).transpose(1, 2)?;
-        let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
+        let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
         res.copy_strided_src(&mut res_t, 0, &res_l)?;
         Ok(res_t)
     }
@@ -1909,7 +1449,10 @@ impl BackendStorage for CudaStorage {
             col.matmul(kernel, (b, m, n, k), &col_l, &kernel_l)?
         } else {
             // Make the kernel contiguous if not already the case.
-            let mut kernel_c = self.device().zeros_impl(kernel_l.shape(), kernel.dtype())?;
+            let mut kernel_c = unsafe {
+                self.device()
+                    .alloc_uninit(kernel_l.shape(), kernel.dtype())?
+            };
             kernel.copy_strided_src(&mut kernel_c, 0, kernel_l)?;
             let kernel_l = Layout::contiguous_with_offset((1, n, k), kernel_l.start_offset())
                 .transpose(1, 2)?
@@ -1919,7 +1462,7 @@ impl BackendStorage for CudaStorage {
         let res_l = Layout::contiguous((b, h_out, w_out, n))
             .transpose(1, 2)?
             .transpose(1, 3)?;
-        let mut res_t = self.device().zeros_impl(res_l.shape(), res.dtype())?;
+        let mut res_t = unsafe { self.device().alloc_uninit(res_l.shape(), res.dtype())? };
         res.copy_strided_src(&mut res_t, 0, &res_l)?;
         Ok(res_t)
     }
@@ -2056,7 +1599,7 @@ impl BackendStorage for CudaStorage {
         dim: usize,
     ) -> Result<Self> {
         let device = self.device().clone();
-        let mut acc = device.zeros_impl(l.shape(), self.dtype())?;
+        let mut acc = unsafe { device.alloc_uninit(l.shape(), self.dtype())? };
         self.copy_strided_src(&mut acc, 0, l)?;
         ScatterAdd(ids, ids_l, dim).map(&mut acc.slice, l.shape(), &src.slice, src_l, &device)?;
         Ok(acc)
@@ -2071,7 +1614,7 @@ impl BackendStorage for CudaStorage {
         dim: usize,
     ) -> Result<Self> {
         let device = self.device().clone();
-        let mut acc = device.zeros_impl(l.shape(), self.dtype())?;
+        let mut acc = unsafe { device.alloc_uninit(l.shape(), self.dtype())? };
         self.copy_strided_src(&mut acc, 0, l)?;
         IndexAdd(ids, ids_l, dim).map(&mut acc.slice, l.shape(), &src.slice, src_l, &device)?;
         Ok(acc)
@@ -2145,6 +1688,72 @@ impl BackendStorage for CudaStorage {
         Ok(Self { slice, device })
     }
 
+    fn copy2d(
+        &self,
+        dst: &mut Self,
+        d1: usize,
+        d2: usize,
+        src_s: usize,
+        dst_s: usize,
+        src_o: usize,
+        dst_o: usize,
+    ) -> Result<()> {
+        let dev = &self.device;
+        let d1 = d1 as u32;
+        let d2 = d2 as u32;
+        // Nothing to copy so we exit early to avoid launching a kernel and some potential invalid
+        // argument with a null pointer.
+        if d1 == 0 || d2 == 0 {
+            return Ok(());
+        }
+        let dst_s = dst_s as u32;
+        let src_s = src_s as u32;
+        let (src, dst, kname) = match (&self.slice, &mut dst.slice) {
+            (S::U8(s), S::U8(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_u8",
+            ),
+            (S::U32(s), S::U32(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_u32",
+            ),
+            (S::I64(s), S::I64(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_i64",
+            ),
+            (S::BF16(s), S::BF16(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_bf16",
+            ),
+            (S::F16(s), S::F16(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_f16",
+            ),
+            (S::F32(s), S::F32(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_f32",
+            ),
+            (S::F64(s), S::F64(d)) => (
+                *s.slice(src_o..).device_ptr(),
+                *d.slice(dst_o..).device_ptr(),
+                "copy2d_f64",
+            ),
+            _ => Err(CudaError::InternalError("dtype mismatch in copy2d"))?,
+        };
+        let func = dev.get_or_load_func(kname, kernels::FILL)?;
+        let cfg = LaunchConfig::for_num_elems(d1 * d2);
+        let params = (src, dst, d1, d2, src_s, dst_s);
+        // SAFETY: ffi.
+        unsafe { func.launch(cfg, params) }.w()?;
+        Ok(())
+    }
+
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         let src_shape = src_l.shape();
         let dims = src_shape.dims();
@@ -2154,7 +1763,7 @@ impl BackendStorage for CudaStorage {
         }
         let cfg = LaunchConfig::for_num_elems(el_count as u32);
         let dev = &self.device;
-        let ds = dev.htod_copy([dims, src_l.stride()].concat()).w()?;
+        let ds = SlicePtrOrNull::params_from_layout(dev, src_l)?;
         match (&self.slice, &mut dst.slice) {
             (CudaStorageSlice::BF16(src), CudaStorageSlice::BF16(dst)) => {
                 let (src, mut dst) = slice_src_and_dst(src, src_l, dst, dst_offset);

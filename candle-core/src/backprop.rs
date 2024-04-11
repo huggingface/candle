@@ -1,3 +1,4 @@
+/// Methods for backpropagation of gradients.
 use crate::op::{BinaryOp, Op, ReduceOp, UnaryOp};
 use crate::{Error, Result, Tensor, TensorId};
 use std::collections::HashMap;
@@ -111,7 +112,8 @@ impl Tensor {
                     }
                     Op::Unary(_node, UnaryOp::Ceil)
                     | Op::Unary(_node, UnaryOp::Floor)
-                    | Op::Unary(_node, UnaryOp::Round) => nodes,
+                    | Op::Unary(_node, UnaryOp::Round)
+                    | Op::Unary(_node, UnaryOp::Sign) => nodes,
                     Op::Reshape(node)
                     | Op::UpsampleNearest1D { arg: node, .. }
                     | Op::UpsampleNearest2D { arg: node, .. }
@@ -310,9 +312,32 @@ impl Tensor {
                     Op::ConvTranspose1D { .. } => Err(Error::BackwardNotSupported {
                         op: "conv-transpose1d",
                     })?,
-                    Op::ConvTranspose2D { .. } => Err(Error::BackwardNotSupported {
-                        op: "conv-transpose2d",
-                    })?,
+                    Op::ConvTranspose2D {
+                        arg,
+                        kernel,
+                        padding,
+                        stride,
+                        dilation,
+                        output_padding: _output_padding,
+                    } => {
+                        let grad_arg = grad.conv2d(kernel, *padding, *dilation, *stride, 1)?;
+                        let sum_grad = grads.or_insert(arg)?;
+                        *sum_grad = sum_grad.add(&grad_arg)?;
+
+                        let grad_kernel = grad
+                            .transpose(0, 1)?
+                            .conv2d(&arg.transpose(0, 1)?, *padding, *stride, *dilation, 1)?
+                            .transpose(0, 1)?;
+                        let sum_grad = grads.or_insert(kernel)?;
+                        let (_, _, k0, k1) = kernel.dims4()?;
+                        let (_, _, g_k0, g_k1) = grad_kernel.dims4()?;
+                        let grad_kernel = if g_k0 != k0 || g_k1 != k1 {
+                            grad_kernel.narrow(2, 0, k0)?.narrow(3, 0, k1)?
+                        } else {
+                            grad_kernel
+                        };
+                        *sum_grad = sum_grad.add(&grad_kernel)?;
+                    }
                     Op::AvgPool2D {
                         arg,
                         kernel_size,
@@ -464,7 +489,6 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad)?;
                     }
-                    Op::Cmp(_args, _) => {}
                     Op::Reduce(arg, ReduceOp::Max, reduced_dims) => {
                         let node = broadcast_back(arg, node, reduced_dims)?;
                         let grad = broadcast_back(arg, &grad, reduced_dims)?;
@@ -554,20 +578,18 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
-                    Op::Reduce(_, ReduceOp::ArgMin, _) => {}
-                    Op::Reduce(_, ReduceOp::ArgMax, _) => {}
+                    Op::Unary(_, UnaryOp::Floor)
+                    | Op::Unary(_, UnaryOp::Round)
+                    | Op::Reduce(_, ReduceOp::ArgMin, _)
+                    | Op::Reduce(_, ReduceOp::ArgMax, _)
+                    | Op::Unary(_, UnaryOp::Sign)
+                    | Op::Cmp(_, _) => {}
                     Op::Reshape(arg) => {
                         let arg_grad = grad.reshape(arg.dims())?;
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
                     Op::Unary(_, UnaryOp::Ceil) => Err(Error::BackwardNotSupported { op: "ceil" })?,
-                    Op::Unary(_, UnaryOp::Floor) => {
-                        Err(Error::BackwardNotSupported { op: "floor" })?
-                    }
-                    Op::Unary(_, UnaryOp::Round) => {
-                        Err(Error::BackwardNotSupported { op: "round" })?
-                    }
                     Op::Unary(arg, UnaryOp::Gelu) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let cube = arg.powf(3.)?;
@@ -690,30 +712,38 @@ impl Tensor {
     }
 }
 
+/// A store for gradients, associating a tensor id to the corresponding gradient tensor, used for back propagation.
 #[derive(Debug)]
 pub struct GradStore(HashMap<TensorId, Tensor>);
 
 impl GradStore {
+    /// Create a new gradient store
     fn new() -> Self {
         GradStore(HashMap::new())
     }
 
+    /// Get the gradient tensor corresponding to the given tensor id
     pub fn get_id(&self, id: TensorId) -> Option<&Tensor> {
         self.0.get(&id)
     }
 
+    /// Get the gradient tensor associated with the given tensor
     pub fn get(&self, tensor: &Tensor) -> Option<&Tensor> {
         self.0.get(&tensor.id())
     }
 
+    /// Remove the gradient tensor associated with the given tensor, returning it if it exists
     pub fn remove(&mut self, tensor: &Tensor) -> Option<Tensor> {
         self.0.remove(&tensor.id())
     }
 
+    /// Insert a gradient tensor associated with the given tensor, returning the previous gradient tensor if it existed
     pub fn insert(&mut self, tensor: &Tensor, grad: Tensor) -> Option<Tensor> {
         self.0.insert(tensor.id(), grad)
     }
 
+    /// Get the gradient tensor associated with the given tensor, or, if it does not exist,
+    /// insert a tensor of zeroes, with the same shape and type as the given tensors and return it
     fn or_insert(&mut self, tensor: &Tensor) -> Result<&mut Tensor> {
         use std::collections::hash_map::Entry;
         let grad = match self.0.entry(tensor.id()) {

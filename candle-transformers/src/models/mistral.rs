@@ -1,23 +1,28 @@
-use crate::models::with_tracing::{linear_no_bias, Linear};
+use crate::models::with_tracing::{linear_no_bias, Linear, RmsNorm};
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{Activation, VarBuilder};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
+fn default_use_flash_attn() -> bool {
+    false
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Config {
-    pub(crate) vocab_size: usize,
-    pub(crate) hidden_size: usize,
-    pub(crate) intermediate_size: usize,
-    pub(crate) num_hidden_layers: usize,
-    pub(crate) num_attention_heads: usize,
-    pub(crate) num_key_value_heads: usize,
-    pub(crate) hidden_act: Activation,
-    pub(crate) max_position_embeddings: usize,
-    pub(crate) rms_norm_eps: f64,
-    pub(crate) rope_theta: f64,
-    pub(crate) sliding_window: usize,
-    pub(crate) use_flash_attn: bool,
+    pub vocab_size: usize,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub hidden_act: Activation,
+    pub max_position_embeddings: usize,
+    pub rms_norm_eps: f64,
+    pub rope_theta: f64,
+    pub sliding_window: Option<usize>,
+    #[serde(default = "default_use_flash_attn")]
+    pub use_flash_attn: bool,
 }
 
 impl Config {
@@ -34,7 +39,7 @@ impl Config {
             max_position_embeddings: 32768,
             rms_norm_eps: 1e-5,
             rope_theta: 10_000.,
-            sliding_window: 4096,
+            sliding_window: Some(4096),
             use_flash_attn,
         }
     }
@@ -53,7 +58,7 @@ impl Config {
             max_position_embeddings: 32768,
             rms_norm_eps: 1e-5,
             rope_theta: 10_000.,
-            sliding_window: 4096,
+            sliding_window: Some(4096),
             use_flash_attn,
         }
     }
@@ -71,30 +76,9 @@ impl Config {
             max_position_embeddings: 32768,
             rms_norm_eps: 1e-5,
             rope_theta: 10_000.,
-            sliding_window: 4096,
+            sliding_window: Some(4096),
             use_flash_attn,
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm,
-    span: tracing::Span,
-}
-
-impl RmsNorm {
-    fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let inner = candle_nn::rms_norm(size, eps, vb)?;
-        Ok(Self { inner, span })
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
     }
 }
 
@@ -104,20 +88,14 @@ struct RotaryEmbedding {
     cos: Tensor,
 }
 
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let last_dim = xs.dim(D::Minus1)?;
-    let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
-    let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
-    Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
-}
-
 impl RotaryEmbedding {
     fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+        let rope_theta = cfg.rope_theta as f32;
         let dim = cfg.hidden_size / cfg.num_attention_heads;
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
-            .map(|i| 1f32 / 10000f32.powf(i as f32 / dim as f32))
+            .map(|i| 1f32 / rope_theta.powf(i as f32 / dim as f32))
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
@@ -125,7 +103,6 @@ impl RotaryEmbedding {
             .to_dtype(dtype)?
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
         Ok(Self {
             sin: freqs.sin()?,
             cos: freqs.cos()?,
@@ -141,10 +118,8 @@ impl RotaryEmbedding {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
-        let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
+        let q_embed = candle_nn::rotary_emb::rope(q, &cos, &sin)?;
+        let k_embed = candle_nn::rotary_emb::rope(k, &cos, &sin)?;
         Ok((q_embed, k_embed))
     }
 }
@@ -267,10 +242,12 @@ impl Attention {
 
         let query_states = query_states
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let key_states = key_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         let value_states = value_states
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
@@ -374,7 +351,7 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Linear,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
     device: Device,
     dtype: DType,
 }
@@ -406,15 +383,14 @@ impl Model {
 
     fn prepare_decoder_attention_mask(
         &self,
-        b_size: usize,
         tgt_len: usize,
         seqlen_offset: usize,
     ) -> Result<Tensor> {
-        // Sliding window mask?
+        let sliding_window = self.sliding_window.unwrap_or(tgt_len + 1);
         let mask: Vec<_> = (0..tgt_len)
             .flat_map(|i| {
                 (0..tgt_len).map(move |j| {
-                    if i < j || j + self.sliding_window < i {
+                    if i < j || j + sliding_window < i {
                         f32::NEG_INFINITY
                     } else {
                         0.
@@ -429,16 +405,16 @@ impl Model {
         } else {
             mask
         };
-        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
+        mask.expand((1, 1, tgt_len, tgt_len + seqlen_offset))?
             .to_dtype(self.dtype)
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
-        let (b_size, seq_len) = input_ids.dims2()?;
+        let (_b_size, seq_len) = input_ids.dims2()?;
         let attention_mask = if seq_len <= 1 {
             None
         } else {
-            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
+            let mask = self.prepare_decoder_attention_mask(seq_len, seqlen_offset)?;
             Some(mask)
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;

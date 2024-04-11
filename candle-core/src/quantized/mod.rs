@@ -398,7 +398,7 @@ impl QMatMul {
             _ => DEQUANTIZE_ALL.with(|b| *b),
         };
         let t = if dequantize {
-            let tensor = qtensor.dequantize(&Device::Cpu)?;
+            let tensor = qtensor.dequantize(&qtensor.device())?;
             Self::Tensor(tensor)
         } else {
             Self::QTensor(qtensor)

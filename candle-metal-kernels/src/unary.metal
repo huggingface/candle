@@ -102,6 +102,26 @@ UNARY(NAME, half, NAME##_f16, NAME##_f16_strided);
 #define BFLOAT_UNARY_OP(NAME) \
 UNARY(NAME, bfloat, NAME##_bf16, NAME##_bf16_strided);
 
+#define COPY2D(FN_NAME, TYPENAME) \
+kernel void FN_NAME( \
+    constant int64_t &d1, \
+    constant int64_t &d2, \
+    constant int64_t &src_s, \
+    constant int64_t &dst_s, \
+    device const TYPENAME *input,  \
+    device TYPENAME *output, \
+    uint2 idx [[thread_position_in_grid]] \
+) { \
+    if (idx.x >= d1 || idx.y >= d2) return; \
+    int64_t src_idx = idx.x * src_s + idx.y; \
+    int64_t dst_idx = idx.x * dst_s + idx.y; \
+    output[dst_idx] = input[src_idx]; \
+}
+
+COPY2D(copy2d_f32, float)
+COPY2D(copy2d_f16, half)
+COPY2D(copy2d_u8, uint8_t)
+COPY2D(copy2d_u32, uint32_t)
 
 UNARY_OP(cos)
 UNARY_OP(sin)
@@ -121,6 +141,7 @@ UNARY_OP(erf)
 UNARY_OP(tanh)
 UNARY_OP(recip)
 UNARY_OP(relu)
+UNARY_OP(sign)
 UNARY(id, float, copy_f32, copy_f32_strided)
 UNARY(id, half, copy_f16, copy_f16_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
@@ -128,6 +149,7 @@ UNARY(id, uint32_t, copy_u32, copy_u32_strided)
 
 #if __METAL_VERSION__ >= 220
 UNARY(id, int64_t, copy_i64, copy_i64_strided)
+COPY2D(copy2d_i64, int64_t)
 #endif
 
 #if defined(__HAVE_BFLOAT__)
@@ -149,6 +171,9 @@ BFLOAT_UNARY_OP(erf)
 BFLOAT_UNARY_OP(tanh)
 BFLOAT_UNARY_OP(recip)
 BFLOAT_UNARY_OP(relu)
+BFLOAT_UNARY_OP(sign)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
+
+COPY2D(copy2d_bf64, bfloat)
 #endif

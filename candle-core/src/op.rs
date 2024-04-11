@@ -1,5 +1,5 @@
 #![allow(clippy::redundant_closure_call)]
-use crate::{CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
+use crate::Tensor;
 use half::{bf16, f16};
 use num_traits::float::Float;
 
@@ -66,6 +66,7 @@ pub enum UnaryOp {
     Floor,
     Ceil,
     Round,
+    Sign,
 }
 
 #[derive(Clone)]
@@ -161,166 +162,21 @@ pub enum Op {
     Permute(Tensor, Vec<usize>),
     Elu(Tensor, f64),
     Powf(Tensor, f64),
-    CustomOp1(Tensor, std::sync::Arc<Box<dyn CustomOp1 + Send + Sync>>),
+    CustomOp1(
+        Tensor,
+        std::sync::Arc<Box<dyn crate::CustomOp1 + Send + Sync>>,
+    ),
     CustomOp2(
         Tensor,
         Tensor,
-        std::sync::Arc<Box<dyn CustomOp2 + Send + Sync>>,
+        std::sync::Arc<Box<dyn crate::CustomOp2 + Send + Sync>>,
     ),
     CustomOp3(
         Tensor,
         Tensor,
         Tensor,
-        std::sync::Arc<Box<dyn CustomOp3 + Send + Sync>>,
+        std::sync::Arc<Box<dyn crate::CustomOp3 + Send + Sync>>,
     ),
-}
-
-/// Unary ops that can be defined in user-land.
-pub trait CustomOp1 {
-    // Box<dyn> does not support const yet, so use a function to get the name.
-    fn name(&self) -> &'static str;
-
-    /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)>;
-
-    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn cuda_fwd(&self, _storage: &CudaStorage, _layout: &Layout) -> Result<(CudaStorage, Shape)> {
-        Err(crate::Error::Cuda(
-            format!("no cuda implementation for {}", self.name()).into(),
-        ))
-    }
-
-    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn metal_fwd(
-        &self,
-        _storage: &MetalStorage,
-        _layout: &Layout,
-    ) -> Result<(MetalStorage, Shape)> {
-        Err(crate::Error::Metal(
-            format!("no metal implementation for {}", self.name()).into(),
-        ))
-    }
-
-    /// This function takes as argument the argument `arg` used in the forward pass, the result
-    /// produced by the forward operation `res` and the gradient of the result `grad_res`.
-    /// The function should return the gradient of the argument.
-    fn bwd(&self, _arg: &Tensor, _res: &Tensor, _grad_res: &Tensor) -> Result<Option<Tensor>> {
-        Err(crate::Error::BackwardNotSupported { op: self.name() })
-    }
-}
-
-pub trait CustomOp2 {
-    fn name(&self) -> &'static str;
-
-    /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn cpu_fwd(
-        &self,
-        s1: &CpuStorage,
-        l1: &Layout,
-        s2: &CpuStorage,
-        l2: &Layout,
-    ) -> Result<(CpuStorage, Shape)>;
-
-    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn cuda_fwd(
-        &self,
-        _: &CudaStorage,
-        _: &Layout,
-        _: &CudaStorage,
-        _: &Layout,
-    ) -> Result<(CudaStorage, Shape)> {
-        Err(crate::Error::Cuda(
-            format!("no cuda implementation for {}", self.name()).into(),
-        ))
-    }
-
-    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn metal_fwd(
-        &self,
-        _: &MetalStorage,
-        _: &Layout,
-        _: &MetalStorage,
-        _: &Layout,
-    ) -> Result<(MetalStorage, Shape)> {
-        Err(crate::Error::Metal(
-            format!("no metal implementation for {}", self.name()).into(),
-        ))
-    }
-
-    fn bwd(
-        &self,
-        _arg1: &Tensor,
-        _arg2: &Tensor,
-        _res: &Tensor,
-        _grad_res: &Tensor,
-    ) -> Result<(Option<Tensor>, Option<Tensor>)> {
-        Err(crate::Error::BackwardNotSupported { op: self.name() })
-    }
-}
-
-pub trait CustomOp3 {
-    fn name(&self) -> &'static str;
-
-    /// The forward pass, as run on a cpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn cpu_fwd(
-        &self,
-        s1: &CpuStorage,
-        l1: &Layout,
-        s2: &CpuStorage,
-        l2: &Layout,
-        s3: &CpuStorage,
-        l3: &Layout,
-    ) -> Result<(CpuStorage, Shape)>;
-
-    /// The forward pass, as run on a gpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn cuda_fwd(
-        &self,
-        _: &CudaStorage,
-        _: &Layout,
-        _: &CudaStorage,
-        _: &Layout,
-        _: &CudaStorage,
-        _: &Layout,
-    ) -> Result<(CudaStorage, Shape)> {
-        Err(crate::Error::Cuda(
-            format!("no cuda implementation for {}", self.name()).into(),
-        ))
-    }
-
-    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
-    /// offsets etc so the associated layout should be used to access it.
-    fn metal_fwd(
-        &self,
-        _: &MetalStorage,
-        _: &Layout,
-        _: &MetalStorage,
-        _: &Layout,
-        _: &MetalStorage,
-        _: &Layout,
-    ) -> Result<(MetalStorage, Shape)> {
-        Err(crate::Error::Metal(
-            format!("no metal implementation for {}", self.name()).into(),
-        ))
-    }
-
-    fn bwd(
-        &self,
-        _arg1: &Tensor,
-        _arg2: &Tensor,
-        _arg3: &Tensor,
-        _res: &Tensor,
-        _grad_res: &Tensor,
-    ) -> Result<(Option<Tensor>, Option<Tensor>, Option<Tensor>)> {
-        Err(crate::Error::BackwardNotSupported { op: self.name() })
-    }
 }
 
 pub trait UnaryOpT {
@@ -399,6 +255,7 @@ pub(crate) struct Tanh;
 pub(crate) struct Floor;
 pub(crate) struct Ceil;
 pub(crate) struct Round;
+pub(crate) struct Sign;
 
 macro_rules! bin_op {
     ($op:ident, $name: literal, $e: expr, $f32_vec: ident, $f64_vec: ident) => {
@@ -602,6 +459,13 @@ unary_op!(Recip, "recip", v, v.recip());
 unary_op!(Sqr, "sqr", v, v * v, vs_sqr, vd_sqr);
 unary_op!(Sqrt, "sqrt", v, v.sqrt(), vs_sqrt, vd_sqrt);
 
+// Hardcode the value for sqrt(2/pi)
+// https://github.com/huggingface/candle/issues/1982
+#[allow(clippy::excessive_precision)]
+const SQRT_TWO_OVER_PI_F32: f32 = 0.79788456080286535587989211986876373;
+#[allow(clippy::excessive_precision)]
+const SQRT_TWO_OVER_PI_F64: f64 = 0.79788456080286535587989211986876373;
+
 /// Tanh based approximation of the `gelu` operation
 /// GeluErf is the more precise one.
 /// <https://en.wikipedia.org/wiki/Activation_function#Comparison_of_activation_functions>
@@ -614,7 +478,7 @@ impl UnaryOpT for Gelu {
             * v
             * (bf16::ONE
                 + bf16::tanh(
-                    (bf16::from_f32_const(2.0) / bf16::PI).sqrt()
+                    bf16::from_f32_const(SQRT_TWO_OVER_PI_F32)
                         * v
                         * (bf16::ONE + bf16::from_f32_const(0.044715) * v * v),
                 ))
@@ -625,22 +489,18 @@ impl UnaryOpT for Gelu {
             * v
             * (f16::ONE
                 + f16::tanh(
-                    (f16::from_f32_const(2.0) / f16::PI).sqrt()
+                    f16::from_f32_const(SQRT_TWO_OVER_PI_F32)
                         * v
                         * (f16::ONE + f16::from_f32_const(0.044715) * v * v),
                 ))
     }
     #[inline(always)]
     fn f32(v: f32) -> f32 {
-        0.5 * v
-            * (1.0
-                + f32::tanh((2.0f32 / std::f32::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)))
+        0.5 * v * (1.0 + f32::tanh(SQRT_TWO_OVER_PI_F32 * v * (1.0 + 0.044715 * v * v)))
     }
     #[inline(always)]
     fn f64(v: f64) -> f64 {
-        0.5 * v
-            * (1.0
-                + f64::tanh((2.0f64 / std::f64::consts::PI).sqrt() * v * (1.0 + 0.044715 * v * v)))
+        0.5 * v * (1.0 + f64::tanh(SQRT_TWO_OVER_PI_F64 * v * (1.0 + 0.044715 * v * v)))
     }
     #[inline(always)]
     fn u8(_: u8) -> u8 {
@@ -1065,5 +925,39 @@ impl std::ops::Deref for BackpropOp {
     type Target = Option<Op>;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl UnaryOpT for Sign {
+    const NAME: &'static str = "sign";
+    const KERNEL: &'static str = "usign";
+    const V: Self = Sign;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        bf16::from((v > bf16::ZERO) as i8) - bf16::from((v < bf16::ZERO) as i8)
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        f16::from((v > f16::ZERO) as i8) - f16::from((v < f16::ZERO) as i8)
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        f32::from(v > 0.) - f32::from(v < 0.)
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        f64::from(v > 0.) - f64::from(v < 0.)
+    }
+    #[inline(always)]
+    fn u8(v: u8) -> u8 {
+        u8::min(1, v)
+    }
+    #[inline(always)]
+    fn u32(v: u32) -> u32 {
+        u32::min(1, v)
+    }
+    #[inline(always)]
+    fn i64(v: i64) -> i64 {
+        (v > 0) as i64 - (v < 0) as i64
     }
 }

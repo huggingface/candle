@@ -96,6 +96,10 @@ struct Args {
     /// information.
     #[arg(long, default_value_t = 0.8)]
     img2img_strength: f64,
+
+    /// The seed to use when generating random samples.
+    #[arg(long)]
+    seed: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
@@ -288,6 +292,13 @@ fn text_embeddings(
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
+    if tokens.len() > sd_config.clip.max_position_embeddings {
+        anyhow::bail!(
+            "the prompt is too long, {} > max-tokens ({})",
+            tokens.len(),
+            sd_config.clip.max_position_embeddings
+        )
+    }
     while tokens.len() < sd_config.clip.max_position_embeddings {
         tokens.push(pad_id)
     }
@@ -315,6 +326,13 @@ fn text_embeddings(
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
+        if uncond_tokens.len() > sd_config.clip.max_position_embeddings {
+            anyhow::bail!(
+                "the negative prompt is too long, {} > max-tokens ({})",
+                uncond_tokens.len(),
+                sd_config.clip.max_position_embeddings
+            )
+        }
         while uncond_tokens.len() < sd_config.clip.max_position_embeddings {
             uncond_tokens.push(pad_id)
         }
@@ -374,6 +392,7 @@ fn run(args: Args) -> Result<()> {
         use_flash_attn,
         img2img,
         img2img_strength,
+        seed,
         ..
     } = args;
 
@@ -427,6 +446,9 @@ fn run(args: Args) -> Result<()> {
 
     let scheduler = sd_config.build_scheduler(n_steps)?;
     let device = candle_examples::device(cpu)?;
+    if let Some(seed) = seed {
+        device.set_seed(seed)?;
+    }
     let use_guide_scale = guidance_scale > 1.0;
 
     let which = match sd_version {

@@ -1,4 +1,3 @@
-#![allow(unused)]
 /// A fast implementation of mamba for inference only.
 /// This is based on: https://github.com/LaurentMazare/mamba.rs
 use crate::models::with_tracing::{linear, linear_no_bias, Linear};
@@ -10,10 +9,10 @@ const D_STATE: usize = 16;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
-    d_model: usize,
-    n_layer: usize,
-    vocab_size: usize,
-    pad_vocab_size_multiple: usize,
+    pub d_model: usize,
+    pub n_layer: usize,
+    pub vocab_size: usize,
+    pub pad_vocab_size_multiple: usize,
 }
 
 impl Config {
@@ -38,12 +37,12 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(batch_size: usize, cfg: &Config, device: &Device) -> Result<Self> {
+    pub fn new(batch_size: usize, cfg: &Config, dtype: DType, device: &Device) -> Result<Self> {
         let mut hs = Vec::with_capacity(cfg.n_layer);
         let mut prev_xs = Vec::with_capacity(cfg.n_layer);
         for _i in 0..cfg.n_layer {
-            let h = Tensor::zeros((batch_size, cfg.d_inner(), D_STATE), DType::F32, device)?;
-            let x = Tensor::zeros((batch_size, cfg.d_inner()), DType::F32, device)?;
+            let h = Tensor::zeros((batch_size, cfg.d_inner(), D_STATE), dtype, device)?;
+            let x = Tensor::zeros((batch_size, cfg.d_inner()), dtype, device)?;
             hs.push(h);
             prev_xs.push([x.clone(), x.clone(), x.clone(), x.clone()]);
         }
@@ -121,15 +120,15 @@ impl MambaBlock {
         // Algorithm 3.2 on page 6, https://arxiv.org/pdf/2312.00752.pdf
 
         let x_proj = self.x_proj.forward(&proj_for_conv)?;
-        let delta = x_proj.narrow(D::Minus1, 0, self.dt_rank)?;
+        let delta = x_proj.narrow(D::Minus1, 0, self.dt_rank)?.contiguous()?;
         let b = x_proj.narrow(D::Minus1, self.dt_rank, D_STATE)?;
         let c = x_proj.narrow(D::Minus1, self.dt_rank + D_STATE, D_STATE)?;
 
         let delta = delta.apply(&self.dt_proj)?;
         // softplus
         let delta = (delta.exp()? + 1.)?.log()?;
-        let a = self.a_log.to_dtype(candle::DType::F32)?.exp()?.neg()?;
-        let d = self.d.to_dtype(candle::DType::F32)?;
+        let a = self.a_log.to_dtype(delta.dtype())?.exp()?.neg()?;
+        let d = self.d.to_dtype(delta.dtype())?;
 
         // Selective scan part
         // Eqn (2a), page 3, h_t = Ab h_{t-1} + Bb x_t
@@ -178,6 +177,7 @@ pub struct Model {
     layers: Vec<ResidualBlock>,
     norm_f: RmsNorm,
     lm_head: Linear,
+    dtype: DType,
 }
 
 impl Model {
@@ -196,6 +196,7 @@ impl Model {
             layers,
             norm_f,
             lm_head,
+            dtype: vb.dtype(),
         })
     }
 
@@ -207,5 +208,9 @@ impl Model {
         }
         state.pos += 1;
         xs.apply(&self.norm_f)?.apply(&self.lm_head)
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
     }
 }

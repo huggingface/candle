@@ -1,4 +1,4 @@
-use super::with_tracing::{linear_no_bias as linear, Linear};
+use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
 use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::collections::HashMap;
@@ -134,25 +134,6 @@ impl Cache {
 }
 
 #[derive(Debug, Clone)]
-struct RmsNorm {
-    inner: candle_nn::RmsNorm,
-    span: tracing::Span,
-}
-
-impl RmsNorm {
-    fn load(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let span = tracing::span!(tracing::Level::TRACE, "rms-norm");
-        let inner = candle_nn::rms_norm(size, eps, vb)?;
-        Ok(Self { inner, span })
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let _enter = self.span.enter();
-        self.inner.forward(x)
-    }
-}
-
-#[derive(Debug, Clone)]
 struct CausalSelfAttention {
     q_proj: Linear,
     k_proj: Linear,
@@ -259,8 +240,12 @@ impl CausalSelfAttention {
             let k = k.to_dtype(DType::F32)?;
             let v = v.to_dtype(DType::F32)?;
             let att = (q.matmul(&k.t()?)? / (self.head_dim as f64).sqrt())?;
-            let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
-            let att = masked_fill(&att, &mask, f32::NEG_INFINITY)?;
+            let att = if seq_len == 1 {
+                att
+            } else {
+                let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
+                masked_fill(&att, &mask, f32::NEG_INFINITY)?
+            };
             let att = candle_nn::ops::softmax(&att, D::Minus1)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
             att.matmul(&v.contiguous()?)?.to_dtype(in_dtype)?
@@ -377,8 +362,8 @@ impl Block {
         let span = tracing::span!(tracing::Level::TRACE, "block");
         let attn = CausalSelfAttention::load(vb.pp("self_attn"), cfg)?;
         let mlp = Mlp::load(vb.pp("mlp"), cfg)?;
-        let rms_1 = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
-        let rms_2 = RmsNorm::load(
+        let rms_1 = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let rms_2 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
@@ -409,7 +394,7 @@ impl Llama {
             x = block.forward(&x, index_pos, block_idx, cache)?;
         }
         let x = self.ln_f.forward(&x)?;
-        let x = x.i((.., seq_len - 1, ..))?;
+        let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
         let logits = self.lm_head.forward(&x)?;
         logits.to_dtype(DType::F32)
     }
@@ -417,7 +402,7 @@ impl Llama {
     pub fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
         let wte = embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.embed_tokens"))?;
         let lm_head = linear(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
-        let ln_f = RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
+        let ln_f = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("model.norm"))?;
         let blocks: Vec<_> = (0..cfg.num_hidden_layers)
             .map(|i| Block::load(vb.pp(&format!("model.layers.{i}")), cfg).unwrap())
             .collect();

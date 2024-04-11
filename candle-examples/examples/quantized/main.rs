@@ -10,7 +10,7 @@ use tokenizers::Tokenizer;
 
 use candle::quantized::{ggml_file, gguf_file};
 use candle::Tensor;
-use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
 use candle_transformers::models::quantized_llama as model;
@@ -200,6 +200,10 @@ struct Args {
     #[arg(long)]
     top_p: Option<f64>,
 
+    /// Only sample among the top K samples.
+    #[arg(long)]
+    top_k: Option<usize>,
+
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
     seed: u64,
@@ -235,6 +239,10 @@ struct Args {
     /// Group-Query Attention, use 8 for the 70B version of LLaMAv2.
     #[arg(long)]
     gqa: Option<usize>,
+
+    /// Use the slower dmmv cuda kernel.
+    #[arg(long)]
+    force_dmmv: bool,
 }
 
 impl Args {
@@ -341,11 +349,10 @@ fn main() -> anyhow::Result<()> {
     use tracing_subscriber::prelude::*;
 
     let args = Args::parse();
-    let temperature = if args.temperature == 0. {
-        None
-    } else {
-        Some(args.temperature)
-    };
+
+    #[cfg(feature = "cuda")]
+    candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
+
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
@@ -492,7 +499,20 @@ fn main() -> anyhow::Result<()> {
             prompt_tokens
         };
         let mut all_tokens = vec![];
-        let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
+        let mut logits_processor = {
+            let temperature = args.temperature;
+            let sampling = if temperature <= 0. {
+                Sampling::ArgMax
+            } else {
+                match (args.top_k, args.top_p) {
+                    (None, None) => Sampling::All { temperature },
+                    (Some(k), None) => Sampling::TopK { k, temperature },
+                    (None, Some(p)) => Sampling::TopP { p, temperature },
+                    (Some(k), Some(p)) => Sampling::TopKThenTopP { k, p, temperature },
+                }
+            };
+            LogitsProcessor::from_sampling(args.seed, sampling)
+        };
 
         let start_prompt_processing = std::time::Instant::now();
         let mut next_token = if !args.split_prompt {

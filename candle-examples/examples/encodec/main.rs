@@ -11,59 +11,7 @@ use candle_transformers::models::encodec::{Config, Model};
 use clap::{Parser, ValueEnum};
 use hf_hub::api::sync::Api;
 
-fn conv<T>(samples: &mut Vec<f32>, data: std::borrow::Cow<symphonia::core::audio::AudioBuffer<T>>)
-where
-    T: symphonia::core::sample::Sample,
-    f32: symphonia::core::conv::FromSample<T>,
-{
-    use symphonia::core::audio::Signal;
-    use symphonia::core::conv::FromSample;
-    samples.extend(data.chan(0).iter().map(|v| f32::from_sample(*v)))
-}
-
-fn pcm_decode<P: AsRef<std::path::Path>>(path: P) -> anyhow::Result<(Vec<f32>, u32)> {
-    use symphonia::core::audio::{AudioBufferRef, Signal};
-
-    let src = std::fs::File::open(path)?;
-    let mss = symphonia::core::io::MediaSourceStream::new(Box::new(src), Default::default());
-    let hint = symphonia::core::probe::Hint::new();
-    let meta_opts: symphonia::core::meta::MetadataOptions = Default::default();
-    let fmt_opts: symphonia::core::formats::FormatOptions = Default::default();
-    let probed = symphonia::default::get_probe().format(&hint, mss, &fmt_opts, &meta_opts)?;
-    let mut format = probed.format;
-    let track = format
-        .tracks()
-        .iter()
-        .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
-        .expect("no supported audio tracks");
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &Default::default())
-        .expect("unsupported codec");
-    let track_id = track.id;
-    let sample_rate = track.codec_params.sample_rate.unwrap_or(0);
-    let mut pcm_data = Vec::new();
-    while let Ok(packet) = format.next_packet() {
-        while !format.metadata().is_latest() {
-            format.metadata().pop();
-        }
-        if packet.track_id() != track_id {
-            continue;
-        }
-        match decoder.decode(&packet)? {
-            AudioBufferRef::F32(buf) => pcm_data.extend(buf.chan(0)),
-            AudioBufferRef::U8(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::U16(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::U24(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::U32(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::S8(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::S16(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::S24(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::S32(data) => conv(&mut pcm_data, data),
-            AudioBufferRef::F64(data) => conv(&mut pcm_data, data),
-        }
-    }
-    Ok((pcm_data, sample_rate))
-}
+mod audio_io;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Action {
@@ -109,14 +57,36 @@ fn main() -> Result<()> {
     let codes = match args.action {
         Action::CodeToAudio => {
             let codes = candle::safetensors::load(args.in_file, &device)?;
-            let codes = codes.get("codes").expect("no codes in input file").i(0)?;
-            codes
+            codes.get("codes").expect("no codes in input file").clone()
         }
         Action::AudioToCode | Action::AudioToAudio => {
-            let (pcm, sample_rate) = pcm_decode(args.in_file)?;
-            if sample_rate != 24_000 {
-                println!("WARNING: encodec uses a 24khz sample rate, input uses {sample_rate}")
-            }
+            let pcm = if args.in_file == "-" {
+                println!(">>>> RECORDING AUDIO, PRESS ENTER ONCE DONE <<<<");
+                let (stream, input_audio) = audio_io::setup_input_stream()?;
+                let mut pcms = vec![];
+                let stdin = std::thread::spawn(|| {
+                    let mut s = String::new();
+                    std::io::stdin().read_line(&mut s)
+                });
+                while !stdin.is_finished() {
+                    let input = input_audio.lock().unwrap().take_all();
+                    if input.is_empty() {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
+                    }
+                    pcms.push(input)
+                }
+                drop(stream);
+                pcms.concat()
+            } else {
+                let (pcm, sample_rate) = audio_io::pcm_decode(args.in_file)?;
+                if sample_rate != 24_000 {
+                    println!("WARNING: encodec uses a 24khz sample rate, input uses {sample_rate}, resampling...");
+                    audio_io::resample(&pcm, sample_rate as usize, 24_000)?
+                } else {
+                    pcm
+                }
+            };
             let pcm_len = pcm.len();
             let pcm = Tensor::from_vec(pcm, (1, 1, pcm_len), &device)?;
             println!("input pcm shape: {:?}", pcm.shape());
@@ -135,8 +105,26 @@ fn main() -> Result<()> {
             let pcm = pcm.i(0)?.i(0)?;
             let pcm = candle_examples::audio::normalize_loudness(&pcm, 24_000, true)?;
             let pcm = pcm.to_vec1::<f32>()?;
-            let mut output = std::fs::File::create(&args.out_file)?;
-            candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
+            if args.out_file == "-" {
+                let (stream, ad) = audio_io::setup_output_stream()?;
+                {
+                    let mut ad = ad.lock().unwrap();
+                    ad.push_samples(&pcm)?;
+                }
+                loop {
+                    let ad = ad.lock().unwrap();
+                    if ad.is_empty() {
+                        break;
+                    }
+                    // That's very weird, calling thread::sleep here triggers the stream to stop
+                    // playing (the callback doesn't seem to be called anymore).
+                    // std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                drop(stream)
+            } else {
+                let mut output = std::fs::File::create(&args.out_file)?;
+                candle_examples::wav::write_pcm_as_wav(&mut output, &pcm, 24_000)?;
+            }
         }
     }
     Ok(())

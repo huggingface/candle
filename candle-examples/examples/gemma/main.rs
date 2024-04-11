@@ -16,6 +16,30 @@ use candle_transformers::generation::LogitsProcessor;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
+#[derive(Clone, Debug, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Which {
+    #[value(name = "2b")]
+    Base2B,
+    #[value(name = "7b")]
+    Base7B,
+    #[value(name = "2b-it")]
+    Instruct2B,
+    #[value(name = "7b-it")]
+    Instruct7B,
+    #[value(name = "1.1-2b-it")]
+    InstructV1_1_2B,
+    #[value(name = "1.1-7b-it")]
+    InstructV1_1_7B,
+    #[value(name = "code-2b")]
+    CodeBase2B,
+    #[value(name = "code-7b")]
+    CodeBase7B,
+    #[value(name = "code-2b-it")]
+    CodeInstruct2B,
+    #[value(name = "code-7b-it")]
+    CodeInstruct7B,
+}
+
 struct TextGeneration {
     model: Model,
     device: Device,
@@ -165,6 +189,10 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
+
+    /// The model to use.
+    #[arg(long, default_value = "2b")]
+    which: Which,
 }
 
 fn main() -> Result<()> {
@@ -196,14 +224,19 @@ fn main() -> Result<()> {
     let start = std::time::Instant::now();
     let api = Api::new()?;
     let model_id = match &args.model_id {
-        Some(model_id) => match model_id.as_str() {
-            "7b-it" => "google/gemma-7b-it".to_string(),
-            "7b" => "google/gemma-7b".to_string(),
-            "2b-it" => "google/gemma-2b-it".to_string(),
-            "2b" => "google/gemma-2b".to_string(),
-            _ => model_id.to_string(),
+        Some(model_id) => model_id.to_string(),
+        None => match args.which {
+            Which::InstructV1_1_2B => "google/gemma-1.1-2b-it".to_string(),
+            Which::InstructV1_1_7B => "google/gemma-1.1-7b-it".to_string(),
+            Which::Base2B => "google/gemma-2b".to_string(),
+            Which::Base7B => "google/gemma-7b".to_string(),
+            Which::Instruct2B => "google/gemma-2b-it".to_string(),
+            Which::Instruct7B => "google/gemma-7b-it".to_string(),
+            Which::CodeBase2B => "google/codegemma-2b".to_string(),
+            Which::CodeBase7B => "google/codegemma-7b".to_string(),
+            Which::CodeInstruct2B => "google/codegemma-2b-it".to_string(),
+            Which::CodeInstruct7B => "google/codegemma-7b-it".to_string(),
         },
-        None => "google/gemma-2b".to_string(),
     };
     let repo = api.repo(Repo::with_revision(
         model_id,

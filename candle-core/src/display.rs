@@ -65,12 +65,13 @@ impl std::fmt::Debug for Tensor {
 }
 
 /// Options for Tensor pretty printing
+#[derive(Debug, Clone)]
 pub struct PrinterOptions {
-    precision: usize,
-    threshold: usize,
-    edge_items: usize,
-    line_width: usize,
-    sci_mode: Option<bool>,
+    pub precision: usize,
+    pub threshold: usize,
+    pub edge_items: usize,
+    pub line_width: usize,
+    pub sci_mode: Option<bool>,
 }
 
 static PRINT_OPTS: std::sync::Mutex<PrinterOptions> =
@@ -87,6 +88,10 @@ impl PrinterOptions {
             sci_mode: None,
         }
     }
+}
+
+pub fn print_options() -> &'static std::sync::Mutex<PrinterOptions> {
+    &PRINT_OPTS
 }
 
 pub fn set_print_options(options: PrinterOptions) {
@@ -115,6 +120,26 @@ pub fn set_print_options_full() {
         line_width: 80,
         sci_mode: None,
     }
+}
+
+pub fn set_line_width(line_width: usize) {
+    PRINT_OPTS.lock().unwrap().line_width = line_width
+}
+
+pub fn set_precision(precision: usize) {
+    PRINT_OPTS.lock().unwrap().precision = precision
+}
+
+pub fn set_edge_items(edge_items: usize) {
+    PRINT_OPTS.lock().unwrap().edge_items = edge_items
+}
+
+pub fn set_threshold(threshold: usize) {
+    PRINT_OPTS.lock().unwrap().threshold = threshold
+}
+
+pub fn set_sci_mode(sci_mode: Option<bool>) {
+    PRINT_OPTS.lock().unwrap().sci_mode = sci_mode
 }
 
 struct FmtSize {
