@@ -310,7 +310,12 @@ impl SdpaAttention {
         }
     }
 
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        attention_mask: Option<&Tensor>,
+        pos: usize,
+    ) -> Result<Tensor> {
         let (bsz, q_len, _) = xs.dims3()?;
 
         let query_states = xs.apply(&self.q_proj)?;
@@ -347,8 +352,10 @@ impl SdpaAttention {
             let att = if q_len == 1 {
                 att
             } else {
-                // TODO: attn mask
-                todo!()
+                match attention_mask {
+                    None => att,
+                    Some(mask) => att.broadcast_add(mask)?,
+                }
             };
             let att = candle_nn::ops::softmax_last_dim(&att)?;
             att.matmul(&value_states.contiguous()?)?
@@ -368,10 +375,15 @@ enum TemporalBlock {
 }
 
 impl TemporalBlock {
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        attention_mask: Option<&Tensor>,
+        pos: usize,
+    ) -> Result<Tensor> {
         match self {
             Self::Recurrent(b) => b.forward(xs, pos),
-            Self::Attention(b) => b.forward(xs, pos),
+            Self::Attention(b) => b.forward(xs, attention_mask, pos),
         }
     }
 }
@@ -413,10 +425,15 @@ impl DecoderLayer {
         })
     }
 
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        xs: &Tensor,
+        attention_mask: Option<&Tensor>,
+        pos: usize,
+    ) -> Result<Tensor> {
         let residual = xs;
         let xs = xs.apply(&self.temporal_pre_norm)?;
-        let xs = self.temporal_block.forward(&xs, pos)?;
+        let xs = self.temporal_block.forward(&xs, attention_mask, pos)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = xs.apply(&self.channel_pre_norm)?.apply(&self.mlp_block)?;
@@ -429,6 +446,10 @@ pub struct Model {
     embed_tokens: candle_nn::Embedding,
     layers: Vec<DecoderLayer>,
     final_norm: RmsNorm,
+    lm_head: Linear,
+    hidden_size: usize,
+    dtype: DType,
+    device: Device,
 }
 
 impl Model {
@@ -443,18 +464,53 @@ impl Model {
             layers.push(layer)
         }
         let final_norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("final_norm"))?;
+        let lm_head = Linear::new(embed_tokens.embeddings().clone(), None);
         Ok(Self {
             embed_tokens,
             layers,
             final_norm,
+            lm_head,
+            hidden_size: cfg.hidden_size,
+            dtype: vb.dtype(),
+            device: vb.device().clone(),
         })
     }
 
+    fn prepare_decoder_attention_mask(
+        &self,
+        b_size: usize,
+        tgt_len: usize,
+        seqlen_offset: usize,
+    ) -> Result<Tensor> {
+        let mask: Vec<_> = (0..tgt_len)
+            .flat_map(|i| (0..tgt_len).map(move |j| if i < j { f32::NEG_INFINITY } else { 0. }))
+            .collect();
+        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
+        let mask = if seqlen_offset > 0 {
+            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
+            Tensor::cat(&[&mask0, &mask], D::Minus1)?
+        } else {
+            mask
+        };
+        mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
+            .to_dtype(self.dtype)
+    }
+
     pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
-        let mut xs = xs.apply(&self.embed_tokens)?;
+        let (b_size, seq_len) = xs.dims2()?;
+        let attention_mask = if seq_len <= 1 {
+            None
+        } else {
+            let mask = self.prepare_decoder_attention_mask(b_size, seq_len, pos)?;
+            Some(mask)
+        };
+        let xs = xs.apply(&self.embed_tokens)?;
+        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, pos)?
+            xs = layer.forward(&xs, attention_mask.as_ref(), pos)?
         }
-        xs.apply(&self.final_norm)
+        xs.narrow(1, seq_len - 1, 1)?
+            .apply(&self.final_norm)?
+            .apply(&self.lm_head)
     }
 }
