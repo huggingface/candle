@@ -205,7 +205,7 @@ impl LayerWeights {
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
-        // Support for MQA, useful for 70B models.
+        // Support for MQA, useful for 70B models and mistral.
         let k = self.repeat_kv(k)?;
         let v = self.repeat_kv(v)?;
 
@@ -231,11 +231,7 @@ impl LayerWeights {
             Ok(x)
         } else {
             let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            let x = x
-                .unsqueeze(2)?
-                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
-            Ok(x)
+            Tensor::cat(&vec![&x; n_rep], 2)?.reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))
         }
     }
 }
