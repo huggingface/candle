@@ -1,7 +1,6 @@
 //! Implement conversion traits for tensors
 use crate::{DType, Device, Error, Tensor, WithDType};
 use half::{bf16, f16, slice::HalfFloatSliceExt};
-use std::convert::TryFrom;
 
 impl<T: WithDType> TryFrom<&Tensor> for Vec<T> {
     type Error = Error;

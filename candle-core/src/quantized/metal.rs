@@ -171,7 +171,7 @@ impl QMetalStorage {
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
         let command_encoder = self.device.command_encoder()?;
         candle_metal_kernels::call_quantized_matmul_t(
-            device.device(),
+            device.metal_device(),
             &command_encoder,
             device.kernels(),
             self.dtype.into(),
