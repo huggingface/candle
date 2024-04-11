@@ -3,6 +3,7 @@ use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Activation, Linear, VarBuilder};
 
 #[derive(serde::Deserialize, Debug, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
 pub enum TemporalBlockType {
     Attention,
     Recurrent,
@@ -10,27 +11,36 @@ pub enum TemporalBlockType {
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
+    pub num_hidden_layers: usize,
     pub vocab_size: usize,
-    pub width: usize,
-    pub num_heads: usize,
-    pub mlp_expanded_width: usize,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub head_dim: usize,
     pub lru_width: Option<usize>,
-    pub embeddings_scale_by_sqrt_dim: bool,
     pub attention_window_size: usize,
-    pub logits_soft_cap: Option<f32>,
+    pub conv1d_width: usize,
+    pub logits_soft_cap: f64,
+    pub hidden_activation: candle_nn::Activation,
+    pub partial_rotary_factor: f64,
+    pub rms_norm_eps: f64,
+    pub rope_theta: f64,
+    #[serde(alias = "_block_types")]
     pub block_types: Vec<TemporalBlockType>,
+    pub attention_bias: bool,
 }
 
 #[derive(Debug, Clone)]
 struct RmsNorm {
-    scale: Tensor,
+    weight: Tensor,
     eps: f64,
 }
 
 impl RmsNorm {
     fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let scale = vb.get(dim, "scale")?;
-        Ok(Self { scale, eps })
+        let weight = vb.get(dim, "weight")?;
+        Ok(Self { weight, eps })
     }
 }
 
@@ -47,77 +57,38 @@ impl Module for RmsNorm {
         let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
         x_normed
             .to_dtype(x_dtype)?
-            .broadcast_mul(&(&self.scale + 1.0)?)
+            .broadcast_mul(&(&self.weight + 1.0)?)
     }
 }
 
 #[derive(Debug, Clone)]
-struct Embedder {
-    input_embedding: Tensor,
+struct Mlp {
+    gate_proj: Linear,
+    up_proj: Linear,
+    down_proj: Linear,
+    act_fn: candle_nn::Activation,
 }
 
-impl Embedder {
+impl Mlp {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let input_embedding = vb.get((cfg.vocab_size, cfg.width), "input_embedding")?;
-        Ok(Self { input_embedding })
+        let h = cfg.hidden_size;
+        let intermediate_size = cfg.intermediate_size / 2;
+        let gate_proj = linear(h, intermediate_size, true, vb.pp("gate_proj"))?;
+        let up_proj = linear(h, intermediate_size, true, vb.pp("up_proj"))?;
+        let down_proj = linear(intermediate_size, h, true, vb.pp("down_proj"))?;
+        Ok(Self {
+            gate_proj,
+            up_proj,
+            down_proj,
+            act_fn: cfg.hidden_activation,
+        })
     }
 }
 
-#[derive(Debug, Clone)]
-struct FfwUp {
-    w: Tensor,
-    b: Tensor,
-}
-
-impl FfwUp {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let e = cfg.mlp_expanded_width;
-        let w = vb.get((2, cfg.width, e), "w")?;
-        let b = vb.get((2, 1, 1, e), "b")?;
-        Ok(Self { w, b })
-    }
-}
-
-impl Module for FfwUp {
+impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
-    }
-}
-
-#[derive(Debug, Clone)]
-struct MlpBlock {
-    ffw_up: FfwUp,
-    ffw_down: Linear,
-}
-
-impl MlpBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let width = cfg.width;
-        let expanded_width = cfg.mlp_expanded_width;
-        let ffw_up = FfwUp::new(cfg, vb.pp("ffw_up"))?;
-        let ffw_down = linear(expanded_width, width, true, vb.pp("ffw_down"))?;
-        Ok(Self { ffw_up, ffw_down })
-    }
-}
-
-impl Module for MlpBlock {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let out = xs.apply(&self.ffw_up)?;
-        todo!()
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Conv1D {
-    w: Tensor,
-    b: Tensor,
-}
-
-impl Conv1D {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let w = vb.get((4, cfg.width), "w")?;
-        let b = vb.get((cfg.width,), "b")?;
-        Ok(Self { w, b })
+        let gate = xs.apply(&self.gate_proj)?.apply(&self.act_fn)?;
+        (gate * xs.apply(&self.up_proj))?.apply(&self.down_proj)
     }
 }
 
@@ -140,22 +111,31 @@ impl BlockDiagonalLinear {
 // Real-Gated Linear Recurrent Unit
 #[derive(Debug, Clone)]
 struct Rglru {
-    a_param: Tensor,
-    input_gate: BlockDiagonalLinear,
-    a_gate: BlockDiagonalLinear,
+    recurrent_param: Tensor,
+    input_gate_weight: Tensor,
+    input_gate_bias: Tensor,
+    recurrent_gate_weight: Tensor,
+    recurrent_gate_bias: Tensor,
 }
 
 impl Rglru {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let width = cfg.width;
-        let num_heads = cfg.num_heads;
-        let input_gate = BlockDiagonalLinear::new(width, num_heads, vb.pp("input_gate"))?;
-        let a_gate = BlockDiagonalLinear::new(width, num_heads, vb.pp("a_gate"))?;
-        let a_param = vb.get((width,), "a_param")?;
+        let h = cfg.hidden_size;
+        let lru_width = cfg.lru_width.unwrap_or(h);
+        let n_heads = cfg.num_attention_heads;
+        let block_width = lru_width / n_heads;
+        let recurrent_param = vb.get((lru_width,), "recurrent_param")?;
+        let input_gate_weight = vb.get((n_heads, block_width, block_width), "input_gate_weight")?;
+        let input_gate_bias = vb.get((n_heads, block_width), "input_gate_bias")?;
+        let recurrent_gate_weight =
+            vb.get((n_heads, block_width, block_width), "recurrent_gate_weight")?;
+        let recurrent_gate_bias = vb.get((n_heads, block_width), "recurrent_gate_bias")?;
         Ok(Self {
-            input_gate,
-            a_param,
-            a_gate,
+            recurrent_param,
+            input_gate_bias,
+            input_gate_weight,
+            recurrent_gate_bias,
+            recurrent_gate_weight,
         })
     }
 }
@@ -165,17 +145,29 @@ struct RecurrentBlock {
     linear_y: Linear,
     linear_x: Linear,
     linear_out: Linear,
-    conv_1d: Conv1D,
+    conv_1d: candle_nn::Conv1d,
     rg_lru: Rglru,
+    act_fn: candle_nn::Activation,
 }
 
 impl RecurrentBlock {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let lru_width = cfg.lru_width.unwrap_or(cfg.width);
-        let linear_y = linear(cfg.width, lru_width, true, vb.pp("linear_y"))?;
-        let linear_x = linear(cfg.width, lru_width, true, vb.pp("linear_x"))?;
-        let linear_out = linear(lru_width, cfg.width, true, vb.pp("linear_out"))?;
-        let conv_1d = Conv1D::new(cfg, vb.pp("conv_1d"))?;
+        let h = cfg.hidden_size;
+        let lru_width = cfg.lru_width.unwrap_or(h);
+        let linear_y = linear(h, lru_width, true, vb.pp("linear_y"))?;
+        let linear_x = linear(h, lru_width, true, vb.pp("linear_x"))?;
+        let linear_out = linear(lru_width, h, true, vb.pp("linear_out"))?;
+        let conv_1d = candle_nn::conv1d(
+            lru_width,
+            lru_width,
+            cfg.conv1d_width,
+            candle_nn::Conv1dConfig {
+                groups: lru_width,
+                padding: cfg.conv1d_width - 1,
+                ..Default::default()
+            },
+            vb.pp("conv_1d"),
+        )?;
         let rg_lru = Rglru::new(cfg, vb.pp("rg_lru"))?;
         Ok(Self {
             linear_y,
@@ -183,30 +175,34 @@ impl RecurrentBlock {
             linear_out,
             conv_1d,
             rg_lru,
+            act_fn: cfg.hidden_activation,
         })
     }
 }
 
 #[derive(Debug, Clone)]
-struct LocalAttentionBlock {
-    proj_q: Linear,
-    proj_k: Linear,
-    proj_v: Linear,
-    proj_final: Linear,
+struct SdpaAttention {
+    q_proj: Linear,
+    k_proj: Linear,
+    v_proj: Linear,
+    o_proj: Linear,
 }
 
-impl LocalAttentionBlock {
+impl SdpaAttention {
     fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let w = cfg.width;
-        let proj_q = linear(w, w, true, vb.pp("proj_q"))?;
-        let proj_k = linear(w, w, true, vb.pp("proj_k"))?;
-        let proj_v = linear(w, w, true, vb.pp("proj_v"))?;
-        let proj_final = linear(w, w, false, vb.pp("proj_final"))?;
+        let h = cfg.hidden_size;
+        let n_heads = cfg.num_attention_heads;
+        let n_kv_heads = cfg.num_key_value_heads;
+        let hd = cfg.head_dim;
+        let q_proj = linear(h, n_heads * hd, cfg.attention_bias, vb.pp("q_proj"))?;
+        let k_proj = linear(h, n_kv_heads * hd, cfg.attention_bias, vb.pp("k_proj"))?;
+        let v_proj = linear(h, n_kv_heads * hd, cfg.attention_bias, vb.pp("v_proj"))?;
+        let o_proj = linear(n_heads * hd, h, true, vb.pp("o_proj"))?;
         Ok(Self {
-            proj_q,
-            proj_k,
-            proj_v,
-            proj_final,
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
         })
     }
 }
@@ -214,32 +210,33 @@ impl LocalAttentionBlock {
 #[derive(Debug, Clone)]
 enum Inner {
     Recurrent(RecurrentBlock),
-    Attention(LocalAttentionBlock),
+    Attention(SdpaAttention),
 }
 
 #[derive(Debug, Clone)]
-struct ResidualBlock {
+struct DecoderLayer {
     temporal_pre_norm: RmsNorm,
     channel_pre_norm: RmsNorm,
     inner: Inner,
-    mlp_block: MlpBlock,
+    mlp_block: Mlp,
 }
 
-impl ResidualBlock {
-    fn new(block_type: TemporalBlockType, cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let temporal_pre_norm = RmsNorm::new(cfg.width, 1e-6, vb.pp("temporal_pre_norm"))?;
-        let channel_pre_norm = RmsNorm::new(cfg.width, 1e-6, vb.pp("channel_pre_norm"))?;
-        let inner = match block_type {
+impl DecoderLayer {
+    fn new(block_idx: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let h = cfg.hidden_size;
+        let temporal_pre_norm = RmsNorm::new(h, cfg.rms_norm_eps, vb.pp("temporal_pre_norm"))?;
+        let channel_pre_norm = RmsNorm::new(h, cfg.rms_norm_eps, vb.pp("channel_pre_norm"))?;
+        let inner = match cfg.block_types[block_idx % cfg.block_types.len()] {
             TemporalBlockType::Recurrent => {
-                let block = RecurrentBlock::new(cfg, vb.pp("recurrent_block"))?;
+                let block = RecurrentBlock::new(cfg, vb.pp("temporal_block"))?;
                 Inner::Recurrent(block)
             }
             TemporalBlockType::Attention => {
-                let block = LocalAttentionBlock::new(cfg, vb.pp("attention_block"))?;
+                let block = SdpaAttention::new(cfg, vb.pp("temporal_block"))?;
                 Inner::Attention(block)
             }
         };
-        let mlp_block = MlpBlock::new(cfg, vb.pp("mlp_block"))?;
+        let mlp_block = Mlp::new(cfg, vb.pp("mlp_block"))?;
         Ok(Self {
             temporal_pre_norm,
             channel_pre_norm,
@@ -251,25 +248,30 @@ impl ResidualBlock {
 
 #[derive(Debug, Clone)]
 pub struct Model {
-    embedder: Embedder,
-    blocks: Vec<ResidualBlock>,
+    embed_tokens: candle_nn::Embedding,
+    layers: Vec<DecoderLayer>,
     final_norm: RmsNorm,
 }
 
 impl Model {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let embedder = Embedder::new(cfg, vb.pp("embedder"))?;
-        let vb_b = vb.pp("blocks");
-        let mut blocks = vec![];
-        for (block_id, &block_type) in cfg.block_types.iter().enumerate() {
-            let block = ResidualBlock::new(block_type, cfg, vb_b.pp(block_id))?;
-            blocks.push(block)
+    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+        let embed_tokens =
+            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
+        let vb_b = vb.pp("layers");
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        for idx in 0..cfg.num_hidden_layers {
+            let layer = DecoderLayer::new(idx, cfg, vb_b.pp(idx))?;
+            layers.push(layer)
         }
-        let final_norm = RmsNorm::new(cfg.width, 1e-6, vb.pp("final_norm"))?;
+        let final_norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("final_norm"))?;
         Ok(Self {
-            embedder,
-            blocks,
+            embed_tokens,
+            layers,
             final_norm,
         })
+    }
+
+    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+        todo!()
     }
 }
