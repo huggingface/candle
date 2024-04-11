@@ -1,6 +1,7 @@
 #![allow(unused)]
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Activation, Linear, VarBuilder};
+use std::sync::Arc;
 
 #[derive(serde::Deserialize, Debug, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +63,57 @@ impl Module for RmsNorm {
 }
 
 #[derive(Debug, Clone)]
+struct RotaryEmbedding {
+    sin: Tensor,
+    cos: Tensor,
+}
+
+fn rotate_half(xs: &Tensor) -> Result<Tensor> {
+    let last_dim = xs.dim(D::Minus1)?;
+    let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
+    let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
+    Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
+}
+
+impl RotaryEmbedding {
+    fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+        let dim = cfg.head_dim;
+        let max_seq_len = 2048; // TODO: configure or make it dynamic
+        let inv_freq: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
+        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+            .to_dtype(dtype)?
+            .reshape((max_seq_len, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
+        Ok(Self {
+            sin: freqs.sin()?,
+            cos: freqs.cos()?,
+        })
+    }
+
+    fn apply_rotary_emb_qkv(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        seqlen_offset: usize,
+    ) -> Result<(Tensor, Tensor)> {
+        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
+        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
+        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
+        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
+        let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
+        let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
+        Ok((q_embed, k_embed))
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Mlp {
     gate_proj: Linear,
     up_proj: Linear,
@@ -116,6 +168,8 @@ struct Rglru {
     input_gate_bias: Tensor,
     recurrent_gate_weight: Tensor,
     recurrent_gate_bias: Tensor,
+    block_width: usize,
+    n_heads: usize,
 }
 
 impl Rglru {
@@ -136,7 +190,17 @@ impl Rglru {
             input_gate_weight,
             recurrent_gate_bias,
             recurrent_gate_weight,
+            block_width,
+            n_heads,
         })
+    }
+
+    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+        let (b_sz, seq_len, lru_width) = xs.dims3()?;
+        let reshape_act = xs
+            .reshape((b_sz * seq_len, self.n_heads, self.block_width))?
+            .permute((1, 0, 2))?;
+        todo!()
     }
 }
 
@@ -180,7 +244,17 @@ impl RecurrentBlock {
     }
 
     pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
-        todo!()
+        let (_b_sz, seq_len, _) = xs.dims3()?;
+
+        let y_branch = xs.apply(&self.linear_y)?.apply(&self.act_fn)?;
+        let x_branch = xs.apply(&self.linear_x)?.transpose(1, 2)?;
+        // TODO: use_cache
+        let x_branch = x_branch
+            .apply(&self.conv_1d)?
+            .narrow(D::Minus1, 0, seq_len)?;
+        let x_branch = x_branch.transpose(1, 2)?;
+        let x_branch = self.rg_lru.forward(&x_branch, pos)?;
+        (x_branch * y_branch)?.apply(&self.linear_out)
     }
 }
 
@@ -194,10 +268,12 @@ struct SdpaAttention {
     n_kv_heads: usize,
     head_dim: usize,
     hidden_size: usize,
+    kv_cache: Option<(Tensor, Tensor)>,
+    rotary_emb: Arc<RotaryEmbedding>,
 }
 
 impl SdpaAttention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let h = cfg.hidden_size;
         let n_heads = cfg.num_attention_heads;
         let n_kv_heads = cfg.num_key_value_heads;
@@ -215,6 +291,8 @@ impl SdpaAttention {
             n_kv_heads,
             head_dim: hd,
             hidden_size: h,
+            kv_cache: None,
+            rotary_emb,
         })
     }
 
@@ -232,7 +310,7 @@ impl SdpaAttention {
         }
     }
 
-    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
         let (bsz, q_len, _) = xs.dims3()?;
 
         let query_states = xs.apply(&self.q_proj)?;
@@ -248,8 +326,20 @@ impl SdpaAttention {
         let value_states = value_states
             .reshape((bsz, q_len, self.n_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
-        // TODO: rope
-        // TODO: kv-cache
+        let (query_states, key_states) =
+            self.rotary_emb
+                .apply_rotary_emb_qkv(&query_states, &key_states, pos)?;
+
+        let (key_states, value_states) = match &self.kv_cache {
+            None => (key_states, value_states),
+            Some((prev_k, prev_v)) => {
+                let key_states = Tensor::cat(&[prev_k, &key_states], 2)?;
+                let value_states = Tensor::cat(&[prev_v, &value_states], 2)?;
+                (key_states, value_states)
+            }
+        };
+        self.kv_cache = Some((key_states.clone(), value_states.clone()));
+
         let key_states = self.repeat_kv(key_states)?;
         let value_states = self.repeat_kv(value_states)?;
         let xs = {
@@ -278,7 +368,7 @@ enum TemporalBlock {
 }
 
 impl TemporalBlock {
-    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
         match self {
             Self::Recurrent(b) => b.forward(xs, pos),
             Self::Attention(b) => b.forward(xs, pos),
@@ -295,7 +385,12 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(block_idx: usize, cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        block_idx: usize,
+        rotary_emb: Arc<RotaryEmbedding>,
+        cfg: &Config,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let h = cfg.hidden_size;
         let temporal_pre_norm = RmsNorm::new(h, cfg.rms_norm_eps, vb.pp("temporal_pre_norm"))?;
         let channel_pre_norm = RmsNorm::new(h, cfg.rms_norm_eps, vb.pp("channel_pre_norm"))?;
@@ -305,7 +400,7 @@ impl DecoderLayer {
                 TemporalBlock::Recurrent(block)
             }
             TemporalBlockType::Attention => {
-                let block = SdpaAttention::new(cfg, vb.pp("temporal_block"))?;
+                let block = SdpaAttention::new(rotary_emb, cfg, vb.pp("temporal_block"))?;
                 TemporalBlock::Attention(block)
             }
         };
@@ -318,7 +413,7 @@ impl DecoderLayer {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
         let residual = xs;
         let xs = xs.apply(&self.temporal_pre_norm)?;
         let xs = self.temporal_block.forward(&xs, pos)?;
@@ -340,10 +435,11 @@ impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let embed_tokens =
             candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
+        let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
         let vb_b = vb.pp("layers");
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for idx in 0..cfg.num_hidden_layers {
-            let layer = DecoderLayer::new(idx, cfg, vb_b.pp(idx))?;
+            let layer = DecoderLayer::new(idx, rotary_emb.clone(), cfg, vb_b.pp(idx))?;
             layers.push(layer)
         }
         let final_norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("final_norm"))?;
@@ -354,9 +450,9 @@ impl Model {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
         let mut xs = xs.apply(&self.embed_tokens)?;
-        for layer in self.layers.iter() {
+        for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, pos)?
         }
         xs.apply(&self.final_norm)
