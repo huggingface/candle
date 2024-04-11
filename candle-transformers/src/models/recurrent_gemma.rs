@@ -178,6 +178,10 @@ impl RecurrentBlock {
             act_fn: cfg.hidden_activation,
         })
     }
+
+    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +190,10 @@ struct SdpaAttention {
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
+    n_heads: usize,
+    n_kv_heads: usize,
+    head_dim: usize,
+    hidden_size: usize,
 }
 
 impl SdpaAttention {
@@ -203,21 +211,86 @@ impl SdpaAttention {
             k_proj,
             v_proj,
             o_proj,
+            n_heads,
+            n_kv_heads,
+            head_dim: hd,
+            hidden_size: h,
         })
+    }
+
+    fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
+        let n_rep = self.n_heads / self.n_kv_heads;
+        if n_rep == 1 {
+            Ok(x)
+        } else {
+            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
+            let x = x
+                .unsqueeze(2)?
+                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
+                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
+            Ok(x)
+        }
+    }
+
+    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+        let (bsz, q_len, _) = xs.dims3()?;
+
+        let query_states = xs.apply(&self.q_proj)?;
+        let key_states = xs.apply(&self.k_proj)?;
+        let value_states = xs.apply(&self.v_proj)?;
+
+        let query_states = query_states
+            .reshape((bsz, q_len, self.n_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let key_states = key_states
+            .reshape((bsz, q_len, self.n_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        let value_states = value_states
+            .reshape((bsz, q_len, self.n_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        // TODO: rope
+        // TODO: kv-cache
+        let key_states = self.repeat_kv(key_states)?;
+        let value_states = self.repeat_kv(value_states)?;
+        let xs = {
+            let att = (query_states.matmul(&key_states.t()?)? / (self.head_dim as f64).sqrt())?;
+            let att = if q_len == 1 {
+                att
+            } else {
+                // TODO: attn mask
+                todo!()
+            };
+            let att = candle_nn::ops::softmax_last_dim(&att)?;
+            att.matmul(&value_states.contiguous()?)?
+        };
+
+        let xs = xs
+            .transpose(1, 2)?
+            .reshape((bsz, q_len, self.hidden_size))?;
+        self.o_proj.forward(&xs)
     }
 }
 
 #[derive(Debug, Clone)]
-enum Inner {
+enum TemporalBlock {
     Recurrent(RecurrentBlock),
     Attention(SdpaAttention),
+}
+
+impl TemporalBlock {
+    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+        match self {
+            Self::Recurrent(b) => b.forward(xs, pos),
+            Self::Attention(b) => b.forward(xs, pos),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct DecoderLayer {
     temporal_pre_norm: RmsNorm,
     channel_pre_norm: RmsNorm,
-    inner: Inner,
+    temporal_block: TemporalBlock,
     mlp_block: Mlp,
 }
 
@@ -226,23 +299,33 @@ impl DecoderLayer {
         let h = cfg.hidden_size;
         let temporal_pre_norm = RmsNorm::new(h, cfg.rms_norm_eps, vb.pp("temporal_pre_norm"))?;
         let channel_pre_norm = RmsNorm::new(h, cfg.rms_norm_eps, vb.pp("channel_pre_norm"))?;
-        let inner = match cfg.block_types[block_idx % cfg.block_types.len()] {
+        let temporal_block = match cfg.block_types[block_idx % cfg.block_types.len()] {
             TemporalBlockType::Recurrent => {
                 let block = RecurrentBlock::new(cfg, vb.pp("temporal_block"))?;
-                Inner::Recurrent(block)
+                TemporalBlock::Recurrent(block)
             }
             TemporalBlockType::Attention => {
                 let block = SdpaAttention::new(cfg, vb.pp("temporal_block"))?;
-                Inner::Attention(block)
+                TemporalBlock::Attention(block)
             }
         };
         let mlp_block = Mlp::new(cfg, vb.pp("mlp_block"))?;
         Ok(Self {
             temporal_pre_norm,
             channel_pre_norm,
-            inner,
+            temporal_block,
             mlp_block,
         })
+    }
+
+    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+        let residual = xs;
+        let xs = xs.apply(&self.temporal_pre_norm)?;
+        let xs = self.temporal_block.forward(&xs, pos)?;
+        let xs = (xs + residual)?;
+        let residual = &xs;
+        let xs = xs.apply(&self.channel_pre_norm)?.apply(&self.mlp_block)?;
+        xs + residual
     }
 }
 
@@ -272,6 +355,10 @@ impl Model {
     }
 
     pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
-        todo!()
+        let mut xs = xs.apply(&self.embed_tokens)?;
+        for layer in self.layers.iter() {
+            xs = layer.forward(&xs, pos)?
+        }
+        xs.apply(&self.final_norm)
     }
 }
