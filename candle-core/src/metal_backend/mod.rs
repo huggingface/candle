@@ -1594,21 +1594,11 @@ impl MetalStorage {
         let size = (self.count * self.dtype.size_in_bytes()) as NSUInteger;
         let buffer = self.device.new_buffer_managed(size)?;
 
-        // Handle the creation and initialization of a new command buffer
-        {
-            // Finalize current compute operations
-            self.device.end_compute_encoding()?;
+        // Enqueue the copy operation
+        self.device.copy_buffer(&self.buffer, 0, &buffer, 0, size)?;
 
-            let command_buffer = self.device.command_buffer()?;
-
-            // Setup the blit encoder to perform the copy operation
-            let blit = command_buffer.new_blit_command_encoder();
-            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
-            blit.end_encoding();
-
-            // Commit the command buffer to the queue
-            self.device.close_compute_buffer()?;
-        }
+        // Commit the command buffer to the queue to ensure the copy operation is completed
+        self.device.close_compute_buffer()?;
 
         let result = read_to_vec(&buffer, self.count);
         Ok(result)

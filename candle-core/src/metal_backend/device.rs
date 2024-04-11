@@ -336,6 +336,8 @@ impl MetalDevice {
 
     /// Copies data from one buffer to another.
     /// This method is blocking as it relies on GPU-CPU synchronization.
+    /// NOTE: this method does not end the current command buffer, it is the responsibility of the caller
+    /// to do so via the [`close_compute_buffer`] function.
     pub fn copy_buffer(
         &self,
         source_buffer: &BufferRef,
