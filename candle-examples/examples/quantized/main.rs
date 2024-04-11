@@ -382,15 +382,6 @@ fn main() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
     let device = candle_examples::device(args.cpu)?;
 
-    // Start metal capture
-    #[cfg(feature = "metal")]
-    if args.metal_tracing {
-        use candle::Device;
-        if let Device::Metal(metal_device) = device.clone() {
-            metal_device.capture("/tmp/candle.gputrace")?;
-        };
-    };
-
     let mut model = match model_path.extension().and_then(|v| v.to_str()) {
         Some("gguf") => {
             let model = gguf_file::Content::read(&mut file).map_err(|e| e.with_path(model_path))?;
@@ -558,6 +549,15 @@ fn main() -> anyhow::Result<()> {
         let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
+
+        // Start metal capture
+        #[cfg(feature = "metal")]
+        if args.metal_tracing {
+            use candle::Device;
+            if let Device::Metal(metal_device) = device.clone() {
+                metal_device.capture("/tmp/candle.gputrace")?;
+            };
+        };
 
         for index in 0..to_sample {
             let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;

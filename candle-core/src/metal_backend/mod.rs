@@ -11,8 +11,6 @@ use std::sync::{Arc, Mutex, RwLock, TryLockError};
 pub mod device;
 pub use device::{DeviceId, MetalDevice};
 
-use self::device::ComputeCommandEncoder;
-
 fn buffer_o<'a>(buffer: &'a Buffer, l: &Layout, dtype: DType) -> BufferOffset<'a> {
     BufferOffset {
         buffer,
@@ -1280,72 +1278,92 @@ impl BackendStorage for MetalStorage {
                 dst.dtype()
             )
         }
-
-        let command_encoder = self.device.command_encoder()?;
-        let el_count = d1 * d2;
-        if el_count == 0 {
-            return Ok(());
+        if src_s == d2 && dst_s == d2 {
+            self.device.end_compute_encoding()?;
+            let command_buffer = self.device.command_buffer()?;
+            let blit = command_buffer.new_blit_command_encoder().to_owned();
+            let src_offset = (src_o * self.dtype.size_in_bytes()) as NSUInteger;
+            let length = (d1 * d2 * self.dtype.size_in_bytes()) as NSUInteger;
+            let dst_offset = (dst_o * dst.dtype().size_in_bytes()) as NSUInteger;
+            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
+            blit.end_encoding();
+        } else {
+            let command_encoder = self.device.command_encoder()?;
+            let el_count = d1 * d2;
+            if el_count == 0 {
+                return Ok(());
+            }
+            let kernel_name = match self.dtype {
+                DType::F32 => candle_metal_kernels::copy2d::FLOAT,
+                DType::F16 => candle_metal_kernels::copy2d::HALF,
+                DType::BF16 => candle_metal_kernels::copy2d::BFLOAT,
+                DType::I64 => candle_metal_kernels::copy2d::I64,
+                DType::U32 => candle_metal_kernels::copy2d::U32,
+                DType::U8 => candle_metal_kernels::copy2d::U8,
+                dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
+            };
+            candle_metal_kernels::call_copy2d(
+                &self.device.device,
+                &command_encoder,
+                &self.device.kernels,
+                kernel_name,
+                &self.buffer,
+                &dst.buffer,
+                d1,
+                d2,
+                src_s,
+                dst_s,
+                src_o * self.dtype.size_in_bytes(),
+                dst_o * self.dtype.size_in_bytes(),
+            )
+            .map_err(MetalError::from)?;
         }
-        let kernel_name = match self.dtype {
-            DType::F32 => candle_metal_kernels::copy2d::FLOAT,
-            DType::F16 => candle_metal_kernels::copy2d::HALF,
-            DType::BF16 => candle_metal_kernels::copy2d::BFLOAT,
-            DType::I64 => candle_metal_kernels::copy2d::I64,
-            DType::U32 => candle_metal_kernels::copy2d::U32,
-            DType::U8 => candle_metal_kernels::copy2d::U8,
-            dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
-        };
-        candle_metal_kernels::call_copy2d(
-            &self.device.device,
-            &command_encoder,
-            &self.device.kernels,
-            kernel_name,
-            &self.buffer,
-            &dst.buffer,
-            d1,
-            d2,
-            src_s,
-            dst_s,
-            src_o * self.dtype.size_in_bytes(),
-            dst_o * self.dtype.size_in_bytes(),
-        )
-        .map_err(MetalError::from)?;
-
         Ok(())
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
-        let command_encoder = self.device.command_encoder()?;
-        let src_shape = src_l.shape();
-        let el_count = src_shape.elem_count();
-        if el_count == 0 {
-            return Ok(());
+        if src_l.is_contiguous() && self.dtype == dst.dtype() {
+            self.device.end_compute_encoding()?;
+            let command_buffer = self.device.command_buffer()?;
+            let blit = command_buffer.new_blit_command_encoder();
+            let src_offset = (src_l.start_offset() * self.dtype.size_in_bytes()) as NSUInteger;
+            let length = (src_l.shape().elem_count() * self.dtype.size_in_bytes()) as NSUInteger;
+            let dst_offset = (dst_offset * dst.dtype().size_in_bytes()) as NSUInteger;
+            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
+            blit.end_encoding();
+        } else {
+            let src_shape = src_l.shape();
+            let el_count = src_shape.elem_count();
+            if el_count == 0 {
+                return Ok(());
+            }
+            let kernel_name = match self.dtype {
+                DType::F32 => candle_metal_kernels::unary::strided::copy::FLOAT,
+                DType::F16 => candle_metal_kernels::unary::strided::copy::HALF,
+                DType::BF16 => candle_metal_kernels::unary::strided::copy::BFLOAT,
+                DType::I64 => candle_metal_kernels::unary::strided::copy::I64,
+                DType::U32 => candle_metal_kernels::unary::strided::copy::U32,
+                DType::U8 => candle_metal_kernels::unary::strided::copy::U8,
+                dtype => crate::bail!("Metal copy_strided {dtype:?} not implemented"),
+            };
+            let src = buffer_o(&self.buffer, src_l, self.dtype);
+            let dst = BufferOffset {
+                buffer: &dst.buffer,
+                offset_in_bytes: dst_offset * dst.dtype.size_in_bytes(),
+            };
+            let command_encoder = self.device.command_encoder()?;
+            candle_metal_kernels::call_unary_strided(
+                &self.device.device,
+                &command_encoder,
+                &self.device.kernels,
+                kernel_name,
+                src_l.dims(),
+                src,
+                src_l.stride(),
+                dst,
+            )
+            .map_err(MetalError::from)?;
         }
-        let kernel_name = match self.dtype {
-            DType::F32 => candle_metal_kernels::unary::strided::copy::FLOAT,
-            DType::F16 => candle_metal_kernels::unary::strided::copy::HALF,
-            DType::BF16 => candle_metal_kernels::unary::strided::copy::BFLOAT,
-            DType::I64 => candle_metal_kernels::unary::strided::copy::I64,
-            DType::U32 => candle_metal_kernels::unary::strided::copy::U32,
-            DType::U8 => candle_metal_kernels::unary::strided::copy::U8,
-            dtype => crate::bail!("Metal copy_strided {dtype:?} not implemented"),
-        };
-        let src = buffer_o(&self.buffer, src_l, self.dtype);
-        let dst = BufferOffset {
-            buffer: &dst.buffer,
-            offset_in_bytes: dst_offset * dst.dtype.size_in_bytes(),
-        };
-        candle_metal_kernels::call_unary_strided(
-            &self.device.device,
-            &command_encoder,
-            &self.device.kernels,
-            kernel_name,
-            src_l.dims(),
-            src,
-            src_l.stride(),
-            dst,
-        )
-        .map_err(MetalError::from)?;
 
         Ok(())
     }
@@ -1577,34 +1595,18 @@ impl MetalStorage {
 
         // Handle the creation and initialization of a new command buffer
         {
-            let mut command_buffer_lock = self.device.command_buffer.try_write().map_err(|_| {
-                MetalError::Message("Failed to lock command buffer for to_cpu".to_string())
-            })?;
-            let command_buffer = command_buffer_lock.to_owned();
-
             // Finalize current compute operations
             self.device.end_compute_encoding()?;
+
+            let command_buffer = self.device.command_buffer()?;
 
             // Setup the blit encoder to perform the copy operation
             let blit = command_buffer.new_blit_command_encoder();
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, size);
             blit.end_encoding();
 
-            // Execute the command buffer and initialize the next command buffers
-            command_buffer.commit();
-            command_buffer.wait_until_completed();
-
-            // Setup the next command buffer
-            let command_queue = self.device.command_queue();
-            let new_command_buffer = command_queue.new_command_buffer().to_owned();
-            let new_command_encoder = new_command_buffer.new_compute_command_encoder().to_owned();
-            let mut command_encoder = self.device.command_encoder.try_write().map_err(|_| {
-                MetalError::Message("Failed to lock command encoder for to_cpu".to_string())
-            })?;
-            *command_buffer_lock = new_command_buffer;
-            *command_encoder = ComputeCommandEncoder::from(new_command_encoder);
-
-            self.device.drop_unused_buffers()?;
+            // Commit the command buffer to the queue
+            self.device.close_compute_buffer()?;
         }
 
         let result = read_to_vec(&buffer, self.count);
@@ -1619,16 +1621,9 @@ impl BackendDevice for MetalDevice {
         let device = metal::Device::all().swap_remove(ordinal);
         let command_queue = device.new_command_queue();
 
-        // Setup a new command buffer, the call to enqueue is necessary because of ???
-        let command_buffer = command_queue.new_command_buffer().to_owned();
-
-        // Setup a new command encoder for the compute operations, any blit encoder will require management and creation of it's own buffer
-        // since only one encoder can be present on a buffer
-        let command_encoder = command_buffer.new_compute_command_encoder().to_owned();
-
         // Wrap the buffer and encoder in an Arc to allow sharing between threads
-        let command_buffer = Arc::new(RwLock::new(command_buffer));
-        let command_encoder = Arc::new(RwLock::new(command_encoder.into()));
+        let command_buffer = Arc::new(RwLock::new(None));
+        let command_encoder = Arc::new(RwLock::new(None));
 
         let kernels = Arc::new(Kernels::new());
         let buffers = Arc::new(RwLock::new(HashMap::new()));
