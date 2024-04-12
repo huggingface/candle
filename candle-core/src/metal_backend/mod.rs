@@ -1042,6 +1042,7 @@ impl BackendStorage for MetalStorage {
         let name = match (ids.dtype, self.dtype) {
             (DType::U32, DType::F32) => "gather_u32_f32",
             (DType::U32, DType::F16) => "gather_u32_f16",
+            (DType::U32, DType::BF16) => "gather_u32_bf16",
             (left, right) => crate::bail!("Metal gather {left:?} {right:?} not implemented"),
         };
         let command_buffer = self.device.command_buffer()?;
