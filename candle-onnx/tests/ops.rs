@@ -1537,12 +1537,7 @@ fn test_reduce_mean() -> Result<()> {
         &[[[7.0]], [[18.25]], [[29.5]]],
     )?;
 
-    test(
-        &[1., 2., 3.],
-        None,
-        1,
-        &[2.0]
-    )?;
+    test(&[1., 2., 3.], None, 1, &[2.0])?;
 
     fn test(
         data: impl NdArray,
