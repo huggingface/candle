@@ -256,17 +256,7 @@ impl CausalSelfAttention {
     }
 
     fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_attention_heads / self.num_key_value_heads;
-        if n_rep == 1 {
-            Ok(x)
-        } else {
-            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            let x = x
-                .unsqueeze(2)?
-                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
-            Ok(x)
-        }
+        crate::utils::repeat_kv(x, self.num_attention_heads / self.num_key_value_heads)
     }
 
     fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
