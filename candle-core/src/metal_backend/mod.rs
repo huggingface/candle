@@ -2,11 +2,9 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, DType, Layout, Result, Shape};
-use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg, Kernels};
-use metal::{Buffer, MTLResourceOptions, NSUInteger};
-use std::collections::HashMap;
-use std::ffi::c_void;
-use std::sync::{Arc, Mutex, RwLock, TryLockError};
+use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg};
+use metal::{Buffer, NSUInteger};
+use std::sync::{Arc, TryLockError};
 
 pub mod device;
 pub use device::{DeviceId, MetalDevice};
@@ -1610,22 +1608,7 @@ impl BackendDevice for MetalDevice {
 
     fn new(ordinal: usize) -> Result<Self> {
         let device = metal::Device::all().swap_remove(ordinal);
-        let command_queue = device.new_command_queue();
-        let kernels = Arc::new(Kernels::new());
-        let buffers = Arc::new(RwLock::new(HashMap::new()));
-        let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
-            [299792458].as_ptr() as *const c_void,
-            4,
-            MTLResourceOptions::StorageModeManaged,
-        )));
-        Ok(Self::load(
-            DeviceId::new(),
-            device,
-            command_queue,
-            kernels,
-            buffers,
-            seed,
-        )?)
+        Ok(Self::from(device))
     }
 
     fn location(&self) -> crate::DeviceLocation {

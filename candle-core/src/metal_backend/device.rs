@@ -95,31 +95,31 @@ impl std::ops::Deref for MetalDevice {
     }
 }
 
-impl MetalDevice {
-    /// Creates a new MetalDevice.
-    /// Instantiates an empty command buffer and command encoder.
-    pub fn load(
-        id: DeviceId,
-        device: metal::Device,
-        command_queue: CommandQueue,
-        kernels: Arc<Kernels>,
-        buffers: AllocatedBuffers,
-        seed: Arc<Mutex<Buffer>>,
-    ) -> Result<Self> {
-        let command_buffer = Arc::new(RwLock::new(None));
-        let command_encoder = Arc::new(RwLock::new(None));
-        Ok(Self {
+impl From<metal::Device> for MetalDevice {
+    fn from(device: metal::Device) -> Self {
+        let id = DeviceId::new();
+        let command_queue = device.new_command_queue();
+        let kernels = Arc::new(Kernels::new());
+        let buffers = Arc::new(RwLock::new(HashMap::new()));
+        let seed = Arc::new(Mutex::new(device.new_buffer_with_data(
+            [299792458].as_ptr() as *const c_void,
+            4,
+            MTLResourceOptions::StorageModeManaged,
+        )));
+        Self {
             id,
             device,
             command_queue,
-            command_buffer,
-            command_encoder,
+            command_buffer: Arc::new(RwLock::new(None)),
+            command_encoder: Arc::new(RwLock::new(None)),
             kernels,
             buffers,
             seed,
-        })
+        }
     }
+}
 
+impl MetalDevice {
     pub fn id(&self) -> DeviceId {
         self.id
     }
