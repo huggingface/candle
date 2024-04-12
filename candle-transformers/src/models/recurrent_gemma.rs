@@ -1,3 +1,5 @@
+// This implementation is based on the python version from huggingface/transformers.
+// https://github.com/huggingface/transformers/blob/b109257f4fb8b1166e7c53cc5418632014ed53a5/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L2
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Linear, VarBuilder};
 use std::sync::Arc;
