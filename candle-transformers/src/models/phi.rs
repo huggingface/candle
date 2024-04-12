@@ -174,15 +174,7 @@ impl Attention {
     }
 
     fn repeat_kv(&self, xs: Tensor) -> Result<Tensor> {
-        let n_rep = self.num_heads / self.num_kv_heads;
-        if n_rep == 1 {
-            Ok(xs)
-        } else {
-            let (b_sz, num_kv_heads, seq_len, head_dim) = xs.dims4()?;
-            xs.unsqueeze(2)?
-                .expand((b_sz, num_kv_heads, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, num_kv_heads * n_rep, seq_len, head_dim))
-        }
+        crate::utils::repeat_kv(xs, self.num_heads / self.num_kv_heads)
     }
 
     fn forward(&mut self, xs: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
