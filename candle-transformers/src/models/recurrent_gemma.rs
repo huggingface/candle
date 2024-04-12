@@ -209,10 +209,11 @@ impl Rglru {
     pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
         let (b_sz, seq_len, lru_width) = xs.dims3()?;
         let pos = Tensor::arange(pos as u32, (pos + seq_len) as u32, xs.device())?;
-        let reset = pos.eq(0u32)?.unsqueeze(1)?;
+        let reset = pos.eq(0u32)?.unsqueeze(1)?.unsqueeze(0)?;
         let reshape_act = xs
             .reshape((b_sz * seq_len, self.n_heads, self.block_width))?
-            .permute((1, 0, 2))?;
+            .permute((1, 0, 2))?
+            .contiguous()?;
 
         let res = baddbmm(
             &self.input_gate_bias.unsqueeze(1)?,
@@ -229,7 +230,8 @@ impl Rglru {
         let recurrent_gate = res.transpose(0, 1)?.reshape((b_sz, seq_len, lru_width))?;
         let recurrent_gate = candle_nn::ops::sigmoid(&recurrent_gate)?;
 
-        let log_recurrent_gate = ((recurrent_gate * (-8.0))? * softplus(&self.recurrent_param)?)?;
+        let log_recurrent_gate =
+            (recurrent_gate * (-8.0))?.broadcast_mul(&softplus(&self.recurrent_param)?)?;
         let recurrent_gate = log_recurrent_gate.exp()?;
         let a_square = (log_recurrent_gate * 2.)?.exp()?;
 
@@ -237,7 +239,8 @@ impl Rglru {
         let gated_inputs = (xs * input_gate)?;
 
         let reset = reset.to_dtype(a_square.dtype())?;
-        let multiplier = (&reset + (1.0 - &reset)? * (1.0 - a_square)?.sqrt())?;
+        let multiplier =
+            reset.broadcast_add(&((1.0 - &reset)?.broadcast_mul(&(1.0 - a_square)?.sqrt()?))?)?;
         let normalized_x = gated_inputs;
 
         let (hidden_states, recurrent_states) = self.rnn_scan(
@@ -261,7 +264,7 @@ impl Rglru {
         let dev = hidden_states.device();
         let in_dtype = hidden_states.dtype();
         let inv_reset = (1.0 - reset)?.to_dtype(recurrent_gate.dtype())?;
-        let recurrent_gate = (recurrent_gate * inv_reset)?;
+        let recurrent_gate = recurrent_gate.broadcast_mul(&inv_reset)?;
         let (c, r) = if hidden_states.dim(1)? == 1 {
             match recurrent_states {
                 None => {
@@ -393,16 +396,7 @@ impl SdpaAttention {
 
     fn repeat_kv(&self, x: Tensor) -> Result<Tensor> {
         let n_rep = self.n_heads / self.n_kv_heads;
-        if n_rep == 1 {
-            Ok(x)
-        } else {
-            let (b_sz, n_kv_head, seq_len, head_dim) = x.dims4()?;
-            let x = x
-                .unsqueeze(2)?
-                .expand((b_sz, n_kv_head, n_rep, seq_len, head_dim))?
-                .reshape((b_sz, n_kv_head * n_rep, seq_len, head_dim))?;
-            Ok(x)
-        }
+        crate::utils::repeat_kv(x, n_rep)
     }
 
     fn forward(
