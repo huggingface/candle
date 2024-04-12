@@ -1,4 +1,5 @@
 use crate::{DType, Device, Error, Result, Tensor, WithDType};
+use bytemuck::{AnyBitPattern, NoUninit, Pod};
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
 use std::borrow::Cow;
@@ -84,14 +85,17 @@ impl Tensor {
     }
 }
 
-fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
+fn convert_slice<T: WithDType + AnyBitPattern>(
+    data: &[u8],
+    shape: &[usize],
+    device: &Device,
+) -> Result<Tensor> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let elem_count = data.len() / size_in_bytes;
     if (data.as_ptr() as usize) % size_in_bytes == 0 {
         // SAFETY This is safe because we just checked that this
         // was correctly aligned.
-        let data: &[T] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const T, elem_count) };
+        let data: &[T] = bytemuck::cast_slice(data);
         Tensor::from_slice(data, shape, device)
     } else {
         // XXX: We need to specify `T` here, otherwise the compiler will infer u8 because of the following cast
@@ -109,7 +113,7 @@ fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) ->
     }
 }
 
-fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>(
+fn convert_slice_with_cast<T: Sized + Copy + AnyBitPattern, U: WithDType, F: Fn(T) -> Result<U>>(
     data: &[u8],
     shape: &[usize],
     device: &Device,
@@ -118,10 +122,7 @@ fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>
     let size_in_bytes = std::mem::size_of::<T>();
     let elem_count = data.len() / size_in_bytes;
     if (data.as_ptr() as usize) % size_in_bytes == 0 {
-        // SAFETY This is safe because we just checked that this
-        // was correctly aligned.
-        let data: &[T] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const T, elem_count) };
+        let data: &[T] = bytemuck::cast_slice(data);
         let data = data.iter().map(|t| conv(*t)).collect::<Result<Vec<_>>>()?;
         Tensor::from_vec(data, shape, device)
     } else {
@@ -141,7 +142,7 @@ fn convert_slice_with_cast<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>
     }
 }
 
-fn convert_with_cast_<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>(
+fn convert_with_cast_<T: Sized + Copy + AnyBitPattern, U: WithDType, F: Fn(T) -> Result<U>>(
     view: &st::TensorView<'_>,
     device: &Device,
     conv: F,
@@ -149,22 +150,16 @@ fn convert_with_cast_<T: Sized + Copy, U: WithDType, F: Fn(T) -> Result<U>>(
     convert_slice_with_cast::<T, U, F>(view.data(), view.shape(), device, conv)
 }
 
-fn convert_<T: WithDType>(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
+fn convert_<T: WithDType + AnyBitPattern>(
+    view: &st::TensorView<'_>,
+    device: &Device,
+) -> Result<Tensor> {
     convert_slice::<T>(view.data(), view.shape(), device)
 }
 
-fn convert_back_<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
-    let size_in_bytes = T::DTYPE.size_in_bytes();
-    let length = vs.len() * size_in_bytes;
-    let capacity = vs.capacity() * size_in_bytes;
-    let ptr = vs.as_mut_ptr() as *mut u8;
-    // Don't run the destructor for Vec<T>
-    std::mem::forget(vs);
-    // SAFETY:
-    //
-    // Every T is larger than u8, so there is no issue regarding alignment.
-    // This re-interpret the Vec<T> as a Vec<u8>.
-    unsafe { Vec::from_raw_parts(ptr, length, capacity) }
+fn convert_back_<T: WithDType + Pod + NoUninit>(vs: Vec<T>) -> Vec<u8> {
+    let data: &[u8] = bytemuck::cast_slice(vs.as_slice());
+    data.to_vec()
 }
 
 pub trait Load {
@@ -413,7 +408,6 @@ impl MmapedFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn save_single_tensor() {

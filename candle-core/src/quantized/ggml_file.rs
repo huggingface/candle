@@ -2,6 +2,7 @@
 
 use super::{k_quants, GgmlDType, QStorage};
 use crate::{Device, Result};
+use bytemuck::{AnyBitPattern, Pod};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 
@@ -117,15 +118,12 @@ impl Vocab {
     }
 }
 
-fn from_raw_data<T: super::GgmlType + Send + Sync + 'static>(
+fn from_raw_data<T: super::GgmlType + Send + Sync + AnyBitPattern + Pod + 'static>(
     raw_data: &[u8],
-    size_in_bytes: usize,
     dims: Vec<usize>,
     device: &Device,
 ) -> Result<super::QTensor> {
-    let raw_data_ptr = raw_data.as_ptr();
-    let n_blocks = size_in_bytes / std::mem::size_of::<T>();
-    let data = unsafe { std::slice::from_raw_parts(raw_data_ptr as *const T, n_blocks) };
+    let data: &[T] = bytemuck::cast_slice(raw_data);
     let data: QStorage = match device {
         Device::Cpu => QStorage::Cpu(Box::new(data.to_vec())),
         Device::Metal(metal) => super::metal::load_quantized(metal, data)?,
@@ -148,41 +146,20 @@ pub fn qtensor_from_ggml(
             "the number of elements {tensor_elems} is not divisible by the block size {block_size}"
         )
     }
-    let size_in_bytes = tensor_elems / block_size * ggml_dtype.type_size();
 
     match ggml_dtype {
-        GgmlDType::F32 => from_raw_data::<f32>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::F16 => from_raw_data::<half::f16>(raw_data, size_in_bytes, dims, device),
-        GgmlDType::Q4_0 => {
-            from_raw_data::<k_quants::BlockQ4_0>(raw_data, size_in_bytes, dims, device)
-        }
-        GgmlDType::Q4_1 => {
-            from_raw_data::<k_quants::BlockQ4_1>(raw_data, size_in_bytes, dims, device)
-        }
-        GgmlDType::Q5_0 => {
-            from_raw_data::<k_quants::BlockQ5_0>(raw_data, size_in_bytes, dims, device)
-        }
-        GgmlDType::Q5_1 => {
-            from_raw_data::<k_quants::BlockQ5_1>(raw_data, size_in_bytes, dims, device)
-        }
-        GgmlDType::Q8_0 => {
-            from_raw_data::<k_quants::BlockQ8_0>(raw_data, size_in_bytes, dims, device)
-        }
-        GgmlDType::Q2K => {
-            from_raw_data::<k_quants::BlockQ2K>(raw_data, size_in_bytes, dims, device)
-        }
-        GgmlDType::Q3K => {
-            from_raw_data::<k_quants::BlockQ3K>(raw_data, size_in_bytes, dims, device)
-        }
-        GgmlDType::Q4K => {
-            from_raw_data::<k_quants::BlockQ4K>(raw_data, size_in_bytes, dims, device)
-        }
-        GgmlDType::Q5K => {
-            from_raw_data::<k_quants::BlockQ5K>(raw_data, size_in_bytes, dims, device)
-        }
-        GgmlDType::Q6K => {
-            from_raw_data::<k_quants::BlockQ6K>(raw_data, size_in_bytes, dims, device)
-        }
+        GgmlDType::F32 => from_raw_data::<f32>(raw_data, dims, device),
+        GgmlDType::F16 => from_raw_data::<half::f16>(raw_data, dims, device),
+        GgmlDType::Q4_0 => from_raw_data::<k_quants::BlockQ4_0>(raw_data, dims, device),
+        GgmlDType::Q4_1 => from_raw_data::<k_quants::BlockQ4_1>(raw_data, dims, device),
+        GgmlDType::Q5_0 => from_raw_data::<k_quants::BlockQ5_0>(raw_data, dims, device),
+        GgmlDType::Q5_1 => from_raw_data::<k_quants::BlockQ5_1>(raw_data, dims, device),
+        GgmlDType::Q8_0 => from_raw_data::<k_quants::BlockQ8_0>(raw_data, dims, device),
+        GgmlDType::Q2K => from_raw_data::<k_quants::BlockQ2K>(raw_data, dims, device),
+        GgmlDType::Q3K => from_raw_data::<k_quants::BlockQ3K>(raw_data, dims, device),
+        GgmlDType::Q4K => from_raw_data::<k_quants::BlockQ4K>(raw_data, dims, device),
+        GgmlDType::Q5K => from_raw_data::<k_quants::BlockQ5K>(raw_data, dims, device),
+        GgmlDType::Q6K => from_raw_data::<k_quants::BlockQ6K>(raw_data, dims, device),
         _ => crate::bail!("quantized type {ggml_dtype:?} is not supported yet"),
     }
 }

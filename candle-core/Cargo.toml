@@ -30,6 +30,7 @@ safetensors = { workspace = true }
 thiserror = { workspace = true }
 yoke = { workspace = true }
 zip = { workspace = true }
+bytemuck = "1.15.0"
 
 [dev-dependencies]
 anyhow = { workspace = true }
