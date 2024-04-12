@@ -1,6 +1,5 @@
-#![allow(unused)]
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, Activation, Linear, VarBuilder};
+use candle_nn::{linear_b as linear, Linear, VarBuilder};
 use std::sync::Arc;
 
 #[derive(serde::Deserialize, Debug, Clone, Copy)]
@@ -144,22 +143,6 @@ impl Module for Mlp {
     }
 }
 
-#[derive(Debug, Clone)]
-struct BlockDiagonalLinear {
-    w: Tensor,
-    b: Tensor,
-    block_width: usize,
-}
-
-impl BlockDiagonalLinear {
-    fn new(width: usize, num_blocks: usize, vb: VarBuilder) -> Result<Self> {
-        let block_width = width / num_blocks;
-        let w = vb.get((num_blocks, block_width, block_width), "w")?;
-        let b = vb.get((num_blocks, block_width), "b")?;
-        Ok(Self { w, b, block_width })
-    }
-}
-
 // Real-Gated Linear Recurrent Unit
 #[derive(Debug, Clone)]
 struct Rglru {
@@ -241,7 +224,7 @@ impl Rglru {
         let reset = reset.to_dtype(a_square.dtype())?;
         let multiplier =
             reset.broadcast_add(&((1.0 - &reset)?.broadcast_mul(&(1.0 - a_square)?.sqrt()?))?)?;
-        let normalized_x = gated_inputs;
+        let normalized_x = (gated_inputs * multiplier.to_dtype(xs.dtype()))?;
 
         let (hidden_states, recurrent_states) = self.rnn_scan(
             &normalized_x,
