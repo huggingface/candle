@@ -31,6 +31,12 @@ pub struct Config {
     #[serde(alias = "_block_types")]
     pub block_types: Vec<TemporalBlockType>,
     pub attention_bias: bool,
+    #[serde(default = "default_max_seq_len")]
+    pub max_seq_len: usize,
+}
+
+fn default_max_seq_len() -> usize {
+    8192
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +88,7 @@ impl RotaryEmbedding {
             candle::bail!("partial-rotary-factor {} <> 0.5", cfg.partial_rotary_factor)
         }
         let dim = cfg.head_dim / 2;
-        let max_seq_len = 2048; // TODO: configure or make it dynamic
+        let max_seq_len = cfg.max_seq_len;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
             .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
