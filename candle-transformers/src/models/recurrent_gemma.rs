@@ -294,6 +294,8 @@ struct RecurrentBlock {
     linear_x: Linear,
     linear_out: Linear,
     conv_1d: candle_nn::Conv1d,
+    conv1d_state: Option<Tensor>,
+    conv1d_width: usize,
     rg_lru: Rglru,
     act_fn: candle_nn::Activation,
 }
@@ -322,6 +324,8 @@ impl RecurrentBlock {
             linear_x,
             linear_out,
             conv_1d,
+            conv1d_state: None,
+            conv1d_width: cfg.conv1d_width,
             rg_lru,
             act_fn: cfg.hidden_activation,
         })
@@ -332,10 +336,38 @@ impl RecurrentBlock {
 
         let y_branch = xs.apply(&self.linear_y)?.apply(&self.act_fn)?;
         let x_branch = xs.apply(&self.linear_x)?.transpose(1, 2)?;
-        // TODO: use_cache
-        let x_branch = x_branch
-            .apply(&self.conv_1d)?
-            .narrow(D::Minus1, 0, seq_len)?;
+        let x_branch = if pos == 0 {
+            let x_len = x_branch.dim(D::Minus1)?;
+            let pad = self.conv1d_width as i64 - x_len as i64 - 1;
+            let padded = match pad.cmp(&0) {
+                std::cmp::Ordering::Equal => x_branch.clone(),
+                std::cmp::Ordering::Less => {
+                    let rev_pad = (-pad) as usize;
+                    x_branch.narrow(D::Minus1, rev_pad, x_len - rev_pad)?
+                }
+                std::cmp::Ordering::Greater => {
+                    x_branch.pad_with_zeros(D::Minus1, pad as usize, 0)?
+                }
+            };
+            self.conv1d_state = Some(padded);
+            x_branch
+                .apply(&self.conv_1d)?
+                .narrow(D::Minus1, 0, seq_len)?
+        } else {
+            let conv_state = match self.conv1d_state.as_ref() {
+                None => candle::bail!("empty cache despite pos > 0"),
+                Some(s) => Tensor::cat(&[s, &x_branch], D::Minus1)?,
+            };
+            let w = self.conv_1d.weight().i((.., 0, ..))?;
+            let x_branch = conv_state.broadcast_mul(&w)?.sum(D::Minus1)?;
+            let x_branch = match self.conv_1d.bias() {
+                None => x_branch,
+                Some(b) => x_branch.broadcast_add(b)?,
+            };
+            let x_branch = x_branch.unsqueeze(D::Minus1)?;
+            self.conv1d_state = Some(conv_state.i((.., .., 1..))?);
+            x_branch
+        };
         let x_branch = x_branch.transpose(1, 2)?;
         let x_branch = self.rg_lru.forward(&x_branch, pos)?;
         (x_branch * y_branch)?.apply(&self.linear_out)
@@ -411,8 +443,8 @@ impl SdpaAttention {
         let (query_rot, key_rot) =
             self.rotary_emb
                 .apply_rotary_emb_qkv(&query_states[0], &key_states[0], pos)?;
-        let query_states = Tensor::cat(&[&query_rot, &query_states[1]], D::Minus1)?;
-        let key_states = Tensor::cat(&[&key_rot, &key_states[1]], D::Minus1)?;
+        let query_states = Tensor::cat(&[&query_rot, &query_states[1]], D::Minus1)?.contiguous()?;
+        let key_states = Tensor::cat(&[&key_rot, &key_states[1]], D::Minus1)?.contiguous()?;
 
         let (key_states, value_states) = match &self.kv_cache {
             None => (key_states, value_states),
@@ -587,7 +619,7 @@ impl Model {
         };
         let xs = xs.apply(&self.embed_tokens)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
-        for (_idx, layer) in self.layers.iter_mut().enumerate() {
+        for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), pos)?;
         }
         let logits = xs
