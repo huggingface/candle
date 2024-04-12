@@ -13,8 +13,8 @@ fn run(matmul: &QMatMul, x: &Tensor) {
 fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
     let b = 1;
     let m = 1;
-    let n = 2048;
-    let k = 2048;
+    let n = 1024;
+    let k = 1024;
 
     let lhs = (0..(m * k))
         .map(|v| v as f32 / (m * k) as f32)
@@ -31,7 +31,8 @@ fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
 
     let flops = b * m * n * k;
 
-    let mut group = c.benchmark_group(device.bench_name("qmatmul"));
+    let mut group = c.benchmark_group(device.bench_name(format!("qmatmul_{:?}", dtype)));
+    group.sample_size(200);
     group.throughput(Throughput::Bytes(flops as u64));
     group.bench_function("iter", move |b| {
         b.iter_custom(|iters| {
@@ -49,7 +50,20 @@ fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
 fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
-        for dtype in vec![GgmlDType::Q4K] {
+        for dtype in vec![
+            GgmlDType::F32,
+            GgmlDType::F16,
+            GgmlDType::Q4_0,
+            GgmlDType::Q4_1,
+            GgmlDType::Q5_0,
+            GgmlDType::Q5_1,
+            GgmlDType::Q8_0,
+            GgmlDType::Q2K,
+            GgmlDType::Q3K,
+            GgmlDType::Q4K,
+            GgmlDType::Q5K,
+            GgmlDType::Q6K,
+        ] {
             run_bench(c, &device, dtype);
         }
     }
