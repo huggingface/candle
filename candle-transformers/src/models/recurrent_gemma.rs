@@ -537,6 +537,7 @@ pub struct Model {
     final_norm: RmsNorm,
     lm_head: Linear,
     hidden_size: usize,
+    logits_soft_cap: f64,
     dtype: DType,
     device: Device,
 }
@@ -560,6 +561,7 @@ impl Model {
             final_norm,
             lm_head,
             hidden_size: cfg.hidden_size,
+            logits_soft_cap: cfg.logits_soft_cap,
             dtype: vb.dtype(),
             device: vb.device().clone(),
         })
@@ -598,8 +600,11 @@ impl Model {
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), pos)?
         }
-        xs.narrow(1, seq_len - 1, 1)?
+        let logits = xs
+            .narrow(1, seq_len - 1, 1)?
             .apply(&self.final_norm)?
-            .apply(&self.lm_head)
+            .apply(&self.lm_head)?;
+        let logits = ((logits / self.logits_soft_cap)?.tanh()? * self.logits_soft_cap)?;
+        Ok(logits)
     }
 }
