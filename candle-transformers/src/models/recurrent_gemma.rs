@@ -76,7 +76,10 @@ fn rotate_half(xs: &Tensor) -> Result<Tensor> {
 
 impl RotaryEmbedding {
     fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
-        let dim = cfg.head_dim;
+        if cfg.partial_rotary_factor != 0.5 {
+            candle::bail!("partial-rotary-factor {} <> 0.5", cfg.partial_rotary_factor)
+        }
+        let dim = cfg.head_dim / 2;
         let max_seq_len = 2048; // TODO: configure or make it dynamic
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
@@ -403,9 +406,13 @@ impl SdpaAttention {
         let value_states = value_states
             .reshape((bsz, q_len, self.n_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let (query_states, key_states) =
+        let query_states = query_states.chunk(2, D::Minus1)?;
+        let key_states = key_states.chunk(2, D::Minus1)?;
+        let (query_rot, key_rot) =
             self.rotary_emb
-                .apply_rotary_emb_qkv(&query_states, &key_states, pos)?;
+                .apply_rotary_emb_qkv(&query_states[0], &key_states[0], pos)?;
+        let query_states = Tensor::cat(&[&query_rot, &query_states[1]], D::Minus1)?;
+        let key_states = Tensor::cat(&[&key_rot, &key_states[1]], D::Minus1)?;
 
         let (key_states, value_states) = match &self.kv_cache {
             None => (key_states, value_states),
@@ -580,8 +587,8 @@ impl Model {
         };
         let xs = xs.apply(&self.embed_tokens)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
-        for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, attention_mask.as_ref(), pos)?
+        for (_idx, layer) in self.layers.iter_mut().enumerate() {
+            xs = layer.forward(&xs, attention_mask.as_ref(), pos)?;
         }
         let logits = xs
             .narrow(1, seq_len - 1, 1)?
