@@ -1,5 +1,5 @@
 #![allow(unused)]
-use candle::{DType, Device, Module, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{linear_b as linear, Activation, Linear, VarBuilder};
 use std::sync::Arc;
 
@@ -170,6 +170,15 @@ struct Rglru {
     recurrent_gate_bias: Tensor,
     block_width: usize,
     n_heads: usize,
+    recurrent_states: Option<Tensor>,
+}
+
+fn baddbmm(a: &Tensor, b: &Tensor, c: &Tensor) -> Result<Tensor> {
+    a.broadcast_add(&b.matmul(c)?)
+}
+
+fn softplus(xs: &Tensor) -> Result<Tensor> {
+    (xs.exp()? + 1.0)?.log()
 }
 
 impl Rglru {
@@ -192,15 +201,101 @@ impl Rglru {
             recurrent_gate_weight,
             block_width,
             n_heads,
+            recurrent_states: None,
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    // https://github.com/huggingface/transformers/blob/0bd58f1ce0573c0e3269de4215a17d318add49b9/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L303
+    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
         let (b_sz, seq_len, lru_width) = xs.dims3()?;
+        let pos = Tensor::arange(pos as u32, (pos + seq_len) as u32, xs.device())?;
+        let reset = pos.eq(0u32)?.unsqueeze(1)?;
         let reshape_act = xs
             .reshape((b_sz * seq_len, self.n_heads, self.block_width))?
             .permute((1, 0, 2))?;
-        todo!()
+
+        let res = baddbmm(
+            &self.input_gate_bias.unsqueeze(1)?,
+            &reshape_act,
+            &self.input_gate_weight,
+        )?;
+        let input_gate = res.transpose(0, 1)?.reshape((b_sz, seq_len, lru_width))?;
+        let input_gate = candle_nn::ops::sigmoid(&input_gate)?;
+        let res = baddbmm(
+            &self.recurrent_gate_bias.unsqueeze(1)?,
+            &reshape_act,
+            &self.recurrent_gate_weight,
+        )?;
+        let recurrent_gate = res.transpose(0, 1)?.reshape((b_sz, seq_len, lru_width))?;
+        let recurrent_gate = candle_nn::ops::sigmoid(&recurrent_gate)?;
+
+        let log_recurrent_gate = ((recurrent_gate * (-8.0))? * softplus(&self.recurrent_param)?)?;
+        let recurrent_gate = log_recurrent_gate.exp()?;
+        let a_square = (log_recurrent_gate * 2.)?.exp()?;
+
+        // Gate the input.
+        let gated_inputs = (xs * input_gate)?;
+
+        let reset = reset.to_dtype(a_square.dtype())?;
+        let multiplier = (&reset + (1.0 - &reset)? * (1.0 - a_square)?.sqrt())?;
+        let normalized_x = gated_inputs;
+
+        let (hidden_states, recurrent_states) = self.rnn_scan(
+            &normalized_x,
+            &recurrent_gate,
+            &reset,
+            self.recurrent_states.as_ref(),
+        )?;
+        self.recurrent_states = Some(recurrent_states);
+        Ok(hidden_states)
+    }
+
+    fn rnn_scan(
+        &self,
+        hidden_states: &Tensor,
+        recurrent_gate: &Tensor,
+        reset: &Tensor,
+        recurrent_states: Option<&Tensor>,
+    ) -> Result<(Tensor, Tensor)> {
+        let acc_dtype = DType::F32;
+        let dev = hidden_states.device();
+        let in_dtype = hidden_states.dtype();
+        let inv_reset = (1.0 - reset)?.to_dtype(recurrent_gate.dtype())?;
+        let recurrent_gate = (recurrent_gate * inv_reset)?;
+        let (c, r) = if hidden_states.dim(1)? == 1 {
+            match recurrent_states {
+                None => {
+                    let next_state = hidden_states.i((.., 0))?.to_dtype(acc_dtype)?;
+                    (hidden_states.clone(), next_state)
+                }
+                Some(recurrent_states) => {
+                    let contextualized_states =
+                        recurrent_gate.to_dtype(acc_dtype)? * recurrent_states.unsqueeze(1)?;
+                    let contextualized_states =
+                        (contextualized_states + hidden_states.to_dtype(acc_dtype)?)?;
+                    let c = contextualized_states.to_dtype(in_dtype)?;
+                    let l = contextualized_states.dim(1)?;
+                    let r = contextualized_states.i((.., l - 1))?;
+                    (c, r)
+                }
+            }
+        } else {
+            let mut recurrent_states = match recurrent_states {
+                None => Tensor::zeros(hidden_states.i((.., 0))?.shape(), acc_dtype, dev)?,
+                Some(r) => r.clone(),
+            };
+            let mut contextualized_states = vec![];
+            for t in 0..hidden_states.dim(1)? {
+                recurrent_states =
+                    (recurrent_gate.i((.., t))?.to_dtype(acc_dtype)? * recurrent_states)?;
+                recurrent_states =
+                    (recurrent_states + hidden_states.i((.., t))?.to_dtype(acc_dtype)?)?;
+                contextualized_states.push(recurrent_states.to_dtype(in_dtype)?)
+            }
+            let contextualized_states = Tensor::stack(&contextualized_states, 1)?;
+            (contextualized_states, recurrent_states)
+        };
+        Ok((c, r))
     }
 }
 
@@ -243,7 +338,7 @@ impl RecurrentBlock {
         })
     }
 
-    pub fn forward(&self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len, _) = xs.dims3()?;
 
         let y_branch = xs.apply(&self.linear_y)?.apply(&self.act_fn)?;
