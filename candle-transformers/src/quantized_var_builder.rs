@@ -63,7 +63,7 @@ impl VarBuilder {
         let path = self.path(name);
         match self.data.get(&path) {
             None => {
-                candle::bail!("cannot find tensor {name}")
+                candle::bail!("cannot find tensor {path}")
             }
             Some(qtensor) => {
                 let shape = s.into();

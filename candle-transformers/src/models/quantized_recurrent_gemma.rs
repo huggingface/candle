@@ -86,9 +86,9 @@ impl RecurrentBlock {
 
         let conv_1d = {
             let ws = vb
-                .get((lru_width, lru_width, cfg.conv1d_width), "weight")?
+                .get((lru_width, 1, cfg.conv1d_width), "conv_1d.weight")?
                 .dequantize(vb.device())?;
-            let bs = vb.get(lru_width, "bias")?.dequantize(vb.device())?;
+            let bs = vb.get(lru_width, "conv_1d.bias")?.dequantize(vb.device())?;
             let config = candle_nn::Conv1dConfig {
                 groups: lru_width,
                 padding: cfg.conv1d_width - 1,
