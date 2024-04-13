@@ -618,3 +618,49 @@ impl Backend for ShardedSafeTensors {
         self.0.get(name).is_ok()
     }
 }
+
+pub trait Renamer {
+    /// This is applied to the name obtained by a name call and the resulting name is passed to the
+    /// inner VarBuilder.
+    fn rename(&self, v: &str) -> std::borrow::Cow<'_, str>;
+}
+
+pub struct Rename<T: SimpleBackend, R: Renamer> {
+    inner: T,
+    renamer: R,
+}
+
+impl<T: SimpleBackend, R: Renamer + Sync + Send> SimpleBackend for Rename<T, R> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        h: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        let name = self.renamer.rename(name);
+        self.inner.get(s, &name, h, dtype, dev)
+    }
+
+    fn contains_tensor(&self, name: &str) -> bool {
+        let name = self.renamer.rename(name);
+        self.inner.contains_tensor(&name)
+    }
+}
+
+impl<T: SimpleBackend, R: Renamer> Rename<T, R> {
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+
+    pub fn inner(&self) -> &T {
+        &self.inner
+    }
+}
+
+impl Renamer for dyn Fn(&str) -> String {
+    fn rename(&self, v: &str) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Owned(self(v))
+    }
+}
