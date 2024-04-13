@@ -41,11 +41,26 @@ impl TextGeneration {
         seed: u64,
         temp: Option<f64>,
         top_p: Option<f64>,
+        top_k: usize,
         repeat_penalty: f32,
         repeat_last_n: usize,
         device: &Device,
     ) -> Self {
-        let logits_processor = LogitsProcessor::new(seed, temp, top_p);
+        let sampling = match temp {
+            None => candle_transformers::generation::Sampling::ArgMax,
+            Some(temperature) => match top_p {
+                None => candle_transformers::generation::Sampling::TopK {
+                    temperature,
+                    k: top_k,
+                },
+                Some(top_p) => candle_transformers::generation::Sampling::TopKThenTopP {
+                    temperature,
+                    k: top_k,
+                    p: top_p,
+                },
+            },
+        };
+        let logits_processor = LogitsProcessor::from_sampling(seed, sampling);
         Self {
             model,
             tokenizer: TokenOutputStream::new(tokenizer),
@@ -142,6 +157,9 @@ struct Args {
     /// Nucleus sampling probability cutoff.
     #[arg(long)]
     top_p: Option<f64>,
+
+    #[arg(long, default_value_t = 250)]
+    top_k: usize,
 
     /// The seed to use when generating random samples.
     #[arg(long, default_value_t = 299792458)]
@@ -256,6 +274,7 @@ fn main() -> Result<()> {
         args.seed,
         args.temperature,
         args.top_p,
+        args.top_k,
         args.repeat_penalty,
         args.repeat_last_n,
         &device,
