@@ -498,6 +498,53 @@ impl<'a> VarBuilder<'a> {
         let pth = candle::pickle::PthTensors::new(p, None)?;
         Ok(Self::from_backend(Box::new(pth), dtype, dev.clone()))
     }
+
+    /// Gets a VarBuilder that applies some renaming function on tensor it gets queried for before
+    /// passing the new names to the inner VarBuilder.
+    ///
+    /// ```rust
+    /// use candle::{Tensor, DType, Device};
+    ///
+    /// let a = Tensor::arange(0f32, 6f32, &Device::Cpu)?.reshape((2, 3))?;
+    /// let tensors: std::collections::HashMap<_, _> = [
+    ///     ("foo".to_string(), a),
+    /// ]
+    /// .into_iter()
+    /// .collect();
+    /// let vb = candle_nn::VarBuilder::from_tensors(tensors, DType::F32, &Device::Cpu);
+    /// assert!(vb.contains_tensor("foo"));
+    /// assert!(vb.get((2, 3), "foo").is_ok());
+    /// assert!(!vb.contains_tensor("bar"));
+    /// let vb = vb.rename_f(|f: &str| if f == "bar" { "foo".to_string() } else { f.to_string() });
+    /// assert!(vb.contains_tensor("bar"));
+    /// assert!(vb.contains_tensor("foo"));
+    /// assert!(vb.get((2, 3), "bar").is_ok());
+    /// assert!(vb.get((2, 3), "foo").is_ok());
+    /// assert!(!vb.contains_tensor("baz"));
+    /// # Ok::<(), candle::Error>(())
+    /// ```
+    pub fn rename_f<F: Fn(&str) -> String + Sync + Send + 'static>(self, f: F) -> Self {
+        let f: Box<dyn Fn(&str) -> String + Sync + Send + 'static> = Box::new(f);
+        self.rename(f)
+    }
+
+    pub fn rename<R: Renamer + Send + Sync + 'a>(self, renamer: R) -> Self {
+        let dtype = self.dtype();
+        let device = self.device().clone();
+        let path = self.path.clone();
+        let backend = Rename::new(self, renamer);
+        let backend: Box<dyn SimpleBackend + 'a> = Box::new(backend);
+        let data = TensorData {
+            backend,
+            dtype,
+            device,
+        };
+        Self {
+            data: Arc::new(data),
+            path,
+            _phantom: std::marker::PhantomData,
+        }
+    }
 }
 
 pub struct ShardedSafeTensors(candle::safetensors::MmapedSafetensors);
@@ -619,18 +666,20 @@ impl Backend for ShardedSafeTensors {
     }
 }
 
+/// This traits specifies a way to rename the queried names into names that are stored in an inner
+/// VarBuilder.
 pub trait Renamer {
     /// This is applied to the name obtained by a name call and the resulting name is passed to the
     /// inner VarBuilder.
     fn rename(&self, v: &str) -> std::borrow::Cow<'_, str>;
 }
 
-pub struct Rename<T: SimpleBackend, R: Renamer> {
-    inner: T,
+pub struct Rename<'a, R: Renamer> {
+    inner: VarBuilder<'a>,
     renamer: R,
 }
 
-impl<T: SimpleBackend, R: Renamer + Sync + Send> SimpleBackend for Rename<T, R> {
+impl<'a, R: Renamer + Sync + Send> SimpleBackend for Rename<'a, R> {
     fn get(
         &self,
         s: Shape,
@@ -640,7 +689,9 @@ impl<T: SimpleBackend, R: Renamer + Sync + Send> SimpleBackend for Rename<T, R> 
         dev: &Device,
     ) -> Result<Tensor> {
         let name = self.renamer.rename(name);
-        self.inner.get(s, &name, h, dtype, dev)
+        self.inner
+            .get_with_hints_dtype(s, &name, h, dtype)?
+            .to_device(dev)
     }
 
     fn contains_tensor(&self, name: &str) -> bool {
@@ -649,17 +700,13 @@ impl<T: SimpleBackend, R: Renamer + Sync + Send> SimpleBackend for Rename<T, R> 
     }
 }
 
-impl<T: SimpleBackend, R: Renamer> Rename<T, R> {
-    pub fn into_inner(self) -> T {
-        self.inner
-    }
-
-    pub fn inner(&self) -> &T {
-        &self.inner
+impl<'a, R: Renamer> Rename<'a, R> {
+    pub fn new(inner: VarBuilder<'a>, renamer: R) -> Self {
+        Self { inner, renamer }
     }
 }
 
-impl Renamer for dyn Fn(&str) -> String {
+impl Renamer for Box<dyn Fn(&str) -> String + Sync + Send> {
     fn rename(&self, v: &str) -> std::borrow::Cow<'_, str> {
         std::borrow::Cow::Owned(self(v))
     }
