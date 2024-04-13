@@ -3,9 +3,7 @@ pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use std::sync::Arc;
 
-use crate::models::recurrent_gemma::{
-    baddbmm, rnn_scan, softplus, Config, RmsNorm, RotaryEmbedding, TemporalBlockType,
-};
+use crate::models::recurrent_gemma::{Config, Rglru, RmsNorm, RotaryEmbedding, TemporalBlockType};
 
 fn rms_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<RmsNorm> {
     let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
@@ -43,89 +41,27 @@ impl Module for Mlp {
     }
 }
 
-// Real-Gated Linear Recurrent Unit
-#[derive(Debug, Clone)]
-struct Rglru {
-    recurrent_param: Tensor,
-    input_gate_weight: Tensor,
-    input_gate_bias: Tensor,
-    recurrent_gate_weight: Tensor,
-    recurrent_gate_bias: Tensor,
-    block_width: usize,
-    n_heads: usize,
-    recurrent_states: Option<Tensor>,
-}
-
-impl Rglru {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let h = cfg.hidden_size;
-        let lru_width = cfg.lru_width.unwrap_or(h);
-        let n_heads = cfg.num_attention_heads;
-        let block_width = lru_width / n_heads;
-        let recurrent_param = vb.get((lru_width,), "recurrent_param")?;
-        let input_gate_weight = vb.get((n_heads, block_width, block_width), "input_gate_weight")?;
-        let input_gate_bias = vb.get((n_heads, block_width), "input_gate_bias")?;
-        let recurrent_gate_weight =
-            vb.get((n_heads, block_width, block_width), "recurrent_gate_weight")?;
-        let recurrent_gate_bias = vb.get((n_heads, block_width), "recurrent_gate_bias")?;
-        Ok(Self {
-            recurrent_param: recurrent_param.dequantize(vb.device())?,
-            input_gate_bias: input_gate_bias.dequantize(vb.device())?,
-            input_gate_weight: input_gate_weight.dequantize(vb.device())?,
-            recurrent_gate_bias: recurrent_gate_bias.dequantize(vb.device())?,
-            recurrent_gate_weight: recurrent_gate_weight.dequantize(vb.device())?,
-            block_width,
-            n_heads,
-            recurrent_states: None,
-        })
-    }
-
-    // https://github.com/huggingface/transformers/blob/0bd58f1ce0573c0e3269de4215a17d318add49b9/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L303
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
-        let (b_sz, seq_len, lru_width) = xs.dims3()?;
-        let pos = Tensor::arange(pos as u32, (pos + seq_len) as u32, xs.device())?;
-        let reset = pos.eq(0u32)?.unsqueeze(1)?.unsqueeze(0)?;
-        let reshape_act = xs
-            .reshape((b_sz * seq_len, self.n_heads, self.block_width))?
-            .permute((1, 0, 2))?
-            .contiguous()?;
-
-        let res = baddbmm(
-            &self.input_gate_bias.unsqueeze(1)?,
-            &reshape_act,
-            &self.input_gate_weight,
-        )?;
-        let input_gate = res.transpose(0, 1)?.reshape((b_sz, seq_len, lru_width))?;
-        let input_gate = candle_nn::ops::sigmoid(&input_gate)?;
-        let res = baddbmm(
-            &self.recurrent_gate_bias.unsqueeze(1)?,
-            &reshape_act,
-            &self.recurrent_gate_weight,
-        )?;
-        let recurrent_gate = res.transpose(0, 1)?.reshape((b_sz, seq_len, lru_width))?;
-        let recurrent_gate = candle_nn::ops::sigmoid(&recurrent_gate)?;
-
-        let log_recurrent_gate =
-            (recurrent_gate * (-8.0))?.broadcast_mul(&softplus(&self.recurrent_param)?)?;
-        let recurrent_gate = log_recurrent_gate.exp()?;
-        let a_square = (log_recurrent_gate * 2.)?.exp()?;
-
-        // Gate the input.
-        let gated_inputs = (xs * input_gate)?;
-
-        let multiplier =
-            reset.broadcast_add(&((1.0 - &reset)?.broadcast_mul(&(1.0 - a_square)?.sqrt()?))?)?;
-        let normalized_x = (gated_inputs * multiplier)?;
-
-        let (hidden_states, recurrent_states) = rnn_scan(
-            &normalized_x,
-            &recurrent_gate,
-            &reset,
-            self.recurrent_states.as_ref(),
-        )?;
-        self.recurrent_states = Some(recurrent_states);
-        Ok(hidden_states)
-    }
+fn rglru(cfg: &Config, vb: VarBuilder) -> Result<Rglru> {
+    let h = cfg.hidden_size;
+    let lru_width = cfg.lru_width.unwrap_or(h);
+    let n_heads = cfg.num_attention_heads;
+    let block_width = lru_width / n_heads;
+    let recurrent_param = vb.get((lru_width,), "recurrent_param")?;
+    let input_gate_weight = vb.get((n_heads, block_width, block_width), "input_gate_weight")?;
+    let input_gate_bias = vb.get((n_heads, block_width), "input_gate_bias")?;
+    let recurrent_gate_weight =
+        vb.get((n_heads, block_width, block_width), "recurrent_gate_weight")?;
+    let recurrent_gate_bias = vb.get((n_heads, block_width), "recurrent_gate_bias")?;
+    Ok(Rglru {
+        recurrent_param: recurrent_param.dequantize(vb.device())?,
+        input_gate_bias: input_gate_bias.dequantize(vb.device())?,
+        input_gate_weight: input_gate_weight.dequantize(vb.device())?,
+        recurrent_gate_bias: recurrent_gate_bias.dequantize(vb.device())?,
+        recurrent_gate_weight: recurrent_gate_weight.dequantize(vb.device())?,
+        block_width,
+        n_heads,
+        recurrent_states: None,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -160,7 +96,7 @@ impl RecurrentBlock {
             };
             candle_nn::Conv1d::new(ws, Some(bs), config)
         };
-        let rg_lru = Rglru::new(cfg, vb.pp("rg_lru"))?;
+        let rg_lru = rglru(cfg, vb.pp("rg_lru"))?;
         Ok(Self {
             linear_y,
             linear_x,

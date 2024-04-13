@@ -160,22 +160,22 @@ impl Module for Mlp {
 
 // Real-Gated Linear Recurrent Unit
 #[derive(Debug, Clone)]
-struct Rglru {
-    recurrent_param: Tensor,
-    input_gate_weight: Tensor,
-    input_gate_bias: Tensor,
-    recurrent_gate_weight: Tensor,
-    recurrent_gate_bias: Tensor,
-    block_width: usize,
-    n_heads: usize,
-    recurrent_states: Option<Tensor>,
+pub(crate) struct Rglru {
+    pub(crate) recurrent_param: Tensor,
+    pub(crate) input_gate_weight: Tensor,
+    pub(crate) input_gate_bias: Tensor,
+    pub(crate) recurrent_gate_weight: Tensor,
+    pub(crate) recurrent_gate_bias: Tensor,
+    pub(crate) block_width: usize,
+    pub(crate) n_heads: usize,
+    pub(crate) recurrent_states: Option<Tensor>,
 }
 
-pub(crate) fn baddbmm(a: &Tensor, b: &Tensor, c: &Tensor) -> Result<Tensor> {
+fn baddbmm(a: &Tensor, b: &Tensor, c: &Tensor) -> Result<Tensor> {
     a.broadcast_add(&b.matmul(c)?)
 }
 
-pub(crate) fn softplus(xs: &Tensor) -> Result<Tensor> {
+fn softplus(xs: &Tensor) -> Result<Tensor> {
     (xs.exp()? + 1.0)?.log()
 }
 
@@ -204,7 +204,7 @@ impl Rglru {
     }
 
     // https://github.com/huggingface/transformers/blob/0bd58f1ce0573c0e3269de4215a17d318add49b9/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L303
-    pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
+    pub(crate) fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
         let (b_sz, seq_len, lru_width) = xs.dims3()?;
         let pos = Tensor::arange(pos as u32, (pos + seq_len) as u32, xs.device())?;
         let reset = pos.eq(0u32)?.unsqueeze(1)?.unsqueeze(0)?;
@@ -252,7 +252,7 @@ impl Rglru {
     }
 }
 
-pub(crate) fn rnn_scan(
+fn rnn_scan(
     hidden_states: &Tensor,
     recurrent_gate: &Tensor,
     reset: &Tensor,
