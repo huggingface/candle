@@ -261,6 +261,8 @@ impl MetalDevice {
 
     /// Allocates a new buffer with zeros.
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
+        // Only one encoder can be active at a time, so we need to end the compute encoder to enable the blit encoder
+        // <https://developer.apple.com/documentation/metal/mtlcommandencoder?language=objc>
         self.end_compute_encoding()?;
 
         let buffer = self.allocate_buffer(
@@ -311,6 +313,8 @@ impl MetalDevice {
     }
 
     /// The critical allocator algorithm
+    /// Allocates a new buffer with the given size and options. If there already exists a buffer
+    /// that can be reused, it will be returned instead to avoid the overhead of creating a new buffer.
     fn allocate_buffer(
         &self,
         size: NSUInteger,
@@ -323,10 +327,10 @@ impl MetalDevice {
             return Ok(b.clone());
         }
 
-        // Buffers on metal must be
+        // Buffers on metal should be powers of two, this is to encourage buffer reuse
         let size = (size - 1).next_power_of_two() as NSUInteger;
-        let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
 
+        let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
         let new_buffer = self.device.new_buffer(size as NSUInteger, option);
         let new_buffer = Arc::new(new_buffer);
         subbuffers.push(new_buffer.clone());
@@ -336,8 +340,10 @@ impl MetalDevice {
 
     /// Copies data from one buffer to another.
     /// This method is blocking as it relies on GPU-CPU synchronization.
-    /// NOTE: this method does not end the current command buffer, it is the responsibility of the caller
-    /// to do so via the [`close_compute_buffer`] function.
+    /// This method does not end the current command buffer, it is the responsibility of the caller
+    /// to do so via the [`close_compute_buffer`] function. This is to allow for multiple copies to be made
+    /// without the overhead of creating a new command buffer each time in the case of not requiring the data
+    /// to be accessible on CPU memory.
     pub fn copy_buffer(
         &self,
         source_buffer: &BufferRef,
@@ -346,7 +352,8 @@ impl MetalDevice {
         destination_offset: NSUInteger,
         size: NSUInteger,
     ) -> Result<()> {
-        // Only one encoder can be present on the command buffer at a time, so we need to end the current one
+        // Only one encoder can be active at a time, so we need to end the compute encoder to enable the blit encoder
+        // <https://developer.apple.com/documentation/metal/mtlcommandencoder?language=objc>
         self.end_compute_encoding()?;
 
         // Setup a new blit encoder and copy the data
@@ -380,12 +387,16 @@ impl MetalDevice {
     }
 
     /// Ends the current compute encoder and command buffer.
-    /// Note: this is a blocking operation and should be avoided if possible.
-    /// If you are looking to wait for data to be available or compute to finish, please leverage
+    /// If no compute buffer is allocated, this is a no-op.
+    /// If you are looking to wait for data to be available for or compute to finish, please leverage
     /// memory barriers instead (https://developer.apple.com/documentation/metal/mtlrendercommandencoder/2967441-memorybarrierwithresources?language=objc).
     pub fn synchronize(&self) -> Result<()> {
+        // Command buffers cannot be committed if there is an active encoder.
         self.end_compute_encoding()?;
+
+        // Commit the command buffer and wait for it to finish
         self.close_compute_buffer()?;
+
         Ok(())
     }
 }

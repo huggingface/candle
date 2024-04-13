@@ -1277,14 +1277,11 @@ impl BackendStorage for MetalStorage {
             )
         }
         if src_s == d2 && dst_s == d2 {
-            self.device.end_compute_encoding()?;
-            let command_buffer = self.device.command_buffer()?;
-            let blit = command_buffer.new_blit_command_encoder().to_owned();
             let src_offset = (src_o * self.dtype.size_in_bytes()) as NSUInteger;
             let length = (d1 * d2 * self.dtype.size_in_bytes()) as NSUInteger;
             let dst_offset = (dst_o * dst.dtype().size_in_bytes()) as NSUInteger;
-            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
-            blit.end_encoding();
+            self.device
+                .copy_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length)?;
         } else {
             let command_encoder = self.device.command_encoder()?;
             let el_count = d1 * d2;
@@ -1321,14 +1318,11 @@ impl BackendStorage for MetalStorage {
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &Layout) -> Result<()> {
         if src_l.is_contiguous() && self.dtype == dst.dtype() {
-            self.device.end_compute_encoding()?;
-            let command_buffer = self.device.command_buffer()?;
-            let blit = command_buffer.new_blit_command_encoder();
             let src_offset = (src_l.start_offset() * self.dtype.size_in_bytes()) as NSUInteger;
             let length = (src_l.shape().elem_count() * self.dtype.size_in_bytes()) as NSUInteger;
             let dst_offset = (dst_offset * dst.dtype().size_in_bytes()) as NSUInteger;
-            blit.copy_from_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length);
-            blit.end_encoding();
+            self.device
+                .copy_buffer(&self.buffer, src_offset, dst.buffer(), dst_offset, length)?;
         } else {
             let src_shape = src_l.shape();
             let el_count = src_shape.elem_count();
