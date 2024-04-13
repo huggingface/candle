@@ -3,6 +3,7 @@ pub(crate) mod conv_transpose2d;
 pub(crate) mod matmul;
 pub(crate) mod qmatmul;
 pub(crate) mod random;
+pub(crate) mod unary;
 pub(crate) mod where_cond;
 
 use candle_core::{Device, Result};
@@ -62,7 +63,7 @@ impl BenchDeviceHandler {
         } else if cfg!(feature = "cuda") {
             devices.push(Device::new_cuda(0)?);
         }
-        devices.push(Device::Cpu);
+        // devices.push(Device::Cpu);
         Ok(Self { devices })
     }
 }
