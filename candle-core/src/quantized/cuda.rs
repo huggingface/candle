@@ -247,23 +247,27 @@ fn mul_mat_via_q8_1(
     let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes).w()? };
     quantize_q8_1(y, &mut y_q8_1, k, y_cols, dev)?;
 
-    let kernel_name = match dtype {
-        GgmlDType::Q4_0 => "mul_mat_q4_0",
-        GgmlDType::Q4_1 => "mul_mat_q4_1",
-        GgmlDType::Q5_0 => "mul_mat_q5_0",
-        GgmlDType::Q5_1 => "mul_mat_q5_1",
-        GgmlDType::Q8_0 => "mul_mat_q8_0",
-        GgmlDType::Q2K => "mul_mat_q2_K",
-        GgmlDType::Q3K => "mul_mat_q3_K",
-        GgmlDType::Q4K => "mul_mat_q4_K",
-        GgmlDType::Q5K => "mul_mat_q5_K",
-        GgmlDType::Q6K => "mul_mat_q6_K",
+    let (kernel_name, mmq_x, mmq_y) = match dtype {
+        GgmlDType::Q4_0 => ("mul_mat_q4_0", 64, 128),
+        GgmlDType::Q4_1 => ("mul_mat_q4_1", 64, 128),
+        GgmlDType::Q5_0 => ("mul_mat_q5_0", 128, 64),
+        GgmlDType::Q5_1 => ("mul_mat_q5_1", 128, 64),
+        GgmlDType::Q8_0 => ("mul_mat_q8_0", 128, 64),
+        GgmlDType::Q2K => ("mul_mat_q2_K", 64, 128),
+        GgmlDType::Q3K => ("mul_mat_q3_K", 128, 128),
+        GgmlDType::Q4K => ("mul_mat_q4_K", 64, 128),
+        GgmlDType::Q5K => ("mul_mat_q5_K", 64, 128),
+        GgmlDType::Q6K => ("mul_mat_q6_K", 64, 64),
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, candle_kernels::QUANTIZED)?;
     let dst = unsafe { dev.alloc::<f32>(x_rows * y_cols).w()? };
     let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: ((x_rows as u32 + 127) / 128, (y_cols as u32 + 63) / 64, 1),
+        grid_dim: (
+            ceil_div(x_rows, mmq_y) as u32,
+            ceil_div(y_cols, mmq_x) as u32,
+            1,
+        ),
         block_dim: (WARP_SIZE as u32, 4, 1),
         shared_mem_bytes: 0,
     };
@@ -445,9 +449,16 @@ impl QCudaStorage {
             storage.matmul(&data_f32, (b, m, n, k), layout, &rhs_l)?
         } else {
             let storage = storage.as_cuda_slice::<f32>()?;
+            let storage = match layout.contiguous_offsets() {
+                Some((o1, o2)) => storage.slice(o1..o2),
+                None => Err(crate::Error::RequiresContiguous {
+                    op: "quantized-matmul",
+                }
+                .bt())?,
+            };
             mul_mat_via_q8_1(
                 &self.data,
-                &storage.slice(..),
+                &storage,
                 self.dtype,
                 /* x_rows */ n,
                 /* x_cols */ k,
