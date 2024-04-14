@@ -241,4 +241,8 @@ impl crate::backend::BackendDevice for MetalDevice {
     fn rand_normal(&self, _: &Shape, _: DType, _: f64, _: f64) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithMetalSupport)
     }
+
+    fn synchronize(&self) -> Result<()> {
+        Ok(())
+    }
 }

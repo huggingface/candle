@@ -2628,6 +2628,10 @@ impl BackendDevice for CpuDevice {
         };
         Ok(storage)
     }
+
+    fn synchronize(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[macro_export]
