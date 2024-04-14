@@ -1,130 +1,13 @@
-// This implementation is based on the python version from huggingface/transformers.
-// https://github.com/huggingface/transformers/blob/b109257f4fb8b1166e7c53cc5418632014ed53a5/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L2
+use crate::quantized_nn::{linear_b as linear, Embedding, Linear};
+pub use crate::quantized_var_builder::VarBuilder;
 use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{linear_b as linear, Linear, VarBuilder};
 use std::sync::Arc;
 
-#[derive(serde::Deserialize, Debug, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-pub enum TemporalBlockType {
-    Attention,
-    Recurrent,
-}
+use crate::models::recurrent_gemma::{Config, Rglru, RmsNorm, RotaryEmbedding, TemporalBlockType};
 
-#[derive(serde::Deserialize, Debug, Clone)]
-pub struct Config {
-    pub num_hidden_layers: usize,
-    pub vocab_size: usize,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub head_dim: usize,
-    pub lru_width: Option<usize>,
-    pub attention_window_size: usize,
-    pub conv1d_width: usize,
-    pub logits_soft_cap: f64,
-    pub hidden_activation: candle_nn::Activation,
-    pub partial_rotary_factor: f64,
-    pub rms_norm_eps: f64,
-    pub rope_theta: f64,
-    #[serde(alias = "_block_types")]
-    pub block_types: Vec<TemporalBlockType>,
-    pub attention_bias: bool,
-    #[serde(default = "default_max_seq_len")]
-    pub max_seq_len: usize,
-}
-
-fn default_max_seq_len() -> usize {
-    8192
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-impl RmsNorm {
-    pub(crate) fn new(dim: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let weight = vb.get(dim, "weight")?;
-        Ok(Self { weight, eps })
-    }
-
-    pub(crate) fn from_weight(weight: Tensor, eps: f64) -> Self {
-        Self { weight, eps }
-    }
-}
-
-impl Module for RmsNorm {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x_dtype = x.dtype();
-        let internal_dtype = match x_dtype {
-            DType::F16 | DType::BF16 => DType::F32,
-            d => d,
-        };
-        let hidden_size = x.dim(D::Minus1)?;
-        let x = x.to_dtype(internal_dtype)?;
-        let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
-        let x_normed = x.broadcast_div(&(norm_x + self.eps)?.sqrt()?)?;
-        x_normed
-            .to_dtype(x_dtype)?
-            .broadcast_mul(&(&self.weight + 1.0)?)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
-}
-
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let last_dim = xs.dim(D::Minus1)?;
-    let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
-    let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
-    Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
-}
-
-impl RotaryEmbedding {
-    pub(crate) fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
-        if cfg.partial_rotary_factor != 0.5 {
-            candle::bail!("partial-rotary-factor {} <> 0.5", cfg.partial_rotary_factor)
-        }
-        let dim = cfg.head_dim / 2;
-        let max_seq_len = cfg.max_seq_len;
-        let inv_freq: Vec<_> = (0..dim)
-            .step_by(2)
-            .map(|i| 1f32 / cfg.rope_theta.powf(i as f64 / dim as f64) as f32)
-            .collect();
-        let inv_freq_len = inv_freq.len();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?.to_dtype(dtype)?;
-        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
-            .to_dtype(dtype)?
-            .reshape((max_seq_len, 1))?;
-        let freqs = t.matmul(&inv_freq)?;
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
-        Ok(Self {
-            sin: freqs.sin()?,
-            cos: freqs.cos()?,
-        })
-    }
-
-    pub(crate) fn apply_rotary_emb_qkv(
-        &self,
-        q: &Tensor,
-        k: &Tensor,
-        seqlen_offset: usize,
-    ) -> Result<(Tensor, Tensor)> {
-        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
-        let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
-        let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
-        Ok((q_embed, k_embed))
-    }
+fn rms_norm(size: usize, eps: f64, vb: VarBuilder) -> Result<RmsNorm> {
+    let weight = vb.get(size, "weight")?.dequantize(vb.device())?;
+    Ok(RmsNorm::from_weight(weight, eps))
 }
 
 #[derive(Debug, Clone)]
@@ -158,145 +41,27 @@ impl Module for Mlp {
     }
 }
 
-// Real-Gated Linear Recurrent Unit
-#[derive(Debug, Clone)]
-pub(crate) struct Rglru {
-    pub(crate) recurrent_param: Tensor,
-    pub(crate) input_gate_weight: Tensor,
-    pub(crate) input_gate_bias: Tensor,
-    pub(crate) recurrent_gate_weight: Tensor,
-    pub(crate) recurrent_gate_bias: Tensor,
-    pub(crate) block_width: usize,
-    pub(crate) n_heads: usize,
-    pub(crate) recurrent_states: Option<Tensor>,
-}
-
-fn baddbmm(a: &Tensor, b: &Tensor, c: &Tensor) -> Result<Tensor> {
-    a.broadcast_add(&b.matmul(c)?)
-}
-
-fn softplus(xs: &Tensor) -> Result<Tensor> {
-    (xs.exp()? + 1.0)?.log()
-}
-
-impl Rglru {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let h = cfg.hidden_size;
-        let lru_width = cfg.lru_width.unwrap_or(h);
-        let n_heads = cfg.num_attention_heads;
-        let block_width = lru_width / n_heads;
-        let recurrent_param = vb.get((lru_width,), "recurrent_param")?;
-        let input_gate_weight = vb.get((n_heads, block_width, block_width), "input_gate_weight")?;
-        let input_gate_bias = vb.get((n_heads, block_width), "input_gate_bias")?;
-        let recurrent_gate_weight =
-            vb.get((n_heads, block_width, block_width), "recurrent_gate_weight")?;
-        let recurrent_gate_bias = vb.get((n_heads, block_width), "recurrent_gate_bias")?;
-        Ok(Self {
-            recurrent_param,
-            input_gate_bias,
-            input_gate_weight,
-            recurrent_gate_bias,
-            recurrent_gate_weight,
-            block_width,
-            n_heads,
-            recurrent_states: None,
-        })
-    }
-
-    // https://github.com/huggingface/transformers/blob/0bd58f1ce0573c0e3269de4215a17d318add49b9/src/transformers/models/recurrent_gemma/modeling_recurrent_gemma.py#L303
-    pub(crate) fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {
-        let (b_sz, seq_len, lru_width) = xs.dims3()?;
-        let pos = Tensor::arange(pos as u32, (pos + seq_len) as u32, xs.device())?;
-        let reset = pos.eq(0u32)?.unsqueeze(1)?.unsqueeze(0)?;
-        let reshape_act = xs
-            .reshape((b_sz * seq_len, self.n_heads, self.block_width))?
-            .permute((1, 0, 2))?
-            .contiguous()?;
-
-        let res = baddbmm(
-            &self.input_gate_bias.unsqueeze(1)?,
-            &reshape_act,
-            &self.input_gate_weight,
-        )?;
-        let input_gate = res.transpose(0, 1)?.reshape((b_sz, seq_len, lru_width))?;
-        let input_gate = candle_nn::ops::sigmoid(&input_gate)?;
-        let res = baddbmm(
-            &self.recurrent_gate_bias.unsqueeze(1)?,
-            &reshape_act,
-            &self.recurrent_gate_weight,
-        )?;
-        let recurrent_gate = res.transpose(0, 1)?.reshape((b_sz, seq_len, lru_width))?;
-        let recurrent_gate = candle_nn::ops::sigmoid(&recurrent_gate)?;
-
-        let log_recurrent_gate =
-            (recurrent_gate * (-8.0))?.broadcast_mul(&softplus(&self.recurrent_param)?)?;
-        let recurrent_gate = log_recurrent_gate.exp()?;
-        let a_square = (log_recurrent_gate * 2.)?.exp()?;
-
-        // Gate the input.
-        let gated_inputs = (xs * input_gate)?;
-
-        let reset = reset.to_dtype(a_square.dtype())?;
-        let multiplier =
-            reset.broadcast_add(&((1.0 - &reset)?.broadcast_mul(&(1.0 - a_square)?.sqrt()?))?)?;
-        let normalized_x = (gated_inputs * multiplier.to_dtype(xs.dtype()))?;
-
-        let (hidden_states, recurrent_states) = rnn_scan(
-            &normalized_x,
-            &recurrent_gate,
-            &reset,
-            self.recurrent_states.as_ref(),
-        )?;
-        self.recurrent_states = Some(recurrent_states);
-        Ok(hidden_states)
-    }
-}
-
-fn rnn_scan(
-    hidden_states: &Tensor,
-    recurrent_gate: &Tensor,
-    reset: &Tensor,
-    recurrent_states: Option<&Tensor>,
-) -> Result<(Tensor, Tensor)> {
-    let acc_dtype = DType::F32;
-    let dev = hidden_states.device();
-    let in_dtype = hidden_states.dtype();
-    let inv_reset = (1.0 - reset)?.to_dtype(recurrent_gate.dtype())?;
-    let recurrent_gate = recurrent_gate.broadcast_mul(&inv_reset)?;
-    let (c, r) = if hidden_states.dim(1)? == 1 {
-        match recurrent_states {
-            None => {
-                let next_state = hidden_states.i((.., 0))?.to_dtype(acc_dtype)?;
-                (hidden_states.clone(), next_state)
-            }
-            Some(recurrent_states) => {
-                let contextualized_states =
-                    recurrent_gate.to_dtype(acc_dtype)? * recurrent_states.unsqueeze(1)?;
-                let contextualized_states =
-                    (contextualized_states + hidden_states.to_dtype(acc_dtype)?)?;
-                let c = contextualized_states.to_dtype(in_dtype)?;
-                let l = contextualized_states.dim(1)?;
-                let r = contextualized_states.i((.., l - 1))?;
-                (c, r)
-            }
-        }
-    } else {
-        let mut recurrent_states = match recurrent_states {
-            None => Tensor::zeros(hidden_states.i((.., 0))?.shape(), acc_dtype, dev)?,
-            Some(r) => r.clone(),
-        };
-        let mut contextualized_states = vec![];
-        for t in 0..hidden_states.dim(1)? {
-            recurrent_states =
-                (recurrent_gate.i((.., t))?.to_dtype(acc_dtype)? * recurrent_states)?;
-            recurrent_states =
-                (recurrent_states + hidden_states.i((.., t))?.to_dtype(acc_dtype)?)?;
-            contextualized_states.push(recurrent_states.to_dtype(in_dtype)?)
-        }
-        let contextualized_states = Tensor::stack(&contextualized_states, 1)?;
-        (contextualized_states, recurrent_states)
-    };
-    Ok((c, r))
+fn rglru(cfg: &Config, vb: VarBuilder) -> Result<Rglru> {
+    let h = cfg.hidden_size;
+    let lru_width = cfg.lru_width.unwrap_or(h);
+    let n_heads = cfg.num_attention_heads;
+    let block_width = lru_width / n_heads;
+    let recurrent_param = vb.get((lru_width,), "recurrent_param")?;
+    let input_gate_weight = vb.get((n_heads, block_width, block_width), "input_gate_weight")?;
+    let input_gate_bias = vb.get((n_heads, block_width), "input_gate_bias")?;
+    let recurrent_gate_weight =
+        vb.get((n_heads, block_width, block_width), "recurrent_gate_weight")?;
+    let recurrent_gate_bias = vb.get((n_heads, block_width), "recurrent_gate_bias")?;
+    Ok(Rglru {
+        recurrent_param: recurrent_param.dequantize(vb.device())?,
+        input_gate_bias: input_gate_bias.dequantize(vb.device())?,
+        input_gate_weight: input_gate_weight.dequantize(vb.device())?,
+        recurrent_gate_bias: recurrent_gate_bias.dequantize(vb.device())?,
+        recurrent_gate_weight: recurrent_gate_weight.dequantize(vb.device())?,
+        block_width,
+        n_heads,
+        recurrent_states: None,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -318,18 +83,20 @@ impl RecurrentBlock {
         let linear_y = linear(h, lru_width, true, vb.pp("linear_y"))?;
         let linear_x = linear(h, lru_width, true, vb.pp("linear_x"))?;
         let linear_out = linear(lru_width, h, true, vb.pp("linear_out"))?;
-        let conv_1d = candle_nn::conv1d(
-            lru_width,
-            lru_width,
-            cfg.conv1d_width,
-            candle_nn::Conv1dConfig {
+
+        let conv_1d = {
+            let ws = vb
+                .get((lru_width, 1, cfg.conv1d_width), "conv_1d.weight")?
+                .dequantize(vb.device())?;
+            let bs = vb.get(lru_width, "conv_1d.bias")?.dequantize(vb.device())?;
+            let config = candle_nn::Conv1dConfig {
                 groups: lru_width,
                 padding: cfg.conv1d_width - 1,
                 ..Default::default()
-            },
-            vb.pp("conv_1d"),
-        )?;
-        let rg_lru = Rglru::new(cfg, vb.pp("rg_lru"))?;
+            };
+            candle_nn::Conv1d::new(ws, Some(bs), config)
+        };
+        let rg_lru = rglru(cfg, vb.pp("rg_lru"))?;
         Ok(Self {
             linear_y,
             linear_x,
@@ -526,8 +293,8 @@ impl DecoderLayer {
         vb: VarBuilder,
     ) -> Result<Self> {
         let h = cfg.hidden_size;
-        let temporal_pre_norm = RmsNorm::new(h, cfg.rms_norm_eps, vb.pp("temporal_pre_norm"))?;
-        let channel_pre_norm = RmsNorm::new(h, cfg.rms_norm_eps, vb.pp("channel_pre_norm"))?;
+        let temporal_pre_norm = rms_norm(h, cfg.rms_norm_eps, vb.pp("temporal_pre_norm"))?;
+        let channel_pre_norm = rms_norm(h, cfg.rms_norm_eps, vb.pp("channel_pre_norm"))?;
         let temporal_block = match cfg.block_types[block_idx % cfg.block_types.len()] {
             TemporalBlockType::Recurrent => {
                 let block = RecurrentBlock::new(cfg, vb.pp("temporal_block"))?;
@@ -565,29 +332,32 @@ impl DecoderLayer {
 
 #[derive(Debug, Clone)]
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
     final_norm: RmsNorm,
     lm_head: Linear,
     hidden_size: usize,
     logits_soft_cap: f64,
-    dtype: DType,
     device: Device,
 }
 
 impl Model {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let embed_tokens =
-            candle_nn::embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
-        let rotary_emb = Arc::new(RotaryEmbedding::new(vb.dtype(), cfg, vb.device())?);
+        let embed_tokens = Embedding::new(cfg.vocab_size, cfg.hidden_size, vb.pp("embed_tokens"))?;
+        let rotary_emb = Arc::new(RotaryEmbedding::new(DType::F32, cfg, vb.device())?);
         let vb_b = vb.pp("layers");
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for idx in 0..cfg.num_hidden_layers {
             let layer = DecoderLayer::new(idx, rotary_emb.clone(), cfg, vb_b.pp(idx))?;
             layers.push(layer)
         }
-        let final_norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("final_norm"))?;
-        let lm_head = Linear::new(embed_tokens.embeddings().clone(), None);
+        let final_norm = rms_norm(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("final_norm"))?;
+        let lm_head = linear(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            false,
+            vb.pp("embed_tokens"),
+        )?;
         Ok(Self {
             embed_tokens,
             layers,
@@ -595,7 +365,6 @@ impl Model {
             lm_head,
             hidden_size: cfg.hidden_size,
             logits_soft_cap: cfg.logits_soft_cap,
-            dtype: vb.dtype(),
             device: vb.device().clone(),
         })
     }
@@ -617,7 +386,7 @@ impl Model {
             mask
         };
         mask.expand((b_size, 1, tgt_len, tgt_len + seqlen_offset))?
-            .to_dtype(self.dtype)
+            .to_dtype(DType::F32)
     }
 
     pub fn forward(&mut self, xs: &Tensor, pos: usize) -> Result<Tensor> {

@@ -1751,6 +1751,10 @@ impl BackendDevice for MetalDevice {
 
         Ok(())
     }
+
+    fn synchronize(&self) -> Result<()> {
+        self.wait_until_completed()
+    }
 }
 
 fn read_to_vec<T: Clone>(buffer: &Buffer, n: usize) -> Vec<T> {
