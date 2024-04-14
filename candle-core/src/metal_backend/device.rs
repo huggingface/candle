@@ -300,27 +300,8 @@ impl MetalDevice {
 
     /// Allocates a new buffer with zeros.
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
-        // Only one encoder can be active at a time, so we need to end the compute encoder to enable the blit encoder
-        // <https://developer.apple.com/documentation/metal/mtlcommandencoder?language=objc>
-        self.end_compute_encoding()?;
-
-        let buffer = self.allocate_buffer(
-            size_in_bytes as NSUInteger,
-            MTLResourceOptions::StorageModePrivate,
-            "allocate_zeros",
-        )?;
-        let command_buffer = self.command_buffer()?;
-        let blit = command_buffer.new_blit_command_encoder();
-        blit.fill_buffer(
-            &buffer,
-            metal::NSRange {
-                location: 0,
-                length: buffer.length(),
-            },
-            0,
-        );
-        blit.end_encoding();
-        Ok(buffer)
+        let data = vec![0u8; size_in_bytes];
+        self.new_buffer_with_data(&data)
     }
 
     /// Finds the best buffer to reuse.
@@ -391,14 +372,13 @@ impl MetalDevice {
         destination_offset: NSUInteger,
         size: NSUInteger,
     ) -> Result<()> {
-        // Only one encoder can be active at a time, so we need to end the compute encoder to enable the blit encoder
-        // <https://developer.apple.com/documentation/metal/mtlcommandencoder?language=objc>
-        self.end_compute_encoding()?;
+        // Ensure that current work is complete before copying data
+        self.synchronize()?;
 
         // Setup a new blit encoder and copy the data
         // There is no need to setup a new compute command encoder since it is handled by
         // the [`command_encoder`] function.
-        let command_buffer = self.command_buffer()?;
+        let command_buffer = self.command_queue().new_command_buffer();
         let blit = command_buffer.new_blit_command_encoder();
         blit.copy_from_buffer(
             source_buffer,
@@ -408,6 +388,8 @@ impl MetalDevice {
             size,
         );
         blit.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
 
         Ok(())
     }
