@@ -557,7 +557,6 @@ mod test {
         assert_eq!(vs.len(), 16);
         assert_eq!(vs[0], 347604.0);
         assert_eq!(vs[1], 888153.06);
-        // TODO: This is wrong.
         assert_eq!(vs[4], 869780.7);
         assert_eq!(vs[5], 2483145.0);
         Ok(())
