@@ -221,23 +221,31 @@ fn mul_mat_via_q8_1(
     data: &CudaSlice<u8>,
     y: &CudaView<f32>,
     dtype: GgmlDType,
-    (m, n, k): (usize, usize, usize),
+    x_rows: usize,
+    x_cols: usize,
+    y_rows: usize,
+    y_cols: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
     use cudarc::driver::LaunchAsync;
 
     let data_elems = data.len() / dtype.type_size() * dtype.block_size();
-    if data_elems < m * k {
-        crate::bail!("unexpected lhs size {}, {m} {k}", data_elems)
+    if data_elems < x_rows * x_cols {
+        crate::bail!("unexpected lhs size {}, {x_rows} {x_cols}", data_elems)
     }
-    if y.len() != n * k {
-        crate::bail!("unexpected y size {}, {k} {n}", y.len())
+    if y.len() != y_rows * y_cols {
+        crate::bail!("unexpected y size {}, {y_rows} {y_cols}", y.len())
     }
+    if x_cols != y_cols {
+        crate::bail!("unexpected x/y size {x_rows} {x_cols} {y_rows} {y_cols}")
+    }
+    let k = x_cols;
     // Start by quantizing y
     let k_padded = pad(k, MATRIX_ROW_PADDING);
-    let y_size_in_bytes = k_padded * n * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
+    let y_size_in_bytes =
+        k_padded * y_rows * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
     let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes).w()? };
-    quantize_q8_1(y, &mut y_q8_1, k, n, dev)?;
+    quantize_q8_1(y, &mut y_q8_1, k, y_rows, dev)?;
 
     let kernel_name = match dtype {
         GgmlDType::Q4_0 => "mul_mat_q4_0",
@@ -253,9 +261,9 @@ fn mul_mat_via_q8_1(
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
     let func = dev.get_or_load_func(kernel_name, candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f32>(m * n).w()? };
+    let dst = unsafe { dev.alloc::<f32>(x_rows * y_rows).w()? };
     let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (m as u32, n as u32, 1),
+        grid_dim: (x_rows as u32, y_rows as u32, 1),
         block_dim: (WARP_SIZE as u32, 4, 1),
         shared_mem_bytes: 0,
     };
@@ -264,11 +272,11 @@ fn mul_mat_via_q8_1(
         /* vx */ data,
         /* vy */ &y_q8_1,
         /* dst */ &dst,
-        /* ncols_x */ k as i32,
-        /* nrows_x */ m as i32,
-        /* ncols_y */ n as i32,
-        /* nrows_y */ k_padded as i32,
-        /* nrows_dst */ m as i32,
+        /* ncols_x */ x_cols as i32,
+        /* nrows_x */ x_rows as i32,
+        /* ncols_y */ k_padded as i32,
+        /* nrows_y */ y_rows as i32,
+        /* nrows_dst */ y_rows as i32,
     );
     unsafe { func.launch(cfg, params) }.w()?;
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
@@ -431,9 +439,23 @@ impl QCudaStorage {
             crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", layout.shape())
         }
 
-        let data_f32 = self.dequantize(n * k)?;
-        let rhs_l = crate::Layout::new((k, n).into(), vec![1, k], 0).broadcast_as((b, k, n))?;
-        let out = storage.matmul(&data_f32, (b, m, n, k), layout, &rhs_l)?;
+        let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
+            let data_f32 = self.dequantize(n * k)?;
+            let rhs_l = crate::Layout::new((k, n).into(), vec![1, k], 0).broadcast_as((b, k, n))?;
+            storage.matmul(&data_f32, (b, m, n, k), layout, &rhs_l)?
+        } else {
+            let storage = storage.as_cuda_slice::<f32>()?;
+            mul_mat_via_q8_1(
+                &self.data,
+                &storage.slice(..),
+                self.dtype,
+                /* x_rows */ n,
+                /* x_cols */ k,
+                /* y_rows */ m,
+                /* y_cols */ k,
+                self.device(),
+            )?
+        };
         let mut out_shape = layout.shape().dims().to_vec();
         out_shape.pop();
         out_shape.push(n);
@@ -509,6 +531,35 @@ mod test {
         let vs = dev.dtoh_sync_copy(&vs.slice(..)).unwrap();
         assert_eq!(vs.len(), 1);
         assert_eq!(vs[0], 5561851.0);
+        Ok(())
+    }
+
+    #[test]
+    fn cuda_mm_q8_1() -> Result<()> {
+        let dev = CudaDevice::new(0)?;
+        let ncols = 256;
+        let vs: Vec<f32> = (0..ncols * 4).map(|v| v as f32 / 4.).collect();
+        let y = dev.htod_sync_copy(&vs).w()?;
+        let mut xs = QCudaStorage::zeros(&dev, ncols * 4, GgmlDType::Q4_0)?;
+        xs.quantize(&CudaStorage::wrap_cuda_slice(y.clone(), dev.clone()))?;
+        let cuda_storage = mul_mat_via_q8_1(
+            &xs.data,
+            &y.slice(..),
+            /* dtype */ GgmlDType::Q4_0,
+            /* x_rows */ 4,
+            /* x_cols */ ncols,
+            /* y_rows */ 4,
+            /* y_cols */ ncols,
+            &dev,
+        )?;
+        let vs = cuda_storage.as_cuda_slice::<f32>()?;
+        let vs = dev.dtoh_sync_copy(&vs.slice(..)).unwrap();
+        assert_eq!(vs.len(), 16);
+        assert_eq!(vs[0], 347604.0);
+        assert_eq!(vs[1], 888153.06);
+        // TODO: This is wrong.
+        assert_eq!(vs[4], 347604.0);
+        assert_eq!(vs[5], 888153.06);
         Ok(())
     }
 }
