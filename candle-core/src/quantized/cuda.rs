@@ -263,7 +263,7 @@ fn mul_mat_via_q8_1(
     let func = dev.get_or_load_func(kernel_name, candle_kernels::QUANTIZED)?;
     let dst = unsafe { dev.alloc::<f32>(x_rows * y_rows).w()? };
     let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (x_rows as u32, y_rows as u32, 1),
+        grid_dim: ((x_rows as u32 + 127) / 128, (y_rows as u32 + 63) / 64, 1),
         block_dim: (WARP_SIZE as u32, 4, 1),
         shared_mem_bytes: 0,
     };
