@@ -268,30 +268,6 @@ impl Kernels {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn call_unary_contiguous(
-    device: &Device,
-    command_buffer: &CommandBufferRef,
-    kernels: &Kernels,
-    kernel_name: unary::contiguous::Kernel,
-    length: usize,
-    input: BufferOffset,
-    output: &Buffer,
-) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
-    let encoder = command_buffer.new_compute_command_encoder();
-    encoder.set_compute_pipeline_state(&pipeline);
-
-    set_params!(encoder, (length, &input, output));
-
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.end_encoding();
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
 pub fn call_copy2d(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -335,6 +311,33 @@ pub fn call_copy2d(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn call_unary_contiguous(
+    device: &Device,
+    command_buffer: &CommandBufferRef,
+    kernels: &Kernels,
+    kernel_name: unary::contiguous::Kernel,
+    length: usize,
+    input: BufferOffset,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
+    let encoder = command_buffer.new_compute_command_encoder();
+    let tile_size = 4;
+    let tiles = length.div_ceil(tile_size);
+
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (length, tile_size, &input, output));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
+    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    encoder.end_encoding();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn call_unary_strided(
     device: &Device,
     command_buffer: &CommandBufferRef,
@@ -347,16 +350,18 @@ pub fn call_unary_strided(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, name.0)?;
 
+    let length: usize = shape.iter().product();
+    let tile_size = 4;
+    let tiles = length.div_ceil(tile_size);
     let num_dims: usize = shape.len();
     let encoder = command_buffer.new_compute_command_encoder();
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
+
     encoder.set_compute_pipeline_state(&pipeline);
-
-    let length: usize = shape.iter().product();
-    set_params!(encoder, (length, num_dims, shape, strides, &input, &output));
-
-    let width: usize = shape.iter().product();
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
-
+    set_params!(
+        encoder,
+        (length, tile_size, num_dims, shape, strides, &input, &output)
+    );
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output.buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -410,10 +415,10 @@ pub fn call_binary_strided(
     let num_dims: usize = shape.len();
     let encoder = command_buffer.new_compute_command_encoder();
     let width: usize = shape.iter().product();
-    encoder.set_compute_pipeline_state(&pipeline);
-
     let length: usize = shape.iter().product();
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
 
+    encoder.set_compute_pipeline_state(&pipeline);
     set_params!(
         encoder,
         (
@@ -427,14 +432,12 @@ pub fn call_binary_strided(
             output
         )
     );
-
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, width);
-
     encoder.use_resource(left_input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(right_input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
+
     Ok(())
 }
 
