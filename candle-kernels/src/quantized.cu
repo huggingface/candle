@@ -71,8 +71,6 @@ static __device__ __forceinline__ int get_int_from_uint8_aligned(const uint8_t *
 }
 
 
-#define CUDA_USE_TENSOR_CORES
-
 #define WARP_SIZE 32
 #define CUDART_HMAX     11070 // CUDA 11.7, min. ver. for which __hmax and __hmax2 are known to work (may be higher than needed)
 
