@@ -38,19 +38,16 @@ impl QMetalStorage {
         let buffer = self.device.new_buffer_managed(self.buffer.length())?;
 
         {
-            let command_buffer = self.device.command_buffer()?;
-
-            // Only one encoder can be active at a time, so we need to end the compute encoder to enable the blit encoder
-            // <https://developer.apple.com/documentation/metal/mtlcommandencoder?language=objc>
-            self.device.end_compute_encoding()?;
+            // Ensure current work is complete on the device
+            self.device.synchronize()?;
 
             // Setup the blit encoder to perform the copy operation
+            let command_buffer = self.device.command_queue().new_command_buffer();
             let blit = command_buffer.new_blit_command_encoder();
             blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
             blit.end_encoding();
-
-            // Execute the command buffer and initialize the next command buffers
-            self.device.close_compute_buffer()?;
+            command_buffer.commit();
+            command_buffer.wait_until_completed();
         }
 
         let mut out = vec![0.0; elem_count];

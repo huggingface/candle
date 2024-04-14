@@ -214,6 +214,7 @@ impl MetalDevice {
             command_buffer.wait_until_completed();
             *command_buffer_lock = None;
             *accesses = 0;
+            self.drop_unused_buffers()?;
         }
 
         Ok(())
