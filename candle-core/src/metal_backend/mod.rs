@@ -1637,9 +1637,73 @@ impl BackendDevice for MetalDevice {
     }
 
     fn ones_impl(&self, shape: &Shape, dtype: DType) -> Result<Self::Storage> {
-        // TODO Is there a faster way ?
-        let cpu_storage = crate::cpu_backend::CpuDevice.ones_impl(shape, dtype)?;
-        self.storage_from_cpu_storage(&cpu_storage)
+        match dtype {
+            DType::F32 => {
+                let buffer = self.new_buffer_with_data(&vec![1.0f32; shape.elem_count()])?;
+                Ok(Self::Storage::new(
+                    buffer,
+                    self.clone(),
+                    shape.elem_count(),
+                    dtype,
+                ))
+            }
+            DType::F16 => {
+                let buffer =
+                    self.new_buffer_with_data(&vec![half::f16::from_f32(1.0); shape.elem_count()])?;
+                Ok(Self::Storage::new(
+                    buffer,
+                    self.clone(),
+                    shape.elem_count(),
+                    dtype,
+                ))
+            }
+            DType::BF16 => {
+                let buffer = self
+                    .new_buffer_with_data(&vec![half::bf16::from_f32(1.0); shape.elem_count()])?;
+                Ok(Self::Storage::new(
+                    buffer,
+                    self.clone(),
+                    shape.elem_count(),
+                    dtype,
+                ))
+            }
+            DType::I64 => {
+                let buffer = self.new_buffer_with_data(&vec![1i64; shape.elem_count()])?;
+                Ok(Self::Storage::new(
+                    buffer,
+                    self.clone(),
+                    shape.elem_count(),
+                    dtype,
+                ))
+            }
+            DType::U32 => {
+                let buffer = self.new_buffer_with_data(&vec![1u32; shape.elem_count()])?;
+                Ok(Self::Storage::new(
+                    buffer,
+                    self.clone(),
+                    shape.elem_count(),
+                    dtype,
+                ))
+            }
+            DType::U8 => {
+                let buffer = self.new_buffer_with_data(&vec![1u8; shape.elem_count()])?;
+                Ok(Self::Storage::new(
+                    buffer,
+                    self.clone(),
+                    shape.elem_count(),
+                    dtype,
+                ))
+            }
+            DType::F64 => {
+                let buffer = self.new_buffer_with_data(&vec![1.0f64; shape.elem_count()])?;
+                Ok(Self::Storage::new(
+                    buffer,
+                    self.clone(),
+                    shape.elem_count(),
+                    dtype,
+                ))
+            }
+        }
     }
 
     fn storage_from_cpu_storage(&self, storage: &CpuStorage) -> Result<Self::Storage> {
@@ -1753,7 +1817,9 @@ impl BackendDevice for MetalDevice {
     }
 
     fn synchronize(&self) -> Result<()> {
-        self.wait_until_completed()
+        self.end_compute_encoding()?;
+        self.close_compute_buffer()?;
+        Ok(())
     }
 }
 
