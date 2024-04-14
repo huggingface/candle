@@ -565,11 +565,23 @@ mod test {
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
         let vs = dev.dtoh_sync_copy(&vs.slice(..)).unwrap();
+
+        /*
+           x = torch.tensor([float(v) for v in range(1024)]).reshape(4, 256)
+           x @ x.t() / 16
+        tensor([[  347480.0000,   869720.0000,  1391960.0000,  1914200.0000],
+                [  869720.0000,  2440536.0000,  4011352.0000,  5582166.5000],
+                [ 1391960.0000,  4011352.0000,  6630742.0000,  9250132.0000],
+                [ 1914200.0000,  5582166.5000,  9250132.0000, 12918099.0000]])
+                */
         assert_eq!(vs.len(), 16);
         assert_eq!(vs[0], 347604.0);
         assert_eq!(vs[1], 888153.06);
         assert_eq!(vs[4], 869780.7);
         assert_eq!(vs[5], 2483145.0);
+        assert_eq!(vs[11], 9407368.0);
+        assert_eq!(vs[14], 9470856.0);
+        assert_eq!(vs[15], 13138824.0);
         Ok(())
     }
 }
