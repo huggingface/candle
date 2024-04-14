@@ -145,8 +145,8 @@ impl MetalDevice {
             Ok(command_buffer)
         } else {
             let new_command_buffer = self.command_queue.new_command_buffer().to_owned();
-            *command_buffer_lock = Some(new_command_buffer);
-            Ok(command_buffer_lock.to_owned().unwrap())
+            *command_buffer_lock = Some(new_command_buffer.clone());
+            Ok(new_command_buffer)
         }
     }
 
@@ -161,8 +161,8 @@ impl MetalDevice {
         } else {
             let command_buffer = self.command_buffer()?;
             let new_command_encoder = command_buffer.new_compute_command_encoder().to_owned();
-            *command_encoder_lock = Some(ComputeCommandEncoder::from(new_command_encoder));
-            Ok(command_encoder_lock.to_owned().unwrap())
+            *command_encoder_lock = Some(ComputeCommandEncoder::from(new_command_encoder.clone()));
+            Ok(new_command_encoder)
         }
     }
 
@@ -186,7 +186,7 @@ impl MetalDevice {
     pub fn end_compute_encoding(&self) -> Result<()> {
         let mut command_encoder_lock =
             self.command_encoder.try_write().map_err(MetalError::from)?;
-        let command_encoder = command_encoder_lock.to_owned();
+        let command_encoder = command_encoder_lock.as_ref();
         if let Some(command_encoder) = command_encoder {
             command_encoder.end_encoding();
             *command_encoder_lock = None;
