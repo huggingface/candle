@@ -164,6 +164,12 @@ impl MetalDevice {
         // If the command buffer has reached the maximum number of accesses, we need to close it
         if accesses >= self.max_command_buffer_accesses {
             self.close_compute_buffer()?;
+        } else {
+            let mut accesses = self
+                .command_buffer_accesses
+                .try_write()
+                .map_err(MetalError::from)?;
+            *accesses += 1;
         }
 
         // Provision a new command buffer if there is none
