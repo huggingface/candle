@@ -7,7 +7,7 @@ fn run(a: &Tensor) {
     a.sqrt().unwrap();
 }
 
-fn run_binary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
+fn run_unary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
     let b = 1;
     let m = 1024;
     let k = 1024;
@@ -36,7 +36,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for device in handler.devices {
         for dtype in [DType::F32, DType::BF16, DType::F16] {
             let name = format!("sqrt_{:?}", dtype);
-            run_binary_benchmark(c, &device, dtype, &name);
+            run_unary_benchmark(c, &device, dtype, &name);
         }
     }
 }
