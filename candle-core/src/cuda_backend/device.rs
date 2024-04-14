@@ -407,4 +407,9 @@ impl BackendDevice for CudaDevice {
             device: self.clone(),
         })
     }
+
+    fn synchronize(&self) -> Result<()> {
+        self.device.synchronize().map_err(crate::Error::wrap)?;
+        Ok(())
+    }
 }
