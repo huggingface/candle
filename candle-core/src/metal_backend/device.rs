@@ -49,6 +49,14 @@ pub struct MetalDevice {
     /// don't need to manage cleaning up an empty command buffer on the last tensor, which usually has a call to [`to_cpu`].
     command_buffer: ActiveCommandBuffer,
 
+    /// Track the count of encoded commands.
+    /// We do this to cap the maximum number of commands that can be encoded in a single command buffer.
+    /// This is to prevent system crashes due to OOM errors.
+    command_buffer_accesses: Arc<RwLock<usize>>,
+
+    /// Maximum number of commands that can be encoded in a single command buffer.
+    max_command_buffer_accesses: usize,
+
     /// The active command encoder for use by the kernels, specifically is of type compute encoder.
     /// <https://developer.apple.com/documentation/metal/mtlcomputecommandencoder?language=objc>
     /// Some notes on the command encoder:
@@ -106,15 +114,21 @@ impl From<metal::Device> for MetalDevice {
             4,
             MTLResourceOptions::StorageModeManaged,
         )));
+        let max_command_buffer_accesses = std::env::var("CANDLE_MAX_COMMAND_BUFFER_ACCESSES")
+            .unwrap_or("100".to_string())
+            .parse()
+            .unwrap();
         Self {
             id,
             device,
             command_queue,
             command_buffer: Arc::new(RwLock::new(None)),
             command_encoder: Arc::new(RwLock::new(None)),
+            command_buffer_accesses: Arc::new(RwLock::new(0)),
             kernels,
             buffers,
             seed,
+            max_command_buffer_accesses,
         }
     }
 }
@@ -138,9 +152,23 @@ impl MetalDevice {
 
     /// Returns the current active command buffer, if the buffer is not present, this will allocate one
     pub fn command_buffer(&self) -> Result<CommandBuffer> {
+        // Check if the command buffer has reached the maximum number of accesses
+        let accesses = {
+            let accesses = self
+                .command_buffer_accesses
+                .try_read()
+                .map_err(MetalError::from)?;
+            accesses.clone()
+        };
+
+        // If the command buffer has reached the maximum number of accesses, we need to close it
+        if accesses >= self.max_command_buffer_accesses {
+            self.close_compute_buffer()?;
+        }
+
+        // Provision a new command buffer if there is none
         let mut command_buffer_lock = self.command_buffer.try_write().map_err(MetalError::from)?;
         let command_buffer = command_buffer_lock.to_owned();
-
         if let Some(command_buffer) = command_buffer {
             Ok(command_buffer)
         } else {
@@ -172,9 +200,14 @@ impl MetalDevice {
         let command_buffer = command_buffer_lock.to_owned();
 
         if let Some(command_buffer) = command_buffer {
+            let mut accesses = self
+                .command_buffer_accesses
+                .try_write()
+                .map_err(MetalError::from)?;
             command_buffer.commit();
             command_buffer.wait_until_completed();
             *command_buffer_lock = None;
+            *accesses = 0;
         }
 
         Ok(())
