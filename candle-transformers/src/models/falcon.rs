@@ -315,6 +315,10 @@ impl FalconAttention {
         let attn_output = self.dense.forward(&attn_output)?;
         Ok(attn_output)
     }
+
+    fn clear_kv_cache(&mut self) {
+        self.kv_cache = None
+    }
 }
 
 #[derive(Debug)]
@@ -402,6 +406,10 @@ impl FalconDecoderLayer {
         let output = (mlp_output + residual)?;
         Ok(output)
     }
+
+    pub fn clear_kv_cache(&mut self) {
+        self.self_attention.clear_kv_cache()
+    }
 }
 
 #[derive(Debug)]
@@ -476,5 +484,11 @@ impl Falcon {
         let hidden_state = hidden_state.narrow(1, seq_len - 1, 1)?;
         let logits = self.lm_head.forward(&hidden_state)?.squeeze(1)?;
         Ok(logits)
+    }
+
+    pub fn clear_kv_cache(&mut self) {
+        for block in self.blocks.iter_mut() {
+            block.clear_kv_cache()
+        }
     }
 }
