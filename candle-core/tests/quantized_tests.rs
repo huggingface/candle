@@ -47,10 +47,6 @@ fn test_matmul(
 }
 
 fn quantized_matmul(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let (m, k, n) = (3, 64, 4);
     let lhs = (0..(m * k)).map(|v| v as f32).collect::<Vec<_>>();
     let tensor_lhs = Tensor::from_slice(&lhs, (m, k), device)?;
@@ -89,7 +85,15 @@ fn quantized_matmul(device: &Device) -> Result<()> {
                 [341970.0, 994574.0, 1656181.0, 2302182.0]
             ]
         ),
-        _ => assert_eq!(
+        Device::Cuda(_) => assert_eq!(
+            to_vec2_round(&res, 0)?,
+            &[
+                [84866.0, 214045.0, 344676.0, 473707.0],
+                [213425.0, 604313.0, 1000431.0, 1387960.0],
+                [342030.0, 994630.0, 1656248.0, 2302250.0]
+            ]
+        ),
+        Device::Cpu => assert_eq!(
             to_vec2_round(&res, 0)?,
             &[
                 [85120.0, 214562.0, 345455.0, 474748.0],
@@ -98,17 +102,11 @@ fn quantized_matmul(device: &Device) -> Result<()> {
             ]
         ),
     }
-
     test_matmul(device, (1, 3, 4, 256), GgmlDType::Q4_0)?;
-
     Ok(())
 }
 
 fn quantized_matmul_neg(device: &Device) -> Result<()> {
-    // TODO Enable this later when we enable cuda.
-    if device.is_cuda() {
-        return Ok(());
-    }
     let (m, k, n) = (3, 64, 4);
     let lhs = (0..(m * k))
         .map(|v| v as f32 - (m * k) as f32 / 2.0)
@@ -151,7 +149,15 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
                 [-196102.0, 63022.0, 324233.0, 587191.0]
             ]
         ),
-        _ => assert_eq!(
+        Device::Cuda(_) => assert_eq!(
+            to_vec2_round(&res, 0)?,
+            &[
+                [243740.0, -19762.0, -285476.0, -550498.0],
+                [23774.0, 21645.0, 19395.0, 18364.0],
+                [-196045.0, 63030.0, 324120.0, 587079.0]
+            ]
+        ),
+        Device::Cpu => assert_eq!(
             to_vec2_round(&res, 0)?,
             &[
                 [243524.0, -19596.0, -285051.0, -549815.0],
@@ -160,22 +166,11 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
             ]
         ),
     }
-
     Ok(())
 }
 
-test_device!(
-    quantized_matmul,
-    quantized_matmul_cpu,
-    quantized_matmul_cuda,
-    quantized_matmul_metal
-);
-test_device!(
-    quantized_matmul_neg,
-    quantized_matmul_neg_cpu,
-    quantized_matmul_neg_cuda,
-    quantized_matmul_neg_metal
-);
+test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
+test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
 
 fn quantize_q4_0(device: &Device) -> Result<()> {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
