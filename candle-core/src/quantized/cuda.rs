@@ -217,6 +217,7 @@ fn mul_mat_vec_via_q8_1(
     Ok(CudaStorage::wrap_cuda_slice(dst, dev.clone()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn mul_mat_via_q8_1(
     data: &CudaSlice<u8>,
     y: &CudaView<f32>,
