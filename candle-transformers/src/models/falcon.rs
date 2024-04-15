@@ -120,7 +120,7 @@ fn rotate_half(x: &Tensor) -> Result<Tensor> {
     Ok(x21)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconRotaryEmbedding {
     inv_freq: Tensor,
     cache: Option<(usize, Tensor, Tensor)>,
@@ -186,7 +186,7 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: f32) -> Result<Tensor>
     Ok(m)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconAttention {
     query_key_value: Linear,
     dense: Linear,
@@ -321,7 +321,7 @@ impl FalconAttention {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconMlp {
     dense_h_to_4h: Linear,
     dense_4h_to_h: Linear,
@@ -346,7 +346,7 @@ impl FalconMlp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct FalconDecoderLayer {
     inp_layernorm: LayerNorm,
     self_attention: FalconAttention,
@@ -412,7 +412,7 @@ impl FalconDecoderLayer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Falcon {
     word_embeddings: Embedding,
     blocks: Vec<FalconDecoderLayer>,
