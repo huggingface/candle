@@ -1172,6 +1172,9 @@ impl Tensor {
         let n = b_dims[dim - 1];
 
         let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
+        if c_shape.elem_count() == 0 || k == 0 {
+            return Tensor::zeros(c_shape, self.dtype(), self.device());
+        }
         let batching: usize = a_dims[..dim - 2].iter().product();
         let batching_b: usize = b_dims[..dim - 2].iter().product();
         if k != k2 || batching != batching_b {
