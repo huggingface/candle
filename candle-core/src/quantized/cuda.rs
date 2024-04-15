@@ -464,7 +464,7 @@ impl QCudaStorage {
                 /* x_rows */ n,
                 /* x_cols */ k,
                 /* y_rows */ k,
-                /* y_cols */ m,
+                /* y_cols */ b * m,
                 self.device(),
             )?
         };
