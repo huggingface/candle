@@ -9,6 +9,7 @@ use candle_transformers::models::stable_diffusion;
 use anyhow::{Error as E, Result};
 use candle::{DType, Device, IndexOp, Module, Tensor, D};
 use clap::Parser;
+use stable_diffusion::vae::AutoEncoderKL;
 use tokenizers::Tokenizer;
 
 #[derive(Parser)]
@@ -64,9 +65,13 @@ struct Args {
     #[arg(long)]
     n_steps: Option<usize>,
 
-    /// The number of samples to generate.
+    /// The number of samples to generate iteratively.
     #[arg(long, default_value_t = 1)]
     num_samples: i64,
+
+    /// The numbers of samples to generate simultaneously.
+    #[arg[long, default_value_t = 1]]
+    bsize: i64,
 
     /// The name of the final image to generate.
     #[arg(long, value_name = "FILE", default_value = "sd_final.png")]
@@ -261,6 +266,32 @@ fn output_filename(
     }
 }
 
+fn save_image(
+    vae: &AutoEncoderKL,
+    latents: &Tensor,
+    vae_scale: f64,
+    bsize: i64,
+    idx: i64,
+    final_image: &String,
+    num_samples: i64,
+    timestep_ids: Option<usize>
+) -> Result<()> {
+    let images = vae.decode(&(latents / vae_scale)?)?;
+    let images = ((images / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
+    let images = (images.clamp(0f32, 1.)? * 255.)?.to_dtype(DType::U8)?;
+    for batch in 0..bsize {
+        let image = images.i(batch as usize)?;
+        let image_filename = output_filename(
+            &final_image,
+            (bsize * idx) + batch + 1,
+            batch + num_samples,
+            timestep_ids,
+        );
+        candle_examples::save_image(&image, image_filename)?;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn text_embeddings(
     prompt: &str,
@@ -382,6 +413,7 @@ fn run(args: Args) -> Result<()> {
         final_image,
         sliced_attention_size,
         num_samples,
+        bsize,
         sd_version,
         clip_weights,
         vae_weights,
@@ -475,6 +507,7 @@ fn run(args: Args) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     let text_embeddings = Tensor::cat(&text_embeddings, D::Minus1)?;
+    let text_embeddings = text_embeddings.repeat((bsize as usize, 1, 1))?;
     println!("{text_embeddings:?}");
 
     println!("Building the autoencoder.");
@@ -496,7 +529,6 @@ fn run(args: Args) -> Result<()> {
     } else {
         0
     };
-    let bsize = 1;
 
     let vae_scale = match sd_version {
         StableDiffusionVersion::V1_5
@@ -521,7 +553,7 @@ fn run(args: Args) -> Result<()> {
                 let latents = Tensor::randn(
                     0f32,
                     1f32,
-                    (bsize, 4, sd_config.height / 8, sd_config.width / 8),
+                    (bsize as usize, 4, sd_config.height / 8, sd_config.width / 8),
                     &device,
                 )?;
                 // scale the initial noise by the standard deviation required by the scheduler
@@ -560,12 +592,7 @@ fn run(args: Args) -> Result<()> {
             println!("step {}/{n_steps} done, {:.2}s", timestep_index + 1, dt);
 
             if args.intermediary_images {
-                let image = vae.decode(&(&latents / vae_scale)?)?;
-                let image = ((image / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
-                let image = (image * 255.)?.to_dtype(DType::U8)?.i(0)?;
-                let image_filename =
-                    output_filename(&final_image, idx + 1, num_samples, Some(timestep_index + 1));
-                candle_examples::save_image(&image, image_filename)?
+                save_image(&vae, &latents, vae_scale, bsize, idx, &final_image, num_samples, Some(timestep_index + 1))?;
             }
         }
 
@@ -574,11 +601,7 @@ fn run(args: Args) -> Result<()> {
             idx + 1,
             num_samples
         );
-        let image = vae.decode(&(&latents / vae_scale)?)?;
-        let image = ((image / 2.)? + 0.5)?.to_device(&Device::Cpu)?;
-        let image = (image.clamp(0f32, 1.)? * 255.)?.to_dtype(DType::U8)?.i(0)?;
-        let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
-        candle_examples::save_image(&image, image_filename)?
+        save_image(&vae, &latents, vae_scale, bsize, idx, &final_image, num_samples, None)?;
     }
     Ok(())
 }
