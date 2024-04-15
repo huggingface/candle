@@ -1093,8 +1093,14 @@ fn zero_dim(device: &Device) -> Result<()> {
     assert_eq!(t_cat.dims3()?, (4, 0, 1));
     let t_unary = t.sqrt()?;
     assert_eq!(t_unary.dims3()?, (4, 0, 1));
-    let t_plus = (t + 1.)?;
+    let t_plus = (&t + 1.)?;
     assert_eq!(t_plus.dims3()?, (4, 0, 1));
+    let t_mm = t2.matmul(&t.t()?)?;
+    assert_eq!(t_mm.dims3()?, (4, 3, 0));
+    let t_mm = t.matmul(&t2.t()?)?;
+    assert_eq!(t_mm.dims3()?, (4, 0, 3));
+    let t_mm = t.t()?.matmul(&t)?;
+    assert_eq!(t_mm.dims3()?, (4, 1, 1));
     Ok(())
 }
 
