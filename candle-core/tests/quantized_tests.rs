@@ -3,7 +3,7 @@ use candle_core::{
     quantized::{self, GgmlDType},
     test_device,
     test_utils::to_vec2_round,
-    Device, Module, Result, Tensor,
+    Device, IndexOp, Module, Result, Tensor,
 };
 use quantized::{k_quants, GgmlType};
 use rand::prelude::*;
@@ -48,13 +48,13 @@ fn test_matmul(
 
 fn quantized_matmul(device: &Device) -> Result<()> {
     let (m, k, n) = (3, 64, 4);
-    let lhs = (0..(m * k)).map(|v| v as f32).collect::<Vec<_>>();
-    let tensor_lhs = Tensor::from_slice(&lhs, (m, k), device)?;
+    let lhs_s = (0..(m * k)).map(|v| v as f32).collect::<Vec<_>>();
+    let lhs = Tensor::from_slice(&lhs_s, (m, k), device)?;
     let mut dst = vec![42.; 3 * 4];
     let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); 8];
     let rhs = (0..(k * n)).map(|v| v as f32).collect::<Vec<_>>();
     k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
-    k_quants::matmul((m, k, n), &lhs, &rhs_t, &mut dst)?;
+    k_quants::matmul((m, k, n), &lhs_s, &rhs_t, &mut dst)?;
     assert_eq!(
         dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
         &[
@@ -63,7 +63,7 @@ fn quantized_matmul(device: &Device) -> Result<()> {
         ]
     );
     let tensor_rhs = Tensor::from_slice(&rhs, (n, k), device)?.t()?;
-    let mm = tensor_lhs.matmul(&tensor_rhs)?;
+    let mm = lhs.matmul(&tensor_rhs)?;
     assert_eq!(
         mm.to_vec2::<f32>()?,
         &[
@@ -75,7 +75,7 @@ fn quantized_matmul(device: &Device) -> Result<()> {
 
     let qtensor = quantized::QTensor::quantize(&tensor_rhs.t()?, GgmlDType::Q4_0)?;
     let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
-    let res = matmul.forward(&tensor_lhs)?;
+    let res = matmul.forward(&lhs)?;
     match device {
         Device::Metal(_) => assert_eq!(
             to_vec2_round(&res, 0)?,
@@ -108,10 +108,10 @@ fn quantized_matmul(device: &Device) -> Result<()> {
 
 fn quantized_matmul_neg(device: &Device) -> Result<()> {
     let (m, k, n) = (3, 64, 4);
-    let lhs = (0..(m * k))
+    let lhs_s = (0..(m * k))
         .map(|v| v as f32 - (m * k) as f32 / 2.0)
         .collect::<Vec<_>>();
-    let tensor_lhs = Tensor::from_slice(&lhs, (m, k), device)?;
+    let lhs = Tensor::from_slice(&lhs_s, (m, k), device)?;
     let mut dst = vec![42.; 3 * 4];
     let mut rhs_t = vec![k_quants::BlockQ4_0::zeros(); 8];
     let rhs = (0..k * n)
@@ -119,7 +119,7 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
         .collect::<Vec<_>>();
     let tensor_rhs = Tensor::from_slice(&rhs, (n, k), device)?.t()?;
     k_quants::BlockQ4_0::from_float(&rhs, &mut rhs_t)?;
-    k_quants::matmul((m, k, n), &lhs, &rhs_t, &mut dst)?;
+    k_quants::matmul((m, k, n), &lhs_s, &rhs_t, &mut dst)?;
     assert_eq!(
         dst.iter().map(|x| x.round()).collect::<Vec<_>>(),
         &[
@@ -127,7 +127,7 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
             -196472.0, 63012.0, 324585.0, 587902.0
         ]
     );
-    let mm = tensor_lhs.matmul(&tensor_rhs)?;
+    let mm = lhs.matmul(&tensor_rhs)?;
     assert_eq!(
         to_vec2_round(&mm, 0)?,
         &[
@@ -139,7 +139,7 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
 
     let qtensor = quantized::QTensor::quantize(&tensor_rhs.t()?, GgmlDType::Q4_0)?;
     let matmul = quantized::QMatMul::from_qtensor(qtensor)?;
-    let res = matmul.forward(&tensor_lhs)?;
+    let res = matmul.forward(&lhs)?;
     match device {
         Device::Metal(_) => assert_eq!(
             to_vec2_round(&res, 0)?,
@@ -166,6 +166,11 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
             ]
         ),
     }
+    let lhs2 = Tensor::stack(&[&lhs, &lhs], 0)?;
+    let res2 = matmul.forward(&lhs2)?;
+    let res2 = res2.i(1)?;
+    let diff = (res - res2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
     Ok(())
 }
 
