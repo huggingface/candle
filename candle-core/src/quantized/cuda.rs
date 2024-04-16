@@ -395,9 +395,14 @@ impl QCudaStorage {
         storage: &CudaStorage,
         layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
+        let max_bm = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
+            1
+        } else {
+            4
+        };
         let use_vec_kernel = match layout.shape().dims() {
-            [b, m, _k] => b * m <= 4,
-            [b, _k] => *b <= 4,
+            [b, m, _k] => b * m <= max_bm,
+            [b, _k] => *b <= max_bm,
             _ => false,
         };
         if use_vec_kernel {
