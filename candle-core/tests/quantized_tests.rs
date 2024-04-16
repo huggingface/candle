@@ -169,25 +169,47 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
     let lhs2 = Tensor::stack(&[&lhs, &lhs], 0)?;
     let res2 = matmul.forward(&lhs2)?;
     let res2 = res2.i(1)?;
-    let diff = (res - &res2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
-    // On cuda, the cases m = 3 and m = 6 use two different kernels resulting in a small
-    // discrepency.
+    let diff = (res - res2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     if device.is_cuda() {
         assert!(diff < 0.1);
     } else {
         assert_eq!(diff, 0.);
     }
-    let lhs4 = Tensor::stack(&[&lhs, &lhs, &lhs, &lhs], 0)?;
-    let res4 = matmul.forward(&lhs4)?;
-    let res4 = res4.i(1)?;
-    let diff = (res4 - res2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
-    // The cases m = 6 and m = 12 use the same kernel, so res2 and res4 should be exactly in line.
-    assert_eq!(diff, 0.);
+    Ok(())
+}
+
+fn qmm_batch(dev: &Device) -> Result<()> {
+    let (lhs, rhs, _mm) = get_random_tensors(2, 256, 6, dev)?;
+    let rhs = quantized::QTensor::quantize(&rhs, GgmlDType::Q2K)?;
+    let rhs = quantized::QMatMul::from_qtensor(rhs)?;
+    let mm = rhs.forward(&lhs)?;
+    assert_eq!(mm.shape().dims(), [2, 6]);
+    let lhs2 = Tensor::cat(&[&lhs, &lhs], 0)?;
+    let mm2 = rhs.forward(&lhs2)?;
+    assert_eq!(mm2.shape().dims(), [4, 6]);
+    let diff2 = (mm2.i(2..)? - &mm)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert_eq!(diff2, 0.0);
+    let lhs3 = Tensor::cat(&[&lhs2, &lhs], 0)?;
+    let mm3 = rhs.forward(&lhs3)?;
+    assert_eq!(mm3.shape().dims(), [6, 6]);
+    let diff3 = (mm3.i(2..4)? - &mm)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    if dev.is_cuda() {
+        assert!(diff3 < 1e-4)
+    } else {
+        assert_eq!(diff3, 0.0)
+    };
+    let diff3 = (mm3.i(4..)? - &mm)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    if dev.is_cuda() {
+        assert!(diff3 < 1e-4)
+    } else {
+        assert_eq!(diff3, 0.0)
+    };
     Ok(())
 }
 
 test_device!(quantized_matmul, qmm_cpu, qmm_cuda, qmm_metal);
 test_device!(quantized_matmul_neg, qmm_n_cpu, qmm_n_cuda, qmm_n_metal);
+test_device!(qmm_batch, qmm_b_cpu, qmm_b_cuda, qmm_b_metal);
 
 fn quantize_q4_0(device: &Device) -> Result<()> {
     let src = (0..32 * 4).map(|v| v as f32).collect::<Vec<_>>();
