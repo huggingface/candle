@@ -203,7 +203,7 @@ fn mul_mat_vec_via_q8_1(
     };
     let kernel_name = format!("{kernel_name}{b_size}");
     let func = dev.get_or_load_func(&kernel_name, candle_kernels::QUANTIZED)?;
-    let dst = unsafe { dev.alloc::<f32>(nrows).w()? };
+    let dst = unsafe { dev.alloc::<f32>(nrows * b_size).w()? };
     let nblocks = if b_size == 4 {
         (nrows as u32 + 1) / 2
     } else {
