@@ -2649,7 +2649,7 @@ static __device__ void mul_mat_vec_q(
 }
 
 // batch size = 1
-extern "C" __global__ void mul_mat_vec_q4_0_q8_1_cuda(
+extern "C" __global__ void mul_mat_vec_q4_0_q8_1_cuda1(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -2657,7 +2657,7 @@ extern "C" __global__ void mul_mat_vec_q4_0_q8_1_cuda(
         (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void mul_mat_vec_q4_1_q8_1_cuda(
+extern "C" __global__ void mul_mat_vec_q4_1_q8_1_cuda1(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -2665,7 +2665,7 @@ extern "C" __global__ void mul_mat_vec_q4_1_q8_1_cuda(
         (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void mul_mat_vec_q5_0_q8_1_cuda(
+extern "C" __global__ void mul_mat_vec_q5_0_q8_1_cuda1(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -2673,7 +2673,7 @@ extern "C" __global__ void mul_mat_vec_q5_0_q8_1_cuda(
         (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void mul_mat_vec_q5_1_q8_1_cuda(
+extern "C" __global__ void mul_mat_vec_q5_1_q8_1_cuda1(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -2681,7 +2681,7 @@ extern "C" __global__ void mul_mat_vec_q5_1_q8_1_cuda(
         (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void mul_mat_vec_q8_0_q8_1_cuda(
+extern "C" __global__ void mul_mat_vec_q8_0_q8_1_cuda1(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -2689,7 +2689,7 @@ extern "C" __global__ void mul_mat_vec_q8_0_q8_1_cuda(
         (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void mul_mat_vec_q2_K_q8_1_cuda(
+extern "C" __global__ void mul_mat_vec_q2_K_q8_1_cuda1(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -2697,7 +2697,7 @@ extern "C" __global__ void mul_mat_vec_q2_K_q8_1_cuda(
         (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void mul_mat_vec_q3_K_q8_1_cuda(
+extern "C" __global__ void mul_mat_vec_q3_K_q8_1_cuda1(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -2705,7 +2705,7 @@ extern "C" __global__ void mul_mat_vec_q3_K_q8_1_cuda(
         (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void mul_mat_vec_q4_K_q8_1_cuda(
+extern "C" __global__ void mul_mat_vec_q4_K_q8_1_cuda1(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -2713,7 +2713,7 @@ extern "C" __global__ void mul_mat_vec_q4_K_q8_1_cuda(
         (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void mul_mat_vec_q5_K_q8_1_cuda(
+extern "C" __global__ void mul_mat_vec_q5_K_q8_1_cuda1(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -2721,7 +2721,7 @@ extern "C" __global__ void mul_mat_vec_q5_K_q8_1_cuda(
         (vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
 }
 
-extern "C" __global__ void mul_mat_vec_q6_K_q8_1_cuda(
+extern "C" __global__ void mul_mat_vec_q6_K_q8_1_cuda1(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 

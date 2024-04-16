@@ -166,6 +166,7 @@ fn mul_mat_vec_via_q8_1(
     dtype: GgmlDType,
     ncols: usize,
     nrows: usize,
+    b_size: usize,
     dev: &CudaDevice,
 ) -> Result<CudaStorage> {
     use cudarc::driver::LaunchAsync;
@@ -177,9 +178,13 @@ fn mul_mat_vec_via_q8_1(
     if y.len() != ncols {
         crate::bail!("unexpected y size {}, ncols {ncols} {nrows}", y.len())
     }
+    if b_size == 0 || b_size > 4 {
+        crate::bail!("only bsize between 1 and 4 are supported, got {b_size}")
+    }
     // Start by quantizing y
     let ncols_padded = pad(ncols, MATRIX_ROW_PADDING);
-    let y_size_in_bytes = ncols_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
+    let y_size_in_bytes =
+        b_size * ncols_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
     let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes).w()? };
     quantize_q8_1(y, &mut y_q8_1, ncols, 1, dev)?;
 
@@ -196,10 +201,16 @@ fn mul_mat_vec_via_q8_1(
         GgmlDType::Q6K => "mul_mat_vec_q6_K_q8_1_cuda",
         _ => crate::bail!("unsupported dtype for quantized matmul {dtype:?}"),
     };
-    let func = dev.get_or_load_func(kernel_name, candle_kernels::QUANTIZED)?;
+    let kernel_name = format!("{kernel_name}{b_size}");
+    let func = dev.get_or_load_func(&kernel_name, candle_kernels::QUANTIZED)?;
     let dst = unsafe { dev.alloc::<f32>(nrows).w()? };
+    let nblocks = if b_size == 4 {
+        (nrows as u32 + 1) / 2
+    } else {
+        nrows as u32
+    };
     let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (nrows as u32, 1, 1),
+        grid_dim: (nblocks, 1, 1),
         block_dim: (WARP_SIZE as u32, 4, 1),
         shared_mem_bytes: 0,
     };
@@ -417,7 +428,7 @@ impl QCudaStorage {
         let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
             dequantize_mul_mat_vec(&self.data, &rhs, self.dtype, ncols, nrows, self.device())?
         } else {
-            mul_mat_vec_via_q8_1(&self.data, &rhs, self.dtype, ncols, nrows, self.device())?
+            mul_mat_vec_via_q8_1(&self.data, &rhs, self.dtype, ncols, nrows, 1, self.device())?
         };
         let out_shape = if with_batch {
             vec![1, 1, nrows]
@@ -522,6 +533,7 @@ mod test {
             /* dtype */ GgmlDType::Q4_0,
             /* ncols */ ncols,
             /* nrows */ 1,
+            /* b_size */ 1,
             &dev,
         )?;
         let vs = cuda_storage.as_cuda_slice::<f32>()?;
