@@ -169,7 +169,19 @@ fn quantized_matmul_neg(device: &Device) -> Result<()> {
     let lhs2 = Tensor::stack(&[&lhs, &lhs], 0)?;
     let res2 = matmul.forward(&lhs2)?;
     let res2 = res2.i(1)?;
-    let diff = (res - res2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    let diff = (res - &res2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    // On cuda, the cases m = 3 and m = 6 use two different kernels resulting in a small
+    // discrepency.
+    if device.is_cuda() {
+        assert!(diff < 0.1);
+    } else {
+        assert_eq!(diff, 0.);
+    }
+    let lhs4 = Tensor::stack(&[&lhs, &lhs, &lhs, &lhs], 0)?;
+    let res4 = matmul.forward(&lhs4)?;
+    let res4 = res4.i(1)?;
+    let diff = (res4 - res2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    // The cases m = 6 and m = 12 use the same kernel, so res2 and res4 should be exactly in line.
     assert_eq!(diff, 0.);
     Ok(())
 }
