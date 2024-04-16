@@ -204,10 +204,10 @@ fn mul_mat_vec_via_q8_1(
     let kernel_name = format!("{kernel_name}{b_size}");
     let func = dev.get_or_load_func(&kernel_name, candle_kernels::QUANTIZED)?;
     let dst = unsafe { dev.alloc::<f32>(nrows * b_size).w()? };
-    let nblocks = if b_size == 4 {
-        (nrows as u32 + 1) / 2
-    } else {
+    let nblocks = if b_size == 1 {
         nrows as u32
+    } else {
+        (nrows as u32 + 1) / 2
     };
     let cfg = cudarc::driver::LaunchConfig {
         grid_dim: (nblocks, 1, 1),
@@ -221,7 +221,7 @@ fn mul_mat_vec_via_q8_1(
         &dst,
         /* ncols_x */ ncols as i32,
         /* nrows_x */ nrows as i32,
-        /* nrows_y */ ncols as i32,
+        /* nrows_y */ ncols_padded as i32,
         /* nrows_dst */ nrows as i32,
     );
     unsafe { func.launch(cfg, params) }.w()?;
