@@ -175,7 +175,7 @@ fn mul_mat_vec_via_q8_1(
     if data_elems < ncols * nrows {
         crate::bail!("unexpected data size {}, ncols {ncols} {nrows}", data_elems)
     }
-    if y.len() != ncols {
+    if y.len() != ncols * b_size {
         crate::bail!("unexpected y size {}, ncols {ncols} {nrows}", y.len())
     }
     if b_size == 0 || b_size > 4 {
@@ -186,7 +186,7 @@ fn mul_mat_vec_via_q8_1(
     let y_size_in_bytes =
         b_size * ncols_padded * GgmlDType::Q8_1.type_size() / GgmlDType::Q8_1.block_size();
     let mut y_q8_1 = unsafe { dev.alloc::<u8>(y_size_in_bytes).w()? };
-    quantize_q8_1(y, &mut y_q8_1, ncols, 1, dev)?;
+    quantize_q8_1(y, &mut y_q8_1, ncols, b_size, dev)?;
 
     let kernel_name = match dtype {
         GgmlDType::Q4_0 => "mul_mat_vec_q4_0_q8_1_cuda",
@@ -395,7 +395,12 @@ impl QCudaStorage {
         storage: &CudaStorage,
         layout: &crate::Layout,
     ) -> Result<(CudaStorage, crate::Shape)> {
-        if matches!(layout.shape().dims(), [1, 1, _] | [1, _]) {
+        let use_vec_kernel = match layout.shape().dims() {
+            [b, m, _k] => b * m <= 4,
+            [b, _k] => *b <= 4,
+            _ => false,
+        };
+        if use_vec_kernel {
             self.dequantize_matmul_vec(self_shape, storage, layout)
         } else {
             self.dequantize_matmul(self_shape, storage, layout)
@@ -416,25 +421,31 @@ impl QCudaStorage {
             Some((o1, o2)) => rhs.slice(o1..o2),
             None => Err(crate::Error::RequiresContiguous { op: "dmmv" }.bt())?,
         };
-        let (with_batch, k) = match rhs_l.shape().dims() {
-            [1, 1, k] => (true, k),
-            [1, k] => (false, k),
+        let (b_size, k) = match rhs_l.shape().dims() {
+            [b, m, k] => (b * m, *k),
+            [b, k] => (*b, *k),
             _ => crate::bail!("unexpected rhs shape in dmmv {:?}", rhs_l.shape()),
         };
-        if ncols != *k {
+        if ncols != k {
             crate::bail!("mismatch on matmul dim {self_shape:?} {:?}", rhs_l.shape())
         }
 
         let out = if FORCE_DMMV.load(std::sync::atomic::Ordering::Relaxed) {
             dequantize_mul_mat_vec(&self.data, &rhs, self.dtype, ncols, nrows, self.device())?
         } else {
-            mul_mat_vec_via_q8_1(&self.data, &rhs, self.dtype, ncols, nrows, 1, self.device())?
+            mul_mat_vec_via_q8_1(
+                &self.data,
+                &rhs,
+                self.dtype,
+                ncols,
+                nrows,
+                b_size,
+                self.device(),
+            )?
         };
-        let out_shape = if with_batch {
-            vec![1, 1, nrows]
-        } else {
-            vec![1, nrows]
-        };
+        let mut out_shape = rhs_l.shape().dims().to_vec();
+        out_shape.pop();
+        out_shape.push(nrows);
         Ok((out, out_shape.into()))
     }
 
