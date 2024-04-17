@@ -375,9 +375,9 @@ git submodule update --init
 /usr/include/c++/11/bits/std_function.h:530:146: error: parameter packs not expanded with ‘...’:
 ```
 
-This is a bug in gcc-11 triggered by the Cuda compiler. To fix this, install a different, supported gcc version - for example gcc-10, and specify the path to the compiler in the CANDLE_NVCC_CCBIN environment variable.
+This is a bug in gcc-11 triggered by the Cuda compiler. To fix this, install a different, supported gcc version - for example gcc-10, and specify the path to the compiler in the NVCC_CCBIN environment variable.
 ```
-env CANDLE_NVCC_CCBIN=/usr/lib/gcc/x86_64-linux-gnu/10 cargo ...
+env NVCC_CCBIN=/usr/lib/gcc/x86_64-linux-gnu/10 cargo ...
 ```
 
 #### Linking error on windows when running rustdoc or mdbook tests
