@@ -256,6 +256,58 @@ fn precomput_freqs_cis(
     Ok((cos, sin))
 }
 
+#[derive(Debug, Clone)]
+struct MetadataConfig {
+    n_expert: usize,
+    n_expert_used: usize,
+    head_count: usize,
+    head_count_kv: usize,
+    block_count: usize,
+    embedding_length: usize,
+    rope_dim: usize,
+    rms_norm_eps: f64,
+    rope_freq_base: f32,
+}
+
+impl MetadataConfig {
+    fn from_gguf(ct: &gguf_file::Content) -> Result<Self> {
+        let md_get = |s: &str| match ct.metadata.get(s) {
+            None => candle::bail!("cannot find {s} in metadata"),
+            Some(v) => Ok(v),
+        };
+
+        // Parameter extraction from metadata.
+        let n_expert = md_get("llama.expert_count")
+            .and_then(|v| v.to_u32())
+            .unwrap_or(0) as usize;
+        let n_expert_used = md_get("llama.expert_used_count")
+            .and_then(|v| v.to_u32())
+            .unwrap_or(0) as usize;
+        let head_count = md_get("llama.attention.head_count")?.to_u32()? as usize;
+        let head_count_kv = md_get("llama.attention.head_count_kv")?.to_u32()? as usize;
+        let block_count = md_get("llama.block_count")?.to_u32()? as usize;
+        let embedding_length = md_get("llama.embedding_length")?.to_u32()? as usize;
+        let rope_dim = md_get("llama.rope.dimension_count")?.to_u32()? as usize;
+        // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
+        let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
+
+        let rope_freq_base = md_get("llama.rope.freq_base")
+            .and_then(|m| m.to_f32())
+            .unwrap_or(10000f32);
+        Ok(Self {
+            n_expert,
+            n_expert_used,
+            head_count,
+            head_count_kv,
+            block_count,
+            embedding_length,
+            rope_freq_base,
+            rope_dim,
+            rms_norm_eps,
+        })
+    }
+}
+
 impl ModelWeights {
     pub fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
@@ -325,48 +377,27 @@ impl ModelWeights {
         reader: &mut R,
         device: &Device,
     ) -> Result<Self> {
-        let md_get = |s: &str| match ct.metadata.get(s) {
-            None => candle::bail!("cannot find {s} in metadata"),
-            Some(v) => Ok(v),
-        };
+        let cfg = MetadataConfig::from_gguf(&ct)?;
 
-        // Parameter extraction from metadata.
-        let n_expert = md_get("llama.expert_count")
-            .and_then(|v| v.to_u32())
-            .unwrap_or(0) as usize;
-        let n_expert_used = md_get("llama.expert_used_count")
-            .and_then(|v| v.to_u32())
-            .unwrap_or(0) as usize;
-        let head_count = md_get("llama.attention.head_count")?.to_u32()? as usize;
-        let head_count_kv = md_get("llama.attention.head_count_kv")?.to_u32()? as usize;
-        let block_count = md_get("llama.block_count")?.to_u32()? as usize;
-        let embedding_length = md_get("llama.embedding_length")?.to_u32()? as usize;
-        let rope_dim = md_get("llama.rope.dimension_count")?.to_u32()? as usize;
-        // Strangely this value is generally 1e-6 in GGUF file but used to be 1e-5 by default.
-        let rms_norm_eps = md_get("llama.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
-
-        let rope_freq_base = md_get("llama.rope.freq_base")
-            .and_then(|m| m.to_f32())
-            .unwrap_or(10000f32);
-        let (cos, sin) = precomput_freqs_cis(rope_dim, rope_freq_base, device)?;
+        let (cos, sin) = precomput_freqs_cis(cfg.rope_dim, cfg.rope_freq_base, device)?;
         let neg_inf = Tensor::new(f32::NEG_INFINITY, device)?;
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
         let norm = RmsNorm::from_qtensor(
             ct.tensor(reader, "output_norm.weight", device)?,
-            rms_norm_eps,
+            cfg.rms_norm_eps,
         )?;
         let output = ct.tensor(reader, "output.weight", device)?;
-        let mut layers = Vec::with_capacity(block_count);
-        for layer_idx in 0..block_count {
+        let mut layers = Vec::with_capacity(cfg.block_count);
+        for layer_idx in 0..cfg.block_count {
             let prefix = format!("blk.{layer_idx}");
             let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
             let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
             let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
             let attention_wo =
                 ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
-            let mlp_or_moe = if n_expert <= 1 {
+            let mlp_or_moe = if cfg.n_expert <= 1 {
                 let feed_forward_w1 =
                     ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
                 let feed_forward_w2 =
@@ -381,8 +412,8 @@ impl ModelWeights {
             } else {
                 let feed_forward_gate_inp =
                     ct.tensor(reader, &format!("{prefix}.ffn_gate_inp.weight"), device)?;
-                let mut experts = Vec::with_capacity(n_expert);
-                for i in 0..n_expert {
+                let mut experts = Vec::with_capacity(cfg.n_expert);
+                for i in 0..cfg.n_expert {
                     let feed_forward_w1 =
                         ct.tensor(reader, &format!("{prefix}.ffn_gate.{i}.weight"), device)?;
                     let feed_forward_w2 =
@@ -396,7 +427,7 @@ impl ModelWeights {
                     })
                 }
                 MlpOrMoe::MoE {
-                    n_expert_used,
+                    n_expert_used: cfg.n_expert_used,
                     feed_forward_gate_inp: QMatMul::from_qtensor(feed_forward_gate_inp)?,
                     experts,
                 }
@@ -412,12 +443,12 @@ impl ModelWeights {
                 attention_wk: QMatMul::from_qtensor(attention_wk)?,
                 attention_wv: QMatMul::from_qtensor(attention_wv)?,
                 attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm: RmsNorm::from_qtensor(attention_norm, rms_norm_eps)?,
+                attention_norm: RmsNorm::from_qtensor(attention_norm, cfg.rms_norm_eps)?,
                 mlp_or_moe,
-                ffn_norm: RmsNorm::from_qtensor(ffn_norm, rms_norm_eps)?,
-                n_head: head_count,
-                n_kv_head: head_count_kv,
-                head_dim: embedding_length / head_count,
+                ffn_norm: RmsNorm::from_qtensor(ffn_norm, cfg.rms_norm_eps)?,
+                n_head: cfg.head_count,
+                n_kv_head: cfg.head_count_kv,
+                head_dim: cfg.embedding_length / cfg.head_count,
                 cos: cos.clone(),
                 sin: sin.clone(),
                 neg_inf: neg_inf.clone(),
@@ -430,7 +461,7 @@ impl ModelWeights {
         let span = tracing::span!(tracing::Level::TRACE, "model");
         let span_output = tracing::span!(tracing::Level::TRACE, "output");
         Ok(Self {
-            tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
+            tok_embeddings: Embedding::new(tok_embeddings, cfg.embedding_length),
             layers,
             norm,
             output: QMatMul::from_qtensor(output)?,
