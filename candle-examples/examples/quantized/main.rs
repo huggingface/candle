@@ -328,6 +328,7 @@ impl Args {
                         "TheBloke/Starling-LM-7B-alpha-GGUF",
                         "starling-lm-7b-alpha.Q4_K_M.gguf",
                     ),
+                    // TODO: swap to TheBloke model when available
                     Which::L8b => (
                         "QuantFactory/Meta-Llama-3-8B-GGUF",
                         "Meta-Llama-3-8B.Q3_K_M.gguf",
