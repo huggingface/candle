@@ -193,17 +193,25 @@ fn qmm_batch(dev: &Device) -> Result<()> {
     let mm3 = rhs.forward(&lhs3)?;
     assert_eq!(mm3.shape().dims(), [6, 6]);
     let diff3 = (mm3.i(2..4)? - &mm)?.abs()?.sum_all()?.to_vec0::<f32>()?;
-    if dev.is_cuda() {
-        assert!(diff3 < 1e-4)
-    } else {
-        assert_eq!(diff3, 0.0)
-    };
+    assert_eq!(diff3, 0.0);
     let diff3 = (mm3.i(4..)? - &mm)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert_eq!(diff3, 0.0);
+    let lhs4 = Tensor::cat(&[&lhs3, &lhs3], 0)?;
+    let mm4 = rhs.forward(&lhs4)?;
+    assert_eq!(mm4.shape().dims(), [12, 6]);
+    let diff4 = (mm4.i(..6)? - &mm3)?.abs()?.sum_all()?.to_vec0::<f32>()?;
     if dev.is_cuda() {
-        assert!(diff3 < 1e-4)
+        // We use a different kernel for sizes from 1 to 8 on cuda which explains
+        // the difference here.
+        assert!(0. < diff4 && diff4 < 1e-4)
     } else {
-        assert_eq!(diff3, 0.0)
+        assert_eq!(diff4, 0.0)
     };
+    let diff4 = (mm4.i(6..)? - &mm4.i(..6)?)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff4, 0.0);
     Ok(())
 }
 
