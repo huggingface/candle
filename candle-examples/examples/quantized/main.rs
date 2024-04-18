@@ -172,7 +172,7 @@ impl Which {
             | Which::Zephyr7bBeta => "mistralai/Mistral-7B-v0.1",
             Which::OpenChat35 => "openchat/openchat_3.5",
             Which::Starling7bAlpha => "berkeley-nest/Starling-LM-7B-alpha",
-            Self::L8b => "unsloth/llama-3-8b",
+            Self::L8b => "meta-llama/Meta-Llama-3-8B",
         }
     }
 }
