@@ -331,7 +331,7 @@ impl Args {
                     // TODO: swap to TheBloke model when available
                     Which::L8b => (
                         "QuantFactory/Meta-Llama-3-8B-GGUF",
-                        "Meta-Llama-3-8B.Q3_K_M.gguf",
+                        "Meta-Llama-3-8B.Q4_K_S.gguf",
                     ),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
