@@ -95,7 +95,7 @@ struct Args {
     repeat_penalty: f32,
 
     /// The context size to consider for the repeat penalty.
-    #[arg(long, default_value_t = 64)]
+    #[arg(long, default_value_t = 128)]
     repeat_last_n: usize,
 }
 
