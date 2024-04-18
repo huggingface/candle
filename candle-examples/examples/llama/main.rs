@@ -46,8 +46,8 @@ struct Args {
     cpu: bool,
 
     /// The temperature used to generate samples.
-    #[arg(long)]
-    temperature: Option<f64>,
+    #[arg(long, default_value_t = 0.8)]
+    temperature: f64,
 
     /// Nucleus sampling probability cutoff.
     #[arg(long)]
@@ -91,7 +91,7 @@ struct Args {
     use_flash_attn: bool,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 1.1)]
     repeat_penalty: f32,
 
     /// The context size to consider for the repeat penalty.
@@ -121,7 +121,7 @@ fn main() -> Result<()> {
         Some(dtype) => bail!("Unsupported dtype {dtype}"),
         None => DType::F16,
     };
-    let (llama, tokenizer_filename, mut cache) = {
+    let (llama, tokenizer_filename, mut cache, config) = {
         let api = Api::new()?;
         let model_id = args.model_id.unwrap_or_else(|| match args.which {
             Which::V1 => "Narsil/amall-7b".to_string(),
@@ -148,10 +148,12 @@ fn main() -> Result<()> {
         let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;
 
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-        (Llama::load(vb, &config)?, tokenizer_filename, cache)
+        (Llama::load(vb, &config)?, tokenizer_filename, cache, config)
     };
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-    let eos_token_id = tokenizer.token_to_id(EOS_TOKEN);
+    let eos_token_id = config
+        .eos_token_id
+        .or_else(|| tokenizer.token_to_id(EOS_TOKEN));
     let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
     let mut tokens = tokenizer
         .encode(prompt, true)
@@ -162,7 +164,7 @@ fn main() -> Result<()> {
 
     println!("starting the inference loop");
     print!("{prompt}");
-    let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature, args.top_p);
+    let mut logits_processor = LogitsProcessor::new(args.seed, Some(args.temperature), args.top_p);
     let start_gen = std::time::Instant::now();
     let mut index_pos = 0;
     let mut token_generated = 0;
