@@ -32,6 +32,7 @@ enum Which {
     V1,
     V2,
     V3,
+    V3Instruct,
     #[value(name = "solar-10.7b")]
     Solar10_7B,
     #[value(name = "tiny-llama-1.1b-chat")]
@@ -127,6 +128,7 @@ fn main() -> Result<()> {
             Which::V1 => "Narsil/amall-7b".to_string(),
             Which::V2 => "meta-llama/Llama-2-7b-hf".to_string(),
             Which::V3 => "meta-llama/Meta-Llama-3-8B".to_string(),
+            Which::V3Instruct => "meta-llama/Meta-Llama-3-8B-Instruct".to_string(),
             Which::Solar10_7B => "upstage/SOLAR-10.7B-v1.0".to_string(),
             Which::TinyLlama1_1BChat => "TinyLlama/TinyLlama-1.1B-Chat-v1.0".to_string(),
         });
@@ -140,7 +142,7 @@ fn main() -> Result<()> {
         let config = config.into_config(args.use_flash_attn);
 
         let filenames = match args.which {
-            Which::V1 | Which::V2 | Which::V3 | Which::Solar10_7B => {
+            Which::V1 | Which::V2 | Which::V3 | Which::V3Instruct | Which::Solar10_7B => {
                 candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
             }
             Which::TinyLlama1_1BChat => vec![api.get("model.safetensors")?],
