@@ -177,9 +177,10 @@ impl candle::CustomOp3 for RotaryEmbI {
         let (b, h, t, d) = l_src.shape().dims4()?;
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope-i")?;
+        let command_encoder = command_buffer.new_compute_command_encoder();
         candle_metal_kernels::call_rope_i(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             b * h,
@@ -193,6 +194,7 @@ impl candle::CustomOp3 for RotaryEmbI {
             &output,
         )
         .map_err(candle::Error::wrap)?;
+        command_encoder.end_encoding();
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
     }
@@ -430,9 +432,10 @@ impl candle::CustomOp3 for RotaryEmb {
         let (b, h, t, d) = l_src.shape().dims4()?;
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope-i")?;
+        let command_encoder = command_buffer.new_compute_command_encoder();
         candle_metal_kernels::call_rope(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             b * h,
@@ -447,6 +450,7 @@ impl candle::CustomOp3 for RotaryEmb {
             &output,
         )
         .map_err(candle::Error::wrap)?;
+        command_encoder.end_encoding();
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
     }
@@ -678,9 +682,10 @@ impl candle::CustomOp3 for RotaryEmbThd {
         let (b, t, h, d) = l_src.shape().dims4()?;
         let el = b * h * t * d;
         let output = device.new_buffer(el, src.dtype(), "rope-thd")?;
+        let command_encoder = command_buffer.new_compute_command_encoder();
         candle_metal_kernels::call_rope_thd(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             b,
@@ -696,6 +701,7 @@ impl candle::CustomOp3 for RotaryEmbThd {
             &output,
         )
         .map_err(candle::Error::wrap)?;
+        command_encoder.end_encoding();
         let out = candle::MetalStorage::new(output, device.clone(), el, src.dtype());
         Ok((out, l_src.shape().clone()))
     }

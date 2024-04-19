@@ -166,9 +166,10 @@ impl QMetalStorage {
         let device = storage.device().clone();
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
         let command_buffer = device.command_buffer()?;
+        let command_encoder = command_buffer.new_compute_command_encoder();
         candle_metal_kernels::call_quantized_matmul_t(
             device.device(),
-            &command_buffer,
+            &command_encoder,
             device.kernels(),
             self.dtype.into(),
             (b, m, n, k),
@@ -178,6 +179,7 @@ impl QMetalStorage {
             &dst,
         )
         .map_err(MetalError::from)?;
+        command_encoder.end_encoding();
         let dst_storage = crate::MetalStorage::new(dst, device, dst_shape.elem_count(), DType::F32);
         Ok((dst_storage, dst_shape))
     }

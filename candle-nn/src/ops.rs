@@ -225,9 +225,10 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         let last_dim = layout.dims()[layout.shape().rank() - 1];
         let elem_count = layout.shape().elem_count();
         let output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
+        let command_encoder = command_buffer.new_compute_command_encoder();
         candle_metal_kernels::call_last_softmax(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             elem_count,
@@ -237,6 +238,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             &output,
         )
         .map_err(candle::Error::wrap)?;
+        command_encoder.end_encoding();
         let newstorage =
             candle::MetalStorage::new(output, device.clone(), elem_count, storage.dtype());
         Ok((newstorage, layout.shape().clone()))
@@ -410,9 +412,10 @@ impl candle::CustomOp2 for RmsNorm {
         let last_dim = l1.dims()[l1.shape().rank() - 1];
         let elem_count = l1.shape().elem_count();
         let output = device.new_buffer(elem_count, s1.dtype(), "rmsnorm")?;
+        let command_encoder = command_buffer.new_compute_command_encoder();
         candle_metal_kernels::call_rms_norm(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             elem_count,
@@ -425,6 +428,7 @@ impl candle::CustomOp2 for RmsNorm {
             &output,
         )
         .map_err(candle::Error::wrap)?;
+        command_encoder.end_encoding();
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
     }
