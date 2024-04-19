@@ -850,11 +850,8 @@ pub fn simple_eval(
                 let low: f32 = get_attr_opt(node, "low")?.copied().unwrap_or(0.0);
                 let high: f32 = get_attr_opt(node, "high")?.copied().unwrap_or(1.0);
                 let seed: Option<f32> = get_attr_opt(node, "seed")?.copied();
-                match seed {
-                    Some(_) => {
-                        bail!("seed for RandomUniform is currently not supported")
-                    }
-                    None => {}
+                if seed.is_some() {
+                    bail!("seed for RandomUniform is currently not supported")
                 };
                 let shape: Vec<usize> = get_attr::<[i64]>(node, "shape")?
                     .iter()
