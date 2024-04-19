@@ -120,7 +120,10 @@ fn main() -> Result<()> {
         Some("bf16") => DType::BF16,
         Some("f32") => DType::F32,
         Some(dtype) => bail!("Unsupported dtype {dtype}"),
-        None => DType::F16,
+        None => match args.which {
+            Which::V3 | Which::V3Instruct => DType::BF16,
+            Which::V1 | Which::V2 | Which::Solar10_7B | Which::TinyLlama1_1BChat => DType::F16,
+        },
     };
     let (llama, tokenizer_filename, mut cache, config) = {
         let api = Api::new()?;
