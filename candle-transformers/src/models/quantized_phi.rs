@@ -65,7 +65,6 @@ struct LayerWeights {
     kv_cache: Option<(Tensor, Tensor)>,
     span_attn: tracing::Span,
     span_rot: tracing::Span,
-    span_mlp: tracing::Span,
 }
 
 fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Tensor> {
@@ -120,7 +119,7 @@ impl LayerWeights {
                 } else {
                     let k = Tensor::cat(&[k_cache, &k], 2)?;
                     let v = Tensor::cat(&[v_cache, &v], 2)?;
-                    (k, v)
+                    (k.contiguous()?, v.contiguous()?)
                 }
             }
         };
@@ -141,7 +140,8 @@ impl LayerWeights {
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        self.attn_output.forward(&y)
+        let y = self.attn_output.forward(&y)?;
+        Ok(y)
     }
 }
 
@@ -224,7 +224,6 @@ impl ModelWeights {
             )?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
-            let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
             layers.push(LayerWeights {
                 attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
                 attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
@@ -240,7 +239,6 @@ impl ModelWeights {
                 kv_cache: None,
                 span_attn,
                 span_rot,
-                span_mlp,
             })
         }
         let span = tracing::span!(tracing::Level::TRACE, "model");
@@ -269,32 +267,24 @@ impl ModelWeights {
         }
     }
 
-    pub fn forward(&mut self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
-        let (_b_sz, seq_len) = x.dims2()?;
+    pub fn forward(&mut self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
+        let (_b_sz, seq_len) = xs.dims2()?;
         let mask = if seq_len == 1 {
             None
         } else {
-            Some(self.mask(seq_len, x.device())?)
+            Some(self.mask(seq_len, xs.device())?)
         };
         let _enter = self.span.enter();
-        let mut layer_in = self.tok_embeddings.forward(x)?;
+        let mut xs = self.tok_embeddings.forward(xs)?;
         for layer in self.layers.iter_mut() {
-            let x = layer_in;
-            let residual = &x;
-            let x = layer.attn_norm.forward(&x)?;
-            let attn = layer.forward_attn(&x, mask.as_ref(), index_pos)?;
-            let x = (attn + residual)?;
-
-            // MLP
-            let _enter = layer.span_mlp.enter();
-            let residual = &x;
-            let x = layer.mlp.forward(&x)?;
-            let x = (x + residual)?;
-            layer_in = x
+            let residual = &xs;
+            let xs_norm = xs.apply(&layer.attn_norm)?;
+            let attn_outputs = layer.forward_attn(&xs_norm, mask.as_ref(), index_pos)?;
+            let feed_forward_hidden_states = layer.mlp.forward(&xs_norm)?;
+            xs = (attn_outputs + feed_forward_hidden_states + residual)?
         }
-        let x = self.output_norm.forward(&layer_in)?;
-        let x = x.i((.., seq_len - 1, ..))?;
+        let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
-        self.output.forward(&x)
+        self.output.forward(&xs)
     }
 }

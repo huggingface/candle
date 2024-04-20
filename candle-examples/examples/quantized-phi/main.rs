@@ -223,7 +223,11 @@ fn main() -> anyhow::Result<()> {
         print!("{t}");
         std::io::stdout().flush()?;
     }
-    let eos_token = *tos.tokenizer().get_vocab(true).get("</s>").unwrap();
+    let eos_token = *tos
+        .tokenizer()
+        .get_vocab(true)
+        .get("<|endoftext|>")
+        .unwrap();
     let start_post_prompt = std::time::Instant::now();
     let mut sampled = 0;
     for index in 0..to_sample {
