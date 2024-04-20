@@ -20,6 +20,12 @@ pub struct LlamaConfig {
     pub eos_token_id: Option<u32>,
 }
 
+impl LlamaConfig {
+    pub fn num_key_value_heads(&self) -> usize {
+        self.num_key_value_heads.unwrap_or(self.num_attention_heads)
+    }
+}
+
 fn default_rope() -> f32 {
     10_000.0
 }
@@ -32,7 +38,7 @@ impl LlamaConfig {
             vocab_size: self.vocab_size,
             num_hidden_layers: self.num_hidden_layers,
             num_attention_heads: self.num_attention_heads,
-            num_key_value_heads: self.num_key_value_heads.unwrap_or(self.num_attention_heads),
+            num_key_value_heads: self.num_key_value_heads(),
             rms_norm_eps: self.rms_norm_eps,
             rope_theta: self.rope_theta,
             use_flash_attn,

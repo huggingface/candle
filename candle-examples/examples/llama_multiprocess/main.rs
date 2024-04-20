@@ -76,7 +76,7 @@ struct Args {
     #[arg(long)]
     dtype: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, default_value = "v3-8b")]
     which: Which,
 
     #[arg(long, default_value = "nccl_id.txt")]
@@ -219,6 +219,9 @@ fn main() -> Result<()> {
         let next_token = logits_processor.sample(&logits)?;
         tokens.push(next_token);
         new_tokens.push(next_token);
+        if Some(next_token) == config.eos_token_id {
+            break;
+        }
         if rank == 0 {
             if let Some(t) = tokenizer.next_token(next_token)? {
                 print!("{t}");
@@ -226,6 +229,7 @@ fn main() -> Result<()> {
             }
         }
     }
+    println!();
     if rank == 0 {
         let dt = start_gen.elapsed();
         println!(
