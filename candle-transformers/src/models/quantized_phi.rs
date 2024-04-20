@@ -2,56 +2,59 @@ use std::collections::HashMap;
 
 use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
-use candle::{DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, LayerNorm, Module};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor};
+use candle_nn::{Embedding, LayerNorm};
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
-// QMatMul wrapper adding some tracing.
 #[derive(Debug, Clone)]
-struct QMatMul {
+struct QLinear {
     inner: candle::quantized::QMatMul,
+    bias: Tensor,
     span: tracing::Span,
 }
 
-impl QMatMul {
-    fn from_qtensor(qtensor: QTensor) -> Result<Self> {
-        let inner = candle::quantized::QMatMul::from_qtensor(qtensor)?;
+impl QLinear {
+    fn new<R: std::io::Read + std::io::Seek>(
+        ct: &gguf_file::Content,
+        r: &mut R,
+        name: &str,
+        device: &Device,
+    ) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "qmatmul");
-        Ok(Self { inner, span })
+        let w = ct.tensor(r, &format!("{name}.weight"), device)?;
+        let b = ct.tensor(r, &format!("{name}.bias"), device)?;
+        let inner = candle::quantized::QMatMul::from_qtensor(w)?;
+        let bias = b.dequantize(device)?;
+        Ok(Self { inner, bias, span })
     }
+}
 
+impl Module for QLinear {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let _enter = self.span.enter();
-        self.inner.forward(xs)
+        self.inner.forward(xs)?.broadcast_add(&self.bias)
     }
 }
 
 #[derive(Debug, Clone)]
 struct Mlp {
-    feed_forward_w1: QMatMul,
-    feed_forward_w2: QMatMul,
-    feed_forward_w3: QMatMul,
+    ffn_up: QLinear,
+    ffn_down: QLinear,
 }
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w1 = self.feed_forward_w1.forward(xs)?;
-        let w3 = self.feed_forward_w3.forward(xs)?;
-        self.feed_forward_w2
-            .forward(&(candle_nn::ops::silu(&w1)? * w3)?)
+        xs.apply(&self.ffn_up)?.gelu()?.apply(&self.ffn_down)
     }
 }
 
 #[derive(Debug, Clone)]
 struct LayerWeights {
-    attention_wq: QMatMul,
-    attention_wk: QMatMul,
-    attention_wv: QMatMul,
-    attention_wo: QMatMul,
-    attention_norm: LayerNorm,
+    attn_qkv: QLinear,
+    attn_output: QLinear,
+    attn_norm: LayerNorm,
     mlp: Mlp,
-    ffn_norm: LayerNorm,
     n_head: usize,
     n_kv_head: usize,
     head_dim: usize,
@@ -89,23 +92,18 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let q = self.attention_wq.forward(x)?;
-        let k = self.attention_wk.forward(x)?;
-        let v = self.attention_wv.forward(x)?;
+        let qkv =
+            self.attn_qkv
+                .forward(x)?
+                .reshape((b_sz, seq_len, 3, self.n_head, self.head_dim))?;
 
-        let q = q
-            .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let k = k
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?;
-        let v = v
-            .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-            .transpose(1, 2)?
-            // This call to contiguous ensures that the fast kernel can be called below. It's
-            // actually a no-op except when processing the initial prompt so has no significant
-            // impact on performance.
-            .contiguous()?;
+        let q = qkv.i((.., .., 0))?.transpose(1, 2)?;
+        let k = qkv.i((.., .., 1))?.transpose(1, 2)?;
+        let v = qkv.i((.., .., 2))?.transpose(1, 2)?;
+        // This call to contiguous ensures that the fast kernel can be called below. It's
+        // actually a no-op except when processing the initial prompt so has no significant
+        // impact on performance.
+        let v = v.contiguous()?;
 
         let q = self.apply_rotary_emb(&q, index_pos)?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
@@ -140,7 +138,7 @@ impl LayerWeights {
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = self.attention_wo.forward(&y)?;
+        let y = self.attn_output.forward(&y)?;
         Ok(y)
     }
 }
@@ -149,8 +147,8 @@ impl LayerWeights {
 pub struct ModelWeights {
     tok_embeddings: Embedding,
     layers: Vec<LayerWeights>,
-    norm: LayerNorm,
-    output: QMatMul,
+    output_norm: LayerNorm,
+    output: QLinear,
     masks: HashMap<usize, Tensor>,
     span: tracing::Span,
     span_output: tracing::Span,
@@ -205,54 +203,31 @@ impl ModelWeights {
 
         let tok_embeddings = ct.tensor(reader, "token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
-        let norm = layer_norm(
+        let output_norm = layer_norm(
             ct.tensor(reader, "output_norm.weight", device)?,
             ct.tensor(reader, "output_norm.bias", device)?,
             ln_eps,
         )?;
-        let output = ct.tensor(reader, "output.weight", device)?;
+        let output = QLinear::new(&ct, reader, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
         for layer_idx in 0..block_count {
             let prefix = format!("blk.{layer_idx}");
-            let attention_wq = ct.tensor(reader, &format!("{prefix}.attn_q.weight"), device)?;
-            let attention_wk = ct.tensor(reader, &format!("{prefix}.attn_k.weight"), device)?;
-            let attention_wv = ct.tensor(reader, &format!("{prefix}.attn_v.weight"), device)?;
-            let attention_wo =
-                ct.tensor(reader, &format!("{prefix}.attn_output.weight"), device)?;
-            let mlp = {
-                let feed_forward_w1 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_gate.weight"), device)?;
-                let feed_forward_w2 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_down.weight"), device)?;
-                let feed_forward_w3 =
-                    ct.tensor(reader, &format!("{prefix}.ffn_up.weight"), device)?;
-                Mlp {
-                    feed_forward_w1: QMatMul::from_qtensor(feed_forward_w1)?,
-                    feed_forward_w2: QMatMul::from_qtensor(feed_forward_w2)?,
-                    feed_forward_w3: QMatMul::from_qtensor(feed_forward_w3)?,
-                }
-            };
-            let attention_norm = layer_norm(
+            let ffn_up = QLinear::new(&ct, reader, &format!("{prefix}.ffn_up"), device)?;
+            let ffn_down = QLinear::new(&ct, reader, &format!("{prefix}.ffn_down"), device)?;
+            let mlp = Mlp { ffn_up, ffn_down };
+            let attn_norm = layer_norm(
                 ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
                 ct.tensor(reader, &format!("{prefix}.attn_norm.bias"), device)?,
-                ln_eps,
-            )?;
-            let ffn_norm = layer_norm(
-                ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
-                ct.tensor(reader, &format!("{prefix}.ffn_norm.bias"), device)?,
                 ln_eps,
             )?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
             let span_mlp = tracing::span!(tracing::Level::TRACE, "attn-mlp");
             layers.push(LayerWeights {
-                attention_wq: QMatMul::from_qtensor(attention_wq)?,
-                attention_wk: QMatMul::from_qtensor(attention_wk)?,
-                attention_wv: QMatMul::from_qtensor(attention_wv)?,
-                attention_wo: QMatMul::from_qtensor(attention_wo)?,
-                attention_norm,
+                attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
+                attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
+                attn_norm,
                 mlp,
-                ffn_norm,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
                 head_dim: embedding_length / head_count,
@@ -270,8 +245,8 @@ impl ModelWeights {
         Ok(Self {
             tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
             layers,
-            norm,
-            output: QMatMul::from_qtensor(output)?,
+            output_norm,
+            output,
             masks: HashMap::new(),
             span,
             span_output,
@@ -303,19 +278,18 @@ impl ModelWeights {
         for layer in self.layers.iter_mut() {
             let x = layer_in;
             let residual = &x;
-            let x = layer.attention_norm.forward(&x)?;
+            let x = layer.attn_norm.forward(&x)?;
             let attn = layer.forward_attn(&x, mask.as_ref(), index_pos)?;
             let x = (attn + residual)?;
 
             // MLP
             let _enter = layer.span_mlp.enter();
             let residual = &x;
-            let x = layer.ffn_norm.forward(&x)?;
             let x = layer.mlp.forward(&x)?;
             let x = (x + residual)?;
             layer_in = x
         }
-        let x = self.norm.forward(&layer_in)?;
+        let x = self.output_norm.forward(&layer_in)?;
         let x = x.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
         self.output.forward(&x)
