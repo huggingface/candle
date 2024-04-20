@@ -527,18 +527,15 @@ pub fn simple_eval(
             }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#ConstantOfShape
             "ConstantOfShape" => {
-                let dims = get(&node.input[0])?;
-                let value = get_attr_opt_owned::<Tensor>(node, "value")?;
-                let shape = dims
-                    .to_vec1::<i64>()?
-                    .into_iter()
-                    .map(|v| v as usize)
-                    .collect::<Vec<_>>();
-                let dtype = match value {
-                    Some(value) => value.dtype(),
-                    None => DType::F32,
-                };
-                let xs = Tensor::zeros(shape, dtype, dims.device())?;
+                let input = get(&node.input[0])?;
+                let value = get_attr_opt_owned::<Tensor>(node, "value")?.unwrap_or(Tensor::zeros(
+                    (),
+                    DType::F32,
+                    &Device::Cpu,
+                )?);
+
+                let xs = Tensor::ones(input.shape(), value.dtype(), input.device())?
+                    .broadcast_mul(&value)?;
                 values.insert(node.output[0].clone(), xs);
             }
             "Unsqueeze" => {
@@ -635,14 +632,29 @@ pub fn simple_eval(
             "Range" => {
                 let start = get(&node.input[0])?;
                 let limit = get(&node.input[1])?;
-                let delta = get(&node.input[2])?.to_vec0::<i64>()?;
+                let delta = get(&node.input[2])?;
 
-                let range = std::ops::Range {
-                    start: start.to_vec0::<i64>()?,
-                    end: limit.to_vec0::<i64>()?,
+                macro_rules! arange_step {
+                    ($t: ty) => {
+                        Tensor::arange_step(
+                            start.to_vec0::<$t>()?,
+                            limit.to_vec0::<$t>()?,
+                            delta.to_vec0::<$t>()?,
+                            &Device::Cpu,
+                        )?
+                    };
+                }
+
+                let output = match start.dtype() {
+                    DType::U8 => arange_step!(u8),
+                    DType::U32 => arange_step!(u32),
+                    DType::I64 => arange_step!(i64),
+                    DType::BF16 => arange_step!(f32),
+                    DType::F16 => arange_step!(f32),
+                    DType::F32 => arange_step!(f32),
+                    DType::F64 => arange_step!(f64),
                 };
 
-                let output = Tensor::from_iter(range, start.device())?;
                 values.insert(node.output[0].clone(), output);
             }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Greater
@@ -658,7 +670,7 @@ pub fn simple_eval(
                 let a = get(&node.input[0])?;
                 let b = get(&node.input[1])?;
 
-                let output = a.broadcast_le(b)?;
+                let output = a.broadcast_lt(b)?;
                 values.insert(node.output[0].clone(), output);
             }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Log
