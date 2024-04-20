@@ -35,7 +35,7 @@ jobs:
         rust: [stable]
         features: [default]
         include:
-          - os: macOS-latest
+          - os: macos-14-arm64
             features: metal
             rust: stable
           - os: macOS-latest
