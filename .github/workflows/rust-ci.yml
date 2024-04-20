@@ -31,12 +31,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
+        os: [ubuntu-latest, windows-latest]
         rust: [stable]
-        features: ["default"]
+        features: [default]
         include:
           - os: macOS-latest
             features: [default, metal, accelerate]
+            rust: [stable]
     steps:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
