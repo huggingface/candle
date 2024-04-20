@@ -937,7 +937,10 @@ fn test_constant_of_shape() -> Result<()> {
         let eval = candle_onnx::simple_eval(&manual_graph, inputs)?;
         assert_eq!(eval.len(), 1);
 
-        let z = eval.get(OUTPUT_Z).expect("Output 'z' not found").to_dtype(DType::F64)?;
+        let z = eval
+            .get(OUTPUT_Z)
+            .expect("Output 'z' not found")
+            .to_dtype(DType::F64)?;
 
         let expected = Tensor::new(expected, &Device::Cpu)?.to_dtype(DType::F64)?;
         match expected.dims().len() {
