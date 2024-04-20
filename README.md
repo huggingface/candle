@@ -60,7 +60,7 @@ These online demos run entirely in your browser:
 
 We also provide a some command line based examples using state of the art models:
 
-- [LLaMA and LLaMA-v2](./candle-examples/examples/llama/): general LLM, includes
+- [LLaMA v1, v2, and v3](./candle-examples/examples/llama/): general LLM, includes
   the SOLAR-10.7B variant.
 - [Falcon](./candle-examples/examples/falcon/): general LLM.
 - [Gemma](./candle-examples/examples/gemma/): 2b and 7b general LLMs from Google Deepmind.
@@ -200,7 +200,7 @@ If you have an addition to this list, please submit a pull request.
     - WASM support, run your models in a browser.
 - Included models.
     - Language Models.
-        - LLaMA v1 and v2 with variants such as SOLAR-10.7B.
+        - LLaMA v1, v2, and v3 with variants such as SOLAR-10.7B.
         - Falcon.
         - StarCoder, StarCoder2.
         - Phi 1, 1.5, and 2.
@@ -375,9 +375,9 @@ git submodule update --init
 /usr/include/c++/11/bits/std_function.h:530:146: error: parameter packs not expanded with ‘...’:
 ```
 
-This is a bug in gcc-11 triggered by the Cuda compiler. To fix this, install a different, supported gcc version - for example gcc-10, and specify the path to the compiler in the CANDLE_NVCC_CCBIN environment variable.
+This is a bug in gcc-11 triggered by the Cuda compiler. To fix this, install a different, supported gcc version - for example gcc-10, and specify the path to the compiler in the NVCC_CCBIN environment variable.
 ```
-env CANDLE_NVCC_CCBIN=/usr/lib/gcc/x86_64-linux-gnu/10 cargo ...
+env NVCC_CCBIN=/usr/lib/gcc/x86_64-linux-gnu/10 cargo ...
 ```
 
 #### Linking error on windows when running rustdoc or mdbook tests

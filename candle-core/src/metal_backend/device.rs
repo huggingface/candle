@@ -283,5 +283,5 @@ impl MetalDevice {
 }
 
 fn buf_size(size: NSUInteger) -> NSUInteger {
-    (size - 1).next_power_of_two() as NSUInteger
+    size.saturating_sub(1).next_power_of_two() as NSUInteger
 }

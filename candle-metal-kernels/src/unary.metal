@@ -184,5 +184,5 @@ BFLOAT_UNARY_OP(sign)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
 
-COPY2D(copy2d_bf64, bfloat)
+COPY2D(copy2d_bf16, bfloat)
 #endif
