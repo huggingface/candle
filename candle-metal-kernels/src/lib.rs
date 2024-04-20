@@ -370,7 +370,7 @@ pub fn call_unary_contiguous_tiled(
 ) -> Result<(), MetalKernelError> {
     let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
     let encoder = command_buffer.new_compute_command_encoder();
-    let tile_size = 4;
+    let tile_size = 2;
     let tiles = length.div_ceil(tile_size);
 
     encoder.set_compute_pipeline_state(&pipeline);
@@ -399,7 +399,7 @@ pub fn call_unary_strided_tiled(
     let pipeline = kernels.load_pipeline(device, Source::Unary, name.0)?;
 
     let length: usize = shape.iter().product();
-    let tile_size = 4;
+    let tile_size = 2;
     let tiles = length.div_ceil(tile_size);
     let num_dims: usize = shape.len();
     let encoder = command_buffer.new_compute_command_encoder();

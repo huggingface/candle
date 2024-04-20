@@ -68,7 +68,7 @@ template <typename T> METAL_FUNC T silu(T in){
     return in / (static_cast<T>(1) + exp(-in));
 }
 
-#define TILE_SIZE 4
+#define TILE_SIZE 2
 
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
