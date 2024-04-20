@@ -191,6 +191,7 @@ fn main() -> Result<()> {
         .map_err(E::msg)?
         .get_ids()
         .to_vec();
+    let mut tokenizer = candle_examples::token_output_stream::TokenOutputStream::new(tokenizer);
 
     println!("starting the inference loop");
     let temperature = if args.temperature <= 0. {
@@ -200,10 +201,14 @@ fn main() -> Result<()> {
     };
     let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
     let mut new_tokens = vec![];
-    let start_gen = std::time::Instant::now();
+    let mut start_gen = std::time::Instant::now();
     let mut index_pos = 0;
     for index in 0..args.sample_len {
-        let start_gen = std::time::Instant::now();
+        // Only start timing at the second token as processing the first token waits for all the
+        // weights to be loaded in an async way.
+        if index == 1 {
+            start_gen = std::time::Instant::now()
+        };
         let context_size = if index > 0 { 1 } else { tokens.len() };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
@@ -215,24 +220,18 @@ fn main() -> Result<()> {
         tokens.push(next_token);
         new_tokens.push(next_token);
         if rank == 0 {
-            println!("> {:?}", start_gen.elapsed());
-            println!(
-                "{} token: {} '{}'",
-                index + 1,
-                next_token,
-                tokenizer.decode(&[next_token], true).map_err(E::msg)?
-            );
+            if let Some(t) = tokenizer.next_token(next_token)? {
+                print!("{t}");
+                std::io::stdout().flush()?;
+            }
         }
     }
-    let dt = start_gen.elapsed();
     if rank == 0 {
+        let dt = start_gen.elapsed();
         println!(
-            "{} tokens generated ({} token/s)\n----\n{}\n----",
+            "\n\n{} tokens generated ({} token/s)\n",
             args.sample_len,
-            args.sample_len as f64 / dt.as_secs_f64(),
-            tokenizer
-                .decode(new_tokens.as_slice(), true)
-                .map_err(E::msg)?
+            (args.sample_len - 1) as f64 / dt.as_secs_f64(),
         );
     }
     Ok(())
