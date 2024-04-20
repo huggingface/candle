@@ -219,8 +219,12 @@ impl Error {
         Self::Wrapped(Box::new(err)).bt()
     }
 
-    pub fn msg(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+    pub fn msg(err: impl std::error::Error) -> Self {
         Self::Msg(err.to_string()).bt()
+    }
+
+    pub fn debug(err: impl std::fmt::Debug) -> Self {
+        Self::Msg(format!("{err:?}")).bt()
     }
 
     pub fn bt(self) -> Self {
