@@ -46,7 +46,8 @@ The default scheduler for the XL Turbo version is the Euler Ancestral scheduler.
 - `--cpu`: use the cpu rather than the gpu (much slower).
 - `--height`, `--width`: set the height and width for the generated image.
 - `--n-steps`: the number of steps to be used in the diffusion process.
-- `--num-samples`: the number of samples to generate.
+- `--num-samples`: the number of samples to generate iteratively.
+- `--bsize`: the numbers of samples to generate simultaneously.
 - `--final-image`: the filename for the generated image(s).
 
 ### Using flash-attention

@@ -337,4 +337,12 @@ impl Device {
             }
         }
     }
+
+    pub fn synchronize(&self) -> Result<()> {
+        match self {
+            Self::Cpu => Ok(()),
+            Self::Cuda(d) => d.synchronize(),
+            Self::Metal(d) => d.synchronize(),
+        }
+    }
 }
