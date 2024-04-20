@@ -68,25 +68,22 @@ template <typename T> METAL_FUNC T silu(T in){
     return in / (static_cast<T>(1) + exp(-in));
 }
 
+#define TILE_SIZE 4
+
 #define UNARY(FN, TYPENAME, FN_NAME, FN_NAME_STRIDED) \
 kernel void FN_NAME( \
     constant size_t &dim, \
-    constant size_t &tile_size, \
     device const TYPENAME *input,  \
     device TYPENAME *output, \
     uint tid [[ thread_position_in_grid ]] \
 ) { \
-    for (uint i = 0; i < tile_size; i++) { \
-        const uint idx = tid * tile_size + i; \
-        if (idx >= dim) { \
-            return; \
-        } \
-        output[idx] = TYPENAME(FN(float(input[idx]))); \
+    if (tid >= dim) { \
+        return; \
     } \
-}\
-kernel void FN_NAME_STRIDED( \
+    output[tid] = TYPENAME(FN(float(input[tid]))); \
+} \
+kernel void FN_NAME##_##strided( \
     constant size_t &dim, \
-    constant size_t &tile_size, \
     constant size_t &num_dims, \
     constant size_t *dims, \
     constant size_t *strides, \
@@ -94,9 +91,37 @@ kernel void FN_NAME_STRIDED( \
     device TYPENAME *output, \
     uint tid [[ thread_position_in_grid ]] \
 ) { \
-    const uint anchor = tid * tile_size; \
-    for (uint i = 0; i < tile_size; i++) { \
-        const uint idx = tid * tile_size + i; \
+    if (tid >= dim) { \
+        return; \
+    } \
+    output[tid] = TYPENAME(FN(float(input[get_strided_index(tid, num_dims, dims, strides)]))); \
+} \
+kernel void FN_NAME##_##tiled( \
+    constant size_t &dim, \
+    device const TYPENAME *input,  \
+    device TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    for (uint i = 0; i < TILE_SIZE; i++) { \
+        const uint idx = tid * TILE_SIZE + i; \
+        if (idx >= dim) { \
+            return; \
+        } \
+        output[idx] = TYPENAME(FN(float(input[idx]))); \
+    } \
+}\
+kernel void FN_NAME##_##strided_tiled( \
+    constant size_t &dim, \
+    constant size_t &num_dims, \
+    constant size_t *dims, \
+    constant size_t *strides, \
+    device const TYPENAME *input,  \
+    device TYPENAME *output, \
+    uint tid [[ thread_position_in_grid ]] \
+) { \
+    const uint anchor = tid * TILE_SIZE; \
+    for (uint i = 0; i < TILE_SIZE; i++) { \
+        const uint idx = tid * TILE_SIZE + i; \
         if (idx >= dim) { \
             return; \
         } \
