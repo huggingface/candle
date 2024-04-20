@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use candle::quantized::gguf_file;
 use candle::quantized::QTensor;
-use candle::{DType, Device, IndexOp, Module, Result, Tensor};
+use candle::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
 
 pub const MAX_SEQ_LEN: usize = 4096;
@@ -60,6 +60,7 @@ struct LayerWeights {
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
+    rope_dim: usize,
     neg_inf: Tensor,
     kv_cache: Option<(Tensor, Tensor)>,
     span_attn: tracing::Span,
@@ -74,14 +75,17 @@ fn masked_fill(on_false: &Tensor, mask: &Tensor, on_true: &Tensor) -> Result<Ten
 }
 
 impl LayerWeights {
-    fn apply_rotary_emb(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+    fn apply_rotary_emb(&self, xs: &Tensor, index_pos: usize) -> Result<Tensor> {
         let _enter = self.span_rot.enter();
-        let (_b_sz, _n_head, seq_len, _n_embd) = x.dims4()?;
+        let (_b_sz, _n_head, seq_len, _n_embd) = xs.dims4()?;
+        let xs_rot = xs.i((.., .., .., ..self.rope_dim))?;
+        let xs_pass = xs.i((.., .., .., self.rope_dim..))?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.sin.narrow(0, index_pos, seq_len)?;
         // The call to contiguous below is only necessary when processing the prompt.
         // When the seq_len is 1 in the inference loop, this is a no-op.
-        candle_nn::rotary_emb::rope_i(&x.contiguous()?, &cos, &sin)
+        let xs_rot = candle_nn::rotary_emb::rope_i(&xs_rot.contiguous()?, &cos, &sin)?;
+        Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)
     }
 
     fn forward_attn(
@@ -105,14 +109,14 @@ impl LayerWeights {
         // impact on performance.
         let v = v.contiguous()?;
 
-        let q = self.apply_rotary_emb(&q, index_pos)?;
+        let q = self.apply_rotary_emb(&q, index_pos)?.contiguous()?;
         let k = self.apply_rotary_emb(&k, index_pos)?;
 
         let (k, v) = match &self.kv_cache {
-            None => (k, v),
+            None => (k.contiguous()?, v.contiguous()?),
             Some((k_cache, v_cache)) => {
                 if index_pos == 0 {
-                    (k, v)
+                    (k.contiguous()?, v.contiguous()?)
                 } else {
                     let k = Tensor::cat(&[k_cache, &k], 2)?;
                     let v = Tensor::cat(&[v_cache, &v], 2)?;
@@ -122,7 +126,6 @@ impl LayerWeights {
         };
         self.kv_cache = Some((k.clone(), v.clone()));
 
-        // Support for MQA, useful for 70B models and mistral.
         let k = crate::utils::repeat_kv(k, self.n_head / self.n_kv_head)?;
         let v = crate::utils::repeat_kv(v, self.n_head / self.n_kv_head)?;
 
@@ -138,8 +141,7 @@ impl LayerWeights {
         // Convert to contiguous as matmul doesn't support strided vs for now.
         let y = att.matmul(&v.contiguous()?)?;
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y = self.attn_output.forward(&y)?;
-        Ok(y)
+        self.attn_output.forward(&y)
     }
 }
 
@@ -233,6 +235,7 @@ impl ModelWeights {
                 head_dim: embedding_length / head_count,
                 cos: cos.clone(),
                 sin: sin.clone(),
+                rope_dim,
                 neg_inf: neg_inf.clone(),
                 kv_cache: None,
                 span_attn,
