@@ -81,9 +81,7 @@ impl LayerWeights {
         let xs_pass = xs.i((.., .., .., self.rope_dim..))?;
         let cos = self.cos.narrow(0, index_pos, seq_len)?;
         let sin = self.sin.narrow(0, index_pos, seq_len)?;
-        // The call to contiguous below is only necessary when processing the prompt.
-        // When the seq_len is 1 in the inference loop, this is a no-op.
-        let xs_rot = candle_nn::rotary_emb::rope_i(&xs_rot.contiguous()?, &cos, &sin)?;
+        let xs_rot = candle_nn::rotary_emb::rope(&xs_rot.contiguous()?, &cos, &sin)?;
         Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)
     }
 
