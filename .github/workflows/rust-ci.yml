@@ -35,10 +35,10 @@ jobs:
         rust: [stable]
         features: [default]
         include:
-          - os: macOS-14-arm64
+          - os: macOS-14
             features: metal
             rust: stable
-          - os: macOS-latest
+          - os: macOS-14
             features: accelerate
             rust: stable
     steps:
