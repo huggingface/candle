@@ -445,8 +445,8 @@ impl BackendStorage for MetalStorage {
         command_buffer.set_label(B::KERNEL);
         let src = buffer_o(&self.buffer, layout, self.dtype);
 
-        match (dtype, layout.is_contiguous()) {
-            (DType::BF16 | DType::F16, true) => {
+        match (el_count % 2, dtype, layout.is_contiguous()) {
+            (0, DType::BF16 | DType::F16, true) => {
                 use candle_metal_kernels::unary::contiguous_tiled;
                 let kernel_name = match (B::KERNEL, dtype) {
                     ("uabs", DType::F16) => contiguous_tiled::abs::HALF,
@@ -524,81 +524,7 @@ impl BackendStorage for MetalStorage {
                 )
                 .map_err(MetalError::from)?;
             }
-            (DType::BF16 | DType::F16, false) => {
-                use candle_metal_kernels::unary::strided_tiled;
-                let kernel_name = match (B::KERNEL, dtype) {
-                    ("ucos", DType::F32) => strided_tiled::cos::FLOAT,
-                    ("usin", DType::F32) => strided_tiled::sin::FLOAT,
-                    ("usqr", DType::F32) => strided_tiled::sqr::FLOAT,
-                    ("usqrt", DType::F32) => strided_tiled::sqrt::FLOAT,
-                    ("uneg", DType::F32) => strided_tiled::neg::FLOAT,
-                    ("uexp", DType::F32) => strided_tiled::exp::FLOAT,
-                    ("ulog", DType::F32) => strided_tiled::log::FLOAT,
-                    ("ugelu", DType::F32) => strided_tiled::gelu::FLOAT,
-                    ("ugelu_erf", DType::F32) => strided_tiled::gelu_erf::FLOAT,
-                    ("uerf", DType::F32) => strided_tiled::erf::FLOAT,
-                    ("usilu", DType::F32) => strided_tiled::silu::FLOAT,
-                    ("uabs", DType::F32) => strided_tiled::abs::FLOAT,
-                    ("uceil", DType::F32) => strided_tiled::ceil::FLOAT,
-                    ("ufloor", DType::F32) => strided_tiled::floor::FLOAT,
-                    ("urelu", DType::F32) => strided_tiled::relu::FLOAT,
-                    ("uround", DType::F32) => strided_tiled::round::FLOAT,
-                    ("utanh", DType::F32) => strided_tiled::tanh::FLOAT,
-
-                    ("ucos", DType::F16) => strided_tiled::cos::HALF,
-                    ("usin", DType::F16) => strided_tiled::sin::HALF,
-                    ("usqr", DType::F16) => strided_tiled::sqr::HALF,
-                    ("usqrt", DType::F16) => strided_tiled::sqrt::HALF,
-                    ("uneg", DType::F16) => strided_tiled::neg::HALF,
-                    ("uexp", DType::F16) => strided_tiled::exp::HALF,
-                    ("ulog", DType::F16) => strided_tiled::log::HALF,
-                    ("ugelu", DType::F16) => strided_tiled::gelu::HALF,
-                    ("ugelu_erf", DType::F16) => strided_tiled::gelu_erf::HALF,
-                    ("uerf", DType::F16) => strided_tiled::erf::HALF,
-                    ("usilu", DType::F16) => strided_tiled::silu::HALF,
-                    ("uabs", DType::F16) => strided_tiled::abs::HALF,
-                    ("uceil", DType::F16) => strided_tiled::ceil::HALF,
-                    ("ufloor", DType::F16) => strided_tiled::floor::HALF,
-                    ("urelu", DType::F16) => strided_tiled::relu::HALF,
-                    ("uround", DType::F16) => strided_tiled::round::HALF,
-                    ("utanh", DType::F16) => strided_tiled::tanh::HALF,
-
-                    ("ucos", DType::BF16) => strided_tiled::cos::BFLOAT,
-                    ("usin", DType::BF16) => strided_tiled::sin::BFLOAT,
-                    ("usqr", DType::BF16) => strided_tiled::sqr::BFLOAT,
-                    ("usqrt", DType::BF16) => strided_tiled::sqrt::BFLOAT,
-                    ("uneg", DType::BF16) => strided_tiled::neg::BFLOAT,
-                    ("uexp", DType::BF16) => strided_tiled::exp::BFLOAT,
-                    ("ulog", DType::BF16) => strided_tiled::log::BFLOAT,
-                    ("ugelu", DType::BF16) => strided_tiled::gelu::BFLOAT,
-                    ("ugelu_erf", DType::BF16) => strided_tiled::gelu_erf::BFLOAT,
-                    ("uerf", DType::BF16) => strided_tiled::erf::BFLOAT,
-                    ("usilu", DType::BF16) => strided_tiled::silu::BFLOAT,
-                    ("uabs", DType::BF16) => strided_tiled::abs::BFLOAT,
-                    ("uceil", DType::BF16) => strided_tiled::ceil::BFLOAT,
-                    ("ufloor", DType::BF16) => strided_tiled::floor::BFLOAT,
-                    ("urelu", DType::BF16) => strided_tiled::relu::BFLOAT,
-                    ("uround", DType::BF16) => strided_tiled::round::BFLOAT,
-                    ("utanh", DType::BF16) => strided_tiled::tanh::BFLOAT,
-
-                    (name, dtype) => {
-                        crate::bail!("Metal strided_tiled unary {name} {dtype:?} not implemented")
-                    }
-                };
-                let dst = BufferOffset::zero_offset(&buffer);
-                candle_metal_kernels::call_unary_strided_tiled(
-                    &device.device,
-                    &command_buffer,
-                    &device.kernels,
-                    kernel_name,
-                    layout.dims(),
-                    src,
-                    layout.stride(),
-                    dst,
-                )
-                .map_err(MetalError::from)?;
-            }
-            (_, true) => {
+            (_, _, true) => {
                 use candle_metal_kernels::unary::contiguous;
                 let kernel_name = match (B::KERNEL, dtype) {
                     ("uabs", DType::F16) => contiguous::abs::HALF,
@@ -674,7 +600,7 @@ impl BackendStorage for MetalStorage {
                 )
                 .map_err(MetalError::from)?;
             }
-            (_, false) => {
+            (_, _, false) => {
                 use candle_metal_kernels::unary::strided;
                 let kernel_name = match (B::KERNEL, dtype) {
                     ("ucos", DType::F32) => strided::cos::FLOAT,

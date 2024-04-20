@@ -121,30 +121,6 @@ macro_rules! ops{
                 pub const U8: Kernel = Kernel("copy_u8_strided");
             }
         }
-
-        pub mod strided_tiled {
-        pub struct Kernel(pub &'static str);
-        $(
-        pub mod $name {
-            use super::Kernel;
-            pub const FLOAT: Kernel = Kernel(concat!(stringify!($name), "_f32_strided_tiled"));
-            pub const HALF: Kernel = Kernel(concat!(stringify!($name), "_f16_strided_tiled"));
-            pub const BFLOAT: Kernel = Kernel(concat!(stringify!($name), "_bf16_strided_tiled"));
-            pub const I64: Kernel = Kernel(concat!(stringify!($name), "_i64_strided_tiled"));
-            pub const U32: Kernel = Kernel(concat!(stringify!($name), "_u32_strided_tiled"));
-            pub const U8: Kernel = Kernel(concat!(stringify!($name), "_u8_strided_tiled"));
-        }
-        )+
-            pub mod copy {
-                use super::Kernel;
-                pub const FLOAT: Kernel = Kernel("copy_f32_strided_tiled");
-                pub const HALF: Kernel = Kernel("copy_f16_strided_tiled");
-                pub const BFLOAT: Kernel = Kernel("copy_bf16_strided_tiled");
-                pub const I64: Kernel = Kernel("copy_i64_strided_tiled");
-                pub const U32: Kernel = Kernel("copy_u32_strided_tiled");
-                pub const U8: Kernel = Kernel("copy_u8_strided_tiled");
-            }
-        }
     };
 }
 
@@ -380,35 +356,6 @@ pub fn call_unary_contiguous_tiled(
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
     encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(output, metal::MTLResourceUsage::Write);
-    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
-    encoder.end_encoding();
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn call_unary_strided_tiled(
-    device: &Device,
-    command_buffer: &CommandBufferRef,
-    kernels: &Kernels,
-    name: unary::strided_tiled::Kernel,
-    shape: &[usize],
-    input: BufferOffset,
-    strides: &[usize],
-    output: BufferOffset,
-) -> Result<(), MetalKernelError> {
-    let pipeline = kernels.load_pipeline(device, Source::Unary, name.0)?;
-
-    let length: usize = shape.iter().product();
-    let tile_size = 2;
-    let tiles = length.div_ceil(tile_size);
-    let num_dims: usize = shape.len();
-    let encoder = command_buffer.new_compute_command_encoder();
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, tiles);
-
-    encoder.set_compute_pipeline_state(&pipeline);
-    set_params!(encoder, (length, num_dims, shape, strides, &input, &output));
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output.buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
     Ok(())

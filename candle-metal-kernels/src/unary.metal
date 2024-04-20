@@ -104,28 +104,7 @@ kernel void FN_NAME##_##tiled( \
 ) { \
     for (uint i = 0; i < TILE_SIZE; i++) { \
         const uint idx = tid * TILE_SIZE + i; \
-        if (idx >= dim) { \
-            return; \
-        } \
         output[idx] = TYPENAME(FN(float(input[idx]))); \
-    } \
-}\
-kernel void FN_NAME##_##strided_tiled( \
-    constant size_t &dim, \
-    constant size_t &num_dims, \
-    constant size_t *dims, \
-    constant size_t *strides, \
-    device const TYPENAME *input,  \
-    device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    const uint anchor = tid * TILE_SIZE; \
-    for (uint i = 0; i < TILE_SIZE; i++) { \
-        const uint idx = tid * TILE_SIZE + i; \
-        if (idx >= dim) { \
-            return; \
-        } \
-        output[idx] = TYPENAME(FN(float(input[get_strided_index(idx, num_dims, dims, strides)]))); \
     } \
 }
 

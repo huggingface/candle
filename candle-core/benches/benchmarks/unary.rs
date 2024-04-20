@@ -12,7 +12,12 @@ fn run_unary_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &
     let m = 1024;
     let k = 1024;
 
-    let tensor = Tensor::ones((b, m, k), dtype, &device).unwrap();
+    let tensor = Tensor::arange(0.0f32, (b * m * k) as f32, &device)
+        .unwrap()
+        .to_dtype(dtype)
+        .unwrap()
+        .reshape((b, m, k))
+        .unwrap();
 
     let flops = b * m * k * dtype.size_in_bytes();
 
