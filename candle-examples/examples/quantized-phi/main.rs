@@ -16,7 +16,7 @@ use candle_examples::token_output_stream::TokenOutputStream;
 use candle_transformers::models::quantized_phi as model;
 use model::ModelWeights;
 
-const DEFAULT_PROMPT: &str = "My favorite theorem is ";
+const DEFAULT_PROMPT: &str = "Write a function to count prime numbers up to N. ";
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, ValueEnum)]
 enum Which {
