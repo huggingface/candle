@@ -131,8 +131,7 @@ fn main() -> Result<()> {
         let model_id = args.model_id.unwrap_or_else(|| match args.which {
             Which::V1 => "Narsil/amall-7b".to_string(),
             Which::V2 => "meta-llama/Llama-2-7b-hf".to_string(),
-            //Which::V3 => "meta-llama/Meta-Llama-3-8B".to_string(),
-            Which::V3 => "NousResearch/Meta-Llama-3-8B".to_string(),
+            Which::V3 => "meta-llama/Meta-Llama-3-8B".to_string(),
             Which::V3Instruct => "meta-llama/Meta-Llama-3-8B-Instruct".to_string(),
             Which::Solar10_7B => "upstage/SOLAR-10.7B-v1.0".to_string(),
             Which::TinyLlama1_1BChat => "TinyLlama/TinyLlama-1.1B-Chat-v1.0".to_string(),
