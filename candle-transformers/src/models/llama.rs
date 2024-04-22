@@ -254,7 +254,12 @@ impl CausalSelfAttention {
             let att = if seq_len == 1 {
                 att
             } else {
-                let mask = cache.mask(seq_len)?.broadcast_as(att.shape())?;
+                let mut mask = cache.mask(seq_len)?;
+                if index_pos != 0 {
+                    let zero_history = Tensor::zeros((seq_len, (index_pos / seq_len) * seq_len), mask.dtype(), mask.device())?;
+                    mask = Tensor::cat(&[zero_history, mask], 1)?;
+                }
+                mask = mask.broadcast_as(att.shape())?;
                 masked_fill(&att, &mask, f32::NEG_INFINITY)?
             };
             let att = candle_nn::ops::softmax(&att, D::Minus1)?;

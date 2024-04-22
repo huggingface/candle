@@ -70,6 +70,10 @@ struct Args {
     #[arg(long)]
     prompt: Option<String>,
 
+    /// When present, prompt processing will be done in chunks of this size
+    #[arg(long)]
+    prompt_batch_size: Option<usize>,
+
     /// Use different dtype than f16
     #[arg(long)]
     dtype: Option<String>,
@@ -127,7 +131,8 @@ fn main() -> Result<()> {
         let model_id = args.model_id.unwrap_or_else(|| match args.which {
             Which::V1 => "Narsil/amall-7b".to_string(),
             Which::V2 => "meta-llama/Llama-2-7b-hf".to_string(),
-            Which::V3 => "meta-llama/Meta-Llama-3-8B".to_string(),
+            //Which::V3 => "meta-llama/Meta-Llama-3-8B".to_string(),
+            Which::V3 => "NousResearch/Meta-Llama-3-8B".to_string(),
             Which::V3Instruct => "meta-llama/Meta-Llama-3-8B-Instruct".to_string(),
             Which::Solar10_7B => "upstage/SOLAR-10.7B-v1.0".to_string(),
             Which::TinyLlama1_1BChat => "TinyLlama/TinyLlama-1.1B-Chat-v1.0".to_string(),
@@ -164,11 +169,21 @@ fn main() -> Result<()> {
         .to_vec();
     let mut tokenizer = candle_examples::token_output_stream::TokenOutputStream::new(tokenizer);
 
+    let mut index_pos = 0;
+    let mut prompt_logits: Option<Tensor> = None;
+    if let Some(chunk_size) = args.prompt_batch_size {
+        println!("processing the prompt");
+        for (chunk_index, chunk) in tokens.chunks(chunk_size).enumerate() {
+            let input = Some(Tensor::new(chunk, &device)?.unsqueeze(0)?);
+            prompt_logits = Some(llama.forward(&input.unwrap(), chunk_index * 128, &mut cache)?);
+            index_pos += chunk.len();
+        }
+    }
+
     println!("starting the inference loop");
     print!("{prompt}");
     let mut logits_processor = LogitsProcessor::new(args.seed, Some(args.temperature), args.top_p);
     let start_gen = std::time::Instant::now();
-    let mut index_pos = 0;
     let mut token_generated = 0;
     for index in 0..args.sample_len {
         let (context_size, context_index) = if cache.use_kv_cache && index > 0 {
@@ -176,9 +191,16 @@ fn main() -> Result<()> {
         } else {
             (tokens.len(), 0)
         };
-        let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-        let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
-        let logits = llama.forward(&input, context_index, &mut cache)?;
+
+        let logits = if let Some(last_logits) = prompt_logits {
+            prompt_logits = None;
+            last_logits
+        } else {
+            let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
+            index_pos += ctxt.len();
+            let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
+            llama.forward(&input, context_index, &mut cache)?
+        };
         let logits = logits.squeeze(0)?;
         let logits = if args.repeat_penalty == 1. {
             logits
@@ -190,7 +212,6 @@ fn main() -> Result<()> {
                 &tokens[start_at..],
             )?
         };
-        index_pos += ctxt.len();
 
         let next_token = logits_processor.sample(&logits)?;
         token_generated += 1;
