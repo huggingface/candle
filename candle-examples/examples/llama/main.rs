@@ -175,7 +175,7 @@ fn main() -> Result<()> {
         println!("processing the prompt");
         for (chunk_index, chunk) in tokens.chunks(chunk_size).enumerate() {
             let input = Some(Tensor::new(chunk, &device)?.unsqueeze(0)?);
-            prompt_logits = Some(llama.forward(&input.unwrap(), chunk_index * 128, &mut cache)?);
+            prompt_logits = Some(llama.forward(&input.unwrap(), chunk_index * chunk_size, &mut cache)?);
             index_pos += chunk.len();
         }
     }
