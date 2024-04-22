@@ -183,7 +183,7 @@ fn main() -> Result<()> {
     println!("starting the inference loop");
     print!("{prompt}");
     let mut logits_processor = LogitsProcessor::new(args.seed, Some(args.temperature), args.top_p);
-    let start_gen = std::time::Instant::now();
+    let mut start_gen = std::time::Instant::now();
     let mut token_generated = 0;
     for index in 0..args.sample_len {
         let (context_size, context_index) = if cache.use_kv_cache && index > 0 {
@@ -191,6 +191,9 @@ fn main() -> Result<()> {
         } else {
             (tokens.len(), 0)
         };
+        if index == 1 {
+            start_gen = std::time::Instant::now()
+        }
 
         let logits = if let Some(last_logits) = prompt_logits {
             prompt_logits = None;
@@ -232,7 +235,7 @@ fn main() -> Result<()> {
     println!(
         "\n\n{} tokens generated ({} token/s)\n",
         token_generated,
-        token_generated as f64 / dt.as_secs_f64(),
+        (token_generated - 1) as f64 / dt.as_secs_f64(),
     );
     Ok(())
 }
