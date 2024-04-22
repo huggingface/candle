@@ -141,7 +141,7 @@ impl Cache {
             let mask: Vec<_> = 
                 (0..t).flat_map(|i| 
                     (0..u).map(move |j| 
-                        u8::from(j > i+(u-t))))
+                        u8::from(j + t > i + u)))
                     .collect();
             let mask = Tensor::from_slice(&mask, (t, u), &self.device)?;
             self.masks.insert((t, u), mask.clone());
