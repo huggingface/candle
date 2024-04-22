@@ -180,6 +180,11 @@ impl RmsNorm {
         let inner = candle_nn::rms_norm(size, eps, vb)?;
         Ok(Self { inner, span })
     }
+
+    pub fn forward_cont(&self, x: &Tensor) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        self.inner.forward_cont(x)
+    }
 }
 
 impl Module for RmsNorm {

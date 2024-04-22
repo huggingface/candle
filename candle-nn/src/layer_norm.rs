@@ -162,6 +162,10 @@ impl RmsNorm {
     pub fn into_inner(self) -> LayerNorm {
         self.0
     }
+
+    pub fn forward_cont(&self, xs: &Tensor) -> Result<Tensor> {
+        crate::ops::rms_norm(xs, &self.0.weight, self.0.eps as f32)
+    }
 }
 
 impl crate::Module for RmsNorm {

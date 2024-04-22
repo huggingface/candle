@@ -1,5 +1,5 @@
 use super::with_tracing::{linear_no_bias as linear, Linear, RmsNorm};
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Module, VarBuilder};
 use std::collections::HashMap;
 
@@ -352,10 +352,10 @@ impl Block {
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
         let residual = x;
-        let x = self.rms_1.forward(x)?;
+        let x = self.rms_1.forward_cont(x)?;
         let x = (self.attn.forward(&x, index_pos, block_idx, cache)? + residual)?;
         let residual = &x;
-        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        let x = (self.mlp.forward(&self.rms_2.forward_cont(&x)?)? + residual)?;
         Ok(x)
     }
 
@@ -394,7 +394,7 @@ impl Llama {
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = block.forward(&x, index_pos, block_idx, cache)?;
         }
-        let x = self.ln_f.forward(&x)?;
+        let x = self.ln_f.forward_cont(&x)?;
         let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
         let logits = self.lm_head.forward(&x)?;
         logits.to_dtype(DType::F32)
