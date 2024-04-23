@@ -67,6 +67,7 @@ pub enum UnaryOp {
     Ceil,
     Round,
     Sign,
+    Sigmoid,
 }
 
 #[derive(Clone)]
@@ -256,6 +257,7 @@ pub(crate) struct Floor;
 pub(crate) struct Ceil;
 pub(crate) struct Round;
 pub(crate) struct Sign;
+pub(crate) struct Sigmoid;
 
 macro_rules! bin_op {
     ($op:ident, $name: literal, $e: expr, $f32_vec: ident, $f64_vec: ident) => {
@@ -861,6 +863,41 @@ impl UnaryOpT for Relu {
     #[inline(always)]
     fn i64(v: i64) -> i64 {
         v
+    }
+}
+
+/// Sigmoid function
+impl UnaryOpT for Sigmoid {
+    const NAME: &'static str = "sigmoid";
+    const KERNEL: &'static str = "usigmoid";
+    const V: Self = Sigmoid;
+    #[inline(always)]
+    fn bf16(v: bf16) -> bf16 {
+        (bf16::ONE + v.neg().exp()).recip()
+    }
+    #[inline(always)]
+    fn f16(v: f16) -> f16 {
+        (f16::ONE + v.neg().exp()).recip()
+    }
+    #[inline(always)]
+    fn f32(v: f32) -> f32 {
+        (1.0 + v.neg().exp()).recip()
+    }
+    #[inline(always)]
+    fn f64(v: f64) -> f64 {
+        (1.0 + v.neg().exp()).recip()
+    }
+    #[inline(always)]
+    fn u8(v: u8) -> u8 {
+        todo!("no unary function for u8")
+    }
+    #[inline(always)]
+    fn u32(v: u32) -> u32 {
+        todo!("no unary function for u32")
+    }
+    #[inline(always)]
+    fn i64(v: i64) -> i64 {
+        todo!("no unary function for i64")
     }
 }
 
