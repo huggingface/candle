@@ -133,6 +133,8 @@ pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
     /// after this call.
     unsafe fn alloc_uninit(&self, _shape: &Shape, _dtype: DType) -> Result<Self::Storage>;
 
+    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage>;
+
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage>;
 
     fn storage_from_cpu_storage_owned(&self, _: CpuStorage) -> Result<Self::Storage>;
