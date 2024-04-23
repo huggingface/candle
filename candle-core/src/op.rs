@@ -873,30 +873,30 @@ impl UnaryOpT for Sigmoid {
     const V: Self = Sigmoid;
     #[inline(always)]
     fn bf16(v: bf16) -> bf16 {
-        (bf16::ONE + v.neg().exp()).recip()
+        (bf16::ONE + (-v).exp()).recip()
     }
     #[inline(always)]
     fn f16(v: f16) -> f16 {
-        (f16::ONE + v.neg().exp()).recip()
+        (f16::ONE + (-v).exp()).recip()
     }
     #[inline(always)]
     fn f32(v: f32) -> f32 {
-        (1.0 + v.neg().exp()).recip()
+        (1.0 + (-v).exp()).recip()
     }
     #[inline(always)]
     fn f64(v: f64) -> f64 {
-        (1.0 + v.neg().exp()).recip()
+        (1.0 + (-v).exp()).recip()
     }
     #[inline(always)]
-    fn u8(v: u8) -> u8 {
+    fn u8(_: u8) -> u8 {
         todo!("no unary function for u8")
     }
     #[inline(always)]
-    fn u32(v: u32) -> u32 {
+    fn u32(_: u32) -> u32 {
         todo!("no unary function for u32")
     }
     #[inline(always)]
-    fn i64(v: i64) -> i64 {
+    fn i64(_: i64) -> i64 {
         todo!("no unary function for i64")
     }
 }
