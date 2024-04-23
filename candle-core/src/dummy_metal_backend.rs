@@ -226,6 +226,10 @@ impl crate::backend::BackendDevice for MetalDevice {
         Err(Error::NotCompiledWithMetalSupport)
     }
 
+    fn storage_from_slice<T: crate::WithDType>(&self, _: &[T]) -> Result<Self::Storage> {
+        Err(Error::NotCompiledWithMetalSupport)
+    }
+
     fn storage_from_cpu_storage(&self, _: &CpuStorage) -> Result<Self::Storage> {
         Err(Error::NotCompiledWithMetalSupport)
     }

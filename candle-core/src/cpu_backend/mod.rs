@@ -27,6 +27,17 @@ pub enum CpuStorage {
 }
 
 #[derive(Debug, Clone)]
+pub enum CpuStorageRef<'a> {
+    U8(&'a [u8]),
+    U32(&'a [u32]),
+    I64(&'a [i64]),
+    BF16(&'a [bf16]),
+    F16(&'a [f16]),
+    F32(&'a [f32]),
+    F64(&'a [f64]),
+}
+
+#[derive(Debug, Clone)]
 pub struct CpuDevice;
 
 struct Cmp(CmpOp);
@@ -2443,6 +2454,10 @@ impl BackendDevice for CpuDevice {
 
     fn same_device(&self, _: &Self) -> bool {
         true
+    }
+
+    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
+        Ok(T::to_cpu_storage(s))
     }
 
     fn storage_from_cpu_storage(&self, s: &CpuStorage) -> Result<Self::Storage> {
