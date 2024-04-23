@@ -258,11 +258,7 @@ fn test_exp_operation() -> Result<()> {
         quantization_annotation: vec![],
     }));
 
-    let x = Tensor::from_vec(
-        vec![-1.0f32, 0.0f32, 1.0f32, 2.0f32],
-        &[2, 2],
-        &Device::Cpu,
-    )?;
+    let x = Tensor::from_vec(vec![-1.0f32, 0.0f32, 1.0f32, 2.0f32], &[2, 2], &Device::Cpu)?;
 
     let mut inputs: HashMap<String, Tensor> = HashMap::new();
     inputs.insert(INPUT_X.to_string(), x);
