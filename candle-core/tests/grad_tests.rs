@@ -308,6 +308,19 @@ fn unary_grad(device: &Device) -> Result<()> {
         );
     }
 
+    // testing for sigmoid
+    let y = x.sigmoid()?;
+    let grads = y.backward()?;
+    let grads_x = grads.get(&x).context("no grad for x")?;
+    assert_eq!(
+        test_utils::to_vec1_round(&y, 4)?,
+        [0.9526, 0.7311, 0.9820, 0.5374]
+    );
+    assert_eq!(
+        test_utils::to_vec1_round(&grads_x, 4)?,
+        [0.0452, 0.1966, 0.0177, 0.2486]
+    );
+
     // manually checked: see comments
     let x = Var::new(&[[[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]]]], device)?;
     let y = x.interpolate2d(6, 6)?.reshape(36)?;
