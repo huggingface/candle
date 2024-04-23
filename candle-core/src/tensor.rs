@@ -520,6 +520,7 @@ impl Tensor {
     unary_op!(floor, Floor);
     unary_op!(round, Round);
     unary_op!(sign, Sign);
+    unary_op!(sigmoid, Sigmoid);
 
     /// Round element of the input tensor to the nearest integer.
     ///
