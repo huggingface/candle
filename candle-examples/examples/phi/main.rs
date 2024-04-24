@@ -7,6 +7,7 @@ extern crate accelerate_src;
 use anyhow::{Error as E, Result};
 use clap::{Parser, ValueEnum};
 
+use candle_examples::token_output_stream::TokenOutputStream;
 use candle_transformers::models::mixformer::{Config, MixFormerSequentialForCausalLM as MixFormer};
 use candle_transformers::models::phi::{Config as PhiConfig, Model as Phi};
 use candle_transformers::models::phi3::{Config as Phi3Config, Model as Phi3};
@@ -28,7 +29,7 @@ enum Model {
 struct TextGeneration {
     model: Model,
     device: Device,
-    tokenizer: Tokenizer,
+    tokenizer: TokenOutputStream,
     logits_processor: LogitsProcessor,
     repeat_penalty: f32,
     repeat_last_n: usize,
@@ -51,7 +52,7 @@ impl TextGeneration {
         let logits_processor = LogitsProcessor::new(seed, temp, top_p);
         Self {
             model,
-            tokenizer,
+            tokenizer: TokenOutputStream::new(tokenizer),
             logits_processor,
             repeat_penalty,
             repeat_last_n,
@@ -63,7 +64,11 @@ impl TextGeneration {
     fn run(&mut self, prompt: &str, sample_len: usize) -> Result<()> {
         use std::io::Write;
         println!("starting the inference loop");
-        let tokens = self.tokenizer.encode(prompt, true).map_err(E::msg)?;
+        let tokens = self
+            .tokenizer
+            .tokenizer()
+            .encode(prompt, true)
+            .map_err(E::msg)?;
         if tokens.is_empty() {
             anyhow::bail!("Empty prompts are not supported in the phi model.")
         }
@@ -75,8 +80,8 @@ impl TextGeneration {
         }
         let mut tokens = tokens.get_ids().to_vec();
         let mut generated_tokens = 0usize;
-        let eos_token = match self.tokenizer.get_vocab(true).get("<|endoftext|>") {
-            Some(token) => *token,
+        let eos_token = match self.tokenizer.get_token("<|endoftext|>") {
+            Some(token) => token,
             None => anyhow::bail!("cannot find the endoftext token"),
         };
         print!("{prompt}");
@@ -111,10 +116,10 @@ impl TextGeneration {
             if next_token == eos_token {
                 break;
             }
-            let token = self.tokenizer.decode(&[next_token], true).map_err(E::msg)?;
-            print!("{token}");
-            std::io::stdout().flush()?;
-
+            if let Some(t) = self.tokenizer.next_token(next_token)? {
+                print!("{t}");
+                std::io::stdout().flush()?;
+            }
             pos += context_size;
         }
         let dt = start_gen.elapsed();

@@ -258,7 +258,6 @@ pub struct Model {
     lm_head: Linear,
     device: Device,
     dtype: DType,
-    hidden_size: usize,
 }
 
 impl Model {
@@ -282,7 +281,6 @@ impl Model {
             lm_head,
             device: vb.device().clone(),
             dtype: vb.dtype(),
-            hidden_size: cfg.hidden_size,
         })
     }
 
