@@ -13,8 +13,8 @@ use candle::Tensor;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
-use candle_transformers::models::quantized_phi as model;
-use model::ModelWeights;
+use candle_transformers::models::quantized_llama::ModelWeights as Phi3;
+use candle_transformers::models::quantized_phi::ModelWeights as Phi2;
 
 const DEFAULT_PROMPT: &str = "Write a function to count prime numbers up to N. ";
 
@@ -22,6 +22,8 @@ const DEFAULT_PROMPT: &str = "Write a function to count prime numbers up to N. "
 enum Which {
     #[value(name = "phi-2")]
     Phi2,
+    #[value(name = "phi-3")]
+    Phi3,
 }
 
 #[derive(Parser, Debug)]
@@ -92,7 +94,11 @@ impl Args {
             Some(config) => std::path::PathBuf::from(config),
             None => {
                 let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model("microsoft/phi-2".to_string());
+                let repo = match self.which {
+                    Which::Phi2 => "microsoft/phi-2",
+                    Which::Phi3 => "microsoft/Phi-3-mini-4k-instruct",
+                };
+                let api = api.model(repo.to_string());
                 api.get("tokenizer.json")?
             }
         };
@@ -105,6 +111,10 @@ impl Args {
             None => {
                 let (repo, filename) = match self.which {
                     Which::Phi2 => ("TheBloke/phi-2-GGUF", "phi-2.Q4_K_M.gguf"),
+                    Which::Phi3 => (
+                        "microsoft/Phi-3-mini-4k-instruct-gguf",
+                        "Phi-3-mini-4k-instruct-q4.gguf",
+                    ),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
                 let api = api.model(repo.to_string());
@@ -124,6 +134,20 @@ fn format_size(size_in_bytes: usize) -> String {
         format!("{:.2}MB", size_in_bytes as f64 / 1e6)
     } else {
         format!("{:.2}GB", size_in_bytes as f64 / 1e9)
+    }
+}
+
+enum Model {
+    Phi2(Phi2),
+    Phi3(Phi3),
+}
+
+impl Model {
+    fn forward(&mut self, xs: &Tensor, pos: usize) -> candle::Result<Tensor> {
+        match self {
+            Self::Phi2(m) => m.forward(xs, pos),
+            Self::Phi3(m) => m.forward(xs, pos),
+        }
     }
 }
 
@@ -171,7 +195,10 @@ fn main() -> anyhow::Result<()> {
             &format_size(total_size_in_bytes),
             start.elapsed().as_secs_f32(),
         );
-        ModelWeights::from_gguf(model, &mut file, &device)?
+        match args.which {
+            Which::Phi2 => Model::Phi2(Phi2::from_gguf(model, &mut file, &device)?),
+            Which::Phi3 => Model::Phi3(Phi3::from_gguf(model, &mut file, &device)?),
+        }
     };
     println!("model built");
 
