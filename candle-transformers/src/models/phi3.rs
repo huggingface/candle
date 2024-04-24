@@ -314,8 +314,7 @@ impl Model {
             let mask = self.prepare_decoder_attention_mask(b_size, seq_len, seqlen_offset)?;
             Some(mask)
         };
-        let xs = self.embed_tokens.forward(input_ids)?;
-        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
+        let mut xs = self.embed_tokens.forward(input_ids)?;
         for layer in self.layers.iter_mut() {
             xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
