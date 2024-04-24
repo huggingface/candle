@@ -81,7 +81,7 @@ let mut tp_shape = view.shape().to_vec();
 let size = tp_shape[0];
 
 if size % world_size != 0 {
-    panic!("The dimension is not divisble by `world_size`");
+    panic!("The dimension is not divisible by `world_size`");
 }
 let block_size = size / world_size;
 let start = rank * block_size;

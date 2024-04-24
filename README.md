@@ -111,7 +111,7 @@ We also provide a some command line based examples using state of the art models
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
 
-- [SegFormer](./candle-examples/examples/segformer/): transformer based semantic segmantation model.
+- [SegFormer](./candle-examples/examples/segformer/): transformer based semantic segmentation model.
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
 - [EnCodec](./candle-examples/examples/encodec/): high-quality audio compression
   model using residual vector quantization.
