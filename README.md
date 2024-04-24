@@ -66,7 +66,8 @@ We also provide a some command line based examples using state of the art models
 - [Gemma](./candle-examples/examples/gemma/): 2b and 7b general LLMs from Google Deepmind.
 - [RecurrentGemma](./candle-examples/examples/recurrent-gemma/): 2b and 7b
   Griffin based models from Google that mix attention with a RNN like state.
-- [Phi-1, Phi-1.5, and Phi-2](./candle-examples/examples/phi/): 1.3b and 2.7b general LLMs with performance on par with LLaMA-v2 7b.
+- [Phi-1, Phi-1.5, Phi-2, and Phi-3](./candle-examples/examples/phi/): 1.3b,
+  2.7b, and 3.8b general LLMs with performance on par with 7b models.
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
   pre-trained on 1T tokens of English and code datasets. Also supports
   StableLM-2, a 1.6b LLM trained on 2T tokens, as well as the code variants.
@@ -203,7 +204,7 @@ If you have an addition to this list, please submit a pull request.
         - LLaMA v1, v2, and v3 with variants such as SOLAR-10.7B.
         - Falcon.
         - StarCoder, StarCoder2.
-        - Phi 1, 1.5, and 2.
+        - Phi 1, 1.5, 2, and 3.
         - Mamba, Minimal Mamba
         - Gemma 2b and 7b.
         - Mistral 7b v0.1.
