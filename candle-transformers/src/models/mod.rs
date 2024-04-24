@@ -28,6 +28,7 @@ pub mod moondream;
 pub mod mpt;
 pub mod persimmon;
 pub mod phi;
+pub mod phi3;
 pub mod quantized_blip;
 pub mod quantized_blip_text;
 pub mod quantized_llama;
