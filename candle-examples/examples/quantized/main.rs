@@ -69,6 +69,8 @@ enum Which {
     MixtralInstruct,
     #[value(name = "llama3-8b")]
     L8b,
+    #[value(name = "phi3")]
+    Phi3,
 }
 
 impl Which {
@@ -85,7 +87,8 @@ impl Which {
             | Self::L34bCode
             | Self::Leo7b
             | Self::Leo13b
-            | Self::L8b => false,
+            | Self::L8b
+            | Self::Phi3 => false,
             // Zephyr and OpenChat are fine tuned versions of mistral and should be treated in the
             // same way. Starling is a fine tuned version of OpenChat.
             Self::OpenChat35
@@ -120,7 +123,8 @@ impl Which {
             | Self::Mistral7bInstructV02
             | Self::OpenChat35
             | Self::Starling7bAlpha
-            | Self::L8b => false,
+            | Self::L8b
+            | Self::Phi3 => false,
             Self::Zephyr7bAlpha | Self::Zephyr7bBeta => true,
         }
     }
@@ -145,34 +149,36 @@ impl Which {
             | Self::Mistral7bInstructV02
             | Self::Zephyr7bAlpha
             | Self::Zephyr7bBeta
-            | Self::L8b => false,
+            | Self::L8b
+            | Self::Phi3 => false,
             Self::OpenChat35 | Self::Starling7bAlpha => true,
         }
     }
 
     fn tokenizer_repo(&self) -> &'static str {
         match self {
-            Which::L7b
-            | Which::L13b
-            | Which::L70b
-            | Which::L7bChat
-            | Which::L13bChat
-            | Which::L70bChat
-            | Which::L7bCode
-            | Which::L13bCode
-            | Which::L34bCode => "hf-internal-testing/llama-tokenizer",
-            Which::Leo7b => "LeoLM/leo-hessianai-7b",
-            Which::Leo13b => "LeoLM/leo-hessianai-13b",
-            Which::Mixtral => "mistralai/Mixtral-8x7B-v0.1",
-            Which::MixtralInstruct => "mistralai/Mixtral-8x7B-Instruct-v0.1",
-            Which::Mistral7b
-            | Which::Mistral7bInstruct
-            | Which::Mistral7bInstructV02
-            | Which::Zephyr7bAlpha
-            | Which::Zephyr7bBeta => "mistralai/Mistral-7B-v0.1",
-            Which::OpenChat35 => "openchat/openchat_3.5",
-            Which::Starling7bAlpha => "berkeley-nest/Starling-LM-7B-alpha",
+            Self::L7b
+            | Self::L13b
+            | Self::L70b
+            | Self::L7bChat
+            | Self::L13bChat
+            | Self::L70bChat
+            | Self::L7bCode
+            | Self::L13bCode
+            | Self::L34bCode => "hf-internal-testing/llama-tokenizer",
+            Self::Leo7b => "LeoLM/leo-hessianai-7b",
+            Self::Leo13b => "LeoLM/leo-hessianai-13b",
+            Self::Mixtral => "mistralai/Mixtral-8x7B-v0.1",
+            Self::MixtralInstruct => "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            Self::Mistral7b
+            | Self::Mistral7bInstruct
+            | Self::Mistral7bInstructV02
+            | Self::Zephyr7bAlpha
+            | Self::Zephyr7bBeta => "mistralai/Mistral-7B-v0.1",
+            Self::OpenChat35 => "openchat/openchat_3.5",
+            Self::Starling7bAlpha => "berkeley-nest/Starling-LM-7B-alpha",
             Self::L8b => "meta-llama/Meta-Llama-3-8B",
+            Self::Phi3 => "microsoft/Phi-3-mini-4k-instruct",
         }
     }
 }
@@ -333,6 +339,10 @@ impl Args {
                         "QuantFactory/Meta-Llama-3-8B-GGUF",
                         "Meta-Llama-3-8B.Q4_K_S.gguf",
                     ),
+                    Which::Phi3 => (
+                        "microsoft/Phi-3-mini-4k-instruct-gguf",
+                        "Phi-3-mini-4k-instruct-q4.gguf",
+                    ),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
                 let api = api.model(repo.to_string());
@@ -432,7 +442,8 @@ fn main() -> anyhow::Result<()> {
                 | Which::L34bCode
                 | Which::Leo7b
                 | Which::Leo13b
-                | Which::L8b => 1,
+                | Which::L8b
+                | Which::Phi3 => 1,
                 Which::Mixtral
                 | Which::MixtralInstruct
                 | Which::Mistral7b
