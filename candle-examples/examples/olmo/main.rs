@@ -237,7 +237,12 @@ fn main() -> Result<()> {
             .split(',')
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
-        None => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        None => match args.model {
+            Which::W1b => {
+                vec![repo.get("model.safetensors")?]
+            }
+            _ => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
+        },
     };
 
     println!("retrieved the files in {:?}", start.elapsed());

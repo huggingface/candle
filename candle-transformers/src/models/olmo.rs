@@ -1,35 +1,27 @@
-#![allow(unused)]
 use candle::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{linear_b, linear_no_bias, Activation, LayerNorm, Linear, VarBuilder};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    attention_bias: bool,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    num_key_value_heads: usize,
-    hidden_act: candle_nn::Activation,
-    max_position_embeddings: usize,
-    rope_theta: f64,
-    tie_word_embeddings: bool,
-    clip_qkv: Option<f64>,
+    pub vocab_size: usize,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub attention_bias: bool,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub hidden_act: candle_nn::Activation,
+    pub max_position_embeddings: usize,
+    pub rope_theta: f64,
+    pub tie_word_embeddings: bool,
+    pub clip_qkv: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
 struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
-}
-
-fn rotate_half(xs: &Tensor) -> Result<Tensor> {
-    let last_dim = xs.dim(D::Minus1)?;
-    let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
-    let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
-    Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
 }
 
 impl RotaryEmbedding {
@@ -46,7 +38,6 @@ impl RotaryEmbedding {
             .to_dtype(dtype)?
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
         Ok(Self {
             sin: freqs.sin()?,
             cos: freqs.cos()?,
@@ -62,10 +53,8 @@ impl RotaryEmbedding {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let cos = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let sin = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let cos = cos.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let sin = sin.unsqueeze(0)?.unsqueeze(0)?; // (1, 1, seq_len, dim)
-        let q_embed = (q.broadcast_mul(&cos)? + rotate_half(q)?.broadcast_mul(&sin))?;
-        let k_embed = (k.broadcast_mul(&cos)? + rotate_half(k)?.broadcast_mul(&sin))?;
+        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
         Ok((q_embed, k_embed))
     }
 }
@@ -232,12 +221,7 @@ impl DecoderLayer {
     fn new(rotary_emb: Arc<RotaryEmbedding>, cfg: &Config, vb: VarBuilder) -> Result<Self> {
         let self_attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let mlp = MLP::new(cfg, vb.pp("mlp"))?;
-        let ln_cfg = candle_nn::LayerNormConfig {
-            affine: false,
-            remove_mean: false,
-            ..Default::default()
-        };
-        let ln_weight = Tensor::ones(cfg.hidden_size, DType::F32, vb.device())?;
+        let ln_weight = Tensor::ones(cfg.hidden_size, vb.dtype(), vb.device())?;
         let input_layernorm = LayerNorm::new_no_bias(ln_weight.clone(), 1e-5);
         let post_attention_layernorm = LayerNorm::new_no_bias(ln_weight.clone(), 1e-5);
         Ok(Self {
@@ -290,11 +274,7 @@ impl Model {
             let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let ln_cfg = candle_nn::LayerNormConfig {
-            affine: false,
-            ..Default::default()
-        };
-        let ln_weight = Tensor::ones(cfg.hidden_size, DType::F32, vb.device())?;
+        let ln_weight = Tensor::ones(cfg.hidden_size, vb.dtype(), vb.device())?;
         let norm = LayerNorm::new_no_bias(ln_weight, 1e-5);
         let lm_head = if cfg.tie_word_embeddings {
             Linear::new(embed_tokens.embeddings().clone(), None)
@@ -323,7 +303,7 @@ impl Model {
             .collect();
         let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), &self.device)?;
         let mask = if seqlen_offset > 0 {
-            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, &self.device)?;
+            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), self.dtype, &self.device)?;
             Tensor::cat(&[&mask0, &mask], D::Minus1)?
         } else {
             mask
