@@ -17,7 +17,7 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 enum Model {
-    OLMo(OLMo)
+    OLMo(OLMo),
 }
 
 struct TextGeneration {

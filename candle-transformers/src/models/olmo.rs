@@ -1,6 +1,6 @@
 #![allow(unused)]
 use candle::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{linear_b, linear_no_bias, LayerNorm, Linear, Activation, VarBuilder};
+use candle_nn::{linear_b, linear_no_bias, Activation, LayerNorm, Linear, VarBuilder};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -195,7 +195,8 @@ impl Attention {
         self.kv_cache = Some((key_states.clone(), value_states.clone()));
 
         let key_states = crate::utils::repeat_kv(key_states, self.num_kv_groups)?.contiguous()?;
-        let value_states = crate::utils::repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
+        let value_states =
+            crate::utils::repeat_kv(value_states, self.num_kv_groups)?.contiguous()?;
 
         let attn_output = {
             let scale = 1f64 / f64::sqrt(self.head_dim as f64);
