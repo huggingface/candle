@@ -168,7 +168,7 @@ struct Args {
     revision: String,
 
     #[arg(long, default_value = "1b")]
-    which: Which,
+    model: Which,
 
     #[arg(long)]
     tokenizer_file: Option<String>,
@@ -215,7 +215,7 @@ fn main() -> Result<()> {
     let api = Api::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
-        None => match args.which {
+        None => match args.model {
             Which::W1b => "allenai/OLMo-1B-hf".to_string(),
             Which::W7b => "allenai/OLMo-7B-hf".to_string(),
             Which::W7bTwin2T => "allenai/OLMo-7B-Twin-2T-hf".to_string(),
