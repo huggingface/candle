@@ -237,7 +237,7 @@ impl DecoderLayer {
             remove_mean: false,
             ..Default::default()
         };
-        let ln_weight = Tensor::ones(cfg.hidden_size, DType::F32, &vb.device())?;
+        let ln_weight = Tensor::ones(cfg.hidden_size, DType::F32, vb.device())?;
         let input_layernorm = LayerNorm::new_no_bias(ln_weight.clone(), 1e-5);
         let post_attention_layernorm = LayerNorm::new_no_bias(ln_weight.clone(), 1e-5);
         Ok(Self {
@@ -294,7 +294,7 @@ impl Model {
             affine: false,
             ..Default::default()
         };
-        let ln_weight = Tensor::ones(cfg.hidden_size, DType::F32, &vb.device())?;
+        let ln_weight = Tensor::ones(cfg.hidden_size, DType::F32, vb.device())?;
         let norm = LayerNorm::new_no_bias(ln_weight, 1e-5);
         let lm_head = if cfg.tie_word_embeddings {
             Linear::new(embed_tokens.embeddings().clone(), None)
