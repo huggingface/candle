@@ -97,17 +97,17 @@ fn clamp(device: &Device) -> Result<()> {
 }
 
 fn asort(device: &Device) -> Result<()> {
-    let data = &[[3f32, 1., 4., 1., 5.], [2., 1., 7., 8., 2.]];
+    let data = &[[3f32, 1., 4., 1.1, 5.], [2.1, 1., 7., 8., 2.]];
     let tensor = Tensor::new(data, device)?;
     let indexes = tensor.arg_sort_last_dim(true)?;
     assert_eq!(
         indexes.to_vec2::<u32>()?,
-        [[1, 3, 0, 2, 4], [1, 0, 4, 2, 3]],
+        [[1, 3, 0, 2, 4], [1, 4, 0, 2, 3]],
     );
     let indexes = tensor.arg_sort_last_dim(false)?;
     assert_eq!(
         indexes.to_vec2::<u32>()?,
-        [[4, 2, 0, 1, 3], [3, 2, 0, 4, 1]],
+        [[4, 2, 0, 3, 1], [3, 2, 0, 4, 1]],
     );
     Ok(())
 }
