@@ -63,6 +63,7 @@ pub mod quantized;
 pub mod safetensors;
 pub mod scalar;
 pub mod shape;
+mod sort;
 mod storage;
 mod strided_index;
 mod tensor;
