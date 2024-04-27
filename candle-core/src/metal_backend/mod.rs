@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, RwLock, TryLockError};
 mod device;
 pub use device::{DeviceId, MetalDevice};
 
-fn buffer_o<'a>(buffer: &'a Buffer, l: &Layout, dtype: DType) -> BufferOffset<'a> {
+pub fn buffer_o<'a>(buffer: &'a Buffer, l: &Layout, dtype: DType) -> BufferOffset<'a> {
     BufferOffset {
         buffer,
         offset_in_bytes: l.start_offset() * dtype.size_in_bytes(),

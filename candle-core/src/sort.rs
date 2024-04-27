@@ -133,10 +133,56 @@ impl crate::CustomOp1 for ArgSort {
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
-        _storage: &crate::MetalStorage,
-        _layout: &crate::Layout,
+        storage: &crate::MetalStorage,
+        layout: &crate::Layout,
     ) -> Result<(crate::MetalStorage, crate::Shape)> {
-        todo!()
+        use crate::backend::BackendStorage;
+        use crate::DType;
+
+        let name = {
+            if self.asc {
+                match storage.dtype() {
+                    DType::BF16 => "asort_asc_bf16",
+                    DType::F16 => "asort_asc_f16",
+                    DType::F32 => "asort_asc_f32",
+                    DType::F64 => "asort_asc_f64",
+                    DType::U8 => "asort_asc_u8",
+                    DType::U32 => "asort_asc_u32",
+                    DType::I64 => "asort_asc_i64",
+                }
+            } else {
+                match storage.dtype() {
+                    DType::BF16 => "asort_desc_bf16",
+                    DType::F16 => "asort_desc_f16",
+                    DType::F32 => "asort_desc_f32",
+                    DType::F64 => "asort_desc_f64",
+                    DType::U8 => "asort_desc_u8",
+                    DType::U32 => "asort_desc_u32",
+                    DType::I64 => "asort_desc_i64",
+                }
+            }
+        };
+        let device = storage.device();
+        let kernels = device.kernels();
+        let command_buffer = device.command_buffer()?;
+        let el = layout.shape().elem_count();
+        let ncols = self.last_dim;
+        let nrows = el / ncols;
+        let src = crate::metal_backend::buffer_o(storage.buffer(), layout, storage.dtype());
+        let dst = device.new_buffer(el, DType::U32, "asort")?;
+        candle_metal_kernels::call_arg_sort(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            &name,
+            nrows,
+            ncols,
+            src,
+            &dst,
+        )
+        .map_err(crate::Error::wrap)?;
+        let dst = crate::MetalStorage::new(dst, device.clone(), el, DType::U32);
+        Ok((dst, layout.shape().clone()))
     }
 }
 
