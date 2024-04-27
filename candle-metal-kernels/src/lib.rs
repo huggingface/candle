@@ -2075,7 +2075,7 @@ pub fn call_arg_sort(
         depth: 1,
     };
     let thread_group_size = MTLSize {
-        width: ncols as u64,
+        width: ncols_pad as u64,
         height: 1,
         depth: 1,
     };
