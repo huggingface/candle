@@ -170,6 +170,10 @@ impl crate::CustomOp1 for ArgSort {
         let nrows = el / ncols;
         let src = crate::metal_backend::buffer_o(storage.buffer(), layout, storage.dtype());
         let dst = device.new_buffer(el, DType::U32, "asort")?;
+        let mut ncols_pad = 1;
+        while ncols_pad < ncols {
+            ncols_pad *= 2;
+        }
         candle_metal_kernels::call_arg_sort(
             device.metal_device(),
             &command_buffer,
@@ -177,6 +181,7 @@ impl crate::CustomOp1 for ArgSort {
             &name,
             nrows,
             ncols,
+            ncols_pad,
             src,
             &dst,
         )

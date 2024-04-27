@@ -2059,6 +2059,7 @@ pub fn call_arg_sort(
     name: &'static str,
     nrows: usize,
     ncols: usize,
+    ncols_pad: usize,
     src: BufferOffset,
     dst: &Buffer,
 ) -> Result<(), MetalKernelError> {
@@ -2066,7 +2067,7 @@ pub fn call_arg_sort(
     let encoder = command_buffer.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (&src, dst, ncols as i64));
+    set_params!(encoder, (&src, dst, ncols as i64, ncols_pad as i64));
 
     let thread_group_count = MTLSize {
         width: 1,
@@ -2081,6 +2082,7 @@ pub fn call_arg_sort(
 
     encoder.use_resource(src.buffer, metal::MTLResourceUsage::Read);
     encoder.use_resource(dst, metal::MTLResourceUsage::Write);
+    encoder.set_threadgroup_memory_length(0, (ncols_pad * 4).max(16) as u64);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     encoder.end_encoding();
     Ok(())
