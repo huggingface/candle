@@ -249,30 +249,28 @@ impl Module for SparseMoeBlock {
 
         // In order to extract topk, we extract the data from the tensor and manipulate it
         // directly. Maybe we will want to use some custom ops instead at some point.
-        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        let experts_per_tok = routing_weights
+            .arg_sort_last_dim(false)?
+            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
+            .contiguous()?;
+        let routing_weights = routing_weights.gather(&experts_per_tok, D::Minus1)?;
 
         // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
         // top_x contains the row indexes to evaluate for each expert.
+        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        let experts_per_tok = experts_per_tok.to_vec2::<u32>()?;
         let mut top_x = vec![vec![]; self.experts.len()];
         let mut selected_experts = vec![vec![]; self.experts.len()];
-        for (row_idx, rw) in routing_weights.iter().enumerate() {
-            let mut dst = (0..rw.len() as u32).collect::<Vec<u32>>();
-            dst.sort_by(|&i, &j| rw[j as usize].total_cmp(&rw[i as usize]));
-            let mut sum_routing_weights = 0f32;
-            for &expert_idx in dst.iter().take(self.num_experts_per_tok) {
-                let expert_idx = expert_idx as usize;
-                let routing_weight = rw[expert_idx];
-                sum_routing_weights += routing_weight;
-                top_x[expert_idx].push(row_idx as u32);
-            }
-            for &expert_idx in dst.iter().take(self.num_experts_per_tok) {
-                let expert_idx = expert_idx as usize;
-                let routing_weight = if self.norm_topk_prob {
-                    rw[expert_idx] / sum_routing_weights
-                } else {
-                    rw[expert_idx]
-                };
-                selected_experts[expert_idx].push(routing_weight)
+        for (row_idx, (rw, expert_idxs)) in routing_weights
+            .iter()
+            .zip(experts_per_tok.iter())
+            .enumerate()
+        {
+            let sum_rw = rw.iter().sum::<f32>();
+            for (&rw, &expert_idx) in rw.iter().zip(expert_idxs.iter()) {
+                top_x[expert_idx as usize].push(row_idx as u32);
+                let rw = if self.norm_topk_prob { rw / sum_rw } else { rw };
+                selected_experts[expert_idx as usize].push(rw)
             }
         }
 
