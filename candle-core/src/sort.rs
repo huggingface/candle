@@ -22,6 +22,10 @@ impl ArgSort {
                 .par_chunks_exact_mut(self.last_dim)
                 .zip(vs.par_chunks_exact(self.last_dim))
                 .for_each(|(indexes, vs)| {
+                    indexes
+                        .iter_mut()
+                        .enumerate()
+                        .for_each(|(i, v)| *v = i as u32);
                     indexes.sort_by(|&i, &j| {
                         vs[i as usize]
                             .partial_cmp(&vs[j as usize])
@@ -33,6 +37,10 @@ impl ArgSort {
                 .par_chunks_exact_mut(self.last_dim)
                 .zip(vs.par_chunks_exact(self.last_dim))
                 .for_each(|(indexes, vs)| {
+                    indexes
+                        .iter_mut()
+                        .enumerate()
+                        .for_each(|(i, v)| *v = i as u32);
                     indexes.sort_by(|&j, &i| {
                         vs[i as usize]
                             .partial_cmp(&vs[j as usize])
