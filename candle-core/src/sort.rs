@@ -219,4 +219,21 @@ impl Tensor {
         // No need for a backward pass for arg sort.
         self.apply_op1_no_bwd(&ArgSort { asc, last_dim })
     }
+
+    /// Sorts the tensor along the last dimension, returns the sorted tensor together with the
+    /// sorted indexes.
+    ///
+    /// If `asc` is `true`, sorting is in ascending order. Otherwise sorting is performed in
+    /// descending order. The sort is unstable so there is no guarantees on the final order when it
+    /// comes to ties.
+    pub fn sort_last_dim(&self, asc: bool) -> Result<(Tensor, Tensor)> {
+        if !self.is_contiguous() {
+            return Err(crate::Error::RequiresContiguous {
+                op: "sort_last_dim",
+            });
+        }
+        let asort = self.arg_sort_last_dim(asc)?;
+        let sorted = self.gather(&asort, crate::D::Minus1)?;
+        Ok((sorted, asort))
+    }
 }
