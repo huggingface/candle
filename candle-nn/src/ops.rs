@@ -80,13 +80,17 @@ impl candle::CustomOp1 for Sigmoid {
     }
 
     #[cfg(feature = "cuda")]
-    fn cuda_fwd(&self, storage: &candle::CudaStorage, layout: &Layout) -> Result<(candle::CudaStorage, Shape)> {
+    fn cuda_fwd(
+        &self,
+        storage: &candle::CudaStorage,
+        layout: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        use candle::backend::BackendStorage;
         use candle::cuda_backend::cudarc::driver::{
             CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig, ValidAsZeroBits,
         };
         use candle::cuda_backend::{kernel_name, kernels, Map1, WrapErr};
         use candle::{CudaDevice, WithDType};
-        use candle::backend::BackendStorage;
 
         // much of these are copied from `candle_core::cuda_backend`.
         enum SlicePtrOrNull<T> {
@@ -131,7 +135,7 @@ impl candle::CustomOp1 for Sigmoid {
                 let func = dev.get_or_load_func(&kernel_name::<T>("usigmoid"), kernels::UNARY)?;
                 // SAFETY: Set later by running the kernel.
                 let out = unsafe { dev.alloc::<T>(el_count) }.w()?;
-                
+
                 let params = (el_count, dims.len(), &ds, src, &out);
                 // SAFETY: ffi.
                 unsafe { func.launch(cfg, params) }.w()?;
