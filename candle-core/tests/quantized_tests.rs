@@ -3,7 +3,7 @@ use candle_core::{
     quantized::{self, GgmlDType},
     test_device,
     test_utils::to_vec2_round,
-    Device, IndexOp, Module, Result, Tensor,
+    DType, Device, IndexOp, Module, Result, Tensor,
 };
 use quantized::{k_quants, GgmlType};
 use rand::prelude::*;
@@ -225,6 +225,13 @@ fn quantize_q4_0(device: &Device) -> Result<()> {
     let src = Tensor::from_slice(&src, (32 * 4,), device)?;
     let quant = quantized::QTensor::quantize(&src, GgmlDType::Q4_0)?;
     let dst = quant.dequantize(device)?;
+    let dst_f16 = quant.dequantize_f16(device)?;
+    let diff = (dst.to_dtype(DType::F16)? - dst_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
     assert_eq!(
         dst.to_vec1::<f32>()?,
         &[

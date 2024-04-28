@@ -374,7 +374,7 @@ impl QTensor {
                     .to_device(device)
             }
             _ => {
-                let s = self.dequantize(device)?.to_dtype(crate::DType::F32)?;
+                let s = self.dequantize(device)?.to_dtype(crate::DType::F16)?;
                 Ok(s)
             }
         }
