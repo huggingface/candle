@@ -109,6 +109,24 @@ fn asort(device: &Device) -> Result<()> {
         indexes.to_vec2::<u32>()?,
         [[4, 2, 0, 3, 1], [3, 2, 0, 4, 1]],
     );
+    let (sorted, indexes) = tensor.sort_last_dim(true)?;
+    assert_eq!(
+        indexes.to_vec2::<u32>()?,
+        [[1, 3, 0, 2, 4], [1, 4, 0, 2, 3]],
+    );
+    assert_eq!(
+        sorted.to_vec2::<f32>()?,
+        [[1.0, 1.1, 3.0, 4.0, 5.0], [1.0, 2.0, 2.1, 7.0, 8.0]]
+    );
+    let (sorted, indexes) = tensor.sort_last_dim(false)?;
+    assert_eq!(
+        indexes.to_vec2::<u32>()?,
+        [[4, 2, 0, 3, 1], [3, 2, 0, 4, 1]],
+    );
+    assert_eq!(
+        sorted.to_vec2::<f32>()?,
+        [[5.0, 4.0, 3.0, 1.1, 1.0], [8.0, 7.0, 2.1, 2.0, 1.0]]
+    );
     Ok(())
 }
 
