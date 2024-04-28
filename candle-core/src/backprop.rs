@@ -686,12 +686,6 @@ impl Tensor {
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&arg_grad)?
                     }
-                    Op::Unary(arg, UnaryOp::Sigmoid) => {
-                        let sum_grad = grads.or_insert(arg)?;
-                        // d/dx sigmoid(x) = (1 - sigmoid(x)) * sigmoid(x)
-                        let this_grad = (1.0 - *node)?.mul(node)?;
-                        *sum_grad = sum_grad.add(&(&grad * &this_grad)?)?
-                    }
                     Op::ToDevice(arg) => {
                         let sum_grad = grads.or_insert(arg)?;
                         let arg_grad = grad.to_device(sum_grad.device())?;

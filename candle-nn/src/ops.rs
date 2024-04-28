@@ -44,7 +44,8 @@ pub fn swiglu(xs: &Tensor) -> Result<Tensor> {
 }
 
 pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
-    xs.sigmoid()
+    // TODO: Should we have a specialized op for this?
+    (xs.neg()?.exp()? + 1.0)?.recip()
 }
 
 pub fn hard_sigmoid(xs: &Tensor) -> Result<Tensor> {
