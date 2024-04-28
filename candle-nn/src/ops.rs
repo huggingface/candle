@@ -43,9 +43,41 @@ pub fn swiglu(xs: &Tensor) -> Result<Tensor> {
     &xs[0].silu()? * &xs[1]
 }
 
+struct Sigmoid;
+
+impl candle::CustomOp1 for Sigmoid {
+    fn name(&self) -> &'static str {
+        "sigmoid"
+    }
+
+    fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        use candle::backend::BackendStorage;
+
+        fn fwd<T: num_traits::Float>(v: T) -> T {
+            (v.neg().exp() + T::one()).recip()
+        }
+
+        // FIXME: using `candle::map_dtype` causes compilation errors.
+        let storage = match storage {
+            CpuStorage::BF16(slice) => CpuStorage::BF16(candle::cpu_backend::unary_map(slice, layout, fwd)),
+            CpuStorage::F16(slice) => CpuStorage::F16(candle::cpu_backend::unary_map(slice, layout, fwd)),
+            CpuStorage::F32(slice) => CpuStorage::F32(candle::cpu_backend::unary_map(slice, layout, fwd)),
+            CpuStorage::F64(slice) => CpuStorage::F64(candle::cpu_backend::unary_map(slice, layout, fwd)),
+            _ => Err(candle::Error::UnsupportedDTypeForOp(storage.dtype(), self.name()))?,
+        };
+        Ok((storage, layout.shape().clone()))
+    }
+
+    fn bwd(&self, _arg: &Tensor, res: &Tensor, grad_res: &Tensor) -> Result<Option<Tensor>> {
+        // d/dx sigmoid(x) = (1 - sigmoid(x)) * sigmoid(x)
+        let d_dx_sigmoid = res.ones_like()?.sub(res)?.mul(res)?;
+        Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
+    }
+}
+
 pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
     // TODO: Should we have a specialized op for this?
-    (xs.neg()?.exp()? + 1.0)?.recip()
+    xs.apply_op1(Sigmoid)
 }
 
 pub fn hard_sigmoid(xs: &Tensor) -> Result<Tensor> {
