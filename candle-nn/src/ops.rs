@@ -59,11 +59,22 @@ impl candle::CustomOp1 for Sigmoid {
 
         // FIXME: using `candle::map_dtype` causes compilation errors.
         let storage = match storage {
-            CpuStorage::BF16(slice) => CpuStorage::BF16(candle::cpu_backend::unary_map(slice, layout, fwd)),
-            CpuStorage::F16(slice) => CpuStorage::F16(candle::cpu_backend::unary_map(slice, layout, fwd)),
-            CpuStorage::F32(slice) => CpuStorage::F32(candle::cpu_backend::unary_map(slice, layout, fwd)),
-            CpuStorage::F64(slice) => CpuStorage::F64(candle::cpu_backend::unary_map(slice, layout, fwd)),
-            _ => Err(candle::Error::UnsupportedDTypeForOp(storage.dtype(), self.name()))?,
+            CpuStorage::BF16(slice) => {
+                CpuStorage::BF16(candle::cpu_backend::unary_map(slice, layout, fwd))
+            }
+            CpuStorage::F16(slice) => {
+                CpuStorage::F16(candle::cpu_backend::unary_map(slice, layout, fwd))
+            }
+            CpuStorage::F32(slice) => {
+                CpuStorage::F32(candle::cpu_backend::unary_map(slice, layout, fwd))
+            }
+            CpuStorage::F64(slice) => {
+                CpuStorage::F64(candle::cpu_backend::unary_map(slice, layout, fwd))
+            }
+            _ => Err(candle::Error::UnsupportedDTypeForOp(
+                storage.dtype(),
+                self.name(),
+            ))?,
         };
         Ok((storage, layout.shape().clone()))
     }
