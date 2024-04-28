@@ -67,6 +67,9 @@ template <typename T> METAL_FUNC T relu(T in){
 template <typename T> METAL_FUNC T silu(T in){
     return in / (static_cast<T>(1) + exp(-in));
 }
+template <typename T> METAL_FUNC T sigmoid(T in) {
+    return recip(static_cast<T>(1) + exp(-in));
+}
 
 #define TILE_SIZE 2
 
@@ -155,6 +158,7 @@ UNARY_OP(tanh)
 UNARY_OP(recip)
 UNARY_OP(relu)
 UNARY_OP(sign)
+UNARY_OP(sigmoid)
 UNARY(id, float, copy_f32, copy_f32_strided)
 UNARY(id, half, copy_f16, copy_f16_strided)
 UNARY(id, uint8_t, copy_u8, copy_u8_strided)
@@ -185,6 +189,7 @@ BFLOAT_UNARY_OP(tanh)
 BFLOAT_UNARY_OP(recip)
 BFLOAT_UNARY_OP(relu)
 BFLOAT_UNARY_OP(sign)
+BFLOAT_UNARY_OP(sigmoid)
 
 UNARY(id, bfloat, copy_bf16, copy_bf16_strided)
 
