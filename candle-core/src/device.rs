@@ -306,6 +306,20 @@ impl Device {
         }
     }
 
+    pub(crate) fn storage_from_slice<D: WithDType>(&self, data: &[D]) -> Result<Storage> {
+        match self {
+            Device::Cpu => Ok(Storage::Cpu(data.to_cpu_storage())),
+            Device::Cuda(device) => {
+                let storage = device.storage_from_slice(data)?;
+                Ok(Storage::Cuda(storage))
+            }
+            Device::Metal(device) => {
+                let storage = device.storage_from_slice(data)?;
+                Ok(Storage::Metal(storage))
+            }
+        }
+    }
+
     pub(crate) fn storage<A: NdArray>(&self, array: A) -> Result<Storage> {
         match self {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
@@ -335,6 +349,14 @@ impl Device {
                 let storage = device.storage_from_cpu_storage_owned(storage)?;
                 Ok(Storage::Metal(storage))
             }
+        }
+    }
+
+    pub fn synchronize(&self) -> Result<()> {
+        match self {
+            Self::Cpu => Ok(()),
+            Self::Cuda(d) => d.synchronize(),
+            Self::Metal(d) => d.synchronize(),
         }
     }
 }

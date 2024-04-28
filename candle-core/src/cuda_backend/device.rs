@@ -1,5 +1,5 @@
 use crate::backend::BackendDevice;
-use crate::{CpuStorage, DType, Layout, Result, Shape};
+use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
 pub use candle_kernels as kernels;
 pub use cudarc;
 use cudarc::driver::{CudaFunction, LaunchAsync, LaunchConfig};
@@ -325,6 +325,43 @@ impl BackendDevice for CudaDevice {
             }
             DType::F64 => {
                 let data = self.alloc::<f64>(elem_count).w()?;
+                CudaStorageSlice::F64(data)
+            }
+        };
+        Ok(CudaStorage {
+            slice,
+            device: self.clone(),
+        })
+    }
+
+    fn storage_from_slice<T: crate::WithDType>(&self, s: &[T]) -> Result<Self::Storage> {
+        let slice = match T::cpu_storage_ref(s) {
+            CpuStorageRef::U8(storage) => {
+                let data = self.htod_sync_copy(storage).w()?;
+                CudaStorageSlice::U8(data)
+            }
+            CpuStorageRef::U32(storage) => {
+                let data = self.htod_sync_copy(storage).w()?;
+                CudaStorageSlice::U32(data)
+            }
+            CpuStorageRef::I64(storage) => {
+                let data = self.htod_sync_copy(storage).w()?;
+                CudaStorageSlice::I64(data)
+            }
+            CpuStorageRef::BF16(storage) => {
+                let data = self.htod_sync_copy(storage).w()?;
+                CudaStorageSlice::BF16(data)
+            }
+            CpuStorageRef::F16(storage) => {
+                let data = self.htod_sync_copy(storage).w()?;
+                CudaStorageSlice::F16(data)
+            }
+            CpuStorageRef::F32(storage) => {
+                let data = self.htod_sync_copy(storage).w()?;
+                CudaStorageSlice::F32(data)
+            }
+            CpuStorageRef::F64(storage) => {
+                let data = self.htod_sync_copy(storage).w()?;
                 CudaStorageSlice::F64(data)
             }
         };

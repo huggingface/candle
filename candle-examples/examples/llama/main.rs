@@ -31,6 +31,8 @@ const DEFAULT_PROMPT: &str = "My favorite theorem is ";
 enum Which {
     V1,
     V2,
+    V3,
+    V3Instruct,
     #[value(name = "solar-10.7b")]
     Solar10_7B,
     #[value(name = "tiny-llama-1.1b-chat")]
@@ -45,8 +47,8 @@ struct Args {
     cpu: bool,
 
     /// The temperature used to generate samples.
-    #[arg(long)]
-    temperature: Option<f64>,
+    #[arg(long, default_value_t = 0.8)]
+    temperature: f64,
 
     /// Nucleus sampling probability cutoff.
     #[arg(long)]
@@ -83,18 +85,18 @@ struct Args {
     revision: Option<String>,
 
     /// The model size to use.
-    #[arg(long, default_value = "v2")]
+    #[arg(long, default_value = "v3")]
     which: Which,
 
     #[arg(long)]
     use_flash_attn: bool,
 
     /// Penalty to be applied for repeating tokens, 1. means no penalty.
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 1.1)]
     repeat_penalty: f32,
 
     /// The context size to consider for the repeat penalty.
-    #[arg(long, default_value_t = 64)]
+    #[arg(long, default_value_t = 128)]
     repeat_last_n: usize,
 }
 
@@ -120,11 +122,13 @@ fn main() -> Result<()> {
         Some(dtype) => bail!("Unsupported dtype {dtype}"),
         None => DType::F16,
     };
-    let (llama, tokenizer_filename, mut cache) = {
+    let (llama, tokenizer_filename, mut cache, config) = {
         let api = Api::new()?;
         let model_id = args.model_id.unwrap_or_else(|| match args.which {
             Which::V1 => "Narsil/amall-7b".to_string(),
             Which::V2 => "meta-llama/Llama-2-7b-hf".to_string(),
+            Which::V3 => "meta-llama/Meta-Llama-3-8B".to_string(),
+            Which::V3Instruct => "meta-llama/Meta-Llama-3-8B-Instruct".to_string(),
             Which::Solar10_7B => "upstage/SOLAR-10.7B-v1.0".to_string(),
             Which::TinyLlama1_1BChat => "TinyLlama/TinyLlama-1.1B-Chat-v1.0".to_string(),
         });
@@ -138,7 +142,7 @@ fn main() -> Result<()> {
         let config = config.into_config(args.use_flash_attn);
 
         let filenames = match args.which {
-            Which::V1 | Which::V2 | Which::Solar10_7B => {
+            Which::V1 | Which::V2 | Which::V3 | Which::V3Instruct | Which::Solar10_7B => {
                 candle_examples::hub_load_safetensors(&api, "model.safetensors.index.json")?
             }
             Which::TinyLlama1_1BChat => vec![api.get("model.safetensors")?],
@@ -146,10 +150,12 @@ fn main() -> Result<()> {
         let cache = model::Cache::new(!args.no_kv_cache, dtype, &config, &device)?;
 
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-        (Llama::load(vb, &config)?, tokenizer_filename, cache)
+        (Llama::load(vb, &config)?, tokenizer_filename, cache, config)
     };
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
-    let eos_token_id = tokenizer.token_to_id(EOS_TOKEN);
+    let eos_token_id = config
+        .eos_token_id
+        .or_else(|| tokenizer.token_to_id(EOS_TOKEN));
     let prompt = args.prompt.as_ref().map_or(DEFAULT_PROMPT, |p| p.as_str());
     let mut tokens = tokenizer
         .encode(prompt, true)
@@ -160,8 +166,8 @@ fn main() -> Result<()> {
 
     println!("starting the inference loop");
     print!("{prompt}");
-    let mut logits_processor = LogitsProcessor::new(args.seed, args.temperature, args.top_p);
-    let start_gen = std::time::Instant::now();
+    let mut logits_processor = LogitsProcessor::new(args.seed, Some(args.temperature), args.top_p);
+    let mut start_gen = std::time::Instant::now();
     let mut index_pos = 0;
     let mut token_generated = 0;
     for index in 0..args.sample_len {
@@ -170,6 +176,9 @@ fn main() -> Result<()> {
         } else {
             (tokens.len(), 0)
         };
+        if index == 1 {
+            start_gen = std::time::Instant::now()
+        }
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;
         let logits = llama.forward(&input, context_index, &mut cache)?;
@@ -205,7 +214,7 @@ fn main() -> Result<()> {
     println!(
         "\n\n{} tokens generated ({} token/s)\n",
         token_generated,
-        token_generated as f64 / dt.as_secs_f64(),
+        (token_generated - 1) as f64 / dt.as_secs_f64(),
     );
     Ok(())
 }

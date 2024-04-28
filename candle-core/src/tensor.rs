@@ -79,6 +79,9 @@ macro_rules! unary_op {
     ($fn_name:ident, $op_name:ident) => {
         pub fn $fn_name(&self) -> Result<Self> {
             let shape = self.shape();
+            if shape.elem_count() == 0 {
+                return Ok(self.clone());
+            }
             let storage = self
                 .storage()
                 .unary_impl::<crate::op::$op_name>(self.layout())?;
@@ -92,6 +95,9 @@ macro_rules! binary_op {
     ($fn_name:ident, $op_name:ident) => {
         pub fn $fn_name(&self, rhs: &Self) -> Result<Self> {
             let shape = self.same_shape_binary_op(rhs, stringify!($fn_name))?;
+            if shape.elem_count() == 0 {
+                return Ok(self.clone());
+            }
             let storage = self.storage().binary_impl::<crate::op::$op_name>(
                 &*rhs.storage(),
                 self.layout(),
@@ -114,6 +120,9 @@ macro_rules! binary_op_scalar {
                     .broadcast_as(self.shape())?,
             };
             let shape = self.same_shape_binary_op(&rhs, stringify!($fn_name))?;
+            if self.elem_count() == 0 {
+                return Ok(self.clone());
+            }
             let storage = self.storage().binary_impl::<crate::op::$op_name>(
                 &*rhs.storage(),
                 self.layout(),
@@ -447,7 +456,15 @@ impl Tensor {
         shape: S,
         device: &Device,
     ) -> Result<Self> {
-        Self::new_impl(array, shape.into(), device, false)
+        let shape = shape.into();
+        let n: usize = shape.elem_count();
+        let buffer_size: usize = array.len();
+        if buffer_size != n {
+            return Err(Error::ShapeMismatch { buffer_size, shape }.bt());
+        }
+        let storage = device.storage_from_slice(array)?;
+        let none = BackpropOp::none();
+        Ok(from_storage(storage, shape, none, false))
     }
 
     pub(crate) fn same_shape_binary_op(&self, rhs: &Self, op: &'static str) -> Result<&Shape> {
@@ -646,6 +663,9 @@ impl Tensor {
     /// # Ok::<(), candle_core::Error>(())
     /// ```
     pub fn affine(&self, mul: f64, add: f64) -> Result<Self> {
+        if self.elem_count() == 0 {
+            return Ok(self.clone());
+        }
         let storage = self.storage().affine(self.layout(), mul, add)?;
         let op = BackpropOp::new1(self, |arg| Op::Affine { arg, mul, add });
         Ok(from_storage(storage, self.shape(), op, false))
@@ -653,6 +673,9 @@ impl Tensor {
 
     /// Applies the Exponential Linear Unit (ELU) function on each element of the input tensor.
     pub fn elu(&self, alpha: f64) -> Result<Self> {
+        if self.elem_count() == 0 {
+            return Ok(self.clone());
+        }
         let storage = self.storage().elu(self.layout(), alpha)?;
         let op = BackpropOp::new1(self, |t| Op::Elu(t, alpha));
         Ok(from_storage(storage, self.shape(), op, false))
@@ -660,6 +683,9 @@ impl Tensor {
 
     /// Raise the tensor to some float exponent `e`.
     pub fn powf(&self, e: f64) -> Result<Self> {
+        if self.elem_count() == 0 {
+            return Ok(self.clone());
+        }
         let storage = self.storage().powf(self.layout(), e)?;
         let op = BackpropOp::new1(self, |t| Op::Powf(t, e));
         Ok(from_storage(storage, self.shape(), op, false))
@@ -1154,6 +1180,9 @@ impl Tensor {
         let n = b_dims[dim - 1];
 
         let c_shape = Shape::from(&a_dims[..dim - 2]).extend(&[m, n]);
+        if c_shape.elem_count() == 0 || k == 0 {
+            return Tensor::zeros(c_shape, self.dtype(), self.device());
+        }
         let batching: usize = a_dims[..dim - 2].iter().product();
         let batching_b: usize = b_dims[..dim - 2].iter().product();
         if k != k2 || batching != batching_b {
