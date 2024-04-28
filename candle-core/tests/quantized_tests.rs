@@ -465,6 +465,13 @@ fn quantize_q2k(device: &Device) -> Result<()> {
     let src_big = get_test_vector2(128.0, 1024, device)?;
     let quant_big = quantized::QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
+    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
 
     let src_big = src_big.to_vec1::<f32>()?;
     let dst_big = dst_big.to_vec1::<f32>()?;
@@ -505,6 +512,13 @@ fn quantize_q3k(device: &Device) -> Result<()> {
     let src_big = get_test_vector2(128.0, 1024, device)?;
     let quant_big = quantized::QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
+    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
 
     let src_big = src_big.to_vec1::<f32>()?;
     let dst_big = dst_big.to_vec1::<f32>()?;
@@ -545,6 +559,13 @@ fn quantize_q4k(device: &Device) -> Result<()> {
     let src_big = get_test_vector2(128.0, 1024, device)?;
     let quant_big = quantized::QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
+    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
 
     let src_big = src_big.to_vec1::<f32>()?;
     let dst_big = dst_big.to_vec1::<f32>()?;
@@ -585,6 +606,13 @@ fn quantize_q5k(device: &Device) -> Result<()> {
     let src_big = get_test_vector2(128.0, 1024, device)?;
     let quant_big = quantized::QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
+    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
 
     let src_big = src_big.to_vec1::<f32>()?;
     let dst_big = dst_big.to_vec1::<f32>()?;
@@ -625,6 +653,13 @@ fn quantize_q6k(device: &Device) -> Result<()> {
     let src_big = get_test_vector2(128.0, 1024, device)?;
     let quant_big = quantized::QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
+    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
 
     let src_big = src_big.to_vec1::<f32>()?;
     let dst_big = dst_big.to_vec1::<f32>()?;
@@ -665,6 +700,13 @@ fn quantize_q8k(device: &Device) -> Result<()> {
     let src_big = get_test_vector2(128.0, 1024, device)?;
     let quant_big = quantized::QTensor::quantize(&src_big, dtype)?;
     let dst_big = quant_big.dequantize(device)?;
+    let dst_big_f16 = quant_big.dequantize_f16(device)?;
+    let diff = (dst_big.to_dtype(DType::F16)? - dst_big_f16)?
+        .to_dtype(DType::F32)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
 
     let src_big = src_big.to_vec1::<f32>()?;
     let dst_big = dst_big.to_vec1::<f32>()?;
