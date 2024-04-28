@@ -79,6 +79,75 @@ impl candle::CustomOp1 for Sigmoid {
         Ok((storage, layout.shape().clone()))
     }
 
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, storage: &candle::CudaStorage, layout: &Layout) -> Result<(candle::CudaStorage, Shape)> {
+        use candle::cuda_backend::cudarc::driver::{
+            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig, ValidAsZeroBits,
+        };
+        use candle::cuda_backend::{kernel_name, kernels, Map1, WrapErr};
+        use candle::{CudaDevice, WithDType};
+        use candle::backend::BackendStorage;
+
+        // much of these are copied from `candle_core::cuda_backend`.
+        enum SlicePtrOrNull<T> {
+            Ptr(CudaSlice<T>),
+            Null,
+        }
+
+        unsafe impl<T: DeviceRepr> DeviceRepr for &SlicePtrOrNull<T> {
+            fn as_kernel_param(&self) -> *mut std::ffi::c_void {
+                match self {
+                    SlicePtrOrNull::Null => 0usize.as_kernel_param(),
+                    SlicePtrOrNull::Ptr(slice) => slice.as_kernel_param(),
+                }
+            }
+        }
+
+        impl SlicePtrOrNull<usize> {
+            fn params_from_layout(dev: &CudaDevice, l: &Layout) -> Result<Self> {
+                let ds = if l.is_contiguous() {
+                    SlicePtrOrNull::Null
+                } else {
+                    SlicePtrOrNull::Ptr(dev.htod_copy([l.dims(), l.stride()].concat()).w()?)
+                };
+                Ok(ds)
+            }
+        }
+
+        struct S;
+        impl Map1 for S {
+            fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
+                &self,
+                src: &CudaSlice<T>,
+                dev: &CudaDevice,
+                layout: &Layout,
+            ) -> Result<CudaSlice<T>> {
+                let shape = layout.shape();
+                let dims = shape.dims();
+                let el_count = shape.elem_count();
+                let cfg = LaunchConfig::for_num_elems(el_count as u32);
+                let ds = SlicePtrOrNull::params_from_layout(dev, layout)?;
+                let src = &src.slice(layout.start_offset()..);
+                let func = dev.get_or_load_func(&kernel_name::<T>("usigmoid"), kernels::UNARY)?;
+                // SAFETY: Set later by running the kernel.
+                let out = unsafe { dev.alloc::<T>(el_count) }.w()?;
+                
+                let params = (el_count, dims.len(), &ds, src, &out);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }.w()?;
+                Ok(out)
+            }
+        }
+
+        let dev = storage.device();
+        let slice = S.map(&storage.slice, dev, layout)?;
+        let dst = candle::CudaStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, layout.shape().clone()))
+    }
+
     #[cfg(feature = "metal")]
     fn metal_fwd(
         &self,
