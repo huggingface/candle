@@ -1,4 +1,4 @@
-use crate::{CpuStorage, Device, Result, Shape, Storage, Tensor};
+use crate::{CpuStorage, DType, Device, Result, Shape, Storage, Tensor};
 use k_quants::*;
 use std::borrow::Cow;
 
@@ -393,11 +393,23 @@ impl QTensor {
 pub enum QMatMul {
     QTensor(std::sync::Arc<QTensor>),
     Tensor(Tensor),
+    TensorF16(Tensor),
 }
 
 thread_local! {
     static DEQUANTIZE_ALL: bool = {
         match std::env::var("CANDLE_DEQUANTIZE_ALL") {
+            Ok(s) => {
+                !s.is_empty() && s != "0"
+            },
+            Err(_) => false,
+        }
+    }
+}
+
+thread_local! {
+    static DEQUANTIZE_ALL_F16: bool = {
+        match std::env::var("CANDLE_DEQUANTIZE_ALL_F16") {
             Ok(s) => {
                 !s.is_empty() && s != "0"
             },
@@ -415,6 +427,9 @@ impl QMatMul {
         let t = if dequantize {
             let tensor = qtensor.dequantize(&qtensor.device())?;
             Self::Tensor(tensor)
+        } else if DEQUANTIZE_ALL_F16.with(|b| *b) {
+            let tensor = qtensor.dequantize_f16(&qtensor.device())?;
+            Self::TensorF16(tensor)
         } else {
             Self::QTensor(qtensor)
         };
@@ -500,6 +515,15 @@ impl crate::Module for QMatMul {
                     _ => w.t()?,
                 };
                 xs.matmul(&w)
+            }
+            Self::TensorF16(w) => {
+                let in_dtype = xs.dtype();
+                let w = match *xs.dims() {
+                    [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
+                    [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
+                    _ => w.t()?,
+                };
+                xs.to_dtype(DType::F16)?.matmul(&w)?.to_dtype(in_dtype)
             }
         }
     }
