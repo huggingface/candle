@@ -18,7 +18,7 @@ pub use device::{CudaDevice, DeviceId};
 pub use error::{CudaError, WrapErr};
 pub use utils::{Map1, Map1Any, Map2, Map2Any, Map2InPlace, S};
 
-enum SlicePtrOrNull<T> {
+pub enum SlicePtrOrNull<T> {
     Ptr(CudaSlice<T>),
     Null,
 }
@@ -33,7 +33,7 @@ unsafe impl<T: DeviceRepr> DeviceRepr for &SlicePtrOrNull<T> {
 }
 
 impl SlicePtrOrNull<usize> {
-    fn params_from_layout(dev: &CudaDevice, l: &Layout) -> Result<Self> {
+    pub fn params_from_layout(dev: &CudaDevice, l: &Layout) -> Result<Self> {
         let ds = if l.is_contiguous() {
             SlicePtrOrNull::Null
         } else {
