@@ -1944,12 +1944,13 @@ unsafe fn gemm_strided_batched_bf16(
 ) -> std::result::Result<(), cudarc::cublas::result::CublasError> {
     use cudarc::cublas::sys;
     use cudarc::driver::DevicePtrMut;
-    use num_traits::AsPrimitive;
 
-    let alpha: f16 = cfg.gemm.alpha.as_();
-    let beta: f16 = cfg.gemm.beta.as_();
     let alpha_f32: f32 = cfg.gemm.alpha.to_f32();
     let beta_f32: f32 = cfg.gemm.beta.to_f32();
+    let alpha = f16::from_f32(alpha_f32);
+    let beta = f16::from_f32(beta_f32);
+    // The type for alpha and beta depends on the computeType.
+    // https://docs.nvidia.com/cuda/cublas/index.html#cublasgemmstridedbatchedex
     let (compute_type, alpha, beta) = if gemm_reduced_precision_f16() {
         (
             sys::cublasComputeType_t::CUBLAS_COMPUTE_16F,
