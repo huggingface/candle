@@ -1935,7 +1935,7 @@ unsafe fn gemm_strided_batched_bf16(
     use cudarc::cublas::sys;
     use cudarc::driver::DevicePtrMut;
 
-    let compute_type = if gemm_reduced_precision_f16() {
+    let compute_type = if gemm_reduced_precision_bf16() {
         sys::cublasComputeType_t::CUBLAS_COMPUTE_16F
     } else {
         sys::cublasComputeType_t::CUBLAS_COMPUTE_32F
