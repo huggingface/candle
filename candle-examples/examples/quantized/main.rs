@@ -374,6 +374,9 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "cuda")]
     candle::quantized::cuda::set_force_dmmv(args.force_dmmv);
 
+    candle::cuda::set_gemm_reduced_precision_f16(true);
+    candle::cuda::set_gemm_reduced_precision_bf16(true);
+
     let _guard = if args.tracing {
         let (chrome_layer, guard) = ChromeLayerBuilder::new().build();
         tracing_subscriber::registry().with(chrome_layer).init();
