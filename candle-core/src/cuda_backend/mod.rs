@@ -1635,12 +1635,8 @@ impl BackendStorage for CudaStorage {
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
                 let cfg = gemm_config(bf16::ONE, bf16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
                 let mut out = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
-                unsafe {
-                    self.device
-                        .blas
-                        .gemm_strided_batched(cfg, rhs, lhs, &mut out)
-                }
-                .w()?;
+                unsafe { gemm_strided_batched_bf16(&self.device.blas, cfg, rhs, lhs, &mut out) }
+                    .w()?;
                 CudaStorageSlice::BF16(out)
             }
             (CudaStorageSlice::F16(lhs), CudaStorageSlice::F16(rhs)) => {
@@ -1648,12 +1644,8 @@ impl BackendStorage for CudaStorage {
                 let rhs = &rhs.slice(rhs_l.start_offset()..);
                 let cfg = gemm_config(f16::ONE, f16::ZERO, (b, m, n, k), lhs_l, rhs_l)?;
                 let mut out = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
-                unsafe {
-                    self.device
-                        .blas
-                        .gemm_strided_batched(cfg, rhs, lhs, &mut out)
-                }
-                .w()?;
+                unsafe { gemm_strided_batched_f16(&self.device.blas, cfg, rhs, lhs, &mut out) }
+                    .w()?;
                 CudaStorageSlice::F16(out)
             }
             (CudaStorageSlice::F32(lhs), CudaStorageSlice::F32(rhs)) => {
@@ -1855,4 +1847,125 @@ impl BackendStorage for CudaStorage {
         }
         Ok(())
     }
+}
+
+// Default for the reduced precision setting is false, similar to pytorch.
+// https://github.com/pytorch/pytorch/issues/123157
+static MM_F16_REDUCED_PRECISION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static MM_BF16_REDUCED_PRECISION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with f16 GEMMs.
+pub fn gemm_reduced_precision_f16() -> bool {
+    MM_F16_REDUCED_PRECISION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with f16 GEMMs.
+pub fn set_gemm_reduced_precision_f16(b: bool) {
+    MM_F16_REDUCED_PRECISION.store(b, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with bf16 GEMMs.
+pub fn gemm_reduced_precision_bf16() -> bool {
+    MM_BF16_REDUCED_PRECISION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// This bool controls whether reduced precision reductions (e.g., with fp16 accumulation type) are
+/// allowed with bf16 GEMMs.
+pub fn set_gemm_reduced_precision_bf16(b: bool) {
+    MM_BF16_REDUCED_PRECISION.store(b, std::sync::atomic::Ordering::Relaxed)
+}
+
+unsafe fn gemm_strided_batched_f16(
+    cublas: &cudarc::cublas::CudaBlas,
+    cfg: StridedBatchedConfig<f16>,
+    a: &cudarc::driver::CudaView<f16>,
+    b: &cudarc::driver::CudaView<f16>,
+    c: &mut CudaSlice<f16>,
+) -> std::result::Result<(), cudarc::cublas::result::CublasError> {
+    use cudarc::cublas::sys;
+    use cudarc::driver::DevicePtrMut;
+
+    let compute_type = if gemm_reduced_precision_f16() {
+        sys::cublasComputeType_t::CUBLAS_COMPUTE_16F
+    } else {
+        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F
+    };
+
+    let alpha = cfg.gemm.alpha;
+    let beta = cfg.gemm.beta;
+    cudarc::cublas::result::gemm_strided_batched_ex(
+        *cublas.handle(),
+        cfg.gemm.transa,
+        cfg.gemm.transb,
+        cfg.gemm.m,
+        cfg.gemm.n,
+        cfg.gemm.k,
+        (&alpha) as *const f16 as *const _,
+        *a.device_ptr() as *const _,
+        sys::cudaDataType_t::CUDA_R_16F,
+        cfg.gemm.lda,
+        cfg.stride_a,
+        *b.device_ptr() as *const _,
+        sys::cudaDataType_t::CUDA_R_16F,
+        cfg.gemm.ldb,
+        cfg.stride_b,
+        (&beta) as *const f16 as *const _,
+        *c.device_ptr_mut() as *mut _,
+        sys::cudaDataType_t::CUDA_R_16F,
+        cfg.gemm.ldc,
+        cfg.stride_c,
+        cfg.batch_size,
+        compute_type,
+        sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT_TENSOR_OP,
+    )
+}
+
+unsafe fn gemm_strided_batched_bf16(
+    cublas: &cudarc::cublas::CudaBlas,
+    cfg: StridedBatchedConfig<bf16>,
+    a: &cudarc::driver::CudaView<bf16>,
+    b: &cudarc::driver::CudaView<bf16>,
+    c: &mut CudaSlice<bf16>,
+) -> std::result::Result<(), cudarc::cublas::result::CublasError> {
+    use cudarc::cublas::sys;
+    use cudarc::driver::DevicePtrMut;
+
+    let compute_type = if gemm_reduced_precision_f16() {
+        sys::cublasComputeType_t::CUBLAS_COMPUTE_16F
+    } else {
+        sys::cublasComputeType_t::CUBLAS_COMPUTE_32F
+    };
+
+    let alpha = cfg.gemm.alpha;
+    let beta = cfg.gemm.beta;
+    cudarc::cublas::result::gemm_strided_batched_ex(
+        *cublas.handle(),
+        cfg.gemm.transa,
+        cfg.gemm.transb,
+        cfg.gemm.m,
+        cfg.gemm.n,
+        cfg.gemm.k,
+        (&alpha) as *const bf16 as *const _,
+        *a.device_ptr() as *const _,
+        sys::cudaDataType_t::CUDA_R_16BF,
+        cfg.gemm.lda,
+        cfg.stride_a,
+        *b.device_ptr() as *const _,
+        sys::cudaDataType_t::CUDA_R_16BF,
+        cfg.gemm.ldb,
+        cfg.stride_b,
+        (&beta) as *const bf16 as *const _,
+        *c.device_ptr_mut() as *mut _,
+        sys::cudaDataType_t::CUDA_R_16BF,
+        cfg.gemm.ldc,
+        cfg.stride_c,
+        cfg.batch_size,
+        compute_type,
+        sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT_TENSOR_OP,
+    )
 }
