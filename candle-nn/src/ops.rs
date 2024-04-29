@@ -89,34 +89,9 @@ impl candle::CustomOp1 for Sigmoid {
         use candle::cuda_backend::cudarc::driver::{
             CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig, ValidAsZeroBits,
         };
+        use candle::cuda_backend::SlicePtrOrNull;
         use candle::cuda_backend::{kernel_name, kernels, Map1, WrapErr};
         use candle::{CudaDevice, WithDType};
-
-        // much of these are copied from `candle_core::cuda_backend`.
-        enum SlicePtrOrNull<T> {
-            Ptr(CudaSlice<T>),
-            Null,
-        }
-
-        unsafe impl<T: DeviceRepr> DeviceRepr for &SlicePtrOrNull<T> {
-            fn as_kernel_param(&self) -> *mut std::ffi::c_void {
-                match self {
-                    SlicePtrOrNull::Null => 0usize.as_kernel_param(),
-                    SlicePtrOrNull::Ptr(slice) => slice.as_kernel_param(),
-                }
-            }
-        }
-
-        impl SlicePtrOrNull<usize> {
-            fn params_from_layout(dev: &CudaDevice, l: &Layout) -> Result<Self> {
-                let ds = if l.is_contiguous() {
-                    SlicePtrOrNull::Null
-                } else {
-                    SlicePtrOrNull::Ptr(dev.htod_copy([l.dims(), l.stride()].concat()).w()?)
-                };
-                Ok(ds)
-            }
-        }
 
         struct S;
         impl Map1 for S {
@@ -254,7 +229,6 @@ impl candle::CustomOp1 for Sigmoid {
 }
 
 pub fn sigmoid(xs: &Tensor) -> Result<Tensor> {
-    // TODO: Should we have a specialized op for this?
     xs.apply_op1(Sigmoid)
 }
 
