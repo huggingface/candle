@@ -5,6 +5,11 @@ use candle_nn::{
 };
 use candle_transformers::models::{encodec, t5};
 
+use crate::DTYPE;
+
+fn print_type_of<T>(_: &T) {
+    println!("{}", std::any::type_name::<T>())
+}
 // https://github.com/huggingface/transformers/blob/cd4584e3c809bb9e1392ccd3fe38b40daba5519a/src/transformers/models/musicgen/configuration_musicgen.py#L83
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -164,12 +169,22 @@ impl MusicgenAttention {
         })
     }
 
+    fn _shape(&mut self, tensor: &Tensor, tgt_len: usize, b_sz: usize) -> Result<Tensor> {
+        let tgt = (b_sz, tgt_len, self.num_heads, self.head_dim);
+        tensor
+            .reshape(tgt)?
+            .transpose(1, 2)?
+            .contiguous()?
+            .squeeze(0)
+    }
+
     fn forward(
         &mut self,
         xs: &Tensor,
         kv_states: Option<&Tensor>,
-        attention_mask: &Tensor,
+        attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
+        let is_cross_attention = kv_states.is_some();
         let (b_sz, tgt_len, _) = xs.dims3()?;
         let query_states = (self.q_proj.forward(xs)? * self.scaling)?;
 
@@ -177,24 +192,51 @@ impl MusicgenAttention {
         let key_states = self.k_proj.forward(kv_states)?;
         let value_states = self.v_proj.forward(kv_states)?;
 
-        let tgt = (b_sz, tgt_len, self.num_heads, self.head_dim);
-        let query_states = query_states.reshape(tgt)?.transpose(1, 2)?.contiguous()?;
-        let key_states = key_states.reshape(tgt)?.transpose(1, 2)?.contiguous()?;
-        let value_states = value_states.reshape(tgt)?.transpose(1, 2)?.contiguous()?;
+        let proj_shape = (b_sz * self.num_heads, (), self.head_dim);
+
+        let query_states = self._shape(&query_states, tgt_len, b_sz)?;
+        println!("Q! Q0 {query_states:?}");
+        let key_states = key_states.reshape(proj_shape)?;
+        println!("Q! K0 {key_states:?}");
+        let value_states = value_states.reshape(proj_shape)?;
+        println!("Q! V0 {value_states:?}");
 
         let src_len = key_states.dim(1)?;
-        let attn_weights = query_states.matmul(&key_states.transpose(1, 2)?)?;
-        let attn_weights = attn_weights
-            .reshape((b_sz, self.num_heads, tgt_len, src_len))?
-            .broadcast_add(attention_mask)?;
-        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
+
+        println!("Q! Q {query_states:?}");
+        println!("Q! K {key_states:?}");
+        let mut attn_weights = query_states.matmul(&key_states.transpose(1, 2)?)?;
+
+        println!("Q! ATT1 {attn_weights:?}");
+        if let Some(attm_mask) = attention_mask {
+            attn_weights = attn_weights
+                .reshape((b_sz, self.num_heads, tgt_len, src_len))?
+                .broadcast_add(&attm_mask.to_dtype(DType::F32)?)?;
+        }
+
+        println!("Q! ATTM {attention_mask:?}");
+        println!("Q! ATTN {attn_weights:?}");
+        let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?.squeeze(0)?;
+
+        println!("Q! ATTW {attn_weights:?}");
         // TODO: layer_head_mask?
-        let attn_output = attn_weights
-            .matmul(&value_states)?
-            .reshape((b_sz, self.num_heads, tgt_len, self.head_dim))?
-            .transpose(1, 2)?
-            .reshape((b_sz, tgt_len, self.num_heads * self.head_dim))?;
+        let attn_output = attn_weights.matmul(&value_states)?;
+
+        println!("Q! ATTNO {attn_output:?}");
+        let attn_output = attn_output.reshape((b_sz, self.num_heads, tgt_len, self.head_dim))?;
+
+        println!("Q! ATTNO {attn_output:?}");
+        let attn_output = attn_output.transpose(1, 2)?.reshape((
+            b_sz,
+            tgt_len,
+            self.num_heads * self.head_dim,
+        ))?;
+
+        println!("Q! ATTNO {attn_output:?}");
+
         let attn_output = self.out_proj.forward(&attn_output)?;
+
+        println!("Q! ATTNO {attn_output:?}");
         Ok(attn_output)
     }
 }
@@ -236,21 +278,27 @@ impl MusicgenDecoderLayer {
     fn forward(
         &mut self,
         xs: &Tensor,
-        attention_mask: &Tensor,
+        attention_mask: Option<&Tensor>,
         encoder_hidden_states: Option<&Tensor>,
+        encoder_attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let residual = xs.clone();
         let xs = self.self_attn_layer_norm.forward(xs)?;
         let xs = self.self_attn.forward(&xs, None, attention_mask)?;
         let mut xs = (xs + residual)?;
+        println!("Q! XS + RES {xs:?}");
         if let Some(encoder_hidden_states) = &encoder_hidden_states {
             let residual = xs.clone();
-            let encoder_attention_mask = attention_mask.clone(); // TODO
+            xs = self.encoder_attn_layer_norm.forward(&xs)?;
+
+            println!("Q! HHST {xs:?}");
+            println!("Q! EHST {encoder_hidden_states:?}");
             xs = self.encoder_attn.forward(
                 &xs,
                 Some(encoder_hidden_states),
-                &encoder_attention_mask,
+                encoder_attention_mask,
             )?;
+
             xs = (xs + residual)?
         }
         let residual = xs.clone();
@@ -306,7 +354,12 @@ impl MusicgenDecoder {
         todo!()
     }
 
-    fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        encoder_hidden_states: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let dev = input_ids.device();
         let (b_sz_times_codebooks, seq_len) = input_ids.dims2()?;
         let b_sz = b_sz_times_codebooks / self.num_codebooks;
@@ -314,16 +367,25 @@ impl MusicgenDecoder {
         let mut inputs_embeds = Tensor::zeros((b_sz, seq_len, self.d_model), DType::F32, dev)?;
         for (idx, codebook) in self.embed_tokens.iter().enumerate() {
             let inp = input.narrow(1, idx, 1)?.squeeze(1)?;
-            inputs_embeds = (inputs_embeds + codebook.forward(&inp)?)?
+            inputs_embeds = (inputs_embeds + codebook.forward(&inp)?)?;
         }
         let inputs_embeds = inputs_embeds;
         let positions = self.embed_positions.forward(&input)?.to_device(dev)?;
         let mut xs = inputs_embeds.broadcast_add(&positions)?;
-        let attention_mask = self.prepare_decoder_attention_mask(b_sz, seq_len)?;
+
+        //let attention_mask = self.prepare_decoder_attention_mask(b_sz, seq_len)?;
+        let mut i = 0;
+        let num = self.layers.len();
+        println!("Q! LAYERS {num}");
         for decoder_layer in self.layers.iter_mut() {
-            xs = decoder_layer.forward(&xs, &attention_mask, None)?;
+            println!("Q! LAYER {i}/{num}");
+            xs = decoder_layer.forward(&xs, attention_mask, encoder_hidden_states, None)?;
+            i += 1;
         }
+
         let xs = self.layer_norm.forward(&xs)?;
+
+        println!("Q! END LAYERS {num}");
         Ok(xs)
     }
 }
@@ -351,19 +413,28 @@ impl MusicgenForCausalLM {
         })
     }
 
-    pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        encoder_hidden_states: Option<&Tensor>,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let (b_sz, seq_len) = input_ids.dims2()?;
-        let hidden_states = self.decoder.forward(input_ids)?;
+        let hidden_states =
+            self.decoder
+                .forward(input_ids, encoder_hidden_states, attention_mask)?;
+
+        println!("Q! CAS {hidden_states:?}");
         let lm_logits = self
             .lm_heads
             .iter()
             .map(|h| h.forward(&hidden_states))
             .collect::<Result<Vec<_>>>()?;
-        let lm_logits = Tensor::stack(&lm_logits, 1)?.reshape((
-            b_sz * self.num_codebooks,
-            seq_len,
-            self.vocab_size,
-        ))?;
+        let lm_logits = Tensor::stack(&lm_logits, 1)?;
+        let lm_logits_shape = lm_logits.dims4()?;
+
+        println!("Q! CAS STACK {lm_logits:?}");
+        let lm_logits = lm_logits.reshape(((), lm_logits_shape.2, lm_logits_shape.3))?;
         Ok(lm_logits)
     }
 }
@@ -373,6 +444,7 @@ pub struct MusicgenForConditionalGeneration {
     pub text_encoder: t5::T5EncoderModel,
     pub audio_encoder: encodec::Model,
     pub decoder: MusicgenForCausalLM,
+    pub enc_to_dec_proj: Linear,
     cfg: GenConfig,
 }
 
@@ -429,11 +501,35 @@ impl MusicgenForConditionalGeneration {
         let text_encoder = t5::T5EncoderModel::load(vb.pp("text_encoder"), &cfg.t5)?;
         let audio_encoder = encodec::Model::new(&cfg.encodec, vb.pp("audio_encoder"))?;
         let decoder = MusicgenForCausalLM::load(vb.pp("decoder"), &cfg.musicgen)?;
+        let enc_to_dec_proj = candle_nn::linear(
+            cfg.t5.d_model,
+            cfg.musicgen.hidden_size,
+            vb.pp("enc_to_dec_proj"),
+        )?;
         Ok(Self {
             text_encoder,
             audio_encoder,
             decoder,
+            enc_to_dec_proj,
             cfg,
         })
+    }
+
+    pub fn forward(
+        &mut self,
+        input_ids: &Tensor,
+        decoder_input_ids: &Tensor,
+        attention_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let mut encoder_hidden_states = self.text_encoder.forward(input_ids)?;
+        if self.config().t5.d_model != self.config().musicgen.hidden_size {
+            encoder_hidden_states = self.enc_to_dec_proj.forward(&encoder_hidden_states)?;
+        }
+
+        encoder_hidden_states =
+            self.decoder
+                .forward(decoder_input_ids, Some(&encoder_hidden_states), None)?;
+
+        Ok(encoder_hidden_states)
     }
 }
