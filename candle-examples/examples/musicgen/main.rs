@@ -92,10 +92,11 @@ fn main() -> Result<()> {
     //let embeds = model.text_encoder.forward(&tokens)?;
 
     //println!("{embeds}");
-
-    let v: Vec<i64> = vec![2048, 2048, 2048, 2048];
-    let decoder_input_ids = Tensor::new(v, &device)?.unsqueeze(1)?;
-    println!("Q!DD {decoder_input_ids:?}");
+    let musicgen_config = musicgen_model::GenConfig::small().musicgen;
+    let pad_token_id = musicgen_config.pad_token_id as f64;
+    let num_codebooks = musicgen_config.num_codebooks;
+    let decoder_input_ids =
+        (Tensor::ones((num_codebooks, 1), DType::I64, &device)? * pad_token_id)?;
     let output = model.forward(&tokens, &decoder_input_ids, Some(&token_type_ids))?;
     println!("{output}");
     //let audio_encoder_outputs = model.audio_encoder.encode(&embeds)?;
