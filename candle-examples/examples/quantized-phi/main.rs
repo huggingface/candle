@@ -13,8 +13,8 @@ use candle::Tensor;
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 
 use candle_examples::token_output_stream::TokenOutputStream;
-use candle_transformers::models::quantized_llama::ModelWeights as Phi3;
 use candle_transformers::models::quantized_phi::ModelWeights as Phi2;
+use candle_transformers::models::quantized_phi3::ModelWeights as Phi3;
 
 const DEFAULT_PROMPT: &str = "Write a function to count prime numbers up to N. ";
 
@@ -84,7 +84,7 @@ struct Args {
     repeat_last_n: usize,
 
     /// The model size to use.
-    #[arg(long, default_value = "phi-2")]
+    #[arg(long, default_value = "phi-3")]
     which: Which,
 }
 
@@ -114,7 +114,7 @@ impl Args {
                     Which::Phi3 => (
                         "microsoft/Phi-3-mini-4k-instruct-gguf",
                         "Phi-3-mini-4k-instruct-q4.gguf",
-                        "5eef2ce24766d31909c0b269fe90c817a8f263fb",
+                        "main",
                     ),
                 };
                 let api = hf_hub::api::sync::Api::new()?;

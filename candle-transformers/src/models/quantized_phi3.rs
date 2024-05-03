@@ -97,10 +97,7 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let _enter = self.span_attn.enter();
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let qkv =
-            self.attn_qkv
-                .forward(x)?
-                .reshape((b_sz, seq_len, 3, self.n_head, self.head_dim))?;
+        let qkv = self.attn_qkv.forward(x)?;
 
         let query_pos = self.n_head * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
@@ -280,15 +277,19 @@ impl ModelWeights {
             Some(self.mask(seq_len, xs.device())?)
         };
         let _enter = self.span.enter();
-        let mut xs = self.tok_embeddings.forward(xs)?;
+        let mut layer_xs = self.tok_embeddings.forward(xs)?;
         for layer in self.layers.iter_mut() {
+            let residual = &layer_xs;
+            let xs = layer_xs.apply(&layer.attn_norm)?;
+            let xs = layer.forward_attn(&xs, mask.as_ref(), index_pos)?;
+            let xs = (xs + residual)?;
             let residual = &xs;
-            let xs_norm = xs.apply(&layer.attn_norm)?;
-            let attn_outputs = layer.forward_attn(&xs_norm, mask.as_ref(), index_pos)?;
-            let feed_forward_hidden_states = layer.mlp.forward(&xs_norm)?;
-            xs = (attn_outputs + feed_forward_hidden_states + residual)?
+            let xs = layer.mlp.forward(&xs)?;
+            layer_xs = (xs + residual)?
         }
-        let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
+        let xs = layer_xs
+            .apply(&self.output_norm)?
+            .i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
         self.output.forward(&xs)
     }
