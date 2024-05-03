@@ -109,16 +109,21 @@ impl Args {
         let model_path = match &self.model {
             Some(config) => std::path::PathBuf::from(config),
             None => {
-                let (repo, filename) = match self.which {
-                    Which::Phi2 => ("TheBloke/phi-2-GGUF", "phi-2.Q4_K_M.gguf"),
+                let (repo, filename, revision) = match self.which {
+                    Which::Phi2 => ("TheBloke/phi-2-GGUF", "phi-2.Q4_K_M.gguf", "main"),
                     Which::Phi3 => (
                         "microsoft/Phi-3-mini-4k-instruct-gguf",
                         "Phi-3-mini-4k-instruct-q4.gguf",
+                        "5eef2ce24766d31909c0b269fe90c817a8f263fb",
                     ),
                 };
                 let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model(repo.to_string());
-                api.get(filename)?
+                api.repo(hf_hub::Repo::with_revision(
+                    repo.to_string(),
+                    hf_hub::RepoType::Model,
+                    revision.to_string(),
+                ))
+                .get(filename)?
             }
         };
         Ok(model_path)
