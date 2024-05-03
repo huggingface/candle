@@ -350,7 +350,7 @@ pub fn call_unary_contiguous_tiled(
     let pipeline = kernels.load_pipeline(device, Source::Unary, kernel_name.0)?;
     let encoder = command_buffer.new_compute_command_encoder();
     let tile_size = 2;
-    let tiles = length.div_ceil(tile_size);
+    let tiles = (length + tile_size - 1) / tile_size;
 
     encoder.set_compute_pipeline_state(&pipeline);
 
