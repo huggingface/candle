@@ -1,6 +1,6 @@
 [package]
 name = "candle-kernels"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 
 description = "CUDA kernels for Candle"
