@@ -62,6 +62,7 @@ struct LayerWeights {
     attn_qkv: QLinear,
     attn_output: QLinear,
     attn_norm: RmsNorm,
+    ffn_norm: RmsNorm,
     mlp: Mlp,
     n_head: usize,
     n_kv_head: usize,
@@ -225,12 +226,17 @@ impl ModelWeights {
                 ct.tensor(reader, &format!("{prefix}.attn_norm.weight"), device)?,
                 rms_eps,
             )?;
+            let ffn_norm = rms_norm(
+                ct.tensor(reader, &format!("{prefix}.ffn_norm.weight"), device)?,
+                rms_eps,
+            )?;
             let span_attn = tracing::span!(tracing::Level::TRACE, "attn");
             let span_rot = tracing::span!(tracing::Level::TRACE, "attn-rot");
             layers.push(LayerWeights {
                 attn_qkv: QLinear::new(&ct, reader, &format!("{prefix}.attn_qkv"), device)?,
                 attn_output: QLinear::new(&ct, reader, &format!("{prefix}.attn_output"), device)?,
                 attn_norm,
+                ffn_norm,
                 mlp,
                 n_head: head_count,
                 n_kv_head: head_count_kv,
@@ -277,19 +283,18 @@ impl ModelWeights {
             Some(self.mask(seq_len, xs.device())?)
         };
         let _enter = self.span.enter();
-        let mut layer_xs = self.tok_embeddings.forward(xs)?;
+        let mut xs = self.tok_embeddings.forward(xs)?;
         for layer in self.layers.iter_mut() {
-            let residual = &layer_xs;
-            let xs = layer_xs.apply(&layer.attn_norm)?;
-            let xs = layer.forward_attn(&xs, mask.as_ref(), index_pos)?;
-            let xs = (xs + residual)?;
             let residual = &xs;
-            let xs = layer.mlp.forward(&xs)?;
-            layer_xs = (xs + residual)?
+            let ys = xs.apply(&layer.attn_norm)?;
+            let ys = layer.forward_attn(&ys, mask.as_ref(), index_pos)?;
+            let ys = (ys + residual)?;
+            let residual = &ys;
+            let ys = ys.apply(&layer.ffn_norm)?;
+            let ys = layer.mlp.forward(&ys)?;
+            xs = (ys + residual)?
         }
-        let xs = layer_xs
-            .apply(&self.output_norm)?
-            .i((.., seq_len - 1, ..))?;
+        let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
         let _enter = self.span_output.enter();
         self.output.forward(&xs)
     }
