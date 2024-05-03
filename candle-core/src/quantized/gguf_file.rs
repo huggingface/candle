@@ -135,7 +135,6 @@ pub enum ValueType {
     // The value is a UTF-8 non-null-terminated string, with length prepended.
     String,
     // The value is an array of other values, with the length and type prepended.
-    ///
     // Arrays can be nested, and the length of the array is the number of elements in the array, not the number of bytes.
     Array,
 }
