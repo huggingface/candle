@@ -170,8 +170,19 @@ fn rope_thd(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn sigmoid(device: &Device) -> Result<()> {
+    let data = &[[[3f32, 1., 4.], [1., 5., 9.]], [[2., 1., 7.], [8., 2., 8.]]];
+    let tensor = Tensor::new(data, device)?;
+    let s1 = candle_nn::ops::sigmoid(&tensor)?;
+    let s2 = (1. / (1. + tensor.neg()?.exp()?)?)?;
+    let diff = (s1 - s2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
+    Ok(())
+}
+
 test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
 test_device!(rope, rope_cpu, rope_gpu, rope_metal);
 test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
 test_device!(softmax, softmax_cpu, softmax_gpu, softmax_metal);
 test_device!(rms_norm, rms_norm_cpu, rms_norm_gpu, rms_norm_metal);
+test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);

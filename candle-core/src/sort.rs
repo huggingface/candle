@@ -178,7 +178,7 @@ impl crate::CustomOp1 for ArgSort {
             device.metal_device(),
             &command_encoder,
             kernels,
-            &name,
+            name,
             nrows,
             ncols,
             ncols_pad,

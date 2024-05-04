@@ -72,7 +72,7 @@ impl RotaryEmbedding {
         let (xs1, xs2) = (&xs12[0], &xs12[1]);
         let c = self.cos.narrow(0, seqlen_offset, seq_len)?;
         let s = self.sin.narrow(0, seqlen_offset, seq_len)?;
-        let rotate_half = Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)?;
+        let rotate_half = Tensor::cat(&[&xs2.neg()?, xs1], D::Minus1)?;
         let xs_rot = (xs_rot.broadcast_mul(&c)? + rotate_half.broadcast_mul(&s)?)?;
         Tensor::cat(&[&xs_rot, &xs_pass], D::Minus1)
     }

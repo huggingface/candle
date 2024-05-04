@@ -1,6 +1,6 @@
 [package]
 name = "candle-onnx"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 
 description = "ONNX support for Candle"
@@ -10,8 +10,8 @@ categories = ["science"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-candle = { path = "../candle-core", package = "candle-core", version = "0.5.0" }
-candle-nn = { path = "../candle-nn", version = "0.5.0" }
+candle = { path = "../candle-core", package = "candle-core", version = "0.5.1" }
+candle-nn = { path = "../candle-nn", version = "0.5.1" }
 prost = "0.12.1"
 
 [build-dependencies]

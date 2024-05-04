@@ -24,19 +24,19 @@ pub struct Config {
 }
 
 impl Config {
-    fn head_dim(&self) -> usize {
+    pub fn head_dim(&self) -> usize {
         self.hidden_size / self.num_attention_heads
     }
 }
 
 #[derive(Debug, Clone)]
-struct RotaryEmbedding {
+pub struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
 }
 
 impl RotaryEmbedding {
-    fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
+    pub fn new(dtype: DType, cfg: &Config, dev: &Device) -> Result<Self> {
         let dim = cfg.head_dim();
         let max_seq_len = cfg.max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
@@ -55,7 +55,7 @@ impl RotaryEmbedding {
         })
     }
 
-    fn apply_rotary_emb_qkv(
+    pub fn apply_rotary_emb_qkv(
         &self,
         q: &Tensor,
         k: &Tensor,
