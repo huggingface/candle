@@ -676,9 +676,6 @@ impl BackendStorage for MetalStorage {
             }
         }
 
-        if layout.is_contiguous() {
-        } else {
-        }
         Ok(Self::new(buffer, device.clone(), el_count, dtype))
     }
 
