@@ -349,10 +349,7 @@ impl MetalDevice {
         }
 
         // Buffers on metal should be powers of two, this is to encourage buffer reuse
-        let size = match size {
-            0 => 2 as NSUInteger,
-            _ => (size - 1).next_power_of_two() as NSUInteger,
-        };
+        let size = size.saturating_sub(1).next_power_of_two() as NSUInteger;
 
         let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
         let new_buffer = self.device.new_buffer(size as NSUInteger, option);
