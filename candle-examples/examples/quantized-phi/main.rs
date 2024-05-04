@@ -88,7 +88,7 @@ struct Args {
     repeat_last_n: usize,
 
     /// The model size to use.
-    #[arg(long, default_value = "phi-3")]
+    #[arg(long, default_value = "phi-3b")]
     which: Which,
 }
 
