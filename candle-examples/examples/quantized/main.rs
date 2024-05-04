@@ -344,9 +344,18 @@ impl Args {
                         "Phi-3-mini-4k-instruct-q4.gguf",
                     ),
                 };
+                let revision = if self.which == Which::Phi3 {
+                    "5eef2ce24766d31909c0b269fe90c817a8f263fb"
+                } else {
+                    "main"
+                };
                 let api = hf_hub::api::sync::Api::new()?;
-                let api = api.model(repo.to_string());
-                api.get(filename)?
+                api.repo(hf_hub::Repo::with_revision(
+                    repo.to_string(),
+                    hf_hub::RepoType::Model,
+                    revision.to_string(),
+                ))
+                .get(filename)?
             }
         };
         Ok(model_path)
