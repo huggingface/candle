@@ -163,7 +163,7 @@ impl MetalDevice {
 
         // If the command buffer has reached the maximum number of accesses, we need to close it
         if accesses >= self.max_command_buffer_accesses {
-            self.close_compute_buffer()?;
+            self.synchronize()?;
         } else {
             let mut accesses = self
                 .command_buffer_accesses
@@ -368,7 +368,7 @@ impl MetalDevice {
         }
 
         // Buffers on metal should be powers of two, this is to encourage buffer reuse
-        let size = size.saturating_sub(1).next_power_of_two() as NSUInteger;
+        let size = size_to_internal_size(size);
 
         let subbuffers = buffers.entry((size, option)).or_insert(vec![]);
         let new_buffer = self.device.new_buffer(size as NSUInteger, option);
@@ -440,4 +440,8 @@ impl MetalDevice {
 
         Ok(())
     }
+}
+
+fn size_to_internal_size(size: u64) -> NSUInteger {
+    size.saturating_sub(1).next_power_of_two() as NSUInteger
 }

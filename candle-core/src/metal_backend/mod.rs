@@ -1693,9 +1693,6 @@ impl MetalStorage {
         // Enqueue the copy operation
         self.device.copy_buffer(&self.buffer, 0, &buffer, 0, size)?;
 
-        // Commit the command buffer to the queue to ensure the copy operation is completed
-        self.device.close_compute_buffer()?;
-
         let result = read_to_vec(&buffer, self.count);
         Ok(result)
     }
