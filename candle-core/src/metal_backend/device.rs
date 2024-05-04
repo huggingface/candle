@@ -301,8 +301,25 @@ impl MetalDevice {
 
     /// Allocates a new buffer with zeros.
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
-        let data = vec![0u8; size_in_bytes];
-        self.new_buffer_with_data(&data)
+        let buffer = self.allocate_buffer(
+            size_in_bytes as NSUInteger,
+            MTLResourceOptions::StorageModePrivate,
+            "zeros",
+        )?;
+
+        let command_buffer = self.command_queue().new_command_buffer();
+        let blit = command_buffer.new_blit_command_encoder();
+        blit.fill_buffer(
+            &buffer,
+            metal::NSRange {
+                location: 0,
+                length: buffer.length(),
+            },
+            0,
+        );
+        blit.end_encoding();
+        command_buffer.commit();
+        return Ok(buffer);
     }
 
     /// Finds the best buffer to reuse.
