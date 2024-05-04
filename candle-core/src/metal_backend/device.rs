@@ -303,7 +303,7 @@ impl MetalDevice {
     pub fn allocate_zeros(&self, size_in_bytes: usize) -> Result<Arc<Buffer>> {
         let buffer = self.allocate_buffer(
             size_in_bytes as NSUInteger,
-            MTLResourceOptions::StorageModePrivate,
+            MTLResourceOptions::StorageModeShared,
             "zeros",
         )?;
 
@@ -319,6 +319,8 @@ impl MetalDevice {
         );
         blit.end_encoding();
         command_buffer.commit();
+        command_buffer.wait_until_completed();
+
         return Ok(buffer);
     }
 
