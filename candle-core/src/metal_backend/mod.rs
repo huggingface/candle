@@ -6,7 +6,7 @@ use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg, Kernels};
 use metal::{Buffer, MTLResourceOptions, NSUInteger};
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::{Arc, Mutex, RwLock, TryLockError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
 
 mod device;
 pub use device::{DeviceId, MetalDevice};
@@ -33,6 +33,12 @@ impl<T> From<TryLockError<T>> for MetalError {
             TryLockError::Poisoned(p) => MetalError::LockError(LockError::Poisoned(p.to_string())),
             TryLockError::WouldBlock => MetalError::LockError(LockError::WouldBlock),
         }
+    }
+}
+
+impl<T> From<PoisonError<T>> for MetalError {
+    fn from(p: PoisonError<T>) -> Self {
+        MetalError::LockError(LockError::Poisoned(p.to_string()))
     }
 }
 
