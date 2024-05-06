@@ -158,7 +158,7 @@ impl MetalDevice {
                 .command_buffer_accesses
                 .try_read()
                 .map_err(MetalError::from)?;
-            accesses.clone()
+            *accesses
         };
 
         // If the command buffer has reached the maximum number of accesses, we need to close it
@@ -194,7 +194,7 @@ impl MetalDevice {
         } else {
             let command_buffer = self.command_buffer()?;
             let new_command_encoder = command_buffer.new_compute_command_encoder().to_owned();
-            *command_encoder_lock = Some(ComputeCommandEncoder::from(new_command_encoder.clone()));
+            *command_encoder_lock = Some(new_command_encoder.clone());
             Ok(new_command_encoder)
         }
     }
@@ -319,7 +319,7 @@ impl MetalDevice {
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
-        return Ok(buffer);
+        Ok(buffer)
     }
 
     /// Finds the best buffer to reuse.

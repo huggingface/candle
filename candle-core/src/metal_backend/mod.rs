@@ -121,9 +121,9 @@ impl BackendStorage for MetalStorage {
                 dtype => crate::bail!("Metal contiguous affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 name,
                 el,
                 src,
@@ -140,9 +140,9 @@ impl BackendStorage for MetalStorage {
                 dtype => crate::bail!("Metal strided affine {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_affine_strided(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 name,
                 layout.dims(),
                 src,
@@ -174,9 +174,9 @@ impl BackendStorage for MetalStorage {
                 dtype => crate::bail!("Metal contiguous powf {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_powf(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 name,
                 el,
                 src,
@@ -192,9 +192,9 @@ impl BackendStorage for MetalStorage {
                 dtype => crate::bail!("Metal strided powf {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_powf_strided(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 name,
                 layout.dims(),
                 src,
@@ -225,9 +225,9 @@ impl BackendStorage for MetalStorage {
                 dtype => crate::bail!("Metal contiguous elu {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_elu(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 name,
                 el,
                 src,
@@ -243,9 +243,9 @@ impl BackendStorage for MetalStorage {
                 dtype => crate::bail!("Metal strided elu {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_elu_strided(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 name,
                 layout.dims(),
                 src,
@@ -321,9 +321,9 @@ impl BackendStorage for MetalStorage {
         let command_encoder = self.device.command_encoder()?;
         let src = buffer_o(&self.buffer, layout, self.dtype);
         candle_metal_kernels::call_reduce_strided(
-            &device.metal_device(),
+            device.metal_device(),
             &command_encoder,
-            &device.kernels(),
+            device.kernels(),
             name,
             &dims,
             &stride,
@@ -398,9 +398,9 @@ impl BackendStorage for MetalStorage {
                 }
             };
             candle_metal_kernels::call_cast_contiguous(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 kernel_name,
                 el_count,
                 src,
@@ -425,9 +425,9 @@ impl BackendStorage for MetalStorage {
                 }
             };
             candle_metal_kernels::call_cast_strided(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 kernel_name,
                 layout.dims(),
                 src,
@@ -517,9 +517,9 @@ impl BackendStorage for MetalStorage {
                     }
                 };
                 candle_metal_kernels::call_unary_contiguous_tiled(
-                    &device.metal_device(),
+                    device.metal_device(),
                     &command_encoder,
-                    &device.kernels(),
+                    device.kernels(),
                     kernel_name,
                     el_count,
                     src,
@@ -593,9 +593,9 @@ impl BackendStorage for MetalStorage {
                     }
                 };
                 candle_metal_kernels::call_unary_contiguous(
-                    &device.metal_device(),
+                    device.metal_device(),
                     &command_encoder,
-                    &device.kernels(),
+                    device.kernels(),
                     kernel_name,
                     el_count,
                     src,
@@ -666,9 +666,9 @@ impl BackendStorage for MetalStorage {
                 };
                 let dst = BufferOffset::zero_offset(&buffer);
                 candle_metal_kernels::call_unary_strided(
-                    &device.metal_device(),
+                    device.metal_device(),
                     &command_encoder,
-                    &device.kernels(),
+                    device.kernels(),
                     kernel_name,
                     layout.dims(),
                     src,
@@ -726,9 +726,9 @@ impl BackendStorage for MetalStorage {
         let t = buffer_o(&t.buffer, t_l, t.dtype);
         let f = buffer_o(&f.buffer, f_l, f.dtype);
         candle_metal_kernels::call_where_cond_strided(
-            &device.metal_device(),
+            device.metal_device(),
             &command_encoder,
-            &device.kernels(),
+            device.kernels(),
             name,
             dims,
             src,
@@ -771,9 +771,9 @@ impl BackendStorage for MetalStorage {
         };
         let src = buffer_o(&self.buffer, layout, self.dtype);
         candle_metal_kernels::call_im2col1d_strided(
-            &self.device.metal_device(),
+            self.device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             layout.shape().dims(),
             strides,
@@ -837,9 +837,9 @@ impl BackendStorage for MetalStorage {
             dtype => crate::bail!("Metal conv_transpose1d {dtype:?} not implemented"),
         };
         candle_metal_kernels::call_conv_transpose1d(
-            &self.device.metal_device(),
+            self.device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             params.dilation,
             params.stride,
@@ -898,9 +898,9 @@ impl BackendStorage for MetalStorage {
         };
         let src = buffer_o(&self.buffer, layout, self.dtype);
         candle_metal_kernels::call_im2col_strided(
-            &self.device.metal_device(),
+            self.device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             layout.shape().dims(),
             layout.stride(),
@@ -980,9 +980,9 @@ impl BackendStorage for MetalStorage {
         };
 
         candle_metal_kernels::call_conv_transpose2d(
-            &self.device.metal_device(),
+            self.device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             CallConvTranspose2dCfg {
                 dilation: params.dilation,
@@ -1031,9 +1031,9 @@ impl BackendStorage for MetalStorage {
         let buffer = self.device.new_buffer(dst_el, self.dtype, "avg_pool2d")?;
         let command_encoder = self.device.command_encoder()?;
         candle_metal_kernels::call_pool2d(
-            &self.device.metal_device(),
+            self.device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             inp_l.dims(),
             strides,
@@ -1073,9 +1073,9 @@ impl BackendStorage for MetalStorage {
         let buffer = self.device.new_buffer(dst_el, self.dtype, "max_pool2d")?;
         let command_encoder = self.device.command_encoder()?;
         candle_metal_kernels::call_pool2d(
-            &self.device.metal_device(),
+            self.device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             inp_l.dims(),
             strides,
@@ -1120,9 +1120,9 @@ impl BackendStorage for MetalStorage {
         let command_encoder = self.device.command_encoder()?;
         let src = buffer_o(&self.buffer, inp_l, self.dtype);
         candle_metal_kernels::call_upsample_nearest_2d(
-            &self.device.metal_device(),
+            self.device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             dims,
             strides,
@@ -1153,9 +1153,9 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&self.buffer, src_l, dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_gather(
-            &device.metal_device(),
+            device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             src_l.dims(),
             ids_el,
@@ -1202,9 +1202,9 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_scatter_add(
-            &self.device.metal_device(),
+            self.device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             src_l.dims(),
             l.dims(),
@@ -1249,9 +1249,9 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&self.buffer, src_l, dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_index_select(
-            &device.metal_device(),
+            device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             src_l.dims(),
             ids_el,
@@ -1313,9 +1313,9 @@ impl BackendStorage for MetalStorage {
         let src = buffer_o(&src.buffer, src_l, src.dtype);
         let ids = buffer_o(&ids.buffer, ids_l, ids.dtype);
         candle_metal_kernels::call_index_add(
-            &self.device.metal_device(),
+            self.device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             src_l.dims(),
             l.dims(),
@@ -1346,9 +1346,9 @@ impl BackendStorage for MetalStorage {
 
         let command_encoder = self.device.command_encoder()?;
         candle_metal_kernels::call_gemm(
-            &self.device.metal_device(),
+            self.device.metal_device(),
             &command_encoder,
-            &self.device.kernels(),
+            self.device.kernels(),
             name,
             (b, m, n, k),
             lhs_l.stride(),
@@ -1407,9 +1407,9 @@ impl BackendStorage for MetalStorage {
                 dtype => crate::bail!("Metal copy2d {dtype:?} not implemented"),
             };
             candle_metal_kernels::call_copy2d(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 kernel_name,
                 &self.buffer,
                 &dst.buffer,
@@ -1454,9 +1454,9 @@ impl BackendStorage for MetalStorage {
             };
             let command_encoder = self.device.command_encoder()?;
             candle_metal_kernels::call_unary_strided(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 kernel_name,
                 src_l.dims(),
                 src,
@@ -1574,9 +1574,9 @@ impl MetalStorage {
             };
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_contiguous(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 kernel_name,
                 el_count,
                 lhs,
@@ -1673,9 +1673,9 @@ impl MetalStorage {
             };
             let buffer = device.new_buffer(el_count, dtype, op)?;
             candle_metal_kernels::call_binary_strided(
-                &self.device.metal_device(),
+                self.device.metal_device(),
                 &command_encoder,
-                &self.device.kernels(),
+                self.device.kernels(),
                 kernel_name,
                 lhs_l.dims(),
                 lhs,
@@ -1799,9 +1799,9 @@ impl BackendDevice for MetalDevice {
         let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_uniform")?;
         let command_encoder = self.command_encoder()?;
         candle_metal_kernels::call_random_uniform(
-            &self.metal_device(),
+            self.metal_device(),
             &command_encoder,
-            &self.kernels(),
+            self.kernels(),
             name,
             min as f32,
             max as f32,
@@ -1835,9 +1835,9 @@ impl BackendDevice for MetalDevice {
         let buffer = self.new_buffer(shape.elem_count(), dtype, "rand_normal")?;
         let command_encoder = self.command_encoder()?;
         candle_metal_kernels::call_random_normal(
-            &self.metal_device(),
+            self.metal_device(),
             &command_encoder,
-            &self.kernels(),
+            self.kernels(),
             name,
             mean as f32,
             stddev as f32,
