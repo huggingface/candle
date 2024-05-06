@@ -1,5 +1,6 @@
 use crate::op::{BackpropOp, Op};
 use crate::tensor::from_storage;
+use crate::wgpu_backend::WgpuStorage;
 use crate::{CpuStorage, CudaStorage, Layout, MetalStorage, Result, Shape, Tensor};
 use std::sync::Arc;
 
@@ -29,6 +30,18 @@ pub trait CustomOp1 {
     ) -> Result<(MetalStorage, Shape)> {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+
+    /// The forward pass, as run on a webgpu gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn webgpu_fwd(
+        &self,
+        _storage: &WgpuStorage,
+        _layout: &Layout,
+    ) -> Result<(WgpuStorage, Shape)> {
+        Err(crate::Error::WebGpu(
+            format!("no WebGpu implementation for {}", self.name()).into(),
         ))
     }
 
@@ -67,7 +80,7 @@ pub trait CustomOp2 {
         ))
     }
 
-    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
+    /// The forward pass, as run on a webgpu gpu device. Note that the storage can use arbitrary strides,
     /// offsets etc so the associated layout should be used to access it.
     fn metal_fwd(
         &self,
@@ -77,9 +90,24 @@ pub trait CustomOp2 {
         _: &Layout,
     ) -> Result<(MetalStorage, Shape)> {
         Err(crate::Error::Metal(
+            format!("no webgpu implementation for {}", self.name()).into(),
+        ))
+    }
+
+    /// The forward pass, as run on a metal gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn webgpu_fwd(
+        &self,
+        _: &WgpuStorage,
+        _: &Layout,
+        _: &WgpuStorage,
+        _: &Layout,
+    ) -> Result<(WgpuStorage, Shape)> {
+        Err(crate::Error::WebGpu(
             format!("no metal implementation for {}", self.name()).into(),
         ))
     }
+
 
     fn bwd(
         &self,
@@ -138,6 +166,24 @@ pub trait CustomOp3 {
             format!("no metal implementation for {}", self.name()).into(),
         ))
     }
+
+
+    /// The forward pass, as run on a webgpu gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn webgpu_fwd(
+        &self,
+        _: &WgpuStorage,
+        _: &Layout,
+        _: &WgpuStorage,
+        _: &Layout,
+        _: &WgpuStorage,
+        _: &Layout,
+    ) -> Result<(WgpuStorage, Shape)> {
+        Err(crate::Error::WebGpu(
+            format!("no webgpu implementation for {}", self.name()).into(),
+        ))
+    }
+
 
     fn bwd(
         &self,
@@ -270,6 +316,15 @@ pub trait InplaceOp1 {
             format!("no metal implementation for {}", self.name()).into(),
         ))
     }
+
+    /// The forward pass, as run on a webgpu gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn webgpu_fwd(&self, _storage: &mut WgpuStorage, _layout: &Layout) -> Result<()> {
+        Err(crate::Error::WebGpu(
+            format!("no webgpu implementation for {}", self.name()).into(),
+        ))
+    }
+
 }
 
 pub trait InplaceOp2 {
@@ -299,6 +354,20 @@ pub trait InplaceOp2 {
     ) -> Result<()> {
         Err(crate::Error::Metal(
             format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+
+    /// The forward pass, as run on a webgpu gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn webgpu_fwd(
+        &self,
+        _: &mut WgpuStorage,
+        _: &Layout,
+        _: &WgpuStorage,
+        _: &Layout,
+    ) -> Result<()> {
+        Err(crate::Error::WebGpu(
+            format!("no webgpu implementation for {}", self.name()).into(),
         ))
     }
 }
@@ -349,6 +418,23 @@ pub trait InplaceOp3 {
             format!("no metal implementation for {}", self.name()).into(),
         ))
     }
+
+    /// The forward pass, as run on a webgpu gpu device. Note that the storage can use arbitrary strides,
+    /// offsets etc so the associated layout should be used to access it.
+    fn webgpu_fwd(
+        &self,
+        _: &mut WgpuStorage,
+        _: &Layout,
+        _: &WgpuStorage,
+        _: &Layout,
+        _: &WgpuStorage,
+        _: &Layout,
+    ) -> Result<()> {
+        Err(crate::Error::WebGpu(
+            format!("no metal implementation for {}", self.name()).into(),
+        ))
+    }
+
 }
 
 impl Tensor {

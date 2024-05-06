@@ -1,4 +1,4 @@
-use crate::{CpuStorage, DType, Device, Result, Shape, Storage, Tensor};
+use crate::{CpuStorage, DType, Device, Error, Result, Shape, Storage, Tensor};
 use k_quants::*;
 use std::borrow::Cow;
 
@@ -51,6 +51,7 @@ impl Device {
                 let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
                 Ok(QStorage::Cuda(storage))
             }
+            Device::WebGpu(_) => Err(Error::WebGpu(format!("no WebGpu implementation for QTensor").into()))
         }
     }
 }

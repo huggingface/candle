@@ -1,6 +1,6 @@
 use crate::backend::BackendStorage;
 use crate::op::{self, CmpOp, ReduceOp};
-use crate::{CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
+use crate::{wgpu_backend, CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
@@ -10,6 +10,7 @@ pub enum Storage {
     Cpu(CpuStorage),
     Cuda(CudaStorage),
     Metal(MetalStorage),
+    WebGpu(wgpu_backend::WgpuStorage)
 }
 
 impl Storage {
@@ -24,6 +25,10 @@ impl Storage {
                 let storage = storage.try_clone(layout)?;
                 Ok(Self::Metal(storage))
             }
+            Self::WebGpu(storage) => {
+                let storage = storage.try_clone(layout)?;
+                Ok(Self::WebGpu(storage))
+            }
         }
     }
 
@@ -32,6 +37,7 @@ impl Storage {
             Self::Cpu(_) => Device::Cpu,
             Self::Cuda(storage) => Device::Cuda(storage.device().clone()),
             Self::Metal(storage) => Device::Metal(storage.device().clone()),
+            Self::WebGpu(storage) => Device::WebGpu(storage.device().clone()),
         }
     }
 
@@ -40,6 +46,7 @@ impl Storage {
             Self::Cpu(storage) => storage.dtype(),
             Self::Cuda(storage) => storage.dtype(),
             Self::Metal(storage) => storage.dtype(),
+            Self::WebGpu(storage) => storage.dtype(),
         }
     }
 
@@ -87,6 +94,10 @@ impl Storage {
                 let storage = storage.affine(layout, mul, add)?;
                 Ok(Self::Metal(storage))
             }
+            Self::WebGpu(storage) => {
+                let storage = storage.affine(layout, mul, add)?;
+                Ok(Self::WebGpu(storage))
+            }
         }
     }
 
@@ -104,6 +115,10 @@ impl Storage {
                 let storage = storage.powf(layout, alpha)?;
                 Ok(Self::Metal(storage))
             }
+            Self::WebGpu(storage) => {
+                let storage = storage.powf(layout, alpha)?;
+                Ok(Self::WebGpu(storage))
+            }
         }
     }
 
@@ -120,6 +135,10 @@ impl Storage {
             Self::Metal(storage) => {
                 let storage = storage.elu(layout, alpha)?;
                 Ok(Self::Metal(storage))
+            }
+            Self::WebGpu(storage) => {
+                let storage = storage.elu(layout, alpha)?;
+                Ok(Self::WebGpu(storage))
             }
         }
     }
@@ -145,6 +164,10 @@ impl Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::WebGpu(lhs), Self::WebGpu(rhs)) => {
+                let storage = lhs.cmp(op, rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::WebGpu(storage))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -173,6 +196,10 @@ impl Storage {
                 let storage = storage.reduce_op(op, layout, s)?;
                 Ok(Self::Metal(storage))
             }
+            Self::WebGpu(storage) => {
+                let storage = storage.reduce_op(op, layout, s)?;
+                Ok(Self::WebGpu(storage))
+            }
         }
     }
 
@@ -190,6 +217,10 @@ impl Storage {
                 let storage = storage.to_dtype(layout, dtype)?;
                 Ok(Self::Metal(storage))
             }
+            Self::WebGpu(storage) => {
+                let storage = storage.to_dtype(layout, dtype)?;
+                Ok(Self::WebGpu(storage))
+            }
         }
     }
 
@@ -206,6 +237,10 @@ impl Storage {
             Self::Metal(storage) => {
                 let (storage, shape) = c.metal_fwd(storage, l)?;
                 Ok((Self::Metal(storage), shape))
+            }
+            Self::WebGpu(storage) => {
+                let (storage, shape) = c.webgpu_fwd(storage, l)?;
+                Ok((Self::WebGpu(storage), shape))
             }
         }
     }
@@ -230,6 +265,10 @@ impl Storage {
             (Self::Metal(s1), Self::Metal(s2)) => {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2)?;
                 Ok((Self::Metal(s), shape))
+            }
+            (Self::WebGpu(s1), Self::WebGpu(s2)) => {
+                let (s, shape) = c.webgpu_fwd(s1, l1, s2, l2)?;
+                Ok((Self::WebGpu(s), shape))
             }
             _ => unreachable!(),
         }
@@ -259,6 +298,10 @@ impl Storage {
                 let (s, shape) = c.metal_fwd(s1, l1, s2, l2, s3, l3)?;
                 Ok((Self::Metal(s), shape))
             }
+            (Self::WebGpu(s1), Self::WebGpu(s2), Self::WebGpu(s3)) => {
+                let (s, shape) = c.webgpu_fwd(s1, l1, s2, l2, s3, l3)?;
+                Ok((Self::WebGpu(s), shape))
+            }
             _ => unreachable!(),
         }
     }
@@ -268,6 +311,7 @@ impl Storage {
             Self::Cpu(storage) => c.cpu_fwd(storage, l),
             Self::Cuda(storage) => c.cuda_fwd(storage, l),
             Self::Metal(storage) => c.metal_fwd(storage, l),
+            Self::WebGpu(storage) => c.webgpu_fwd(storage, l),
         }
     }
 
@@ -283,6 +327,7 @@ impl Storage {
             (Self::Cpu(s1), Self::Cpu(s2)) => c.cpu_fwd(s1, l1, s2, l2),
             (Self::Cuda(s1), Self::Cuda(s2)) => c.cuda_fwd(s1, l1, s2, l2),
             (Self::Metal(s1), Self::Metal(s2)) => c.metal_fwd(s1, l1, s2, l2),
+            (Self::WebGpu(s1), Self::WebGpu(s2)) => c.webgpu_fwd(s1, l1, s2, l2),
             _ => unreachable!(),
         }
     }
@@ -304,6 +349,9 @@ impl Storage {
             (Self::Metal(s1), Self::Metal(s2), Self::Metal(s3)) => {
                 c.metal_fwd(s1, l1, s2, l2, s3, l3)
             }
+            (Self::WebGpu(s1), Self::WebGpu(s2), Self::WebGpu(s3)) => {
+                c.webgpu_fwd(s1, l1, s2, l2, s3, l3)
+            }
             _ => unreachable!(),
         }
     }
@@ -321,6 +369,10 @@ impl Storage {
             Self::Metal(storage) => {
                 let storage = storage.unary_impl::<B>(layout)?;
                 Ok(Self::Metal(storage))
+            }
+            Self::WebGpu(storage) => {
+                let storage = storage.unary_impl::<B>(layout)?;
+                Ok(Self::WebGpu(storage))
             }
         }
     }
@@ -345,6 +397,10 @@ impl Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::WebGpu(lhs), Self::WebGpu(rhs)) => {
+                let storage = lhs.binary_impl::<B>(rhs, lhs_layout, rhs_layout)?;
+                Ok(Self::WebGpu(storage))
             }
             (lhs, rhs) => {
                 // Should not happen because of the same device check above but we're defensive
@@ -381,6 +437,10 @@ impl Storage {
                 let s = inp.conv1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            (Storage::WebGpu(inp), Storage::WebGpu(kernel)) => {
+                let s = inp.conv1d(l, kernel, kernel_l, params)?;
+                Ok(Self::WebGpu(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -411,6 +471,10 @@ impl Storage {
             (Storage::Metal(inp), Storage::Metal(kernel)) => {
                 let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
+            }
+            (Storage::WebGpu(inp), Storage::WebGpu(kernel)) => {
+                let s = inp.conv_transpose1d(l, kernel, kernel_l, params)?;
+                Ok(Self::WebGpu(s))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -443,6 +507,10 @@ impl Storage {
                 let s = inp.conv2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            (Storage::WebGpu(inp), Storage::WebGpu(kernel)) => {
+                let s = inp.conv2d(l, kernel, kernel_l, params)?;
+                Ok(Self::WebGpu(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -474,6 +542,10 @@ impl Storage {
                 let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
                 Ok(Self::Metal(s))
             }
+            (Storage::WebGpu(inp), Storage::WebGpu(kernel)) => {
+                let s = inp.conv_transpose2d(l, kernel, kernel_l, params)?;
+                Ok(Self::WebGpu(s))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -502,6 +574,10 @@ impl Storage {
                 let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
             }
+            Self::WebGpu(storage) => {
+                let storage = storage.avg_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::WebGpu(storage))
+            }
         }
     }
 
@@ -524,6 +600,10 @@ impl Storage {
                 let storage = storage.max_pool2d(layout, kernel_size, stride)?;
                 Ok(Self::Metal(storage))
             }
+            Self::WebGpu(storage) => {
+                let storage = storage.max_pool2d(layout, kernel_size, stride)?;
+                Ok(Self::WebGpu(storage))
+            }
         }
     }
 
@@ -541,6 +621,10 @@ impl Storage {
                 let storage = storage.upsample_nearest1d(layout, sz)?;
                 Ok(Self::Metal(storage))
             }
+            Self::WebGpu(storage) => {
+                let storage = storage.upsample_nearest1d(layout, sz)?;
+                Ok(Self::WebGpu(storage))
+            }
         }
     }
 
@@ -557,6 +641,10 @@ impl Storage {
             Self::Metal(storage) => {
                 let storage = storage.upsample_nearest2d(layout, h, w)?;
                 Ok(Self::Metal(storage))
+            }
+            Self::WebGpu(storage) => {
+                let storage = storage.upsample_nearest2d(layout, h, w)?;
+                Ok(Self::WebGpu(storage))
             }
         }
     }
@@ -584,6 +672,10 @@ impl Storage {
             (Self::Metal(cond), Self::Metal(t), Self::Metal(f)) => {
                 let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::WebGpu(cond), Self::WebGpu(t), Self::WebGpu(f)) => {
+                let storage = cond.where_cond(layout, t, layout_t, f, layout_f)?;
+                Ok(Self::WebGpu(storage))
             }
             (_, lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -615,6 +707,10 @@ impl Storage {
                 let storage = s.gather(l, indexes, indexes_l, d)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::WebGpu(s), Self::WebGpu(indexes)) => {
+                let storage = s.gather(l, indexes, indexes_l, d)?;
+                Ok(Self::WebGpu(storage))
+            }
             _ => unreachable!(),
         }
     }
@@ -642,6 +738,10 @@ impl Storage {
             (Self::Metal(s), Self::Metal(indexes), Self::Metal(source)) => {
                 let storage = s.scatter_add(l, indexes, indexes_l, source, source_l, d)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::WebGpu(s), Self::WebGpu(indexes), Self::WebGpu(source)) => {
+                let storage = s.scatter_add(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::WebGpu(storage))
             }
             _ => unreachable!(),
         }
@@ -671,6 +771,10 @@ impl Storage {
                 let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::WebGpu(s), Self::WebGpu(indexes), Self::WebGpu(source)) => {
+                let storage = s.index_add(l, indexes, indexes_l, source, source_l, d)?;
+                Ok(Self::WebGpu(storage))
+            }
             _ => unreachable!(),
         }
     }
@@ -695,6 +799,10 @@ impl Storage {
             (Self::Metal(lhs), Self::Metal(rhs)) => {
                 let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
                 Ok(Self::Metal(storage))
+            }
+            (Self::WebGpu(lhs), Self::WebGpu(rhs)) => {
+                let storage = lhs.index_select(rhs, lhs_l, rhs_l, d)?;
+                Ok(Self::WebGpu(storage))
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
@@ -727,6 +835,10 @@ impl Storage {
                 let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
                 Ok(Self::Metal(storage))
             }
+            (Self::WebGpu(lhs), Self::WebGpu(rhs)) => {
+                let storage = lhs.matmul(rhs, bmnk, lhs_layout, rhs_layout)?;
+                Ok(Self::WebGpu(storage))
+            }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
                 lhs: lhs.device().location(),
                 rhs: rhs.device().location(),
@@ -747,6 +859,9 @@ impl Storage {
             (Self::Cpu(src), Self::Cpu(dst)) => src.copy_strided_src(dst, dst_offset, src_l),
             (Self::Cuda(src), Self::Cuda(dst)) => Ok(src.copy_strided_src(dst, dst_offset, src_l)?),
             (Self::Metal(src), Self::Metal(dst)) => {
+                Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
+            }
+            (Self::WebGpu(src), Self::WebGpu(dst)) => {
                 Ok(src.copy_strided_src(dst, dst_offset, src_l)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {
@@ -775,6 +890,9 @@ impl Storage {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (Self::Metal(src), Self::Metal(dst)) => {
+                Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
+            }
+            (Self::WebGpu(src), Self::WebGpu(dst)) => {
                 Ok(src.copy2d(dst, d1, d2, src_s, dst_s, src_o, dst_o)?)
             }
             (lhs, rhs) => Err(Error::DeviceMismatchBinaryOp {

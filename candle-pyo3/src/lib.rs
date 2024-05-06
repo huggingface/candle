@@ -86,6 +86,7 @@ impl PyDevice {
             Device::Cpu => Self::Cpu,
             Device::Cuda(_) => Self::Cuda,
             Device::Metal(_) => Self::Metal,
+            Device::WebGpu(_) => panic!("not supported for WebGpu")
         }
     }
 

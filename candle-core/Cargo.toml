@@ -31,6 +31,18 @@ thiserror = { workspace = true }
 yoke = { workspace = true }
 zip = { workspace = true }
 
+#Wgpu Dependencies:
+wgpu = {version="0.19.3", features=["webgpu"]}
+#pollster = "0.3.0"
+flume = "0.11.0"
+log = "0.4.21"
+bytemuck = { version = "1.15", features = [ "derive" ] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+futures = "0.3"
+#[target.'cfg(target_arch = "wasm32")'.dependencies]
+
+
 [dev-dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }

@@ -557,6 +557,7 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1548,6 +1549,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1579,6 +1581,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1620,6 +1623,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1940,6 +1944,9 @@ impl Tensor {
                 (Storage::Cpu(storage), Device::Metal(metal)) => {
                     Storage::Metal(metal.storage_from_cpu_storage(storage)?)
                 }
+                (Storage::Cpu(storage), Device::WebGpu(wgpu)) => {
+                    Storage::WebGpu(wgpu.storage_from_cpu_storage(storage)?)
+                }
                 (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
                 (Storage::Cuda(storage), Device::Cuda(cuda)) => {
@@ -1949,6 +1956,51 @@ impl Tensor {
                     Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
+                (Storage::WebGpu(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                _ => {
+                    bail!("not implemented yet")
+                } 
+            };
+            let op = BackpropOp::new1(self, Op::ToDevice);
+            let tensor_ = Tensor_ {
+                id: TensorId::new(),
+                storage: Arc::new(RwLock::new(storage)),
+                layout: self.layout.clone(),
+                op,
+                is_variable: false,
+                dtype: self.dtype,
+                device: device.clone(),
+            };
+            Ok(Tensor(Arc::new(tensor_)))
+        }
+    }
+
+     /// If the target device is the same as the tensor device, only a shallow copy is performed.
+     /// This Function is only needed for WebGpu -> Cpu, in all other cases one can use the sync version.
+     pub async fn to_device_async(&self, device: &Device) -> Result<Tensor> {
+        if self.device().same_device(device) {
+            Ok(self.clone())
+        } else {
+            let storage = match (&*self.storage(), device) {
+                (Storage::Cpu(storage), Device::Cuda(cuda)) => {
+                    Storage::Cuda(cuda.storage_from_cpu_storage(storage)?)
+                }
+                (Storage::Cpu(storage), Device::Metal(metal)) => {
+                    Storage::Metal(metal.storage_from_cpu_storage(storage)?)
+                }
+                (Storage::Cpu(storage), Device::WebGpu(wgpu)) => {
+                    Storage::WebGpu(wgpu.storage_from_cpu_storage(storage)?)
+                }
+                (Storage::Cuda(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                (Storage::Metal(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                (Storage::Cuda(storage), Device::Cuda(cuda)) => {
+                    // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
+                    // are the same.
+                    let cpu_storage = storage.to_cpu_storage()?;
+                    Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
+                }
+                (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
+                (Storage::WebGpu(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage_async().await?),
                 _ => {
                     bail!("not implemented yet")
                 }

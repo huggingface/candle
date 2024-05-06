@@ -30,6 +30,7 @@ impl BenchDevice for Device {
                 #[cfg(not(feature = "metal"))]
                 panic!("Metal device without metal feature enabled: {:?}", device)
             }
+            Device::WebGpu(_) => panic!("not supported for WebGpu")
         }
     }
 
@@ -47,6 +48,7 @@ impl BenchDevice for Device {
             }
             Device::Cuda(_) => format!("cuda_{}", name.into()),
             Device::Metal(_) => format!("metal_{}", name.into()),
+            Device::WebGpu(_) => panic!("not supported for WebGpu")
         }
     }
 }
