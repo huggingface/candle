@@ -167,13 +167,13 @@ impl MetalDevice {
         } else {
             let mut accesses = self
                 .command_buffer_accesses
-                .try_write()
+                .write()
                 .map_err(MetalError::from)?;
             *accesses += 1;
         }
 
         // Provision a new command buffer if there is none
-        let mut command_buffer_lock = self.command_buffer.try_write().map_err(MetalError::from)?;
+        let mut command_buffer_lock = self.command_buffer.write().map_err(MetalError::from)?;
         let command_buffer = command_buffer_lock.to_owned();
         if let Some(command_buffer) = command_buffer {
             Ok(command_buffer)
@@ -186,8 +186,7 @@ impl MetalDevice {
 
     /// Returns the current active command encoder, if the encoder is not present, this will allocate one
     pub fn command_encoder(&self) -> Result<ComputeCommandEncoder> {
-        let mut command_encoder_lock =
-            self.command_encoder.try_write().map_err(MetalError::from)?;
+        let mut command_encoder_lock = self.command_encoder.write().map_err(MetalError::from)?;
         let command_encoder = command_encoder_lock.to_owned();
 
         if let Some(command_encoder) = command_encoder {
@@ -202,13 +201,13 @@ impl MetalDevice {
 
     /// Ends the current command buffer
     pub fn close_compute_buffer(&self) -> Result<()> {
-        let mut command_buffer_lock = self.command_buffer.try_write().map_err(MetalError::from)?;
+        let mut command_buffer_lock = self.command_buffer.write().map_err(MetalError::from)?;
         let command_buffer = command_buffer_lock.to_owned();
 
         if let Some(command_buffer) = command_buffer {
             let mut accesses = self
                 .command_buffer_accesses
-                .try_write()
+                .write()
                 .map_err(MetalError::from)?;
             command_buffer.commit();
             command_buffer.wait_until_completed();
@@ -224,8 +223,7 @@ impl MetalDevice {
     /// In the case that there is no active command encoder, this function will not return an error,
     /// it instead is a no-op.
     pub fn end_compute_encoding(&self) -> Result<()> {
-        let mut command_encoder_lock =
-            self.command_encoder.try_write().map_err(MetalError::from)?;
+        let mut command_encoder_lock = self.command_encoder.write().map_err(MetalError::from)?;
         let command_encoder = command_encoder_lock.as_ref();
         if let Some(command_encoder) = command_encoder {
             command_encoder.end_encoding();
@@ -236,7 +234,7 @@ impl MetalDevice {
 
     /// Drops all buffers that are not currently in use, see the struct docs for more details about the buffer allocator
     pub fn drop_unused_buffers(&self) -> Result<()> {
-        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
+        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
         for subbuffers in buffers.values_mut() {
             let newbuffers = subbuffers
                 .iter()
@@ -289,7 +287,7 @@ impl MetalDevice {
             size,
             MTLResourceOptions::StorageModeManaged,
         );
-        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
+        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
         let subbuffers = buffers
             .entry((size, MTLResourceOptions::StorageModeManaged))
             .or_insert(vec![]);
@@ -361,7 +359,7 @@ impl MetalDevice {
         option: MTLResourceOptions,
         _name: &str,
     ) -> Result<Arc<Buffer>> {
-        let mut buffers = self.buffers.try_write().map_err(MetalError::from)?;
+        let mut buffers = self.buffers.write().map_err(MetalError::from)?;
         if let Some(b) = self.find_available_buffer(size, option, &buffers) {
             // Cloning also ensures we increment the strong count
             return Ok(b.clone());

@@ -2,11 +2,10 @@ use crate::backend::{BackendDevice, BackendStorage};
 use crate::conv::{ParamsConv1D, ParamsConv2D, ParamsConvTranspose1D, ParamsConvTranspose2D};
 use crate::op::{BinaryOpT, CmpOp, ReduceOp, UnaryOpT};
 use crate::{CpuStorage, CpuStorageRef, DType, Layout, Result, Shape};
-use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg, Kernels};
-use metal::{Buffer, MTLResourceOptions, NSUInteger};
-use std::collections::HashMap;
-use std::ffi::c_void;
-use std::sync::{Arc, Mutex, RwLock, TryLockError};
+use candle_metal_kernels::{BufferOffset, CallConvTranspose2dCfg};
+use metal::{Buffer, NSUInteger};
+
+use std::sync::{Arc, PoisonError, TryLockError};
 
 pub mod device;
 pub use device::{DeviceId, MetalDevice};
@@ -33,6 +32,12 @@ impl<T> From<TryLockError<T>> for MetalError {
             TryLockError::Poisoned(p) => MetalError::LockError(LockError::Poisoned(p.to_string())),
             TryLockError::WouldBlock => MetalError::LockError(LockError::WouldBlock),
         }
+    }
+}
+
+impl<T> From<PoisonError<T>> for MetalError {
+    fn from(p: PoisonError<T>) -> Self {
+        MetalError::LockError(LockError::Poisoned(p.to_string()))
     }
 }
 
