@@ -34,7 +34,23 @@ serde_json = { workspace = true }
 symphonia = { version = "0.5.3", features = ["all"], optional = true }
 tokenizers = { workspace = true, features = ["onig"] }
 cpal= { version = "0.15.2", optional = true }
-
+axum = { version ="0.7", features = ["json", "multipart"] }
+axum-extra = "0.9"
+askama = "0.11"
+async-trait = "0.1.66"
+config = "0.13"
+dotenv = "0.15"
+futures = "0.3"
+hyper = "0.14"
+tokio = { version = "1.25", features = ["full"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["auth","fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+lazy_static = "1.4.0"
+chrono = {version="0.4.33", features = ["serde"] }
+tokio-stream = "0.1"
+async-stream = "0.3.5"
 [dev-dependencies]
 anyhow = { workspace = true }
 byteorder = { workspace = true }
