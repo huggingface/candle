@@ -6,9 +6,20 @@ use super::WgpuStorage;
 #[derive(Debug, Clone)]
 pub struct  WgpuDevice {
     pub device : Arc<wgpu::Device>, 
-    pub queue : Arc<wgpu::Queue>
+    pub queue : Arc<wgpu::Queue>,
+    pub pipelines : Arc<Vec<wgpu::ComputePipeline>>,
+    pub shader : Arc<wgpu::ShaderModule>
 }
 
+pub (crate) enum Pipelines{
+    UnaryInplace = 0,
+    UnaryFromBuffer = 1,
+    BinaryScalarInplace = 2,
+    BinaryScalarFromBuffer = 3,
+    BinaryBufferInplace = 4,
+    BinaryBufferFromBuffer = 5,
+    MatmulBuffer = 6
+}
 
 
 impl WgpuDevice{
@@ -30,12 +41,51 @@ impl WgpuDevice{
                 },
                 None,
             ).await.map_err(|err| crate::Error::WebGpu(err.to_string().into()))?;
-
+        let shader =  wgpu_functions::get_shader(&device);
+        
+        let pipelines = 
+        vec![
+            Self::load_pipeline(&device, &shader, Pipelines::UnaryInplace), 
+            Self::load_pipeline(&device, &shader, Pipelines::UnaryFromBuffer),
+            Self::load_pipeline(&device, &shader, Pipelines::BinaryScalarInplace),
+            Self::load_pipeline(&device, &shader, Pipelines::BinaryScalarFromBuffer),
+            Self::load_pipeline(&device, &shader, Pipelines::BinaryBufferInplace),
+            Self::load_pipeline(&device, &shader, Pipelines::BinaryBufferFromBuffer),
+            Self::load_pipeline(&device, &shader, Pipelines::MatmulBuffer)];
+        
         Ok(WgpuDevice {
             device: Arc::new(device),
-            queue: Arc::new(queue)
+            queue: Arc::new(queue),
+            pipelines : Arc::new(pipelines),
+            shader : Arc::new(shader)
         })
     }
+
+    
+    fn load_pipeline(device : &wgpu::Device, shader : &wgpu::ShaderModule, pipeline : Pipelines) -> wgpu::ComputePipeline{
+        let entry_point = match pipeline{
+            Pipelines::UnaryInplace => "unary_inplace",
+            Pipelines::UnaryFromBuffer => "unary_from_buffer",
+            Pipelines::BinaryScalarInplace => "binary_scalar_inplace",
+            Pipelines::BinaryScalarFromBuffer => "binary_scalar_from_buffer",
+            Pipelines::BinaryBufferInplace => "binary_buffer_inplace",
+            Pipelines::BinaryBufferFromBuffer => "binary_buffer_from_buffer",
+            Pipelines::MatmulBuffer => "matmul",
+        };
+        
+        return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: None,
+            module: &shader,
+            entry_point: entry_point,
+        });
+    }
+
+    pub (crate) fn get_pipeline(&self,pipeline: Pipelines) -> &wgpu::ComputePipeline { //Ref<'_, wgpu::ComputePipeline> 
+        return &self.pipelines[pipeline as usize];
+    }
+
+
 }
 
 impl crate::backend::BackendDevice for WgpuDevice{

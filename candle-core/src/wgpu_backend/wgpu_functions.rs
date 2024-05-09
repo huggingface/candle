@@ -4,6 +4,8 @@ use wgpu::{util::DeviceExt, BindGroup, Buffer, ComputePipeline, ShaderModule};
 
 use crate::wgpu_backend::device::WgpuDevice;
 
+use super::device::Pipelines;
+
 #[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
 #[repr(C)]
 struct MetaUnary{
@@ -88,7 +90,7 @@ pub enum BinaryOperation{
 
 const WORKGROUP_SIZE : u32 = 64;
 
-fn get_shader(device: &wgpu::Device) -> ShaderModule {
+pub fn get_shader(device: &wgpu::Device) -> ShaderModule {
     let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
@@ -96,16 +98,6 @@ fn get_shader(device: &wgpu::Device) -> ShaderModule {
     return cs_module;
 }
 
-fn get_pipeline(dev : &WgpuDevice,cs_module: &ShaderModule,entry_point: &str,) -> ComputePipeline {
-    let compute_pipeline: wgpu::ComputePipeline =
-        dev.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: None,
-            layout: None,
-            module: &cs_module,
-            entry_point: entry_point,
-        });
-    return compute_pipeline;
-}
 
 
 pub fn create_buffer(dev : &WgpuDevice, size : usize) -> Buffer{
@@ -135,14 +127,14 @@ pub fn create_buffer_init<T : bytemuck::Pod>(dev : &WgpuDevice, data : &[T]) -> 
     buffer
 }
 
-fn enqueue(dev : &WgpuDevice, pipeline : ComputePipeline, bind_group: BindGroup, length : u32){
+fn enqueue(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup, length : u32){
     let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: None,
             timestamp_writes: None,
         });
-        cpass.set_pipeline(&pipeline);
+        cpass.set_pipeline(pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
         cpass.dispatch_workgroups(length / WORKGROUP_SIZE, 1, 1);
     }
@@ -156,9 +148,7 @@ pub fn queue_unary_inplace_op(dev : &WgpuDevice, buffer : &Buffer, length : u32,
     let meta = MetaUnary{length , operation : op as u32};
     let buffer_meta = create_uniform_buffer(dev, meta);
 
-    let cs_module = get_shader(&dev.device);
-    let pipeline = get_pipeline(dev, &cs_module, "unary_inplace");
-
+    let pipeline = dev.get_pipeline(Pipelines::UnaryInplace);
     let bind_group_layout = pipeline.get_bind_group_layout(0);
     let bind_group = dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
@@ -182,8 +172,7 @@ pub fn queue_unary_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffe
     let meta = MetaUnary{length , operation : op as u32};
     let buffer_meta = create_uniform_buffer(dev, meta);
 
-    let cs_module = get_shader(&dev.device);
-    let pipeline = get_pipeline(dev, &cs_module, "unary_from_buffer");
+    let pipeline = dev.get_pipeline(Pipelines::UnaryFromBuffer);
 
     // Instantiates the bind group
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -216,8 +205,7 @@ pub fn queue_binary_scalar_inplace(dev : &WgpuDevice, buffer_dest : &Buffer, sca
     let meta = MetaBinaryScalar{length , operation : op as u32, scalar};
     let buffer_meta = create_uniform_buffer(dev, meta);
 
-    let cs_module = get_shader(&dev.device);
-    let pipeline = get_pipeline(dev, &cs_module, "binary_scalar_inplace");
+    let pipeline = dev.get_pipeline(Pipelines::BinaryScalarInplace);
 
     // Instantiates the bind group
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -244,8 +232,7 @@ pub fn queue_binary_scalar_from_buffer(dev : &WgpuDevice, buffer_dest : &Buffer,
     let meta = MetaBinaryScalar{length , operation : op as u32, scalar};
     let buffer_meta = create_uniform_buffer(dev, meta);
 
-    let cs_module = get_shader(&dev.device);
-    let pipeline = get_pipeline(dev, &cs_module, "binary_scalar_from_buffer");
+    let pipeline = dev.get_pipeline(Pipelines::BinaryScalarFromBuffer);
 
     // Instantiates the bind group
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -276,8 +263,7 @@ pub fn queue_binary_buffer_inplace(dev : &WgpuDevice, buffer_dest : &Buffer, buf
     let meta = MetaUnary{length , operation : op as u32};
     let buffer_meta = create_uniform_buffer(dev, meta);
 
-    let cs_module = get_shader(&dev.device);
-    let pipeline = get_pipeline(dev, &cs_module, "binary_buffer_inplace");
+    let pipeline = dev.get_pipeline(Pipelines::BinaryBufferInplace);
 
     // Instantiates the bind group
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -308,8 +294,7 @@ pub fn queue_binary_buffer_from_buffer(dev : &WgpuDevice, buffer_dest : &Buffer,
     let meta = MetaUnary{length , operation : op as u32};
     let buffer_meta = create_uniform_buffer(dev, meta);
 
-    let cs_module = get_shader(&dev.device);
-    let pipeline = get_pipeline(dev, &cs_module, "binary_buffer_from_buffer");
+    let pipeline = dev.get_pipeline(Pipelines::BinaryBufferFromBuffer);
 
     // Instantiates the bind group
     let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -345,8 +330,7 @@ pub fn queue_matmul_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_inpu
     let meta = MetaInfoMatMul{m,n,k};
     let buffer_meta = create_uniform_buffer(dev, meta);
 
-    let cs_module = get_shader(&dev.device);
-    let pipeline = get_pipeline(dev, &cs_module, "matmul");
+    let pipeline = dev.get_pipeline(Pipelines::MatmulBuffer);
 
     // Instantiates the bind group
     let bind_group_layout = pipeline.get_bind_group_layout(0);

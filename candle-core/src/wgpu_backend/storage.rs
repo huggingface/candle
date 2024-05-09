@@ -1,6 +1,6 @@
 use crate::Error;
 
-use super::{device::WgpuDevice, wgpu_functions::{self, read_data_from_gpu_async, UnaryOperation}};
+use super::{device::WgpuDevice, wgpu_functions::{self, read_data_from_gpu_async, BinaryOperation, UnaryOperation}};
 
 
 
@@ -74,6 +74,24 @@ impl crate::backend::BackendStorage for WgpuStorage{
     fn unary_impl<B: crate::op::UnaryOpT>(&self, layout: &crate::Layout) -> crate::Result<Self> {
         let buffer_dest = wgpu_functions::create_buffer(self.device(), layout.shape().elem_count() * 4);
         let op = match B::NAME{
+            //"gelu" => UnaryOperation::Gelu,
+            //"erf" => UnaryOperation::Erf,
+            "silu" => UnaryOperation::SiLu,
+            "ceil" => UnaryOperation::Ceil,
+            "floor" => UnaryOperation::Floor,
+            //"round" => UnaryOperation::Round,
+            //"gelu_erf" => UnaryOperation::GeluErf,
+            "sign" => UnaryOperation::Sign,
+            "abs" => UnaryOperation::Abs,
+
+            "exp" => UnaryOperation::Exp,
+            "log" => UnaryOperation::Log,
+            "sin" => UnaryOperation::Sin,
+            "cos" => UnaryOperation::Cos,
+            "neg" => UnaryOperation::Neg,
+            //"recip" => UnaryOperation::Recip,
+            //"sqr" => UnaryOperation::Sqr,
+            "sqrt" => UnaryOperation::Sqrt,
             "tanh" => UnaryOperation::Tanh,
             _ =>{panic!("Operation {} is not supported on wgpu", B::NAME)}
         };
@@ -81,8 +99,21 @@ impl crate::backend::BackendStorage for WgpuStorage{
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone()));
     }
 
-    fn binary_impl<B: crate::op::BinaryOpT>(&self, _: &Self, _: &crate::Layout, _: &crate::Layout) -> crate::Result<Self> {
-        todo!()
+    fn binary_impl<B: crate::op::BinaryOpT>(&self, rhs: &Self, lhs_layout: &crate::Layout, _: &crate::Layout) -> crate::Result<Self> {
+        let buffer_dest = wgpu_functions::create_buffer(self.device(), lhs_layout.shape().elem_count() * 4);
+        
+        let op = match B::NAME{
+            "add" => BinaryOperation::Add,
+            "sub" => BinaryOperation::Minus,
+            "mul" => BinaryOperation::Mult,
+            "div" => BinaryOperation::Div,
+            "minimum" => BinaryOperation::Min,
+            "maximum" => BinaryOperation::Max,
+            _ =>{panic!("Operation {} is not supported on wgpu", B::NAME)}
+        };
+        
+        wgpu_functions::queue_binary_buffer_from_buffer(self.device(), &buffer_dest, &self.buffer, &rhs.buffer, lhs_layout.shape().elem_count() as u32, op);
+        return Ok(WgpuStorage::new(buffer_dest,self.device().clone()));
     }
 
     fn where_cond(&self, _: &crate::Layout, _: &Self, _: &crate::Layout, _: &Self, _: &crate::Layout) -> crate::Result<Self> {
