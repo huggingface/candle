@@ -2613,7 +2613,7 @@ fn test_argmin() -> Result<()> {
     Ok(())
 }
 
-// "ArgMin"
+// "ArgMax"
 #[test]
 fn test_argmax() -> Result<()> {
     // tests from https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-6
