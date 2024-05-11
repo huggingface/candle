@@ -15,6 +15,7 @@ fn main() -> Result<()> {
     drop(_x1);
     let start_time = std::time::Instant::now();
     let _x1 = x.matmul(&x)?;
+    device.synchronize()?;
     println!("fp32: {:?}", start_time.elapsed());
     drop(_x1);
     candle_core::cuda::set_gemm_reduced_precision_f32(true);
@@ -22,6 +23,7 @@ fn main() -> Result<()> {
     drop(_x1);
     let start_time = std::time::Instant::now();
     let _x1 = x.matmul(&x)?;
+    device.synchronize()?;
     println!("tf32: {:?}", start_time.elapsed());
     drop(_x1);
     Ok(())

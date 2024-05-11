@@ -1867,7 +1867,6 @@ unsafe fn gemm_strided_batched_f32(
     } else {
         sys::cublasComputeType_t::CUBLAS_COMPUTE_32F
     };
-    println!(">>> {}", gemm_reduced_precision_f32());
     let alpha = &cfg.gemm.alpha as *const f32 as *const _;
     let beta = &cfg.gemm.beta as *const f32 as *const _;
 
