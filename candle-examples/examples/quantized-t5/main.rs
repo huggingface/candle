@@ -184,7 +184,7 @@ fn main() -> Result<()> {
     } else {
         Some(args.temperature)
     };
-    let mut logits_processor = LogitsProcessor::new(299792458, temperature, args.top_p);
+    let mut logits_processor = LogitsProcessor::new(299792458, temperature, args.top_p, None);
     let encoder_output = model.encode(&input_token_ids)?;
     let start = std::time::Instant::now();
 

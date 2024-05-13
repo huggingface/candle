@@ -120,7 +120,7 @@ pub fn main() -> anyhow::Result<()> {
     let encoder_xs = model.encoder().forward(&image)?;
 
     let mut logits_processor =
-        candle_transformers::generation::LogitsProcessor::new(1337, None, None);
+        candle_transformers::generation::LogitsProcessor::new(1337, None, None, None);
 
     let mut token_ids: Vec<u32> = vec![decoder_config.decoder_start_token_id];
     for index in 0..1000 {

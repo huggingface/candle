@@ -199,7 +199,7 @@ fn main() -> Result<()> {
     } else {
         Some(args.temperature)
     };
-    let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
+    let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p, None);
     let mut new_tokens = vec![];
     let mut start_gen = std::time::Instant::now();
     let mut index_pos = 0;

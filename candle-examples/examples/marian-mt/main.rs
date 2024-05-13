@@ -112,7 +112,7 @@ pub fn main() -> anyhow::Result<()> {
     let mut model = marian::MTModel::new(&config, vb)?;
 
     let mut logits_processor =
-        candle_transformers::generation::LogitsProcessor::new(1337, None, None);
+        candle_transformers::generation::LogitsProcessor::new(1337, None, None, None);
 
     let encoder_xs = {
         let mut tokens = tokenizer

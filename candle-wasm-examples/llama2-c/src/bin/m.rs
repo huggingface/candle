@@ -47,7 +47,7 @@ impl Model {
             tokenizer,
             model: weights,
         });
-        let logits_processor = LogitsProcessor::new(299792458, None, None);
+        let logits_processor = LogitsProcessor::new(299792458, None, None, None);
         match model {
             Ok(inner) => Ok(Self {
                 inner,
@@ -86,7 +86,7 @@ impl Model {
         } else {
             Some(top_p)
         };
-        self.logits_processor = LogitsProcessor::new(seed, temp, top_p);
+        self.logits_processor = LogitsProcessor::new(seed, temp, top_p, None);
         self.repeat_penalty = repeat_penalty;
         self.tokens.clear();
         let tokens = self

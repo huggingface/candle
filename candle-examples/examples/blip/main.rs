@@ -102,7 +102,7 @@ pub fn main() -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer).map_err(E::msg)?;
     let mut tokenizer = TokenOutputStream::new(tokenizer);
     let mut logits_processor =
-        candle_transformers::generation::LogitsProcessor::new(1337, None, None);
+        candle_transformers::generation::LogitsProcessor::new(1337, None, None, None);
 
     let config = blip::Config::image_captioning_large();
 

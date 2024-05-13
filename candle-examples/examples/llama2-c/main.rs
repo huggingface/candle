@@ -319,7 +319,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
     };
 
     println!("starting the inference loop");
-    let mut logits_processor = LogitsProcessor::new(299792458, args.temperature, args.top_p);
+    let mut logits_processor = LogitsProcessor::new(299792458, args.temperature, args.top_p, None);
     let mut index_pos = 0;
 
     print!("{}", args.prompt);

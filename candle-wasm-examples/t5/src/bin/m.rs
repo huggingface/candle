@@ -62,7 +62,7 @@ impl ModelConditionalGeneration {
         } else {
             Some(input.top_p)
         };
-        let mut logits_processor = LogitsProcessor::new(seed, temperature, top_p);
+        let mut logits_processor = LogitsProcessor::new(seed, temperature, top_p, None);
         let tokens = self
             .tokenizer
             .encode(prompt, true)

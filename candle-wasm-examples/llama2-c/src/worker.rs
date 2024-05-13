@@ -73,7 +73,7 @@ impl Model {
             Some(top_p)
         };
         console_log!("temp: {temp:?} top_p: {top_p:?} prompt: {prompt}");
-        let mut logits_processor = LogitsProcessor::new(299792458, temp, top_p);
+        let mut logits_processor = LogitsProcessor::new(299792458, temp, top_p, None);
         let mut index_pos = 0;
         let mut tokens = self
             .tokenizer

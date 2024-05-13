@@ -192,7 +192,8 @@ fn main() -> Result<()> {
         Some(spk_emb) => spk_emb.to_dtype(dtype)?,
     };
     let spk_emb = spk_emb.to_device(&device)?;
-    let mut logits_processor = LogitsProcessor::new(args.seed, Some(args.temperature), Some(0.95));
+    let mut logits_processor =
+        LogitsProcessor::new(args.seed, Some(args.temperature), Some(0.95), None);
 
     // First stage generation.
     for index in 0..args.max_tokens {

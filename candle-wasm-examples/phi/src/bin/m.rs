@@ -69,7 +69,7 @@ impl Model {
             SelectedModel::MixFormer(model)
         };
         console_log!("model loaded in {:?}s", (Date::now() - start) / 1000.);
-        let logits_processor = LogitsProcessor::new(299792458, None, None);
+        let logits_processor = LogitsProcessor::new(299792458, None, None, None);
         Ok(Self {
             model,
             tokenizer,
@@ -99,7 +99,7 @@ impl Model {
         } else {
             Some(top_p)
         };
-        self.logits_processor = LogitsProcessor::new(seed, temp, top_p);
+        self.logits_processor = LogitsProcessor::new(seed, temp, top_p, None);
         self.repeat_penalty = repeat_penalty;
         self.repeat_last_n = repeat_last_n;
         self.tokens.clear();
