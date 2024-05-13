@@ -215,8 +215,14 @@ impl crate::backend::BackendStorage for WgpuStorage{
         _: &crate::Layout,
         _: &crate::Layout,
     ) -> crate::Result<Self> {
-        let buffer_dest = wgpu_functions::create_buffer(self.device(), (m * k) * 4);
-        wgpu_functions::queue_matmul_buffer(self.device(), &buffer_dest, &self.buffer, &rhs.buffer, m as u32, n as u32, k as u32);
+
+        //mXk * kXn -> mXn * nXk
+        let m2  = m;
+        let n2 = k;
+        let k2 = n;
+
+        let buffer_dest = wgpu_functions::create_buffer(self.device(), (m2 * k2) * 4);
+        wgpu_functions::queue_matmul_buffer(self.device(), &buffer_dest, &self.buffer, &rhs.buffer, m2 as u32, n2 as u32, k2 as u32);
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone()));
     }
 

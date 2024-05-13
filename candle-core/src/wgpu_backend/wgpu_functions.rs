@@ -10,14 +10,14 @@ use super::device::Pipelines;
 #[repr(C)]
 struct MetaUnary{
     operation : u32,
-    length : u32
+    length : u32 //elements
 }
 
 #[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
 #[repr(C)]
 struct MetaBinaryScalar{
     operation : u32,
-    length : u32,
+    length : u32, //elements
     scalar : f32
 }
 
@@ -25,9 +25,9 @@ struct MetaBinaryScalar{
 #[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
 #[repr(C)]
 struct MetaInfoMatMul{
-    m : u32, 
-    n : u32, 
-    k : u32
+    m : u32,  //elements
+    n : u32,  //elements
+    k : u32   //elements
 }
 
 #[derive(Copy, Clone)]
@@ -100,6 +100,7 @@ pub fn get_shader(device: &wgpu::Device) -> ShaderModule {
 
 
 
+/// Size is in Bytes!
 pub fn create_buffer(dev : &WgpuDevice, size : usize) -> Buffer{
     let buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -136,7 +137,7 @@ fn enqueue(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup
         });
         cpass.set_pipeline(pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
-        cpass.dispatch_workgroups(length / WORKGROUP_SIZE, 1, 1);
+        cpass.dispatch_workgroups((length + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE, 1, 1);
     }
 
     dev.queue.submit(Some(encoder.finish()));
@@ -365,7 +366,7 @@ pub fn queue_matmul_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_inpu
         });
         cpass.set_pipeline(&pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
-        cpass.dispatch_workgroups(k / 8, m / 8, 1);
+        cpass.dispatch_workgroups((k + 7) / 8, (m + 7) / 8, 1);
     }
 
     dev.queue.submit(Some(encoder.finish()));
