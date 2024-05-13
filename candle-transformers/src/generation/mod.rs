@@ -21,12 +21,20 @@ impl LogitsProcessor {
         Self { rng, sampling }
     }
 
-    pub fn new(seed: u64, temperature: Option<f64>, top_p: Option<f64>) -> Self {
+    pub fn new(
+        seed: u64,
+        temperature: Option<f64>,
+        top_p: Option<f64>,
+        top_k: Option<usize>,
+    ) -> Self {
         let temperature = temperature.and_then(|v| if v < 1e-7 { None } else { Some(v) });
         let sampling = match temperature {
             None => Sampling::ArgMax,
             Some(temperature) => match top_p {
-                None => Sampling::All { temperature },
+                None => match top_k {
+                    Some(k) => Sampling::TopK { k, temperature },
+                    None => Sampling::All { temperature },
+                },
                 Some(p) => Sampling::TopP { p, temperature },
             },
         };
