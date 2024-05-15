@@ -1,4 +1,4 @@
-use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
+use candle::{backend::BackendStorage, wgpu_backend::WgpuStorage, CpuStorage, DType, Layout, Result, Shape, Tensor};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -51,8 +51,6 @@ impl candle::CustomOp1 for Sigmoid {
     }
 
     fn cpu_fwd(&self, storage: &CpuStorage, layout: &Layout) -> Result<(CpuStorage, Shape)> {
-        use candle::backend::BackendStorage;
-
         fn fwd<T: num_traits::Float>(v: T) -> T {
             (v.neg().exp() + T::one()).recip()
         }
@@ -225,6 +223,51 @@ impl candle::CustomOp1 for Sigmoid {
         // d/dx sigmoid(x) = (1 - sigmoid(x)) * sigmoid(x)
         let d_dx_sigmoid = res.ones_like()?.sub(res)?.mul(res)?;
         Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
+    }
+
+    fn webgpu_fwd(
+            &self,
+            _storage: &WgpuStorage,
+            _layout: &Layout,
+        ) -> Result<(WgpuStorage, Shape)> {
+        let s =  _storage.unary_impl::<Self>(_layout)?;
+        return Ok((s, _layout.shape().clone()));
+    }
+}
+
+impl candle::op::UnaryOpT for Sigmoid{
+    const NAME: &'static str = "sigmoid";
+
+    const KERNEL: &'static str = "usigmoid";
+
+    const V: Self = Sigmoid;
+
+    fn bf16(_v1: half::prelude::bf16) -> half::prelude::bf16 {
+        todo!()
+    }
+
+    fn f16(_v1: half::prelude::f16) -> half::prelude::f16 {
+        todo!()
+    }
+
+    fn f32(_v1: f32) -> f32 {
+        todo!()
+    }
+
+    fn f64(_v1: f64) -> f64 {
+        todo!()
+    }
+
+    fn u8(_v1: u8) -> u8 {
+        todo!()
+    }
+
+    fn u32(_v1: u32) -> u32 {
+        todo!()
+    }
+
+    fn i64(_v1: i64) -> i64 {
+        todo!()
     }
 }
 
@@ -448,8 +491,6 @@ impl candle::CustomOp2 for RmsNorm {
         s2: &CpuStorage,
         l2: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        use candle::backend::BackendStorage;
-
         let eps = self.eps;
         fn inner<
             T: candle::WithDType

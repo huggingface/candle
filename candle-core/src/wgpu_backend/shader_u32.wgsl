@@ -1,14 +1,14 @@
 struct MetaUnary{
     operation : u32,
     length : u32,
-    scalar1 : f32, //optionally scalar value
-    scalar2 : f32
+    scalar1 : u32, //optionally scalar value
+    scalar2 : u32
 }
 
 struct MetaBinaryScalar{
     operation : u32,
     length : u32,
-    scalar : f32
+    scalar : u32
 }
 
 //(M X N) * (N X K)
@@ -38,7 +38,7 @@ struct MatrixLayout{
 
 
 @group(0) @binding(0)
-var<storage, read_write> v_dest: array<f32>;
+var<storage, read_write> v_dest: array<u32>;
 
 @group(0) @binding(0) 
 var<storage, read_write> v_dest_u32: array<u32>; //Output for U8, and U32
@@ -59,10 +59,10 @@ var<uniform> op_matmul : MetaInfoMatMul;
 var<uniform> op_input_matrix : array<MatrixLayout, 3>;
 
 @group(0) @binding(2)
-var<storage> v_input1: array<f32>;
+var<storage> v_input1: array<u32>;
 
 @group(0) @binding(3)
-var<storage> v_input2: array<f32>;
+var<storage> v_input2: array<u32>;
 
 fn get_shape(m : MatrixLayout, index : u32) -> u32{
     switch index{
@@ -136,120 +136,43 @@ fn rand_normal(id: u32, mean: f32, std_: f32) -> f32 {
     return uniform_to_normal(mean, std_, u1, u2);
 }
 
+
+
+// fn rand(vec2 co) -> f32{
+//     return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+// }
+
 const SQRT_TWO_OVER_PI_F32: f32 = 0.79788456080286535587989211986876373;
 
 //all Unary Operations(No Input)
-fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
+fn set_unary(operation : u32, id : u32, x : u32, scalar1 : u32, scalar2 : u32){
 
     switch operation {
         case 0u{ // set 0
-            v_dest[id] = 0.0;
+            v_dest[id] = 0u;
         }
         case 1u{ //set 1
-            v_dest[id] = 1.0;
+            v_dest[id] = 1u;
         }
 
         //inplace operators
         case 2u{ 
-            v_dest[id] += 1.0;
+            v_dest[id] += 1u;
         }
         case 3u{ 
-            v_dest[id] -= 1.0;
+            v_dest[id] -= 1u;
         }
         case 4u{  
             v_dest[id] = abs(x);
-        }
-        case 5u{ 
-            v_dest[id] = acos(x); 
-        }
-        case 6u{ 
-            v_dest[id] = acosh(x); 
-        }
-        case 7u{ 
-            v_dest[id] = asin(x); 
-        }
-        case 8u{ 
-            v_dest[id] = asinh(x); 
-        }
-        case 9u{ 
-            v_dest[id] = atan(x) ;
-        }
-        case 10u{ 
-            v_dest[id] = atanh(x) ;
-        }
-        case 11u{ 
-            v_dest[id] = ceil(x) ;
-        }
-        case 12u{ 
-            v_dest[id] = cos(x); 
-        }
-        case 13u{ 
-            v_dest[id] = cosh(x) ;
-        }
-        case 17u{ 
-            v_dest[id] = degrees(x) ;
-        }
-       
-        
-        case 21u{ 
-            v_dest[id] = exp(x); 
-        }
-        case 22u{ 
-            v_dest[id] = floor(x); 
-        }
-        case 23u{ 
-            v_dest[id] = fract(x); 
-        }
-        case 24u{ 
-            v_dest[id] = inverseSqrt(x) ;
-        }
-        case 25u{ 
-            v_dest[id] = log(x) ;
-        }
-        case 26u{ 
-            v_dest[id] = log2(x) ;
-        }
-        case 27u{ 
-            v_dest[id] = radians(x) ;
-        }
-        case 28u{ 
-            v_dest[id] = sign(x) ;
-        }
-        case 29u{ 
-            v_dest[id] = sin(x) ;
-        }case 31u{ 
-            v_dest[id] = sinh(x) ;
-        }case 32u{ 
-            v_dest[id] = sqrt(x) ;
-        }case 33u{ 
-            v_dest[id] = tan(x); 
-        }case 35u{ 
-            v_dest[id] = trunc(x) ;
         }case 36u{  //Binary Step
             if(v_dest[id]) < 0{
-                v_dest[id] = 0.0;
+                v_dest[id] = 0u;
             }
             else{
-                v_dest[id] = 1.0;
+                v_dest[id] = 1u;
             }
-        }case 37u{   //Sigmoid
-            v_dest[id] = 1 / (1 + exp(-x));
         }case 38u{   //Relu
-            v_dest[id] = max(0.0, x) ;
-        }case 39u{   //Softplus
-            v_dest[id] = log(1 + exp(x));
-        }case 40u{  //Leaky ReLU
-            if(x) < 0{
-                v_dest[id] = 0.01 * x;
-            }
-            else{
-                v_dest[id] = x;
-            }
-        }case 41u{ //SiLU
-            v_dest[id] = x / (1 + exp(-x));
-        }
-        case 42u{ //Gaussian
-            v_dest[id] = exp(-(x * x));
+            v_dest[id] = max(0u, x) ;
         }
         case 43u{ //Identity
             v_dest[id] = x;
@@ -257,36 +180,16 @@ fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
         case 44u{ //square
             v_dest[id] = x * x;
         }
-        case 45u{ 
-            v_dest[id] = -x;
-        }
-        case 46u{ //inverse
-            v_dest[id] = 1 / x;
-        }
-        case 47u{ //random_normal
-            v_dest[id] = rand_normal(id, scalar1, scalar2);
-        }
-        case 48u{ //random_normal
-            let r = rand_uniform(id);
-            v_dest[id] = (scalar2 - scalar1) * r + scalar1;
-        }
-        case 49u{//Gelu
-            v_dest[id] = 0.5 * x * (1.0 + tanh(SQRT_TWO_OVER_PI_F32 * x * (1.0 + 0.044715 * x * x)));
-        }
-        case 50u{
-            v_dest[id] = round(x);
-        }
+        // case 47u{ //random_normal
+        //     v_dest[id] = rand_normal(id, scalar1, scalar2);
+        // }
+        // case 48u{ //random_normal
+        //     let r = rand_uniform(id);
+        //     v_dest[id] = (scalar2 - scalar1) * r + scalar1;
+        // }
         case 51u{//Affine
             v_dest[id] = x * scalar1 + scalar2;
         }
-        case 52u{ //elu
-            if x > 0 {
-                v_dest[id] = x;
-            } else {
-                v_dest[id] = (exp(x) - 1) * scalar1;
-            }
-        }
-
         case 101u{ //add
             v_dest[id] = x + scalar1;
         }
@@ -304,9 +207,6 @@ fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
         }
         case 106u{ //min
             v_dest[id] = min(x, scalar1);
-        }
-        case 107u{ //powf
-            v_dest[id] = pow(x, scalar1);
         }
         default{
 
@@ -340,7 +240,8 @@ fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 
-fn set_binary(operation : u32, id : u32, x : f32, y : f32){
+
+fn set_binary(operation : u32, id : u32, x : u32, y : u32){
     switch(operation){
         case 0u{
             v_dest[id] = y;
@@ -363,9 +264,9 @@ fn set_binary(operation : u32, id : u32, x : f32, y : f32){
         case 6u{ //min
             v_dest[id] = min(x, y);
         }
-        case 7u{ //powf
-            v_dest[id] = pow(x, y);
-        }
+        // case 7u{ //powf
+        //     v_dest[id] = pow(x, y);
+        // }
         default{
 
         }
@@ -430,7 +331,7 @@ fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let input2_stride_n = op_matmul.input2.stride4;
     let input2_stride_k = op_matmul.input2.stride5;
 
-    var sum = 0.0;
+    var sum = 0u;
     for (var i = 0u; i < op_matmul.n; i++){
         sum +=  
         v_input1[b * input1_stride_b  + input1_stride_m * y + i * input1_stride_n + input1_offset] 
@@ -451,7 +352,7 @@ fn reduce_from_buffer() {
 
     switch(op_unary.operation){
         case 0u{ //sum
-            var sum = 0.0;
+            var sum = 0u;
             for (var i = 0u; i < op_unary.length; i++){
                 sum += v_input1[i];
             }
@@ -480,7 +381,7 @@ fn reduce_from_buffer() {
                     index = i;
                 }
             }
-            v_dest[0] = f32(index);
+            v_dest[0] = index;
         }
         case 4u{//ArgMax
             var sum = v_input1[0];
@@ -491,7 +392,7 @@ fn reduce_from_buffer() {
                     index = i;
                 }
             }
-            v_dest[0] = f32(index);
+            v_dest[0] = index;
         }
         default{
 

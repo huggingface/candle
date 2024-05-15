@@ -1,0 +1,517 @@
+ cargo test --no-fail-fast webgpu -- --test-threads=1
+    Finished test [unoptimized + debuginfo] target(s) in 0.68s
+     Running unittests src\lib.rs (target\debug\deps\candle_book-d14b05514eaa874d.exe)
+
+     Running tests\conv_tests.rs (target\debug\deps\conv_tests-93dab36b10f7ef9a.exe)
+
+running 7 tests
+test conv1d_small_webgpu ... FAILED
+test conv1d_webgpu ... FAILED
+test conv2_grad_webgpu ... FAILED
+test conv2d_non_square_webgpu ... FAILED
+test conv2d_small_webgpu ... FAILED
+test conv2d_smaller_webgpu ... FAILED
+test conv2d_webgpu ... FAILED
+
+failures:
+
+---- conv1d_small_webgpu stdout ----
+thread 'conv1d_small_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:183:9:
+not yet implemented
+
+---- conv1d_webgpu stdout ----
+thread 'conv1d_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:183:9:
+not yet implemented
+
+---- conv2_grad_webgpu stdout ----
+thread 'conv2_grad_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:203:9:
+not yet implemented
+
+---- conv2d_non_square_webgpu stdout ----
+thread 'conv2d_non_square_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:203:9:
+not yet implemented
+
+---- conv2d_small_webgpu stdout ----
+thread 'conv2d_small_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:203:9:
+not yet implemented
+
+---- conv2d_smaller_webgpu stdout ----
+thread 'conv2d_smaller_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:203:9:
+not yet implemented
+
+---- conv2d_webgpu stdout ----
+thread 'conv2d_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:203:9:
+not yet implemented
+
+failures:
+    conv1d_small_webgpu
+    conv1d_webgpu
+    conv2_grad_webgpu
+    conv2d_non_square_webgpu
+    conv2d_small_webgpu
+    conv2d_smaller_webgpu
+    conv2d_webgpu
+
+test result: FAILED. 0 passed; 7 failed; 0 ignored; 0 measured; 7 filtered out; finished in 1.89s
+
+     Running tests\grad_tests.rs (target\debug\deps\grad_tests-6c7788f7314ad65d.exe)
+
+running 6 tests
+test binary_grad_webgpu ... FAILED
+test grad_descent_webgpu ... FAILED
+test matmul_grad_webgpu ... ok
+test simple_grad_webgpu ... ok
+test sum_grad_webgpu ... FAILED
+test unary_grad_webgpu ... FAILED
+
+failures:
+
+---- binary_grad_webgpu stdout ----
+thread 'binary_grad_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:120:19:
+conversion of dtype to F32 not suported on webgpu
+
+---- grad_descent_webgpu stdout ----
+thread 'grad_descent_webgpu' panicked at C:\Users\KimHe\.cargo\registry\src\index.crates.io-6f17d22bba15001f\wgpu-0.19.4\src\backend\wgpu_core.rs:3006:5:
+wgpu error: Validation Error
+
+Caused by:
+    In CommandEncoder::copy_buffer_to_buffer
+    Copy error
+    Destination buffer/texture is missing the `COPY_DST` usage flag
+      note: destination = `Buffer A`
+
+
+---- sum_grad_webgpu stdout ----
+thread 'sum_grad_webgpu' panicked at candle-core\tests\grad_tests.rs:27:5:
+assertion `left == right` failed
+  left: [12.0, 0.0, 0.0]
+ right: [12.0, 4.0, 16.0]
+
+---- unary_grad_webgpu stdout ----
+thread 'unary_grad_webgpu' panicked at candle-core\tests\grad_tests.rs:164:5:
+assertion `left == right` failed
+  left: [0.3333, 0.0, 0.0, 0.0]
+ right: [0.3333, 1.0, 0.25, 6.6667]
+
+
+failures:
+    binary_grad_webgpu
+    grad_descent_webgpu
+    sum_grad_webgpu
+    unary_grad_webgpu
+
+test result: FAILED. 2 passed; 4 failed; 0 ignored; 0 measured; 6 filtered out; finished in 1.89s
+
+error: test failed, to rerun pass `-p candle-core --test grad_tests`
+     Running tests\indexing_tests.rs (target\debug\deps\indexing_tests-f23f635b42815e43.exe)
+
+
+running 4 tests
+test broadcast_matmul_webgpu ... FAILED
+test matmul_webgpu ... ok
+test mm_layout_webgpu ... ok
+test squeeze_mm_webgpu ... ok
+
+failures:
+
+---- broadcast_matmul_webgpu stdout ----
+sum_diff2: 0
+sum_diff2: 0.0017477503
+thread 'broadcast_matmul_webgpu' panicked at candle-core\tests\matmul_tests.rs:67:13:
+assertion failed: sum_diff2 < 1e-6
+
+failures:
+    broadcast_matmul_webgpu
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.36s
+
+error: test failed, to rerun pass `-p candle-core --test matmul_tests`
+     Running tests\pool_tests.rs (target\debug\deps\pool_tests-588fd32340dccde2.exe)
+
+running 4 tests
+test avg_pool2d_pytorch_webgpu ... FAILED
+test avg_pool2d_webgpu ... FAILED
+test max_pool2d_webgpu ... FAILED
+test upsample_nearest2d_webgpu ... FAILED
+
+failures:
+
+---- avg_pool2d_pytorch_webgpu stdout ----
+thread 'avg_pool2d_pytorch_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:217:9:
+not yet implemented
+---- avg_pool2d_webgpu stdout ----
+thread 'avg_pool2d_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:217:9:
+not yet implemented
+
+---- max_pool2d_webgpu stdout ----
+thread 'max_pool2d_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:221:9:
+not yet implemented
+
+---- upsample_nearest2d_webgpu stdout ----
+thread 'upsample_nearest2d_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:229:9:
+not yet implemented
+
+failures:
+    avg_pool2d_pytorch_webgpu
+    avg_pool2d_webgpu
+    max_pool2d_webgpu
+    upsample_nearest2d_webgpu
+
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.32s
+
+error: test failed, to rerun pass `-p candle-core --test pool_tests`
+     Running tests\pth_tests.rs (target\debug\deps\pth_tests-f3a068b515138577.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests\quantized_tests.rs (target\debug\deps\quantized_tests-df892242f6d48d4a.exe)
+
+running 23 tests
+test qmm_b_webgpu ... FAILED
+test qmm_n_webgpu ... FAILED
+test qmm_webgpu ... FAILED
+test quantize_q2k_webgpu ... FAILED
+test quantize_q3k_webgpu ... FAILED
+test quantize_q4_0_webgpu ... FAILED
+test quantize_q4_1_webgpu ... FAILED
+test quantize_q4k_webgpu ... FAILED
+test quantize_q5_0_webgpu ... FAILED
+test quantize_q5_1_webgpu ... FAILED
+test quantize_q5k_webgpu ... FAILED
+test quantize_q6k_webgpu ... FAILED
+test quantize_q8k_webgpu ... FAILED
+test quantized_matmul_q2k_webgpu ... FAILED
+test quantized_matmul_q3k_webgpu ... FAILED
+test quantized_matmul_q4_0_webgpu ... FAILED
+test quantized_matmul_q4_1_webgpu ... FAILED
+test quantized_matmul_q4k_webgpu ... FAILED
+test quantized_matmul_q5_0_webgpu ... FAILED
+test quantized_matmul_q5_1_webgpu ... FAILED
+test quantized_matmul_q5k_webgpu ... FAILED
+test quantized_matmul_q6k_webgpu ... FAILED
+test quantized_matmul_q8_0_webgpu ... FAILED
+
+failures:
+
+---- qmm_b_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- qmm_n_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- qmm_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantize_q2k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantize_q3k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantize_q4_0_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantize_q4_1_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantize_q4k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantize_q5_0_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantize_q5_1_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantize_q5k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantize_q6k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantize_q8k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantized_matmul_q2k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantized_matmul_q3k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantized_matmul_q4_0_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantized_matmul_q4_1_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantized_matmul_q4k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantized_matmul_q5_0_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantized_matmul_q5_1_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantized_matmul_q5k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantized_matmul_q6k_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+---- quantized_matmul_q8_0_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for QTensor"))
+
+
+failures:
+    qmm_b_webgpu
+    qmm_n_webgpu
+    qmm_webgpu
+    quantize_q2k_webgpu
+    quantize_q3k_webgpu
+    quantize_q4_0_webgpu
+    quantize_q4_1_webgpu
+    quantize_q4k_webgpu
+    quantize_q5_0_webgpu
+    quantize_q5_1_webgpu
+    quantize_q5k_webgpu
+    quantize_q6k_webgpu
+    quantize_q8k_webgpu
+    quantized_matmul_q2k_webgpu
+    quantized_matmul_q3k_webgpu
+    quantized_matmul_q4_0_webgpu
+    quantized_matmul_q4_1_webgpu
+    quantized_matmul_q4k_webgpu
+    quantized_matmul_q5_0_webgpu
+    quantized_matmul_q5_1_webgpu
+    quantized_matmul_q5k_webgpu
+    quantized_matmul_q6k_webgpu
+    quantized_matmul_q8_0_webgpu
+
+test result: FAILED. 0 passed; 23 failed; 0 ignored; 0 measured; 30 filtered out; finished in 7.31s
+
+error: test failed, to rerun pass `-p candle-core --test quantized_tests`
+     Running tests\serialization_tests.rs (target\debug\deps\serialization_tests-862ff5e6de7c0f7f.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests\tensor_tests.rs (target\debug\deps\tensor_tests-d9f9d879a53d6883.exe)
+
+running 30 tests
+test add_mul_webgpu ... ok
+test arange_webgpu ... FAILED
+test argmax_webgpu ... FAILED
+test argmin_webgpu ... FAILED
+test asort_webgpu ... FAILED
+test binary_op_webgpu ... ok
+test broadcast_webgpu ... ok
+test broadcasting_webgpu ... FAILED
+test cat_webgpu ... FAILED
+test clamp_webgpu ... FAILED
+test cmp_webgpu ... FAILED
+test embeddings_webgpu ... FAILED
+test full_webgpu ... ok
+test gather_webgpu ... FAILED
+test index_add_webgpu ... FAILED
+test index_select_webgpu ... FAILED
+test max_webgpu ... FAILED
+test min_webgpu ... FAILED
+test narrow_webgpu ... ok
+test ones_webgpu ... FAILED
+test randn_webgpu ... FAILED
+test scatter_add_webgpu ... FAILED
+test slice_scatter_webgpu ... ok
+test sum_webgpu ... FAILED
+test tensor_2d_webgpu ... ok
+test transpose_webgpu ... ok
+test unary_op_webgpu ... FAILED
+test var_webgpu ... FAILED
+test zero_dim_webgpu ... FAILED
+test zeros_webgpu ... ok
+
+failures:
+
+---- arange_webgpu stdout ----
+thread 'arange_webgpu' panicked at candle-core\src\wgpu_backend\device.rs:192:19:
+can not create wgpu array other than f32
+
+---- argmax_webgpu stdout ----
+thread 'argmax_webgpu' panicked at candle-core\tests\tensor_tests.rs:557:5:
+assertion `left == right` failed
+  left: [[[5], [0]], [[0], [0]]]
+ right: [[[2], [2]], [[2], [0]]]
+
+---- argmin_webgpu stdout ----
+thread 'argmin_webgpu' panicked at candle-core\tests\tensor_tests.rs:483:5:
+assertion `left == right` failed
+  left: [[[1], [0]], [[0], [0]]]
+ right: [[[1], [0]], [[1], [1]]]
+
+---- asort_webgpu stdout ----
+Error: WebGpu(Message("no WebGpu implementation for argsort"))
+
+---- broadcasting_webgpu stdout ----
+thread 'broadcasting_webgpu' panicked at candle-core\tests\tensor_tests.rs:990:5:
+assertion `left == right` failed
+  left: [[[100.0, 201.0, 2.0], [3.0, 4.0, 5.0]], [[6.0, 7.0, 8.0], [9.0, 10.0, 11.0]], [[12.0, 13.0, 14.0], [15.0, 16.0, 17.0]], [[18.0, 19.0, 20.0], [21.0, 22.0, 23.0]]]
+ right: [[[100.0, 101.0, 102.0], [203.0, 204.0, 205.0]], [[106.0, 107.0, 108.0], [209.0, 210.0, 211.0]], [[112.0, 113.0, 114.0], [215.0, 216.0, 217.0]], [[118.0, 119.0, 120.0], [221.0, 222.0, 223.0]]]
+
+---- cat_webgpu stdout ----
+thread 'cat_webgpu' panicked at candle-core\src\wgpu_backend\device.rs:192:19:
+can not create wgpu array other than f32
+
+---- clamp_webgpu stdout ----
+thread 'clamp_webgpu' panicked at candle-core\tests\tensor_tests.rs:92:5:
+assertion `left == right` failed
+  left: [[3.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0]]
+ right: [[3.0, 1.5, 4.0, 1.5, 5.0], [2.0, 1.5, 6.2, 6.2, 2.0]]
+
+---- cmp_webgpu stdout ----
+Error: WithBacktrace { inner: UnexpectedDType { msg: "unexpected dtype", expected: U8, got: U32 }, backtrace: Backtrace [{ fn: "std::backtrace_rs::backtrace::dbghelp::trace", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\..\..\backtrace\src\backtrace\dbghelp.rs", line: 131 }, { fn: "std::backtrace_rs::backtrace::trace_unsynchronized", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\..\..\backtrace\src\backtrace\mod.rs", line: 66 }, { fn: "std::backtrace::Backtrace::create", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\backtrace.rs", line: 331 }, { fn: "std::backtrace::Backtrace::capture", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\backtrace.rs", line: 296 }, { fn: "enum2$<candle_core::error::Error>::bt", file: ".\src\error.rs", line: 234 }, { fn: "candle_core::dtype::impl$22::cpu_storage_as_slice", file: ".\src\dtype.rs", line: 157 }, { fn: "candle_core::tensor::impl$3::to_vec2::closure$0<u8>", file: ".\src\tensor.rs", line: 1560 }, { fn: "candle_core::tensor::Tensor::to_vec2<u8>", file: ".\src\tensor.rs", line: 1584 }, { fn: "tensor_tests::cmp", file: ".\tests\tensor_tests.rs", line: 763 }, { fn: "tensor_tests::cmp_webgpu", file: ".\src\test_utils.rs", line: 29 }, { fn: "tensor_tests::cmp_webgpu::closure$0", file: ".\src\test_utils.rs", line: 27 }, { fn: "core::ops::function::FnOnce::call_once<tensor_tests::cmp_webgpu::closure_env$0,tuple$<> >", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04\library\core\src\ops\function.rs", line: 250 }, { fn: "core::ops::function::FnOnce::call_once", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\core\src\ops\function.rs", line: 250 }, { fn: "test::__rust_begin_short_backtrace<enum2$<core::result::Result<tuple$<>,alloc::string::String> >,enum2$<core::result::Result<tuple$<>,alloc::string::String> > (*)()>", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\test\src\lib.rs", line: 621 }, { fn: "test::run_test_in_process::closure$0", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\test\src\lib.rs", line: 644 }, { fn: "core::panic::unwind_safe::impl$23::call_once", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\core\src\panic\unwind_safe.rs", line: 272 }, { fn: "std::panicking::try::do_call", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\panicking.rs", line: 554 }, { fn: "std::panicking::try", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\panicking.rs", line: 518 }, { fn: "std::panic::catch_unwind", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\panic.rs", line: 142 }, { fn: "test::run_test_in_process", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\test\src\lib.rs", line: 644 }, { fn: "test::run_test::closure$0", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\test\src\lib.rs", line: 567 }, { fn: "test::run_test::closure$1", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\test\src\lib.rs", line: 595 }, { fn: "std::sys_common::backtrace::__rust_begin_short_backtrace<test::run_test::closure_env$1,tuple$<> >", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\sys_common\backtrace.rs", line: 155 }, { fn: "std::thread::impl$0::spawn_unchecked_::closure$1::closure$0", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\thread\mod.rs", line: 529 }, { fn: "core::panic::unwind_safe::impl$23::call_once", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\core\src\panic\unwind_safe.rs", line: 272 }, { fn: "std::panicking::try::do_call", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\panicking.rs", line: 554 }, { fn: "std::panicking::try", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\panicking.rs", line: 518 }, { fn: "std::panic::catch_unwind", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\panic.rs", line: 142 }, { fn: "std::thread::impl$0::spawn_unchecked_::closure$1", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\thread\mod.rs", line: 528 }, { fn: "core::ops::function::FnOnce::call_once<std::thread::impl$0::spawn_unchecked_::closure_env$1<test::run_test::closure_env$1,tuple$<> >,tuple$<> >", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\core\src\ops\function.rs", line: 250 }, { fn: "std::sys::pal::windows::thread::impl$0::new::thread_start", file: "/rustc/25ef9e3d85d934b27d9dada2f9dd52b1dc63bb04/library\std\src\sys\pal\windows\thread.rs", line: 58 }, { fn: "BaseThreadInitThunk" }, { fn: "RtlUserThreadStart" }] }
+
+---- embeddings_webgpu stdout ----
+thread 'embeddings_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:249:9:
+not yet implemented
+
+---- gather_webgpu stdout ----
+thread 'gather_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:233:9:
+not yet implemented
+
+---- index_add_webgpu stdout ----
+thread 'index_add_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:261:9:
+not yet implemented
+
+---- index_select_webgpu stdout ----
+thread 'index_select_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:120:19:
+conversion of dtype to U8 not suported on webgpu
+
+---- max_webgpu stdout ----
+thread 'max_webgpu' panicked at candle-core\tests\tensor_tests.rs:421:5:
+assertion `left == right` failed
+  left: [[[9], [0]], [[0], [0]]]
+ right: [[[4], [9]], [[7], [8]]]
+
+---- min_webgpu stdout ----
+thread 'min_webgpu' panicked at candle-core\tests\tensor_tests.rs:359:5:
+assertion `left == right` failed
+  left: [[[1], [0]], [[0], [0]]]
+ right: [[[1], [1]], [[1], [2]]]
+
+---- ones_webgpu stdout ----
+thread 'ones_webgpu' panicked at candle-core\src\wgpu_backend\wgpu_functions\mod.rs:237:18:
+can not create wgpu array of type U8
+
+---- randn_webgpu stdout ----
+thread 'randn_webgpu' panicked at candle-core\tests\tensor_tests.rs:1093:5:
+assertion `left != right` failed
+  left: [[0.44740137, 0.44668162, 0.44596198], [0.4506546, 0.45028135, 0.44956133], [0.44884172, 0.44270432, 0.4416447], [0.4409255, 0.4402067, 0.44489992], [0.44452247, 0.44380304, 0.44308394]]    
+ right: [[0.44740137, 0.44668162, 0.44596198], [0.4506546, 0.45028135, 0.44956133], [0.44884172, 0.44270432, 0.4416447], [0.4409255, 0.4402067, 0.44489992], [0.44452247, 0.44380304, 0.44308394]]    
+
+---- scatter_add_webgpu stdout ----
+thread 'scatter_add_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:245:9:
+not yet implemented
+
+---- sum_webgpu stdout ----
+thread 'sum_webgpu' panicked at candle-core\tests\tensor_tests.rs:262:5:
+assertion `left == right` failed
+  left: [[[51], [0]], [[0], [0]]]
+ right: [[[8], [15]], [[10], [18]]]
+
+---- unary_op_webgpu stdout ----
+thread 'unary_op_webgpu' panicked at candle-core\src\wgpu_backend\storage.rs:120:19:
+conversion of dtype to F16 not suported on webgpu
+
+---- var_webgpu stdout ----
+thread 'var_webgpu' panicked at candle-core\tests\tensor_tests.rs:252:5:
+assertion `left == right` failed
+  left: [[5.8536], [0.0], [0.0], [0.0]]
+ right: [[1.0631], [0.559], [1.4893], [0.8258]]
+
+---- zero_dim_webgpu stdout ----
+thread 'zero_dim_webgpu' panicked at C:\Users\KimHe\.cargo\registry\src\index.crates.io-6f17d22bba15001f\wgpu-0.19.4\src\backend\wgpu_core.rs:3006:5:
+wgpu error: Validation Error
+
+Caused by:
+    In Device::create_bind_group
+    Buffer binding size 0 is less than minimum 4
+      note: buffer = `<Buffer-(0, 1, Vulkan)>`
+
+failures:
+    arange_webgpu
+    argmax_webgpu
+    argmin_webgpu
+    asort_webgpu
+    broadcasting_webgpu
+    cat_webgpu
+    clamp_webgpu
+    cmp_webgpu
+    embeddings_webgpu
+    gather_webgpu
+    index_add_webgpu
+    index_select_webgpu
+    max_webgpu
+    min_webgpu
+    ones_webgpu
+    randn_webgpu
+    scatter_add_webgpu
+    sum_webgpu
+    unary_op_webgpu
+    var_webgpu
+    zero_dim_webgpu
+
+test result: FAILED. 9 passed; 21 failed; 0 ignored; 0 measured; 37 filtered out; finished in 8.24s
+
+
+
+     Running tests\ops.rs (target\debug\deps\ops-e8db9b242f7fba21.exe)
+
+running 6 tests
+test rms_norm_webgpu ... FAILED
+test rope_thd_webgpu ... FAILED
+test rope_webgpu ... FAILED
+test ropei_webgpu ... FAILED
+test sigmoid_webgpu ... ok
+test softmax_webgpu ... FAILED
+
+failures:
+
+---- rms_norm_webgpu stdout ----
+Error: WebGpu(Message("no metal implementation for rms-norm"))
+
+---- rope_thd_webgpu stdout ----
+Error: WebGpu(Message("no webgpu implementation for rotary-emb"))
+
+---- rope_webgpu stdout ----
+Error: WebGpu(Message("no webgpu implementation for rotary-emb"))
+
+---- ropei_webgpu stdout ----
+Error: WebGpu(Message("no webgpu implementation for rotary-emb-int"))
+
+---- softmax_webgpu stdout ----
+thread 'softmax_webgpu' panicked at candle-nn\tests\ops.rs:15:5:
+assertion `left == right` failed
+  left: [[[0.0069, inf, inf], [inf, inf, inf]], [[inf, inf, inf], [inf, inf, inf]]]
+ right: [[[0.6, 0.5, 0.3636], [0.1111, 0.7143, 0.5294]], [[0.4, 0.5, 0.6364], [0.8889, 0.2857, 0.4706]]]
+
+failures:
+    rms_norm_webgpu
+    rope_thd_webgpu
+    rope_webgpu
+    ropei_webgpu
+    softmax_webgpu
+
+
+
+
+error: 7 targets failed:
+    `-p candle-core --test conv_tests`
+    `-p candle-core --test grad_tests`
+    `-p candle-core --test matmul_tests`
+    `-p candle-core --test pool_tests`
+    `-p candle-core --test quantized_tests`
+    `-p candle-core --test tensor_tests`
+    `-p candle-nn --test ops`

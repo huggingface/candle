@@ -1,27 +1,27 @@
-use candle_core::{test_device, DType, Device, IndexOp, Result, Tensor};
+use candle_core::{test_device, test_device_async, DType, Device, IndexOp, Result, Tensor};
 
-fn matmul(device: &Device) -> Result<()> {
+async fn matmul(device: &Device) -> Result<()> {
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
     let a = Tensor::from_slice(&data, (2, 2), device)?;
     let data = vec![1.0f32, 2.0, 3.0, 4.0];
     let b = Tensor::from_slice(&data, (2, 2), device)?;
 
     let c = a.matmul(&b)?;
-    assert_eq!(c.to_vec2::<f32>()?, &[[7.0f32, 10.0], [15.0, 22.0]]);
+    assert_eq!(c.to_cpu_device().await?.to_vec2::<f32>()?, &[[7.0f32, 10.0], [15.0, 22.0]]);
 
     let data = vec![1.0f32, 2.0];
     let a = Tensor::from_slice(&data, (2, 1), device)?;
     let data = vec![3.0f32, 4.0];
     let b = Tensor::from_slice(&data, (1, 2), device)?;
     let c = a.matmul(&b)?;
-    assert_eq!(c.to_vec2::<f32>()?, &[&[3.0, 4.0], &[6.0, 8.0]]);
+    assert_eq!(c.to_cpu_device().await?.to_vec2::<f32>()?, &[&[3.0, 4.0], &[6.0, 8.0]]);
 
     let data: Vec<_> = (0..6).map(|i| i as f32).collect();
     let a = Tensor::from_slice(&data, (2, 3), device)?;
     let data: Vec<_> = (0..6).map(|i| (i + 2) as f32).collect();
     let b = Tensor::from_slice(&data, (3, 2), device)?;
     let c = a.matmul(&b)?;
-    assert_eq!(c.to_vec2::<f32>()?, &[&[16., 19.], &[52., 64.]]);
+    assert_eq!(c.to_cpu_device().await?.to_vec2::<f32>()?, &[&[16., 19.], &[52., 64.]]);
 
     let data: Vec<_> = (0..12).map(|i| i as f32).collect();
     let a = Tensor::from_slice(&data, (2, 2, 3), device)?;
@@ -30,7 +30,7 @@ fn matmul(device: &Device) -> Result<()> {
     let expected = [[[16., 19.], [52., 64.]], [[214., 235.], [304., 334.]]];
 
     let c = a.matmul(&b)?;
-    assert_eq!(c.to_vec3::<f32>()?, &expected);
+    assert_eq!(c.to_cpu_device().await?.to_vec3::<f32>()?, &expected);
 
     // Also perform the matmul on contiguous transposed versions.
     let a_tt = a.t()?.contiguous()?.t()?;
@@ -43,13 +43,13 @@ fn matmul(device: &Device) -> Result<()> {
     assert_eq!(b.dims(), b_tt.dims());
     assert_eq!(b_tt.stride(), &[6, 1, 3]);
 
-    assert_eq!(a_tt.matmul(&b)?.to_vec3::<f32>()?, &expected);
-    assert_eq!(a.matmul(&b_tt)?.to_vec3::<f32>()?, &expected);
-    assert_eq!(a_tt.matmul(&b_tt)?.to_vec3::<f32>()?, &expected);
+    assert_eq!(a_tt.matmul(&b)?.to_cpu_device().await?.to_vec3::<f32>()?, &expected);
+    assert_eq!(a.matmul(&b_tt)?.to_cpu_device().await?.to_vec3::<f32>()?, &expected);
+    assert_eq!(a_tt.matmul(&b_tt)?.to_cpu_device().await?.to_vec3::<f32>()?, &expected);
     Ok(())
 }
 
-fn broadcast_matmul(device: &Device) -> Result<()> {
+async fn broadcast_matmul(device: &Device) -> Result<()> {
     let lhs = Tensor::randn(0f32, 1f32, (3, 1, 4, 5), device)?;
     let rhs = Tensor::randn(0f32, 1f32, (6, 5, 2), device)?;
     let out = lhs.broadcast_matmul(&rhs)?;
@@ -61,8 +61,10 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
             let rhs = rhs.i(idx2)?;
             let out2 = lhs.matmul(&rhs);
             let sum_diff2 = (out - out2)?.sqr()?.sum_all()?;
+            let sum_diff2 = sum_diff2.to_cpu_device().await?.to_vec0::<f32>()?;
+            println!("sum_diff2: {}", sum_diff2);
             // With cuda, we see errors of up to ~1e-12.
-            assert!(sum_diff2.to_vec0::<f32>()? < 1e-6)
+            assert!(sum_diff2 < 1e-6)
         }
     }
     Ok(())
@@ -80,7 +82,7 @@ fn squeeze_mm(device: &Device) -> Result<()> {
 }
 
 // https://github.com/huggingface/candle/issues/1992
-fn mm_layout(device: &Device) -> Result<()> {
+async fn mm_layout(device: &Device) -> Result<()> {
     let a = Tensor::arange(0f32, 16f32, device)?.reshape((1, 1, 4, 4))?;
     let b = Tensor::arange(0f32, 8f32, device)?.reshape((1, 1, 4, 2))?;
     let mm1 = a.matmul(&b)?;
@@ -90,17 +92,18 @@ fn mm_layout(device: &Device) -> Result<()> {
     // non 1 sizes but matmul check may be reluctant to handle it.
     let b = b.transpose(1, 2)?.force_contiguous()?.transpose(1, 2)?;
     let mm2 = a.matmul(&b)?;
-    let diff = (mm1 - mm2)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    let diff = (mm1 - mm2)?.abs()?.sum_all()?.to_cpu_device().await?.to_vec0::<f32>()?;
     assert_eq!(diff, 0.);
     Ok(())
 }
 
-test_device!(matmul, matmul_cpu, matmul_gpu, matmul_metal);
-test_device!(
+test_device_async!(matmul, matmul_cpu, matmul_gpu, matmul_metal, matmul_webgpu);
+test_device_async!(
     broadcast_matmul,
     broadcast_matmul_cpu,
     broadcast_matmul_gpu,
-    broadcast_matmul_metal
+    broadcast_matmul_metal,
+    broadcast_matmul_webgpu
 );
-test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal);
-test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal);
+test_device!(squeeze_mm, squeeze_mm_cpu, squeeze_mm_gpu, squeeze_mm_metal,squeeze_mm_webgpu);
+test_device_async!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal, mm_layout_webgpu);

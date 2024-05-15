@@ -1138,56 +1138,60 @@ fn zero_dim(device: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(zeros, zeros_cpu, zeros_gpu, zeros_metal);
-test_device!(ones, ones_cpu, ones_gpu, ones_metal);
-test_device!(full, full_cpu, full_gpu, full_metal);
-test_device!(arange, arange_cpu, arange_gpu, arange_metal);
-test_device!(add_mul, add_mul_cpu, add_mul_gpu, add_mul_metal);
-test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu, tensor_2d_metal);
-test_device!(narrow, narrow_cpu, narrow_gpu, narrow_metal);
-test_device!(broadcast, broadcast_cpu, broadcast_gpu, broadcast_metal);
-test_device!(cat, cat_cpu, cat_gpu, cat_metal);
-test_device!(sum, sum_cpu, sum_gpu, sum_metal);
-test_device!(min, min_cpu, min_gpu, min_metal);
-test_device!(max, max_cpu, max_gpu, max_metal);
-test_device!(argmax, argmax_cpu, argmax_gpu, argmax_metal);
-test_device!(argmin, argmin_cpu, argmin_gpu, argmin_metal);
-test_device!(transpose, transpose_cpu, transpose_gpu, transpose_metal);
-test_device!(unary_op, unary_op_cpu, unary_op_gpu, unary_op_metal);
-test_device!(binary_op, binary_op_cpu, binary_op_gpu, binary_op_metal);
-test_device!(embeddings, embeddings_cpu, embeddings_gpu, embeddings_metal);
-test_device!(cmp, cmp_cpu, cmp_gpu, cmp_metal);
+test_device!(zeros, zeros_cpu, zeros_gpu, zeros_metal,zeros_webgpu);
+test_device!(ones, ones_cpu, ones_gpu, ones_metal,ones_webgpu);
+test_device!(full, full_cpu, full_gpu, full_metal,full_webgpu);
+test_device!(arange, arange_cpu, arange_gpu, arange_metal,arange_webgpu);
+test_device!(add_mul, add_mul_cpu, add_mul_gpu, add_mul_metal,add_mul_webgpu);
+test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu, tensor_2d_metal,tensor_2d_webgpu);
+test_device!(narrow, narrow_cpu, narrow_gpu, narrow_metal,narrow_webgpu);
+test_device!(broadcast, broadcast_cpu, broadcast_gpu, broadcast_metal,broadcast_webgpu);
+test_device!(cat, cat_cpu, cat_gpu, cat_metal,cat_webgpu);
+test_device!(sum, sum_cpu, sum_gpu, sum_metal,sum_webgpu);
+test_device!(min, min_cpu, min_gpu, min_metal,min_webgpu);
+test_device!(max, max_cpu, max_gpu, max_metal,max_webgpu);
+test_device!(argmax, argmax_cpu, argmax_gpu, argmax_metal,argmax_webgpu);
+test_device!(argmin, argmin_cpu, argmin_gpu, argmin_metal,argmin_webgpu);
+test_device!(transpose, transpose_cpu, transpose_gpu, transpose_metal,transpose_webgpu);
+test_device!(unary_op, unary_op_cpu, unary_op_gpu, unary_op_metal,unary_op_webgpu);
+test_device!(binary_op, binary_op_cpu, binary_op_gpu, binary_op_metal,binary_op_webgpu);
+test_device!(embeddings, embeddings_cpu, embeddings_gpu, embeddings_metal,embeddings_webgpu);
+test_device!(cmp, cmp_cpu, cmp_gpu, cmp_metal,cmp_webgpu);
 test_device!(
     broadcasting,
     broadcasting_cpu,
     broadcasting_gpu,
-    broadcasting_metal
+    broadcasting_metal,
+    broadcasting_webgpu
 );
 test_device!(
     index_select,
     index_select_cpu,
     index_select_gpu,
-    index_select_metal
+    index_select_metal,
+    index_select_webgpu
 );
-test_device!(index_add, index_add_cpu, index_add_gpu, index_add_metal);
-test_device!(gather, gather_cpu, gather_gpu, gather_metal);
+test_device!(index_add, index_add_cpu, index_add_gpu, index_add_metal,index_add_webgpu);
+test_device!(gather, gather_cpu, gather_gpu, gather_metal,gather_webgpu);
 test_device!(
     scatter_add,
     scatter_add_cpu,
     scatter_add_gpu,
-    scatter_add_metal
+    scatter_add_metal,
+    scatter_add_webgpu
 );
 test_device!(
     slice_scatter,
     slice_scatter_cpu,
     slice_scatter_gpu,
-    slice_scatter_metal
+    slice_scatter_metal,
+    slice_scatter_webgpu
 );
-test_device!(randn, randn_cpu, randn_gpu, randn_metal);
-test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal);
-test_device!(asort, asort_cpu, asort_gpu, asort_metal);
-test_device!(var, var_cpu, var_gpu, var_metal);
-test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal);
+test_device!(randn, randn_cpu, randn_gpu, randn_metal,randn_webgpu);
+test_device!(clamp, clamp_cpu, clamp_gpu, clamp_metal,clamp_webgpu);
+test_device!(asort, asort_cpu, asort_gpu, asort_metal,asort_webgpu);
+test_device!(var, var_cpu, var_gpu, var_metal,var_webgpu);
+test_device!(zero_dim, zero_dim_cpu, zero_dim_gpu, zero_dim_metal,zero_dim_webgpu);
 
 // There was originally a bug on the CPU implementation for randn
 // https://github.com/huggingface/candle/issues/381

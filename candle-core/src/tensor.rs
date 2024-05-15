@@ -2019,6 +2019,32 @@ impl Tensor {
         }
     }
 
+    /// If the target device is the same as the tensor device, only a shallow copy is performed.
+    /// This Function is only needed for WebGpu -> Cpu, in all other cases one can use the sync version.
+    pub async fn to_cpu_device(&self) -> Result<Tensor> {
+        if self.device().same_device(&Device::Cpu) {
+            Ok(self.clone())
+        } else {
+            let storage = match &*self.storage() {
+                Storage::Cuda(storage) => Storage::Cpu(storage.to_cpu_storage()?),
+                Storage::Metal(storage) => Storage::Cpu(storage.to_cpu_storage()?),
+                Storage::Cpu(storage) => Storage::Cpu(storage.clone()),
+                Storage::WebGpu(storage) => Storage::Cpu(storage.to_cpu_storage_async().await?),
+            };
+            let op = BackpropOp::new1(self, Op::ToDevice);
+            let tensor_ = Tensor_ {
+                id: TensorId::new(),
+                storage: Arc::new(RwLock::new(storage)),
+                layout: self.layout.clone(),
+                op,
+                is_variable: false,
+                dtype: self.dtype,
+                device: Device::Cpu,
+            };
+            Ok(Tensor(Arc::new(tensor_)))
+        }
+    }
+
     /// Returns a new tensor duplicating data from the original tensor. New dimensions are inserted
     /// on the left.
     pub fn broadcast_left<S: Into<Shape>>(&self, left_shape: S) -> Result<Self> {

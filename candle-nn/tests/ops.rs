@@ -180,9 +180,9 @@ fn sigmoid(device: &Device) -> Result<()> {
     Ok(())
 }
 
-test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal);
-test_device!(rope, rope_cpu, rope_gpu, rope_metal);
-test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal);
-test_device!(softmax, softmax_cpu, softmax_gpu, softmax_metal);
-test_device!(rms_norm, rms_norm_cpu, rms_norm_gpu, rms_norm_metal);
-test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal);
+test_device!(ropei, ropei_cpu, ropei_gpu, ropei_metal,ropei_webgpu);
+test_device!(rope, rope_cpu, rope_gpu, rope_metal,rope_webgpu);
+test_device!(rope_thd, rope_thd_cpu, rope_thd_gpu, rope_thd_metal,rope_thd_webgpu);
+test_device!(softmax, softmax_cpu, softmax_gpu, softmax_metal,softmax_webgpu);
+test_device!(rms_norm, rms_norm_cpu, rms_norm_gpu, rms_norm_metal,rms_norm_webgpu);
+test_device!(sigmoid, sigmoid_cpu, sigmoid_gpu, sigmoid_metal,sigmoid_webgpu);

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+
 use super::wgpu_functions::{self, create_buffer, create_buffer_init, UnaryOperation};
 use super::WgpuStorage;
 
@@ -14,11 +15,19 @@ pub struct  WgpuDevice {
 pub (crate) enum Pipelines{
     UnaryInplace = 0,
     UnaryFromBuffer = 1,
-    BinaryScalarInplace = 2,
-    BinaryScalarFromBuffer = 3,
-    BinaryBufferInplace = 4,
-    BinaryBufferFromBuffer = 5,
-    MatmulBuffer = 6
+    BinaryBufferInplace = 2,
+    BinaryBufferFromBuffer = 3,
+    MatmulBuffer = 4,
+    ReduceFromBuffer = 5,
+    CmpFromBuffer = 6,
+
+    UnaryInplaceU32 = 7,
+    UnaryFromBufferU32 = 8,
+    BinaryBufferInplaceU32 = 9,
+    BinaryBufferFromBufferU32 = 10,
+    MatmulBufferU32 = 11,
+    ReduceFromBufferU32 = 12,
+    CmpFromBufferU32 = 13,
 }
 
 
@@ -41,23 +50,33 @@ impl WgpuDevice{
                 },
                 None,
             ).await.map_err(|err| crate::Error::WebGpu(err.to_string().into()))?;
-        let shader =  wgpu_functions::get_shader(&device);
+        let shader1 =  wgpu_functions::get_shader(&device, include_str!("shader.wgsl"));
+        let shader2 =  wgpu_functions::get_shader(&device,include_str!("shader_u32.wgsl"));
         
         let pipelines = 
         vec![
-            Self::load_pipeline(&device, &shader, Pipelines::UnaryInplace), 
-            Self::load_pipeline(&device, &shader, Pipelines::UnaryFromBuffer),
-            Self::load_pipeline(&device, &shader, Pipelines::BinaryScalarInplace),
-            Self::load_pipeline(&device, &shader, Pipelines::BinaryScalarFromBuffer),
-            Self::load_pipeline(&device, &shader, Pipelines::BinaryBufferInplace),
-            Self::load_pipeline(&device, &shader, Pipelines::BinaryBufferFromBuffer),
-            Self::load_pipeline(&device, &shader, Pipelines::MatmulBuffer)];
+            Self::load_pipeline(&device, &shader1, Pipelines::UnaryInplace), 
+            Self::load_pipeline(&device, &shader1, Pipelines::UnaryFromBuffer),
+            Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferInplace),
+            Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferFromBuffer),
+            Self::load_pipeline(&device, &shader1, Pipelines::MatmulBuffer),
+            Self::load_pipeline(&device, &shader1, Pipelines::ReduceFromBuffer),
+            Self::load_pipeline(&device, &shader1, Pipelines::CmpFromBuffer),
+
+            Self::load_pipeline(&device, &shader2, Pipelines::UnaryInplaceU32), 
+            Self::load_pipeline(&device, &shader2, Pipelines::UnaryFromBufferU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferInplaceU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferFromBufferU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::MatmulBufferU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::ReduceFromBufferU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::CmpFromBufferU32)
+            ];
         
         Ok(WgpuDevice {
             device: Arc::new(device),
             queue: Arc::new(queue),
             pipelines : Arc::new(pipelines),
-            shader : Arc::new(shader)
+            shader : Arc::new(shader1)
         })
     }
 
@@ -66,11 +85,19 @@ impl WgpuDevice{
         let entry_point = match pipeline{
             Pipelines::UnaryInplace => "unary_inplace",
             Pipelines::UnaryFromBuffer => "unary_from_buffer",
-            Pipelines::BinaryScalarInplace => "binary_scalar_inplace",
-            Pipelines::BinaryScalarFromBuffer => "binary_scalar_from_buffer",
             Pipelines::BinaryBufferInplace => "binary_buffer_inplace",
             Pipelines::BinaryBufferFromBuffer => "binary_buffer_from_buffer",
             Pipelines::MatmulBuffer => "matmul",
+            Pipelines::ReduceFromBuffer => "reduce_from_buffer",
+            Pipelines::CmpFromBuffer => "cmp_buffer_from_buffer",
+
+            Pipelines::UnaryInplaceU32 => "unary_inplace",
+            Pipelines::UnaryFromBufferU32 => "unary_from_buffer",
+            Pipelines::BinaryBufferInplaceU32 => "binary_buffer_inplace",
+            Pipelines::BinaryBufferFromBufferU32 => "binary_buffer_from_buffer",
+            Pipelines::MatmulBufferU32 => "matmul",
+            Pipelines::ReduceFromBufferU32 => "reduce_from_buffer",
+            Pipelines::CmpFromBufferU32 => "cmp_buffer_from_buffer"
         };
         
         return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -104,34 +131,24 @@ impl crate::backend::BackendDevice for WgpuDevice{
     }
 
     fn zeros_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
-        if dtype == crate::DType::F32{
-            let buffer = create_buffer(self, shape.elem_count() * 4);
-            wgpu_functions::queue_unary_inplace_op(self, &buffer, shape.elem_count() as u32,UnaryOperation::SetZero);
-            return Ok(WgpuStorage::new(buffer, self.clone()));
-        }
-        else{
-            panic!("can not create wgpu array of type {:?}, onlf f32 is allowed", dtype);
-        }
+        let buffer = create_buffer(self, shape.elem_count() * 4);
+        wgpu_functions::queue_unary_inplace_op(self, &buffer, shape.elem_count() as u32,UnaryOperation::SetZero, 0.0, 0.0,dtype);
+        return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 
     fn ones_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
-        if dtype == crate::DType::F32{
-            let buffer = create_buffer(self, shape.elem_count() * 4);
-            wgpu_functions::queue_unary_inplace_op(self, &buffer, shape.elem_count() as u32,UnaryOperation::SetOne);
-            return Ok(WgpuStorage::new(buffer, self.clone()));
-        }
-        else{
-            panic!("can not create wgpu array of type {:?}, onlf f32 is allowed", dtype);
-        }
+        let buffer = create_buffer(self, shape.elem_count() * 4);
+        wgpu_functions::queue_unary_inplace_op(self, &buffer, shape.elem_count() as u32,UnaryOperation::SetOne, 0.0, 0.0,dtype);
+        return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 
     unsafe fn alloc_uninit(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
-        if dtype == crate::DType::F32{
+        if dtype == crate::DType::F32 || dtype == crate::DType::U32{
             let buffer = create_buffer(self, shape.elem_count() * 4);
-            return Ok(WgpuStorage::new(buffer, self.clone()));
+            return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
         }
         else{
-            panic!("can not create wgpu array of type {:?}, onlf f32 is allowed", dtype);
+            panic!("can not create wgpu array of type {:?}, onlf f32 or U32 is allowed", dtype);
         }
     }
 
@@ -145,14 +162,18 @@ impl crate::backend::BackendDevice for WgpuDevice{
         // This is safe because T is known to be f32 due to the above check
         let data = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
         let buffer = create_buffer_init(self, &data);
-        return Ok(WgpuStorage::new(buffer, self.clone()));
+        return Ok(WgpuStorage::new(buffer, self.clone(),T::DTYPE));
     }
 
     fn storage_from_cpu_storage(&self, storage: &crate::CpuStorage) -> crate::Result<Self::Storage> {
         match storage{
             crate::CpuStorage::F32(data) => {
                 let buffer = create_buffer_init(self, data);
-                return Ok(WgpuStorage::new(buffer, self.clone()));
+                return Ok(WgpuStorage::new(buffer, self.clone(),crate::DType::F32));
+            },
+            crate::CpuStorage::U32(data) => {
+                let buffer = create_buffer_init(self, data);
+                return Ok(WgpuStorage::new(buffer, self.clone(),crate::DType::U32));
             },
             _ =>  panic!("can not create wgpu array other than f32"),
         }
@@ -162,18 +183,26 @@ impl crate::backend::BackendDevice for WgpuDevice{
         match storage{
             crate::CpuStorage::F32(data) => {
                 let buffer = create_buffer_init(self, &data);
-                return Ok(WgpuStorage::new(buffer, self.clone()));
+                return Ok(WgpuStorage::new(buffer, self.clone(),crate::DType::F32));
+            },
+            crate::CpuStorage::U32(data) => {
+                let buffer = create_buffer_init(self, &data);
+                return Ok(WgpuStorage::new(buffer, self.clone(),crate::DType::U32));
             },
             _ =>  panic!("can not create wgpu array other than f32"),
         }
     }
 
-    fn rand_uniform(&self, _: &crate::Shape, _: crate::DType, _: f64, _: f64) -> crate::Result<Self::Storage> {
-        todo!()
+    fn rand_uniform(&self, shape: &crate::Shape, dtype: crate::DType, lo: f64, up: f64) -> crate::Result<Self::Storage> {
+        let buffer = create_buffer(self, shape.elem_count() * 4);
+        wgpu_functions::queue_unary_inplace_op(self, &buffer, shape.elem_count() as u32,UnaryOperation::RandUniform, lo as f32, up as f32,dtype);
+        return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 
-    fn rand_normal(&self, _: &crate::Shape, _: crate::DType, _: f64, _: f64) -> crate::Result<Self::Storage> {
-        todo!()
+    fn rand_normal(&self, shape: &crate::Shape, dtype: crate::DType, mean: f64, std: f64) -> crate::Result<Self::Storage> {
+        let buffer = create_buffer(self, shape.elem_count() * 4);
+        wgpu_functions::queue_unary_inplace_op(self, &buffer, shape.elem_count() as u32,UnaryOperation::RandNormal, mean as  f32, std as f32, dtype);
+        return Ok(WgpuStorage::new(buffer, self.clone(),dtype));
     }
 
     fn set_seed(&self, _: u64) -> crate::Result<()> {

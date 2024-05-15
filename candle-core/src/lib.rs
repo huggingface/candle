@@ -71,7 +71,7 @@ mod tensor_cat;
 pub mod test_utils;
 pub mod utils;
 mod variable;
-mod wgpu_backend;
+pub mod wgpu_backend;
 
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
