@@ -1,5 +1,5 @@
 use candle::{DType, Device, Error as E, IndexOp, Module, Result, Tensor, D};
-use candle_nn::{embedding, linear_b, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
+use candle_nn::{embedding, linear_b, rms_norm_non_quant, Embedding, Linear, RmsNorm, VarBuilder};
 
 // Equivalent to torch.repeat_interleave
 pub(crate) fn repeat_interleave(img: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
@@ -328,6 +328,8 @@ pub mod tokenizers {
 }
 
 pub mod gpt {
+    use candle_nn::layer_norm::RmsNormNonQuantized;
+
     use super::*;
 
     #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -350,7 +352,7 @@ pub mod gpt {
     }
 
     enum Norm {
-        RMSNorm(candle_nn::RmsNorm),
+        RMSNorm(candle_nn::RmsNorm<RmsNormNonQuantized>),
         LayerNorm(candle_nn::LayerNorm),
     }
 
@@ -400,7 +402,7 @@ pub mod gpt {
         fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
             match cfg.norm_type {
                 NormType::RMSNorm => {
-                    let rms_norm = candle_nn::rms_norm(cfg.n_embd, cfg.rmsnorm_eps, vb)?;
+                    let rms_norm = candle_nn::rms_norm_non_quant(cfg.n_embd, cfg.rmsnorm_eps, vb)?;
                     Ok(Self::RMSNorm(rms_norm))
                 }
                 NormType::LayerNorm => {
@@ -666,6 +668,8 @@ pub mod gpt {
 }
 
 pub mod transformer {
+    use candle_nn::layer_norm::RmsNormNonQuantized;
+
     use super::*;
 
     #[derive(Debug, Clone, serde::Deserialize)]
@@ -833,8 +837,8 @@ pub mod transformer {
     struct Block {
         attention: Attention,
         feed_forward: FeedForward,
-        ffn_norm: RmsNorm,
-        attention_norm: RmsNorm,
+        ffn_norm: RmsNorm<RmsNormNonQuantized>,
+        attention_norm: RmsNorm<RmsNormNonQuantized>,
         span: tracing::Span,
     }
 
@@ -842,8 +846,9 @@ pub mod transformer {
         fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
             let attention = Attention::new(cfg, vb.pp("attention"))?;
             let feed_forward = FeedForward::new(cfg, vb.pp("feed_forward"))?;
-            let ffn_norm = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("ffn_norm"))?;
-            let attention_norm = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("attention_norm"))?;
+            let ffn_norm = rms_norm_non_quant(cfg.dim, cfg.norm_eps, vb.pp("ffn_norm"))?;
+            let attention_norm =
+                rms_norm_non_quant(cfg.dim, cfg.norm_eps, vb.pp("attention_norm"))?;
             Ok(Self {
                 attention,
                 feed_forward,
@@ -871,7 +876,7 @@ pub mod transformer {
         pos_embeddings: Embedding,
         speaker_cond_pos: Linear,
         layers: Vec<Block>,
-        norm: RmsNorm,
+        norm: RmsNorm<RmsNormNonQuantized>,
         output: Linear,
         spk_cond_mask: Tensor,
         span: tracing::Span,
@@ -893,7 +898,7 @@ pub mod transformer {
                 let layer = Block::new(cfg, vb_l.pp(layer_idx))?;
                 layers.push(layer)
             }
-            let norm = rms_norm(cfg.dim, cfg.norm_eps, vb.pp("norm"))?;
+            let norm = rms_norm_non_quant(cfg.dim, cfg.norm_eps, vb.pp("norm"))?;
             let output = linear_b(cfg.dim, cfg.vocab_size, false, vb.pp("output"))?;
             let dtype = vb.dtype();
             let spk_cond_mask = Tensor::cat(

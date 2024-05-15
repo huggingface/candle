@@ -2,7 +2,7 @@
 /// https://github.com/johnma2006/mamba-minimal/blob/master/model.py
 /// Simple, minimal implementation of Mamba in one file of PyTorch.
 use candle::{IndexOp, Module, Result, Tensor, D};
-use candle_nn::{RmsNorm, VarBuilder};
+use candle_nn::{layer_norm::RmsNormNonQuantized, RmsNorm, VarBuilder};
 
 use candle_transformers::models::with_tracing::{linear, linear_no_bias, Linear};
 
@@ -144,12 +144,12 @@ impl Module for MambaBlock {
 #[derive(Clone, Debug)]
 pub struct ResidualBlock {
     mixer: MambaBlock,
-    norm: RmsNorm,
+    norm: RmsNorm<RmsNormNonQuantized>,
 }
 
 impl ResidualBlock {
     pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
-        let norm = candle_nn::rms_norm(cfg.d_model, 1e-5, vb.pp("norm"))?;
+        let norm = candle_nn::rms_norm_non_quant(cfg.d_model, 1e-5, vb.pp("norm"))?;
         let mixer = MambaBlock::new(cfg, vb.pp("mixer"))?;
         Ok(Self { mixer, norm })
     }
@@ -166,7 +166,7 @@ impl Module for ResidualBlock {
 pub struct Model {
     embedding: candle_nn::Embedding,
     layers: Vec<ResidualBlock>,
-    norm_f: RmsNorm,
+    norm_f: RmsNorm<RmsNormNonQuantized>,
     lm_head: Linear,
 }
 
@@ -179,7 +179,7 @@ impl Model {
             let layer = ResidualBlock::new(cfg, vb_l.pp(layer_idx))?;
             layers.push(layer)
         }
-        let norm_f = candle_nn::rms_norm(cfg.d_model, 1e-5, vb.pp("norm_f"))?;
+        let norm_f = candle_nn::rms_norm_non_quant(cfg.d_model, 1e-5, vb.pp("norm_f"))?;
         let lm_head = Linear::from_weights(embedding.embeddings().clone(), None);
         Ok(Self {
             embedding,

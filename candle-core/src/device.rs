@@ -325,12 +325,12 @@ impl Device {
             Device::Cpu => Ok(Storage::Cpu(array.to_cpu_storage())),
             Device::Cuda(device) => {
                 let storage = array.to_cpu_storage();
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Cuda(storage))
             }
             Device::Metal(device) => {
                 let storage = array.to_cpu_storage();
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Metal(storage))
             }
         }
@@ -341,12 +341,12 @@ impl Device {
             Device::Cpu => Ok(Storage::Cpu(S::to_cpu_storage_owned(data))),
             Device::Cuda(device) => {
                 let storage = S::to_cpu_storage_owned(data);
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Cuda(storage))
             }
             Device::Metal(device) => {
                 let storage = S::to_cpu_storage_owned(data);
-                let storage = device.storage_from_cpu_storage_owned(storage)?;
+                let storage = device.storage_from_cpu_storage(&storage)?;
                 Ok(Storage::Metal(storage))
             }
         }

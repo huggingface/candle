@@ -678,3 +678,30 @@ pub fn replication_pad2d(xs: &Tensor, pad: usize) -> Result<Tensor> {
         n => candle::bail!("replication-pad with a size of {n} is not supported"),
     }
 }
+
+#[cfg(feature = "cuda")]
+pub fn kvconcat(ltensor: &Tensor, rtensor: &Tensor, concat_dim: usize) -> Result<Tensor> {
+    if !ltensor.device().is_cuda() {
+        return Tensor::cat(&[ltensor, &rtensor], concat_dim as usize)?.contiguous();
+    }
+    use candle::cuda_backend::KVConcat;
+    let op = KVConcat { concat_dim };
+    //inputs for kvconcat must be contiguous tensors
+    if ltensor.is_contiguous() && rtensor.is_contiguous() {
+        ltensor.apply_op2(&rtensor, op)
+    } else if ltensor.is_contiguous() {
+        ltensor.apply_op2(&rtensor.contiguous()?, op)
+    } else if rtensor.is_contiguous() {
+        let ltensor = ltensor.contiguous()?;
+        ltensor.apply_op2(&rtensor, op)
+    } else {
+        let ltensor = ltensor.contiguous()?;
+        let rtensor = rtensor.contiguous()?;
+        ltensor.apply_op2(&rtensor, op)
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn kvconcat(ltensor: &Tensor, rtensor: &Tensor, concat_dim: i32) -> Result<Tensor> {
+    Tensor::cat(&[ltensor, rtensor], concat_dim as usize)?.contiguous()
+}
