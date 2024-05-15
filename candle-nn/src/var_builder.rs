@@ -434,6 +434,32 @@ impl SimpleBackend for candle::safetensors::BufferedSafetensors {
     }
 }
 
+impl<'a> SimpleBackend for candle::safetensors::SliceSafetensors<'a> {
+    fn get(
+        &self,
+        s: Shape,
+        name: &str,
+        _: crate::Init,
+        dtype: DType,
+        dev: &Device,
+    ) -> Result<Tensor> {
+        let tensor = self.load(name, dev)?.to_dtype(dtype)?;
+        if tensor.shape() != &s {
+            Err(candle::Error::UnexpectedShape {
+                msg: format!("shape mismatch for {name}"),
+                expected: s,
+                got: tensor.shape().clone(),
+            }
+            .bt())?
+        }
+        Ok(tensor)
+    }
+
+    fn contains_tensor(&self, name: &str) -> bool {
+        self.get(name).is_ok()
+    }
+}
+
 impl<'a> VarBuilder<'a> {
     /// Initializes a `VarBuilder` using a custom backend.
     ///
@@ -493,9 +519,15 @@ impl<'a> VarBuilder<'a> {
         Ok(Self::from_backend(Box::new(tensors), dtype, dev.clone()))
     }
 
-    /// Initializes a `VarBuilder` from a binary builder in the safetensor format.
+    /// Initializes a `VarBuilder` from a binary buffer in the safetensor format.
     pub fn from_buffered_safetensors(data: Vec<u8>, dtype: DType, dev: &Device) -> Result<Self> {
         let tensors = candle::safetensors::BufferedSafetensors::new(data)?;
+        Ok(Self::from_backend(Box::new(tensors), dtype, dev.clone()))
+    }
+
+    /// Initializes a `VarBuilder` from a binary slice in the safetensor format.
+    pub fn from_slice_safetensors(data: &'a [u8], dtype: DType, dev: &Device) -> Result<Self> {
+        let tensors = candle::safetensors::SliceSafetensors::new(data)?;
         Ok(Self::from_backend(Box::new(tensors), dtype, dev.clone()))
     }
 
