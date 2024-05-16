@@ -340,13 +340,8 @@ impl Model {
         };
         let mut xs = self.embed_tokens.forward(input_ids)?;
         for layer in self.layers.iter_mut() {
-            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?;
+            xs = layer.forward(&xs, attention_mask.as_ref(), seqlen_offset)?
         }
-
-        if attn_mask.is_none() {
-            xs = xs.narrow(1, seq_len - 1, 1)?;
-        }
-
         xs.apply(&self.norm)
     }
 
@@ -374,8 +369,10 @@ impl ModelForCausalLM {
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, seqlen_offset: usize) -> Result<Tensor> {
+        let (_b_size, seq_len) = input_ids.dims2()?;
         self.base_model
             .forward(input_ids, seqlen_offset, None)?
+            .narrow(1, seq_len - 1, 1)?
             .apply(&self.lm_head)
     }
 
