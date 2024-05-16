@@ -410,3 +410,10 @@ This may be caused by the models being loaded from `/mnt/c`, more details on
 
 You can set `RUST_BACKTRACE=1` to be provided with backtraces when a candle
 error is generated.
+
+#### CudaRC error
+
+If you encounter an error like this one `called `Result::unwrap()` on an `Err` value: LoadLibraryExW { source: Os { code: 126, kind: Uncategorized, message: "The specified module could not be found." } }` on windows. To fix copy and rename these 3 files (make sure they are in path). The paths depend on your cuda version.
+`c:\Windows\System32\nvcuda.dll` -> `cuda.dll`
+`c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\cublas64_12.dll` -> `cublas.dll`
+`c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\curand64_10.dll` -> `curand.dll`
