@@ -4,7 +4,7 @@ extern crate intel_mkl_src;
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
 
-use candle_transformers::models::jina_bert::{BertModel, Config};
+use candle_transformers::models::jina_bert::{BertModel, Config, PositionEmbeddingType};
 
 use anyhow::Error as E;
 use candle::{DType, Module, Tensor};
@@ -72,9 +72,8 @@ impl Args {
                 .get("tokenizer.json")?,
         };
         let device = candle_examples::device(self.cpu)?;
-        let mut config = Config::v2_base();
         let tokenizer = tokenizers::Tokenizer::from_file(tokenizer).map_err(E::msg)?;
-        config.vocab_size = tokenizer.get_vocab_size(false);
+        let config = Config::new(tokenizer.get_vocab_size(true), 768, 12, 12, 3072, candle_nn::Activation::Gelu, 8192, 2, 0.02, 1e-12, 0, PositionEmbeddingType::Alibi);
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
         let model = BertModel::new(vb, &config)?;
         Ok((model, tokenizer))
