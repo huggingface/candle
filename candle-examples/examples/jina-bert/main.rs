@@ -39,16 +39,25 @@ struct Args {
 
     #[arg(long)]
     model: Option<String>,
+
+    #[arg(long)]
+    model_file: Option<String>,
 }
 
 impl Args {
     fn build_model_and_tokenizer(&self) -> anyhow::Result<(BertModel, tokenizers::Tokenizer)> {
         use hf_hub::{api::sync::Api, Repo, RepoType};
-        let model = match &self.model {
+        let default = "jinaai/jina-embeddings-v2-base-en".to_string();
+        let model_name = match &self.model {
+            Some(model) => model,
+            None => &default,
+        };
+
+        let model = match &self.model_file {
             Some(model_file) => std::path::PathBuf::from(model_file),
             None => Api::new()?
                 .repo(Repo::new(
-                    "jinaai/jina-embeddings-v2-base-en".to_string(),
+                    model_name.to_string(),
                     RepoType::Model,
                 ))
                 .get("model.safetensors")?,
@@ -57,14 +66,15 @@ impl Args {
             Some(file) => std::path::PathBuf::from(file),
             None => Api::new()?
                 .repo(Repo::new(
-                    "sentence-transformers/all-MiniLM-L6-v2".to_string(),
+                    model_name.to_string(),
                     RepoType::Model,
                 ))
                 .get("tokenizer.json")?,
         };
         let device = candle_examples::device(self.cpu)?;
-        let config = Config::v2_base();
+        let mut config = Config::v2_base();
         let tokenizer = tokenizers::Tokenizer::from_file(tokenizer).map_err(E::msg)?;
+        config.vocab_size = tokenizer.get_vocab_size(false);
         let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model], DType::F32, &device)? };
         let model = BertModel::new(vb, &config)?;
         Ok((model, tokenizer))
