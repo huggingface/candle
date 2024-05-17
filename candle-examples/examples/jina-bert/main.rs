@@ -101,14 +101,21 @@ fn main() -> anyhow::Result<()> {
             .to_vec();
         let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
         println!("Loaded and encoded {:?}", start.elapsed());
-        for idx in 0..args.n {
-            let start = std::time::Instant::now();
-            let ys = model.forward(&token_ids)?;
-            if idx == 0 {
-                println!("{ys}");
-            }
-            println!("Took {:?}", start.elapsed());
+        let start = std::time::Instant::now();
+        let embeddings = model.forward(&token_ids)?;
+        let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
+        let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
+        println!("pooled_embeddigns: {embeddings}");
+        let embeddings = if args.normalize_embeddings {
+            normalize_l2(&embeddings)?
+        } else {
+            embeddings
+        };
+        if args.normalize_embeddings {
+            println!("normalized_embeddings: {embeddings}");
         }
+        println!("Took {:?}", start.elapsed());
+        
     } else {
         let sentences = [
             "The cat sits outside",
