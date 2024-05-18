@@ -1,14 +1,14 @@
 struct MetaUnary{
+    input1_layout : MatrixLayout,
     operation : u32,
-    length : u32,
     scalar1 : u32, //optionally scalar value
-    scalar2 : u32
+    scalar2 : u32,
 }
 
-struct MetaBinaryScalar{
+struct MetaBinary{
+    input1_layout : MatrixLayout,
+    input2_layout : MatrixLayout,
     operation : u32,
-    length : u32,
-    scalar : u32
 }
 
 //(M X N) * (N X K)
@@ -20,7 +20,14 @@ struct MetaInfoMatMul{
     input1 : MatrixLayout, 
     input2 : MatrixLayout
 }
-const MAX_STRIDE_SIZE = 4; 
+
+struct MetaInfoReduce{
+    input_layout : MatrixLayout,
+    operation : u32,
+    dimensions : u32, //Dimensions to Reduce Over(if ith bit is set -> Reduce over ith Dimension maximal 5)
+}
+
+//Layout Information
 struct MatrixLayout{
     shape1 : u32, 
     shape2 : u32, 
@@ -33,7 +40,7 @@ struct MatrixLayout{
     stride4 : u32, 
     stride5 : u32, 
     offset : u32,
-    p1 : u32, 
+    length : u32, //length if continues, else 0 
 }
 
 
@@ -43,17 +50,17 @@ var<storage, read_write> v_dest: array<u32>;
 @group(0) @binding(0) 
 var<storage, read_write> v_dest_u32: array<u32>; //Output for U8, and U32
 
-//@group(0) @binding(0) 
-//var<storage, read_write> v_dest_f16: array<f16>; //Output for f16
-
 @group(0) @binding(1)
 var<uniform> op_unary : MetaUnary;
 
 @group(0) @binding(1)
-var<uniform> op_unary_scalar : MetaBinaryScalar;
+var<uniform> op_binary : MetaBinary;
 
 @group(0) @binding(1)
 var<uniform> op_matmul : MetaInfoMatMul;
+
+@group(0) @binding(1)
+var<uniform> op_reduce : MetaInfoReduce;
 
 @group(0) @binding(1)
 var<uniform> op_input_matrix : array<MatrixLayout, 3>;
@@ -63,32 +70,6 @@ var<storage> v_input1: array<u32>;
 
 @group(0) @binding(3)
 var<storage> v_input2: array<u32>;
-
-fn get_shape(m : MatrixLayout, index : u32) -> u32{
-    switch index{
-        case 0u {return m.shape1;}
-        case 1u {return m.shape2;}
-        case 2u {return m.shape3;}
-        case 3u {return m.shape4;}
-        case 4u {return m.shape5;}
-        default : {return m.shape1;}
-    }
-}
-
-fn get_stride(m : MatrixLayout, index : u32) -> u32{
-    switch index{
-        case 0u {return m.stride1;}
-        case 1u {return m.stride2;}
-        case 2u {return m.stride3;}
-        case 3u {return m.stride4;}
-        case 4u {return m.stride5;}
-        default : {return m.stride1;}
-    }
-}
-
-fn set_output_u32(m : u32, value : u32){
-    v_dest_u32[m] = value;
-}
 
 fn set_output_u8(m : u32, v1 : u32, v2 : u32, v3 : u32, v4 : u32){
     let value = ((v1 & 0xFF) << 12) | ((v2 & 0xFF) << 8) | ((v3 & 0xFF) << 4) | (v4 & 0xFF);
@@ -105,44 +86,35 @@ fn get_output_u8(m : u32) -> array<u32,4>{
 }
 
 
-fn rand_uniform(value: u32) -> f32 {
-    // Use XORShift algorithm to generate a pseudo-random float
-    // Parameters for XORShift algorithm (adjust as needed)
-    var state: u32 = value ^ 0x5F3759DF; // Initial state, can be any non-zero value
-    state ^= state << 13;
-    state ^= state >> 17;
-    state ^= state << 5;
 
-    // Convert u32 to a float between 0 and 1
-    // Divide by maximum u32 value to get a float in [0, 1)
-    return f32(state) / f32(0xFFFFFFFFu);
+struct MatrixIndex{
+    id : u32,
+    is_valid : bool
 }
 
+fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
+    if l.length != 0{ //Continues memory:
+        if index < l.length{
+            return MatrixIndex((l.offset + index), true);
+        }
+        return MatrixIndex(0, false);
+    }
+    else { //not continues:
+        let length = l.shape1 * l.shape2 * l.shape3 * l.shape4 * l.shape5;
+        if index >= l.length{
+            return MatrixIndex(0, false);
+        }
+       
+        let s1 = index % (length);
+        let s2 = index % (l.shape1 * l.shape2 * l.shape3 * l.shape4);
+        let s3 = index % (l.shape1 * l.shape2 * l.shape3);
+        let s4 = index % (l.shape1 * l.shape2);
+        let s5 = index % (l.shape1);
 
-// Function to convert a uniformly distributed random number [0, 1) to a normal distribution with mean and std
-fn uniform_to_normal(mean: f32, std_: f32, u1: f32, u2 : f32) -> f32 {
-    // Box-Muller transform to convert uniform random value to normal distribution
-    let pi: f32 = 3.141592653589793;    
-
-    let z0 = sqrt(-2.0 * log(u1)) * cos(2.0 * pi * u2);
-    let z = mean + std_ * z0; // Convert to desired mean and std
-    return z;
+        let new_index = s1 * l.stride1 + s2 * l.stride2 + s3 * l.stride3 + s4 * l.stride4 + s5 * l.stride5;
+         return MatrixIndex(new_index, true);
+    }
 }
-
-// Function to convert a uniformly distributed random number [0, 1) to a normal distribution with mean and std
-fn rand_normal(id: u32, mean: f32, std_: f32) -> f32 {
-    let u1 = rand_uniform(id);
-    let u2 = rand_uniform(id + 1);
-    return uniform_to_normal(mean, std_, u1, u2);
-}
-
-
-
-// fn rand(vec2 co) -> f32{
-//     return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
-// }
-
-const SQRT_TWO_OVER_PI_F32: f32 = 0.79788456080286535587989211986876373;
 
 //all Unary Operations(No Input)
 fn set_unary(operation : u32, id : u32, x : u32, scalar1 : u32, scalar2 : u32){
@@ -164,13 +136,6 @@ fn set_unary(operation : u32, id : u32, x : u32, scalar1 : u32, scalar2 : u32){
         }
         case 4u{  
             v_dest[id] = abs(x);
-        }case 36u{  //Binary Step
-            if(v_dest[id]) < 0{
-                v_dest[id] = 0u;
-            }
-            else{
-                v_dest[id] = 1u;
-            }
         }case 38u{   //Relu
             v_dest[id] = max(0u, x) ;
         }
@@ -180,13 +145,6 @@ fn set_unary(operation : u32, id : u32, x : u32, scalar1 : u32, scalar2 : u32){
         case 44u{ //square
             v_dest[id] = x * x;
         }
-        // case 47u{ //random_normal
-        //     v_dest[id] = rand_normal(id, scalar1, scalar2);
-        // }
-        // case 48u{ //random_normal
-        //     let r = rand_uniform(id);
-        //     v_dest[id] = (scalar2 - scalar1) * r + scalar1;
-        // }
         case 51u{//Affine
             v_dest[id] = x * scalar1 + scalar2;
         }
@@ -218,11 +176,11 @@ fn set_unary(operation : u32, id : u32, x : u32, scalar1 : u32, scalar2 : u32){
 @workgroup_size(64,1,1)
 fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    if(id >= op_unary.length){
-        return;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_dest[pos1.id];
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
     }
-    let x = v_dest[id];
-    set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
 }
 
 
@@ -230,14 +188,12 @@ fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @workgroup_size(64,1,1)
 fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    if(id >= op_unary.length){
-        return;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_input1[pos1.id];
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
     }
-
-    let x = v_input1[id];
-    set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
 }
-
 
 
 
@@ -264,9 +220,6 @@ fn set_binary(operation : u32, id : u32, x : u32, y : u32){
         case 6u{ //min
             v_dest[id] = min(x, y);
         }
-        // case 7u{ //powf
-        //     v_dest[id] = pow(x, y);
-        // }
         default{
 
         }
@@ -278,20 +231,22 @@ fn set_binary(operation : u32, id : u32, x : u32, y : u32){
 @workgroup_size(64,1,1)
 fn binary_buffer_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    if(id >= op_unary.length){
-        return;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        set_binary(op_unary.operation, id, v_dest[id], v_input1[pos1.id]);
     }
-    set_binary(op_unary.operation, id, v_dest[id], v_input1[id]);
+   
 }
 
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    if(id >= op_unary.length){
-        return;
+    let pos1 = get_index(op_binary.input1_layout, id);
+    let pos2 = get_index(op_binary.input2_layout, id);
+    if(pos1.is_valid){
+        set_binary(op_binary.operation, id, v_input1[pos1.id], v_input2[pos2.id]);
     }
-    set_binary(op_unary.operation, id, v_input1[id], v_input2[id]);
 }
 
 
@@ -342,64 +297,130 @@ fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 
-@compute
-@workgroup_size(1,1,1)
-fn reduce_from_buffer() {
-    // let id = global_id.x;
-    // if(id >= op_unary.length){
-    //     return;
-    // }
+// @compute
+// @workgroup_size(1,1,1)
+// fn reduce_from_buffer_old() {
+//     // let id = global_id.x;
+//     // if(id >= op_unary.length){
+//     //     return;
+//     // }
 
-    switch(op_unary.operation){
-        case 0u{ //sum
-            var sum = 0u;
-            for (var i = 0u; i < op_unary.length; i++){
-                sum += v_input1[i];
-            }
-            v_dest[0] = sum;
-        }
-        case 1u{ //min
-            var sum = v_input1[0];
-            for (var i = 0u; i < op_unary.length; i++){
-                sum = min(sum,v_input1[i]);
-            }
-            v_dest[0] = sum;
-        }
-        case 2u{ //max
-            var sum = v_input1[0];
-            for (var i = 0u; i < op_unary.length; i++){
-                sum = max(sum,v_input1[i]);
-            }
-            v_dest[0] = sum;
-        }
-        case 3u{//ArgMin
-            var sum = v_input1[0];
-            var index = 0u;
-            for (var i = 0u; i < op_unary.length; i++){
-                if v_input1[i] < sum{
-                    sum = v_input1[i];
-                    index = i;
-                }
-            }
-            v_dest[0] = index;
-        }
-        case 4u{//ArgMax
-            var sum = v_input1[0];
-            var index = 0u;
-            for (var i = 0u; i < op_unary.length; i++){
-                if v_input1[i] > sum{
-                    sum = v_input1[i];
-                    index = i;
-                }
-            }
-            v_dest[0] = index;
-        }
-        default{
+//     switch(op_reduce.operation){
+//         case 0u{ //sum
+//             var sum = 0u;
+//             for (var i = 0u; i < op_reduce.length; i++){
+//                 sum += v_input1[i];
+//             }
+//             v_dest[0] = sum;
+//         }
+//         case 1u{ //min
+//             var sum = v_input1[0];
+//             for (var i = 0u; i < op_reduce.length; i++){
+//                 sum = min(sum,v_input1[i]);
+//             }
+//             v_dest[0] = sum;
+//         }
+//         case 2u{ //max
+//             var sum = v_input1[0];
+//             for (var i = 0u; i < op_reduce.length; i++){
+//                 sum = max(sum,v_input1[i]);
+//             }
+//             v_dest[0] = sum;
+//         }
+//         case 3u{//ArgMin
+//             var sum = v_input1[0];
+//             var index = 0u;
+//             for (var i = 0u; i < op_reduce.length; i++){
+//                 if v_input1[i] < sum{
+//                     sum = v_input1[i];
+//                     index = i;
+//                 }
+//             }
+//             v_dest[0] = index;
+//         }
+//         case 4u{//ArgMax
+//             var sum = v_input1[0];
+//             var index = 0u;
+//             for (var i = 0u; i < op_reduce.length; i++){
+//                 if v_input1[i] > sum{
+//                     sum = v_input1[i];
+//                     index = i;
+//                 }
+//             }
+//             v_dest[0] = index;
+//         }
+//         default{
 
-        }
-    }
+//         }
+//     }
+// }
+
+
+
+fn linear_index(indices: array<u32, 5>, strides: array<u32, 5>) -> u32 {
+     return indices[0] * strides[0] +
+            indices[1] * strides[1] +
+            indices[2] * strides[2] +
+            indices[3] * strides[3] +
+            indices[4] * strides[4];
 }
 
+   
+var<workgroup> sharedSums: array<u32, 64>;  
+@compute @workgroup_size(64)
+fn reduce_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+
+    // Compute the shape of the output buffer
+    var shape = array<u32, 5>(op_reduce.input_layout.shape1, op_reduce.input_layout.shape2, op_reduce.input_layout.shape3, op_reduce.input_layout.shape4, op_reduce.input_layout.shape5);
+    var strides = array<u32, 5>(op_reduce.input_layout.stride1, op_reduce.input_layout.stride2, op_reduce.input_layout.stride3, op_reduce.input_layout.stride4, op_reduce.input_layout.stride5);
+    var out_shape: array<u32, 5>;
+    for (var i = 0u; i < 5u; i = i + 1u) {
+        if ((op_reduce.dimensions & (1u << i)) != 0u) {
+            out_shape[i] = 1u;
+        } else {
+            out_shape[i] = shape[i];
+        }
+    }
+
+    // Compute the indices in the input and output buffers
+    var indices: array<u32, 5>;
+    var out_indices: array<u32, 5>;
+    var rem = index;
+    for (var i = 0u; i < 5u; i = i + 1u) {
+        indices[i] = rem % shape[i];
+        rem = rem / shape[i];
+        if (out_shape[i] != 1u) {
+            out_indices[i] = indices[i];
+        } else {
+            out_indices[i] = 0u;
+        }
+    }
+
+    // Load the input data into shared memory
+    let linear_in_index = op_reduce.input_layout.offset + linear_index(indices, strides);
+    if (index < arrayLength(&v_input1)) {
+        sharedSums[index % 64] = v_input1[linear_in_index];
+    } else {
+        sharedSums[index % 64] = 0u;
+    }
+
+    workgroupBarrier();
+
+    // Perform reduction within the workgroup
+    for (var offset = 32u; offset > 0u; offset = offset >> 1u) {
+        if (index % 64 < offset) {
+            sharedSums[index % 64] = sharedSums[index % 64] + sharedSums[index % 64 + offset];
+        }
+        workgroupBarrier();
+    }
+
+    // Write the result to the output buffer
+    if (index % 64 == 0u) {
+        let linear_out_index = linear_index(out_indices, strides);
+        v_dest[linear_out_index] = sharedSums[0];
+    }
+}
 
 fn bool_to_int(b : bool) -> u32{
     if b{
@@ -412,48 +433,36 @@ fn bool_to_int(b : bool) -> u32{
 @workgroup_size(64,1,1)
 fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    if(id >= op_unary.length){
+    let pos1 = get_index(op_binary.input1_layout, id);
+    let pos2 = get_index(op_binary.input2_layout, id);
+    if(!pos1.is_valid){
         return;
     }
-   
-    switch(op_unary.operation){
+    
+    let x = v_input1[pos1.id];
+    let y = v_input2[pos2.id];
+
+    switch(op_binary.operation){
         case 0u: { //eq
-            v_dest_u32[id] = bool_to_int(v_input1[id] == v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x == y);
         }
         case 1u: {//ne
-            v_dest_u32[id] = bool_to_int(v_input1[id] != v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x != y);
         }
         case 2u: {//lt
-            v_dest_u32[id] = bool_to_int(v_input1[id] < v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x < y);
         }
         case 3u: {//LE
-            v_dest_u32[id] = bool_to_int(v_input1[id] <= v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x <= y);
         }
         case 4u: {//GT
-            v_dest_u32[id] = bool_to_int(v_input1[id] > v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x > y);
         }
         case 5u: {//GE
-            v_dest_u32[id] = bool_to_int(v_input1[id] >= v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x >= y);
         }
         default:{
             
         }
     }
 }
-
-
-
-
-
-// @compute
-// @workgroup_size(64,1,1)
-// fn copy_stride(@builtin(global_invocation_id) global_id: vec3<u32>) {
-//     let x = global_id.x;
-
-//     let info_dest   = op_input_matrix[0];
-//     let info_input1 = op_input_matrix[1];
-
-//     v_dest[info_dest.offset + x] = v_input1[info_input1.offset + x];
-// }
-
-

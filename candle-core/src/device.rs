@@ -183,6 +183,22 @@ impl Device {
         matches!(self, Self::WebGpu(_))
     }
 
+    pub fn is_dtype_available(&self, dtype: DType) -> bool{
+        match (self, dtype) {
+            (Device::Cpu, _) => true,
+            (Device::Cuda(_), _) => true,
+            (Device::Metal(_), _) => true,
+            (Device::WebGpu(_), DType::U32) => true,
+            (Device::WebGpu(_), DType::F32) => true,
+
+            (Device::WebGpu(_), DType::U8) => false,
+            (Device::WebGpu(_), DType::I64) => false,
+            (Device::WebGpu(_), DType::BF16) => false,
+            (Device::WebGpu(_), DType::F16) => false,
+            (Device::WebGpu(_), DType::F64) => false,
+        }
+    }
+
     pub fn cuda_if_available(ordinal: usize) -> Result<Self> {
         if crate::utils::cuda_is_available() {
             Self::new_cuda(ordinal)

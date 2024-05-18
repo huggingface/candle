@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use crate::backend::BackendStorage;
+use crate::{notImplemented, wrongType, Layout};
+
 use super::wgpu_functions::{self, create_buffer, create_buffer_init, UnaryOperation};
 use super::WgpuStorage;
 
@@ -20,14 +23,16 @@ pub (crate) enum Pipelines{
     MatmulBuffer = 4,
     ReduceFromBuffer = 5,
     CmpFromBuffer = 6,
+    Conv2D = 7,
+    Conv2DTranspose = 8,
 
-    UnaryInplaceU32 = 7,
-    UnaryFromBufferU32 = 8,
-    BinaryBufferInplaceU32 = 9,
-    BinaryBufferFromBufferU32 = 10,
-    MatmulBufferU32 = 11,
-    ReduceFromBufferU32 = 12,
-    CmpFromBufferU32 = 13,
+    UnaryInplaceU32 = 9,
+    UnaryFromBufferU32 = 10,
+    BinaryBufferInplaceU32 = 11,
+    BinaryBufferFromBufferU32 = 12,
+    MatmulBufferU32 = 13,
+    ReduceFromBufferU32 = 14,
+    CmpFromBufferU32 = 15,
 }
 
 
@@ -55,21 +60,23 @@ impl WgpuDevice{
         
         let pipelines = 
         vec![
-            Self::load_pipeline(&device, &shader1, Pipelines::UnaryInplace), 
-            Self::load_pipeline(&device, &shader1, Pipelines::UnaryFromBuffer),
-            Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferInplace),
-            Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferFromBuffer),
-            Self::load_pipeline(&device, &shader1, Pipelines::MatmulBuffer),
-            Self::load_pipeline(&device, &shader1, Pipelines::ReduceFromBuffer),
-            Self::load_pipeline(&device, &shader1, Pipelines::CmpFromBuffer),
+            Self::load_pipeline(&device, &shader1, Pipelines::UnaryInplace),  //0
+            Self::load_pipeline(&device, &shader1, Pipelines::UnaryFromBuffer), //1
+            Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferInplace), //2
+            Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferFromBuffer), //3
+            Self::load_pipeline(&device, &shader1, Pipelines::MatmulBuffer), //4
+            Self::load_pipeline(&device, &shader1, Pipelines::ReduceFromBuffer), //5
+            Self::load_pipeline(&device, &shader1, Pipelines::CmpFromBuffer), //6
+            Self::load_pipeline(&device, &shader1, Pipelines::Conv2D),
+            Self::load_pipeline(&device, &shader1, Pipelines::Conv2DTranspose),
 
-            Self::load_pipeline(&device, &shader2, Pipelines::UnaryInplaceU32), 
-            Self::load_pipeline(&device, &shader2, Pipelines::UnaryFromBufferU32),
-            Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferInplaceU32),
-            Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferFromBufferU32),
-            Self::load_pipeline(&device, &shader2, Pipelines::MatmulBufferU32),
-            Self::load_pipeline(&device, &shader2, Pipelines::ReduceFromBufferU32),
-            Self::load_pipeline(&device, &shader2, Pipelines::CmpFromBufferU32)
+            Self::load_pipeline(&device, &shader2, Pipelines::UnaryInplaceU32),  //7
+            Self::load_pipeline(&device, &shader2, Pipelines::UnaryFromBufferU32), //8
+            Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferInplaceU32), //9
+            Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferFromBufferU32), //10 
+            Self::load_pipeline(&device, &shader2, Pipelines::MatmulBufferU32), //11
+            Self::load_pipeline(&device, &shader2, Pipelines::ReduceFromBufferU32), //12
+            Self::load_pipeline(&device, &shader2, Pipelines::CmpFromBufferU32) //13
             ];
         
         Ok(WgpuDevice {
@@ -90,6 +97,8 @@ impl WgpuDevice{
             Pipelines::MatmulBuffer => "matmul",
             Pipelines::ReduceFromBuffer => "reduce_from_buffer",
             Pipelines::CmpFromBuffer => "cmp_buffer_from_buffer",
+            Pipelines::Conv2D => "conv2d",
+            Pipelines::Conv2DTranspose => "conv2d_transpose",
 
             Pipelines::UnaryInplaceU32 => "unary_inplace",
             Pipelines::UnaryFromBufferU32 => "unary_from_buffer",
@@ -111,9 +120,9 @@ impl WgpuDevice{
     pub (crate) fn get_pipeline(&self,pipeline: Pipelines) -> &wgpu::ComputePipeline { //Ref<'_, wgpu::ComputePipeline> 
         return &self.pipelines[pipeline as usize];
     }
-
-
 }
+
+
 
 impl crate::backend::BackendDevice for WgpuDevice{
     type Storage = WgpuStorage;
@@ -132,13 +141,13 @@ impl crate::backend::BackendDevice for WgpuDevice{
 
     fn zeros_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
         let buffer = create_buffer(self, shape.elem_count() * 4);
-        wgpu_functions::queue_unary_inplace_op(self, &buffer, shape.elem_count() as u32,UnaryOperation::SetZero, 0.0, 0.0,dtype);
+        wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::SetZero, 0.0, 0.0,dtype, Layout::contiguous(shape))?;
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 
     fn ones_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
         let buffer = create_buffer(self, shape.elem_count() * 4);
-        wgpu_functions::queue_unary_inplace_op(self, &buffer, shape.elem_count() as u32,UnaryOperation::SetOne, 0.0, 0.0,dtype);
+        wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::SetOne, 0.0, 0.0,dtype,Layout::contiguous(shape))?;
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 
@@ -148,14 +157,14 @@ impl crate::backend::BackendDevice for WgpuDevice{
             return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
         }
         else{
-            panic!("can not create wgpu array of type {:?}, onlf f32 or U32 is allowed", dtype);
+            wrongType!(alloc_uninit, dtype);
         }
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, data : &[T]) -> crate::Result<Self::Storage> {
         if T::DTYPE != crate::DType::F32 {
             // Panic if T is not f32
-            panic!("Expected type T to be f32");
+            wrongType!(storage_from_slice, T::DTYPE);
         }
         
         // Safe to cast data to &[f32] since T is f32
@@ -175,7 +184,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
                 let buffer = create_buffer_init(self, data);
                 return Ok(WgpuStorage::new(buffer, self.clone(),crate::DType::U32));
             },
-            _ =>  panic!("can not create wgpu array other than f32"),
+            _ =>  wrongType!(storage_from_cpu_storage, storage.dtype()),
         }
     }
 
@@ -189,27 +198,27 @@ impl crate::backend::BackendDevice for WgpuDevice{
                 let buffer = create_buffer_init(self, &data);
                 return Ok(WgpuStorage::new(buffer, self.clone(),crate::DType::U32));
             },
-            _ =>  panic!("can not create wgpu array other than f32"),
+            _ =>  wrongType!(storage_from_cpu_storage_owned, storage.dtype()),
         }
     }
 
     fn rand_uniform(&self, shape: &crate::Shape, dtype: crate::DType, lo: f64, up: f64) -> crate::Result<Self::Storage> {
         let buffer = create_buffer(self, shape.elem_count() * 4);
-        wgpu_functions::queue_unary_inplace_op(self, &buffer, shape.elem_count() as u32,UnaryOperation::RandUniform, lo as f32, up as f32,dtype);
+        wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::RandUniform, lo as f32, up as f32,dtype,Layout::contiguous(shape))?;
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 
     fn rand_normal(&self, shape: &crate::Shape, dtype: crate::DType, mean: f64, std: f64) -> crate::Result<Self::Storage> {
         let buffer = create_buffer(self, shape.elem_count() * 4);
-        wgpu_functions::queue_unary_inplace_op(self, &buffer, shape.elem_count() as u32,UnaryOperation::RandNormal, mean as  f32, std as f32, dtype);
+        wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::RandNormal, mean as  f32, std as f32, dtype,Layout::contiguous(shape))?;
         return Ok(WgpuStorage::new(buffer, self.clone(),dtype));
     }
 
     fn set_seed(&self, _: u64) -> crate::Result<()> {
-        todo!()
+        notImplemented!(set_seed)
     }
 
     fn synchronize(&self) -> crate::Result<()> {
-        todo!()
+        notImplemented!(synchronize)
     }
 }

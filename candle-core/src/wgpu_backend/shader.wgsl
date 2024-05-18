@@ -1,14 +1,14 @@
 struct MetaUnary{
+    input1_layout : MatrixLayout,
     operation : u32,
-    length : u32,
     scalar1 : f32, //optionally scalar value
-    scalar2 : f32
+    scalar2 : f32,
 }
 
-struct MetaBinaryScalar{
+struct MetaBinary{
+    input1_layout : MatrixLayout,
+    input2_layout : MatrixLayout,
     operation : u32,
-    length : u32,
-    scalar : f32
 }
 
 //(M X N) * (N X K)
@@ -20,7 +20,36 @@ struct MetaInfoMatMul{
     input1 : MatrixLayout, 
     input2 : MatrixLayout
 }
-const MAX_STRIDE_SIZE = 4; 
+
+struct MetaInfoReduce{
+    input_layout : MatrixLayout,
+    operation : u32,
+    dimensions : u32, //Dimensions to Reduce Over(if ith bit is set -> Reduce over ith Dimension maximal 5)
+}
+
+struct MetaConv2d{
+    b : u32, //batch_count ("normal" matmul = 1)
+    c_in : u32, //Output Channel, we are using workgroups for all c_out, x, y pairs
+    kernel_x : u32,
+    kernel_y : u32,
+    size_in_x: u32,
+    size_in_y : u32,
+    stride_batch_out : u32,
+    stride_c_out: u32,
+    stride_y_out: u32,
+    size_y_out : u32,
+
+    stride_batch_input : u32,
+    stride_c_in : u32,
+    stride_y_in : u32,
+    padding : u32,
+    stride_conv : u32,
+    dialation_conv : u32,
+    offset_input : u32,
+}
+
+
+//Layout Information
 struct MatrixLayout{
     shape1 : u32, 
     shape2 : u32, 
@@ -33,7 +62,7 @@ struct MatrixLayout{
     stride4 : u32, 
     stride5 : u32, 
     offset : u32,
-    p1 : u32, 
+    length : u32, //length if continues, else 0 
 }
 
 
@@ -43,52 +72,32 @@ var<storage, read_write> v_dest: array<f32>;
 @group(0) @binding(0) 
 var<storage, read_write> v_dest_u32: array<u32>; //Output for U8, and U32
 
-//@group(0) @binding(0) 
-//var<storage, read_write> v_dest_f16: array<f16>; //Output for f16
 
 @group(0) @binding(1)
 var<uniform> op_unary : MetaUnary;
 
 @group(0) @binding(1)
-var<uniform> op_unary_scalar : MetaBinaryScalar;
+var<uniform> op_binary : MetaBinary;
 
 @group(0) @binding(1)
 var<uniform> op_matmul : MetaInfoMatMul;
 
 @group(0) @binding(1)
+var<uniform> op_reduce : MetaInfoReduce;
+
+@group(0) @binding(1)
+var<uniform> op_conv2d : MetaConv2d;
+
+
+@group(0) @binding(1)
 var<uniform> op_input_matrix : array<MatrixLayout, 3>;
+
 
 @group(0) @binding(2)
 var<storage> v_input1: array<f32>;
 
 @group(0) @binding(3)
 var<storage> v_input2: array<f32>;
-
-fn get_shape(m : MatrixLayout, index : u32) -> u32{
-    switch index{
-        case 0u {return m.shape1;}
-        case 1u {return m.shape2;}
-        case 2u {return m.shape3;}
-        case 3u {return m.shape4;}
-        case 4u {return m.shape5;}
-        default : {return m.shape1;}
-    }
-}
-
-fn get_stride(m : MatrixLayout, index : u32) -> u32{
-    switch index{
-        case 0u {return m.stride1;}
-        case 1u {return m.stride2;}
-        case 2u {return m.stride3;}
-        case 3u {return m.stride4;}
-        case 4u {return m.stride5;}
-        default : {return m.stride1;}
-    }
-}
-
-fn set_output_u32(m : u32, value : u32){
-    v_dest_u32[m] = value;
-}
 
 fn set_output_u8(m : u32, v1 : u32, v2 : u32, v3 : u32, v4 : u32){
     let value = ((v1 & 0xFF) << 12) | ((v2 & 0xFF) << 8) | ((v3 & 0xFF) << 4) | (v4 & 0xFF);
@@ -103,6 +112,42 @@ fn get_output_u8(m : u32) -> array<u32,4>{
     let v1 = (value >> 12) & 0xFF;
     return array(v1,v2,v3,v4);
 }
+
+
+
+struct MatrixIndex{
+    id : u32,
+    is_valid : bool
+}
+
+const ZERO : f32 = 0;
+const ONE : f32 = 0;
+
+fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
+    if l.length != 0{ //Continues memory:
+        if index < l.length{
+            return MatrixIndex((l.offset + index), true);
+        }
+        return MatrixIndex(0, false);
+    }
+    else { //not continues:
+        let length = l.shape1 * l.shape2 * l.shape3 * l.shape4 * l.shape5;
+        if index >= l.length{
+            return MatrixIndex(0, false);
+        }
+       
+        let s1 = index % (length);
+        let s2 = index % (l.shape1 * l.shape2 * l.shape3 * l.shape4);
+        let s3 = index % (l.shape1 * l.shape2 * l.shape3);
+        let s4 = index % (l.shape1 * l.shape2);
+        let s5 = index % (l.shape1);
+
+        let new_index = s1 * l.stride1 + s2 * l.stride2 + s3 * l.stride3 + s4 * l.stride4 + s5 * l.stride5;
+         return MatrixIndex(new_index, true);
+    }
+}
+
+
 
 
 fn rand_uniform(value: u32) -> f32 {
@@ -143,18 +188,16 @@ fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
 
     switch operation {
         case 0u{ // set 0
-            v_dest[id] = 0.0;
+            v_dest[id] = ZERO;
         }
         case 1u{ //set 1
-            v_dest[id] = 1.0;
+            v_dest[id] = ONE;
         }
-
-        //inplace operators
         case 2u{ 
-            v_dest[id] += 1.0;
+            v_dest[id] += ONE;
         }
         case 3u{ 
-            v_dest[id] -= 1.0;
+            v_dest[id] -= ONE;
         }
         case 4u{  
             v_dest[id] = abs(x);
@@ -189,8 +232,6 @@ fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
         case 17u{ 
             v_dest[id] = degrees(x) ;
         }
-       
-        
         case 21u{ 
             v_dest[id] = exp(x); 
         }
@@ -227,15 +268,15 @@ fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
             v_dest[id] = trunc(x) ;
         }case 36u{  //Binary Step
             if(v_dest[id]) < 0{
-                v_dest[id] = 0.0;
+                v_dest[id] = ZERO;
             }
             else{
-                v_dest[id] = 1.0;
+                v_dest[id] = ONE;
             }
         }case 37u{   //Sigmoid
             v_dest[id] = 1 / (1 + exp(-x));
         }case 38u{   //Relu
-            v_dest[id] = max(0.0, x) ;
+            v_dest[id] = max(ZERO, x) ;
         }case 39u{   //Softplus
             v_dest[id] = log(1 + exp(x));
         }case 40u{  //Leaky ReLU
@@ -318,11 +359,11 @@ fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
 @workgroup_size(64,1,1)
 fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    if(id >= op_unary.length){
-        return;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_dest[pos1.id];
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
     }
-    let x = v_dest[id];
-    set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
 }
 
 
@@ -330,12 +371,11 @@ fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @workgroup_size(64,1,1)
 fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    if(id >= op_unary.length){
-        return;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_input1[pos1.id];
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
     }
-
-    let x = v_input1[id];
-    set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
 }
 
 
@@ -377,20 +417,22 @@ fn set_binary(operation : u32, id : u32, x : f32, y : f32){
 @workgroup_size(64,1,1)
 fn binary_buffer_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    if(id >= op_unary.length){
-        return;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        set_binary(op_unary.operation, id, v_dest[id], v_input1[pos1.id]);
     }
-    set_binary(op_unary.operation, id, v_dest[id], v_input1[id]);
+   
 }
 
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    if(id >= op_unary.length){
-        return;
+    let pos1 = get_index(op_binary.input1_layout, id);
+    let pos2 = get_index(op_binary.input2_layout, id);
+    if(pos1.is_valid){
+        set_binary(op_binary.operation, id, v_input1[pos1.id], v_input2[pos2.id]);
     }
-    set_binary(op_unary.operation, id, v_input1[id], v_input2[id]);
 }
 
 
@@ -430,7 +472,7 @@ fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let input2_stride_n = op_matmul.input2.stride4;
     let input2_stride_k = op_matmul.input2.stride5;
 
-    var sum = 0.0;
+    var sum = ZERO;
     for (var i = 0u; i < op_matmul.n; i++){
         sum +=  
         v_input1[b * input1_stride_b  + input1_stride_m * y + i * input1_stride_n + input1_offset] 
@@ -443,59 +485,144 @@ fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 @compute
 @workgroup_size(1,1,1)
-fn reduce_from_buffer() {
-    // let id = global_id.x;
+fn reduce_from_buffer2(@builtin(global_invocation_id) global_id: vec3<u32>) {
+
+    let id = global_id.x; //this is the ith Reduce Operation
     // if(id >= op_unary.length){
     //     return;
     // }
 
-    switch(op_unary.operation){
+    switch(op_reduce.operation){
         case 0u{ //sum
-            var sum = 0.0;
-            for (var i = 0u; i < op_unary.length; i++){
-                sum += v_input1[i];
-            }
+            var sum = ZERO;
+
+            // while true{
+            //     let pos1 = get_index(op_unary.input1_layout, 0);
+            //     if(!pos1.is_valid){
+            //         break;
+            //     }
+            //     sum += v_input1[pos1.id];
+
+            // }
+            
+            // for (var i = 0u; i < 5; i++){ 
+            //     if((op_reduce.dimensions[i] >> i) & 1) == true{//reduce this dimension
+                    
+            //     }
+            //     sum += v_input1[i];
+            // }
+
+            // for (var i = 0u; i < op_reduce.length; i++){
+
+
+            //     sum += v_input1[i];
+            // }
             v_dest[0] = sum;
         }
         case 1u{ //min
             var sum = v_input1[0];
-            for (var i = 0u; i < op_unary.length; i++){
-                sum = min(sum,v_input1[i]);
-            }
+            // for (var i = 0u; i < op_reduce.length; i++){
+            //     sum = min(sum,v_input1[i]);
+            // }
             v_dest[0] = sum;
         }
         case 2u{ //max
             var sum = v_input1[0];
-            for (var i = 0u; i < op_unary.length; i++){
-                sum = max(sum,v_input1[i]);
-            }
+            // for (var i = 0u; i < op_reduce.length; i++){
+            //     sum = max(sum,v_input1[i]);
+            // }
             v_dest[0] = sum;
         }
         case 3u{//ArgMin
             var sum = v_input1[0];
             var index = 0u;
-            for (var i = 0u; i < op_unary.length; i++){
-                if v_input1[i] < sum{
-                    sum = v_input1[i];
-                    index = i;
-                }
-            }
+            // for (var i = 0u; i < op_reduce.length; i++){
+            //     if v_input1[i] < sum{
+            //         sum = v_input1[i];
+            //         index = i;
+            //     }
+            // }
             v_dest[0] = f32(index);
         }
         case 4u{//ArgMax
             var sum = v_input1[0];
             var index = 0u;
-            for (var i = 0u; i < op_unary.length; i++){
-                if v_input1[i] > sum{
-                    sum = v_input1[i];
-                    index = i;
-                }
-            }
+            // for (var i = 0u; i < op_reduce.length; i++){
+            //     if v_input1[i] > sum{
+            //         sum = v_input1[i];
+            //         index = i;
+            //     }
+            // }
             v_dest[0] = f32(index);
         }
         default{
 
         }
+    }
+}
+
+fn linear_index(indices: array<u32, 5>, strides: array<u32, 5>) -> u32 {
+     return indices[0] * strides[0] +
+            indices[1] * strides[1] +
+            indices[2] * strides[2] +
+            indices[3] * strides[3] +
+            indices[4] * strides[4];
+}
+
+   
+var<workgroup> sharedSums: array<f32, 64>;  
+@compute @workgroup_size(64)
+fn reduce_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+
+    // Compute the shape of the output buffer
+    var shape = array<u32, 5>(op_reduce.input_layout.shape1, op_reduce.input_layout.shape2, op_reduce.input_layout.shape3, op_reduce.input_layout.shape4, op_reduce.input_layout.shape5);
+    var strides = array<u32, 5>(op_reduce.input_layout.stride1, op_reduce.input_layout.stride2, op_reduce.input_layout.stride3, op_reduce.input_layout.stride4, op_reduce.input_layout.stride5);
+    var out_shape: array<u32, 5>;
+    for (var i = 0u; i < 5u; i = i + 1u) {
+        if ((op_reduce.dimensions & (1u << i)) != 0u) {
+            out_shape[i] = 1u;
+        } else {
+            out_shape[i] = shape[i];
+        }
+    }
+
+    // Compute the indices in the input and output buffers
+    var indices: array<u32, 5>;
+    var out_indices: array<u32, 5>;
+    var rem = index;
+    for (var i = 0u; i < 5u; i = i + 1u) {
+        indices[i] = rem % shape[i];
+        rem = rem / shape[i];
+        if (out_shape[i] != 1u) {
+            out_indices[i] = indices[i];
+        } else {
+            out_indices[i] = 0u;
+        }
+    }
+
+    // Load the input data into shared memory
+    let linear_in_index = op_reduce.input_layout.offset + linear_index(indices, strides);
+    if (index < arrayLength(&v_input1)) {
+        sharedSums[index % 64] = v_input1[linear_in_index];
+    } else {
+        sharedSums[index % 64] = 0.0;
+    }
+
+    workgroupBarrier();
+
+    // Perform reduction within the workgroup
+    for (var offset = 32u; offset > 0u; offset = offset >> 1u) {
+        if (index % 64 < offset) {
+            sharedSums[index % 64] = sharedSums[index % 64] + sharedSums[index % 64 + offset];
+        }
+        workgroupBarrier();
+    }
+
+    // Write the result to the output buffer
+    if (index % 64 == 0u) {
+        let linear_out_index = linear_index(out_indices, strides);
+        v_dest[linear_out_index] = sharedSums[0];
     }
 }
 
@@ -511,28 +638,33 @@ fn bool_to_int(b : bool) -> u32{
 @workgroup_size(64,1,1)
 fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    if(id >= op_unary.length){
+    let pos1 = get_index(op_binary.input1_layout, id);
+    let pos2 = get_index(op_binary.input2_layout, id);
+    if(!pos1.is_valid){
         return;
     }
-   
-    switch(op_unary.operation){
+    
+    let x = v_input1[pos1.id];
+    let y = v_input2[pos2.id];
+
+    switch(op_binary.operation){
         case 0u: { //eq
-            v_dest_u32[id] = bool_to_int(v_input1[id] == v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x == y);
         }
         case 1u: {//ne
-            v_dest_u32[id] = bool_to_int(v_input1[id] != v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x != y);
         }
         case 2u: {//lt
-            v_dest_u32[id] = bool_to_int(v_input1[id] < v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x < y);
         }
         case 3u: {//LE
-            v_dest_u32[id] = bool_to_int(v_input1[id] <= v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x <= y);
         }
         case 4u: {//GT
-            v_dest_u32[id] = bool_to_int(v_input1[id] > v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x > y);
         }
         case 5u: {//GE
-            v_dest_u32[id] = bool_to_int(v_input1[id] >= v_input2[id]);
+            v_dest_u32[id] = bool_to_int(x >= y);
         }
         default:{
             
@@ -541,18 +673,142 @@ fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 
+//(N, C_IN, H, W) CONV (C_IN, K_H, K_W) = (N,C_OUT, H_OUT, W_OUT)
+//bzgl CONV: Padding x, Padding y, Stride x, stride y, dilation, groups?
+@compute
+@workgroup_size(8,8,1)
+fn conv2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let i_out_x = global_id.x;
+    let i_out_y = global_id.y;
+    let i_c_out = global_id.z;
+
+    let size_y_out = op_conv2d.size_y_out;
+    let size_x_out = op_conv2d.stride_y_out;
+
+    if i_out_x >= size_x_out || i_out_y >= size_y_out {
+        return;
+    }
+
+    let kernel_size_x = op_conv2d.kernel_x;
+    let kernel_size_y = op_conv2d.kernel_y;
+    let kernel_c_stride = kernel_size_x * kernel_size_y;
+    let kernel_y_stride = kernel_size_x;
+    let kernel_b_stride = kernel_size_x * kernel_size_y * op_conv2d.c_in;
+
+    //TODO: Pass this Valu above
+    let size_in_x = op_conv2d.size_in_x;
+    let size_in_y =  op_conv2d.size_in_y;
+    let stride_batch_out =  op_conv2d.stride_batch_out;
+    let stride_c_out =  op_conv2d.stride_c_out;
+    let stride_y_out =  op_conv2d.stride_y_out;
+
+    let stride_batch_input = op_conv2d.stride_batch_input;
+    let stride_c_in =  op_conv2d.stride_c_in;
+    let stride_y_in =  op_conv2d.stride_y_in;
+    let padding =  op_conv2d.padding;
+    let stride_conv = op_conv2d.stride_conv;
+    let dialation_conv = op_conv2d.dialation_conv;
+
+    //Calculate the top Left Index of the x/y coord 
+
+    let x_coord_offset = i_out_x * stride_conv - padding; //TODO: CALCULATE WITH I32, we need negative numbers for x_coord_offset
+    let y_coord_offset = i_out_y * stride_conv - padding;
+  
+
+    for (var i_b = 0u; i_b < op_conv2d.b; i_b = i_b + 1u) { //For each Batch:
+        var sum = ZERO;
+        for (var i_c_in = 0u; i_c_in < op_conv2d.c_in; i_c_in = i_c_in + 1u) { //For each Input Channel:
+            let image_offset = i_b * stride_batch_input + i_c_in * stride_c_in ;
+            for (var x_k = 0u; x_k < kernel_size_x; x_k = x_k + 1u) { //For each Kernel X
+                for (var y_k = 0u; y_k < kernel_size_y; y_k = y_k + 1u) { //For each Kernel X
+                    let x_coord = x_coord_offset + dialation_conv * x_k;
+                    let y_coord = y_coord_offset + dialation_conv * y_k;
+                    if !(x_coord < 0 || y_coord < 0 || x_coord >= size_in_x || y_coord >= size_in_y){ //Ansonsten wäre dieser Index wegen Padding == null 
+                        let input_pixel = v_input1[image_offset +  y_coord * stride_y_in + x_coord + op_conv2d.offset_input];
+                        sum += v_input2[i_c_out * kernel_b_stride + i_c_in * kernel_c_stride + y_k * kernel_y_stride + x_k] * input_pixel;
+                    }
+                } 
+            }
+        }
+        v_dest[i_b * stride_batch_out + i_c_out * stride_c_out + stride_y_out * i_out_y + i_out_x] = sum;
+    }
+}
 
 
+//(N, C_IN, H, W) CONV (C_IN, K_H, K_W) = (N,C_OUT, H_OUT, W_OUT)
+//bzgl CONV: Padding x, Padding y, Stride x, stride y, dilation, groups?
+@compute
+@workgroup_size(8,8,1)
+fn conv2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let i_out_x = global_id.x + op_conv2d.padding;
+    let i_out_y = global_id.y + op_conv2d.padding; //We go through each output 
+    let i_c_out = global_id.z; 
 
-// @compute
-// @workgroup_size(64,1,1)
-// fn copy_stride(@builtin(global_invocation_id) global_id: vec3<u32>) {
-//     let x = global_id.x;
+    let size_y_out = op_conv2d.size_y_out;
+    let size_x_out = op_conv2d.stride_y_out;
 
-//     let info_dest   = op_input_matrix[0];
-//     let info_input1 = op_input_matrix[1];
+    if  global_id.x  >= size_x_out ||  global_id.y >= size_y_out {
+        return;
+    }
 
-//     v_dest[info_dest.offset + x] = v_input1[info_input1.offset + x];
-// }
+    let kernel_size_x = op_conv2d.kernel_x;
+    let kernel_size_y = op_conv2d.kernel_y;
+    let kernel_c_stride = kernel_size_x * kernel_size_y;
+    let kernel_y_stride = kernel_size_x;
+    let kernel_b_stride = kernel_size_x * kernel_size_y * op_conv2d.c_in;
 
+    
+    let stride_batch_out =  op_conv2d.stride_batch_out;
+    let stride_c_out =  op_conv2d.stride_c_out;
+    let stride_y_out =  op_conv2d.stride_y_out;
 
+    let stride_batch_input = op_conv2d.stride_batch_input;
+    let stride_c_in =  op_conv2d.stride_c_in;
+    let stride_y_in =  op_conv2d.stride_y_in;
+    let padding_x = (kernel_size_x - 1);
+    let padding_y = (kernel_size_y - 1);
+    let stride_conv = op_conv2d.stride_conv;
+    let dialation_conv = op_conv2d.dialation_conv;
+    let input_dialation = stride_conv;
+    let size_in_x = op_conv2d.size_in_x;
+    let size_in_y =  op_conv2d.size_in_y;
+
+    //Calculate the top Left Index of the x/y coord 
+
+    let x_coord_offset = i32(i_out_x) - i32(padding_x); //TODO: CALCULATE WITH I32, we need negative numbers for x_coord_offset
+    let y_coord_offset = i32(i_out_y) - i32(padding_y);
+  
+
+    for (var i_b = 0u; i_b < op_conv2d.b; i_b = i_b + 1u) { //For each Batch:
+        var sum = ZERO;
+        for (var i_c_in = 0u; i_c_in < op_conv2d.c_in; i_c_in = i_c_in + 1u) { //For each Input Channel:
+            let image_offset = i_b * stride_batch_input + i_c_in * stride_c_in ;
+            for (var x_k = 0u; x_k < kernel_size_x; x_k = x_k + 1u) { //For each Kernel X
+                for (var y_k = 0u; y_k < kernel_size_y; y_k = y_k + 1u) { //For each Kernel X
+                    let x_input_offset = dialation_conv * x_k;
+                    let y_input_offset = dialation_conv * y_k;
+
+                    let x_coord2 = x_coord_offset + i32(dialation_conv * x_k);
+                    let y_coord2 = y_coord_offset + i32(dialation_conv * y_k);
+                    if (x_coord2 < 0 || y_coord2 < 0){ //Ansonsten wäre dieser Index wegen Padding == null 
+                        continue;
+                    }
+
+                    if (u32(x_coord2) % input_dialation) != 0 || ((u32(y_coord2) % input_dialation) != 0){
+                        continue;
+                    }
+
+                    let x_coord = u32(x_coord2) / input_dialation;
+                    let y_coord = u32(y_coord2) / input_dialation;
+
+                    if !(x_coord >= size_in_x || y_coord >= size_in_y){ //Ansonsten wäre dieser Index wegen Padding == null 
+                        
+                        let input_pixel = v_input1[image_offset +  y_coord * stride_y_in + x_coord + op_conv2d.offset_input];
+                        sum += v_input2[i_c_out * kernel_b_stride + i_c_in * kernel_c_stride + (kernel_size_y - y_k - 1) * kernel_y_stride + (kernel_size_x - x_k - 1)] * input_pixel;
+                    }
+                } 
+            }
+        }
+        v_dest[i_b * stride_batch_out + i_c_out * stride_c_out + stride_y_out *  global_id.y +  global_id.x] = sum;
+    }
+}

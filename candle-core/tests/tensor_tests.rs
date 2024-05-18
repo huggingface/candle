@@ -9,26 +9,34 @@ fn zeros(device: &Device) -> Result<()> {
 }
 
 fn ones(device: &Device) -> Result<()> {
-    assert_eq!(
-        Tensor::ones((2, 3), DType::U8, device)?.to_vec2::<u8>()?,
-        [[1, 1, 1], [1, 1, 1]],
-    );
-    assert_eq!(
-        Tensor::ones((2, 3), DType::U32, device)?.to_vec2::<u32>()?,
-        [[1, 1, 1], [1, 1, 1]],
-    );
-    assert_eq!(
-        Tensor::ones((2, 3), DType::I64, device)?.to_vec2::<i64>()?,
-        [[1, 1, 1], [1, 1, 1]],
-    );
+    if device.is_dtype_available(DType::U8){
+        assert_eq!(
+            Tensor::ones((2, 3), DType::U8, device)?.to_vec2::<u8>()?,
+            [[1, 1, 1], [1, 1, 1]],
+        );
+    }
+    if device.is_dtype_available(DType::U32){
+        assert_eq!(
+            Tensor::ones((2, 3), DType::U32, device)?.to_vec2::<u32>()?,
+            [[1, 1, 1], [1, 1, 1]],
+        );
+    }
+    if device.is_dtype_available(DType::I64){
+        assert_eq!(
+            Tensor::ones((2, 3), DType::I64, device)?.to_vec2::<i64>()?,
+            [[1, 1, 1], [1, 1, 1]],
+        );
+    }
     assert_eq!(
         Tensor::ones((2, 3), DType::F32, device)?.to_vec2::<f32>()?,
         [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
     );
-    assert_eq!(
-        Tensor::ones((2, 3), DType::F64, device)?.to_vec2::<f64>()?,
-        [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-    );
+    if device.is_dtype_available(DType::F64){
+        assert_eq!(
+            Tensor::ones((2, 3), DType::F64, device)?.to_vec2::<f64>()?,
+            [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        );
+    }
     Ok(())
 }
 
@@ -41,22 +49,27 @@ fn full(device: &Device) -> Result<()> {
 }
 
 fn arange(device: &Device) -> Result<()> {
-    assert_eq!(
-        Tensor::arange(0u8, 5u8, device)?.to_vec1::<u8>()?,
-        [0, 1, 2, 3, 4],
-    );
-    assert_eq!(
-        Tensor::arange_step(0u8, 5u8, 2, device)?.to_vec1::<u8>()?,
-        [0, 2, 4],
-    );
-    assert_eq!(
-        Tensor::arange_step(0u8, 5u8, 3, device)?.to_vec1::<u8>()?,
-        [0, 3],
-    );
-    assert_eq!(
-        Tensor::arange_step(5i64, 0i64, -1, device)?.to_vec1::<i64>()?,
-        [5, 4, 3, 2, 1],
-    );
+    if device.is_dtype_available(DType::U8){
+        assert_eq!(
+            Tensor::arange(0u8, 5u8, device)?.to_vec1::<u8>()?,
+            [0, 1, 2, 3, 4],
+        );
+        assert_eq!(
+            Tensor::arange_step(0u8, 5u8, 2, device)?.to_vec1::<u8>()?,
+            [0, 2, 4],
+        );
+        assert_eq!(
+            Tensor::arange_step(0u8, 5u8, 3, device)?.to_vec1::<u8>()?,
+            [0, 3],
+        );
+    }
+
+    if device.is_dtype_available(DType::I64){
+        assert_eq!(
+            Tensor::arange_step(5i64, 0i64, -1, device)?.to_vec1::<i64>()?,
+            [5, 4, 3, 2, 1],
+        );
+    }
     Ok(())
 }
 
