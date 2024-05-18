@@ -213,7 +213,7 @@ fn main() -> anyhow::Result<()> {
         );
         match args.which {
             Which::Phi2 => Model::Phi2(Phi2::from_gguf(model, &mut file, &device)?),
-            Which::Phi3 => Model::Phi3(Phi3::from_gguf(model, &mut file, &device)?),
+            Which::Phi3 => Model::Phi3(Phi3::from_gguf(1, model, &mut file, &device)?),
             Which::Phi3b => Model::Phi3b(Phi3b::from_gguf(model, &mut file, &device)?),
         }
     };
