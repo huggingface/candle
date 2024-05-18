@@ -1,5 +1,6 @@
 use candle::{DType, Device, Result, Shape, Tensor};
 
+#[derive(Debug, Clone)]
 pub struct Cache {
     all_data: Tensor,
     dim: usize,
@@ -62,6 +63,7 @@ impl Cache {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct KvCache {
     k: Cache,
     v: Cache,
