@@ -665,6 +665,30 @@ fn broadcast(device: &Device) -> Result<()> {
     Ok(())
 }
 
+fn slice_set(device: &Device) -> Result<()> {
+    let (b, h, max_t, d) = (2, 4, 7, 3);
+    let cache = Tensor::zeros((b, h, max_t, d), DType::F32, device)?;
+    let tensor = Tensor::randn(0f32, 1f32, (b, h, 4, d), device)?;
+    cache.slice_set(&tensor, 2, 0)?;
+    let cache_t = cache.narrow(2, 0, 4)?;
+    let diff = (cache_t - &tensor)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
+    cache.slice_set(&tensor, 2, 1)?;
+    let cache_t = cache.narrow(2, 1, 4)?;
+    let diff = (cache_t - &tensor)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
+    let ones = Tensor::ones((b, h, 1, d), DType::F32, device)?;
+    cache.slice_set(&ones, 2, 6)?;
+    let diff = cache.narrow(2, 5, 1)?.abs()?.sum_all()?.to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
+    let diff = (cache.narrow(2, 6, 1)? - 1.)?
+        .abs()?
+        .sum_all()?
+        .to_vec0::<f32>()?;
+    assert_eq!(diff, 0.);
+    Ok(())
+}
+
 fn cat(device: &Device) -> Result<()> {
     // 1D
     let t1 = Tensor::new(&[3f32, 1., 4.], device)?;
@@ -1146,6 +1170,7 @@ test_device!(add_mul, add_mul_cpu, add_mul_gpu, add_mul_metal);
 test_device!(tensor_2d, tensor_2d_cpu, tensor_2d_gpu, tensor_2d_metal);
 test_device!(narrow, narrow_cpu, narrow_gpu, narrow_metal);
 test_device!(broadcast, broadcast_cpu, broadcast_gpu, broadcast_metal);
+test_device!(slice_set, ss_cpu, ss_gpu, ss_metal);
 test_device!(cat, cat_cpu, cat_gpu, cat_metal);
 test_device!(sum, sum_cpu, sum_gpu, sum_metal);
 test_device!(min, min_cpu, min_gpu, min_metal);
