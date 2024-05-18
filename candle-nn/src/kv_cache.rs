@@ -44,7 +44,7 @@ impl Cache {
     }
 
     pub fn current_data(&self) -> Result<Tensor> {
-        self.all_data.narrow(self.dim, 0, self.max_seq_len)
+        self.all_data.narrow(self.dim, 0, self.current_seq_len)
     }
 
     pub fn append(&mut self, src: &Tensor) -> Result<()> {
@@ -91,9 +91,11 @@ impl KvCache {
         self.v.current_data()
     }
 
-    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<()> {
+    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
         self.k.append(k)?;
         self.v.append(v)?;
-        Ok(())
+        let k = self.k.current_data()?;
+        let v = self.v.current_data()?;
+        Ok((k, v))
     }
 }
