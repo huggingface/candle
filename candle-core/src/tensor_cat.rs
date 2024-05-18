@@ -283,7 +283,7 @@ impl Tensor {
         let block_size: usize = src.dims().iter().skip(1 + dim).product();
         let d1: usize = src.dims().iter().take(dim).product();
         let d2 = block_size * src.dims()[dim];
-        let dst_o = self.layout().start_offset();
+        let dst_o = self.layout().start_offset() + offset * block_size;
         let src_o = src.layout().start_offset();
         src.storage().copy2d(
             &mut self.storage_mut(),
