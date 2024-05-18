@@ -83,11 +83,17 @@ impl KvCache {
         Ok(Self { k, v })
     }
 
-    pub fn k(&self) -> &Cache {
-        &self.k
+    pub fn k(&self) -> Result<Tensor> {
+        self.k.current_data()
     }
 
-    pub fn v(&self) -> &Cache {
-        &self.v
+    pub fn v(&self) -> Result<Tensor> {
+        self.v.current_data()
+    }
+
+    pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<()> {
+        self.k.append(k)?;
+        self.v.append(v)?;
+        Ok(())
     }
 }
