@@ -291,18 +291,7 @@ impl<T> RmsNorm<T> {
 
 impl Module for RmsNorm<RmsNormNonQuantized> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        #[cfg(feature = "cuda")]
-        {
-            let (bs, s, h) = xs.dims3()?;
-            let xs = xs.reshape((bs * s, h))?;
-            let res =
-                candle_layer_norm::rms_norm(&xs, self.inner.weight(), None, self.inner.eps as f32)?;
-            res.reshape((bs, s, h))
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            self.inner.forward(xs)
-        }
+        self.inner.forward(xs)
     }
 }
 

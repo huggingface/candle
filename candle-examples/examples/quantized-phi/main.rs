@@ -87,6 +87,9 @@ struct Args {
     /// The model size to use.
     #[arg(long, default_value = "phi-3b")]
     which: Which,
+
+    #[arg(long)]
+    use_flash_attn: bool,
 }
 
 impl Args {

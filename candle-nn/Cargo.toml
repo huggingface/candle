@@ -21,7 +21,6 @@ safetensors = { workspace = true }
 serde = { workspace = true }
 metal = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
-candle-layer-norm = { git = "https://github.com/EricLBuehler/candle-layer-norm.git", version = "0.0.1", optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
@@ -32,7 +31,7 @@ criterion = { workspace = true }
 [features]
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
-cuda = ["candle/cuda", "dep:candle-layer-norm"]
+cuda = ["candle/cuda"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:metal"]
 
