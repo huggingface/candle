@@ -1,4 +1,4 @@
-use crate::{notImplemented, Shape};
+use crate::{notImplemented, Layout, Shape};
 
 use super::{device::WgpuDevice, wgpu_functions::{self, read_data_from_gpu_async, BinaryOperation, UnaryOperation}};
 
@@ -95,34 +95,23 @@ impl crate::backend::BackendStorage for WgpuStorage{
         }
         let dst_shape = Shape::from(dst_dims);
         let mut reduce_dims = reduce_dims.to_vec();
-        // Sort the reduce_dims as they have to be processed from left to right when converting the
-        // indexes.
-        reduce_dims.sort();
 
-        let mut reduce_dims_bit = 0;
-        if reduce_dims.contains(&0){
-            reduce_dims_bit |= 0b1
-        }
-        if reduce_dims.contains(&1){
-            reduce_dims_bit |= 0b10
-        }
-        if reduce_dims.contains(&2){
-            reduce_dims_bit |= 0b100
-        }
-        if reduce_dims.contains(&3){
-            reduce_dims_bit |= 0b1000
-        }
-        if reduce_dims.contains(&4){
-            reduce_dims_bit |= 0b10000
+        fn calculate_stride(shape: &[usize]) -> Vec<usize> {
+            // Reverse the shape vector and fold over it
+            let mut strides = shape.iter()
+                                   .rev()
+                                   .scan(1, |state, &dim| {
+                                       let current_stride = *state;
+                                       *state *= dim;
+                                       Some(current_stride)
+                                   })
+                                   .collect::<Vec<usize>>();
+            // Reverse the strides to get them in the correct order
+            strides.reverse();
+            strides
         }
 
-        let reduce_dims_and_stride: Vec<_> = reduce_dims
-            .iter()
-            .map(|&d| (src_dims[d], src_dims[d + 1..].iter().product::<usize>()))
-            .collect();
-        
 
-        
         let buffer_dest = wgpu_functions::create_buffer(self.device(), dst_shape.elem_count() * 4);
         let op = match reduce_op{
             crate::op::ReduceOp::Sum => wgpu_functions::ReduceOperations::Sum,
@@ -131,7 +120,127 @@ impl crate::backend::BackendStorage for WgpuStorage{
             crate::op::ReduceOp::ArgMin => wgpu_functions::ReduceOperations::ArgMin,
             crate::op::ReduceOp::ArgMax => wgpu_functions::ReduceOperations::ArgMax,
         };
-        wgpu_functions::queue_reduce_from_buffer_op(self.device(), &buffer_dest, &self.buffer, op, self.dtype, layout, reduce_dims_bit, dst_shape)?;
+
+        // Sort the reduce_dims as they have to be processed from left to right when converting the
+        // indexes.
+        reduce_dims.sort();
+        let mut start_reduce_dim = 0;
+        let mut end_reduce_dim = 1;
+        let mut current_shape = layout.shape().clone().into_dims();
+        let input_stride = calculate_stride(&current_shape[..]);
+        let mut current_buffer = None;
+
+        let call_reduce = |
+            output_buffer : &wgpu::Buffer, 
+            output_size : u32, 
+            start_reduce_dim : usize, 
+            end_reduce_dim : usize, 
+            reduce_dims: &Vec<usize>,
+            prev_buffer : &wgpu::Buffer,
+            current_shape: &Vec<usize>,
+            layout : &Layout
+        | -> crate::Result<()>  {
+            let start_dim = reduce_dims[start_reduce_dim];
+            let end_dim = reduce_dims[end_reduce_dim - 1];
+            let output_to_start_shape_stride2 = src_dims[(end_dim+1)..].iter().fold(1, |prev, c| prev * *c) as u32; 
+            //let output_to_start_shape_stride2 = reduce_dims[end_reduce_dim..reduce_dims.len()].iter().fold(1, |prev, c| prev * current_shape[*c]) as u32;
+            let output_to_start_stride1;
+            if let Some(index) = current_shape.iter().rposition(|c| *c != 1){
+                output_to_start_stride1= input_stride[index] as u32;
+            }
+            else{   //All Other Elements have a Shape of 1?
+                output_to_start_stride1 = 1 as u32;
+            }
+            let output_to_start_stride2 = src_dims[start_dim..].iter().fold(1, |prev,c| prev * *c) as u32;
+            let output_to_start_stride2 = output_to_start_stride2 - output_to_start_shape_stride2 * output_to_start_stride1;
+            let reduction_length = src_dims[start_dim..(end_dim+1)].iter().fold(1, |prev, c| prev * *c);
+            let stride_reduction = *input_stride[start_dim..(end_dim+1)].iter().min().unwrap();
+            wgpu_functions::queue_reduce_from_buffer_op(self.device(),
+                &output_buffer, 
+                prev_buffer,
+                op, 
+                self.dtype,
+            layout,
+            output_size,
+            output_to_start_shape_stride2, //Multiply all Shapes after EndDim
+            output_to_start_stride1,    //Find Stride of last dimension(that was not reduced)
+            output_to_start_stride2,    //(Multiply all Shapes from StartDim until end) - output_to_start_shape_stride2 * output_to_start_stride1
+            reduction_length as u32,
+            stride_reduction as u32                    //length of elements to reduce per output
+            )?;
+            return Ok(());
+        };
+
+        loop{
+            if end_reduce_dim < reduce_dims.len(){
+                if reduce_dims[end_reduce_dim] == reduce_dims[end_reduce_dim - 1] + 1{ //the current end, is handled for the same block
+                    end_reduce_dim += 1;
+                }
+                else{
+                    let start_dim = reduce_dims[start_reduce_dim];
+                    let end_dim = reduce_dims[end_reduce_dim - 1];
+                    
+                    let l = Layout::contiguous(Shape::from_dims(&current_shape));
+                    
+                    for i in start_dim..(end_dim + 1){
+                        current_shape[i] = 1;
+                    }
+
+                    let output_count = current_shape.iter().fold(1, |prev, c| prev * c);            
+                    let buffer_temp = wgpu_functions::create_buffer(self.device(), output_count * 4);
+                    
+                    let (prev_buffer, l) = 
+                    match &current_buffer{
+                        Some(buffer) => (buffer,&l),
+                        None => (&self.buffer, layout),
+                    };
+
+                    call_reduce(
+                        &buffer_temp,
+                        output_count as u32, 
+                        start_reduce_dim, 
+                        end_reduce_dim, 
+                        &reduce_dims,
+                        prev_buffer,
+                        &current_shape,
+                        l
+                        )?;
+                    
+                    current_buffer = Some(buffer_temp);
+                    
+                    start_reduce_dim = end_reduce_dim;
+                    end_reduce_dim += 1;
+                }
+            }
+            else{ //end was outside of range, 
+                let start_dim = reduce_dims[start_reduce_dim];
+                let end_dim = reduce_dims[end_reduce_dim - 1];
+
+                let l = Layout::contiguous(Shape::from_dims(&current_shape));
+
+                for i in start_dim..(end_dim + 1){
+                    current_shape[i] = 1;
+                }
+                let (prev_buffer, l) = 
+                    match &current_buffer{
+                        Some(buffer) => (buffer,&l),
+                        None => (&self.buffer, layout),
+                    };
+
+                call_reduce(
+                    &buffer_dest, 
+                    dst_shape.elem_count() as u32, 
+                    start_reduce_dim, 
+                    end_reduce_dim,
+                    &reduce_dims,
+                    prev_buffer,
+                    &current_shape,
+                    l
+                )?;
+
+                break;
+            }
+        }    
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone(), self.dtype));
     }
 
@@ -234,7 +343,7 @@ impl crate::backend::BackendStorage for WgpuStorage{
         &self,
         l: &crate::Layout,
         kernel: &Self,
-        kernel_l: &crate::Layout,
+        _kernel_l: &crate::Layout,
         params: &crate::conv::ParamsConv2D,
     ) -> crate::Result<Self> {
         let buffer_dest = wgpu_functions::create_buffer(self.device(), (params.b_size * params.c_out * params.out_h() * params.out_w()) * 4);
@@ -246,7 +355,7 @@ impl crate::backend::BackendStorage for WgpuStorage{
         &self,
         l: &crate::Layout,
         kernel: &Self,
-        kernel_l: &crate::Layout,
+        _kernel_l: &crate::Layout,
         params: &crate::conv::ParamsConvTranspose2D,
     ) -> crate::Result<Self> {
         

@@ -24,7 +24,16 @@ struct MetaInfoMatMul{
 struct MetaInfoReduce{
     input_layout : MatrixLayout,
     operation : u32,
-    dimensions : u32, //Dimensions to Reduce Over(if ith bit is set -> Reduce over ith Dimension maximal 5)
+    workgroup_count : u32,
+    workgroup_size : u32,
+    length : u32, //Length of Reduction(e.g count of elements to sum per output),
+
+    output_to_start_stride1 : u32, //Stride between each new Output Index
+    
+    output_to_start_shape_stride2 : u32, //After x Outputs use Stride 2 
+    output_to_start_stride2 : u32,
+
+    stride_reduction : u32, //The Stride to use for elements in Reduction
 }
 
 struct MetaConv2d{
@@ -131,18 +140,19 @@ fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
         return MatrixIndex(0, false);
     }
     else { //not continues:
-        let length = l.shape1 * l.shape2 * l.shape3 * l.shape4 * l.shape5;
-        if index >= l.length{
-            return MatrixIndex(0, false);
-        }
+        let shapes1 = l.shape5;
+        let shapes2 =  (shapes1 * l.shape4);
+        let shapes3 =  (shapes2 * l.shape3);
+        let shapes4 =  (shapes3 * l.shape2);
+        let shapes5 =  (shapes4 * l.shape1);
        
-        let s1 = index % (length);
-        let s2 = index % (l.shape1 * l.shape2 * l.shape3 * l.shape4);
-        let s3 = index % (l.shape1 * l.shape2 * l.shape3);
-        let s4 = index % (l.shape1 * l.shape2);
-        let s5 = index % (l.shape1);
+        let s1 = (index / shapes4);
+        let s2 = (index / shapes3) % (shapes4 / shapes3);
+        let s3 = (index / shapes2) % (shapes3 / shapes2);
+        let s4 = (index / shapes1) % (shapes2 / shapes1);
+        let s5 = index             % (shapes1);
 
-        let new_index = s1 * l.stride1 + s2 * l.stride2 + s3 * l.stride3 + s4 * l.stride4 + s5 * l.stride5;
+        let new_index = l.offset + s1 * l.stride1 + s2 * l.stride2 + s3 * l.stride3 + s4 * l.stride4 + s5 * l.stride5;
          return MatrixIndex(new_index, true);
     }
 }
@@ -483,148 +493,209 @@ fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 
+
+fn linear_index(indices: array<u32, 5>, strides: array<u32, 5>, offset : u32) -> u32 {
+    return indices[0] * strides[0] +
+        indices[1] * strides[1] +
+        indices[2] * strides[2] +
+        indices[3] * strides[3] +
+        indices[4] * strides[4] + offset;
+}
+
+
+// fn get_indexes(linear_index : u32, shapes: array<u32,5>, strides : array<u32, 5>) -> array<u32>{
+//     let i4 = (linear_index / 1) % shapes[4];
+//     let i3 = (linear_index / strides[3]) % shapes[3];
+//     let i2 = (linear_index / strides[2]) % shapes[2];
+//     let i1 = (linear_index / strides[1]) % shapes[1];
+//     let i0 = (linear_index / strides[0]) % shapes[0];
+//     return array(i0,i1,i2,i3,i4);
+// }   
+
+// fn linear_to_matrix_index1(linear_index : u32, shapes: array<u32,5>, strides : array<u32, 5>) -> array<u32>{
+//     let indexes = get_indexes(linear_index, shapes, strides);
+//     return linear_index(indexes, strides)
+// }
+
+var<workgroup> sharedSums2: array<f32, 64>; 
 @compute
-@workgroup_size(1,1,1)
-fn reduce_from_buffer2(@builtin(global_invocation_id) global_id: vec3<u32>) {
-
-    let id = global_id.x; //this is the ith Reduce Operation
-    // if(id >= op_unary.length){
-    //     return;
-    // }
-
-    switch(op_reduce.operation){
-        case 0u{ //sum
-            var sum = ZERO;
-
-            // while true{
-            //     let pos1 = get_index(op_unary.input1_layout, 0);
-            //     if(!pos1.is_valid){
-            //         break;
-            //     }
-            //     sum += v_input1[pos1.id];
-
-            // }
-            
-            // for (var i = 0u; i < 5; i++){ 
-            //     if((op_reduce.dimensions[i] >> i) & 1) == true{//reduce this dimension
-                    
-            //     }
-            //     sum += v_input1[i];
-            // }
-
-            // for (var i = 0u; i < op_reduce.length; i++){
-
-
-            //     sum += v_input1[i];
-            // }
-            v_dest[0] = sum;
-        }
-        case 1u{ //min
-            var sum = v_input1[0];
-            // for (var i = 0u; i < op_reduce.length; i++){
-            //     sum = min(sum,v_input1[i]);
-            // }
-            v_dest[0] = sum;
-        }
-        case 2u{ //max
-            var sum = v_input1[0];
-            // for (var i = 0u; i < op_reduce.length; i++){
-            //     sum = max(sum,v_input1[i]);
-            // }
-            v_dest[0] = sum;
-        }
-        case 3u{//ArgMin
-            var sum = v_input1[0];
-            var index = 0u;
-            // for (var i = 0u; i < op_reduce.length; i++){
-            //     if v_input1[i] < sum{
-            //         sum = v_input1[i];
-            //         index = i;
-            //     }
-            // }
-            v_dest[0] = f32(index);
-        }
-        case 4u{//ArgMax
-            var sum = v_input1[0];
-            var index = 0u;
-            // for (var i = 0u; i < op_reduce.length; i++){
-            //     if v_input1[i] > sum{
-            //         sum = v_input1[i];
-            //         index = i;
-            //     }
-            // }
-            v_dest[0] = f32(index);
-        }
-        default{
-
-        }
-    }
-}
-
-fn linear_index(indices: array<u32, 5>, strides: array<u32, 5>) -> u32 {
-     return indices[0] * strides[0] +
-            indices[1] * strides[1] +
-            indices[2] * strides[2] +
-            indices[3] * strides[3] +
-            indices[4] * strides[4];
-}
-
-   
-var<workgroup> sharedSums: array<f32, 64>;  
-@compute @workgroup_size(64)
+@workgroup_size(64,1,1)
 fn reduce_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let index = global_id.x;
+    let workgroup_id = global_id.x;
+    let output_index = global_id.y;
+    
+    //Start Index of the Elements to Reduce
 
-    // Compute the shape of the output buffer
-    var shape = array<u32, 5>(op_reduce.input_layout.shape1, op_reduce.input_layout.shape2, op_reduce.input_layout.shape3, op_reduce.input_layout.shape4, op_reduce.input_layout.shape5);
-    var strides = array<u32, 5>(op_reduce.input_layout.stride1, op_reduce.input_layout.stride2, op_reduce.input_layout.stride3, op_reduce.input_layout.stride4, op_reduce.input_layout.stride5);
-    var out_shape: array<u32, 5>;
-    for (var i = 0u; i < 5u; i = i + 1u) {
-        if ((op_reduce.dimensions & (1u << i)) != 0u) {
-            out_shape[i] = 1u;
-        } else {
-            out_shape[i] = shape[i];
-        }
+    var start_index = 0u;// = output_index * op_reduce.output_to_start_stride1 + (output_index / op_reduce.output_to_start_shape_stride2) * op_reduce.output_to_start_stride2;
+    if op_reduce.output_to_start_shape_stride2 <= 1
+    {
+        start_index = output_index * op_reduce.output_to_start_stride1;
     }
+    else{
+        start_index = output_index * op_reduce.output_to_start_stride1 + (output_index / op_reduce.output_to_start_shape_stride2) * op_reduce.output_to_start_stride2;
+    }
+    
+    let length = op_reduce.length; //length of the elements to reduce
 
-    // Compute the indices in the input and output buffers
-    var indices: array<u32, 5>;
-    var out_indices: array<u32, 5>;
-    var rem = index;
-    for (var i = 0u; i < 5u; i = i + 1u) {
-        indices[i] = rem % shape[i];
-        rem = rem / shape[i];
-        if (out_shape[i] != 1u) {
-            out_indices[i] = indices[i];
-        } else {
-            out_indices[i] = 0u;
-        }
-    }
+    //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
+    let start = workgroup_id * op_reduce.workgroup_size;
+    let end = min(length, (workgroup_id + 1) * op_reduce.workgroup_size);
 
-    // Load the input data into shared memory
-    let linear_in_index = op_reduce.input_layout.offset + linear_index(indices, strides);
-    if (index < arrayLength(&v_input1)) {
-        sharedSums[index % 64] = v_input1[linear_in_index];
-    } else {
-        sharedSums[index % 64] = 0.0;
+    //Now Reduce from start to end
+    var sum = ZERO;
+    for (var i = start; i < end; i++){
+        let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+        sum += v_input1[index];
     }
+    sharedSums2[workgroup_id] = sum;
 
     workgroupBarrier();
 
-    // Perform reduction within the workgroup
-    for (var offset = 32u; offset > 0u; offset = offset >> 1u) {
-        if (index % 64 < offset) {
-            sharedSums[index % 64] = sharedSums[index % 64] + sharedSums[index % 64 + offset];
+    if (workgroup_id == 0){
+        let cnt = op_reduce.workgroup_count;
+        //Finnaly Sum of all worker threads:
+        var sum2 = ZERO;
+        for (var i = 0u; i < cnt; i++){
+            sum2 +=  sharedSums2[i];
         }
-        workgroupBarrier();
-    }
-
-    // Write the result to the output buffer
-    if (index % 64 == 0u) {
-        let linear_out_index = linear_index(out_indices, strides);
-        v_dest[linear_out_index] = sharedSums[0];
+        v_dest[output_index] = sum2;
     }
 }
+
+// @compute
+// @workgroup_size(1,1,1)
+// fn reduce_from_buffer3(@builtin(global_invocation_id) global_id: vec3<u32>) {
+
+//     let id = global_id.x; //this is the ith Reduce Operation
+   
+//     // if(id >= op_unary.length){
+//     //     return;
+//     // }
+    
+//     switch(op_reduce.operation){
+//         case 0u{ //sum
+//             var sum = ZERO;
+
+//             // while true{
+//             //     let pos1 = get_index(op_unary.input1_layout, 0);
+//             //     if(!pos1.is_valid){
+//             //         break;
+//             //     }
+//             //     sum += v_input1[pos1.id];
+
+//             // }
+            
+//             // for (var i = 0u; i < 5; i++){ 
+//             //     if((op_reduce.dimensions[i] >> i) & 1) == true{//reduce this dimension
+                    
+//             //     }
+//             //     sum += v_input1[i];
+//             // }
+
+//             // for (var i = 0u; i < op_reduce.length; i++){
+
+
+//             //     sum += v_input1[i];
+//             // }
+//             v_dest[0] = sum;
+//         }
+//         case 1u{ //min
+//             var sum = v_input1[0];
+//             // for (var i = 0u; i < op_reduce.length; i++){
+//             //     sum = min(sum,v_input1[i]);
+//             // }
+//             v_dest[0] = sum;
+//         }
+//         case 2u{ //max
+//             var sum = v_input1[0];
+//             // for (var i = 0u; i < op_reduce.length; i++){
+//             //     sum = max(sum,v_input1[i]);
+//             // }
+//             v_dest[0] = sum;
+//         }
+//         case 3u{//ArgMin
+//             var sum = v_input1[0];
+//             var index = 0u;
+//             // for (var i = 0u; i < op_reduce.length; i++){
+//             //     if v_input1[i] < sum{
+//             //         sum = v_input1[i];
+//             //         index = i;
+//             //     }
+//             // }
+//             v_dest[0] = f32(index);
+//         }
+//         case 4u{//ArgMax
+//             var sum = v_input1[0];
+//             var index = 0u;
+//             // for (var i = 0u; i < op_reduce.length; i++){
+//             //     if v_input1[i] > sum{
+//             //         sum = v_input1[i];
+//             //         index = i;
+//             //     }
+//             // }
+//             v_dest[0] = f32(index);
+//         }
+//         default{
+
+//         }
+//     }
+// }
+
+// var<workgroup> sharedSums: array<f32, 64>;  
+// @compute @workgroup_size(64)
+// fn reduce_from_buffer_2(@builtin(global_invocation_id) global_id: vec3<u32>) {
+//     let index = global_id.x;
+
+//     // Compute the shape of the output buffer
+//     var shape = array<u32, 5>(op_reduce.input_layout.shape1, op_reduce.input_layout.shape2, op_reduce.input_layout.shape3, op_reduce.input_layout.shape4, op_reduce.input_layout.shape5);
+//     var strides = array<u32, 5>(op_reduce.input_layout.stride1, op_reduce.input_layout.stride2, op_reduce.input_layout.stride3, op_reduce.input_layout.stride4, op_reduce.input_layout.stride5);
+//     var out_shape: array<u32, 5>;
+//     for (var i = 0u; i < 5u; i = i + 1u) {
+//         if ((op_reduce.dimensions & (1u << i)) != 0u) {
+//             out_shape[i] = 1u;
+//         } else {
+//             out_shape[i] = shape[i];
+//         }
+//     }
+
+//     // Compute the indices in the input and output buffers
+//     var indices: array<u32, 5>;
+//     var out_indices: array<u32, 5>;
+//     var rem = index;
+//     for (var i = 0u; i < 5u; i = i + 1u) {
+//         indices[i] = rem % shape[i];
+//         rem = rem / shape[i];
+//         if (out_shape[i] != 1u) {
+//             out_indices[i] = indices[i];
+//         } else {
+//             out_indices[i] = 0u;
+//         }
+//     }
+
+//     // Load the input data into shared memory
+//     let linear_in_index = op_reduce.input_layout.offset + linear_index(indices, strides);
+//     if (index < arrayLength(&v_input1)) {
+//         sharedSums[index % 64] = v_input1[linear_in_index];
+//     } else {
+//         sharedSums[index % 64] = 0.0;
+//     }
+
+//     workgroupBarrier();
+
+//     // Perform reduction within the workgroup
+//     for (var offset = 32u; offset > 0u; offset = offset >> 1u) {
+//         if (index % 64 < offset) {
+//             sharedSums[index % 64] = sharedSums[index % 64] + sharedSums[index % 64 + offset];
+//         }
+//         workgroupBarrier();
+//     }
+
+//     // Write the result to the output buffer
+//     if (index % 64 == 0u) {
+//         let linear_out_index = linear_index(out_indices, strides);
+//         v_dest[linear_out_index] = sharedSums[0];
+//     }
+// }
 
 
 fn bool_to_int(b : bool) -> u32{

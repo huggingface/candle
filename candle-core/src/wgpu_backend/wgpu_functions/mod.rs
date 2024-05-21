@@ -1,9 +1,7 @@
 use std::borrow::Cow;
-
-use wasm_bindgen_futures::js_sys::JSON::parse;
 use wgpu::{util::DeviceExt, BindGroup, Buffer, ComputePipeline, ShaderModule};
 
-use crate::{wgpu_backend::device::WgpuDevice, wrongType, Layout, Shape};
+use crate::{wgpu_backend::device::WgpuDevice, wrongType, Layout};
 
 use super::device::Pipelines;
 
@@ -43,7 +41,16 @@ struct MetaInfoMatMul{
 struct MetaInfoReduce{    
     input_layout : MatrixLayout,
     operation : u32,
-    dimensions : u32,
+    workgroup_count : u32,
+    workgroup_size : u32,
+    length : u32, //Length of Reduction(e.g count of elements to sum per output),
+
+    output_to_start_stride1 : u32, //Stride between each new Output Index
+    
+    output_to_start_shape_stride2 : u32, //After x Outputs use Stride 2 
+    output_to_start_stride2 : u32,
+    
+    stride_reduction : u32, //The Stride to use for elements in Reduction
 }
 
 #[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
@@ -84,12 +91,12 @@ struct MatrixLayout{
     stride4 : u32, 
     stride5 : u32, 
     offset : u32,
-    p : u32, 
+    length : u32, 
 }
 
 impl MatrixLayout {
-    fn new(shape: &[usize;5], stride : &[usize;5], offset: u32) -> Self {
-        Self { shape1 : shape[0] as u32, shape2 : shape[1] as u32, shape3: shape[2] as u32, shape4: shape[3] as u32, shape5: shape[4]as u32, stride1 : stride[0]as u32, stride2: stride[1]as u32, stride3: stride[2]as u32, stride4: stride[3]as u32, stride5: stride[4]as u32, offset, p : 0 }
+    fn new(shape: &[usize;5], stride : &[usize;5], offset: u32, length : u32) -> Self {
+        Self { shape1 : shape[0] as u32, shape2 : shape[1] as u32, shape3: shape[2] as u32, shape4: shape[3] as u32, shape5: shape[4]as u32, stride1 : stride[0]as u32, stride2: stride[1]as u32, stride3: stride[2]as u32, stride4: stride[3]as u32, stride5: stride[4]as u32, offset, length}
     }
     
     fn from_layout(layout : &Layout) -> Self{
@@ -108,7 +115,13 @@ impl MatrixLayout {
 
         let offset = layout.start_offset();
 
-        return Self::new(&dims, &stride_arr, offset as u32)
+        if layout.is_contiguous(){
+            return Self::new(&dims, &stride_arr, offset as u32,layout.shape().elem_count() as u32);
+        }
+       else{
+        return Self::new(&dims, &stride_arr, offset as u32, 0);
+
+       }
 
     }
 }
@@ -420,8 +433,44 @@ pub fn queue_matmul_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_inpu
     return Ok(());
 }
 
-pub fn queue_reduce_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : ReduceOperations, dtype : crate::DType, layout_input1 : &Layout, reduce_dims_bit : u32, dest_shape : Shape) -> crate::Result<()>{
-    let meta = MetaInfoReduce{operation : op as u32, input_layout : MatrixLayout::from_layout(&layout_input1), dimensions : reduce_dims_bit};
+// pub fn queue_reduce_from_buffer_op_old(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : ReduceOperations, dtype : crate::DType, layout_input1 : &Layout, reduce_dims_bit : u32, dest_shape : Shape) -> crate::Result<()>{
+    
+//     let workgroup_count = u32::min(64,(layout_input1.shape().elem_count() / 10 + 1) as u32);
+//     let workgroup_size = layout_input1.shape().elem_count() as u32 / workgroup_count + 1;
+//     let meta = MetaInfoReduce{operation : op as u32, input_layout : MatrixLayout::from_layout(&layout_input1), dimensions : reduce_dims_bit, workgroup_count, workgroup_size,length:layout_input1.shape().elem_count() as u32};
+
+//     let pipeline = dev.get_pipeline(
+//         match dtype{
+//             crate::DType::U32 => Pipelines::ReduceFromBufferU32,
+//             crate::DType::F32 => Pipelines::ReduceFromBuffer,
+//             _ => wrongType!(queue_reduce_from_buffer_op, dtype)
+//         });
+
+//     let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
+//     let workgroup_count = (layout_input1.shape().elem_count() + 63) / 64; // Workgroup size is now 64
+//     enqueue_workgroups(dev, pipeline, bind_group, 1, 1, 1);
+
+//     //enqueue_workgroups(dev, pipeline, bind_group, workgroup_count as u32, 1, 1);
+//     //enqueue_workgroups(dev, pipeline, bind_group, dest_shape.elem_count() as u32, 1, 1);
+//     return Ok(());
+// }
+
+
+pub fn queue_reduce_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : ReduceOperations, dtype : crate::DType, layout_input1 : &Layout, dest_size : u32, output_to_start_shape_stride2 : u32, output_to_start_stride1 : u32, output_to_start_stride2 : u32, reduction_length : u32,stride_reduction : u32) -> crate::Result<()>{
+    
+    let workgroup_count = u32::min(64,(reduction_length / 10 + 1) as u32);
+    let workgroup_size = reduction_length as u32 / workgroup_count + 1;
+    let meta = MetaInfoReduce{
+        operation : op as u32, 
+        input_layout : MatrixLayout::from_layout(&layout_input1), 
+        workgroup_count, 
+        workgroup_size,
+        length: reduction_length as u32, 
+        output_to_start_shape_stride2 : output_to_start_shape_stride2, 
+        output_to_start_stride1: output_to_start_stride1, 
+        output_to_start_stride2: output_to_start_stride2,
+        stride_reduction
+     };
 
     let pipeline = dev.get_pipeline(
         match dtype{
@@ -431,8 +480,11 @@ pub fn queue_reduce_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buff
         });
 
     let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-    let workgroup_count = (layout_input1.shape().elem_count() + 63) / 64; // Workgroup size is now 64
-    enqueue_workgroups(dev, pipeline, bind_group, dest_shape.elem_count() as u32, 1, 1);
+    //let workgroup_count = (layout_input1.shape().elem_count() + 63) / 64; // Workgroup size is now 64
+    enqueue_workgroups(dev, pipeline, bind_group, 1, dest_size, 1);
+
+    //enqueue_workgroups(dev, pipeline, bind_group, workgroup_count as u32, 1, 1);
+    //enqueue_workgroups(dev, pipeline, bind_group, dest_shape.elem_count() as u32, 1, 1);
     return Ok(());
 }
 
@@ -496,6 +548,7 @@ pub fn queue_conv2d(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &B
 
 #[allow(dead_code)]
 pub fn queue_conv2d_transpose(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer, dtype : crate::DType, params : &crate::conv::ParamsConvTranspose2D, input_layout : &crate::Layout) -> crate::Result<()>{
+    let input_stride = input_layout.stride();
     let meta = MetaConv2d{
         b: params.b_size as u32, 
         c_in: params.c_in as u32,  
@@ -507,9 +560,15 @@ pub fn queue_conv2d_transpose(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_i
         stride_c_out: (params.out_w() * params.out_h()) as u32, 
         stride_y_out: params.out_w() as u32, 
         size_y_out: params.out_h() as u32, 
-        stride_batch_input: (params.i_h * params.i_w * params.c_in) as u32, 
-        stride_c_in: (params.i_w * params.i_h) as u32, 
-        stride_y_in: params.i_w  as u32,
+        
+        //stride_batch_input: (params.i_h * params.i_w * params.c_in) as u32, 
+        //stride_c_in: (params.i_w * params.i_h) as u32, 
+        //stride_y_in: params.i_w  as u32,
+
+        stride_batch_input: input_stride[0] as u32, 
+        stride_c_in: input_stride[1] as u32, 
+        stride_y_in: input_stride[2] as u32,
+        
         padding: params.padding as u32, 
         stride_conv: params.stride as u32,  
         dialation_conv: params.dilation as u32,
