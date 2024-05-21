@@ -21,18 +21,19 @@ pub (crate) enum Pipelines{
     BinaryBufferInplace = 2,
     BinaryBufferFromBuffer = 3,
     MatmulBuffer = 4,
-    ReduceFromBuffer = 5,
-    CmpFromBuffer = 6,
-    Conv2D = 7,
-    Conv2DTranspose = 8,
+    Reduce = 5,
+    ReduceIndex = 6,
+    CmpFromBuffer = 7,
+    Conv2D = 8,
+    Conv2DTranspose = 9,
 
-    UnaryInplaceU32 = 9,
-    UnaryFromBufferU32 = 10,
-    BinaryBufferInplaceU32 = 11,
-    BinaryBufferFromBufferU32 = 12,
-    MatmulBufferU32 = 13,
-    ReduceFromBufferU32 = 14,
-    CmpFromBufferU32 = 15,
+    UnaryInplaceU32 = 10,
+    UnaryFromBufferU32 = 11,
+    BinaryBufferInplaceU32 = 12,
+    BinaryBufferFromBufferU32 = 13,
+    MatmulBufferU32 = 14,
+    ReduceFromBufferU32 = 15,
+    CmpFromBufferU32 = 16,
 }
 
 
@@ -65,7 +66,8 @@ impl WgpuDevice{
             Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferInplace), //2
             Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferFromBuffer), //3
             Self::load_pipeline(&device, &shader1, Pipelines::MatmulBuffer), //4
-            Self::load_pipeline(&device, &shader1, Pipelines::ReduceFromBuffer), //5
+            Self::load_pipeline(&device, &shader1, Pipelines::Reduce), //5
+            Self::load_pipeline(&device, &shader1, Pipelines::ReduceIndex), //5
             Self::load_pipeline(&device, &shader1, Pipelines::CmpFromBuffer), //6
             Self::load_pipeline(&device, &shader1, Pipelines::Conv2D),
             Self::load_pipeline(&device, &shader1, Pipelines::Conv2DTranspose),
@@ -95,7 +97,8 @@ impl WgpuDevice{
             Pipelines::BinaryBufferInplace => "binary_buffer_inplace",
             Pipelines::BinaryBufferFromBuffer => "binary_buffer_from_buffer",
             Pipelines::MatmulBuffer => "matmul",
-            Pipelines::ReduceFromBuffer => "reduce_from_buffer",
+            Pipelines::Reduce => "reduce",
+            Pipelines::ReduceIndex => "reduce_index",
             Pipelines::CmpFromBuffer => "cmp_buffer_from_buffer",
             Pipelines::Conv2D => "conv2d",
             Pipelines::Conv2DTranspose => "conv2d_transpose",

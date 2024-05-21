@@ -473,18 +473,19 @@ pub fn queue_reduce_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buff
      };
 
     let pipeline = dev.get_pipeline(
-        match dtype{
-            crate::DType::U32 => Pipelines::ReduceFromBufferU32,
-            crate::DType::F32 => Pipelines::ReduceFromBuffer,
+        match (dtype,op){
+            (crate::DType::U32, _) => Pipelines::ReduceFromBufferU32,
+        
+            (crate::DType::F32, ReduceOperations::Sum) => Pipelines::Reduce,
+            (crate::DType::F32, ReduceOperations::Min) => Pipelines::Reduce,
+            (crate::DType::F32, ReduceOperations::Max) => Pipelines::Reduce,
+            (crate::DType::F32, ReduceOperations::ArgMin) => Pipelines::ReduceIndex,
+            (crate::DType::F32, ReduceOperations::ArgMax) => Pipelines::ReduceIndex,
             _ => wrongType!(queue_reduce_from_buffer_op, dtype)
         });
 
     let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-    //let workgroup_count = (layout_input1.shape().elem_count() + 63) / 64; // Workgroup size is now 64
     enqueue_workgroups(dev, pipeline, bind_group, 1, dest_size, 1);
-
-    //enqueue_workgroups(dev, pipeline, bind_group, workgroup_count as u32, 1, 1);
-    //enqueue_workgroups(dev, pipeline, bind_group, dest_shape.elem_count() as u32, 1, 1);
     return Ok(());
 }
 
