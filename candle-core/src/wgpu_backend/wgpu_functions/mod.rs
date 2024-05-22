@@ -60,6 +60,11 @@ struct MetaConv2d{
     c_in : u32, //Output Channel, we are using workgroups for all c_out, x, y pairs
     kernel_x : u32,
     kernel_y : u32,
+    kernel_x_stride : u32,
+    kernel_y_stride : u32,
+    kernel_c_stride : u32,
+    kernel_b_stride : u32,
+    kernel_offset : u32,
     size_in_x: u32,
     size_in_y : u32,
     stride_batch_out : u32,
@@ -70,6 +75,7 @@ struct MetaConv2d{
     stride_batch_input : u32,
     stride_c_in : u32,
     stride_y_in : u32,
+    stride_x_in : u32,
     padding : u32,
     stride_conv : u32,
     dialation_conv : u32,
@@ -129,22 +135,25 @@ impl MatrixLayout {
 
 
 #[derive(Copy, Clone)]
-#[allow(dead_code)]
+//#[allow(dead_code)]
 pub enum UnaryOperation{
     SetZero = 0,
     SetOne = 1,
     IncOne = 2,
     DecOne= 3,
-    Abs= 4,
-    Acos= 5,
-    Acosh= 6,
-    Asin= 7,
-    Asinh= 8,
-    Atan= 9,
-    Atanh= 10,
-    Ceil= 11,
-    Cos=12,
-    Cosh=13,
+    Identity= 4,
+    Square= 5,
+    Affine=6,
+    Abs= 7,
+    Acos= 8,
+    Acosh= 9,
+    Asin= 10,
+    Asinh= 11,
+    Atan= 12,
+    Atanh= 13,
+    Ceil= 14,
+    Cos=15,
+    Cosh=16,
     Deg=17,
     Exp=21,
     Floor=22,
@@ -167,15 +176,14 @@ pub enum UnaryOperation{
     LeakyRelu= 40,
     SiLu= 41,
     Gassian= 42,
-    Identity= 43,
-    Square= 44,
+   
     Neg= 45,
     Inverse= 46,
     RandNormal=47,
     RandUniform=48,
     Gelu=49,
     Round=50,
-    Affine=51,
+    
     Elu=52,
     AddScalar=101,
     MultScalar=102,
@@ -433,29 +441,6 @@ pub fn queue_matmul_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_inpu
     return Ok(());
 }
 
-// pub fn queue_reduce_from_buffer_op_old(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : ReduceOperations, dtype : crate::DType, layout_input1 : &Layout, reduce_dims_bit : u32, dest_shape : Shape) -> crate::Result<()>{
-    
-//     let workgroup_count = u32::min(64,(layout_input1.shape().elem_count() / 10 + 1) as u32);
-//     let workgroup_size = layout_input1.shape().elem_count() as u32 / workgroup_count + 1;
-//     let meta = MetaInfoReduce{operation : op as u32, input_layout : MatrixLayout::from_layout(&layout_input1), dimensions : reduce_dims_bit, workgroup_count, workgroup_size,length:layout_input1.shape().elem_count() as u32};
-
-//     let pipeline = dev.get_pipeline(
-//         match dtype{
-//             crate::DType::U32 => Pipelines::ReduceFromBufferU32,
-//             crate::DType::F32 => Pipelines::ReduceFromBuffer,
-//             _ => wrongType!(queue_reduce_from_buffer_op, dtype)
-//         });
-
-//     let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-//     let workgroup_count = (layout_input1.shape().elem_count() + 63) / 64; // Workgroup size is now 64
-//     enqueue_workgroups(dev, pipeline, bind_group, 1, 1, 1);
-
-//     //enqueue_workgroups(dev, pipeline, bind_group, workgroup_count as u32, 1, 1);
-//     //enqueue_workgroups(dev, pipeline, bind_group, dest_shape.elem_count() as u32, 1, 1);
-//     return Ok(());
-// }
-
-
 pub fn queue_reduce_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : ReduceOperations, dtype : crate::DType, layout_input1 : &Layout, dest_size : u32, output_to_start_shape_stride2 : u32, output_to_start_stride1 : u32, output_to_start_stride2 : u32, reduction_length : u32,stride_reduction : u32) -> crate::Result<()>{
     
     let workgroup_count = u32::min(64,(reduction_length / 10 + 1) as u32);
@@ -474,7 +459,11 @@ pub fn queue_reduce_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buff
 
     let pipeline = dev.get_pipeline(
         match (dtype,op){
-            (crate::DType::U32, _) => Pipelines::ReduceFromBufferU32,
+            (crate::DType::U32, ReduceOperations::Sum) => Pipelines::ReduceU32,
+            (crate::DType::U32, ReduceOperations::Min) => Pipelines::ReduceU32,
+            (crate::DType::U32, ReduceOperations::Max) => Pipelines::ReduceU32,
+            (crate::DType::U32, ReduceOperations::ArgMin) => Pipelines::ReduceIndexU32,
+            (crate::DType::U32, ReduceOperations::ArgMax) => Pipelines::ReduceIndexU32,
         
             (crate::DType::F32, ReduceOperations::Sum) => Pipelines::Reduce,
             (crate::DType::F32, ReduceOperations::Min) => Pipelines::Reduce,
@@ -513,7 +502,9 @@ pub fn queue_cmp_buffer_from_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, bu
 
 
 #[allow(dead_code)]
-pub fn queue_conv2d(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer, dtype : crate::DType, params : &crate::conv::ParamsConv2D, input_layout : &crate::Layout) -> crate::Result<()>{
+pub fn queue_conv2d(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer, dtype : crate::DType, params : &crate::conv::ParamsConv2D, input_layout : &crate::Layout, kernel_layout : &crate::Layout) -> crate::Result<()>{
+    let input_stride = input_layout.stride();
+    let kernel_stride = kernel_layout.stride();
     let meta = MetaConv2d{
         b: params.b_size as u32, 
         c_in: params.c_in as u32,  
@@ -525,9 +516,22 @@ pub fn queue_conv2d(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &B
         stride_c_out: (params.out_w() * params.out_h()) as u32, 
         stride_y_out: params.out_w() as u32, 
         size_y_out: params.out_h() as u32, 
-        stride_batch_input: (params.i_h * params.i_w * params.c_in) as u32, 
-        stride_c_in: (params.i_w * params.i_h) as u32, 
-        stride_y_in: params.i_w  as u32,
+        
+        stride_batch_input: input_stride[0] as u32, 
+        stride_c_in: input_stride[1] as u32, 
+        stride_y_in: input_stride[2] as u32,
+        stride_x_in: input_stride[3] as u32,
+
+        kernel_b_stride : kernel_stride[0] as u32,
+        kernel_c_stride : kernel_stride[1] as u32,
+        kernel_y_stride : kernel_stride[2] as u32,
+        kernel_x_stride : kernel_stride[3] as u32,
+        kernel_offset: kernel_layout.start_offset() as u32,
+
+        // stride_batch_input: (params.i_h * params.i_w * params.c_in) as u32, 
+        // stride_c_in: (params.i_w * params.i_h) as u32, 
+        // stride_y_in: params.i_w  as u32,
+
         padding: params.padding as u32, 
         stride_conv: params.stride as u32,  
         dialation_conv: params.dilation as u32,
@@ -536,7 +540,7 @@ pub fn queue_conv2d(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &B
     
     let pipeline = dev.get_pipeline(
         match dtype{
-            //crate::DType::U32 => Pipelines::Conv2D,
+            crate::DType::U32 => Pipelines::Conv2DU32,
             crate::DType::F32 => Pipelines::Conv2D,
             _ => wrongType!(queue_binary_buffer_from_buffer, dtype)
         });
@@ -548,8 +552,9 @@ pub fn queue_conv2d(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &B
 }
 
 #[allow(dead_code)]
-pub fn queue_conv2d_transpose(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer, dtype : crate::DType, params : &crate::conv::ParamsConvTranspose2D, input_layout : &crate::Layout) -> crate::Result<()>{
+pub fn queue_conv2d_transpose(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer, dtype : crate::DType, params : &crate::conv::ParamsConvTranspose2D, input_layout : &crate::Layout, kernel_layout : &crate::Layout) -> crate::Result<()>{
     let input_stride = input_layout.stride();
+    let kernel_stride = kernel_layout.stride();
     let meta = MetaConv2d{
         b: params.b_size as u32, 
         c_in: params.c_in as u32,  
@@ -569,7 +574,19 @@ pub fn queue_conv2d_transpose(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_i
         stride_batch_input: input_stride[0] as u32, 
         stride_c_in: input_stride[1] as u32, 
         stride_y_in: input_stride[2] as u32,
+        stride_x_in: input_stride[3] as u32,
+
+        //kernel_b_stride : kernel_stride[0] as u32,
+        //kernel_c_stride : kernel_stride[1] as u32,
+        //kernel_y_stride : kernel_stride[2] as u32,
+        //kernel_x_stride : kernel_stride[3] as u32,
         
+        kernel_c_stride : (params.k_w * params.k_h) as u32,
+        kernel_y_stride : params.k_w as u32,
+        kernel_b_stride : (params.k_w * params.k_h * params.c_in) as u32,
+        kernel_x_stride : 1,
+        kernel_offset: kernel_layout.start_offset() as u32,
+
         padding: params.padding as u32, 
         stride_conv: params.stride as u32,  
         dialation_conv: params.dilation as u32,
@@ -579,7 +596,7 @@ pub fn queue_conv2d_transpose(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_i
 
     let pipeline = dev.get_pipeline(
         match dtype{
-            //crate::DType::U32 => Pipelines::Conv2D,
+            crate::DType::U32 => Pipelines::Conv2DTransposeU32,
             crate::DType::F32 => Pipelines::Conv2DTranspose,
             _ => wrongType!(queue_binary_buffer_from_buffer, dtype)
         });

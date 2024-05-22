@@ -41,6 +41,11 @@ struct MetaConv2d{
     c_in : u32, //Output Channel, we are using workgroups for all c_out, x, y pairs
     kernel_x : u32,
     kernel_y : u32,
+    kernel_x_stride : u32,
+    kernel_y_stride : u32,
+    kernel_c_stride : u32,
+    kernel_b_stride : u32,
+    kernel_offset : u32,
     size_in_x: u32,
     size_in_y : u32,
     stride_batch_out : u32,
@@ -51,6 +56,7 @@ struct MetaConv2d{
     stride_batch_input : u32,
     stride_c_in : u32,
     stride_y_in : u32,
+    stride_x_in : u32,
     padding : u32,
     stride_conv : u32,
     dialation_conv : u32,
@@ -108,6 +114,9 @@ var<storage> v_input1: array<f32>;
 @group(0) @binding(3)
 var<storage> v_input2: array<f32>;
 
+var<workgroup> sharedSums: array<f32, 64>;  //for reduction
+var<workgroup> sharedIndex: array<u32, 64>; 
+
 fn set_output_u8(m : u32, v1 : u32, v2 : u32, v3 : u32, v4 : u32){
     let value = ((v1 & 0xFF) << 12) | ((v2 & 0xFF) << 8) | ((v3 & 0xFF) << 4) | (v4 & 0xFF);
     v_dest_u32[m] = value;
@@ -121,7 +130,6 @@ fn get_output_u8(m : u32) -> array<u32,4>{
     let v1 = (value >> 12) & 0xFF;
     return array(v1,v2,v3,v4);
 }
-
 
 
 struct MatrixIndex{
@@ -195,8 +203,7 @@ const SQRT_TWO_OVER_PI_F32: f32 = 0.79788456080286535587989211986876373;
 
 //all Unary Operations(No Input)
 fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
-
-    switch operation {
+switch operation {
         case 0u{ // set 0
             v_dest[id] = ZERO;
         }
@@ -209,34 +216,44 @@ fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
         case 3u{ 
             v_dest[id] -= ONE;
         }
-        case 4u{  
+        case 4u{ //Identity
+            v_dest[id] = x;
+        }
+        case 5u{ //square
+            v_dest[id] = x * x;
+        }
+        case 6u{//Affine
+            v_dest[id] = x * scalar1 + scalar2;
+        }
+
+        case 7u{  
             v_dest[id] = abs(x);
         }
-        case 5u{ 
+        case 8u{ 
             v_dest[id] = acos(x); 
         }
-        case 6u{ 
+        case 9u{ 
             v_dest[id] = acosh(x); 
         }
-        case 7u{ 
+        case 10u{ 
             v_dest[id] = asin(x); 
         }
-        case 8u{ 
+        case 11u{ 
             v_dest[id] = asinh(x); 
         }
-        case 9u{ 
+        case 12u{ 
             v_dest[id] = atan(x) ;
         }
-        case 10u{ 
+        case 13u{ 
             v_dest[id] = atanh(x) ;
         }
-        case 11u{ 
+        case 14u{ 
             v_dest[id] = ceil(x) ;
         }
-        case 12u{ 
+        case 15u{ 
             v_dest[id] = cos(x); 
         }
-        case 13u{ 
+        case 16u{ 
             v_dest[id] = cosh(x) ;
         }
         case 17u{ 
@@ -302,12 +319,6 @@ fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
         case 42u{ //Gaussian
             v_dest[id] = exp(-(x * x));
         }
-        case 43u{ //Identity
-            v_dest[id] = x;
-        }
-        case 44u{ //square
-            v_dest[id] = x * x;
-        }
         case 45u{ 
             v_dest[id] = -x;
         }
@@ -326,9 +337,6 @@ fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
         }
         case 50u{
             v_dest[id] = round(x);
-        }
-        case 51u{//Affine
-            v_dest[id] = x * scalar1 + scalar2;
         }
         case 52u{ //elu
             if x > 0 {
@@ -365,30 +373,6 @@ fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
     }
 }
 
-@compute
-@workgroup_size(64,1,1)
-fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
-    let pos1 = get_index(op_unary.input1_layout, id);
-    if(pos1.is_valid){
-        let x = v_dest[pos1.id];
-        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
-    }
-}
-
-
-@compute
-@workgroup_size(64,1,1)
-fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
-    let pos1 = get_index(op_unary.input1_layout, id);
-    if(pos1.is_valid){
-        let x = v_input1[pos1.id];
-        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
-    }
-}
-
-
 
 fn set_binary(operation : u32, id : u32, x : f32, y : f32){
     switch(operation){
@@ -422,6 +406,27 @@ fn set_binary(operation : u32, id : u32, x : f32, y : f32){
     }
 }
 
+@compute
+@workgroup_size(64,1,1)
+fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_dest[pos1.id];
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
+    }
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_input1[pos1.id];
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
+    }
+}
 
 @compute
 @workgroup_size(64,1,1)
@@ -492,7 +497,7 @@ fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
     v_dest[b * output_size_of_one_batch + y * op_matmul.k + x] = sum;
 }
 
-var<workgroup> sharedSums: array<f32, 64>; 
+
 @compute
 @workgroup_size(64,1,1)
 fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -582,8 +587,6 @@ fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 }
 
-
-var<workgroup> sharedIndex: array<u32, 64>; 
 @compute
 @workgroup_size(64,1,1)
 fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -745,17 +748,19 @@ fn conv2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let kernel_c_stride = kernel_size_x * kernel_size_y;
     let kernel_y_stride = kernel_size_x;
     let kernel_b_stride = kernel_size_x * kernel_size_y * op_conv2d.c_in;
-
+    
     //TODO: Pass this Valu above
     let size_in_x = op_conv2d.size_in_x;
     let size_in_y =  op_conv2d.size_in_y;
     let stride_batch_out =  op_conv2d.stride_batch_out;
     let stride_c_out =  op_conv2d.stride_c_out;
     let stride_y_out =  op_conv2d.stride_y_out;
-
+    
     let stride_batch_input = op_conv2d.stride_batch_input;
     let stride_c_in =  op_conv2d.stride_c_in;
     let stride_y_in =  op_conv2d.stride_y_in;
+    let stride_x_in  = op_conv2d.stride_x_in;
+
     let padding =  op_conv2d.padding;
     let stride_conv = op_conv2d.stride_conv;
     let dialation_conv = op_conv2d.dialation_conv;
@@ -775,7 +780,7 @@ fn conv2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let x_coord = x_coord_offset + dialation_conv * x_k;
                     let y_coord = y_coord_offset + dialation_conv * y_k;
                     if !(x_coord < 0 || y_coord < 0 || x_coord >= size_in_x || y_coord >= size_in_y){ //Ansonsten wäre dieser Index wegen Padding == null 
-                        let input_pixel = v_input1[image_offset +  y_coord * stride_y_in + x_coord + op_conv2d.offset_input];
+                        let input_pixel = v_input1[image_offset +  y_coord * stride_y_in + x_coord * stride_x_in + op_conv2d.offset_input];
                         sum += v_input2[i_c_out * kernel_b_stride + i_c_in * kernel_c_stride + y_k * kernel_y_stride + x_k] * input_pixel;
                     }
                 } 
@@ -804,11 +809,14 @@ fn conv2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let kernel_size_x = op_conv2d.kernel_x;
     let kernel_size_y = op_conv2d.kernel_y;
-    let kernel_c_stride = kernel_size_x * kernel_size_y;
-    let kernel_y_stride = kernel_size_x;
-    let kernel_b_stride = kernel_size_x * kernel_size_y * op_conv2d.c_in;
-
-    
+    //let kernel_c_stride = kernel_size_x * kernel_size_y;
+    //let kernel_y_stride = kernel_size_x;
+    //let kernel_b_stride = kernel_size_x * kernel_size_y * op_conv2d.c_in;
+    let kernel_c_stride = op_conv2d.kernel_c_stride;
+    let kernel_y_stride = op_conv2d.kernel_y_stride;
+    let kernel_b_stride = op_conv2d.kernel_b_stride;
+    let kernel_x_stride = op_conv2d.kernel_x_stride;
+    let kernel_offset = op_conv2d.kernel_offset;
     let stride_batch_out =  op_conv2d.stride_batch_out;
     let stride_c_out =  op_conv2d.stride_c_out;
     let stride_y_out =  op_conv2d.stride_y_out;
@@ -816,6 +824,8 @@ fn conv2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let stride_batch_input = op_conv2d.stride_batch_input;
     let stride_c_in =  op_conv2d.stride_c_in;
     let stride_y_in =  op_conv2d.stride_y_in;
+    let stride_x_in =  op_conv2d.stride_x_in;
+
     let padding_x = (kernel_size_x - 1);
     let padding_y = (kernel_size_y - 1);
     let stride_conv = op_conv2d.stride_conv;
@@ -836,8 +846,6 @@ fn conv2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let image_offset = i_b * stride_batch_input + i_c_in * stride_c_in ;
             for (var x_k = 0u; x_k < kernel_size_x; x_k = x_k + 1u) { //For each Kernel X
                 for (var y_k = 0u; y_k < kernel_size_y; y_k = y_k + 1u) { //For each Kernel X
-                    let x_input_offset = dialation_conv * x_k;
-                    let y_input_offset = dialation_conv * y_k;
 
                     let x_coord2 = x_coord_offset + i32(dialation_conv * x_k);
                     let y_coord2 = y_coord_offset + i32(dialation_conv * y_k);
@@ -854,8 +862,8 @@ fn conv2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                     if !(x_coord >= size_in_x || y_coord >= size_in_y){ //Ansonsten wäre dieser Index wegen Padding == null 
                         
-                        let input_pixel = v_input1[image_offset +  y_coord * stride_y_in + x_coord + op_conv2d.offset_input];
-                        sum += v_input2[i_c_out * kernel_b_stride + i_c_in * kernel_c_stride + (kernel_size_y - y_k - 1) * kernel_y_stride + (kernel_size_x - x_k - 1)] * input_pixel;
+                        let input_pixel = v_input1[image_offset +  y_coord * stride_y_in + x_coord * stride_x_in + op_conv2d.offset_input];
+                        sum += v_input2[i_c_out * kernel_b_stride + i_c_in * kernel_c_stride + (kernel_size_y - y_k - 1) * kernel_y_stride + (kernel_size_x - x_k - 1) * kernel_x_stride + kernel_offset] * input_pixel;
                     }
                 } 
             }

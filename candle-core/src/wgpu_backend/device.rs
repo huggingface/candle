@@ -32,8 +32,11 @@ pub (crate) enum Pipelines{
     BinaryBufferInplaceU32 = 12,
     BinaryBufferFromBufferU32 = 13,
     MatmulBufferU32 = 14,
-    ReduceFromBufferU32 = 15,
-    CmpFromBufferU32 = 16,
+    ReduceU32 = 15,
+    ReduceIndexU32 = 16,
+    CmpFromBufferU32 = 17,
+    Conv2DU32 = 18,
+    Conv2DTransposeU32 = 19,
 }
 
 
@@ -77,8 +80,11 @@ impl WgpuDevice{
             Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferInplaceU32), //9
             Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferFromBufferU32), //10 
             Self::load_pipeline(&device, &shader2, Pipelines::MatmulBufferU32), //11
-            Self::load_pipeline(&device, &shader2, Pipelines::ReduceFromBufferU32), //12
-            Self::load_pipeline(&device, &shader2, Pipelines::CmpFromBufferU32) //13
+            Self::load_pipeline(&device, &shader2, Pipelines::ReduceU32), //12
+            Self::load_pipeline(&device, &shader2, Pipelines::ReduceIndexU32), //12
+            Self::load_pipeline(&device, &shader2, Pipelines::CmpFromBufferU32), //13
+            Self::load_pipeline(&device, &shader1, Pipelines::Conv2DU32),
+            Self::load_pipeline(&device, &shader1, Pipelines::Conv2DTransposeU32),
             ];
         
         Ok(WgpuDevice {
@@ -108,8 +114,11 @@ impl WgpuDevice{
             Pipelines::BinaryBufferInplaceU32 => "binary_buffer_inplace",
             Pipelines::BinaryBufferFromBufferU32 => "binary_buffer_from_buffer",
             Pipelines::MatmulBufferU32 => "matmul",
-            Pipelines::ReduceFromBufferU32 => "reduce_from_buffer",
-            Pipelines::CmpFromBufferU32 => "cmp_buffer_from_buffer"
+            Pipelines::ReduceU32 => "reduce",
+            Pipelines::ReduceIndexU32 => "reduce_index",
+            Pipelines::CmpFromBufferU32 => "cmp_buffer_from_buffer",
+            Pipelines::Conv2DU32 => "conv2d",
+            Pipelines::Conv2DTransposeU32 => "conv2d_transpose",
         };
         
         return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

@@ -4,6 +4,9 @@ current Problems:
 - not all dtypes are supported: f32, u32 is implemented for most. u8 may be possible. As WebGpu has no standard for f64 or i64 or u8 support for other dtypes is not trivial.
 - Reduce Implementation error: When using ArgMin, ArgMax with non continues reduction dimensions will probably not work. e.g if dim 0 and 2 are reduced. The current implementation will first reduce dim 2, and afterwards dim 0. This approach will not work for ArgMin/ArgMax as after the first reduction the type and source values changed.
 - The current Impl will block with pollster when copying data from webgpu to cpu space(e.g. call to ".to_vecX()"). THIS IS NOT POSSIBLE IN THE BROWSER. When compiling to wasm, one need to copy the data to cpu manuelly using the async method to_device_async().     
+- for all shapes max 5 dimensions are supported
+- Not Implemented: Pool2dMax, Pool2dAvg, Conv1d, Conv1dTransposed, Upsample, Gather, Scatter_add, index_select, index_add, most Custom_nn functions
+- Error in Conv2dTransposed when transformed and diluted?
 
 # candle
 [![discord server](https://dcbadge.vercel.app/api/server/hugging-face-879548962464493619)](https://discord.gg/hugging-face-879548962464493619)

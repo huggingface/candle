@@ -24,8 +24,39 @@ struct MetaInfoMatMul{
 struct MetaInfoReduce{
     input_layout : MatrixLayout,
     operation : u32,
-    dimensions : u32, //Dimensions to Reduce Over(if ith bit is set -> Reduce over ith Dimension maximal 5)
+    workgroup_count : u32,
+    workgroup_size : u32,
+    length : u32, //Length of Reduction(e.g count of elements to sum per output),
+
+    output_to_start_stride1 : u32, //Stride between each new Output Index
+    
+    output_to_start_shape_stride2 : u32, //After x Outputs use Stride 2 
+    output_to_start_stride2 : u32,
+
+    stride_reduction : u32, //The Stride to use for elements in Reduction
 }
+
+struct MetaConv2d{
+    b : u32, //batch_count ("normal" matmul = 1)
+    c_in : u32, //Output Channel, we are using workgroups for all c_out, x, y pairs
+    kernel_x : u32,
+    kernel_y : u32,
+    size_in_x: u32,
+    size_in_y : u32,
+    stride_batch_out : u32,
+    stride_c_out: u32,
+    stride_y_out: u32,
+    size_y_out : u32,
+
+    stride_batch_input : u32,
+    stride_c_in : u32,
+    stride_y_in : u32,
+    padding : u32,
+    stride_conv : u32,
+    dialation_conv : u32,
+    offset_input : u32,
+}
+
 
 //Layout Information
 struct MatrixLayout{
@@ -50,6 +81,7 @@ var<storage, read_write> v_dest: array<u32>;
 @group(0) @binding(0) 
 var<storage, read_write> v_dest_u32: array<u32>; //Output for U8, and U32
 
+
 @group(0) @binding(1)
 var<uniform> op_unary : MetaUnary;
 
@@ -63,13 +95,21 @@ var<uniform> op_matmul : MetaInfoMatMul;
 var<uniform> op_reduce : MetaInfoReduce;
 
 @group(0) @binding(1)
+var<uniform> op_conv2d : MetaConv2d;
+
+
+@group(0) @binding(1)
 var<uniform> op_input_matrix : array<MatrixLayout, 3>;
+
 
 @group(0) @binding(2)
 var<storage> v_input1: array<u32>;
 
 @group(0) @binding(3)
 var<storage> v_input2: array<u32>;
+
+var<workgroup> sharedSums: array<u32, 64>;  //for reduction
+var<workgroup> sharedIndex: array<u32, 64>; 
 
 fn set_output_u8(m : u32, v1 : u32, v2 : u32, v3 : u32, v4 : u32){
     let value = ((v1 & 0xFF) << 12) | ((v2 & 0xFF) << 8) | ((v3 & 0xFF) << 4) | (v4 & 0xFF);
@@ -86,11 +126,13 @@ fn get_output_u8(m : u32) -> array<u32,4>{
 }
 
 
-
 struct MatrixIndex{
     id : u32,
     is_valid : bool
 }
+
+const ZERO : u32 = 0;
+const ONE : u32 = 0;
 
 fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
     if l.length != 0{ //Continues memory:
@@ -100,52 +142,61 @@ fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
         return MatrixIndex(0, false);
     }
     else { //not continues:
-        let length = l.shape1 * l.shape2 * l.shape3 * l.shape4 * l.shape5;
-        if index >= l.length{
-            return MatrixIndex(0, false);
-        }
+        let shapes1 = l.shape5;
+        let shapes2 =  (shapes1 * l.shape4);
+        let shapes3 =  (shapes2 * l.shape3);
+        let shapes4 =  (shapes3 * l.shape2);
+        let shapes5 =  (shapes4 * l.shape1);
        
-        let s1 = index % (length);
-        let s2 = index % (l.shape1 * l.shape2 * l.shape3 * l.shape4);
-        let s3 = index % (l.shape1 * l.shape2 * l.shape3);
-        let s4 = index % (l.shape1 * l.shape2);
-        let s5 = index % (l.shape1);
+        let s1 = (index / shapes4);
+        let s2 = (index / shapes3) % (shapes4 / shapes3);
+        let s3 = (index / shapes2) % (shapes3 / shapes2);
+        let s4 = (index / shapes1) % (shapes2 / shapes1);
+        let s5 = index             % (shapes1);
 
-        let new_index = s1 * l.stride1 + s2 * l.stride2 + s3 * l.stride3 + s4 * l.stride4 + s5 * l.stride5;
+        let new_index = l.offset + s1 * l.stride1 + s2 * l.stride2 + s3 * l.stride3 + s4 * l.stride4 + s5 * l.stride5;
          return MatrixIndex(new_index, true);
     }
 }
 
+
+
+
+fn rand_uniform(value: u32) -> u32 {
+    // Use XORShift algorithm to generate a pseudo-random float
+    // Parameters for XORShift algorithm (adjust as needed)
+    var state: u32 = value ^ 0x5F3759DF; // Initial state, can be any non-zero value
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+
+    // Convert u32 to a float between 0 and 1
+    // Divide by maximum u32 value to get a float in [0, 1)
+    return state;
+}
+
 //all Unary Operations(No Input)
 fn set_unary(operation : u32, id : u32, x : u32, scalar1 : u32, scalar2 : u32){
-
     switch operation {
         case 0u{ // set 0
-            v_dest[id] = 0u;
+            v_dest[id] = ZERO;
         }
         case 1u{ //set 1
-            v_dest[id] = 1u;
+            v_dest[id] = ONE;
         }
-
-        //inplace operators
         case 2u{ 
-            v_dest[id] += 1u;
+            v_dest[id] += ONE;
         }
         case 3u{ 
-            v_dest[id] -= 1u;
+            v_dest[id] -= ONE;
         }
-        case 4u{  
-            v_dest[id] = abs(x);
-        }case 38u{   //Relu
-            v_dest[id] = max(0u, x) ;
-        }
-        case 43u{ //Identity
+        case 4u{ //Identity
             v_dest[id] = x;
         }
-        case 44u{ //square
+        case 5u{ //square
             v_dest[id] = x * x;
         }
-        case 51u{//Affine
+        case 6u{//Affine
             v_dest[id] = x * scalar1 + scalar2;
         }
         case 101u{ //add
@@ -171,30 +222,6 @@ fn set_unary(operation : u32, id : u32, x : u32, scalar1 : u32, scalar2 : u32){
         }
     }
 }
-
-@compute
-@workgroup_size(64,1,1)
-fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
-    let pos1 = get_index(op_unary.input1_layout, id);
-    if(pos1.is_valid){
-        let x = v_dest[pos1.id];
-        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
-    }
-}
-
-
-@compute
-@workgroup_size(64,1,1)
-fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
-    let pos1 = get_index(op_unary.input1_layout, id);
-    if(pos1.is_valid){
-        let x = v_input1[pos1.id];
-        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
-    }
-}
-
 
 
 fn set_binary(operation : u32, id : u32, x : u32, y : u32){
@@ -226,6 +253,29 @@ fn set_binary(operation : u32, id : u32, x : u32, y : u32){
     }
 }
 
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_dest[pos1.id];
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
+    }
+}
+
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_input1[pos1.id];
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
+    }
+}
 
 @compute
 @workgroup_size(64,1,1)
@@ -286,7 +336,7 @@ fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let input2_stride_n = op_matmul.input2.stride4;
     let input2_stride_k = op_matmul.input2.stride5;
 
-    var sum = 0u;
+    var sum = ZERO;
     for (var i = 0u; i < op_matmul.n; i++){
         sum +=  
         v_input1[b * input1_stride_b  + input1_stride_m * y + i * input1_stride_n + input1_offset] 
@@ -297,130 +347,188 @@ fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 
-// @compute
-// @workgroup_size(1,1,1)
-// fn reduce_from_buffer_old() {
-//     // let id = global_id.x;
-//     // if(id >= op_unary.length){
-//     //     return;
-//     // }
+@compute
+@workgroup_size(64,1,1)
+fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let workgroup_id = global_id.x;
+    let output_index = global_id.y;
+    
+    //Start Index of the Elements to Reduce
 
-//     switch(op_reduce.operation){
-//         case 0u{ //sum
-//             var sum = 0u;
-//             for (var i = 0u; i < op_reduce.length; i++){
-//                 sum += v_input1[i];
-//             }
-//             v_dest[0] = sum;
-//         }
-//         case 1u{ //min
-//             var sum = v_input1[0];
-//             for (var i = 0u; i < op_reduce.length; i++){
-//                 sum = min(sum,v_input1[i]);
-//             }
-//             v_dest[0] = sum;
-//         }
-//         case 2u{ //max
-//             var sum = v_input1[0];
-//             for (var i = 0u; i < op_reduce.length; i++){
-//                 sum = max(sum,v_input1[i]);
-//             }
-//             v_dest[0] = sum;
-//         }
-//         case 3u{//ArgMin
-//             var sum = v_input1[0];
-//             var index = 0u;
-//             for (var i = 0u; i < op_reduce.length; i++){
-//                 if v_input1[i] < sum{
-//                     sum = v_input1[i];
-//                     index = i;
-//                 }
-//             }
-//             v_dest[0] = index;
-//         }
-//         case 4u{//ArgMax
-//             var sum = v_input1[0];
-//             var index = 0u;
-//             for (var i = 0u; i < op_reduce.length; i++){
-//                 if v_input1[i] > sum{
-//                     sum = v_input1[i];
-//                     index = i;
-//                 }
-//             }
-//             v_dest[0] = index;
-//         }
-//         default{
+    var start_index = 0u;// = output_index * op_reduce.output_to_start_stride1 + (output_index / op_reduce.output_to_start_shape_stride2) * op_reduce.output_to_start_stride2;
+    if op_reduce.output_to_start_shape_stride2 <= 1
+    {
+        start_index = output_index * op_reduce.output_to_start_stride1;
+    }
+    else{
+        start_index = output_index * op_reduce.output_to_start_stride1 + (output_index / op_reduce.output_to_start_shape_stride2) * op_reduce.output_to_start_stride2;
+    }
+    
+    let length = op_reduce.length; //length of the elements to reduce
 
-//         }
-//     }
-// }
+    //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
+    let start = workgroup_id * op_reduce.workgroup_size;
+    let end = min(length, (workgroup_id + 1) * op_reduce.workgroup_size);
 
+    //Now Reduce from start to end
+    switch(op_reduce.operation){
+        case 0u{ //sum
+            var sum = ZERO;
+            for (var i = start; i < end; i++){
+                let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                sum += v_input1[index];
+            }
+            sharedSums[workgroup_id] = sum;
+        }
+        case 1u{ //min
+            var sum = v_input1[get_index(op_reduce.input_layout, start_index).id];
+            for (var i = start + 1; i < end; i++){
+                let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                sum = min(sum, v_input1[index]);
+            }
+            sharedSums[workgroup_id] = sum;
+        }
+        case 2u{ //max
+            var sum = v_input1[get_index(op_reduce.input_layout, start_index).id];
+            for (var i = start + 1; i < end; i++){
+                let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                sum = max(sum, v_input1[index]);
+            }
+            sharedSums[workgroup_id] = sum;
+        }
+        default{
 
-
-fn linear_index(indices: array<u32, 5>, strides: array<u32, 5>) -> u32 {
-     return indices[0] * strides[0] +
-            indices[1] * strides[1] +
-            indices[2] * strides[2] +
-            indices[3] * strides[3] +
-            indices[4] * strides[4];
-}
-
-   
-var<workgroup> sharedSums: array<u32, 64>;  
-@compute @workgroup_size(64)
-fn reduce_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let index = global_id.x;
-
-    // Compute the shape of the output buffer
-    var shape = array<u32, 5>(op_reduce.input_layout.shape1, op_reduce.input_layout.shape2, op_reduce.input_layout.shape3, op_reduce.input_layout.shape4, op_reduce.input_layout.shape5);
-    var strides = array<u32, 5>(op_reduce.input_layout.stride1, op_reduce.input_layout.stride2, op_reduce.input_layout.stride3, op_reduce.input_layout.stride4, op_reduce.input_layout.stride5);
-    var out_shape: array<u32, 5>;
-    for (var i = 0u; i < 5u; i = i + 1u) {
-        if ((op_reduce.dimensions & (1u << i)) != 0u) {
-            out_shape[i] = 1u;
-        } else {
-            out_shape[i] = shape[i];
         }
     }
-
-    // Compute the indices in the input and output buffers
-    var indices: array<u32, 5>;
-    var out_indices: array<u32, 5>;
-    var rem = index;
-    for (var i = 0u; i < 5u; i = i + 1u) {
-        indices[i] = rem % shape[i];
-        rem = rem / shape[i];
-        if (out_shape[i] != 1u) {
-            out_indices[i] = indices[i];
-        } else {
-            out_indices[i] = 0u;
-        }
-    }
-
-    // Load the input data into shared memory
-    let linear_in_index = op_reduce.input_layout.offset + linear_index(indices, strides);
-    if (index < arrayLength(&v_input1)) {
-        sharedSums[index % 64] = v_input1[linear_in_index];
-    } else {
-        sharedSums[index % 64] = 0u;
-    }
-
+    
     workgroupBarrier();
 
-    // Perform reduction within the workgroup
-    for (var offset = 32u; offset > 0u; offset = offset >> 1u) {
-        if (index % 64 < offset) {
-            sharedSums[index % 64] = sharedSums[index % 64] + sharedSums[index % 64 + offset];
-        }
-        workgroupBarrier();
-    }
+    if (workgroup_id == 0){
+        let cnt = op_reduce.workgroup_count;
+        //Finnaly Sum of all worker threads:
 
-    // Write the result to the output buffer
-    if (index % 64 == 0u) {
-        let linear_out_index = linear_index(out_indices, strides);
-        v_dest[linear_out_index] = sharedSums[0];
+        switch(op_reduce.operation){
+            case 0u{ //sum
+                var sum = ZERO;
+                for (var i = 0u; i < cnt; i++){
+                    sum +=  sharedSums[i];
+                }
+                v_dest[output_index] = sum;
+            }
+            case 1u{ //min
+                var sum = sharedSums[0];
+                for (var i = 0u; i < cnt; i++){
+                    sum = min(sum, sharedSums[i]);
+                }
+                v_dest[output_index] = sum;
+            }
+            case 2u{ //max
+                var sum = sharedSums[0];
+                for (var i = 0u; i < cnt; i++){
+                    sum = max(sum, sharedSums[i]);
+                }
+                v_dest[output_index] = sum;
+            }
+            default{
+
+            }
+        }
     }
 }
+
+@compute
+@workgroup_size(64,1,1)
+fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let workgroup_id = global_id.x;
+    let output_index = global_id.y;
+    
+    //Start Index of the Elements to Reduce
+
+    var start_index = 0u;// = output_index * op_reduce.output_to_start_stride1 + (output_index / op_reduce.output_to_start_shape_stride2) * op_reduce.output_to_start_stride2;
+    if op_reduce.output_to_start_shape_stride2 <= 1
+    {
+        start_index = output_index * op_reduce.output_to_start_stride1;
+    }
+    else{
+        start_index = output_index * op_reduce.output_to_start_stride1 + (output_index / op_reduce.output_to_start_shape_stride2) * op_reduce.output_to_start_stride2;
+    }
+    
+    let length = op_reduce.length; //length of the elements to reduce
+
+    //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
+    let start = workgroup_id * op_reduce.workgroup_size;
+    let end = min(length, (workgroup_id + 1) * op_reduce.workgroup_size);
+
+    //Now Reduce from start to end
+    switch(op_reduce.operation){
+        case 3u{//ArgMin
+            var sum = v_input1[get_index(op_reduce.input_layout, start_index).id];
+            var arg_index = 0u;
+            for (var i = start + 1; i < end; i++){
+                let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                 if v_input1[index] < sum{
+                    sum = v_input1[index];
+                    arg_index = i;
+                }
+            }
+            sharedSums[workgroup_id] = sum;    
+            sharedIndex[workgroup_id] = arg_index;
+        }
+        case 4u{//ArgMax
+            var sum = v_input1[get_index(op_reduce.input_layout, start_index).id];
+            var arg_index = 0u;
+            for (var i = start + 1; i < end; i++){
+                let index = get_index(op_reduce.input_layout, start_index + i * op_reduce.stride_reduction).id;
+                 if v_input1[index] > sum{
+                    sum = v_input1[index];
+                    arg_index = i;
+                }
+            }
+            sharedSums[workgroup_id] = sum;    
+            sharedIndex[workgroup_id] = arg_index;
+        }
+        default{
+
+        }
+    }
+    
+    workgroupBarrier();
+
+    if (workgroup_id == 0){
+        let cnt = op_reduce.workgroup_count;
+        //Finnaly Sum of all worker threads:
+        
+
+        switch(op_reduce.operation){
+            case 3u{//ArgMin
+                var sum = sharedSums[0];
+                var index = 0u;
+                for (var i = 0u; i < cnt; i++){
+                    if sharedSums[i] < sum{
+                        sum = sharedSums[i];
+                        index = i;
+                    }
+                }
+                v_dest_u32[output_index] = sharedIndex[index];
+            }
+            case 4u{//ArgMax
+                var sum = sharedSums[0];
+                var index = 0u;
+                for (var i = 0u; i < cnt; i++){
+                    if sharedSums[i] > sum{
+                        sum = sharedSums[i];
+                        index = i;
+                    }
+                }
+                v_dest_u32[output_index] = sharedIndex[index];
+            }
+            default{
+
+            }
+        }
+    }
+}
+
 
 fn bool_to_int(b : bool) -> u32{
     if b{
@@ -464,5 +572,146 @@ fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
         default:{
             
         }
+    }
+}
+
+
+//(N, C_IN, H, W) CONV (C_IN, K_H, K_W) = (N,C_OUT, H_OUT, W_OUT)
+//bzgl CONV: Padding x, Padding y, Stride x, stride y, dilation, groups?
+@compute
+@workgroup_size(8,8,1)
+fn conv2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let i_out_x = global_id.x;
+    let i_out_y = global_id.y;
+    let i_c_out = global_id.z;
+
+    let size_y_out = op_conv2d.size_y_out;
+    let size_x_out = op_conv2d.stride_y_out;
+
+    if i_out_x >= size_x_out || i_out_y >= size_y_out {
+        return;
+    }
+
+    let kernel_size_x = op_conv2d.kernel_x;
+    let kernel_size_y = op_conv2d.kernel_y;
+    let kernel_c_stride = kernel_size_x * kernel_size_y;
+    let kernel_y_stride = kernel_size_x;
+    let kernel_b_stride = kernel_size_x * kernel_size_y * op_conv2d.c_in;
+
+    //TODO: Pass this Valu above
+    let size_in_x = op_conv2d.size_in_x;
+    let size_in_y =  op_conv2d.size_in_y;
+    let stride_batch_out =  op_conv2d.stride_batch_out;
+    let stride_c_out =  op_conv2d.stride_c_out;
+    let stride_y_out =  op_conv2d.stride_y_out;
+
+    let stride_batch_input = op_conv2d.stride_batch_input;
+    let stride_c_in =  op_conv2d.stride_c_in;
+    let stride_y_in =  op_conv2d.stride_y_in;
+    let padding =  op_conv2d.padding;
+    let stride_conv = op_conv2d.stride_conv;
+    let dialation_conv = op_conv2d.dialation_conv;
+
+    //Calculate the top Left Index of the x/y coord 
+
+    let x_coord_offset = i_out_x * stride_conv - padding; //TODO: CALCULATE WITH I32, we need negative numbers for x_coord_offset
+    let y_coord_offset = i_out_y * stride_conv - padding;
+  
+
+    for (var i_b = 0u; i_b < op_conv2d.b; i_b = i_b + 1u) { //For each Batch:
+        var sum = ZERO;
+        for (var i_c_in = 0u; i_c_in < op_conv2d.c_in; i_c_in = i_c_in + 1u) { //For each Input Channel:
+            let image_offset = i_b * stride_batch_input + i_c_in * stride_c_in ;
+            for (var x_k = 0u; x_k < kernel_size_x; x_k = x_k + 1u) { //For each Kernel X
+                for (var y_k = 0u; y_k < kernel_size_y; y_k = y_k + 1u) { //For each Kernel X
+                    let x_coord = x_coord_offset + dialation_conv * x_k;
+                    let y_coord = y_coord_offset + dialation_conv * y_k;
+                    if !(x_coord < 0 || y_coord < 0 || x_coord >= size_in_x || y_coord >= size_in_y){ //Ansonsten wäre dieser Index wegen Padding == null 
+                        let input_pixel = v_input1[image_offset +  y_coord * stride_y_in + x_coord + op_conv2d.offset_input];
+                        sum += v_input2[i_c_out * kernel_b_stride + i_c_in * kernel_c_stride + y_k * kernel_y_stride + x_k] * input_pixel;
+                    }
+                } 
+            }
+        }
+        v_dest[i_b * stride_batch_out + i_c_out * stride_c_out + stride_y_out * i_out_y + i_out_x] = sum;
+    }
+}
+
+
+//(N, C_IN, H, W) CONV (C_IN, K_H, K_W) = (N,C_OUT, H_OUT, W_OUT)
+//bzgl CONV: Padding x, Padding y, Stride x, stride y, dilation, groups?
+@compute
+@workgroup_size(8,8,1)
+fn conv2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let i_out_x = global_id.x + op_conv2d.padding;
+    let i_out_y = global_id.y + op_conv2d.padding; //We go through each output 
+    let i_c_out = global_id.z; 
+
+    let size_y_out = op_conv2d.size_y_out;
+    let size_x_out = op_conv2d.stride_y_out;
+
+    if  global_id.x  >= size_x_out ||  global_id.y >= size_y_out {
+        return;
+    }
+
+    let kernel_size_x = op_conv2d.kernel_x;
+    let kernel_size_y = op_conv2d.kernel_y;
+    let kernel_c_stride = kernel_size_x * kernel_size_y;
+    let kernel_y_stride = kernel_size_x;
+    let kernel_b_stride = kernel_size_x * kernel_size_y * op_conv2d.c_in;
+
+    
+    let stride_batch_out =  op_conv2d.stride_batch_out;
+    let stride_c_out =  op_conv2d.stride_c_out;
+    let stride_y_out =  op_conv2d.stride_y_out;
+
+    let stride_batch_input = op_conv2d.stride_batch_input;
+    let stride_c_in =  op_conv2d.stride_c_in;
+    let stride_y_in =  op_conv2d.stride_y_in;
+    let padding_x = (kernel_size_x - 1);
+    let padding_y = (kernel_size_y - 1);
+    let stride_conv = op_conv2d.stride_conv;
+    let dialation_conv = op_conv2d.dialation_conv;
+    let input_dialation = stride_conv;
+    let size_in_x = op_conv2d.size_in_x;
+    let size_in_y =  op_conv2d.size_in_y;
+
+    //Calculate the top Left Index of the x/y coord 
+
+    let x_coord_offset = i32(i_out_x) - i32(padding_x); //TODO: CALCULATE WITH I32, we need negative numbers for x_coord_offset
+    let y_coord_offset = i32(i_out_y) - i32(padding_y);
+  
+
+    for (var i_b = 0u; i_b < op_conv2d.b; i_b = i_b + 1u) { //For each Batch:
+        var sum = ZERO;
+        for (var i_c_in = 0u; i_c_in < op_conv2d.c_in; i_c_in = i_c_in + 1u) { //For each Input Channel:
+            let image_offset = i_b * stride_batch_input + i_c_in * stride_c_in ;
+            for (var x_k = 0u; x_k < kernel_size_x; x_k = x_k + 1u) { //For each Kernel X
+                for (var y_k = 0u; y_k < kernel_size_y; y_k = y_k + 1u) { //For each Kernel X
+                    let x_input_offset = dialation_conv * x_k;
+                    let y_input_offset = dialation_conv * y_k;
+
+                    let x_coord2 = x_coord_offset + i32(dialation_conv * x_k);
+                    let y_coord2 = y_coord_offset + i32(dialation_conv * y_k);
+                    if (x_coord2 < 0 || y_coord2 < 0){ //Ansonsten wäre dieser Index wegen Padding == null 
+                        continue;
+                    }
+
+                    if (u32(x_coord2) % input_dialation) != 0 || ((u32(y_coord2) % input_dialation) != 0){
+                        continue;
+                    }
+
+                    let x_coord = u32(x_coord2) / input_dialation;
+                    let y_coord = u32(y_coord2) / input_dialation;
+
+                    if !(x_coord >= size_in_x || y_coord >= size_in_y){ //Ansonsten wäre dieser Index wegen Padding == null 
+                        
+                        let input_pixel = v_input1[image_offset +  y_coord * stride_y_in + x_coord + op_conv2d.offset_input];
+                        sum += v_input2[i_c_out * kernel_b_stride + i_c_in * kernel_c_stride + (kernel_size_y - y_k - 1) * kernel_y_stride + (kernel_size_x - x_k - 1)] * input_pixel;
+                    }
+                } 
+            }
+        }
+        v_dest[i_b * stride_batch_out + i_c_out * stride_c_out + stride_y_out *  global_id.y +  global_id.x] = sum;
     }
 }

@@ -343,11 +343,11 @@ impl crate::backend::BackendStorage for WgpuStorage{
         &self,
         l: &crate::Layout,
         kernel: &Self,
-        _kernel_l: &crate::Layout,
+        kernel_l: &crate::Layout,
         params: &crate::conv::ParamsConv2D,
     ) -> crate::Result<Self> {
         let buffer_dest = wgpu_functions::create_buffer(self.device(), (params.b_size * params.c_out * params.out_h() * params.out_w()) * 4);
-        wgpu_functions::queue_conv2d(self.device(), &buffer_dest, &self.buffer, &kernel.buffer, self.dtype,params,l)?;
+        wgpu_functions::queue_conv2d(self.device(), &buffer_dest, &self.buffer, &kernel.buffer, self.dtype,params,l, kernel_l)?;
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone(),self.dtype));
     }
 
@@ -355,20 +355,20 @@ impl crate::backend::BackendStorage for WgpuStorage{
         &self,
         l: &crate::Layout,
         kernel: &Self,
-        _kernel_l: &crate::Layout,
+        kernel_l: &crate::Layout,
         params: &crate::conv::ParamsConvTranspose2D,
     ) -> crate::Result<Self> {
         
         let buffer_dest = wgpu_functions::create_buffer(self.device(), (params.b_size * params.c_out * params.out_h() * params.out_w()) * 4);
-        wgpu_functions::queue_conv2d_transpose(self.device(), &buffer_dest, &self.buffer, &kernel.buffer, self.dtype,params,l)?;
+        wgpu_functions::queue_conv2d_transpose(self.device(), &buffer_dest, &self.buffer, &kernel.buffer, self.dtype,params,l, kernel_l)?;
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone(),self.dtype));
     }
 
-    fn avg_pool2d(&self, _: &crate::Layout, _: (usize, usize), _: (usize, usize)) -> crate::Result<Self> {
+    fn avg_pool2d(&self, _layout: &crate::Layout, _kernel_size: (usize, usize), _stride: (usize, usize)) -> crate::Result<Self> {
         notImplemented!(avg_pool2d)
     }
 
-    fn max_pool2d(&self, _: &crate::Layout, _: (usize, usize), _: (usize, usize)) -> crate::Result<Self> {
+    fn max_pool2d(&self, _layout: &crate::Layout, _kernel_size: (usize, usize), _stride: (usize, usize)) -> crate::Result<Self> {
         notImplemented!(max_pool2d)
     }
 
