@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::backend::BackendStorage;
 use crate::{notImplemented, wrongType, Layout};
@@ -12,7 +12,8 @@ pub struct  WgpuDevice {
     pub device : Arc<wgpu::Device>, 
     pub queue : Arc<wgpu::Queue>,
     pub pipelines : Arc<Vec<wgpu::ComputePipeline>>,
-    pub shader : Arc<wgpu::ShaderModule>
+    pub shader : Arc<wgpu::ShaderModule>,
+    pub rand_state : Arc<RwLock<rand::rngs::ThreadRng>>
 }
 
 pub (crate) enum Pipelines{
@@ -91,7 +92,8 @@ impl WgpuDevice{
             device: Arc::new(device),
             queue: Arc::new(queue),
             pipelines : Arc::new(pipelines),
-            shader : Arc::new(shader1)
+            shader : Arc::new(shader1),
+            rand_state: Arc::new(RwLock::new(rand::thread_rng()))
         })
     }
 
@@ -153,13 +155,18 @@ impl crate::backend::BackendDevice for WgpuDevice{
 
     fn zeros_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
         let buffer = create_buffer(self, shape.elem_count() * 4);
-        wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::SetZero, 0.0, 0.0,dtype, Layout::contiguous(shape))?;
+        if shape.elem_count() > 0{
+            wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::SetZero, 0.0, 0.0,dtype, Layout::contiguous(shape))?;
+        }
+        
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 
     fn ones_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
         let buffer = create_buffer(self, shape.elem_count() * 4);
-        wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::SetOne, 0.0, 0.0,dtype,Layout::contiguous(shape))?;
+        if shape.elem_count() > 0{
+            wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::SetOne, 0.0, 0.0,dtype,Layout::contiguous(shape))?;
+        }
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 

@@ -3,6 +3,7 @@ struct MetaUnary{
     operation : u32,
     scalar1 : f32, //optionally scalar value
     scalar2 : f32,
+    seed : u32,
 }
 
 struct MetaBinary{
@@ -138,7 +139,7 @@ struct MatrixIndex{
 }
 
 const ZERO : f32 = 0;
-const ONE : f32 = 0;
+const ONE : f32 = 1;
 
 fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
     if l.length != 0{ //Continues memory:
@@ -171,7 +172,7 @@ fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
 fn rand_uniform(value: u32) -> f32 {
     // Use XORShift algorithm to generate a pseudo-random float
     // Parameters for XORShift algorithm (adjust as needed)
-    var state: u32 = value ^ 0x5F3759DF; // Initial state, can be any non-zero value
+    var state: u32 = value ^ 0x5F3759DF ^ op_unary.seed; // Initial state, can be any non-zero value
     state ^= state << 13;
     state ^= state >> 17;
     state ^= state << 5;
@@ -690,40 +691,47 @@ fn bool_to_int(b : bool) -> u32{
 
 @compute
 @workgroup_size(64,1,1)
-fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
-    let pos1 = get_index(op_binary.input1_layout, id);
-    let pos2 = get_index(op_binary.input2_layout, id);
-    if(!pos1.is_valid){
-        return;
-    }
-    
-    let x = v_input1[pos1.id];
-    let y = v_input2[pos2.id];
+fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) { //One Shader needs to handle 4 comps
+    let id = global_id.x * 4;
+    var output_value = 0u;
 
-    switch(op_binary.operation){
-        case 0u: { //eq
-            v_dest_u32[id] = bool_to_int(x == y);
+    for (var i = 0u; i < 4; i++){
+        let pos1 = get_index(op_binary.input1_layout, id);
+        let pos2 = get_index(op_binary.input2_layout, id);
+        
+        if(!pos1.is_valid){
+            continue;
         }
-        case 1u: {//ne
-            v_dest_u32[id] = bool_to_int(x != y);
-        }
-        case 2u: {//lt
-            v_dest_u32[id] = bool_to_int(x < y);
-        }
-        case 3u: {//LE
-            v_dest_u32[id] = bool_to_int(x <= y);
-        }
-        case 4u: {//GT
-            v_dest_u32[id] = bool_to_int(x > y);
-        }
-        case 5u: {//GE
-            v_dest_u32[id] = bool_to_int(x >= y);
-        }
-        default:{
-            
+
+        let x = v_input1[pos1.id];
+        let y = v_input2[pos2.id];
+
+        switch(op_binary.operation){
+            case 0u: { //eq
+                output_value |= bool_to_int(x == y) << (i * 4);
+            }
+            case 1u: {//ne
+                output_value |=  bool_to_int(x != y) << (i * 4);
+            }
+            case 2u: {//lt
+                output_value |=  bool_to_int(x < y) << (i * 4);
+            }
+            case 3u: {//LE
+                output_value |= bool_to_int(x <= y) << (i * 4);
+            }
+            case 4u: {//GT
+                output_value |= bool_to_int(x > y) << (i * 4);
+            }
+            case 5u: {//GE
+                output_value |=  bool_to_int(x >= y) << (i * 4);
+            }
+            default:{
+                
+            }
         }
     }
+
+    v_dest_u32[id] = output_value;   
 }
 
 

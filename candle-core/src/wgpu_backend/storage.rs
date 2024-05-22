@@ -65,6 +65,7 @@ impl crate::backend::BackendStorage for WgpuStorage{
         match self.dtype{
             crate::DType::U32 => return Ok(crate::CpuStorage::U32(pollster::block_on(read_data_from_gpu_async(&self.wgpu_device, &self.buffer)))),
             crate::DType::F32 => return Ok(crate::CpuStorage::F32(pollster::block_on(read_data_from_gpu_async(&self.wgpu_device, &self.buffer)))),
+            crate::DType::U8 => return Ok(crate::CpuStorage::U8(pollster::block_on(read_data_from_gpu_async(&self.wgpu_device, &self.buffer)))),
             _ => todo!(),
         }
     }
@@ -245,7 +246,8 @@ impl crate::backend::BackendStorage for WgpuStorage{
     }
 
     fn cmp(&self, op: crate::op::CmpOp, rhs: &Self, lhs_l: &crate::Layout, rhs_l: &crate::Layout) -> crate::Result<Self> {
-        let buffer_dest = wgpu_functions::create_buffer(self.device(), lhs_l.shape().elem_count() * 4);
+        let buffer_size = ((lhs_l.shape().elem_count() + 3) / 4) * 4; //TODO: get next divisible by 4
+        let buffer_dest = wgpu_functions::create_buffer(self.device(), buffer_size); //Output is u8
         
         let op2 =match op{
             crate::op::CmpOp::Eq => wgpu_functions::CmpOperation::Eq,
@@ -257,7 +259,7 @@ impl crate::backend::BackendStorage for WgpuStorage{
         };
 
         wgpu_functions::queue_cmp_buffer_from_buffer(self.device(), &buffer_dest, &self.buffer, &rhs.buffer, op2, self.dtype, lhs_l, rhs_l)?;
-        return Ok(WgpuStorage::new(buffer_dest,self.device().clone(), crate::DType::U32));
+        return Ok(WgpuStorage::new(buffer_dest,self.device().clone(), crate::DType::U8));
     }
 
     fn to_dtype(&self, _layout: &crate::Layout, dtype: crate::DType) -> crate::Result<Self> {
@@ -396,7 +398,7 @@ impl crate::backend::BackendStorage for WgpuStorage{
         notImplemented!(scatter_add)
     }
 
-    fn index_select(&self, _: &Self, _: &crate::Layout, _: &crate::Layout, _: usize) -> crate::Result<Self> {
+    fn index_select(&self, rhs: &Self, lhs_l: &crate::Layout, rhs_l: &crate::Layout, d: usize) -> crate::Result<Self> {
         notImplemented!(index_select)
     }
 

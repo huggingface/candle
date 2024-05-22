@@ -7,7 +7,9 @@ current Problems:
 - for all shapes max 5 dimensions are supported
 - Not Implemented: Pool2dMax, Pool2dAvg, Conv1d, Conv1dTransposed, Upsample, Gather, Scatter_add, index_select, index_add, most Custom_nn functions
 - Error in Conv2dTransposed when transformed and diluted?
-
+- erf not implemented for unary_impl
+- argsort not implemented 
+- conversions not implemented
 # candle
 [![discord server](https://dcbadge.vercel.app/api/server/hugging-face-879548962464493619)](https://discord.gg/hugging-face-879548962464493619)
 [![Latest version](https://img.shields.io/crates/v/candle-core.svg)](https://crates.io/crates/candle-core)

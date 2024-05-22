@@ -132,7 +132,7 @@ struct MatrixIndex{
 }
 
 const ZERO : u32 = 0;
-const ONE : u32 = 0;
+const ONE : u32 = 1;
 
 fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
     if l.length != 0{ //Continues memory:

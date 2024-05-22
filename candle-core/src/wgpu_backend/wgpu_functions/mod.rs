@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use rand::RngCore;
 use wgpu::{util::DeviceExt, BindGroup, Buffer, ComputePipeline, ShaderModule};
 
 use crate::{wgpu_backend::device::WgpuDevice, wrongType, Layout};
@@ -13,6 +14,7 @@ struct MetaUnary{
     operation : u32,
     scalar1 : f32,
     scalar2 : f32,
+    seed : u32,
 }
 
 
@@ -358,7 +360,7 @@ fn create_bind_group_input2<T : bytemuck::Pod>(dev : &WgpuDevice, pipeline : &Co
 
 
 pub fn queue_unary_inplace_op(dev : &WgpuDevice, buffer : &Buffer, op : UnaryOperation, scalar1 : f32, scalar2 : f32, dtype : crate::DType, layout : crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{operation : op as u32, scalar1, scalar2, input_layout : MatrixLayout::from_layout(&layout)};
+    let meta = MetaUnary{operation : op as u32, scalar1, scalar2, input_layout : MatrixLayout::from_layout(&layout), seed : dev.rand_state.write().unwrap().next_u32()};
     
     let pipeline = dev.get_pipeline(
         match dtype{
@@ -373,7 +375,7 @@ pub fn queue_unary_inplace_op(dev : &WgpuDevice, buffer : &Buffer, op : UnaryOpe
 }
 
 pub fn queue_unary_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : UnaryOperation, scalar1 : f32, scalar2 : f32, dtype : crate::DType,input_layout : &crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{operation : op as u32,scalar1,scalar2, input_layout: MatrixLayout::from_layout(&input_layout)};
+    let meta = MetaUnary{operation : op as u32,scalar1,scalar2, input_layout: MatrixLayout::from_layout(&input_layout), seed : dev.rand_state.write().unwrap().next_u32()};
 
     let pipeline = dev.get_pipeline(
         match dtype{
@@ -576,15 +578,15 @@ pub fn queue_conv2d_transpose(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_i
         stride_y_in: input_stride[2] as u32,
         stride_x_in: input_stride[3] as u32,
 
-        //kernel_b_stride : kernel_stride[0] as u32,
-        //kernel_c_stride : kernel_stride[1] as u32,
-        //kernel_y_stride : kernel_stride[2] as u32,
-        //kernel_x_stride : kernel_stride[3] as u32,
+        kernel_b_stride : kernel_stride[1] as u32,
+        kernel_c_stride : kernel_stride[0] as u32,
+        kernel_y_stride : kernel_stride[2] as u32,
+        kernel_x_stride : kernel_stride[3] as u32,
         
-        kernel_c_stride : (params.k_w * params.k_h) as u32,
-        kernel_y_stride : params.k_w as u32,
-        kernel_b_stride : (params.k_w * params.k_h * params.c_in) as u32,
-        kernel_x_stride : 1,
+        //kernel_c_stride : (params.k_w * params.k_h) as u32,
+        //kernel_y_stride : params.k_w as u32,
+        //kernel_b_stride : (params.k_w * params.k_h * params.c_in) as u32,
+        //kernel_x_stride : 1,
         kernel_offset: kernel_layout.start_offset() as u32,
 
         padding: params.padding as u32, 
