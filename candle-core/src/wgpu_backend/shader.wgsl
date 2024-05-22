@@ -692,12 +692,12 @@ fn bool_to_int(b : bool) -> u32{
 @compute
 @workgroup_size(64,1,1)
 fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) { //One Shader needs to handle 4 comps
-    let id = global_id.x * 4;
+    let id = global_id.x;
     var output_value = 0u;
 
     for (var i = 0u; i < 4; i++){
-        let pos1 = get_index(op_binary.input1_layout, id);
-        let pos2 = get_index(op_binary.input2_layout, id);
+        let pos1 = get_index(op_binary.input1_layout, id * 4 + i);
+        let pos2 = get_index(op_binary.input2_layout, id * 4 + i);
         
         if(!pos1.is_valid){
             continue;
@@ -708,22 +708,22 @@ fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         switch(op_binary.operation){
             case 0u: { //eq
-                output_value |= bool_to_int(x == y) << (i * 4);
+                output_value |= bool_to_int(x == y) << (i * 8);
             }
             case 1u: {//ne
-                output_value |=  bool_to_int(x != y) << (i * 4);
+                output_value |=  bool_to_int(x != y) << (i * 8);
             }
             case 2u: {//lt
-                output_value |=  bool_to_int(x < y) << (i * 4);
+                output_value |=  bool_to_int(x < y) << (i * 8);
             }
             case 3u: {//LE
-                output_value |= bool_to_int(x <= y) << (i * 4);
+                output_value |= bool_to_int(x <= y) << (i * 8);
             }
             case 4u: {//GT
-                output_value |= bool_to_int(x > y) << (i * 4);
+                output_value |= bool_to_int(x > y) << (i * 8);
             }
             case 5u: {//GE
-                output_value |=  bool_to_int(x >= y) << (i * 4);
+                output_value |=  bool_to_int(x >= y) << (i * 8);
             }
             default:{
                 

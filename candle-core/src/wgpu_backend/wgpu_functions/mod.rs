@@ -498,7 +498,7 @@ pub fn queue_cmp_buffer_from_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, bu
         });
 
     let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    enqueue(dev, pipeline, bind_group, layout_input1.shape().elem_count() as u32);
+    enqueue(dev, pipeline, bind_group, ((layout_input1.shape().elem_count() + 3) / 4) as u32);
     return Ok(());
 }
 
