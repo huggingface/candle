@@ -1,4 +1,4 @@
-use crate::{notImplemented, Layout, Shape};
+use crate::{notImplemented, Error, Layout, Shape};
 
 use super::{device::WgpuDevice, wgpu_functions::{self, read_data_from_gpu_async, BinaryOperation, UnaryOperation}};
 
