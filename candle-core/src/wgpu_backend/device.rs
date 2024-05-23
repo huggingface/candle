@@ -1,4 +1,6 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
+
+use rand::SeedableRng;
 
 use crate::backend::BackendStorage;
 use crate::{notImplemented, wrongType, Layout};
@@ -13,31 +15,31 @@ pub struct  WgpuDevice {
     pub queue : Arc<wgpu::Queue>,
     pub pipelines : Arc<Vec<wgpu::ComputePipeline>>,
     pub shader : Arc<wgpu::ShaderModule>,
-    pub rand_state : Arc<RwLock<rand::rngs::ThreadRng>>
+    pub rand_state : Arc<Mutex<rand::rngs::StdRng>>
 }
 
 pub (crate) enum Pipelines{
     UnaryInplace = 0,
-    UnaryFromBuffer = 1,
-    BinaryBufferInplace = 2,
-    BinaryBufferFromBuffer = 3,
-    MatmulBuffer = 4,
-    Reduce = 5,
-    ReduceIndex = 6,
-    CmpFromBuffer = 7,
-    Conv2D = 8,
-    Conv2DTranspose = 9,
+    UnaryFromBuffer,
+    BinaryBufferInplace,
+    BinaryBufferFromBuffer,
+    MatmulBuffer,
+    Reduce,
+    ReduceIndex,
+    CmpFromBuffer ,
+    Conv2D,
+    Conv2DTranspose,
 
-    UnaryInplaceU32 = 10,
-    UnaryFromBufferU32 = 11,
-    BinaryBufferInplaceU32 = 12,
-    BinaryBufferFromBufferU32 = 13,
-    MatmulBufferU32 = 14,
-    ReduceU32 = 15,
-    ReduceIndexU32 = 16,
-    CmpFromBufferU32 = 17,
-    Conv2DU32 = 18,
-    Conv2DTransposeU32 = 19,
+    UnaryInplaceU32,
+    UnaryFromBufferU32,
+    BinaryBufferInplaceU32,
+    BinaryBufferFromBufferU32,
+    MatmulBufferU32,
+    ReduceU32,
+    ReduceIndexU32,
+    CmpFromBufferU32,
+    Conv2DU32,
+    Conv2DTransposeU32,
 }
 
 
@@ -65,25 +67,25 @@ impl WgpuDevice{
         
         let pipelines = 
         vec![
-            Self::load_pipeline(&device, &shader1, Pipelines::UnaryInplace),  //0
-            Self::load_pipeline(&device, &shader1, Pipelines::UnaryFromBuffer), //1
-            Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferInplace), //2
-            Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferFromBuffer), //3
-            Self::load_pipeline(&device, &shader1, Pipelines::MatmulBuffer), //4
-            Self::load_pipeline(&device, &shader1, Pipelines::Reduce), //5
-            Self::load_pipeline(&device, &shader1, Pipelines::ReduceIndex), //5
-            Self::load_pipeline(&device, &shader1, Pipelines::CmpFromBuffer), //6
+            Self::load_pipeline(&device, &shader1, Pipelines::UnaryInplace), 
+            Self::load_pipeline(&device, &shader1, Pipelines::UnaryFromBuffer), 
+            Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferInplace), 
+            Self::load_pipeline(&device, &shader1, Pipelines::BinaryBufferFromBuffer), 
+            Self::load_pipeline(&device, &shader1, Pipelines::MatmulBuffer), 
+            Self::load_pipeline(&device, &shader1, Pipelines::Reduce), 
+            Self::load_pipeline(&device, &shader1, Pipelines::ReduceIndex), 
+            Self::load_pipeline(&device, &shader1, Pipelines::CmpFromBuffer), 
             Self::load_pipeline(&device, &shader1, Pipelines::Conv2D),
             Self::load_pipeline(&device, &shader1, Pipelines::Conv2DTranspose),
 
-            Self::load_pipeline(&device, &shader2, Pipelines::UnaryInplaceU32),  //7
-            Self::load_pipeline(&device, &shader2, Pipelines::UnaryFromBufferU32), //8
-            Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferInplaceU32), //9
-            Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferFromBufferU32), //10 
-            Self::load_pipeline(&device, &shader2, Pipelines::MatmulBufferU32), //11
-            Self::load_pipeline(&device, &shader2, Pipelines::ReduceU32), //12
-            Self::load_pipeline(&device, &shader2, Pipelines::ReduceIndexU32), //12
-            Self::load_pipeline(&device, &shader2, Pipelines::CmpFromBufferU32), //13
+            Self::load_pipeline(&device, &shader2, Pipelines::UnaryInplaceU32),  
+            Self::load_pipeline(&device, &shader2, Pipelines::UnaryFromBufferU32), 
+            Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferInplaceU32), 
+            Self::load_pipeline(&device, &shader2, Pipelines::BinaryBufferFromBufferU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::MatmulBufferU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::ReduceU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::ReduceIndexU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::CmpFromBufferU32),
             Self::load_pipeline(&device, &shader1, Pipelines::Conv2DU32),
             Self::load_pipeline(&device, &shader1, Pipelines::Conv2DTransposeU32),
             ];
@@ -93,7 +95,7 @@ impl WgpuDevice{
             queue: Arc::new(queue),
             pipelines : Arc::new(pipelines),
             shader : Arc::new(shader1),
-            rand_state: Arc::new(RwLock::new(rand::thread_rng()))
+            rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy()))
         })
     }
 

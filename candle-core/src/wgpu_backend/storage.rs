@@ -1,4 +1,4 @@
-use crate::{notImplemented, Error, Layout, Shape};
+use crate::{notImplemented, Layout, Shape};
 
 use super::{device::WgpuDevice, wgpu_functions::{self, read_data_from_gpu_async, BinaryOperation, UnaryOperation}};
 
@@ -57,7 +57,7 @@ impl crate::backend::BackendStorage for WgpuStorage{
 
     #[cfg(target_arch = "wasm32")]
     fn to_cpu_storage(&self) -> crate::Result<crate::CpuStorage>{
-        return Err(Error::WebGpu("Sync copy to CpuStorage is not allowed for WebGpu device in WebAssembly. First copy the date asynchronously to a CpuStorage".to_owned().into()));
+        return Err(crate::Error::WebGpu("Sync copy to CpuStorage is not allowed for WebGpu device in WebAssembly. First copy the date asynchronously to a CpuStorage".to_owned().into()));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -398,7 +398,7 @@ impl crate::backend::BackendStorage for WgpuStorage{
         notImplemented!(scatter_add)
     }
 
-    fn index_select(&self, rhs: &Self, lhs_l: &crate::Layout, rhs_l: &crate::Layout, d: usize) -> crate::Result<Self> {
+    fn index_select(&self, _rhs: &Self, _lhs_l: &crate::Layout, _rhs_l: &crate::Layout, _d: usize) -> crate::Result<Self> {
         notImplemented!(index_select)
     }
 

@@ -360,7 +360,7 @@ fn create_bind_group_input2<T : bytemuck::Pod>(dev : &WgpuDevice, pipeline : &Co
 
 
 pub fn queue_unary_inplace_op(dev : &WgpuDevice, buffer : &Buffer, op : UnaryOperation, scalar1 : f32, scalar2 : f32, dtype : crate::DType, layout : crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{operation : op as u32, scalar1, scalar2, input_layout : MatrixLayout::from_layout(&layout), seed : dev.rand_state.write().unwrap().next_u32()};
+    let meta = MetaUnary{operation : op as u32, scalar1, scalar2, input_layout : MatrixLayout::from_layout(&layout), seed : dev.rand_state.lock().unwrap().next_u32()};
     
     let pipeline = dev.get_pipeline(
         match dtype{
@@ -375,7 +375,7 @@ pub fn queue_unary_inplace_op(dev : &WgpuDevice, buffer : &Buffer, op : UnaryOpe
 }
 
 pub fn queue_unary_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : UnaryOperation, scalar1 : f32, scalar2 : f32, dtype : crate::DType,input_layout : &crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{operation : op as u32,scalar1,scalar2, input_layout: MatrixLayout::from_layout(&input_layout), seed : dev.rand_state.write().unwrap().next_u32()};
+    let meta = MetaUnary{operation : op as u32,scalar1,scalar2, input_layout: MatrixLayout::from_layout(&input_layout), seed : dev.rand_state.lock().unwrap().next_u32()};
 
     let pipeline = dev.get_pipeline(
         match dtype{
