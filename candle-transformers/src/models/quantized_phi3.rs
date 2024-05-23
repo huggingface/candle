@@ -146,7 +146,7 @@ impl LayerWeights {
             };
             let att = candle_nn::ops::softmax_last_dim(&att)?;
             // Convert to contiguous as matmul doesn't support strided vs for now.
-            att.matmul(&v.contiguous()?)?
+            att.matmul(&v)?
         };
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attn_output.forward(&y)?;
