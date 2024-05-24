@@ -11,8 +11,8 @@
 //! use candle_nn::{LayerNorm, Module};
 //! # fn main() -> candle::Result<()> {
 //!
-//! let w = Tensor::new(1f32, &Cpu)?;
-//! let b = Tensor::new(0f32, &Cpu)?;
+//! let w = Tensor::new(&[1f32, 1f32, 1f32], &Cpu)?;
+//! let b = Tensor::new(&[0f32, 0f32, 0f32], &Cpu)?;
 //! let layer = LayerNorm::new(w, b, 1e-5);
 //!
 //! let xs = Tensor::new(
