@@ -830,7 +830,7 @@ impl candle::CustomOp3 for LayerNorm {
 
         let last_dim = l1.dims()[l1.shape().rank() - 1];
         let elem_count = l1.shape().elem_count();
-        let output = device.new_buffer(elem_count, s1.dtype(), "rmsnorm")?;
+        let output = device.new_buffer(elem_count, s1.dtype(), "layernorm")?;
         candle_metal_kernels::call_layer_norm(
             device.metal_device(),
             &command_buffer,
