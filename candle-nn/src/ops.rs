@@ -1,4 +1,4 @@
-use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor};
+use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -39,7 +39,7 @@ pub fn silu(xs: &Tensor) -> Result<Tensor> {
 }
 
 pub fn swiglu(xs: &Tensor) -> Result<Tensor> {
-    let xs = xs.chunk(2, candle::D::Minus1)?;
+    let xs = xs.chunk(2, D::Minus1)?;
     &xs[0].silu()? * &xs[1]
 }
 
@@ -620,15 +620,15 @@ pub fn rms_norm_slow(x: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
         DType::F16 | DType::BF16 => DType::F32,
         d => d,
     };
-    let hidden_size = x.dim(candle::D::Minus1)?;
+    let hidden_size = x.dim(D::Minus1)?;
     let x = x.to_dtype(internal_dtype)?;
-    let norm_x = (x.sqr()?.sum_keepdim(candle::D::Minus1)? / hidden_size as f64)?;
+    let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
     let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
     x_normed.to_dtype(x_dtype)?.broadcast_mul(alpha)
 }
 
 pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
-    let hidden_size_xs = xs.dim(candle::D::Minus1)?;
+    let hidden_size_xs = xs.dim(D::Minus1)?;
     let hidden_size_alpha = alpha.dims1()?;
     if hidden_size_xs != hidden_size_alpha {
         candle::bail!(
@@ -730,8 +730,28 @@ impl candle::CustomOp3 for LayerNorm {
     }
 }
 
+pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
+    let x_dtype = x.dtype();
+    let internal_dtype = match x_dtype {
+        DType::F16 | DType::BF16 => DType::F32,
+        d => d,
+    };
+    let hidden_size = x.dim(D::Minus1)?;
+    let x = x.to_dtype(internal_dtype)?;
+    let x = {
+        let mean_x = (x.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+        x.broadcast_sub(&mean_x)?
+    };
+    let norm_x = (x.sqr()?.sum_keepdim(D::Minus1)? / hidden_size as f64)?;
+    let x_normed = x.broadcast_div(&(norm_x + eps as f64)?.sqrt()?)?;
+    x_normed
+        .to_dtype(x_dtype)?
+        .broadcast_mul(alpha)?
+        .broadcast_add(beta)
+}
+
 pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
-    let hidden_size_xs = xs.dim(candle::D::Minus1)?;
+    let hidden_size_xs = xs.dim(D::Minus1)?;
     let hidden_size_alpha = alpha.dims1()?;
     let hidden_size_beta = beta.dims1()?;
     if hidden_size_xs != hidden_size_alpha || hidden_size_xs != hidden_size_beta {
