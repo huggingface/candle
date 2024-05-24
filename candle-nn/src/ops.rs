@@ -640,6 +640,111 @@ pub fn rms_norm(xs: &Tensor, alpha: &Tensor, eps: f32) -> Result<Tensor> {
     xs.apply_op2_no_bwd(alpha, &RmsNorm { eps })
 }
 
+#[derive(Debug, Clone)]
+struct LayerNorm {
+    eps: f32,
+}
+
+impl candle::CustomOp3 for LayerNorm {
+    fn name(&self) -> &'static str {
+        "layer-norm"
+    }
+
+    fn cpu_fwd(
+        &self,
+        s1: &CpuStorage,
+        l1: &Layout,
+        s2: &CpuStorage,
+        l2: &Layout,
+        s3: &CpuStorage,
+        l3: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        use candle::backend::BackendStorage;
+
+        let eps = self.eps;
+        fn inner<
+            T: candle::WithDType
+                + num_traits::Float
+                + num_traits::AsPrimitive<f32>
+                + num_traits::FromPrimitive,
+        >(
+            src: &[T],
+            layout: &Layout,
+            alpha: &[T],
+            alpha_layout: &Layout,
+            beta: &[T],
+            beta_layout: &Layout,
+            eps: f32,
+        ) -> Result<(CpuStorage, Shape)> {
+            let src = match layout.contiguous_offsets() {
+                None => candle::bail!("input has to be contiguous"),
+                Some((o1, o2)) => &src[o1..o2],
+            };
+            let alpha = match alpha_layout.contiguous_offsets() {
+                None => candle::bail!("alpha has to be contiguous"),
+                Some((o1, o2)) => &alpha[o1..o2],
+            };
+            let beta = match beta_layout.contiguous_offsets() {
+                None => candle::bail!("beta has to be contiguous"),
+                Some((o1, o2)) => &beta[o1..o2],
+            };
+            let el_count = layout.shape().elem_count();
+            let dims = layout.shape().dims();
+            let dim_m1 = dims[dims.len() - 1];
+            let mut dst = vec![T::zero(); el_count];
+            src.par_chunks(dim_m1)
+                .zip(dst.par_chunks_mut(dim_m1))
+                .for_each(|(src, dst)| {
+                    let mut sum = 0f32;
+                    let mut sum2 = 0f32;
+                    for v in src {
+                        let v = v.as_();
+                        sum += v;
+                        sum2 += v * v;
+                    }
+                    let mean = sum / dim_m1 as f32;
+                    let var = sum2 / dim_m1 as f32 - mean * mean;
+                    let inv_std = (var + eps).sqrt().recip();
+                    for ((d, s), (alpha, beta)) in
+                        dst.iter_mut().zip(src.iter()).zip(alpha.iter().zip(beta))
+                    {
+                        let alpha = alpha.as_();
+                        let beta = beta.as_();
+                        let d_ = (s.as_() - mean) * inv_std * alpha + beta;
+                        *d = T::from_f32(d_).unwrap_or_else(T::nan);
+                    }
+                });
+            let storage = candle::WithDType::to_cpu_storage_owned(dst);
+            Ok((storage, Shape::from_dims(dims)))
+        }
+
+        use CpuStorage as C;
+        match (s1, s2, s3) {
+            (C::BF16(s1), C::BF16(s2), C::BF16(s3)) => {
+                inner::<half::bf16>(s1, l1, s2, l2, s3, l3, eps)
+            }
+            (C::F16(s1), C::F16(s2), C::F16(s3)) => inner::<half::f16>(s1, l1, s2, l2, s3, l3, eps),
+            (C::F32(s1), C::F32(s2), C::F32(s3)) => inner::<f32>(s1, l1, s2, l2, s3, l3, eps),
+            _ => candle::bail!("unsupported dtype for rmsnorm {:?}", s1.dtype()),
+        }
+    }
+}
+
+pub fn layer_norm(xs: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
+    let hidden_size_xs = xs.dim(candle::D::Minus1)?;
+    let hidden_size_alpha = alpha.dims1()?;
+    let hidden_size_beta = beta.dims1()?;
+    if hidden_size_xs != hidden_size_alpha || hidden_size_xs != hidden_size_beta {
+        candle::bail!(
+            "shape mismatch in layer-norm src: {:?} alpha: {:?} beta: {:?}",
+            xs.shape(),
+            alpha.shape(),
+            beta.shape()
+        )
+    }
+    xs.apply_op3_no_bwd(alpha, beta, &LayerNorm { eps })
+}
+
 // https://pytorch.org/docs/stable/generated/torch.nn.PixelShuffle.html
 pub fn pixel_shuffle(xs: &Tensor, upscale_factor: usize) -> Result<Tensor> {
     let (b_size, c, h, w) = xs.dims4()?;
