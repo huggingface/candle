@@ -126,7 +126,7 @@ __device__ void col2im1d(
   tmp_dst_i -= b_idx * dst_s0;
   const size_t c_idx = tmp_dst_i / dst_s1;
   tmp_dst_i -= c_idx * dst_s1;
-  const size_t l_out_idx = tmp_dst_i;
+  const int l_out_idx = tmp_dst_i;
 
   dst[dst_i] = static_cast<T>(0);
 
