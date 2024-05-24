@@ -171,7 +171,7 @@ impl RmsNorm {
 
 impl Module for RmsNorm {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        if xs.is_contiguous() {
+        if xs.is_contiguous() && !xs.device().is_webgpu() {
             crate::ops::rms_norm(xs, &self.0.weight, self.0.eps as f32)
         } else {
             self.0.forward(xs)

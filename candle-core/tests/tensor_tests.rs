@@ -801,46 +801,49 @@ fn index_select(device: &Device) -> Result<()> {
         ]
     );
     for dtype in [DType::U8, DType::U32, DType::I64] {
-        let ids = ids.to_dtype(dtype)?;
-        let hs = t.index_select(&ids, 1)?;
-        assert_eq!(
-            hs.to_vec2::<f32>()?,
-            &[
-                [0.0, 2.0, 1.0],
-                [3.0, 5.0, 4.0],
-                [6.0, 8.0, 7.0],
-                [9.0, 11.0, 10.0]
-            ]
-        );
-        let hs = t.index_select(&ids, 0)?;
-        assert_eq!(
-            hs.to_vec2::<f32>()?,
-            &[[0.0, 1.0, 2.0], [6.0, 7.0, 8.0], [3.0, 4.0, 5.0]]
-        );
-        // Prior to https://github.com/huggingface/candle/pull/1022
-        // There would be a bug where the last values in the result tensor would be set to 0.
-        let ids = Tensor::new(&[0u32, 2u32, 1u32, 0u32, 2u32, 1u32], device)?;
-        let hs = t.index_select(&ids, 0)?;
-        assert_eq!(
-            hs.to_vec2::<f32>()?,
-            &[
-                [0.0, 1.0, 2.0],
-                [6.0, 7.0, 8.0],
-                [3.0, 4.0, 5.0],
-                [0.0, 1.0, 2.0],
-                [6.0, 7.0, 8.0],
-                [3.0, 4.0, 5.0],
-            ]
-        );
-
-        // Test when selecting dim > 0 with ids size different from elem count of
-        // target dim in source/input.
-        let ids = Tensor::new(&[1u32, 0u32, 1u32], device)?;
-        let t = Tensor::arange(1f32, 5f32, device)?.reshape((2, 2))?;
-        assert_eq!(t.to_vec2::<f32>()?, &[[1.0, 2.0], [3.0, 4.0]]);
-        let hs = t.index_select(&ids, 1)?;
-        assert_eq!(hs.to_vec2::<f32>()?, &[[2.0, 1.0, 2.0], [4.0, 3.0, 4.0]]);
+        if device.is_dtype_available(dtype){
+            let ids = ids.to_dtype(dtype)?;
+            let hs = t.index_select(&ids, 1)?;
+            assert_eq!(
+                hs.to_vec2::<f32>()?,
+                &[
+                    [0.0, 2.0, 1.0],
+                    [3.0, 5.0, 4.0],
+                    [6.0, 8.0, 7.0],
+                    [9.0, 11.0, 10.0]
+                ]
+            );
+            let hs = t.index_select(&ids, 0)?;
+            assert_eq!(
+                hs.to_vec2::<f32>()?,
+                &[[0.0, 1.0, 2.0], [6.0, 7.0, 8.0], [3.0, 4.0, 5.0]]
+            );
+        }
     }
+
+    // Prior to https://github.com/huggingface/candle/pull/1022
+    // There would be a bug where the last values in the result tensor would be set to 0.
+    let ids = Tensor::new(&[0u32, 2u32, 1u32, 0u32, 2u32, 1u32], device)?;
+    let hs = t.index_select(&ids, 0)?;
+    assert_eq!(
+        hs.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [6.0, 7.0, 8.0],
+            [3.0, 4.0, 5.0],
+            [0.0, 1.0, 2.0],
+            [6.0, 7.0, 8.0],
+            [3.0, 4.0, 5.0],
+        ]
+    );
+
+    // Test when selecting dim > 0 with ids size different from elem count of
+    // target dim in source/input.
+    let ids = Tensor::new(&[1u32, 0u32, 1u32], device)?;
+    let t = Tensor::arange(1f32, 5f32, device)?.reshape((2, 2))?;
+    assert_eq!(t.to_vec2::<f32>()?, &[[1.0, 2.0], [3.0, 4.0]]);
+    let hs = t.index_select(&ids, 1)?;
+    assert_eq!(hs.to_vec2::<f32>()?, &[[2.0, 1.0, 2.0], [4.0, 3.0, 4.0]]);
 
     Ok(())
 }

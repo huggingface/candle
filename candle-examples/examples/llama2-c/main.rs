@@ -6,6 +6,9 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
+use candle::wgpu_backend::measurement::calulate_measurment;
+use candle::wgpu_backend::measurement::save_list;
+use candle::Device;
 use candle_transformers::models::llama2_c as model;
 use candle_transformers::models::llama2_c_weights as weights;
 use candle_transformers::models::quantized_llama2_c as qmodel;
@@ -256,6 +259,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
     let tokenizer = common_args.tokenizer()?;
 
     let device = candle_examples::device(common_args.cpu)?;
+    let device = pollster::block_on(candle::Device::new_webgpu(0))?;
 
     let is_gguf = config_path.extension().map_or(false, |v| v == "gguf");
     let is_safetensors = config_path
@@ -368,5 +372,15 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
         tokens.len(),
         tokens.len() as f64 / dt.as_secs_f64(),
     );
+
+    let info = match device {
+        Device::WebGpu(gpu) => {
+            let info = pollster::block_on(gpu.get_debug_info()).unwrap();
+            let map2 = calulate_measurment(&info);
+            save_list(&map2, "wgpu_infollama2-c_small.json").unwrap();
+        },
+        _ => {},
+    };
+
     Ok(())
 }

@@ -10,7 +10,40 @@ current Problems:
 - Error in Conv2dTransposed when transformed and diluted?
 - erf not implemented for unary_impl
 - argsort not implemented 
-- conversions not implemented
+
+# Feature Support Table
+
+| Feature                     | Support Status                                  | Notes                                                              |
+|-----------------------------|-------------------------------------------------|--------------------------------------------------------------------|
+| **<span style="color:#1E90FF">Data Types</span>**                                  |                                                 |                                                                    |
+| f32                         | ✅ Supported                                     |                                                                    |
+| u32                         | ✅ Supported                                     |                                                                    |
+| u8                          | ❌ Not Supported                                 | *Only f32, I32 and U32 are available in a webGpu shader            |
+| f64                         | ❌ Not Supported                                 |                                                                    |
+| i64                         | ❌ Not Supported                                 |                                                                    |
+| f16                         | ❌ Not Supported                                 |                                                                    |
+| bf16                        | ❌ Not Supported                                 |                                                                    |
+| **<span style="color:#1E90FF">Operations</span>**              |                                                 |   All operations support non-contiguous arrays                                                                   |
+| Unary Operations            | ✅ Supported                                     | Except for "elu"                                                   |
+| Binary Operations           | ✅ Supported                                     | All binary operations supported                                    |
+| MatMul                      | ✅ Supported                                     |                                                                    |
+| Reduce Operations           | ✅ Supported                                     | Sum, Min, Max, (ArgMax, ArgMin works only if continues Dimensions are reduced)                                     |
+| Conv2d                      | ✅ Supported                                     |                                                                    |
+| Conv2dTranspose             | ⚠️ Implemented with errors                      | Errors in unit tests for certain values                            |
+| Index Select                | ✅ Supported                                     |                                                                    |
+| **<span style="color:#1E90FF">Not Implemented</span>**        |                                                 |                                                                    |
+| Conv1d                      | ❌ Not Implemented                               |                                                                    |
+| Conv1dTranspose             | ❌ Not Implemented                               |                                                                    |
+| Pool2dMax                   | ❌ Not Implemented                               |                                                                    |
+| Pool2dAvg                   | ❌ Not Implemented                               |                                                                    |
+| ArgSort                     | ❌ Not Implemented                               |                                                                    |
+| Upsample                    | ❌ Not Implemented                               |                                                                    |
+| Gather                      | ❌ Not Implemented                               |                                                                    |
+| Scatter_add                 | ❌ Not Implemented                               |                                                                    |
+| Index_add                   | ❌ Not Implemented                               |                                                                    |
+| Quantized Matrices          | ❌ Not Supported?                                 |                                                                    |
+
+
 # candle
 [![discord server](https://dcbadge.vercel.app/api/server/hugging-face-879548962464493619)](https://discord.gg/hugging-face-879548962464493619)
 [![Latest version](https://img.shields.io/crates/v/candle-core.svg)](https://crates.io/crates/candle-core)

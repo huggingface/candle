@@ -1,6 +1,10 @@
+use std::collections::HashMap;
+use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
 use rand::SeedableRng;
+use serde::{Deserialize, Serialize};
+use wgpu::Device;
 
 use crate::backend::BackendStorage;
 use crate::{notImplemented, wrongType, Layout};
@@ -10,14 +14,44 @@ use super::WgpuStorage;
 
 
 #[derive(Debug, Clone)]
+pub(crate) struct DebugInfo{
+    pub(crate) set : Arc<wgpu::QuerySet>,
+    pub (crate) query_set_buffer : Arc<wgpu::Buffer>,
+    pub (crate) counter :  Arc<AtomicU32>,
+    pub (crate) shader_pipeline : Arc<Mutex<HashMap<u32, String>>>,
+    
+}
+
+impl DebugInfo {
+    fn new(device : &Device) -> Self{
+        // Create a query set for timer queries
+        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+           count: 2, // We need 2 queries: one for start and one for end
+           ty: wgpu::QueryType::Timestamp,
+           label: None,
+        });
+        // Create a buffer to store the query results
+        let query_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 256 * 10000000 as u64,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::QUERY_RESOLVE,
+            mapped_at_creation: false,
+        });
+        return DebugInfo{set : Arc::new(query_set), counter : Arc::new(AtomicU32::new(0)), shader_pipeline : Arc::new(Mutex::new(HashMap::new())), query_set_buffer : Arc::new(query_buffer)};
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct  WgpuDevice {
     pub device : Arc<wgpu::Device>, 
     pub queue : Arc<wgpu::Queue>,
     pub pipelines : Arc<Vec<wgpu::ComputePipeline>>,
     pub shader : Arc<wgpu::ShaderModule>,
-    pub rand_state : Arc<Mutex<rand::rngs::StdRng>>
+    pub rand_state : Arc<Mutex<rand::rngs::StdRng>>,
+    pub(crate) debug : DebugInfo,
 }
 
+#[derive(Debug, Clone)]
 pub (crate) enum Pipelines{
     UnaryInplace = 0,
     UnaryFromBuffer,
@@ -29,6 +63,8 @@ pub (crate) enum Pipelines{
     CmpFromBuffer ,
     Conv2D,
     Conv2DTranspose,
+    ConvertF32ToU32,
+    IndexSelect,
 
     UnaryInplaceU32,
     UnaryFromBufferU32,
@@ -40,6 +76,34 @@ pub (crate) enum Pipelines{
     CmpFromBufferU32,
     Conv2DU32,
     Conv2DTransposeU32,
+    ConvertU32ToF32,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+
+pub struct MInfo{
+    pub label: String,
+    pub start_time : u64,
+    pub end_time : u64
+}
+
+impl MInfo {
+    pub fn new(label: String, start_time: u64, end_time: u64) -> Self {
+        Self { label, start_time, end_time }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+
+pub struct Measurements{
+    pub data : Vec<MInfo>,
+    timestamp_period : f32
+}
+
+impl Measurements {
+    pub fn new(timestamp_period: f32) -> Self {
+        Self { data : vec![], timestamp_period }
+    }
 }
 
 
@@ -51,14 +115,18 @@ impl WgpuDevice{
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
 
+        let mut limits = wgpu::Limits::downlevel_defaults();
+        let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
+        limits.max_buffer_size = 256 * 1000000000;
+        //limits.max_compute_workgroups_per_dimension = 1024*1024;
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
         //  `features` being the available features.
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults(),
+                    required_features: features,
+                    required_limits: limits,
                 },
                 None,
             ).await.map_err(|err| crate::Error::WebGpu(err.to_string().into()))?;
@@ -77,6 +145,8 @@ impl WgpuDevice{
             Self::load_pipeline(&device, &shader1, Pipelines::CmpFromBuffer), 
             Self::load_pipeline(&device, &shader1, Pipelines::Conv2D),
             Self::load_pipeline(&device, &shader1, Pipelines::Conv2DTranspose),
+            Self::load_pipeline(&device, &shader1, Pipelines::ConvertF32ToU32),
+            Self::load_pipeline(&device, &shader1, Pipelines::IndexSelect),
 
             Self::load_pipeline(&device, &shader2, Pipelines::UnaryInplaceU32),  
             Self::load_pipeline(&device, &shader2, Pipelines::UnaryFromBufferU32), 
@@ -86,20 +156,44 @@ impl WgpuDevice{
             Self::load_pipeline(&device, &shader2, Pipelines::ReduceU32),
             Self::load_pipeline(&device, &shader2, Pipelines::ReduceIndexU32),
             Self::load_pipeline(&device, &shader2, Pipelines::CmpFromBufferU32),
-            Self::load_pipeline(&device, &shader1, Pipelines::Conv2DU32),
-            Self::load_pipeline(&device, &shader1, Pipelines::Conv2DTransposeU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::Conv2DU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::Conv2DTransposeU32),
+            Self::load_pipeline(&device, &shader2, Pipelines::ConvertU32ToF32),
             ];
-        
+        let debug_info = DebugInfo::new(&device);
         Ok(WgpuDevice {
             device: Arc::new(device),
             queue: Arc::new(queue),
             pipelines : Arc::new(pipelines),
             shader : Arc::new(shader1),
-            rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy()))
+            rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy())),
+            debug : debug_info
         })
     }
 
     
+
+    pub async fn get_debug_info_full(&self) -> crate::Result<Measurements>{
+        let data = wgpu_functions::read_data_from_gpu_async::<u64>(self, &self.debug.query_set_buffer).await;
+        let period = self.queue.get_timestamp_period();
+        let mut result = Measurements::new(period);
+        for p in self.debug.shader_pipeline.lock().unwrap().iter(){
+            result.data.push(MInfo::new(p.1.to_owned(), data[(*(p.0) * 32) as usize], data[(*(p.0) * 32) as usize + 1]));
+        }
+        
+        Ok(result)
+    }
+    
+    pub async fn get_debug_info(&self) -> crate::Result<HashMap<String, Vec<u64>>>{
+        let info = self.get_debug_info_full().await?;
+        let mut map: HashMap<String, Vec<u64>> = HashMap::new();
+
+        for item in info.data.iter() {
+            map.entry(item.label.clone()).or_insert_with(Vec::new).push(item.end_time - item.start_time);
+        }
+        return Ok(map);
+    }
+
     fn load_pipeline(device : &wgpu::Device, shader : &wgpu::ShaderModule, pipeline : Pipelines) -> wgpu::ComputePipeline{
         let entry_point = match pipeline{
             Pipelines::UnaryInplace => "unary_inplace",
@@ -112,6 +206,8 @@ impl WgpuDevice{
             Pipelines::CmpFromBuffer => "cmp_buffer_from_buffer",
             Pipelines::Conv2D => "conv2d",
             Pipelines::Conv2DTranspose => "conv2d_transpose",
+            Pipelines::ConvertF32ToU32 => "convert_to_u32",
+            Pipelines::IndexSelect => "index_select",
 
             Pipelines::UnaryInplaceU32 => "unary_inplace",
             Pipelines::UnaryFromBufferU32 => "unary_from_buffer",
@@ -123,6 +219,7 @@ impl WgpuDevice{
             Pipelines::CmpFromBufferU32 => "cmp_buffer_from_buffer",
             Pipelines::Conv2DU32 => "conv2d",
             Pipelines::Conv2DTransposeU32 => "conv2d_transpose",
+            Pipelines::ConvertU32ToF32 => "convert_to_f32",
         };
         
         return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

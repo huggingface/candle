@@ -1,4 +1,4 @@
-use crate::{notImplemented, Layout, Shape};
+use crate::{notImplemented, DType, Layout, Shape};
 
 use super::{device::WgpuDevice, wgpu_functions::{self, read_data_from_gpu_async, BinaryOperation, UnaryOperation}};
 
@@ -19,7 +19,7 @@ impl WgpuStorage {
     //     Self { buffer, wgpu_device,dtype : crate::DType::F32}
     // }
 
-    pub (crate) fn new(buffer: wgpu::Buffer, wgpu_device: WgpuDevice, dtype : crate::DType) -> Self {
+    pub fn new(buffer: wgpu::Buffer, wgpu_device: WgpuDevice, dtype : crate::DType) -> Self {
         Self { buffer, wgpu_device,dtype : dtype}
     }
 
@@ -41,9 +41,9 @@ impl WgpuStorage {
 impl crate::backend::BackendStorage for WgpuStorage{
     type Device = WgpuDevice;
 
-    fn try_clone(&self, _: &crate::Layout) -> crate::Result<Self> {
+    fn try_clone(&self, layout: &crate::Layout) -> crate::Result<Self> {
         let buffer_dest = wgpu_functions::create_buffer(self.device(), self.buffer.size() as usize);
-        wgpu_functions::queue_copy(self.device(), &buffer_dest, &self.buffer, 0, 0, self.buffer.size() as usize);
+        wgpu_functions::queue_copy(self.device(), &buffer_dest, &self.buffer, 0, layout.start_offset(), layout.shape().elem_count() as usize);
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone(), self.dtype));
     }
 
@@ -262,9 +262,20 @@ impl crate::backend::BackendStorage for WgpuStorage{
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone(), crate::DType::U8));
     }
 
-    fn to_dtype(&self, _layout: &crate::Layout, dtype: crate::DType) -> crate::Result<Self> {
-        match dtype{
-            //crate::DType::F32 => return Ok(WgpuStorage::new(self.buffer,self.device().clone())) ,
+    fn to_dtype(&self, layout: &crate::Layout, dtype: crate::DType) -> crate::Result<Self> {
+        match (self.dtype, dtype){
+            (DType::F32, DType::F32) => self.try_clone(layout),
+            (DType::U32, DType::U32) => self.try_clone(layout),
+            (DType::U32, DType::F32) => {
+                let buffer_dest = wgpu_functions::create_buffer(self.device(), layout.shape().elem_count() * 4);
+                wgpu_functions::queue_convert_u32_to_f32(self.device(), &buffer_dest, &self.buffer, layout)?;
+                Ok(WgpuStorage::new(buffer_dest,self.device().clone(), crate::DType::F32))
+            },
+            (DType::F32, DType::U32) => {
+                let buffer_dest = wgpu_functions::create_buffer(self.device(), layout.shape().elem_count() * 4);
+                wgpu_functions::queue_convert_f32_to_u32(self.device(), &buffer_dest, &self.buffer, layout)?;
+                Ok(WgpuStorage::new(buffer_dest,self.device().clone(), crate::DType::U32))
+            },
             _ =>  panic!("conversion of dtype to {:?} not suported on webgpu", dtype),
         }
 
@@ -293,6 +304,7 @@ impl crate::backend::BackendStorage for WgpuStorage{
             "sqr" => UnaryOperation::Square,
             "sqrt" => UnaryOperation::Sqrt,
             "tanh" => UnaryOperation::Tanh,
+            "relu" => UnaryOperation::Relu,
             "sigmoid" => UnaryOperation::Sigmoid,
             _ =>{panic!("Operation {} is not supported on wgpu", B::NAME)}
         };
@@ -398,8 +410,14 @@ impl crate::backend::BackendStorage for WgpuStorage{
         notImplemented!(scatter_add)
     }
 
-    fn index_select(&self, _rhs: &Self, _lhs_l: &crate::Layout, _rhs_l: &crate::Layout, _d: usize) -> crate::Result<Self> {
-        notImplemented!(index_select)
+    fn index_select(&self, rhs: &Self, lhs_l: &crate::Layout, rhs_l: &crate::Layout, d: usize) -> crate::Result<Self> {
+        let mut new_shape = lhs_l.shape().clone().into_dims();
+        new_shape[d] = rhs_l.shape().elem_count();
+        let new_shape = Shape::from_dims(&new_shape[..]);
+
+        let buffer_dest = wgpu_functions::create_buffer(self.device(), (new_shape.elem_count()) * 4);
+        wgpu_functions::queue_index_select(self.device(), &buffer_dest, &self.buffer, &rhs.buffer, self.dtype,lhs_l,rhs_l, d)?;
+        return Ok(WgpuStorage::new(buffer_dest,self.device().clone(),self.dtype));
     }
 
     fn index_add(

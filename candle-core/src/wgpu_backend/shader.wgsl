@@ -12,6 +12,16 @@ struct MetaBinary{
     operation : u32,
 }
 
+struct MetaIndexSelect{
+    input1_layout : MatrixLayout,
+    input2_layout : MatrixLayout,
+    input_stride_x : u32,   //x specifys for values of one dim
+    input_stride_y : u32,   //y specifys per value of the index
+    output_stride_x : u32,  //x specifys for values of one dim
+    output_stride_y : u32,  //y specifys per value of the index
+    length : u32
+}
+
 //(M X N) * (N X K)
 struct MetaInfoMatMul{
     b : u32, //batch_count ("normal" matmul = 1)
@@ -106,6 +116,10 @@ var<uniform> op_conv2d : MetaConv2d;
 
 
 @group(0) @binding(1)
+var<uniform> op_index : MetaIndexSelect;
+
+
+@group(0) @binding(1)
 var<uniform> op_input_matrix : array<MatrixLayout, 3>;
 
 
@@ -115,22 +129,25 @@ var<storage> v_input1: array<f32>;
 @group(0) @binding(3)
 var<storage> v_input2: array<f32>;
 
+@group(0) @binding(3)
+var<storage> v_input2_u32: array<u32>;
+
 var<workgroup> sharedSums: array<f32, 64>;  //for reduction
 var<workgroup> sharedIndex: array<u32, 64>; 
 
-fn set_output_u8(m : u32, v1 : u32, v2 : u32, v3 : u32, v4 : u32){
-    let value = ((v1 & 0xFF) << 12) | ((v2 & 0xFF) << 8) | ((v3 & 0xFF) << 4) | (v4 & 0xFF);
-    v_dest_u32[m] = value;
-}
+// fn set_output_u8(m : u32, v1 : u32, v2 : u32, v3 : u32, v4 : u32){
+//     let value = ((v1 & 0xFF) << 12) | ((v2 & 0xFF) << 8) | ((v3 & 0xFF) << 4) | (v4 & 0xFF);
+//     v_dest_u32[m] = value;
+// }
 
-fn get_output_u8(m : u32) -> array<u32,4>{
-    let value = v_dest_u32[m];
-    let v4 = value & 0xFF;
-    let v3 = (value >> 4) & 0xFF;
-    let v2 = (value >> 8) & 0xFF;
-    let v1 = (value >> 12) & 0xFF;
-    return array(v1,v2,v3,v4);
-}
+// fn get_output_u8(m : u32) -> array<u32,4>{
+//     let value = v_dest_u32[m];
+//     let v4 = value & 0xFF;
+//     let v3 = (value >> 4) & 0xFF;
+//     let v2 = (value >> 8) & 0xFF;
+//     let v1 = (value >> 12) & 0xFF;
+//     return array(v1,v2,v3,v4);
+// }
 
 
 struct MatrixIndex{
@@ -140,6 +157,17 @@ struct MatrixIndex{
 
 const ZERO : f32 = 0;
 const ONE : f32 = 1;
+
+@compute
+@workgroup_size(64,1,1)
+fn convert_to_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        v_dest_u32[id] = u32(v_input1[pos1.id]);
+    }
+}
+
 
 fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
     if l.length != 0{ //Continues memory:
@@ -879,3 +907,70 @@ fn conv2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
         v_dest[i_b * stride_batch_out + i_c_out * stride_c_out + stride_y_out *  global_id.y +  global_id.x] = sum;
     }
 }
+
+
+@compute
+@workgroup_size(8,8,1)
+fn index_select(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    
+    let workgroup_id = global_id.x;
+    let output_index = global_id.y;
+
+    let pos2 = get_index(op_index.input2_layout, output_index);
+    if(pos2.is_valid){
+        let dim_index = v_input2_u32[pos2.id];
+        
+        let input_stride_x = op_index.input_stride_x;
+        let input_stride_y = op_index.input_stride_y;
+        let output_stride_x = op_index.input_stride_x;
+        let output_stride_y = op_index.input_stride_y;
+        let length = op_index.length;
+
+        // let input_stride_x = 1u; //x specifys for values of one dim
+        // let input_stride_y = 1u; //y specifys per value of the index
+        
+        // let output_stride_x = 1u;
+        // let output_stride_y = 1u;
+
+        //let length = 42u;       //Shape Elem Count / Dim to Select
+
+        if workgroup_id < length{
+            let input_id  =    dim_index * input_stride_y  + workgroup_id * input_stride_x;
+            let output_id = output_index * output_stride_y + workgroup_id * output_stride_x;
+            let pos1 = get_index(op_index.input1_layout, input_id);
+            if(pos1.is_valid){
+                v_dest[output_id]  = v_input1[pos1.id];
+            }
+        }
+    }
+}
+
+// @compute
+// @workgroup_size(64,1,1)
+// fn rms_norm(@builtin(global_invocation_id) global_id: vec3<u32>) {
+//     let workgroup_id = global_id.x;
+
+//     let length = 0u;
+//     let dim_m1 = 0u;
+//     let eps = 0.0;
+//     var sum = ZERO;
+    
+//     let start_offset = workgroup_id;
+
+//     for (var i = 0u; i < length; i++){
+//         let index = start_offset + id + i; //TODO
+//         sum += v_input1[index] * v_input1[index];
+//     }
+
+//     let m = sqrt(sum / dim_m1 + eps);
+
+//     for (var i = 0u; i < length; i++){
+//         let index = start_offset + id + i; //TODO
+//         sum += v_input1[index] * v_input1[index];
+
+//         v_dest[index] =  v_input1[index] / m * v_input2[i];
+
+//     }
+// }
+
+

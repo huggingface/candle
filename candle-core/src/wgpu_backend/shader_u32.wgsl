@@ -78,6 +78,9 @@ struct MatrixLayout{
 @group(0) @binding(0)
 var<storage, read_write> v_dest: array<u32>;
 
+@group(0) @binding(0)
+var<storage, read_write> v_dest_f32: array<f32>;
+
 @group(0) @binding(0) 
 var<storage, read_write> v_dest_u32: array<u32>; //Output for U8, and U32
 
@@ -111,19 +114,19 @@ var<storage> v_input2: array<u32>;
 var<workgroup> sharedSums: array<u32, 64>;  //for reduction
 var<workgroup> sharedIndex: array<u32, 64>; 
 
-fn set_output_u8(m : u32, v1 : u32, v2 : u32, v3 : u32, v4 : u32){
-    let value = ((v1 & 0xFF) << 12) | ((v2 & 0xFF) << 8) | ((v3 & 0xFF) << 4) | (v4 & 0xFF);
-    v_dest_u32[m] = value;
-}
+// fn set_output_u8(m : u32, v1 : u32, v2 : u32, v3 : u32, v4 : u32){
+//     let value = ((v1 & 0xFF) << 12) | ((v2 & 0xFF) << 8) | ((v3 & 0xFF) << 4) | (v4 & 0xFF);
+//     v_dest_u32[m] = value;
+// }
 
-fn get_output_u8(m : u32) -> array<u32,4>{
-    let value = v_dest_u32[m];
-    let v4 = value & 0xFF;
-    let v3 = (value >> 4) & 0xFF;
-    let v2 = (value >> 8) & 0xFF;
-    let v1 = (value >> 12) & 0xFF;
-    return array(v1,v2,v3,v4);
-}
+// fn get_output_u8(m : u32) -> array<u32,4>{
+//     let value = v_dest_u32[m];
+//     let v4 = value & 0xFF;
+//     let v3 = (value >> 4) & 0xFF;
+//     let v2 = (value >> 8) & 0xFF;
+//     let v1 = (value >> 12) & 0xFF;
+//     return array(v1,v2,v3,v4);
+// }
 
 
 struct MatrixIndex{
@@ -133,6 +136,17 @@ struct MatrixIndex{
 
 const ZERO : u32 = 0;
 const ONE : u32 = 1;
+
+@compute
+@workgroup_size(64,1,1)
+fn convert_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        v_dest_f32[id] = f32(v_input1[pos1.id]);
+    }
+}
+
 
 fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
     if l.length != 0{ //Continues memory:
@@ -162,18 +176,18 @@ fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
 
 
 
-fn rand_uniform(value: u32) -> u32 {
-    // Use XORShift algorithm to generate a pseudo-random float
-    // Parameters for XORShift algorithm (adjust as needed)
-    var state: u32 = value ^ 0x5F3759DF; // Initial state, can be any non-zero value
-    state ^= state << 13;
-    state ^= state >> 17;
-    state ^= state << 5;
+// fn rand_uniform(value: u32) -> u32 {
+//     // Use XORShift algorithm to generate a pseudo-random float
+//     // Parameters for XORShift algorithm (adjust as needed)
+//     var state: u32 = value ^ 0x5F3759DF; // Initial state, can be any non-zero value
+//     state ^= state << 13;
+//     state ^= state >> 17;
+//     state ^= state << 5;
 
-    // Convert u32 to a float between 0 and 1
-    // Divide by maximum u32 value to get a float in [0, 1)
-    return state;
-}
+//     // Convert u32 to a float between 0 and 1
+//     // Divide by maximum u32 value to get a float in [0, 1)
+//     return state;
+// }
 
 //all Unary Operations(No Input)
 fn set_unary(operation : u32, id : u32, x : u32, scalar1 : u32, scalar2 : u32){
