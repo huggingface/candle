@@ -26,7 +26,7 @@ impl BenchDevice for Device {
             }
             Device::Metal(device) => {
                 #[cfg(feature = "metal")]
-                return Ok(device.wait_until_completed()?);
+                return device.synchronize();
                 #[cfg(not(feature = "metal"))]
                 panic!("Metal device without metal feature enabled: {:?}", device)
             }

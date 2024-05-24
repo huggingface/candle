@@ -164,7 +164,7 @@ impl crate::CustomOp1 for ArgSort {
         };
         let device = storage.device();
         let kernels = device.kernels();
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = device.command_encoder()?;
         let el = layout.shape().elem_count();
         let ncols = self.last_dim;
         let nrows = el / ncols;
@@ -176,7 +176,7 @@ impl crate::CustomOp1 for ArgSort {
         }
         candle_metal_kernels::call_arg_sort(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             nrows,

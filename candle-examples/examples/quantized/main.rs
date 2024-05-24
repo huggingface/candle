@@ -255,6 +255,10 @@ struct Args {
     /// Use the slower dmmv cuda kernel.
     #[arg(long)]
     force_dmmv: bool,
+
+    /// Enable gputrace capture if using metal
+    #[arg(long)]
+    metal_tracing: bool,
 }
 
 impl Args {
@@ -583,6 +587,16 @@ fn main() -> anyhow::Result<()> {
         let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
         let start_post_prompt = std::time::Instant::now();
         let mut sampled = 0;
+
+        // Start metal capture
+        #[cfg(feature = "metal")]
+        if args.metal_tracing {
+            use candle::Device;
+            if let Device::Metal(metal_device) = device.clone() {
+                metal_device.capture("/tmp/candle.gputrace")?;
+            };
+        };
+
         for index in 0..to_sample {
             let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
             let logits = model.forward(&input, prompt_tokens.len() + index)?;

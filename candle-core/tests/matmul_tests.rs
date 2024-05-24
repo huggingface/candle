@@ -76,6 +76,7 @@ fn squeeze_mm(device: &Device) -> Result<()> {
     let w = Tensor::zeros((32, 16), DType::F32, device)?.t()?;
     let x = x.matmul(&w)?;
     assert_eq!(x.dims(), &[1, 32]);
+    assert_eq!(x.to_vec2::<f32>().unwrap()[0], vec![0.0f32; 32]);
     Ok(())
 }
 

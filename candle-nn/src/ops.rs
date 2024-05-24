@@ -140,13 +140,11 @@ impl candle::CustomOp1 for Sigmoid {
         let shape = layout.shape();
         let el_count = shape.elem_count();
         let buffer = device.new_buffer(el_count, dtype, "sigmoid")?;
-        let command_buffer = device.command_buffer()?;
-        command_buffer.set_label("sigmoid");
+        let command_encoder = device.command_encoder()?;
         let src = candle_metal_kernels::BufferOffset {
             buffer: storage.buffer(),
             offset_in_bytes: layout.start_offset() * storage.dtype().size_in_bytes(),
         };
-
         match (el_count % 2, dtype, layout.is_contiguous()) {
             (0, DType::BF16 | DType::F16, true) => {
                 use candle_metal_kernels::unary::contiguous_tiled;
@@ -162,7 +160,7 @@ impl candle::CustomOp1 for Sigmoid {
                 };
                 candle_metal_kernels::call_unary_contiguous_tiled(
                     device.metal_device(),
-                    &command_buffer,
+                    &command_encoder,
                     device.kernels(),
                     kernel_name,
                     el_count,
@@ -183,7 +181,7 @@ impl candle::CustomOp1 for Sigmoid {
                 };
                 candle_metal_kernels::call_unary_contiguous(
                     device.metal_device(),
-                    &command_buffer,
+                    &command_encoder,
                     device.kernels(),
                     kernel_name,
                     el_count,
@@ -205,7 +203,7 @@ impl candle::CustomOp1 for Sigmoid {
                 let dst = candle_metal_kernels::BufferOffset::zero_offset(&buffer);
                 candle_metal_kernels::call_unary_strided(
                     device.metal_device(),
-                    &command_buffer,
+                    &command_encoder,
                     device.kernels(),
                     kernel_name,
                     layout.dims(),
@@ -392,7 +390,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = storage.device();
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = device.command_encoder()?;
         let kernels = device.kernels();
         let name = match storage.dtype() {
             DType::F32 => "softmax_f32",
@@ -411,7 +409,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
         let output = device.new_buffer(elem_count, storage.dtype(), "softmax")?;
         candle_metal_kernels::call_last_softmax(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             elem_count,
@@ -578,7 +576,7 @@ impl candle::CustomOp2 for RmsNorm {
     ) -> Result<(candle::MetalStorage, Shape)> {
         use candle::backend::BackendStorage;
         let device = s1.device();
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = device.command_encoder()?;
         let kernels = device.kernels();
         let name = match (s1.dtype(), s2.dtype()) {
             (DType::F32, DType::F32) => "rmsnorm_f32",
@@ -596,7 +594,7 @@ impl candle::CustomOp2 for RmsNorm {
         let output = device.new_buffer(elem_count, s1.dtype(), "rmsnorm")?;
         candle_metal_kernels::call_rms_norm(
             device.metal_device(),
-            &command_buffer,
+            &command_encoder,
             kernels,
             name,
             elem_count,

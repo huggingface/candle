@@ -1,6 +1,6 @@
 use super::{GgmlDType, QStorage};
 use crate::backend::BackendStorage;
-use crate::{DType, MetalDevice, MetalStorage, Result, Shape};
+use crate::{DType, MetalDevice, MetalError, MetalStorage, Result, Shape};
 use metal::Buffer;
 use std::sync::Arc;
 
@@ -35,15 +35,21 @@ impl QMetalStorage {
 
     pub fn dequantize(&self, elem_count: usize) -> Result<MetalStorage> {
         use crate::quantized::k_quants::GgmlType;
-
         let buffer = self.device.new_buffer_managed(self.buffer.length())?;
-        let command_buffer = self.device.command_buffer()?;
-        command_buffer.set_label("to_cpu");
-        let blit = command_buffer.new_blit_command_encoder();
-        blit.set_label("blit_to_cpu");
-        blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
-        blit.end_encoding();
-        self.device.wait_until_completed()?;
+
+        {
+            // Ensure current work is complete on the device
+            self.device.synchronize()?;
+
+            // Setup the blit encoder to perform the copy operation
+            let command_buffer = self.device.command_queue().new_command_buffer();
+            let blit = command_buffer.new_blit_command_encoder();
+            blit.copy_from_buffer(&self.buffer, 0, &buffer, 0, self.buffer.length());
+            blit.end_encoding();
+            command_buffer.commit();
+            command_buffer.wait_until_completed();
+        }
+
         let mut out = vec![0.0; elem_count];
         let block_len = elem_count / self.dtype.block_size();
         match self.dtype {
@@ -136,8 +142,6 @@ impl QMetalStorage {
         storage: &MetalStorage,
         layout: &crate::Layout,
     ) -> Result<(MetalStorage, Shape)> {
-        use crate::MetalError;
-
         if !layout.is_contiguous() {
             crate::bail!("input tensor is not contiguous {layout:?}")
         }
@@ -165,13 +169,14 @@ impl QMetalStorage {
         let dst_shape = Shape::from(dst_shape);
         let device = storage.device().clone();
         let dst = device.new_buffer(dst_shape.elem_count(), DType::F32, "qmatmul")?;
-        let command_buffer = device.command_buffer()?;
+        let command_encoder = device.command_encoder()?;
+
         // In some cases it would be better to use the mm variant, though it has its drawbacks
         // around memory alignemnt.
         for batch_id in 0..m {
             candle_metal_kernels::call_quantized_matmul_mv_t(
-                device.device(),
-                &command_buffer,
+                device.metal_device(),
+                &command_encoder,
                 device.kernels(),
                 self.dtype.into(),
                 (1, 1, n, k),
