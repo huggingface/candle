@@ -405,7 +405,7 @@ METAL_FUNC void layernorm(
             val *= float(alpha[idx - start_idx]);
         }
         if (beta != nullptr) {
-            val *= float(beta[idx - start_idx]);
+            val += float(beta[idx - start_idx]);
         }
         dst[idx] = T(val);
         idx += block_dim;
