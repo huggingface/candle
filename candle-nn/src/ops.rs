@@ -728,6 +728,129 @@ impl candle::CustomOp3 for LayerNorm {
             _ => candle::bail!("unsupported dtype for rmsnorm {:?}", s1.dtype()),
         }
     }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        s1: &candle::CudaStorage,
+        l1: &Layout,
+        s2: &candle::CudaStorage,
+        l2: &Layout,
+        s3: &candle::CudaStorage,
+        l3: &Layout,
+    ) -> Result<(candle::CudaStorage, Shape)> {
+        use candle::cuda_backend::cudarc::driver::{
+            CudaSlice, DeviceRepr, LaunchAsync, LaunchConfig,
+        };
+        use candle::cuda_backend::{kernel_name, kernels, Map3, WrapErr};
+        use candle::{CudaDevice, WithDType};
+
+        struct S {
+            eps: f32,
+        }
+        impl Map3 for S {
+            fn f<T: DeviceRepr + WithDType>(
+                &self,
+                src: &CudaSlice<T>,
+                layout: &Layout,
+                alpha: &CudaSlice<T>,
+                alpha_layout: &Layout,
+                beta: &CudaSlice<T>,
+                beta_layout: &Layout,
+                dev: &CudaDevice,
+            ) -> Result<CudaSlice<T>> {
+                let src = match layout.contiguous_offsets() {
+                    None => candle::bail!("input has to be contiguous"),
+                    Some((o1, o2)) => src.slice(o1..o2),
+                };
+                let alpha = match alpha_layout.contiguous_offsets() {
+                    None => candle::bail!("alpha has to be contiguous"),
+                    Some((o1, o2)) => alpha.slice(o1..o2),
+                };
+                let beta = match beta_layout.contiguous_offsets() {
+                    None => candle::bail!("beta has to be contiguous"),
+                    Some((o1, o2)) => beta.slice(o1..o2),
+                };
+                let el = layout.shape().elem_count();
+                let dims = layout.shape().dims();
+                let dim_m1 = dims[dims.len() - 1];
+                let (n_rows, n_cols) = (el / dim_m1, dim_m1);
+
+                let cfg = LaunchConfig {
+                    grid_dim: (n_rows as u32, 1, 1),
+                    block_dim: (1024, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                let func = dev.get_or_load_func(&kernel_name::<T>("layernorm"), kernels::REDUCE)?;
+                // SAFETY: Set later by running the kernel.
+                let dst = unsafe { dev.alloc::<T>(el) }.w()?;
+                let params = (&src, &dst, &alpha, &beta, n_cols as i32, self.eps);
+                // SAFETY: ffi.
+                unsafe { func.launch(cfg, params) }.w()?;
+                Ok(dst)
+            }
+        }
+
+        use candle::backend::BackendStorage;
+        let dev = s1.device();
+        let slice = S { eps: self.eps }.map(&s1.slice, l1, &s2.slice, l2, &s3.slice, l3, dev)?;
+        let dst = candle::cuda_backend::CudaStorage {
+            slice,
+            device: dev.clone(),
+        };
+        Ok((dst, l1.shape().clone()))
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle::MetalStorage,
+        l1: &Layout,
+        s2: &candle::MetalStorage,
+        l2: &Layout,
+        s3: &candle::MetalStorage,
+        l3: &Layout,
+    ) -> Result<(candle::MetalStorage, Shape)> {
+        use candle::backend::BackendStorage;
+        let device = s1.device();
+        let command_buffer = device.command_buffer()?;
+        let kernels = device.kernels();
+        let name = match (s1.dtype(), s2.dtype(), s3.dtype()) {
+            (DType::F32, DType::F32, DType::F32) => "layernorm_f32",
+            (DType::F16, DType::F16, DType::F16) => "layernorm_f16",
+            (DType::BF16, DType::BF16, DType::BF16) => "layernorm_bf16",
+            (dt1, dt2, dt3) => {
+                candle::bail!("layernorm is not implemented for {dt1:?} {dt2:?} {dt3:?}")
+            }
+        };
+
+        if !(l1.is_contiguous() && l2.is_contiguous() && l3.is_contiguous()) {
+            candle::bail!("Non contiguous layernorm is not implemented");
+        }
+
+        let last_dim = l1.dims()[l1.shape().rank() - 1];
+        let elem_count = l1.shape().elem_count();
+        let output = device.new_buffer(elem_count, s1.dtype(), "rmsnorm")?;
+        candle_metal_kernels::call_layer_norm(
+            device.metal_device(),
+            &command_buffer,
+            kernels,
+            name,
+            elem_count,
+            last_dim,
+            self.eps,
+            s1.buffer(),
+            l1.start_offset() * s1.dtype().size_in_bytes(),
+            s2.buffer(),
+            l2.start_offset() * s2.dtype().size_in_bytes(),
+            s3.buffer(),
+            l3.start_offset() * s3.dtype().size_in_bytes(),
+            &output,
+        )
+        .map_err(candle::Error::wrap)?;
+        let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
+        Ok((newstorage, l1.shape().clone()))
+    }
 }
 
 pub fn layer_norm_slow(x: &Tensor, alpha: &Tensor, beta: &Tensor, eps: f32) -> Result<Tensor> {
