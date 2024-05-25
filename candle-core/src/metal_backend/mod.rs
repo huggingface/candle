@@ -873,7 +873,7 @@ impl BackendStorage for MetalStorage {
                 &command_buffer,
                 &self.device.kernels,
                 name,
-                layout.dims(),
+                &[b_size, l_in, c_out, k_size],
                 params.k_size,
                 params.stride,
                 BufferOffset::zero_offset(&col.buffer),
