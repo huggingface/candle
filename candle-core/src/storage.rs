@@ -1,6 +1,6 @@
 use crate::backend::BackendStorage;
 use crate::op::{self, CmpOp, ReduceOp};
-use crate::{wgpu_backend, CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
+use crate::{WgpuStorage, CpuStorage, CudaStorage, DType, Device, Error, Layout, MetalStorage, Result, Shape};
 use crate::{CustomOp1, CustomOp2, CustomOp3, InplaceOp1, InplaceOp2, InplaceOp3};
 
 // We do not want to implement Clone on Storage as cloning may fail because of
@@ -10,7 +10,7 @@ pub enum Storage {
     Cpu(CpuStorage),
     Cuda(CudaStorage),
     Metal(MetalStorage),
-    WebGpu(wgpu_backend::WgpuStorage)
+    WebGpu(WgpuStorage)
 }
 
 impl Storage {

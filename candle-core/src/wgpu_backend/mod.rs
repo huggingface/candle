@@ -3,9 +3,14 @@ mod storage;
 
 pub mod error;
 pub mod wgpu_functions;
-pub mod measurement;
+
+#[cfg(feature = "wgpu_debug")]
+pub mod debug_info;
 
 pub use device::WgpuDevice;
 pub use storage::WgpuStorage;
-pub use device::Measurements;
-pub use device::MInfo;
+
+#[cfg(feature = "wgpu_debug")]
+pub use debug_info::Measurements;
+#[cfg(feature = "wgpu_debug")]
+pub use debug_info::MInfo;

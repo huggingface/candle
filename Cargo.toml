@@ -74,6 +74,12 @@ yoke = { version = "0.7.2", features = ["derive"] }
 zip = { version = "1.1.1", default-features = false }
 metal = { version = "0.27.0", features = ["mps"]}
 
+#wgpu dependencies:
+wgpu = {version="0.19.3", features=["webgpu", "fragile-send-sync-non-atomic-wasm"]}
+bytemuck = { version = "1.15", features = [ "derive" ] }
+pollster = "0.3.0"
+flume = "0.11.0"
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true

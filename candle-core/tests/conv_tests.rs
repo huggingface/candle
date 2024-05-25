@@ -99,6 +99,7 @@ fn conv1d_small(dev: &Device) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn conv2d_transpose() -> Result<()> {
     let dev = &pollster::block_on(Device::new_webgpu(0))?; 

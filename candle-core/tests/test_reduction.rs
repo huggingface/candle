@@ -1,6 +1,7 @@
-use candle_core::{Device, Tensor};
-use candle_core::Result;
+#[cfg(feature = "wgpu")]
+use candle_core::{Device, Tensor,Result};
 
+#[cfg(feature = "wgpu")]
 #[test]
 fn test_reduction() -> Result<()> {
     let dev = &pollster::block_on(Device::new_webgpu(0))?; 
@@ -48,7 +49,7 @@ fn test_reduction() -> Result<()> {
     Ok(())
 }
 
-
+#[cfg(feature = "wgpu")]
 #[test]
 fn test_conv() -> Result<()> {
     let dev = &pollster::block_on(Device::new_webgpu(0))?; 

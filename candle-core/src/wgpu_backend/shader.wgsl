@@ -4,6 +4,7 @@ struct MetaUnary{
     scalar1 : f32, //optionally scalar value
     scalar2 : f32,
     seed : u32,
+    dst_offset : u32,
 }
 
 struct MetaBinary{
@@ -442,7 +443,7 @@ fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos1 = get_index(op_unary.input1_layout, id);
     if(pos1.is_valid){
         let x = v_dest[pos1.id];
-        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
+        set_unary(op_unary.operation,id + op_unary.dst_offset, x, op_unary.scalar1, op_unary.scalar2);
     }
 }
 
@@ -453,7 +454,7 @@ fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos1 = get_index(op_unary.input1_layout, id);
     if(pos1.is_valid){
         let x = v_input1[pos1.id];
-        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2);
+        set_unary(op_unary.operation,id + op_unary.dst_offset, x, op_unary.scalar1, op_unary.scalar2);
     }
 }
 

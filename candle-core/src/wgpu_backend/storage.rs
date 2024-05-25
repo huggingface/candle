@@ -72,19 +72,19 @@ impl crate::backend::BackendStorage for WgpuStorage{
 
     fn affine(&self, layout: &crate::Layout, mul: f64, add: f64) -> crate::Result<Self> {
         let buffer_dest = wgpu_functions::create_buffer(self.device(), layout.shape().elem_count() * 4);
-        wgpu_functions::queue_unary_from_buffer_op(self.device(), &buffer_dest, &self.buffer,  UnaryOperation::Affine, mul as f32, add as f32, self.dtype, layout)?;
+        wgpu_functions::queue_unary_from_buffer_op(self.device(), &buffer_dest, &self.buffer,  UnaryOperation::Affine, mul as f32, add as f32, self.dtype, layout,0)?;
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone(), self.dtype));
     }
 
     fn powf(&self, layout: &crate::Layout, e: f64) -> crate::Result<Self> {
         let buffer_dest = wgpu_functions::create_buffer(self.device(), layout.shape().elem_count() * 4);
-        wgpu_functions::queue_unary_from_buffer_op(self.device(), &buffer_dest, &self.buffer,  UnaryOperation::PowScalar, e as f32, 0.0, self.dtype,layout)?;
+        wgpu_functions::queue_unary_from_buffer_op(self.device(), &buffer_dest, &self.buffer,  UnaryOperation::PowScalar, e as f32, 0.0, self.dtype,layout,0)?;
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone(), self.dtype));
     }
 
     fn elu(&self, layout: &crate::Layout, alpha: f64) -> crate::Result<Self> {
         let buffer_dest = wgpu_functions::create_buffer(self.device(), layout.shape().elem_count() * 4);
-        wgpu_functions::queue_unary_from_buffer_op(self.device(), &buffer_dest, &self.buffer,  UnaryOperation::Elu, alpha as f32, 0.0, self.dtype,layout)?;
+        wgpu_functions::queue_unary_from_buffer_op(self.device(), &buffer_dest, &self.buffer,  UnaryOperation::Elu, alpha as f32, 0.0, self.dtype,layout,0)?;
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone(), self.dtype));
     }
 
@@ -308,7 +308,7 @@ impl crate::backend::BackendStorage for WgpuStorage{
             "sigmoid" => UnaryOperation::Sigmoid,
             _ =>{panic!("Operation {} is not supported on wgpu", B::NAME)}
         };
-        wgpu_functions::queue_unary_from_buffer_op(self.device(), &buffer_dest, &self.buffer, op, 0.0, 0.0, self.dtype, layout)?;
+        wgpu_functions::queue_unary_from_buffer_op(self.device(), &buffer_dest, &self.buffer, op, 0.0, 0.0, self.dtype, layout,0)?;
         return Ok(WgpuStorage::new(buffer_dest,self.device().clone(), self.dtype));
     }
 
@@ -451,26 +451,15 @@ impl crate::backend::BackendStorage for WgpuStorage{
     }
 
     fn copy_strided_src(&self, dst: &mut Self, dst_offset: usize, src_l: &crate::Layout) -> crate::Result<()> {
-        match src_l.strided_blocks() {
-            crate::StridedBlocks::SingleBlock { start_offset, len } => {
+        match src_l.contiguous_offsets(){
+            Some((start, end)) =>{
+                let len = end - start;
                 let to_copy = (dst.get_length() - dst_offset).min(len);
-                wgpu_functions::queue_copy(self.device(), &dst.buffer, &self.buffer, dst_offset, start_offset, to_copy);
-            }
-            crate::StridedBlocks::MultipleBlocks {
-                block_start_index,
-                block_len,
-            } => {
-                let mut dst_index = dst_offset;
-                for src_index in block_start_index {
-                    let next_dst_index = dst_index + block_len;
-                    if dst_index >= dst.get_length() {
-                        break;
-                    }
-                    let to_copy = usize::min(block_len, dst.get_length() - dst_index);
-                    wgpu_functions::queue_copy(self.device(), &dst.buffer, &self.buffer, dst_index, src_index, to_copy);
-                    dst_index = next_dst_index
-                }
-            }
+                wgpu_functions::queue_copy(self.device(), &dst.buffer, &self.buffer, dst_offset, start, to_copy);
+            },
+            None => {
+                wgpu_functions::queue_unary_from_buffer_op(self.device(), &dst.buffer, &self.buffer, UnaryOperation::Identity, 0.0, 0.0, self.dtype, src_l, dst_offset as u32)?;
+            },
         }
         return Ok(());
     }

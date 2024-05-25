@@ -22,42 +22,11 @@ macro_rules! test_device {
             $fn_name(&Device::new_metal(0)?)
         }
 
-        
+        #[cfg(feature = "wgpu")]
         #[test]
         fn $test_webgpu() -> Result<()> {
             let device = pollster::block_on(Device::new_webgpu(0))?;
             $fn_name(&device)
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! test_device_async {
-    // TODO: Switch to generating the two last arguments automatically once concat_idents is
-    // stable. https://github.com/rust-lang/rust/issues/29599
-    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident, $test_webgpu: ident) => {
-        #[test]
-        fn $test_cpu() -> Result<()> {
-            pollster::block_on($fn_name(&Device::Cpu))
-        }
-
-        #[cfg(feature = "cuda")]
-        #[test]
-        fn $test_cuda() -> Result<()> {
-            pollster::block_on($fn_name(&Device::new_cuda(0)?))
-        }
-
-        #[cfg(feature = "metal")]
-        #[test]
-        fn $test_metal() -> Result<()> {
-            pollster::block_on($fn_name(&Device::new_metal(0)?))
-        }
-
-        
-        #[test]
-        fn $test_webgpu() -> Result<()> {
-            let device = pollster::block_on(Device::new_webgpu(0))?;
-            pollster::block_on($fn_name(&device))
         }
     };
 }

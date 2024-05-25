@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use rand::RngCore;
-use wgpu::{util::DeviceExt, BindGroup, Buffer, ComputePipeline, ShaderModule};
+use wgpu::{util::DeviceExt, BindGroup, Buffer, CommandEncoder, ComputePipeline, ShaderModule};
 
 use crate::{wgpu_backend::device::WgpuDevice, wrongType, Layout, Shape};
 
@@ -15,6 +15,7 @@ struct MetaUnary{
     scalar1 : f32,
     scalar2 : f32,
     seed : u32,
+    dst_offset : u32,
 }
 
 
@@ -281,31 +282,46 @@ pub fn create_buffer_init<T : bytemuck::Pod>(dev : &WgpuDevice, data : &[T]) -> 
     buffer
 }
 
-fn enqueue_workgroups(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup, x : u32, y : u32, z : u32, name : &str) -> u32{
+#[cfg(not(feature = "wgpu_debug"))]
+fn insert_debug_info_start(_ : &WgpuDevice, _ : &CommandEncoder){
+}
+
+#[cfg(not(feature = "wgpu_debug"))]
+fn insert_debug_info_end(_ : &WgpuDevice, _ : &CommandEncoder,_ : &str){
+   
+}
+
+#[cfg(feature = "wgpu_debug")]
+fn insert_debug_info_start(dev : &WgpuDevice, encoder : &mut CommandEncoder){
+    encoder.write_timestamp(&dev.debug.set, 0);    
+}
+#[cfg(feature = "wgpu_debug")]
+fn insert_debug_info_end(dev : &WgpuDevice, encoder : &mut CommandEncoder,label : &str){
+    encoder.write_timestamp(&dev.debug.set, 1);
     let index = dev.debug.counter.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+    encoder.resolve_query_set(&dev.debug.set, 0..2, &dev.debug.query_set_buffer, (index * 256) as u64);
+    dev.debug.insert_info(index,label.to_owned());
+}
+
+fn enqueue_workgroups(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup, x : u32, y : u32, z : u32, name : &str){
     let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    encoder.write_timestamp(&dev.debug.set, 0);
+    insert_debug_info_start(dev, &mut encoder);
     {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: None,
             timestamp_writes: None,
         });
         cpass.insert_debug_marker(&format!("start: {name}"));
-        //cpass.write_timestamp(&dev.debug.set, 0);
         cpass.set_pipeline(pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
         cpass.dispatch_workgroups(x, y, z);
-        //cpass.write_timestamp(&dev.debug.set, 1);
         cpass.insert_debug_marker(&format!("end: {name}"));
     }
-    encoder.write_timestamp(&dev.debug.set, 1);
-    encoder.resolve_query_set(&dev.debug.set, 0..2, &dev.debug.query_set_buffer, (index * 256) as u64);
+    insert_debug_info_end(dev, &mut encoder,name);
     dev.queue.submit(Some(encoder.finish()));
-    return index;
 }
 
-fn enqueue_workgroups_indirect(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup, x : u32, y : u32, z : u32, name : &str) -> u32{
-    let index = dev.debug.counter.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+fn enqueue_workgroups_indirect(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup, x : u32, y : u32, z : u32, name : &str){
     let data = wgpu::util::DispatchIndirectArgs{ x, y, z };
 
     let workgroup_buffer = dev.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -316,7 +332,7 @@ fn enqueue_workgroups_indirect(dev : &WgpuDevice, pipeline : &ComputePipeline, b
 
     
     let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    encoder.write_timestamp(&dev.debug.set, 0);
+    insert_debug_info_start(dev, &mut encoder);
     {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: None,
@@ -330,13 +346,12 @@ fn enqueue_workgroups_indirect(dev : &WgpuDevice, pipeline : &ComputePipeline, b
         //cpass.write_timestamp(&dev.debug.set, 1);
         cpass.insert_debug_marker(&format!("end: {name}"));
     }
-    encoder.write_timestamp(&dev.debug.set, 1);
-    encoder.resolve_query_set(&dev.debug.set, 0..2, &dev.debug.query_set_buffer, (index * 256) as u64);
+    let index = insert_debug_info_end(dev, &mut encoder,name);
     dev.queue.submit(Some(encoder.finish()));
     return index;
 }
 
-fn enqueue(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup, length : u32, name : &str) -> u32{
+fn enqueue(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup, length : u32, name : &str){
     return enqueue_workgroups(dev, pipeline, bind_group,(length + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE, 1, 1,name);
 }
 
@@ -411,7 +426,14 @@ fn create_bind_group_input2<T : bytemuck::Pod>(dev : &WgpuDevice, pipeline : &Co
 }
 
 pub fn queue_unary_inplace_op(dev : &WgpuDevice, buffer : &Buffer, op : UnaryOperation, scalar1 : f32, scalar2 : f32, dtype : crate::DType, layout : crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{operation : op as u32, scalar1, scalar2, input_layout : MatrixLayout::from_layout(&layout), seed : dev.rand_state.lock().unwrap().next_u32()};
+    let meta = MetaUnary{
+        operation : op as u32, 
+        scalar1, 
+        scalar2, 
+        input_layout : MatrixLayout::from_layout(&layout),
+        seed : dev.rand_state.lock().unwrap().next_u32(),
+        dst_offset : 0
+    };
     
     let pipeline = dev.get_pipeline(
         match dtype{
@@ -421,13 +443,17 @@ pub fn queue_unary_inplace_op(dev : &WgpuDevice, buffer : &Buffer, op : UnaryOpe
         });
     
     let bind_group = create_bind_group_input0(dev,pipeline, meta, buffer);
-    let debug_info = enqueue(dev, pipeline, bind_group, layout.shape().elem_count() as u32, &format!("unary inplace op:{:?}, dtype:{:?}", op, dtype));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("unary inplace op:{:?}, dtype:{:?}", op, dtype));
+    enqueue(dev, pipeline, bind_group, layout.shape().elem_count() as u32, &format!("unary inplace op:{:?}, dtype:{:?}", op, dtype));
     return Ok(());
 }
 
-pub fn queue_unary_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : UnaryOperation, scalar1 : f32, scalar2 : f32, dtype : crate::DType,input_layout : &crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{operation : op as u32,scalar1,scalar2, input_layout: MatrixLayout::from_layout(&input_layout), seed : dev.rand_state.lock().unwrap().next_u32()};
+pub fn queue_unary_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : UnaryOperation, scalar1 : f32, scalar2 : f32, dtype : crate::DType,input_layout : &crate::Layout, dst_offset : u32) -> crate::Result<()>{
+    let meta = MetaUnary{
+        operation : op as u32,
+        scalar1,scalar2, 
+        input_layout: MatrixLayout::from_layout(&input_layout), 
+        seed : dev.rand_state.lock().unwrap().next_u32(),
+        dst_offset};
 
     let pipeline = dev.get_pipeline(
         match dtype{
@@ -437,8 +463,7 @@ pub fn queue_unary_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffe
         });
     
     let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-    let debug_info =  enqueue(dev, pipeline, bind_group, input_layout.shape().elem_count() as u32, &format!("unary op:{:?}, dtype:{:?}", op, dtype));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("unary op:{:?}, dtype:{:?}", op, dtype));
+    enqueue(dev, pipeline, bind_group, input_layout.shape().elem_count() as u32, &format!("unary op:{:?}, dtype:{:?}", op, dtype));
     return Ok(());
 }
 
@@ -455,8 +480,7 @@ pub fn queue_binary_buffer_inplace(dev : &WgpuDevice, buffer_dest : &Buffer, buf
         });
 
     let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input1);
-    let debug_info = enqueue(dev,  pipeline, bind_group, lay1.shape().elem_count() as u32, &format!("binary inplace op:{:?}, dtype:{:?}", op, dtype));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("binary inplace op:{:?}, dtype:{:?}", op, dtype));
+    enqueue(dev,  pipeline, bind_group, lay1.shape().elem_count() as u32, &format!("binary inplace op:{:?}, dtype:{:?}", op, dtype));
     return Ok(());
 }
 
@@ -472,8 +496,7 @@ pub fn queue_binary_buffer_from_buffer(dev : &WgpuDevice, buffer_dest : &Buffer,
         });
 
     let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    let debug_info = enqueue(dev, pipeline, bind_group, lay1.shape().elem_count() as u32, &format!("binary op:{:?}, dtype:{:?}", op, dtype));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("binary op:{:?}, dtype:{:?}", op, dtype));
+    enqueue(dev, pipeline, bind_group, lay1.shape().elem_count() as u32, &format!("binary op:{:?}, dtype:{:?}", op, dtype));
     return Ok(());
 }
 
@@ -494,8 +517,7 @@ pub fn queue_matmul_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_inpu
         });
 
     let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    let debug_info = enqueue_workgroups(dev, pipeline, bind_group,(k + 7) / 8, (m + 7) / 8, b, &format!("matmul, dtype:{:?}", dtype));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("matmul, dtype:{:?}", dtype));
+    enqueue_workgroups(dev, pipeline, bind_group,(k + 7) / 8, (m + 7) / 8, b, &format!("matmul, dtype:{:?}", dtype));
     return Ok(());
 }
 
@@ -533,23 +555,16 @@ pub fn queue_reduce_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buff
     let pipeline = dev.get_pipeline(pipeline_type.clone());
 
     let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-    let debug_info = enqueue_workgroups(dev, pipeline, bind_group, 1, dest_size, 1, &format!("reduce op:{:?}, dtype:{:?}", op, dtype));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("reduce op:{:?}, dtype:{:?}", op, dtype));
+    enqueue_workgroups(dev, pipeline, bind_group, 1, dest_size, 1, &format!("reduce op:{:?}, dtype:{:?}", op, dtype));
     return Ok(());
 }
 
 pub fn queue_copy(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input : &Buffer, destination_offset : usize, source_offset : usize, copy_size : usize){
-    let index = dev.debug.counter.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
-
     let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    encoder.write_timestamp(&dev.debug.set, 0);
+    insert_debug_info_start(dev, &mut encoder);
     encoder.copy_buffer_to_buffer(buffer_input, source_offset as u64 * 4, buffer_dest, destination_offset as u64 * 4, copy_size as u64  * 4);
-   
-    encoder.write_timestamp(&dev.debug.set, 1);
-    encoder.resolve_query_set(&dev.debug.set, 0..2, &dev.debug.query_set_buffer, (index * 256) as u64);
-    
+    insert_debug_info_end(dev, &mut encoder, &format!("copy"));
     dev.queue.submit(Some(encoder.finish()));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(index,format!("copy"));
 }
 
 #[allow(dead_code)]
@@ -564,8 +579,7 @@ pub fn queue_cmp_buffer_from_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, bu
         });
 
     let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    let debug_info = enqueue(dev, pipeline, bind_group, ((layout_input1.shape().elem_count() + 3) / 4) as u32, &format!("cmp op:{:?}, dtype:{:?}", op, dtype));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("cmp op:{:?}, dtype:{:?}", op, dtype));
+    enqueue(dev, pipeline, bind_group, ((layout_input1.shape().elem_count() + 3) / 4) as u32, &format!("cmp op:{:?}, dtype:{:?}", op, dtype));
     return Ok(());
 }
 
@@ -615,9 +629,7 @@ pub fn queue_conv2d(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &B
         });
 
     let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    let debug_info = enqueue_workgroups(dev, pipeline, bind_group, (params.out_w() as u32 + 7) / 8, (params.out_h() as u32 + 7) / 8, params.c_out as u32, &format!("conv2d, dtype:{:?}", dtype));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("conv2d, dtype:{:?}", dtype));
-    //enqueue_workgroups(dev, pipeline, bind_group, params.out_w() as u32, params.out_h() as u32, params.c_out as u32);
+    enqueue_workgroups(dev, pipeline, bind_group, (params.out_w() as u32 + 7) / 8, (params.out_h() as u32 + 7) / 8, params.c_out as u32, &format!("conv2d, dtype:{:?}", dtype));
     return Ok(());
 }
 
@@ -672,29 +684,25 @@ pub fn queue_conv2d_transpose(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_i
         });
 
     let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    let debug_info = enqueue_workgroups(dev, pipeline, bind_group, (params.out_w() as u32 + 7) / 8, (params.out_h() as u32 + 7) / 8, params.c_out as u32, &format!("conv2d_transpose, dtype:{:?}", dtype));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("conv2d_transpose, dtype:{:?}", dtype));
-    //enqueue_workgroups(dev, pipeline, bind_group, params.out_w() as u32, params.out_h() as u32, params.c_out as u32);
+    enqueue_workgroups(dev, pipeline, bind_group, (params.out_w() as u32 + 7) / 8, (params.out_h() as u32 + 7) / 8, params.c_out as u32, &format!("conv2d_transpose, dtype:{:?}", dtype));
     return Ok(());
 }
 
 pub fn queue_convert_u32_to_f32(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, input_layout : &crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{operation : 0 ,scalar1 : 0.0,scalar2 : 0.0, input_layout: MatrixLayout::from_layout(&input_layout), seed : dev.rand_state.lock().unwrap().next_u32()};
+    let meta = MetaUnary{operation : 0 ,scalar1 : 0.0,scalar2 : 0.0, input_layout: MatrixLayout::from_layout(&input_layout), seed : dev.rand_state.lock().unwrap().next_u32(), dst_offset : 0};
 
     let pipeline = dev.get_pipeline(Pipelines::ConvertU32ToF32);
     let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-    let debug_info = enqueue(dev, pipeline, bind_group, input_layout.shape().elem_count() as u32, &format!("u32_to_f32"));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("u32_to_f32"));
+    enqueue(dev, pipeline, bind_group, input_layout.shape().elem_count() as u32, &format!("u32_to_f32"));
     return Ok(());
 }
 
 pub fn queue_convert_f32_to_u32(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, input_layout : &crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{operation : 0 ,scalar1 : 0.0,scalar2 : 0.0, input_layout: MatrixLayout::from_layout(&input_layout), seed : dev.rand_state.lock().unwrap().next_u32()};
+    let meta = MetaUnary{operation : 0 ,scalar1 : 0.0,scalar2 : 0.0, input_layout: MatrixLayout::from_layout(&input_layout), seed : dev.rand_state.lock().unwrap().next_u32(), dst_offset : 0};
 
     let pipeline = dev.get_pipeline(Pipelines::ConvertF32ToU32);
     let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-    let debug_info = enqueue(dev, pipeline, bind_group, input_layout.shape().elem_count() as u32, &format!("f32_to_u32"));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("f32_to_u32"));
+    enqueue(dev, pipeline, bind_group, input_layout.shape().elem_count() as u32, &format!("f32_to_u32"));
     return Ok(());
 }
 
@@ -732,8 +740,7 @@ pub fn queue_index_select(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input
         });
 
     let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input, buffer_index);
-    let debug_info = enqueue_workgroups_indirect(dev, pipeline, bind_group, (length + 7) / 8, ((lay_index.shape().elem_count() + 7) / 8) as u32, 1, &format!("index_select : dtype{:?}", input_dtype));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(debug_info,format!("index_select : dtype{:?}", input_dtype));
+    enqueue_workgroups_indirect(dev, pipeline, bind_group, (length + 7) / 8, ((lay_index.shape().elem_count() + 7) / 8) as u32, 1, &format!("index_select : dtype{:?}", input_dtype));
     return Ok(());
 }
 
@@ -750,18 +757,16 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-
-    let index = dev.debug.counter.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
-
     let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
-    encoder.write_timestamp(&dev.debug.set, 0);
+    
+    insert_debug_info_start(dev, &mut encoder);
+    
     encoder.copy_buffer_to_buffer(&buffer, 0, &staging_buffer, 0, dest_size);
-    encoder.write_timestamp(&dev.debug.set, 1);
-    encoder.resolve_query_set(&dev.debug.set, 0..2, &dev.debug.query_set_buffer, (index * 256) as u64);
+    
+    insert_debug_info_end(dev, &mut encoder, &format!("copy to cpu"));
     // Submits command encoder for processing
     dev.queue.submit(Some(encoder.finish()));
-    dev.debug.shader_pipeline.lock().expect("could not lock debug info").insert(index,format!("copy to cpu"));
+    
 
     // Note that we're not calling `.await` here.
     let buffer_slice = staging_buffer.slice(..);

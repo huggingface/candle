@@ -1,45 +1,17 @@
-use std::collections::HashMap;
-use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
 use rand::SeedableRng;
-use serde::{Deserialize, Serialize};
-use wgpu::Device;
+
 
 use crate::backend::BackendStorage;
 use crate::{notImplemented, wrongType, Layout};
 
+#[cfg(feature = "wgpu_debug")]
+use super::debug_info::{DebugInfo, Measurements,MInfo};
+
+
 use super::wgpu_functions::{self, create_buffer, create_buffer_init, UnaryOperation};
 use super::WgpuStorage;
-
-
-#[derive(Debug, Clone)]
-pub(crate) struct DebugInfo{
-    pub(crate) set : Arc<wgpu::QuerySet>,
-    pub (crate) query_set_buffer : Arc<wgpu::Buffer>,
-    pub (crate) counter :  Arc<AtomicU32>,
-    pub (crate) shader_pipeline : Arc<Mutex<HashMap<u32, String>>>,
-    
-}
-
-impl DebugInfo {
-    fn new(device : &Device) -> Self{
-        // Create a query set for timer queries
-        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
-           count: 2, // We need 2 queries: one for start and one for end
-           ty: wgpu::QueryType::Timestamp,
-           label: None,
-        });
-        // Create a buffer to store the query results
-        let query_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 256 * 10000000 as u64,
-            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::QUERY_RESOLVE,
-            mapped_at_creation: false,
-        });
-        return DebugInfo{set : Arc::new(query_set), counter : Arc::new(AtomicU32::new(0)), shader_pipeline : Arc::new(Mutex::new(HashMap::new())), query_set_buffer : Arc::new(query_buffer)};
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct  WgpuDevice {
@@ -48,7 +20,9 @@ pub struct  WgpuDevice {
     pub pipelines : Arc<Vec<wgpu::ComputePipeline>>,
     pub shader : Arc<wgpu::ShaderModule>,
     pub rand_state : Arc<Mutex<rand::rngs::StdRng>>,
-    pub(crate) debug : DebugInfo,
+
+    #[cfg(feature = "wgpu_debug")]
+    pub debug : DebugInfo,
 }
 
 #[derive(Debug, Clone)]
@@ -79,32 +53,7 @@ pub (crate) enum Pipelines{
     ConvertU32ToF32,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
 
-pub struct MInfo{
-    pub label: String,
-    pub start_time : u64,
-    pub end_time : u64
-}
-
-impl MInfo {
-    pub fn new(label: String, start_time: u64, end_time: u64) -> Self {
-        Self { label, start_time, end_time }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-
-pub struct Measurements{
-    pub data : Vec<MInfo>,
-    timestamp_period : f32
-}
-
-impl Measurements {
-    pub fn new(timestamp_period: f32) -> Self {
-        Self { data : vec![], timestamp_period }
-    }
-}
 
 
 impl WgpuDevice{
@@ -160,19 +109,23 @@ impl WgpuDevice{
             Self::load_pipeline(&device, &shader2, Pipelines::Conv2DTransposeU32),
             Self::load_pipeline(&device, &shader2, Pipelines::ConvertU32ToF32),
             ];
-        let debug_info = DebugInfo::new(&device);
+
+        #[cfg(feature = "wgpu_debug")]
+        let debug_info = super::debug_info::DebugInfo::new(&device);
+
         Ok(WgpuDevice {
             device: Arc::new(device),
             queue: Arc::new(queue),
             pipelines : Arc::new(pipelines),
             shader : Arc::new(shader1),
             rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy())),
+            #[cfg(feature = "wgpu_debug")]
             debug : debug_info
         })
     }
 
     
-
+    #[cfg(feature = "wgpu_debug")]
     pub async fn get_debug_info_full(&self) -> crate::Result<Measurements>{
         let data = wgpu_functions::read_data_from_gpu_async::<u64>(self, &self.debug.query_set_buffer).await;
         let period = self.queue.get_timestamp_period();
@@ -183,10 +136,11 @@ impl WgpuDevice{
         
         Ok(result)
     }
-    
-    pub async fn get_debug_info(&self) -> crate::Result<HashMap<String, Vec<u64>>>{
+
+    #[cfg(feature = "wgpu_debug")]
+    pub async fn get_debug_info(&self) -> crate::Result<std::collections::HashMap<String, Vec<u64>>>{
         let info = self.get_debug_info_full().await?;
-        let mut map: HashMap<String, Vec<u64>> = HashMap::new();
+        let mut map: std::collections::HashMap<String, Vec<u64>> = std::collections::HashMap::new();
 
         for item in info.data.iter() {
             map.entry(item.label.clone()).or_insert_with(Vec::new).push(item.end_time - item.start_time);

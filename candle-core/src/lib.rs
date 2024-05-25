@@ -71,7 +71,10 @@ mod tensor_cat;
 pub mod test_utils;
 pub mod utils;
 mod variable;
+
+#[cfg(feature = "wgpu")]
 pub mod wgpu_backend;
+pub mod dummy_wgpu_backend;
 
 #[cfg(feature = "cudnn")]
 pub use cuda_backend::cudnn;
@@ -108,6 +111,15 @@ extern crate intel_mkl_src;
 
 #[cfg(feature = "accelerate")]
 extern crate accelerate_src;
+
+#[cfg(feature = "wgpu")]
+pub use wgpu_backend as wgpu;
+
+#[cfg(not(feature = "wgpu"))]
+pub use dummy_wgpu_backend as wgpu;
+
+pub use wgpu::{WgpuDevice, WgpuStorage};
+pub use crate::dummy_wgpu_backend::WebGpuError;
 
 pub trait ToUsize2 {
     fn to_usize2(self) -> (usize, usize);

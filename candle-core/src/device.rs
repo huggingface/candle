@@ -16,7 +16,7 @@ pub enum Device {
     Cpu,
     Cuda(crate::CudaDevice),
     Metal(crate::MetalDevice),
-    WebGpu(crate::wgpu_backend::WgpuDevice)
+    WebGpu(crate::WgpuDevice)
 }
 
 pub trait NdArray {
@@ -136,7 +136,7 @@ impl Device {
     }
 
     pub async fn new_webgpu(ordinal: usize) -> Result<Self> {
-        Ok(Self::WebGpu(crate::wgpu_backend::WgpuDevice::create(ordinal).await?))
+        Ok(Self::WebGpu(crate::WgpuDevice::create(ordinal).await?))
     }
 
     pub fn set_seed(&self, seed: u64) -> Result<()> {

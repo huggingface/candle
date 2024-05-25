@@ -1,4 +1,4 @@
-use candle::{backend::BackendStorage, wgpu_backend::WgpuStorage, CpuStorage, DType, Layout, Result, Shape, Tensor};
+use candle::{backend::BackendStorage, WgpuStorage, CpuStorage, DType, Layout, Result, Shape, Tensor};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
