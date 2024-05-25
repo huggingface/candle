@@ -605,6 +605,7 @@ fn main() -> anyhow::Result<()> {
             }
             sampled += 1;
             if next_token == eos_token {
+                break;
             };
         }
         if let Some(rest) = tos.decode_rest().map_err(candle::Error::msg)? {
