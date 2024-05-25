@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use rand::RngCore;
+use std::borrow::Cow;
 use wgpu::{util::DeviceExt, BindGroup, Buffer, CommandEncoder, ComputePipeline, ShaderModule};
 
 use crate::{wgpu_backend::device::WgpuDevice, wrongType, Layout, Shape};
@@ -7,224 +7,295 @@ use crate::{wgpu_backend::device::WgpuDevice, wrongType, Layout, Shape};
 use super::device::Pipelines;
 
 //const MAX_STRIDE_INFO : usize = 4;
-#[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-struct MetaUnary{
-    input_layout : MatrixLayout,
-    operation : u32,
-    scalar1 : f32,
-    scalar2 : f32,
-    seed : u32,
-    dst_offset : u32,
+struct MetaUnary {
+    input_layout: MatrixLayout,
+    operation: u32,
+    scalar1: f32,
+    scalar2: f32,
+    seed: u32,
 }
 
-
-#[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-struct MetaBinary{
-    input1_layout : MatrixLayout,
-    input2_layout : MatrixLayout,
-    operation : u32,
+struct MetaUnaryContiguous {
+    offset: u32,
+    length: u32,
+    operation: u32,
+    scalar1: f32, //optionally scalar value
+    scalar2: f32,
+    seed: u32,
 }
 
-#[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-struct MetaIndexSelect{
-    input1_layout : MatrixLayout,
-    input2_layout : MatrixLayout,
-    input_stride_x : u32,   //x specifys for values of one dim
-    input_stride_y : u32,   //y specifys per value of the index
-    output_stride_x : u32,  //x specifys for values of one dim
-    output_stride_y : u32,  //y specifys per value of the index
-    length : u32
+struct MetaBinary {
+    input1_layout: MatrixLayout,
+    input2_layout: MatrixLayout,
+    operation: u32,
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct MetaBinaryContiguousBoth {
+    input1_length: u32,
+    input1_offset: u32,
+    input2_length: u32,
+    input2_offset: u32,
+    operation: u32,
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct MetaIndexSelect {
+    input1_layout: MatrixLayout,
+    input2_layout: MatrixLayout,
+    input_stride_x: u32,  //x specifys for values of one dim
+    input_stride_y: u32,  //y specifys per value of the index
+    output_stride_x: u32, //x specifys for values of one dim
+    output_stride_y: u32, //y specifys per value of the index
+    length: u32,
 }
 
 //(M X N) * (N X K)
-#[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-struct MetaInfoMatMul{
-    b : u32,   //Batches
-    m : u32,  //elements
-    n : u32,  //elements
-    k : u32,   //elements
-    input1 : MatrixLayout,
-    input2 : MatrixLayout
+struct MetaInfoMatMul {
+    b: u32, //Batches
+    m: u32, //elements
+    n: u32, //elements
+    k: u32, //elements
+    input1_stride_b: u32,
+    input1_stride_m: u32,
+    input1_stride_n: u32,
+    input1_offset: u32,
+    input2_stride_b: u32,
+    input2_stride_n: u32,
+    input2_stride_k: u32,
+    input2_offset: u32,
 }
 
-#[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-struct MetaInfoReduce{    
-    input_layout : MatrixLayout,
-    operation : u32,
+struct MetaInfoReduce {
+    input_layout: MatrixLayout,
+    operation: u32,
+    workgroup_count: u32,
+    workgroup_size: u32,
+    length: u32, //Length of Reduction(e.g count of elements to sum per output),
+
+    output_to_start_stride1: u32, //Stride between each new Output Index
+
+    output_to_start_shape_stride2: u32, //After x Outputs use Stride 2
+    output_to_start_stride2: u32,
+
+    stride_reduction: u32, //The Stride to use for elements in Reduction
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct MetaInfoRmsNormContiguous{
     workgroup_count : u32,
     workgroup_size : u32,
     length : u32, //Length of Reduction(e.g count of elements to sum per output),
 
-    output_to_start_stride1 : u32, //Stride between each new Output Index
-    
-    output_to_start_shape_stride2 : u32, //After x Outputs use Stride 2 
-    output_to_start_stride2 : u32,
-    
-    stride_reduction : u32, //The Stride to use for elements in Reduction
+    input1_offset : u32,
+    input2_offset : u32,
+
+    eps : f32
 }
 
-#[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-struct MetaConv2d{
-    b : u32, //batch_count ("normal" matmul = 1)
-    c_in : u32, //Output Channel, we are using workgroups for all c_out, x, y pairs
-    kernel_x : u32,
-    kernel_y : u32,
-    kernel_x_stride : u32,
-    kernel_y_stride : u32,
-    kernel_c_stride : u32,
-    kernel_b_stride : u32,
-    kernel_offset : u32,
+struct MetaConv2d {
+    b: u32,    //batch_count ("normal" matmul = 1)
+    c_in: u32, //Output Channel, we are using workgroups for all c_out, x, y pairs
+    kernel_x: u32,
+    kernel_y: u32,
+    kernel_x_stride: u32,
+    kernel_y_stride: u32,
+    kernel_c_stride: u32,
+    kernel_b_stride: u32,
+    kernel_offset: u32,
     size_in_x: u32,
-    size_in_y : u32,
-    stride_batch_out : u32,
+    size_in_y: u32,
+    stride_batch_out: u32,
     stride_c_out: u32,
     stride_y_out: u32,
-    size_y_out : u32,
-    
-    stride_batch_input : u32,
-    stride_c_in : u32,
-    stride_y_in : u32,
-    stride_x_in : u32,
-    padding : u32,
-    stride_conv : u32,
-    dialation_conv : u32,
-    offset_input : u32,
+    size_y_out: u32,
+
+    stride_batch_input: u32,
+    stride_c_in: u32,
+    stride_y_in: u32,
+    stride_x_in: u32,
+    padding: u32,
+    stride_conv: u32,
+    dialation_conv: u32,
+    offset_input: u32,
 }
 
-
-#[derive(Clone,Copy,bytemuck::Pod,bytemuck::Zeroable)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
-struct MatrixLayout{
-    shape1 : u32, 
-    shape2 : u32, 
-    shape3 : u32, 
-    shape4 : u32, 
-    shape5 : u32, 
-    stride1 : u32, 
-    stride2 : u32, 
-    stride3 : u32, 
-    stride4 : u32, 
-    stride5 : u32, 
-    offset : u32,
-    length : u32, 
+struct MetaCopy2d {
+    d1: u32,
+    d2: u32,
+    input1_stride1: u32,
+    dest_stride1: u32,
+    input1_offset: u32,
+    dest_offset: u32,
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct MetaConvert {
+    input1_layout: MatrixLayout,
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct MetaCopyStrided {
+    input1_layout: MatrixLayout,
+    dest_offset: u32,
+}
+
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct MatrixLayout {
+    shape1: u32,
+    shape2: u32,
+    shape3: u32,
+    shape4: u32,
+    shape5: u32,
+    stride1: u32,
+    stride2: u32,
+    stride3: u32,
+    stride4: u32,
+    stride5: u32,
+    offset: u32,
+    length: u32,
 }
 
 impl MatrixLayout {
-    fn new(shape: &[usize;5], stride : &[usize;5], offset: u32, length : u32) -> Self {
-        Self { shape1 : shape[0] as u32, shape2 : shape[1] as u32, shape3: shape[2] as u32, shape4: shape[3] as u32, shape5: shape[4]as u32, stride1 : stride[0]as u32, stride2: stride[1]as u32, stride3: stride[2]as u32, stride4: stride[3]as u32, stride5: stride[4]as u32, offset, length}
+    fn new(shape: &[usize; 5], stride: &[usize; 5], offset: u32, length: u32) -> Self {
+        Self {
+            shape1: shape[0] as u32,
+            shape2: shape[1] as u32,
+            shape3: shape[2] as u32,
+            shape4: shape[3] as u32,
+            shape5: shape[4] as u32,
+            stride1: stride[0] as u32,
+            stride2: stride[1] as u32,
+            stride3: stride[2] as u32,
+            stride4: stride[3] as u32,
+            stride5: stride[4] as u32,
+            offset,
+            length,
+        }
     }
-    
-    fn from_layout(layout : &Layout) -> Self{
-        let shape = layout.shape().dims();
-        let mut dims =  [1; 5];
-        //dims[..shape.len()].clone_from_slice(shape);
-        dims[5-shape.len()..].clone_from_slice(shape);
 
-       
+    fn from_layout(layout: &Layout) -> Self {
+        let shape = layout.shape().dims();
+        let mut dims = [1; 5];
+        //dims[..shape.len()].clone_from_slice(shape);
+        dims[5 - shape.len()..].clone_from_slice(shape);
 
         let mut stride_arr = [1; 5];
         let stride = layout.stride();
         //stride_arr[..stride.len()].clone_from_slice(stride);
-        stride_arr[5-stride.len()..].clone_from_slice(stride);
-
+        stride_arr[5 - stride.len()..].clone_from_slice(stride);
 
         let offset = layout.start_offset();
 
-        if layout.is_contiguous(){
-            return Self::new(&dims, &stride_arr, offset as u32,layout.shape().elem_count() as u32);
+        if layout.is_contiguous() {
+            return Self::new(
+                &dims,
+                &stride_arr,
+                offset as u32,
+                layout.shape().elem_count() as u32,
+            );
+        } else {
+            return Self::new(&dims, &stride_arr, offset as u32, 0);
         }
-       else{
-        return Self::new(&dims, &stride_arr, offset as u32, 0);
-
-       }
-
     }
 }
 
-
-
-#[derive(Copy, Clone,Debug)]
+#[derive(Copy, Clone, Debug)]
 //#[allow(dead_code)]
-pub enum UnaryOperation{
+pub enum UnaryOperation {
     SetZero = 0,
     SetOne = 1,
     IncOne = 2,
-    DecOne= 3,
-    Identity= 4,
-    Square= 5,
-    Affine=6,
-    Abs= 7,
-    Acos= 8,
-    Acosh= 9,
-    Asin= 10,
-    Asinh= 11,
-    Atan= 12,
-    Atanh= 13,
-    Ceil= 14,
-    Cos=15,
-    Cosh=16,
-    Deg=17,
-    Exp=21,
-    Floor=22,
-    Fract=23,
-    InverseSqrt= 24,
-    Log= 25,
-    Log2= 26,
-    Rad= 27,
-    Sign= 28,
-    Sin= 29,
-    Sinh= 31,
-    Sqrt= 32,
-    Tan= 33,
-    Tanh= 34,
-    Trunc= 35,
-    BinaryStep= 36, 
-    Sigmoid= 37,
-    Relu= 38,
-    Softplus= 39,
-    LeakyRelu= 40,
-    SiLu= 41,
-    Gassian= 42,
-   
-    Neg= 45,
-    Inverse= 46,
-    RandNormal=47,
-    RandUniform=48,
-    Gelu=49,
-    Round=50,
-    
-    Elu=52,
-    AddScalar=101,
-    MultScalar=102,
-    MinusScalar=103,
-    DivScalar=104,
-    MaxScalar=105,
-    MinScalar=106,
-    PowScalar=107,
+    DecOne = 3,
+    Identity = 4,
+    Square = 5,
+    Affine = 6,
+    Abs = 7,
+    Acos = 8,
+    Acosh = 9,
+    Asin = 10,
+    Asinh = 11,
+    Atan = 12,
+    Atanh = 13,
+    Ceil = 14,
+    Cos = 15,
+    Cosh = 16,
+    Deg = 17,
+    Exp = 21,
+    Floor = 22,
+    Fract = 23,
+    InverseSqrt = 24,
+    Log = 25,
+    Log2 = 26,
+    Rad = 27,
+    Sign = 28,
+    Sin = 29,
+    Sinh = 31,
+    Sqrt = 32,
+    Tan = 33,
+    Tanh = 34,
+    Trunc = 35,
+    BinaryStep = 36,
+    Sigmoid = 37,
+    Relu = 38,
+    Softplus = 39,
+    LeakyRelu = 40,
+    SiLu = 41,
+    Gassian = 42,
+
+    Neg = 45,
+    Inverse = 46,
+    RandNormal = 47,
+    RandUniform = 48,
+    Gelu = 49,
+    Round = 50,
+
+    Elu = 52,
+    AddScalar = 101,
+    MultScalar = 102,
+    MinusScalar = 103,
+    DivScalar = 104,
+    MaxScalar = 105,
+    MinScalar = 106,
+    PowScalar = 107,
 }
 
-#[derive(Copy, Clone,Debug)]
+#[derive(Copy, Clone, Debug)]
 #[allow(dead_code)]
-pub enum BinaryOperation{
+pub enum BinaryOperation {
     SetY = 0,
     Add = 1,
     Mult = 2,
-    Minus= 3,
-    Div= 4,
-    Max= 5,
-    Min= 6,
-    Pow= 7,
+    Minus = 3,
+    Div = 4,
+    Max = 5,
+    Min = 6,
+    Pow = 7,
 }
 
-#[derive(Copy, Clone,Debug)]
+#[derive(Copy, Clone, Debug)]
 #[allow(dead_code)]
-pub enum ReduceOperations{
+pub enum ReduceOperations {
     Sum = 0,
     Min = 1,
     Max = 2,
@@ -232,21 +303,20 @@ pub enum ReduceOperations{
     ArgMax = 4,
 }
 
-#[derive(Copy, Clone,Debug)]
+#[derive(Copy, Clone, Debug)]
 #[allow(dead_code)]
-pub enum CmpOperation{
+pub enum CmpOperation {
     Eq = 0,
     Ne = 1,
     Lt = 2,
-    Le= 3,
-    Gt= 4,
+    Le = 3,
+    Gt = 4,
     Ge = 5,
 }
 
+const WORKGROUP_SIZE: u32 = 64;
 
-const WORKGROUP_SIZE : u32 = 64;
-
-pub fn get_shader(device: &wgpu::Device, shader : &'static str) -> ShaderModule {
+pub fn get_shader(device: &wgpu::Device, shader: &'static str) -> ShaderModule {
     let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader)),
@@ -255,56 +325,78 @@ pub fn get_shader(device: &wgpu::Device, shader : &'static str) -> ShaderModule 
 }
 
 /// Size is in Bytes!
-pub fn create_buffer(dev : &WgpuDevice, size : usize) -> Buffer{
+pub fn create_buffer(dev: &WgpuDevice, size: usize) -> Buffer {
     let buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: size as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_SRC
+            | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     buffer
 }
 
-pub fn create_uniform_buffer<T : bytemuck::Pod>(dev : &WgpuDevice, value : T, name : &str) -> Buffer{
-    return dev.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some(name),
-        contents: bytemuck::cast_slice(&[value]),
-        usage: wgpu::BufferUsages::UNIFORM});
+pub fn create_uniform_buffer<T: bytemuck::Pod>(dev: &WgpuDevice, value: T, name: &str) -> Buffer {
+    return dev
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(name),
+            contents: bytemuck::cast_slice(&[value]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 }
 
-pub fn create_buffer_init<T : bytemuck::Pod>(dev : &WgpuDevice, data : &[T]) -> Buffer {
-    let buffer = dev.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None,
-        contents: bytemuck::cast_slice(data),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-    });
+pub fn create_buffer_init<T: bytemuck::Pod>(dev: &WgpuDevice, data: &[T]) -> Buffer {
+    let buffer = dev
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        });
 
     buffer
 }
 
 #[cfg(not(feature = "wgpu_debug"))]
-fn insert_debug_info_start(_ : &WgpuDevice, _ : &CommandEncoder){
-}
+fn insert_debug_info_start(_: &WgpuDevice, _: &CommandEncoder) {}
 
 #[cfg(not(feature = "wgpu_debug"))]
-fn insert_debug_info_end(_ : &WgpuDevice, _ : &CommandEncoder,_ : &str){
-   
-}
+fn insert_debug_info_end(_: &WgpuDevice, _: &CommandEncoder, _: &str) {}
 
 #[cfg(feature = "wgpu_debug")]
-fn insert_debug_info_start(dev : &WgpuDevice, encoder : &mut CommandEncoder){
-    encoder.write_timestamp(&dev.debug.set, 0);    
+fn insert_debug_info_start(dev: &WgpuDevice, encoder: &mut CommandEncoder) {
+    encoder.write_timestamp(&dev.debug.set, 0);
 }
 #[cfg(feature = "wgpu_debug")]
-fn insert_debug_info_end(dev : &WgpuDevice, encoder : &mut CommandEncoder,label : &str){
+fn insert_debug_info_end(dev: &WgpuDevice, encoder: &mut CommandEncoder, label: &str) {
     encoder.write_timestamp(&dev.debug.set, 1);
-    let index = dev.debug.counter.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
-    encoder.resolve_query_set(&dev.debug.set, 0..2, &dev.debug.query_set_buffer, (index * 256) as u64);
-    dev.debug.insert_info(index,label.to_owned());
+    let index = dev
+        .debug
+        .counter
+        .fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+    encoder.resolve_query_set(
+        &dev.debug.set,
+        0..2,
+        &dev.debug.query_set_buffer,
+        (index * 256) as u64,
+    );
+    dev.debug.insert_info(index, label.to_owned());
 }
 
-fn enqueue_workgroups(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup, x : u32, y : u32, z : u32, name : &str){
-    let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+fn enqueue_workgroups(
+    dev: &WgpuDevice,
+    pipeline: &ComputePipeline,
+    bind_group: BindGroup,
+    x: u32,
+    y: u32,
+    z: u32,
+    name: &str,
+) {
+    let mut encoder = dev
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     insert_debug_info_start(dev, &mut encoder);
     {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -317,21 +409,32 @@ fn enqueue_workgroups(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group
         cpass.dispatch_workgroups(x, y, z);
         cpass.insert_debug_marker(&format!("end: {name}"));
     }
-    insert_debug_info_end(dev, &mut encoder,name);
+    insert_debug_info_end(dev, &mut encoder, name);
     dev.queue.submit(Some(encoder.finish()));
 }
 
-fn enqueue_workgroups_indirect(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup, x : u32, y : u32, z : u32, name : &str){
-    let data = wgpu::util::DispatchIndirectArgs{ x, y, z };
+fn enqueue_workgroups_indirect(
+    dev: &WgpuDevice,
+    pipeline: &ComputePipeline,
+    bind_group: BindGroup,
+    x: u32,
+    y: u32,
+    z: u32,
+    name: &str,
+) {
+    let data = wgpu::util::DispatchIndirectArgs { x, y, z };
 
-    let workgroup_buffer = dev.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None,
-        contents: bytemuck::cast_slice(data.as_bytes()),
-        usage: wgpu::BufferUsages::INDIRECT,
-    });
+    let workgroup_buffer = dev
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(data.as_bytes()),
+            usage: wgpu::BufferUsages::INDIRECT,
+        });
 
-    
-    let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder = dev
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     insert_debug_info_start(dev, &mut encoder);
     {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -342,21 +445,39 @@ fn enqueue_workgroups_indirect(dev : &WgpuDevice, pipeline : &ComputePipeline, b
         //cpass.write_timestamp(&dev.debug.set, 0);
         cpass.set_pipeline(pipeline);
         cpass.set_bind_group(0, &bind_group, &[]);
-        cpass.dispatch_workgroups_indirect(&workgroup_buffer,0);
+        cpass.dispatch_workgroups_indirect(&workgroup_buffer, 0);
         //cpass.write_timestamp(&dev.debug.set, 1);
         cpass.insert_debug_marker(&format!("end: {name}"));
     }
-    let index = insert_debug_info_end(dev, &mut encoder,name);
+    let index = insert_debug_info_end(dev, &mut encoder, name);
     dev.queue.submit(Some(encoder.finish()));
     return index;
 }
 
-fn enqueue(dev : &WgpuDevice, pipeline : &ComputePipeline, bind_group: BindGroup, length : u32, name : &str){
-    return enqueue_workgroups(dev, pipeline, bind_group,(length + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE, 1, 1,name);
+fn enqueue(
+    dev: &WgpuDevice,
+    pipeline: &ComputePipeline,
+    bind_group: BindGroup,
+    length: u32,
+    name: &str,
+) {
+    return enqueue_workgroups(
+        dev,
+        pipeline,
+        bind_group,
+        (length + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE,
+        1,
+        1,
+        name,
+    );
 }
 
-
-fn create_bind_group_input0<T : bytemuck::Pod>(dev : &WgpuDevice, pipeline : &ComputePipeline, meta : T,buffer_dest : &Buffer) -> BindGroup{
+fn create_bind_group_input0<T: bytemuck::Pod>(
+    dev: &WgpuDevice,
+    pipeline: &ComputePipeline,
+    meta: T,
+    buffer_dest: &Buffer,
+) -> BindGroup {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
     let buffer_meta = create_uniform_buffer(dev, meta, "input0");
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -375,7 +496,13 @@ fn create_bind_group_input0<T : bytemuck::Pod>(dev : &WgpuDevice, pipeline : &Co
     })
 }
 
-fn create_bind_group_input1<T : bytemuck::Pod>(dev : &WgpuDevice, pipeline : &ComputePipeline, meta : T, buffer_dest : &Buffer, buffer_input1 : &Buffer) -> BindGroup{
+fn create_bind_group_input1<T: bytemuck::Pod>(
+    dev: &WgpuDevice,
+    pipeline: &ComputePipeline,
+    meta: T,
+    buffer_dest: &Buffer,
+    buffer_input1: &Buffer,
+) -> BindGroup {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
     let buffer_meta = create_uniform_buffer(dev, meta, "input1");
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -398,7 +525,14 @@ fn create_bind_group_input1<T : bytemuck::Pod>(dev : &WgpuDevice, pipeline : &Co
     })
 }
 
-fn create_bind_group_input2<T : bytemuck::Pod>(dev : &WgpuDevice, pipeline : &ComputePipeline, meta : T, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer) -> BindGroup{
+fn create_bind_group_input2<T: bytemuck::Pod>(
+    dev: &WgpuDevice,
+    pipeline: &ComputePipeline,
+    meta: T,
+    buffer_dest: &Buffer,
+    buffer_input1: &Buffer,
+    buffer_input2: &Buffer,
+) -> BindGroup {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
     let buffer_meta = create_uniform_buffer(dev, meta, "input2");
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -425,292 +559,664 @@ fn create_bind_group_input2<T : bytemuck::Pod>(dev : &WgpuDevice, pipeline : &Co
     })
 }
 
-pub fn queue_unary_inplace_op(dev : &WgpuDevice, buffer : &Buffer, op : UnaryOperation, scalar1 : f32, scalar2 : f32, dtype : crate::DType, layout : crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{
-        operation : op as u32, 
-        scalar1, 
-        scalar2, 
-        input_layout : MatrixLayout::from_layout(&layout),
-        seed : dev.rand_state.lock().unwrap().next_u32(),
-        dst_offset : 0
+pub fn queue_unary_inplace_op(
+    dev: &WgpuDevice,
+    buffer: &Buffer,
+    op: UnaryOperation,
+    scalar1: f32,
+    scalar2: f32,
+    dtype: crate::DType,
+    layout: crate::Layout,
+) -> crate::Result<()> {
+    let meta = MetaUnary {
+        operation: op as u32,
+        scalar1,
+        scalar2,
+        input_layout: MatrixLayout::from_layout(&layout),
+        seed: dev.rand_state.lock().unwrap().next_u32(),
     };
-    
-    let pipeline = dev.get_pipeline(
-        match dtype{
-            crate::DType::U32 => Pipelines::UnaryInplaceU32,
-            crate::DType::F32 => Pipelines::UnaryInplace,
-            _ => wrongType!(queue_unary_inplace_op, dtype)
-        });
-    
-    let bind_group = create_bind_group_input0(dev,pipeline, meta, buffer);
-    enqueue(dev, pipeline, bind_group, layout.shape().elem_count() as u32, &format!("unary inplace op:{:?}, dtype:{:?}", op, dtype));
+
+    let pipeline = &dev.get_pipeline(match dtype {
+        crate::DType::U32 => Pipelines::UnaryInplaceU32,
+        crate::DType::F32 => Pipelines::UnaryInplace,
+        _ => wrongType!(queue_unary_inplace_op, dtype),
+    });
+
+    let bind_group = create_bind_group_input0(dev, pipeline, meta, buffer);
+    enqueue(
+        dev,
+        pipeline,
+        bind_group,
+        layout.shape().elem_count() as u32,
+        &format!("unary inplace op:{:?}, dtype:{:?}", op, dtype),
+    );
     return Ok(());
 }
 
-pub fn queue_unary_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : UnaryOperation, scalar1 : f32, scalar2 : f32, dtype : crate::DType,input_layout : &crate::Layout, dst_offset : u32) -> crate::Result<()>{
-    let meta = MetaUnary{
-        operation : op as u32,
-        scalar1,scalar2, 
-        input_layout: MatrixLayout::from_layout(&input_layout), 
-        seed : dev.rand_state.lock().unwrap().next_u32(),
-        dst_offset};
-
-    let pipeline = dev.get_pipeline(
-        match dtype{
+pub fn queue_unary_from_buffer_op(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input: &Buffer,
+    op: UnaryOperation,
+    scalar1: f32,
+    scalar2: f32,
+    dtype: crate::DType,
+    input_layout: &crate::Layout,
+) -> crate::Result<()> {
+    if input_layout.is_contiguous() {
+        let meta = MetaUnaryContiguous {
+            operation: op as u32,
+            scalar1,
+            scalar2,
+            seed: dev.rand_state.lock().unwrap().next_u32(),
+            offset: input_layout.start_offset() as u32,
+            length: input_layout.shape().elem_count() as u32,
+        };
+        let pipeline_type = match dtype {
+            crate::DType::U32 => Pipelines::UnaryFromBufferContiguousU32,
+            crate::DType::F32 => Pipelines::UnaryFromBufferContiguous,
+            _ => wrongType!(queue_unary_from_buffer_op, dtype),
+        };
+        let pipeline = &dev.get_pipeline(pipeline_type.clone());
+        let bind_group = create_bind_group_input1(dev, pipeline, meta, buffer_dest, buffer_input);
+        enqueue(
+            dev,
+            pipeline,
+            bind_group,
+            input_layout.shape().elem_count() as u32,
+            &format!(
+                "unary op:{:?}, dtype:{:?}, pipeline:{:?}",
+                op, dtype, pipeline_type
+            ),
+        );
+    } else {
+        let meta = MetaUnary {
+            operation: op as u32,
+            scalar1,
+            scalar2,
+            input_layout: MatrixLayout::from_layout(&input_layout),
+            seed: dev.rand_state.lock().unwrap().next_u32(),
+        };
+        let pipeline_type = match dtype {
             crate::DType::U32 => Pipelines::UnaryFromBufferU32,
             crate::DType::F32 => Pipelines::UnaryFromBuffer,
-            _ => wrongType!(queue_unary_from_buffer_op, dtype)
-        });
-    
-    let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-    enqueue(dev, pipeline, bind_group, input_layout.shape().elem_count() as u32, &format!("unary op:{:?}, dtype:{:?}", op, dtype));
+            _ => wrongType!(queue_unary_from_buffer_op, dtype),
+        };
+        let pipeline = &dev.get_pipeline(pipeline_type.clone());
+        let bind_group = create_bind_group_input1(dev, pipeline, meta, buffer_dest, buffer_input);
+        enqueue(
+            dev,
+            pipeline,
+            bind_group,
+            input_layout.shape().elem_count() as u32,
+            &format!(
+                "unary op:{:?}, dtype:{:?}, pipeline:{:?}",
+                op, dtype, pipeline_type
+            ),
+        );
+    }
     return Ok(());
 }
 
+pub fn queue_copy_strided(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input: &Buffer,
+    dtype: crate::DType,
+    input_layout: &crate::Layout,
+    dst_offset: u32,
+) -> crate::Result<()> {
+    let meta = MetaCopyStrided {
+        input1_layout: MatrixLayout::from_layout(&input_layout),
+        dest_offset: dst_offset,
+    };
 
-#[allow(dead_code)]
-pub fn queue_binary_buffer_inplace(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, op : BinaryOperation, dtype : crate::DType, lay1 : crate::Layout, lay2 : &crate::Layout) -> crate::Result<()>{
-    let meta = MetaBinary{operation : op as u32, input1_layout : MatrixLayout::from_layout(&lay1), input2_layout:MatrixLayout::from_layout(&lay2)};
-    
-    let pipeline = dev.get_pipeline(
-        match dtype{
-            crate::DType::U32 => Pipelines::BinaryBufferInplaceU32,
-            crate::DType::F32 => Pipelines::BinaryBufferInplace,
-            _ => wrongType!(queue_binary_buffer_inplace, dtype)
-        });
+    let pipeline = &dev.get_pipeline(match dtype {
+        crate::DType::U32 => todo!(),
+        crate::DType::F32 => Pipelines::CopyStrided,
+        _ => wrongType!(queue_copy_strided, dtype),
+    });
 
-    let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input1);
-    enqueue(dev,  pipeline, bind_group, lay1.shape().elem_count() as u32, &format!("binary inplace op:{:?}, dtype:{:?}", op, dtype));
+    let bind_group = create_bind_group_input1(dev, pipeline, meta, buffer_dest, buffer_input);
+    enqueue(
+        dev,
+        pipeline,
+        bind_group,
+        input_layout.shape().elem_count() as u32,
+        &format!("copy strided dtype:{:?}", dtype),
+    );
     return Ok(());
 }
 
-#[allow(dead_code)]
-pub fn queue_binary_buffer_from_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer, op : BinaryOperation, dtype : crate::DType, lay1 : &crate::Layout, lay2 : &crate::Layout) -> crate::Result<()>{
-    let meta = MetaBinary{operation : op as u32, input1_layout : MatrixLayout::from_layout(&lay1), input2_layout:MatrixLayout::from_layout(&lay2)};
-    
-    let pipeline = dev.get_pipeline(
-        match dtype{
+pub fn queue_binary_buffer_inplace(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input1: &Buffer,
+    op: BinaryOperation,
+    dtype: crate::DType,
+    lay1: crate::Layout,
+    lay2: &crate::Layout,
+) -> crate::Result<()> {
+    let meta = MetaBinary {
+        operation: op as u32,
+        input1_layout: MatrixLayout::from_layout(&lay1),
+        input2_layout: MatrixLayout::from_layout(&lay2),
+    };
+
+    let pipeline = &dev.get_pipeline(match dtype {
+        crate::DType::U32 => Pipelines::BinaryBufferInplaceU32,
+        crate::DType::F32 => Pipelines::BinaryBufferInplace,
+        _ => wrongType!(queue_binary_buffer_inplace, dtype),
+    });
+
+    let bind_group = create_bind_group_input1(dev, pipeline, meta, buffer_dest, buffer_input1);
+    enqueue(
+        dev,
+        pipeline,
+        bind_group,
+        lay1.shape().elem_count() as u32,
+        &format!("binary inplace op:{:?}, dtype:{:?}", op, dtype),
+    );
+    return Ok(());
+}
+
+pub fn queue_binary_buffer_from_buffer(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input1: &Buffer,
+    buffer_input2: &Buffer,
+    op: BinaryOperation,
+    dtype: crate::DType,
+    lay1: &crate::Layout,
+    lay2: &crate::Layout,
+) -> crate::Result<()> {
+    if lay1.is_contiguous() && lay2.is_contiguous() {
+        let meta = MetaBinaryContiguousBoth {
+            operation: op as u32,
+            input1_length: lay1.shape().elem_count() as u32,
+            input1_offset: lay1.start_offset()  as u32,
+            input2_length: lay2.shape().elem_count()  as u32,
+            input2_offset: lay2.start_offset()  as u32,
+        };
+        let pipeline_type = match dtype {
+            crate::DType::U32 => Pipelines::BinaryBufferFromBufferContiguousBothU32,
+            crate::DType::F32 => Pipelines::BinaryBufferFromBufferContiguousBoth,
+            _ => wrongType!(queue_binary_buffer_from_buffer, dtype),
+        };
+        let pipeline = &dev.get_pipeline(pipeline_type.clone());
+
+        let bind_group = create_bind_group_input2(
+            dev,
+            pipeline,
+            meta,
+            buffer_dest,
+            buffer_input1,
+            buffer_input2,
+        );
+        enqueue(
+            dev,
+            pipeline,
+            bind_group,
+            lay1.shape().elem_count() as u32,
+            &format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type),
+        );
+        return Ok(());
+    } else {
+        let meta = MetaBinary {
+            operation: op as u32,
+            input1_layout: MatrixLayout::from_layout(&lay1),
+            input2_layout: MatrixLayout::from_layout(&lay2),
+        };
+
+        let pipeline_type = match dtype {
             crate::DType::U32 => Pipelines::BinaryBufferFromBufferU32,
             crate::DType::F32 => Pipelines::BinaryBufferFromBuffer,
-            _ => wrongType!(queue_binary_buffer_from_buffer, dtype)
-        });
+            _ => wrongType!(queue_binary_buffer_from_buffer, dtype),
+        };
+        
+        let pipeline = &dev.get_pipeline(pipeline_type.clone());
+        
+        let bind_group = create_bind_group_input2(
+            dev,
+            pipeline,
+            meta,
+            buffer_dest,
+            buffer_input1,
+            buffer_input2,
+        );
+        enqueue(
+            dev,
+            pipeline,
+            bind_group,
+            lay1.shape().elem_count() as u32,
+            &format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type),
+        );
+        return Ok(());
+    }
+}
 
-    let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    enqueue(dev, pipeline, bind_group, lay1.shape().elem_count() as u32, &format!("binary op:{:?}, dtype:{:?}", op, dtype));
+pub fn queue_matmul_buffer(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input1: &Buffer,
+    buffer_input2: &Buffer,
+    b: u32,
+    m: u32,
+    n: u32,
+    k: u32,
+    layout_input1: &Layout,
+    layout_input2: &Layout,
+    dtype: crate::DType,
+) -> crate::Result<()> {
+    let mut input1_stride = layout_input1.stride().iter().rev();
+    let mut input2_stride = layout_input2.stride().iter().rev();
+
+    let meta = MetaInfoMatMul {
+        b,
+        m,
+        n,
+        k,
+        input1_stride_n: *input1_stride.next().unwrap_or(&1) as u32,
+        input1_stride_m: *input1_stride.next().unwrap_or(&1) as u32,
+        input1_stride_b: *input1_stride.next().unwrap_or(&1) as u32,
+        input1_offset: layout_input1.start_offset() as u32,
+
+        input2_stride_k: *input2_stride.next().unwrap_or(&1) as u32,
+        input2_stride_n: *input2_stride.next().unwrap_or(&1) as u32,
+        input2_stride_b: *input2_stride.next().unwrap_or(&1) as u32,
+        input2_offset: layout_input2.start_offset() as u32,
+    };
+
+    let pipeline = &dev.get_pipeline(match dtype {
+        crate::DType::U32 => Pipelines::MatmulBufferU32,
+        crate::DType::F32 => Pipelines::MatmulBuffer,
+        _ => wrongType!(queue_matmul_buffer, dtype),
+    });
+
+    let bind_group = create_bind_group_input2(
+        dev,
+        pipeline,
+        meta,
+        buffer_dest,
+        buffer_input1,
+        buffer_input2,
+    );
+    enqueue_workgroups(
+        dev,
+        pipeline,
+        bind_group,
+        (k + 7) / 8,
+        (m + 7) / 8,
+        b,
+        &format!("matmul, dtype:{:?}", dtype),
+    );
     return Ok(());
 }
 
-
-
-pub fn queue_matmul_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer,b: u32, m : u32, n : u32, k : u32, layout_input1 : &Layout, layout_input2 : &Layout, dtype : crate::DType) -> crate::Result<()>{
-    
-    let input1_info = MatrixLayout::from_layout(layout_input1);
-    let input2_info = MatrixLayout::from_layout(layout_input2);
-    
-    let meta = MetaInfoMatMul{b,m,n,k,input1:input1_info, input2:input2_info};
-    
-    let pipeline = dev.get_pipeline(
-        match dtype{
-            crate::DType::U32 => Pipelines::MatmulBufferU32,
-            crate::DType::F32 => Pipelines::MatmulBuffer,
-            _ => wrongType!(queue_matmul_buffer, dtype)
-        });
-
-    let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    enqueue_workgroups(dev, pipeline, bind_group,(k + 7) / 8, (m + 7) / 8, b, &format!("matmul, dtype:{:?}", dtype));
-    return Ok(());
-}
-
-pub fn queue_reduce_from_buffer_op(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, op : ReduceOperations, dtype : crate::DType, layout_input1 : &Layout, dest_size : u32, output_to_start_shape_stride2 : u32, output_to_start_stride1 : u32, output_to_start_stride2 : u32, reduction_length : u32,stride_reduction : u32) -> crate::Result<()>{
-    
-    let workgroup_count = u32::min(64,(reduction_length / 10 + 1) as u32);
+pub fn queue_reduce_from_buffer_op(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input: &Buffer,
+    op: ReduceOperations,
+    dtype: crate::DType,
+    layout_input1: &Layout,
+    dest_size: u32,
+    output_to_start_shape_stride2: u32,
+    output_to_start_stride1: u32,
+    output_to_start_stride2: u32,
+    reduction_length: u32,
+    stride_reduction: u32,
+) -> crate::Result<()> {
+    let workgroup_count = u32::min(64, (reduction_length / 10 + 1) as u32);
     let workgroup_size = reduction_length as u32 / workgroup_count + 1;
-    let meta = MetaInfoReduce{
-        operation : op as u32, 
-        input_layout : MatrixLayout::from_layout(&layout_input1), 
-        workgroup_count, 
+    let meta = MetaInfoReduce {
+        operation: op as u32,
+        input_layout: MatrixLayout::from_layout(&layout_input1),
+        workgroup_count,
         workgroup_size,
-        length: reduction_length as u32, 
-        output_to_start_shape_stride2 : output_to_start_shape_stride2, 
-        output_to_start_stride1: output_to_start_stride1, 
+        length: reduction_length as u32,
+        output_to_start_shape_stride2: output_to_start_shape_stride2,
+        output_to_start_stride1: output_to_start_stride1,
         output_to_start_stride2: output_to_start_stride2,
-        stride_reduction
-     };
-    let pipeline_type = match (dtype,op){
+        stride_reduction,
+    };
+    let pipeline_type = match (dtype, op) {
         (crate::DType::U32, ReduceOperations::Sum) => Pipelines::ReduceU32,
         (crate::DType::U32, ReduceOperations::Min) => Pipelines::ReduceU32,
         (crate::DType::U32, ReduceOperations::Max) => Pipelines::ReduceU32,
         (crate::DType::U32, ReduceOperations::ArgMin) => Pipelines::ReduceIndexU32,
         (crate::DType::U32, ReduceOperations::ArgMax) => Pipelines::ReduceIndexU32,
-    
+
         (crate::DType::F32, ReduceOperations::Sum) => Pipelines::Reduce,
         (crate::DType::F32, ReduceOperations::Min) => Pipelines::Reduce,
         (crate::DType::F32, ReduceOperations::Max) => Pipelines::Reduce,
         (crate::DType::F32, ReduceOperations::ArgMin) => Pipelines::ReduceIndex,
         (crate::DType::F32, ReduceOperations::ArgMax) => Pipelines::ReduceIndex,
-        _ => wrongType!(queue_reduce_from_buffer_op, dtype)
+        _ => wrongType!(queue_reduce_from_buffer_op, dtype),
     };
 
+    let pipeline = &dev.get_pipeline(pipeline_type.clone());
 
-    let pipeline = dev.get_pipeline(pipeline_type.clone());
-
-    let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-    enqueue_workgroups(dev, pipeline, bind_group, 1, dest_size, 1, &format!("reduce op:{:?}, dtype:{:?}", op, dtype));
+    let bind_group = create_bind_group_input1(dev, pipeline, meta, buffer_dest, buffer_input);
+    enqueue_workgroups(
+        dev,
+        pipeline,
+        bind_group,
+        1,
+        dest_size,
+        1,
+        &format!("reduce op:{:?}, dtype:{:?}", op, dtype),
+    );
     return Ok(());
 }
 
-pub fn queue_copy(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input : &Buffer, destination_offset : usize, source_offset : usize, copy_size : usize){
-    let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+
+pub fn queue_rms_norm(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input1: &Buffer,
+    buffer_alpha: &Buffer,
+    dtype: crate::DType,
+    input1_offset : u32,
+    alpha_offset : u32,
+    reduction_length : u32,
+    dest_size: u32,
+    eps : f32
+) -> crate::Result<()> {
+    let workgroup_count = u32::min(64, (reduction_length / 10 + 1) as u32);
+    let workgroup_size = reduction_length as u32 / workgroup_count + 1;
+    let meta = MetaInfoRmsNormContiguous {
+        workgroup_count,
+        workgroup_size,
+        length: reduction_length as u32,
+        input1_offset,
+        input2_offset: alpha_offset,
+        eps,
+    };
+    let pipeline_type = match dtype {
+        crate::DType::F32 => Pipelines::RmsNorm,
+        _ => wrongType!(queue_rms_norm, dtype),
+    };
+
+    let pipeline = &dev.get_pipeline(pipeline_type.clone());
+
+    let bind_group = create_bind_group_input2(dev, pipeline, meta, buffer_dest, buffer_input1, buffer_alpha);
+    enqueue_workgroups(
+        dev,
+        pipeline,
+        bind_group,
+        1,
+        dest_size,
+        1,
+        &format!("rms_norm, dtype:{:?}", dtype),
+    );
+    return Ok(());
+}
+
+
+pub fn queue_copy(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input: &Buffer,
+    destination_offset: usize,
+    source_offset: usize,
+    copy_size: usize,
+) {
+    let mut encoder = dev
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     insert_debug_info_start(dev, &mut encoder);
-    encoder.copy_buffer_to_buffer(buffer_input, source_offset as u64 * 4, buffer_dest, destination_offset as u64 * 4, copy_size as u64  * 4);
+    encoder.copy_buffer_to_buffer(
+        buffer_input,
+        source_offset as u64 * 4,
+        buffer_dest,
+        destination_offset as u64 * 4,
+        copy_size as u64 * 4,
+    );
     insert_debug_info_end(dev, &mut encoder, &format!("copy"));
     dev.queue.submit(Some(encoder.finish()));
 }
 
-#[allow(dead_code)]
-pub fn queue_cmp_buffer_from_buffer(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer, op : CmpOperation, dtype : crate::DType,layout_input1 : &Layout, layout_input2 : &Layout,) -> crate::Result<()>{
-    let meta = MetaBinary{operation : op as u32, input1_layout : MatrixLayout::from_layout(&layout_input1), input2_layout : MatrixLayout::from_layout(&layout_input2)};
-   
-    let pipeline = dev.get_pipeline(
-        match dtype{
-            crate::DType::U32 => Pipelines::CmpFromBufferU32,
-            crate::DType::F32 => Pipelines::CmpFromBuffer,
-            _ => wrongType!(queue_cmp_buffer_from_buffer, dtype)
-        });
+pub fn queue_cmp_buffer_from_buffer(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input1: &Buffer,
+    buffer_input2: &Buffer,
+    op: CmpOperation,
+    dtype: crate::DType,
+    layout_input1: &Layout,
+    layout_input2: &Layout,
+) -> crate::Result<()> {
+    let meta = MetaBinary {
+        operation: op as u32,
+        input1_layout: MatrixLayout::from_layout(&layout_input1),
+        input2_layout: MatrixLayout::from_layout(&layout_input2),
+    };
 
-    let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    enqueue(dev, pipeline, bind_group, ((layout_input1.shape().elem_count() + 3) / 4) as u32, &format!("cmp op:{:?}, dtype:{:?}", op, dtype));
+    let pipeline = &dev.get_pipeline(match dtype {
+        crate::DType::U32 => Pipelines::CmpFromBufferU32,
+        crate::DType::F32 => Pipelines::CmpFromBuffer,
+        _ => wrongType!(queue_cmp_buffer_from_buffer, dtype),
+    });
+
+    let bind_group = create_bind_group_input2(
+        dev,
+        pipeline,
+        meta,
+        buffer_dest,
+        buffer_input1,
+        buffer_input2,
+    );
+    enqueue(
+        dev,
+        pipeline,
+        bind_group,
+        ((layout_input1.shape().elem_count() + 3) / 4) as u32,
+        &format!("cmp op:{:?}, dtype:{:?}", op, dtype),
+    );
     return Ok(());
 }
 
-
-#[allow(dead_code)]
-pub fn queue_conv2d(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer, dtype : crate::DType, params : &crate::conv::ParamsConv2D, input_layout : &crate::Layout, kernel_layout : &crate::Layout) -> crate::Result<()>{
+pub fn queue_conv2d(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input1: &Buffer,
+    buffer_input2: &Buffer,
+    dtype: crate::DType,
+    params: &crate::conv::ParamsConv2D,
+    input_layout: &crate::Layout,
+    kernel_layout: &crate::Layout,
+) -> crate::Result<()> {
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
-    let meta = MetaConv2d{
-        b: params.b_size as u32, 
-        c_in: params.c_in as u32,  
-        kernel_x: params.k_w as u32,  
-        kernel_y: params.k_h as u32,  
-        size_in_x: params.i_w as u32,  
-        size_in_y: params.i_h as u32,  
+    let meta = MetaConv2d {
+        b: params.b_size as u32,
+        c_in: params.c_in as u32,
+        kernel_x: params.k_w as u32,
+        kernel_y: params.k_h as u32,
+        size_in_x: params.i_w as u32,
+        size_in_y: params.i_h as u32,
         stride_batch_out: (params.out_w() * params.out_h() * params.c_out) as u32,
-        stride_c_out: (params.out_w() * params.out_h()) as u32, 
-        stride_y_out: params.out_w() as u32, 
-        size_y_out: params.out_h() as u32, 
-        
-        stride_batch_input: input_stride[0] as u32, 
-        stride_c_in: input_stride[1] as u32, 
+        stride_c_out: (params.out_w() * params.out_h()) as u32,
+        stride_y_out: params.out_w() as u32,
+        size_y_out: params.out_h() as u32,
+
+        stride_batch_input: input_stride[0] as u32,
+        stride_c_in: input_stride[1] as u32,
         stride_y_in: input_stride[2] as u32,
         stride_x_in: input_stride[3] as u32,
 
-        kernel_b_stride : kernel_stride[0] as u32,
-        kernel_c_stride : kernel_stride[1] as u32,
-        kernel_y_stride : kernel_stride[2] as u32,
-        kernel_x_stride : kernel_stride[3] as u32,
+        kernel_b_stride: kernel_stride[0] as u32,
+        kernel_c_stride: kernel_stride[1] as u32,
+        kernel_y_stride: kernel_stride[2] as u32,
+        kernel_x_stride: kernel_stride[3] as u32,
         kernel_offset: kernel_layout.start_offset() as u32,
 
-        // stride_batch_input: (params.i_h * params.i_w * params.c_in) as u32, 
-        // stride_c_in: (params.i_w * params.i_h) as u32, 
+        // stride_batch_input: (params.i_h * params.i_w * params.c_in) as u32,
+        // stride_c_in: (params.i_w * params.i_h) as u32,
         // stride_y_in: params.i_w  as u32,
-
-        padding: params.padding as u32, 
-        stride_conv: params.stride as u32,  
+        padding: params.padding as u32,
+        stride_conv: params.stride as u32,
         dialation_conv: params.dilation as u32,
-        offset_input : input_layout.start_offset() as u32
+        offset_input: input_layout.start_offset() as u32,
     };
-    
-    let pipeline = dev.get_pipeline(
-        match dtype{
-            crate::DType::U32 => Pipelines::Conv2DU32,
-            crate::DType::F32 => Pipelines::Conv2D,
-            _ => wrongType!(queue_binary_buffer_from_buffer, dtype)
-        });
 
-    let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    enqueue_workgroups(dev, pipeline, bind_group, (params.out_w() as u32 + 7) / 8, (params.out_h() as u32 + 7) / 8, params.c_out as u32, &format!("conv2d, dtype:{:?}", dtype));
+    let pipeline = &dev.get_pipeline(match dtype {
+        crate::DType::U32 => Pipelines::Conv2DU32,
+        crate::DType::F32 => Pipelines::Conv2D,
+        _ => wrongType!(queue_binary_buffer_from_buffer, dtype),
+    });
+
+    let bind_group = create_bind_group_input2(
+        dev,
+        pipeline,
+        meta,
+        buffer_dest,
+        buffer_input1,
+        buffer_input2,
+    );
+    enqueue_workgroups(
+        dev,
+        pipeline,
+        bind_group,
+        (params.out_w() as u32 + 7) / 8,
+        (params.out_h() as u32 + 7) / 8,
+        params.c_out as u32,
+        &format!("conv2d, dtype:{:?}", dtype),
+    );
     return Ok(());
 }
 
-#[allow(dead_code)]
-pub fn queue_conv2d_transpose(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input1 : &Buffer, buffer_input2 : &Buffer, dtype : crate::DType, params : &crate::conv::ParamsConvTranspose2D, input_layout : &crate::Layout, kernel_layout : &crate::Layout) -> crate::Result<()>{
+pub fn queue_conv2d_transpose(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input1: &Buffer,
+    buffer_input2: &Buffer,
+    dtype: crate::DType,
+    params: &crate::conv::ParamsConvTranspose2D,
+    input_layout: &crate::Layout,
+    kernel_layout: &crate::Layout,
+) -> crate::Result<()> {
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
-    let meta = MetaConv2d{
-        b: params.b_size as u32, 
-        c_in: params.c_in as u32,  
-        kernel_x: params.k_w as u32,  
-        kernel_y: params.k_h as u32,  
-        size_in_x: params.i_w as u32,  
-        size_in_y: params.i_h as u32,  
+    let meta = MetaConv2d {
+        b: params.b_size as u32,
+        c_in: params.c_in as u32,
+        kernel_x: params.k_w as u32,
+        kernel_y: params.k_h as u32,
+        size_in_x: params.i_w as u32,
+        size_in_y: params.i_h as u32,
         stride_batch_out: (params.out_w() * params.out_h() * params.c_out) as u32,
-        stride_c_out: (params.out_w() * params.out_h()) as u32, 
-        stride_y_out: params.out_w() as u32, 
-        size_y_out: params.out_h() as u32, 
-        
-        //stride_batch_input: (params.i_h * params.i_w * params.c_in) as u32, 
-        //stride_c_in: (params.i_w * params.i_h) as u32, 
-        //stride_y_in: params.i_w  as u32,
+        stride_c_out: (params.out_w() * params.out_h()) as u32,
+        stride_y_out: params.out_w() as u32,
+        size_y_out: params.out_h() as u32,
 
-        stride_batch_input: input_stride[0] as u32, 
-        stride_c_in: input_stride[1] as u32, 
+        //stride_batch_input: (params.i_h * params.i_w * params.c_in) as u32,
+        //stride_c_in: (params.i_w * params.i_h) as u32,
+        //stride_y_in: params.i_w  as u32,
+        stride_batch_input: input_stride[0] as u32,
+        stride_c_in: input_stride[1] as u32,
         stride_y_in: input_stride[2] as u32,
         stride_x_in: input_stride[3] as u32,
 
-        kernel_b_stride : kernel_stride[1] as u32,
-        kernel_c_stride : kernel_stride[0] as u32,
-        kernel_y_stride : kernel_stride[2] as u32,
-        kernel_x_stride : kernel_stride[3] as u32,
-        
+        kernel_b_stride: kernel_stride[1] as u32,
+        kernel_c_stride: kernel_stride[0] as u32,
+        kernel_y_stride: kernel_stride[2] as u32,
+        kernel_x_stride: kernel_stride[3] as u32,
+
         //kernel_c_stride : (params.k_w * params.k_h) as u32,
         //kernel_y_stride : params.k_w as u32,
         //kernel_b_stride : (params.k_w * params.k_h * params.c_in) as u32,
         //kernel_x_stride : 1,
         kernel_offset: kernel_layout.start_offset() as u32,
 
-        padding: params.padding as u32, 
-        stride_conv: params.stride as u32,  
+        padding: params.padding as u32,
+        stride_conv: params.stride as u32,
         dialation_conv: params.dilation as u32,
-        offset_input : input_layout.start_offset() as u32
+        offset_input: input_layout.start_offset() as u32,
     };
-    
 
-    let pipeline = dev.get_pipeline(
-        match dtype{
-            crate::DType::U32 => Pipelines::Conv2DTransposeU32,
-            crate::DType::F32 => Pipelines::Conv2DTranspose,
-            _ => wrongType!(queue_binary_buffer_from_buffer, dtype)
-        });
+    let pipeline = &dev.get_pipeline(match dtype {
+        crate::DType::U32 => Pipelines::Conv2DTransposeU32,
+        crate::DType::F32 => Pipelines::Conv2DTranspose,
+        _ => wrongType!(queue_binary_buffer_from_buffer, dtype),
+    });
 
-    let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input1, buffer_input2);
-    enqueue_workgroups(dev, pipeline, bind_group, (params.out_w() as u32 + 7) / 8, (params.out_h() as u32 + 7) / 8, params.c_out as u32, &format!("conv2d_transpose, dtype:{:?}", dtype));
+    let bind_group = create_bind_group_input2(
+        dev,
+        pipeline,
+        meta,
+        buffer_dest,
+        buffer_input1,
+        buffer_input2,
+    );
+    enqueue_workgroups(
+        dev,
+        pipeline,
+        bind_group,
+        (params.out_w() as u32 + 7) / 8,
+        (params.out_h() as u32 + 7) / 8,
+        params.c_out as u32,
+        &format!("conv2d_transpose, dtype:{:?}", dtype),
+    );
     return Ok(());
 }
 
-pub fn queue_convert_u32_to_f32(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, input_layout : &crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{operation : 0 ,scalar1 : 0.0,scalar2 : 0.0, input_layout: MatrixLayout::from_layout(&input_layout), seed : dev.rand_state.lock().unwrap().next_u32(), dst_offset : 0};
+pub fn queue_convert_u32_to_f32(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input: &Buffer,
+    input_layout: &crate::Layout,
+) -> crate::Result<()> {
+    let meta = MetaConvert {
+        input1_layout: MatrixLayout::from_layout(&input_layout),
+    };
 
-    let pipeline = dev.get_pipeline(Pipelines::ConvertU32ToF32);
-    let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-    enqueue(dev, pipeline, bind_group, input_layout.shape().elem_count() as u32, &format!("u32_to_f32"));
+    let pipeline = &dev.get_pipeline(Pipelines::ConvertU32ToF32);
+    let bind_group = create_bind_group_input1(dev, pipeline, meta, buffer_dest, buffer_input);
+    enqueue(
+        dev,
+        pipeline,
+        bind_group,
+        input_layout.shape().elem_count() as u32,
+        &format!("u32_to_f32"),
+    );
     return Ok(());
 }
 
-pub fn queue_convert_f32_to_u32(dev : &WgpuDevice, buffer_dest : &Buffer,buffer_input : &Buffer, input_layout : &crate::Layout) -> crate::Result<()>{
-    let meta = MetaUnary{operation : 0 ,scalar1 : 0.0,scalar2 : 0.0, input_layout: MatrixLayout::from_layout(&input_layout), seed : dev.rand_state.lock().unwrap().next_u32(), dst_offset : 0};
+pub fn queue_convert_f32_to_u32(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input: &Buffer,
+    input_layout: &crate::Layout,
+) -> crate::Result<()> {
+    let meta = MetaConvert {
+        input1_layout: MatrixLayout::from_layout(&input_layout),
+    };
 
-    let pipeline = dev.get_pipeline(Pipelines::ConvertF32ToU32);
-    let bind_group = create_bind_group_input1(dev,pipeline, meta, buffer_dest,buffer_input);
-    enqueue(dev, pipeline, bind_group, input_layout.shape().elem_count() as u32, &format!("f32_to_u32"));
+    let pipeline = &dev.get_pipeline(Pipelines::ConvertF32ToU32);
+    let bind_group = create_bind_group_input1(dev, pipeline, meta, buffer_dest, buffer_input);
+    enqueue(
+        dev,
+        pipeline,
+        bind_group,
+        input_layout.shape().elem_count() as u32,
+        &format!("f32_to_u32"),
+    );
     return Ok(());
 }
 
-
-
-#[allow(dead_code)]
-pub fn queue_index_select(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input : &Buffer, buffer_index : &Buffer, input_dtype : crate::DType, lay_input : &crate::Layout, lay_index : &crate::Layout, dim : usize) -> crate::Result<()>{
-   
+pub fn queue_index_select(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input: &Buffer,
+    buffer_index: &Buffer,
+    input_dtype: crate::DType,
+    lay_input: &crate::Layout,
+    lay_index: &crate::Layout,
+    dim: usize,
+) -> crate::Result<()> {
     let index_length = lay_index.shape().elem_count();
     let length = (lay_input.shape().elem_count() / lay_input.shape().dims()[dim]) as u32;
 
@@ -721,34 +1227,84 @@ pub fn queue_index_select(dev : &WgpuDevice, buffer_dest : &Buffer, buffer_input
     let output_stride_y = new_shape[(dim + 1)..].iter().fold(1, |prev, c| prev * *c) as u32; //Mul All Shapes after dim
     let input_stride_y = output_stride_y as u32;
     let output_stride_x = new_stride[0..dim].iter().fold(1, |prev, c| prev * *c) as u32; //Mul all New Strides left of dim
-    let input_stride_x = lay_input.stride()[0..dim].iter().fold(1, |prev, c| prev * *c) as u32; //Mul Strides Left of dim
+    let input_stride_x = lay_input.stride()[0..dim]
+        .iter()
+        .fold(1, |prev, c| prev * *c) as u32; //Mul Strides Left of dim
 
-    let meta = MetaIndexSelect{
-        input1_layout : MatrixLayout::from_layout(&lay_input), 
-        input2_layout:MatrixLayout::from_layout(&lay_index), 
+    let meta = MetaIndexSelect {
+        input1_layout: MatrixLayout::from_layout(&lay_input),
+        input2_layout: MatrixLayout::from_layout(&lay_index),
         length,
         input_stride_x,
         input_stride_y,
         output_stride_x,
-        output_stride_y};
-    
-    let pipeline = dev.get_pipeline(
-        match input_dtype{
-            crate::DType::U32 => todo!(),
-            crate::DType::F32 => Pipelines::IndexSelect,
-            _ => wrongType!(queue_binary_buffer_from_buffer, input_dtype)
-        });
+        output_stride_y,
+    };
 
-    let bind_group = create_bind_group_input2(dev,pipeline, meta, buffer_dest,buffer_input, buffer_index);
-    enqueue_workgroups_indirect(dev, pipeline, bind_group, (length + 7) / 8, ((lay_index.shape().elem_count() + 7) / 8) as u32, 1, &format!("index_select : dtype{:?}", input_dtype));
+    let pipeline = &dev.get_pipeline(match input_dtype {
+        crate::DType::U32 => todo!(),
+        crate::DType::F32 => Pipelines::IndexSelect,
+        _ => wrongType!(queue_binary_buffer_from_buffer, input_dtype),
+    });
+
+    let bind_group =
+        create_bind_group_input2(dev, pipeline, meta, buffer_dest, buffer_input, buffer_index);
+    enqueue_workgroups_indirect(
+        dev,
+        pipeline,
+        bind_group,
+        (length + 7) / 8,
+        ((lay_index.shape().elem_count() + 7) / 8) as u32,
+        1,
+        &format!("index_select : dtype{:?}", input_dtype),
+    );
     return Ok(());
 }
 
+pub fn queue_copy2d(
+    dev: &WgpuDevice,
+    buffer_dest: &Buffer,
+    buffer_input: &Buffer,
+    dtype: crate::DType,
+    d1: u32,
+    d2: u32,
+    input_stride1: u32,
+    dest_stride1: u32,
+    input_offset: u32,
+    dest_offset: u32,
+) -> crate::Result<()> {
+    let meta = MetaCopy2d {
+        d1,
+        d2,
+        input1_stride1: input_stride1,
+        dest_stride1,
+        input1_offset: input_offset,
+        dest_offset,
+    };
+
+    let pipeline = &&dev.get_pipeline(match dtype {
+        crate::DType::U32 => todo!(),
+        crate::DType::F32 => Pipelines::Copy2d,
+        _ => wrongType!(queue_unary_from_buffer_op, dtype),
+    });
+
+    let bind_group = create_bind_group_input1(dev, pipeline, meta, buffer_dest, buffer_input);
+    enqueue_workgroups(
+        dev,
+        pipeline,
+        bind_group,
+        (d1 + 7) / 8,
+        (d2 + 7) / 8,
+        1,
+        &format!("copy2d dtype:{:?}", dtype),
+    );
+    return Ok(());
+}
 
 pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
-    dev : &WgpuDevice,
-    buffer: &Buffer) -> Vec<T> {
-
+    dev: &WgpuDevice,
+    buffer: &Buffer,
+) -> Vec<T> {
     let dest_size = buffer.size();
 
     let staging_buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
@@ -757,16 +1313,17 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    
+    let mut encoder = dev
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
     insert_debug_info_start(dev, &mut encoder);
-    
+
     encoder.copy_buffer_to_buffer(&buffer, 0, &staging_buffer, 0, dest_size);
-    
+
     insert_debug_info_end(dev, &mut encoder, &format!("copy to cpu"));
     // Submits command encoder for processing
     dev.queue.submit(Some(encoder.finish()));
-    
 
     // Note that we're not calling `.await` here.
     let buffer_slice = staging_buffer.slice(..);

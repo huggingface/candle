@@ -4,12 +4,30 @@ struct MetaUnary{
     scalar1 : f32, //optionally scalar value
     scalar2 : f32,
     seed : u32,
-    dst_offset : u32,
 }
+
+
+struct MetaUnaryContiguous{
+    offset : u32,
+    length : u32,
+    operation : u32,
+    scalar1 : f32, //optionally scalar value
+    scalar2 : f32,
+    seed : u32,
+}
+
 
 struct MetaBinary{
     input1_layout : MatrixLayout,
     input2_layout : MatrixLayout,
+    operation : u32,
+}
+
+struct MetaBinaryContiguousBoth{
+    input1_length : u32,
+    input1_offset : u32,
+    input2_length : u32,
+    input2_offset : u32,
     operation : u32,
 }
 
@@ -29,8 +47,14 @@ struct MetaInfoMatMul{
     m : u32, 
     n : u32, 
     k : u32,
-    input1 : MatrixLayout, 
-    input2 : MatrixLayout
+    input1_stride_b : u32,
+    input1_stride_m : u32,
+    input1_stride_n : u32,
+    input1_offset   : u32,
+    input2_stride_b : u32,
+    input2_stride_n : u32,
+    input2_stride_k : u32,
+    input2_offset   : u32,
 }
 
 struct MetaInfoReduce{
@@ -46,6 +70,18 @@ struct MetaInfoReduce{
     output_to_start_stride2 : u32,
 
     stride_reduction : u32, //The Stride to use for elements in Reduction
+}
+
+
+struct MetaInfoRmsNormContiguous{
+    workgroup_count : u32,
+    workgroup_size : u32,
+    length : u32, //Length of Reduction(e.g count of elements to sum per output),
+
+    input1_offset : u32,
+    input2_offset : u32,
+
+    eps : f32
 }
 
 struct MetaConv2d{
@@ -76,6 +112,24 @@ struct MetaConv2d{
 }
 
 
+struct MetaConvert{
+    input1_layout : MatrixLayout
+}
+
+struct MetaCopy2d{
+    d1 : u32,
+    d2 : u32,
+    input1_stride1 : u32,
+    dest_stride1 : u32,
+    input1_offset : u32,
+    dest_offset : u32,
+}
+
+struct MetaCopyStrided{
+    input1_layout : MatrixLayout,
+    dest_offset : u32,
+}
+
 //Layout Information
 struct MatrixLayout{
     shape1 : u32, 
@@ -89,9 +143,8 @@ struct MatrixLayout{
     stride4 : u32, 
     stride5 : u32, 
     offset : u32,
-    length : u32, //length if continues, else 0 
+    length : u32, //length if contiguous, else 0 
 }
-
 
 @group(0) @binding(0)
 var<storage, read_write> v_dest: array<f32>;
@@ -104,7 +157,13 @@ var<storage, read_write> v_dest_u32: array<u32>; //Output for U8, and U32
 var<uniform> op_unary : MetaUnary;
 
 @group(0) @binding(1)
+var<uniform> op_unary_contiguous : MetaUnaryContiguous;
+
+@group(0) @binding(1)
 var<uniform> op_binary : MetaBinary;
+
+@group(0) @binding(1)
+var<uniform> op_binary_contiguous_both : MetaBinaryContiguousBoth;
 
 @group(0) @binding(1)
 var<uniform> op_matmul : MetaInfoMatMul;
@@ -113,11 +172,22 @@ var<uniform> op_matmul : MetaInfoMatMul;
 var<uniform> op_reduce : MetaInfoReduce;
 
 @group(0) @binding(1)
-var<uniform> op_conv2d : MetaConv2d;
+var<uniform> op_rms_norm_contiguous : MetaInfoRmsNormContiguous;
 
+@group(0) @binding(1)
+var<uniform> op_conv2d : MetaConv2d;
 
 @group(0) @binding(1)
 var<uniform> op_index : MetaIndexSelect;
+
+@group(0) @binding(1)
+var<uniform> op_copy2d : MetaCopy2d;
+
+@group(0) @binding(1)
+var<uniform> op_convert : MetaConvert;
+
+@group(0) @binding(1)
+var<uniform> op_copy_strided : MetaCopyStrided;
 
 
 @group(0) @binding(1)
@@ -136,21 +206,6 @@ var<storage> v_input2_u32: array<u32>;
 var<workgroup> sharedSums: array<f32, 64>;  //for reduction
 var<workgroup> sharedIndex: array<u32, 64>; 
 
-// fn set_output_u8(m : u32, v1 : u32, v2 : u32, v3 : u32, v4 : u32){
-//     let value = ((v1 & 0xFF) << 12) | ((v2 & 0xFF) << 8) | ((v3 & 0xFF) << 4) | (v4 & 0xFF);
-//     v_dest_u32[m] = value;
-// }
-
-// fn get_output_u8(m : u32) -> array<u32,4>{
-//     let value = v_dest_u32[m];
-//     let v4 = value & 0xFF;
-//     let v3 = (value >> 4) & 0xFF;
-//     let v2 = (value >> 8) & 0xFF;
-//     let v1 = (value >> 12) & 0xFF;
-//     return array(v1,v2,v3,v4);
-// }
-
-
 struct MatrixIndex{
     id : u32,
     is_valid : bool
@@ -163,7 +218,7 @@ const ONE : f32 = 1;
 @workgroup_size(64,1,1)
 fn convert_to_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
-    let pos1 = get_index(op_unary.input1_layout, id);
+    let pos1 = get_index(op_convert.input1_layout, id);
     if(pos1.is_valid){
         v_dest_u32[id] = u32(v_input1[pos1.id]);
     }
@@ -171,13 +226,13 @@ fn convert_to_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
-    if l.length != 0{ //Continues memory:
+    if l.length != 0{ //Contiguous memory:
         if index < l.length{
             return MatrixIndex((l.offset + index), true);
         }
         return MatrixIndex(0, false);
     }
-    else { //not continues:
+    else { //not contiguous:
         let shapes1 = l.shape5;
         let shapes2 =  (shapes1 * l.shape4);
         let shapes3 =  (shapes2 * l.shape3);
@@ -197,11 +252,10 @@ fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
 
 
 
-
-fn rand_uniform(value: u32) -> f32 {
+fn rand_uniform(value: u32, seed : u32) -> f32 {
     // Use XORShift algorithm to generate a pseudo-random float
     // Parameters for XORShift algorithm (adjust as needed)
-    var state: u32 = value ^ 0x5F3759DF ^ op_unary.seed; // Initial state, can be any non-zero value
+    var state: u32 = value ^ 0x5F3759DF ^ seed; // Initial state, can be any non-zero value
     state ^= state << 13;
     state ^= state >> 17;
     state ^= state << 5;
@@ -223,16 +277,16 @@ fn uniform_to_normal(mean: f32, std_: f32, u1: f32, u2 : f32) -> f32 {
 }
 
 // Function to convert a uniformly distributed random number [0, 1) to a normal distribution with mean and std
-fn rand_normal(id: u32, mean: f32, std_: f32) -> f32 {
-    let u1 = rand_uniform(id);
-    let u2 = rand_uniform(id + 1);
+fn rand_normal(id: u32, mean: f32, std_: f32, seed : u32) -> f32 {
+    let u1 = rand_uniform(id, seed);
+    let u2 = rand_uniform(id + 1, seed);
     return uniform_to_normal(mean, std_, u1, u2);
 }
 
 const SQRT_TWO_OVER_PI_F32: f32 = 0.79788456080286535587989211986876373;
 
 //all Unary Operations(No Input)
-fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32){
+fn set_unary(operation : u32, id : u32, x : f32, scalar1 : f32, scalar2 : f32, seed : u32){
 switch operation {
         case 0u{ // set 0
             v_dest[id] = ZERO;
@@ -356,10 +410,10 @@ switch operation {
             v_dest[id] = 1 / x;
         }
         case 47u{ //random_normal
-            v_dest[id] = rand_normal(id, scalar1, scalar2);
+            v_dest[id] = rand_normal(id, scalar1, scalar2, seed);
         }
         case 48u{ //random_normal
-            let r = rand_uniform(id);
+            let r = rand_uniform(id, seed);
             v_dest[id] = (scalar2 - scalar1) * r + scalar1;
         }
         case 49u{//Gelu
@@ -443,7 +497,7 @@ fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos1 = get_index(op_unary.input1_layout, id);
     if(pos1.is_valid){
         let x = v_dest[pos1.id];
-        set_unary(op_unary.operation,id + op_unary.dst_offset, x, op_unary.scalar1, op_unary.scalar2);
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2, op_unary.seed);
     }
 }
 
@@ -454,7 +508,30 @@ fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pos1 = get_index(op_unary.input1_layout, id);
     if(pos1.is_valid){
         let x = v_input1[pos1.id];
-        set_unary(op_unary.operation,id + op_unary.dst_offset, x, op_unary.scalar1, op_unary.scalar2);
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2, op_unary.seed);
+    }
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_from_buffer_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    if (id >= op_unary_contiguous.length){
+        return;
+    }
+    let x = v_input1[id + op_unary_contiguous.offset];
+    set_unary(op_unary_contiguous.operation, id, x, op_unary_contiguous.scalar1, op_unary_contiguous.scalar2, op_unary_contiguous.seed);
+}
+
+
+@compute
+@workgroup_size(64,1,1)
+fn copy_strided(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_copy_strided.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_input1[pos1.id];
+        v_dest[id] = x;
     }
 }
 
@@ -480,6 +557,15 @@ fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>
     }
 }
 
+@compute
+@workgroup_size(64,1,1)
+fn binary_buffer_from_buffer_contiguous_both(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    if (id >= op_binary_contiguous_both.input1_length){
+        return;
+    }
+    set_binary(op_binary_contiguous_both.operation, id, v_input1[id + op_binary_contiguous_both.input1_offset], v_input2[id + op_binary_contiguous_both.input2_offset]);
+}
 
 
 @compute
@@ -498,30 +584,46 @@ fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let output_size_of_one_batch = op_matmul.m * op_matmul.k; 
 
-    let input1_offset = op_matmul.input1.offset;
-    let input2_offset = op_matmul.input2.offset;
+    let input1_offset = op_matmul.input1_offset;
+    let input2_offset = op_matmul.input2_offset;
 
-    //let input1_stride_m = op_matmul.n;
-    //let input1_stride_n = 1u;
-    //let input1_stride_b = op_matmul.m * op_matmul.n;
-    
-    //let input2_stride_n = op_matmul.k;
-    //let input2_stride_k = 1u;
-    //let input2_stride_b = op_matmul.n * op_matmul.k;
+    let input1_stride_b = op_matmul.input1_stride_b;
+    let input1_stride_m = op_matmul.input1_stride_m;
+    let input1_stride_n = op_matmul.input1_stride_n;
 
-    let input1_stride_b = op_matmul.input1.stride3;
-    let input1_stride_m = op_matmul.input1.stride4;
-    let input1_stride_n = op_matmul.input1.stride5;
-
-    let input2_stride_b = op_matmul.input2.stride3;
-    let input2_stride_n = op_matmul.input2.stride4;
-    let input2_stride_k = op_matmul.input2.stride5;
+    let input2_stride_b = op_matmul.input2_stride_b;
+    let input2_stride_n = op_matmul.input2_stride_n;
+    let input2_stride_k = op_matmul.input2_stride_k;
 
     var sum = ZERO;
-    for (var i = 0u; i < op_matmul.n; i++){
-        sum +=  
-        v_input1[b * input1_stride_b  + input1_stride_m * y + i * input1_stride_n + input1_offset] 
-      * v_input2[b * input2_stride_b  + input2_stride_n * i + x * input2_stride_k + input2_offset];
+    
+    let m_input1_offset = input1_offset + input1_stride_m * y + b * input1_stride_b;
+    let m_input2_offset = input2_offset + input2_stride_k * x + b * input2_stride_b;
+
+    if(input1_stride_n == 1 && input2_stride_n == 1){
+        for (var i = 0u; i < op_matmul.n; i++){
+            sum +=  v_input1[i + m_input1_offset] 
+                    * v_input2[i + m_input2_offset];
+        }
+    }
+    else if(input1_stride_n == 1){
+        for (var i = 0u; i < op_matmul.n; i++){
+            sum +=  v_input1[i + m_input1_offset] 
+                    * v_input2[input2_stride_n * i + m_input2_offset];
+        }
+    }
+    else if(input2_stride_n == 1){
+        for (var i = 0u; i < op_matmul.n; i++){
+            sum +=  v_input1[input1_stride_n * i + m_input1_offset] 
+                    * v_input2[i + m_input2_offset];
+        }
+    }
+    else
+    {
+        for (var i = 0u; i < op_matmul.n; i++){
+            sum +=  v_input1[input1_stride_n * i + m_input1_offset] 
+                    * v_input2[input2_stride_n * i + m_input2_offset];
+        }
     }
     
     v_dest[b * output_size_of_one_batch + y * op_matmul.k + x] = sum;
@@ -616,6 +718,54 @@ fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 }
+
+
+@compute
+@workgroup_size(64,1,1)
+fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgroup_id) output_id3: vec3<u32>,) {
+    let workgroup_id = local_id.x;
+    let output_index = output_id3.y;
+    
+    //Start Index of the Elements to Reduce
+    let length = op_rms_norm_contiguous.length; //length of the elements to reduce
+    let start_index = output_index * length;
+    let start_index1 = start_index + op_rms_norm_contiguous.input1_offset;
+    let start_index2 = start_index + op_rms_norm_contiguous.input2_offset;
+
+    //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
+    let start = workgroup_id * op_rms_norm_contiguous.workgroup_size;
+    let end = min(length, (workgroup_id + 1) * op_rms_norm_contiguous.workgroup_size);
+
+    //Now Reduce from start to end
+    var sum = ZERO;
+    for (var i = start; i < end; i++){
+        let v = v_input1[start_index1 + i];
+        sum += v*v;
+    }
+    sharedSums[workgroup_id] = sum;
+        
+    workgroupBarrier();
+
+    if (workgroup_id == 0){
+        let cnt = op_rms_norm_contiguous.workgroup_count;
+        //Finnaly Sum of all worker threads:
+        var sum = ZERO;
+        for (var i = 0u; i < cnt; i++){
+            sum +=  sharedSums[i];
+        }
+        let mean = sum / f32(length);
+        let m = sqrt(mean + op_rms_norm_contiguous.eps);
+        sharedSums[0] = m;
+    }
+
+    workgroupBarrier();
+
+    for (var i = start; i < end; i++){
+        v_dest[start_index + i] = v_input1[start_index1 + i] / sharedSums[0] * v_input2[start_index2 + i];
+    }
+
+}
+
 
 @compute
 @workgroup_size(64,1,1)
@@ -945,6 +1095,30 @@ fn index_select(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 }
+
+@compute
+@workgroup_size(8,8,1)
+fn copy2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let i1 = global_id.x;
+    let i2 = global_id.y;
+
+    if (i1 >= op_copy2d.d1){
+        return;
+    }
+    if(i2 >= op_copy2d.d2){
+        return;
+    }
+
+    v_dest[op_copy2d.dest_offset + op_copy2d.dest_stride1 * i1 + i2] = v_input1[op_copy2d.input1_offset + op_copy2d.input1_stride1 * i1 + i2];
+    // let pos1 = get_index(op_copy2d.input1_layout, id);
+    // if(pos1.is_valid){
+    //     let pos2 = get_index(op_copy2d.dest_layout, id);
+    //     if(pos2.is_valid){
+    //         v_dest[pos2.id] = v_input1[pos1.id];
+    //     }
+    // }
+}
+
 
 // @compute
 // @workgroup_size(64,1,1)

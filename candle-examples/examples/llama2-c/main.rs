@@ -6,8 +6,6 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use candle::wgpu_backend::debug_info::calulate_measurment;
-use candle::wgpu_backend::debug_info::save_list;
 use candle::Device;
 use candle_transformers::models::llama2_c as model;
 use candle_transformers::models::llama2_c_weights as weights;
@@ -376,8 +374,8 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
    match device {
         Device::WebGpu(gpu) => {
             let info = pollster::block_on(gpu.get_debug_info()).unwrap();
-            let map2 = calulate_measurment(&info);
-            save_list(&map2, "wgpu_infollama2-c_small.json").unwrap();
+            let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
+            candle::wgpu::debug_info::save_list(&map2, "wgpu_infollama2-c_small.json").unwrap();
         },
         _ => {},
     };

@@ -11,7 +11,7 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { workspace = true }
+candle = { workspace = true}
 half = { workspace = true }
 thiserror = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
@@ -30,11 +30,13 @@ rand = { workspace = true }
 criterion = { workspace = true }
 
 [features]
-default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate"]
 cuda = ["candle/cuda"]
 mkl = ["dep:intel-mkl-src", "candle/mkl"]
 metal = ["candle/metal", "dep:candle-metal-kernels", "dep:metal"]
+wgpu = ["candle/wgpu"]
+
+default=["wgpu"]
 
 [[bench]]
 name = "bench_main"

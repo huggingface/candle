@@ -1,4 +1,7 @@
-use candle::{backend::BackendStorage, WgpuStorage, CpuStorage, DType, Layout, Result, Shape, Tensor};
+use candle::{
+    backend::BackendStorage, wgpu::wgpu_functions, CpuStorage, DType, Layout, Result, Shape,
+    Tensor, WgpuStorage,
+};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -225,17 +228,13 @@ impl candle::CustomOp1 for Sigmoid {
         Ok(Some(grad_res.mul(&d_dx_sigmoid)?))
     }
 
-    fn webgpu_fwd(
-            &self,
-            _storage: &WgpuStorage,
-            _layout: &Layout,
-        ) -> Result<(WgpuStorage, Shape)> {
-        let s =  _storage.unary_impl::<Self>(_layout)?;
+    fn webgpu_fwd(&self, _storage: &WgpuStorage, _layout: &Layout) -> Result<(WgpuStorage, Shape)> {
+        let s = _storage.unary_impl::<Self>(_layout)?;
         return Ok((s, _layout.shape().clone()));
     }
 }
 
-impl candle::op::UnaryOpT for Sigmoid{
+impl candle::op::UnaryOpT for Sigmoid {
     const NAME: &'static str = "sigmoid";
 
     const KERNEL: &'static str = "usigmoid";
@@ -652,6 +651,50 @@ impl candle::CustomOp2 for RmsNorm {
         .map_err(candle::Error::wrap)?;
         let newstorage = candle::MetalStorage::new(output, device.clone(), elem_count, s1.dtype());
         Ok((newstorage, l1.shape().clone()))
+    }
+
+    #[cfg(feature = "wgpu")]
+    fn webgpu_fwd(
+        &self,
+        src: &WgpuStorage,
+        layout: &Layout,
+        alpha: &WgpuStorage,
+        alpha_layout: &Layout,
+    ) -> Result<(WgpuStorage, Shape)> {
+        //start offset and length:
+
+        if !(layout.is_contiguous()){
+            candle::bail!("input has to be contiguous")
+        }
+        if !(alpha_layout.is_contiguous()){
+            candle::bail!("alpha has to be contiguous")
+        }
+       
+        let el_count = layout.shape().elem_count();
+        let dims = layout.shape().dims();
+        let dim_m1 = dims[dims.len() - 1];
+
+        let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
+
+        let output_buffer = wgpu_functions::create_buffer(src.device(), el_count * 4);
+
+        wgpu_functions::queue_rms_norm(
+            src.device(),
+            &output_buffer,
+            &src.buffer,
+            &alpha.buffer,
+            src.dtype,
+            layout.start_offset() as u32,
+            alpha_layout.start_offset() as u32,
+            dim_m1 as u32,
+            dest_size as u32,
+            self.eps,
+        )?;
+        return Ok((WgpuStorage::new(
+            output_buffer,
+            src.device().clone(),
+            src.dtype,
+        ), Shape::from_dims(dims)));
     }
 }
 
