@@ -7,6 +7,9 @@ struct MetaConvert{
 @group(0) @binding(1)
 var<uniform> op_convert : MetaConvert;
 
+#ifdef u32
+#else
+
 @compute
 @workgroup_size(64,1,1)
 fn convert_to_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -17,6 +20,11 @@ fn convert_to_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 }
 
+#endif
+
+#ifdef f32
+#else
+
 @compute
 @workgroup_size(64,1,1)
 fn convert_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -26,3 +34,23 @@ fn convert_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
         v_dest_f32[id] = f32(v_input1[pos1.id]);
     }
 }
+
+#endif
+
+#ifdef u8
+
+@compute
+@workgroup_size(64,1,1)
+fn convert_u8_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_convert.input1_layout, id);
+    if(pos1.is_valid){
+        let mem_id = pos1.id / 4;
+        let u8_offset = pos1.id % 4;
+
+        let value = (v_input1[mem_id] >> (8 * u8_offset)) & 0xFF;
+        v_dest_f32[id] = f32(value);
+    }
+}
+
+#endif

@@ -70,6 +70,7 @@ pub (crate) enum Pipelines{
     CopyStrided,
     ConvertF32ToU32,
     ConvertU32ToF32,
+    ConvertU8ToF32,
 }
 
 
@@ -160,9 +161,11 @@ impl WgpuDevice{
             Pipelines::Conv2DTranspose => "conv2d_transpose",
             Pipelines::ConvertF32ToU32 => "convert_to_u32",
             Pipelines::ConvertU32ToF32 => "convert_to_f32",
+            Pipelines::ConvertU8ToF32 => "convert_u8_to_f32",
             Pipelines::IndexSelect => "index_select",
             Pipelines::Copy2d => "copy2d",
             Pipelines::CopyStrided => "copy_strided",
+          
         };
         
         return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {

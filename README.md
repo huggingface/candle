@@ -24,12 +24,12 @@ current Problems:
 | f16                         | ❌ Not Supported                                 |                                                                    |
 | bf16                        | ❌ Not Supported                                 |                                                                    |
 | **<span style="color:#1E90FF">Operations</span>**              |                                                 |   All operations support non-contiguous arrays                                                                   |
-| Unary Operations            | ✅ Supported                                     | Except for "elu"                                                   |
+| Unary Operations            | ✅ Supported                                     |                                                   |
 | Binary Operations           | ✅ Supported                                     | All binary operations supported                                    |
 | MatMul                      | ✅ Supported                                     |                                                                    |
 | Reduce Operations           | ✅ Supported                                     | Sum, Min, Max, (ArgMax, ArgMin works only if continues Dimensions are reduced)                                     |
 | Conv2d                      | ✅ Supported                                     |                                                                    |
-| Conv2dTranspose             | ⚠️ Implemented with errors                      | Errors in unit tests for certain values                            |
+| Conv2dTranspose             | ⚠️ Implemented with errors                       | Errors in for tranposed & dialation, paddingOutput not implemented                           |
 | Index Select                | ✅ Supported                                     |                                                                    |
 | **<span style="color:#1E90FF">Not Implemented</span>**        |                                                 |                                                                    |
 | Conv1d                      | ❌ Not Implemented                               |                                                                    |

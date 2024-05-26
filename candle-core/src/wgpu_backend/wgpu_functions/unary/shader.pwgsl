@@ -61,6 +61,7 @@ fn unary_from_buffer_contiguous(@builtin(global_invocation_id) global_id: vec3<u
 }
 
 
+#ifdef f32
 fn rand_uniform(value: u32, seed : u32) -> f32 {
     // Use XORShift algorithm to generate a pseudo-random float
     // Parameters for XORShift algorithm (adjust as needed)
@@ -93,6 +94,39 @@ fn rand_normal(id: u32, mean: f32, std_: f32, seed : u32) -> f32 {
 }
 
 const SQRT_TWO_OVER_PI_F32: f32 = 0.79788456080286535587989211986876373;
+
+
+
+//https://en.wikipedia.org/wiki/Error_function Abramowitz and Stegun approximation
+fn erfg(x : f32) -> f32{
+    let p = 0.3275911;
+    let a1 = 0.254829592;
+    let a2 = -0.284496736;
+    let a3 = 1.421413741;
+    let a4 = -1.453152027;
+    let a5 = 1.061405429;
+
+    let t = 1 / (1 + p*x);
+
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let t4 = t3 * t;
+    let t5 = t4 * t;
+
+    return 1 - (a1 * t + a2 * t2 + a3 * t3 + a4 * t4 + a5 * t5) * exp(- (x * x));
+}
+
+fn erf(x : f32) -> f32{
+   if x >= 0{
+        return erfg(x);
+   }
+   else{
+        return -erfg(-x);
+   }
+}
+
+
+#endif
 
 //all Unary Operations(No Input)
 fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : DTYPE, scalar2 : DTYPE, seed : u32){
@@ -185,6 +219,8 @@ switch operation {
             v_dest[id] = sqrt(x) ;
         }case 33u{ 
             v_dest[id] = tan(x); 
+        }case 34u{ 
+            v_dest[id] = tanh(x); 
         }case 35u{ 
             v_dest[id] = trunc(x) ;
         }case 36u{  //Binary Step
@@ -230,7 +266,11 @@ switch operation {
             v_dest[id] = 0.5 * x * (1.0 + tanh(SQRT_TWO_OVER_PI_F32 * x * (1.0 + 0.044715 * x * x)));
         }
         case 50u{
-            v_dest[id] = round(x);
+            //round away from zero, //wgsl round would be round to even
+            let a = abs(x);
+            let b = floor(a) + floor(2*(a%1));
+            v_dest[id] = sign(x)*b;
+            //v_dest[id] = round(x);
         }
         case 52u{ //elu
             if x > 0 {
@@ -238,6 +278,12 @@ switch operation {
             } else {
                 v_dest[id] = (exp(x) - 1) * scalar1;
             }
+        }
+        case 53u{
+            v_dest[id] = erf(x);
+        }
+        case 54u{ //gelu_erf
+             v_dest[id] = (erf(x / sqrt(2.0)) + 1.) * 0.5 * x;
         }
 #endif
         case 101u{ //add

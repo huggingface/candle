@@ -19,7 +19,7 @@ use crate::DType;
 pub use binary::{queue_binary_buffer_from_buffer, queue_binary_buffer_inplace};
 pub use cmp::queue_cmp_buffer_from_buffer;
 pub use conv2d::{queue_conv2d, queue_conv2d_transpose};
-pub use convert::{queue_convert_f32_to_u32, queue_convert_u32_to_f32};
+pub use convert::{queue_convert_f32_to_u32, queue_convert_u32_to_f32, queue_convert_u8_to_f32};
 pub use copy::{queue_copy, queue_copy2d, queue_copy_strided};
 pub use index_select::queue_index_select;
 pub use matmul::queue_matmul_buffer;
@@ -116,6 +116,7 @@ pub fn load_shader(shader : Shader) -> crate::Result<&'static str>{
         Shader::Conv2D(DType::U32) => Ok(include_str!("conv2d/generated/shader.pwgsl_generated_u32.wgsl")),
         Shader::Convert(DType::F32) => Ok(include_str!("convert/generated/shader.pwgsl_generated_f32.wgsl")),
         Shader::Convert(DType::U32) => Ok(include_str!("convert/generated/shader.pwgsl_generated_u32.wgsl")),
+        Shader::Convert(DType::U8) => Ok(include_str!("convert/generated/shader.pwgsl_generated_u8.wgsl")),
         Shader::Copy(DType::F32) => Ok(include_str!("copy/generated/shader.pwgsl_generated_f32.wgsl")),
         Shader::Copy(DType::U32) => Ok(include_str!("copy/generated/shader.pwgsl_generated_u32.wgsl")),
         Shader::IndexSelect(DType::F32) => Ok(include_str!("index_select/generated/shader.pwgsl_generated_f32.wgsl")),

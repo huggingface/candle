@@ -75,8 +75,10 @@ pub enum UnaryOperation {
     RandUniform = 48,
     Gelu = 49,
     Round = 50,
-
     Elu = 52,
+    Erf = 53,
+    GeluErf = 54,
+
     AddScalar = 101,
     MultScalar = 102,
     MinusScalar = 103,

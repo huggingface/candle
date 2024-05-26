@@ -29,17 +29,9 @@ fn index_select(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         let input_stride_x = op_index.input_stride_x;
         let input_stride_y = op_index.input_stride_y;
-        let output_stride_x = op_index.input_stride_x;
-        let output_stride_y = op_index.input_stride_y;
+        let output_stride_x = op_index.output_stride_x;
+        let output_stride_y = op_index.output_stride_y;
         let length = op_index.length;
-
-        // let input_stride_x = 1u; //x specifys for values of one dim
-        // let input_stride_y = 1u; //y specifys per value of the index
-        
-        // let output_stride_x = 1u;
-        // let output_stride_y = 1u;
-
-        //let length = 42u;       //Shape Elem Count / Dim to Select
 
         if workgroup_id < length{
             let input_id  =    dim_index * input_stride_y  + workgroup_id * input_stride_x;

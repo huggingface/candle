@@ -384,6 +384,21 @@ impl crate::backend::BackendStorage for WgpuStorage {
                     crate::DType::F32,
                 ))
             }
+            (DType::U8, DType::F32) => {
+                let buffer_dest =
+                    wgpu_functions::create_buffer(self.device(), layout.shape().elem_count() * 4);
+                wgpu_functions::queue_convert_u8_to_f32(
+                    self.device(),
+                    &buffer_dest,
+                    &self.buffer,
+                    layout,
+                )?;
+                Ok(WgpuStorage::new(
+                    buffer_dest,
+                    self.device().clone(),
+                    crate::DType::F32,
+                ))
+            }
             (DType::F32, DType::U32) => {
                 let buffer_dest =
                     wgpu_functions::create_buffer(self.device(), layout.shape().elem_count() * 4);
@@ -408,12 +423,12 @@ impl crate::backend::BackendStorage for WgpuStorage {
             wgpu_functions::create_buffer(self.device(), layout.shape().elem_count() * 4);
         let op = match B::NAME {
             "gelu" => UnaryOperation::Gelu,
-            //"erf" => UnaryOperation::Erf,
+            "erf" => UnaryOperation::Erf,
             "silu" => UnaryOperation::SiLu,
             "ceil" => UnaryOperation::Ceil,
             "floor" => UnaryOperation::Floor,
             "round" => UnaryOperation::Round,
-            //"gelu_erf" => UnaryOperation::GeluErf,
+            "gelu_erf" => UnaryOperation::GeluErf,
             "sign" => UnaryOperation::Sign,
             "abs" => UnaryOperation::Abs,
 

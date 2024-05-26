@@ -50,22 +50,21 @@ fn main() {
 
         //create the File:
         let debug_s = shader_loader::load_shader(virtual_id_counter, &shader_map, &vec!["f32"]);
-        // let _ = naga::front::wgsl::parse_str(&debug_s).inspect_err(|f| {
-        //     println!("{:?}", f);
-        // } );
         let new_file_name = format!("{}_generated_f32.wgsl", original_file_name);
         let new_file_path = generated_dir.join(new_file_name);
         fs::write(new_file_path, debug_s).expect("Failed to write shader file");
      
 
         let debug_s = shader_loader::load_shader(virtual_id_counter, &shader_map, &vec!["u32"]);
-        // let _ = naga::front::wgsl::parse_str(&debug_s).inspect_err(|f| {
-        //     println!("{:?}", f);
-        // } );
-
         let new_file_name = format!("{}_generated_u32.wgsl", original_file_name);
         let new_file_path = generated_dir.join(new_file_name);
         fs::write(new_file_path, debug_s).expect("Failed to write shader file");
+
+        let debug_s = shader_loader::load_shader(virtual_id_counter, &shader_map, &vec!["u8"]);
+        let new_file_name = format!("{}_generated_u8.wgsl", original_file_name);
+        let new_file_path = generated_dir.join(new_file_name);
+        fs::write(new_file_path, debug_s).expect("Failed to write shader file");
+        
         
         println!("cargo::rerun-if-changed={:?}", file);
         virtual_id_counter += 1;
