@@ -2,7 +2,7 @@ use crate::{notImplemented, DType, Layout, Shape};
 
 use super::{
     device::WgpuDevice,
-    wgpu_functions::{self, read_data_from_gpu_async, BinaryOperation, UnaryOperation},
+    wgpu_functions::{self, read_data_from_gpu_async, binary::BinaryOperation, unary::UnaryOperation, cmp::CmpOperation, reduce::ReduceOperations},
 };
 
 #[derive(Debug)]
@@ -13,10 +13,6 @@ pub struct WgpuStorage {
 }
 
 impl WgpuStorage {
-    // pub (crate) fn new(buffer: wgpu::Buffer, wgpu_device: WgpuDevice) -> Self {
-    //     Self { buffer, wgpu_device,dtype : crate::DType::F32}
-    // }
-
     pub fn new(buffer: wgpu::Buffer, wgpu_device: WgpuDevice, dtype: crate::DType) -> Self {
         Self {
             buffer,
@@ -193,11 +189,11 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
         let buffer_dest = wgpu_functions::create_buffer(self.device(), dst_shape.elem_count() * 4);
         let op = match reduce_op {
-            crate::op::ReduceOp::Sum => wgpu_functions::ReduceOperations::Sum,
-            crate::op::ReduceOp::Min => wgpu_functions::ReduceOperations::Min,
-            crate::op::ReduceOp::Max => wgpu_functions::ReduceOperations::Max,
-            crate::op::ReduceOp::ArgMin => wgpu_functions::ReduceOperations::ArgMin,
-            crate::op::ReduceOp::ArgMax => wgpu_functions::ReduceOperations::ArgMax,
+            crate::op::ReduceOp::Sum => ReduceOperations::Sum,
+            crate::op::ReduceOp::Min => ReduceOperations::Min,
+            crate::op::ReduceOp::Max => ReduceOperations::Max,
+            crate::op::ReduceOp::ArgMin => ReduceOperations::ArgMin,
+            crate::op::ReduceOp::ArgMax => ReduceOperations::ArgMax,
         };
 
         // Sort the reduce_dims as they have to be processed from left to right when converting the
@@ -344,12 +340,12 @@ impl crate::backend::BackendStorage for WgpuStorage {
         let buffer_dest = wgpu_functions::create_buffer(self.device(), buffer_size); //Output is u8
 
         let op2 = match op {
-            crate::op::CmpOp::Eq => wgpu_functions::CmpOperation::Eq,
-            crate::op::CmpOp::Ne => wgpu_functions::CmpOperation::Ne,
-            crate::op::CmpOp::Le => wgpu_functions::CmpOperation::Le,
-            crate::op::CmpOp::Ge => wgpu_functions::CmpOperation::Ge,
-            crate::op::CmpOp::Lt => wgpu_functions::CmpOperation::Lt,
-            crate::op::CmpOp::Gt => wgpu_functions::CmpOperation::Gt,
+            crate::op::CmpOp::Eq => CmpOperation::Eq,
+            crate::op::CmpOp::Ne => CmpOperation::Ne,
+            crate::op::CmpOp::Le => CmpOperation::Le,
+            crate::op::CmpOp::Ge => CmpOperation::Ge,
+            crate::op::CmpOp::Lt => CmpOperation::Lt,
+            crate::op::CmpOp::Gt => CmpOperation::Gt,
         };
 
         wgpu_functions::queue_cmp_buffer_from_buffer(
@@ -403,7 +399,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
                     crate::DType::U32,
                 ))
             }
-            _ => panic!("conversion of dtype to {:?} not suported on webgpu", dtype),
+            _ => panic!("conversion from {:?} to {:?} not suported on wgpu", self.dtype, dtype),
         }
     }
 

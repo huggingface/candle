@@ -36,3 +36,6 @@ candle-wasm-examples/*/package-lock.json
 candle-wasm-examples/**/config*.json
 .DS_Store
 .idea/*
+
+#generated wgpu shader files
+**/generated/*.pwgsl_generated_*.wgsl

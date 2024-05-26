@@ -3,7 +3,7 @@
 macro_rules! notImplemented {
     ($x:ident) => {{
         let name = String::from(stringify!($x));
-        return Err(crate::Error::WebGpu(format!("WebGpu Function not yet Implemented{name}").to_owned().into()));
+        return Err(crate::Error::WebGpu(format!("WebGpu Function not yet Implemented {name}").to_owned().into()));
     }};
 }
 #[macro_export]

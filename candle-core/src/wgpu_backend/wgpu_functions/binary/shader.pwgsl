@@ -1,0 +1,79 @@
+#include "../util.pwgsl"
+
+
+struct MetaBinary{
+    input1_layout : MatrixLayout,
+    input2_layout : MatrixLayout,
+    operation : u32,
+}
+
+struct MetaBinaryContiguousBoth{
+    input1_length : u32,
+    input1_offset : u32,
+    input2_length : u32,
+    input2_offset : u32,
+    operation : u32,
+}
+
+@group(0) @binding(1)
+var<uniform> op_binary : MetaBinary;
+
+@group(0) @binding(1)
+var<uniform> op_binary_contiguous_both : MetaBinaryContiguousBoth;
+
+
+@compute
+@workgroup_size(64,1,1)
+fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_binary.input1_layout, id);
+    let pos2 = get_index(op_binary.input2_layout, id);
+    if(pos1.is_valid){
+        set_binary(op_binary.operation, id, v_input1[pos1.id], v_input2[pos2.id]);
+    }
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn binary_buffer_from_buffer_contiguous_both(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    if (id >= op_binary_contiguous_both.input1_length){
+        return;
+    }
+    set_binary(op_binary_contiguous_both.operation, id, v_input1[id + op_binary_contiguous_both.input1_offset], v_input2[id + op_binary_contiguous_both.input2_offset]);
+}
+
+
+fn set_binary(operation : u32, id : u32, x : DTYPE, y : DTYPE){
+    switch(operation){
+        case 0u{
+            v_dest[id] = y;
+        }
+        case 1u{ //add
+            v_dest[id] = x + y;
+        }
+        case 2u{ //mult
+            v_dest[id] = x * y;
+        }
+        case 3u{ //minus
+            v_dest[id] = x - y;
+        }
+        case 4u{ //div
+            v_dest[id] = x / y;
+        }
+        case 5u{ //max
+            v_dest[id] = max(x, y);
+        }
+        case 6u{ //min
+            v_dest[id] = min(x, y);
+        }
+#ifdef f32        
+        case 7u{ //powf
+            v_dest[id] = pow(x, y);
+        }
+#endif
+        default{
+
+        }
+    }
+}

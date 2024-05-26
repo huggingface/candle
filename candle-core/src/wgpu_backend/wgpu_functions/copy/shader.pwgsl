@@ -1,0 +1,50 @@
+#include "../util.pwgsl"
+
+struct MetaCopy2d{
+    d1 : u32,
+    d2 : u32,
+    input1_stride1 : u32,
+    dest_stride1 : u32,
+    input1_offset : u32,
+    dest_offset : u32,
+}
+
+struct MetaCopyStrided{
+    input1_layout : MatrixLayout,
+    dest_offset : u32,
+}
+
+@group(0) @binding(1)
+var<uniform> op_copy2d : MetaCopy2d;
+
+@group(0) @binding(1)
+var<uniform> op_copy_strided : MetaCopyStrided;
+
+
+@compute
+@workgroup_size(64,1,1)
+fn copy_strided(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_copy_strided.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_input1[pos1.id];
+        v_dest[id] = x;
+    }
+}
+
+
+@compute
+@workgroup_size(8,8,1)
+fn copy2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let i1 = global_id.x;
+    let i2 = global_id.y;
+
+    if (i1 >= op_copy2d.d1){
+        return;
+    }
+    if(i2 >= op_copy2d.d2){
+        return;
+    }
+
+    v_dest[op_copy2d.dest_offset + op_copy2d.dest_stride1 * i1 + i2] = v_input1[op_copy2d.input1_offset + op_copy2d.input1_stride1 * i1 + i2];
+}

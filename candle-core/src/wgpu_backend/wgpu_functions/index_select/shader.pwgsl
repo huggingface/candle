@@ -1,0 +1,53 @@
+#include "../util.pwgsl"
+
+struct MetaIndexSelect{
+    input1_layout : MatrixLayout,
+    input2_layout : MatrixLayout,
+    input_stride_x : u32,   //x specifys for values of one dim
+    input_stride_y : u32,   //y specifys per value of the index
+    output_stride_x : u32,  //x specifys for values of one dim
+    output_stride_y : u32,  //y specifys per value of the index
+    length : u32
+}
+
+@group(0) @binding(1)
+var<uniform> op_index : MetaIndexSelect;
+
+@group(0) @binding(3)
+var<storage> v_input2_u32: array<u32>;
+
+@compute
+@workgroup_size(8,8,1)
+fn index_select(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    
+    let workgroup_id = global_id.x;
+    let output_index = global_id.y;
+
+    let pos2 = get_index(op_index.input2_layout, output_index);
+    if(pos2.is_valid){
+        let dim_index = v_input2_u32[pos2.id];
+        
+        let input_stride_x = op_index.input_stride_x;
+        let input_stride_y = op_index.input_stride_y;
+        let output_stride_x = op_index.input_stride_x;
+        let output_stride_y = op_index.input_stride_y;
+        let length = op_index.length;
+
+        // let input_stride_x = 1u; //x specifys for values of one dim
+        // let input_stride_y = 1u; //y specifys per value of the index
+        
+        // let output_stride_x = 1u;
+        // let output_stride_y = 1u;
+
+        //let length = 42u;       //Shape Elem Count / Dim to Select
+
+        if workgroup_id < length{
+            let input_id  =    dim_index * input_stride_y  + workgroup_id * input_stride_x;
+            let output_id = output_index * output_stride_y + workgroup_id * output_stride_x;
+            let pos1 = get_index(op_index.input1_layout, input_id);
+            if(pos1.is_valid){
+                v_dest[output_id]  = v_input1[pos1.id];
+            }
+        }
+    }
+}

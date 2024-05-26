@@ -1,0 +1,77 @@
+#include "../util.pwgsl"
+
+struct MetaInfoRmsNormContiguous{
+    workgroup_count : u32,
+    workgroup_size : u32,
+    length : u32, //Length of Reduction(e.g count of elements to sum per output),
+
+    input1_offset : u32,
+    input2_offset : u32,
+
+    eps : f32
+}
+
+@group(0) @binding(1)
+var<uniform> op_rms_norm_contiguous : MetaInfoRmsNormContiguous;
+
+var<workgroup> sharedSums: array<DTYPE, 64>; 
+
+var<workgroup> sharedM: f32; 
+
+@compute
+@workgroup_size(64,1,1)
+fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgroup_id) output_id3: vec3<u32>,) {
+    let workgroup_id = local_id.x;
+    let output_index = output_id3.y;
+    
+    //Start Index of the Elements to Reduce
+    let length = op_rms_norm_contiguous.length; //length of the elements to reduce
+    let start_index = output_index * length;
+    let start_index1 = start_index + op_rms_norm_contiguous.input1_offset;
+    let start_index2 = start_index + op_rms_norm_contiguous.input2_offset;
+
+    //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
+    let start = workgroup_id * op_rms_norm_contiguous.workgroup_size;
+    let end = min(length, (workgroup_id + 1) * op_rms_norm_contiguous.workgroup_size);
+
+    //Now Reduce from start to end
+    var sum = ZERO;
+    for (var i = start; i < end; i++){
+        let v = v_input1[start_index1 + i];
+        sum += v*v;
+    }
+    sharedSums[workgroup_id] = sum;
+        
+    workgroupBarrier();
+
+    if (workgroup_id == 0){
+        let cnt = op_rms_norm_contiguous.workgroup_count;
+        //Finnaly Sum of all worker threads:
+        var sum = ZERO;
+        for (var i = 0u; i < cnt; i++){
+            sum +=  sharedSums[i];
+        }
+
+#ifdef f32 
+        let mean = sum / f32(length);
+#endif  
+#ifdef u32 
+        let mean = f32(sum) / f32(length);
+#endif          
+        
+        let m = sqrt(mean + op_rms_norm_contiguous.eps);
+        sharedM = m;
+    }
+
+    workgroupBarrier();
+
+    for (var i = start; i < end; i++){
+#ifdef f32 
+        v_dest[start_index + i] = v_input1[start_index1 + i] / sharedM * v_input2[start_index2 + i];
+#endif 
+#ifdef u32 
+        v_dest[start_index + i] = u32(f32(v_input1[start_index1 + i]) / sharedM * f32(v_input2[start_index2 + i]));
+#endif  
+    }
+
+}

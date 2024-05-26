@@ -1,0 +1,81 @@
+#include "../util.pwgsl"
+
+//(M X N) * (N X K)
+struct MetaInfoMatMul{
+    b : u32, //batch_count ("normal" matmul = 1)
+    m : u32, 
+    n : u32, 
+    k : u32,
+    input1_stride_b : u32,
+    input1_stride_m : u32,
+    input1_stride_n : u32,
+    input1_offset   : u32,
+    input2_stride_b : u32,
+    input2_stride_n : u32,
+    input2_stride_k : u32,
+    input2_offset   : u32,
+}
+
+@group(0) @binding(1)
+var<uniform> op_matmul : MetaInfoMatMul;
+
+@compute
+@workgroup_size(8,8,1)
+fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x;
+    let y = global_id.y;
+    let b = global_id.z;
+
+    if(x >= op_matmul.k){
+        return;
+    }
+    if(y >= op_matmul.m){
+        return;
+    }
+
+    let output_size_of_one_batch = op_matmul.m * op_matmul.k; 
+
+    let input1_offset = op_matmul.input1_offset;
+    let input2_offset = op_matmul.input2_offset;
+
+    let input1_stride_b = op_matmul.input1_stride_b;
+    let input1_stride_m = op_matmul.input1_stride_m;
+    let input1_stride_n = op_matmul.input1_stride_n;
+
+    let input2_stride_b = op_matmul.input2_stride_b;
+    let input2_stride_n = op_matmul.input2_stride_n;
+    let input2_stride_k = op_matmul.input2_stride_k;
+
+    var sum = ZERO;
+    
+    let m_input1_offset = input1_offset + input1_stride_m * y + b * input1_stride_b;
+    let m_input2_offset = input2_offset + input2_stride_k * x + b * input2_stride_b;
+
+    if(input1_stride_n == 1 && input2_stride_n == 1){
+        for (var i = 0u; i < op_matmul.n; i++){
+            sum +=  v_input1[i + m_input1_offset] 
+                    * v_input2[i + m_input2_offset];
+        }
+    }
+    else if(input1_stride_n == 1){
+        for (var i = 0u; i < op_matmul.n; i++){
+            sum +=  v_input1[i + m_input1_offset] 
+                    * v_input2[input2_stride_n * i + m_input2_offset];
+        }
+    }
+    else if(input2_stride_n == 1){
+        for (var i = 0u; i < op_matmul.n; i++){
+            sum +=  v_input1[input1_stride_n * i + m_input1_offset] 
+                    * v_input2[i + m_input2_offset];
+        }
+    }
+    else
+    {
+        for (var i = 0u; i < op_matmul.n; i++){
+            sum +=  v_input1[input1_stride_n * i + m_input1_offset] 
+                    * v_input2[input2_stride_n * i + m_input2_offset];
+        }
+    }
+    
+    v_dest[b * output_size_of_one_batch + y * op_matmul.k + x] = sum;
+}

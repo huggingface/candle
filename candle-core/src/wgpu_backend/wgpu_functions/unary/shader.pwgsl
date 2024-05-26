@@ -1,0 +1,270 @@
+#include "../util.pwgsl"
+
+
+struct MetaUnary{
+    input1_layout : MatrixLayout,
+    operation : u32,
+    scalar1 : DTYPE, //optionally scalar value
+    scalar2 : DTYPE,
+    seed : u32,
+}
+
+struct MetaUnaryContiguous{
+    offset : u32,
+    length : u32,
+    operation : u32,
+    scalar1 : DTYPE, //optionally scalar value
+    scalar2 : DTYPE,
+    seed : u32,
+}
+
+
+@group(0) @binding(1)
+var<uniform> op_unary : MetaUnary;
+
+@group(0) @binding(1)
+var<uniform> op_unary_contiguous : MetaUnaryContiguous;
+
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_input1[pos1.id];
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2, op_unary.seed);
+    }
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_inplace(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_unary.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_dest[pos1.id];
+        set_unary(op_unary.operation,id, x, op_unary.scalar1, op_unary.scalar2, op_unary.seed);
+    }
+}
+
+
+@compute
+@workgroup_size(64,1,1)
+fn unary_from_buffer_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    if (id >= op_unary_contiguous.length){
+        return;
+    }
+    let x = v_input1[id + op_unary_contiguous.offset];
+    set_unary(op_unary_contiguous.operation, id, x, op_unary_contiguous.scalar1, op_unary_contiguous.scalar2, op_unary_contiguous.seed);
+}
+
+
+fn rand_uniform(value: u32, seed : u32) -> f32 {
+    // Use XORShift algorithm to generate a pseudo-random float
+    // Parameters for XORShift algorithm (adjust as needed)
+    var state: u32 = value ^ 0x5F3759DF ^ seed; // Initial state, can be any non-zero value
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+
+    // Convert u32 to a float between 0 and 1
+    // Divide by maximum u32 value to get a float in [0, 1)
+    return f32(state) / f32(0xFFFFFFFFu);
+}
+
+
+// Function to convert a uniformly distributed random number [0, 1) to a normal distribution with mean and std
+fn uniform_to_normal(mean: f32, std_: f32, u1: f32, u2 : f32) -> f32 {
+    // Box-Muller transform to convert uniform random value to normal distribution
+    let pi: f32 = 3.141592653589793;    
+
+    let z0 = sqrt(-2.0 * log(u1)) * cos(2.0 * pi * u2);
+    let z = mean + std_ * z0; // Convert to desired mean and std
+    return z;
+}
+
+// Function to convert a uniformly distributed random number [0, 1) to a normal distribution with mean and std
+fn rand_normal(id: u32, mean: f32, std_: f32, seed : u32) -> f32 {
+    let u1 = rand_uniform(id, seed);
+    let u2 = rand_uniform(id + 1, seed);
+    return uniform_to_normal(mean, std_, u1, u2);
+}
+
+const SQRT_TWO_OVER_PI_F32: f32 = 0.79788456080286535587989211986876373;
+
+//all Unary Operations(No Input)
+fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : DTYPE, scalar2 : DTYPE, seed : u32){
+switch operation {
+        case 0u{ // set 0
+            v_dest[id] = ZERO;
+        }
+        case 1u{ //set 1
+            v_dest[id] = ONE;
+        }
+        case 2u{ 
+            v_dest[id] += ONE;
+        }
+        case 3u{ 
+            v_dest[id] -= ONE;
+        }
+        case 4u{ //Identity
+            v_dest[id] = x;
+        }
+        case 5u{ //square
+            v_dest[id] = x * x;
+        }
+        case 6u{//Affine
+            v_dest[id] = x * scalar1 + scalar2;
+        }
+
+#ifdef f32
+        case 7u{  
+            v_dest[id] = abs(x);
+        }
+        case 8u{ 
+            v_dest[id] = acos(x); 
+        }
+        case 9u{ 
+            v_dest[id] = acosh(x); 
+        }
+        case 10u{ 
+            v_dest[id] = asin(x); 
+        }
+        case 11u{ 
+            v_dest[id] = asinh(x); 
+        }
+        case 12u{ 
+            v_dest[id] = atan(x) ;
+        }
+        case 13u{ 
+            v_dest[id] = atanh(x) ;
+        }
+        case 14u{ 
+            v_dest[id] = ceil(x) ;
+        }
+        case 15u{ 
+            v_dest[id] = cos(x); 
+        }
+        case 16u{ 
+            v_dest[id] = cosh(x) ;
+        }
+        case 17u{ 
+            v_dest[id] = degrees(x) ;
+        }
+        case 21u{ 
+            v_dest[id] = exp(x); 
+        }
+        case 22u{ 
+            v_dest[id] = floor(x); 
+        }
+        case 23u{ 
+            v_dest[id] = fract(x); 
+        }
+        case 24u{ 
+            v_dest[id] = inverseSqrt(x) ;
+        }
+        case 25u{ 
+            v_dest[id] = log(x) ;
+        }
+        case 26u{ 
+            v_dest[id] = log2(x) ;
+        }
+        case 27u{ 
+            v_dest[id] = radians(x) ;
+        }
+        case 28u{ 
+            v_dest[id] = sign(x) ;
+        }
+        case 29u{ 
+            v_dest[id] = sin(x) ;
+        }case 31u{ 
+            v_dest[id] = sinh(x) ;
+        }case 32u{ 
+            v_dest[id] = sqrt(x) ;
+        }case 33u{ 
+            v_dest[id] = tan(x); 
+        }case 35u{ 
+            v_dest[id] = trunc(x) ;
+        }case 36u{  //Binary Step
+            if(v_dest[id]) < 0{
+                v_dest[id] = ZERO;
+            }
+            else{
+                v_dest[id] = ONE;
+            }
+        }case 37u{   //Sigmoid
+            v_dest[id] = 1 / (1 + exp(-x));
+        }case 38u{   //Relu
+            v_dest[id] = max(ZERO, x) ;
+        }case 39u{   //Softplus
+            v_dest[id] = log(1 + exp(x));
+        }case 40u{  //Leaky ReLU
+            if(x) < 0{
+                v_dest[id] = 0.01 * x;
+            }
+            else{
+                v_dest[id] = x;
+            }
+        }case 41u{ //SiLU
+            v_dest[id] = x / (1 + exp(-x));
+        }
+        case 42u{ //Gaussian
+            v_dest[id] = exp(-(x * x));
+        }
+        case 45u{ 
+            v_dest[id] = -x;
+        }
+        case 46u{ //inverse
+            v_dest[id] = 1 / x;
+        }
+        case 47u{ //random_normal
+            v_dest[id] = rand_normal(id, scalar1, scalar2, seed);
+        }
+        case 48u{ //random_normal
+            let r = rand_uniform(id, seed);
+            v_dest[id] = (scalar2 - scalar1) * r + scalar1;
+        }
+        case 49u{//Gelu
+            v_dest[id] = 0.5 * x * (1.0 + tanh(SQRT_TWO_OVER_PI_F32 * x * (1.0 + 0.044715 * x * x)));
+        }
+        case 50u{
+            v_dest[id] = round(x);
+        }
+        case 52u{ //elu
+            if x > 0 {
+                v_dest[id] = x;
+            } else {
+                v_dest[id] = (exp(x) - 1) * scalar1;
+            }
+        }
+#endif
+        case 101u{ //add
+            v_dest[id] = x + scalar1;
+        }
+        case 102u{ //mult
+            v_dest[id] = x * scalar1;
+        }
+        case 103u{ //minus
+            v_dest[id] = x - scalar1;
+        }
+        case 104u{ //div
+            v_dest[id] = x / scalar1;
+        }
+        case 105u{ //max
+            v_dest[id] = max(x, scalar1);
+        }
+        case 106u{ //min
+            v_dest[id] = min(x, scalar1);
+        }
+#ifdef f32
+        case 107u{ //powf
+            v_dest[id] = pow(x, scalar1);
+        }
+#endif
+        default{
+
+        }
+    }
+}

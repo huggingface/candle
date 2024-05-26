@@ -1,0 +1,28 @@
+#include "../util.pwgsl"
+
+struct MetaConvert{
+    input1_layout : MatrixLayout
+}
+
+@group(0) @binding(1)
+var<uniform> op_convert : MetaConvert;
+
+@compute
+@workgroup_size(64,1,1)
+fn convert_to_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_convert.input1_layout, id);
+    if(pos1.is_valid){
+        v_dest_u32[id] = u32(v_input1[pos1.id]);
+    }
+}
+
+@compute
+@workgroup_size(64,1,1)
+fn convert_to_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_convert.input1_layout, id);
+    if(pos1.is_valid){
+        v_dest_f32[id] = f32(v_input1[pos1.id]);
+    }
+}

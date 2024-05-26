@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use rand::SeedableRng;
@@ -9,26 +10,47 @@ use crate::{notImplemented, wrongType, Layout};
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, Measurements,MInfo};
 
-
-use super::wgpu_functions::{self, create_buffer, create_buffer_init, UnaryOperation};
+use super::wgpu_functions::{self, create_buffer, create_buffer_init, unary::UnaryOperation};
 use super::WgpuStorage;
+
+#[derive(Debug)]
+pub (crate) enum MlQueue{
+    Dispatch(MlQueueDispatch),
+}
+
+#[derive(Debug)]
+pub (crate) struct MlQueueDispatch{
+    pub (crate) x : u32, 
+    pub (crate) y : u32, 
+    pub (crate) z : u32,
+    pub (crate) pipeline : Arc<wgpu::ComputePipeline>,
+    pub (crate) bind_group : wgpu::BindGroup,
+    pub (crate) indirect_buffer : Option<wgpu::Buffer>,
+    
+    #[cfg(feature = "wgpu_debug")]
+    pub (crate) name : Option<String>,
+}
+
+#[derive(Debug)]
+pub struct ShaderModuleComputePipelines{
+    shader : Arc<wgpu::ShaderModule>,
+    pipelines : Mutex<HashMap<Pipelines, Arc<wgpu::ComputePipeline>>>
+}
 
 #[derive(Debug, Clone)]
 pub struct  WgpuDevice {
     pub device : Arc<wgpu::Device>, 
     pub queue : Arc<wgpu::Queue>,
-    pub pipelines : Arc<Mutex<Vec<Option<Arc<wgpu::ComputePipeline>>>>>,
-    pub shader : Arc<Vec<wgpu::ShaderModule>>,
-    pub rand_state : Arc<Mutex<rand::rngs::StdRng>>,
+    pub (crate) shader : Arc<Mutex<HashMap<wgpu_functions::Shader, ShaderModuleComputePipelines>>>,
+    pub (crate) rand_state : Arc<Mutex<rand::rngs::StdRng>>,
+
+    pub (crate) command_queue : Arc<Mutex<Vec<MlQueue>>>,
 
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
 }
 
-
-const PIPELINES_COUNT : usize = 30;
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub (crate) enum Pipelines{
     UnaryInplace = 0,
     UnaryFromBuffer,
@@ -43,23 +65,10 @@ pub (crate) enum Pipelines{
     CmpFromBuffer ,
     Conv2D,
     Conv2DTranspose,
-    ConvertF32ToU32,
     IndexSelect,
     Copy2d,
     CopyStrided,
-
-    UnaryInplaceU32,
-    UnaryFromBufferU32,
-    UnaryFromBufferContiguousU32,
-    BinaryBufferFromBufferContiguousBothU32,
-    BinaryBufferInplaceU32,
-    BinaryBufferFromBufferU32,
-    MatmulBufferU32,
-    ReduceU32,
-    ReduceIndexU32,
-    CmpFromBufferU32,
-    Conv2DU32,
-    Conv2DTransposeU32,
+    ConvertF32ToU32,
     ConvertU32ToF32,
 }
 
@@ -95,20 +104,18 @@ impl WgpuDevice{
                 },
                 None,
             ).await.map_err(|err| crate::Error::WebGpu(err.to_string().into()))?;
-        let shader1 =  wgpu_functions::get_shader(&device, include_str!("shader.wgsl"));
-        let shader2 =  wgpu_functions::get_shader(&device,include_str!("shader_u32.wgsl"));
-
+       
         #[cfg(feature = "wgpu_debug")]
         let debug_info = super::debug_info::DebugInfo::new(&device);
 
         Ok(WgpuDevice {
             device: Arc::new(device),
             queue: Arc::new(queue),
-            pipelines : Arc::new(Mutex::new(vec![None;PIPELINES_COUNT])),
-            shader : Arc::new(vec![shader1,shader2]),
+            shader : Arc::new(Mutex::new(HashMap::new())),
             rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy())),
             #[cfg(feature = "wgpu_debug")]
-            debug : debug_info
+            debug : debug_info,
+            command_queue: Arc::new(Mutex::new(vec![]))
         })
     }
 
@@ -119,7 +126,7 @@ impl WgpuDevice{
         let period = self.queue.get_timestamp_period();
         let mut result = Measurements::new(period);
         for p in self.debug.shader_pipeline.lock().unwrap().iter(){
-            result.data.push(MInfo::new(p.1.to_owned(), data[(*(p.0) * 32) as usize], data[(*(p.0) * 32) as usize + 1]));
+            result.data.push(MInfo::new(p.1.to_owned(), data[(*p.0) as usize], data[(*p.0) as usize + 1]));
         }
         
         Ok(result)
@@ -136,62 +143,58 @@ impl WgpuDevice{
         return Ok(map);
     }
 
-    fn load_pipeline(device : &wgpu::Device, shader : &[wgpu::ShaderModule], pipeline : Pipelines) -> wgpu::ComputePipeline{
-        let (entry_point, shader_index) = match pipeline{
-            Pipelines::UnaryInplace => ("unary_inplace", 0),
-            Pipelines::UnaryFromBuffer => ("unary_from_buffer", 0),
-            Pipelines::UnaryFromBufferContiguous => ("unary_from_buffer_contiguous", 0),
-            Pipelines::BinaryBufferInplace => ("binary_buffer_inplace", 0),
-            Pipelines::BinaryBufferFromBuffer => ("binary_buffer_from_buffer", 0),
-            Pipelines::BinaryBufferFromBufferContiguousBoth => ("binary_buffer_from_buffer_contiguous_both", 0),
-            Pipelines::MatmulBuffer => ("matmul", 0),
-            Pipelines::Reduce => ("reduce", 0),
-            Pipelines::ReduceIndex => ("reduce_index", 0),
-            Pipelines::RmsNorm => ("rms_norm", 0),
-            Pipelines::CmpFromBuffer => ("cmp_buffer_from_buffer", 0),
-            Pipelines::Conv2D => ("conv2d", 0),
-            Pipelines::Conv2DTranspose => ("conv2d_transpose", 0),
-            Pipelines::ConvertF32ToU32 => ("convert_to_u32", 0),
-            Pipelines::IndexSelect => ("index_select", 0),
-            Pipelines::Copy2d => ("copy2d", 0),
-            Pipelines::CopyStrided => ("copy_strided", 0),
-
-
-            Pipelines::UnaryInplaceU32 => ("unary_inplace", 1),
-            Pipelines::UnaryFromBufferU32 => ("unary_from_buffer", 1),
-            Pipelines::UnaryFromBufferContiguousU32 => ("unary_from_buffer_contiguous", 1),
-            Pipelines::BinaryBufferInplaceU32 => ("binary_buffer_inplace", 1),
-            Pipelines::BinaryBufferFromBufferU32 => ("binary_buffer_from_buffer", 1),
-            Pipelines::BinaryBufferFromBufferContiguousBothU32 => ("binary_buffer_from_buffer_contiguous_both", 1),
-            Pipelines::MatmulBufferU32 => ("matmul", 1),
-            Pipelines::ReduceU32 => ("reduce", 1),
-            Pipelines::ReduceIndexU32 => ("reduce_index", 1),
-            Pipelines::CmpFromBufferU32 => ("cmp_buffer_from_buffer", 1),
-            Pipelines::Conv2DU32 => ("conv2d", 1),
-            Pipelines::Conv2DTransposeU32 => ("conv2d_transpose", 1),
-            Pipelines::ConvertU32ToF32 => ("convert_to_f32", 1),
-            
+    fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : Pipelines) -> wgpu::ComputePipeline{
+        let entry_point = match pipeline{
+            Pipelines::UnaryInplace => "unary_inplace",
+            Pipelines::UnaryFromBuffer => "unary_from_buffer",
+            Pipelines::UnaryFromBufferContiguous => "unary_from_buffer_contiguous",
+            Pipelines::BinaryBufferInplace => "binary_buffer_inplace",
+            Pipelines::BinaryBufferFromBuffer => "binary_buffer_from_buffer",
+            Pipelines::BinaryBufferFromBufferContiguousBoth => "binary_buffer_from_buffer_contiguous_both",
+            Pipelines::MatmulBuffer => "matmul",
+            Pipelines::Reduce => "reduce",
+            Pipelines::ReduceIndex => "reduce_index",
+            Pipelines::RmsNorm => "rms_norm",
+            Pipelines::CmpFromBuffer => "cmp_buffer_from_buffer",
+            Pipelines::Conv2D => "conv2d",
+            Pipelines::Conv2DTranspose => "conv2d_transpose",
+            Pipelines::ConvertF32ToU32 => "convert_to_u32",
+            Pipelines::ConvertU32ToF32 => "convert_to_f32",
+            Pipelines::IndexSelect => "index_select",
+            Pipelines::Copy2d => "copy2d",
+            Pipelines::CopyStrided => "copy_strided",
         };
         
         return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
             layout: None,
-            module: &shader[shader_index],
+            module: &shader,
             entry_point: entry_point,
         });
     }
 
-    pub (crate) fn get_pipeline(&self,pipeline: Pipelines) -> Arc<wgpu::ComputePipeline> { //Ref<'_, wgpu::ComputePipeline> 
-        let mut pipelines = self.pipelines.lock().unwrap(); 
-        let index = pipeline.clone() as usize;
-
-        if pipelines[index].is_none(){
-            let p = crate::WgpuDevice::load_pipeline(&self.device, &self.shader[..], pipeline);
-            pipelines[index] = Some(Arc::new(p));
+    pub (crate) fn get_pipeline(&self, shader : wgpu_functions::Shader, pipeline: Pipelines) -> crate::Result<Arc<wgpu::ComputePipeline>> {
+        let mut shaders = self.shader.lock().unwrap();
+        
+        if !shaders.contains_key(&shader){
+            let s = wgpu_functions::get_shader(&self.device, wgpu_functions::load_shader(shader.clone())?);
+            shaders.insert(shader.clone(), ShaderModuleComputePipelines{ shader: Arc::new(s), pipelines: Mutex::new(HashMap::new())});
         }
      
-        if let Some(p) = &pipelines[index]{
-            return p.clone();
+        if let Some(s) = shaders.get(&shader){
+            let mut pipelines = s.pipelines.lock().unwrap();
+
+            if !pipelines.contains_key(&pipeline){
+                let p = crate::WgpuDevice::load_pipeline(&self.device, s.shader.clone(), pipeline.clone());
+                pipelines.insert(pipeline.clone(), Arc::new(p));
+            }
+            
+            if let Some(p) = pipelines.get(&pipeline){
+                return Ok(p.clone());
+            }
+            else{
+                panic!("Not expected")
+            }
         }
         else{
             panic!("Not expected")

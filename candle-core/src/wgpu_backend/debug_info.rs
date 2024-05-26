@@ -6,7 +6,6 @@ use serde_json::to_writer;
 
 #[derive(Debug, Clone)]
 pub struct DebugInfo{
-    pub(crate) set : Arc<wgpu::QuerySet>,
     pub (crate) query_set_buffer : Arc<wgpu::Buffer>,
     pub (crate) counter :  Arc<AtomicU32>,
     pub (crate) shader_pipeline : Arc<Mutex<HashMap<u32, String>>>,
@@ -14,12 +13,6 @@ pub struct DebugInfo{
 
 impl DebugInfo {
     pub (crate) fn new(device : &Device) -> Self{
-        // Create a query set for timer queries
-        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
-           count: 2, // We need 2 queries: one for start and one for end
-           ty: wgpu::QueryType::Timestamp,
-           label: None,
-        });
         // Create a buffer to store the query results
         let query_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -28,7 +21,6 @@ impl DebugInfo {
             mapped_at_creation: false,
         });
         return DebugInfo{
-            set : Arc::new(query_set), 
             counter : Arc::new(AtomicU32::new(0)), 
             shader_pipeline : Arc::new(Mutex::new(HashMap::new())), 
             query_set_buffer : Arc::new(query_buffer)};

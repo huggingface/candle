@@ -11,7 +11,7 @@ readme = "README.md"
 
 [dependencies]
 accelerate-src = { workspace = true, optional = true }
-candle = { workspace = true , features = ["wgpu_debug"]}
+candle = { workspace = true }
 candle-datasets = { workspace = true, optional = true }
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
@@ -55,7 +55,6 @@ anyhow = { workspace = true }
 bindgen_cuda = { version = "0.1.1", optional = true }
 
 [features]
-default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
 cuda = ["candle/cuda", "candle-nn/cuda", "candle-transformers/cuda", "dep:bindgen_cuda"]
 cudnn = ["candle/cudnn"]
@@ -66,6 +65,9 @@ onnx = ["candle-onnx"]
 metal = ["candle/metal", "candle-nn/metal"]
 microphone = ["cpal"]
 encodec = ["cpal", "symphonia", "rubato"]
+wgpu = ["candle/wgpu"]
+wgpu_debug = ["candle/wgpu_debug"]
+default = []
 
 [[example]]
 name = "llama_multiprocess"
