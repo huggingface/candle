@@ -9,6 +9,7 @@ pub mod matmul;
 pub mod reduce;
 pub mod rms_norm;
 pub mod unary;
+pub mod where_cond;
 
 use std::{borrow::Cow, sync::Arc};
 use wgpu::{util::DeviceExt, BindGroup, Buffer, ComputePipeline, ShaderModule};
@@ -26,7 +27,7 @@ pub use matmul::queue_matmul_buffer;
 pub use reduce::queue_reduce_from_buffer_op;
 pub use rms_norm::queue_rms_norm;
 pub use unary::{queue_unary_from_buffer_op,queue_unary_inplace_op};
-
+pub use where_cond::queue_where_cond_u32;
 
 
 
@@ -103,7 +104,8 @@ pub enum Shader{
     Matmul(DType),
     Reduce(DType),
     RmsNorm(DType),
-    Unary(DType)        
+    Unary(DType),
+    WhereCond(DType)       
 }
 
 pub fn load_shader(shader : Shader) -> crate::Result<&'static str>{
@@ -129,6 +131,8 @@ pub fn load_shader(shader : Shader) -> crate::Result<&'static str>{
         Shader::RmsNorm(DType::U32) => Ok(include_str!("rms_norm/generated/shader.pwgsl_generated_u32.wgsl")),
         Shader::Unary(DType::F32) => Ok(include_str!("unary/generated/shader.pwgsl_generated_f32.wgsl")),
         Shader::Unary(DType::U32) => Ok(include_str!("unary/generated/shader.pwgsl_generated_u32.wgsl")),
+        Shader::WhereCond(DType::F32) => Ok(include_str!("where_cond/generated/shader.pwgsl_generated_f32.wgsl")),
+        Shader::WhereCond(DType::U32) => Ok(include_str!("where_cond/generated/shader.pwgsl_generated_u32.wgsl")),
        
         _ => Err(crate::Error::WebGpu(WebGpuError::Message(format!("Could not find Pipeline: {:?}", shader))))
     }
@@ -417,6 +421,46 @@ fn create_bind_group_input2<T: bytemuck::Pod>(
 }
 
 
+fn create_bind_group_input3<T: bytemuck::Pod>(
+    dev: &WgpuDevice,
+    pipeline: Arc<ComputePipeline>,
+    meta: T,
+    buffer_dest: &Buffer,
+    buffer_input1: &Buffer,
+    buffer_input2: &Buffer,
+    buffer_input3: &Buffer,
+) -> BindGroup {
+    let bind_group_layout = pipeline.get_bind_group_layout(0);
+    let buffer_meta = create_uniform_buffer(dev, meta, "input3");
+    dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer_dest.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: buffer_meta.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: buffer_input1.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: buffer_input2.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: buffer_input3.as_entire_binding(),
+            },
+        ],
+    })
+}
+
+
 pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &Buffer,
@@ -452,6 +496,9 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     // In an actual application, `device.poll(...)` should
     // be called in an event loop or on another thread.
     dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout();
+
+    
+
 
     // Awaits until `buffer_future` can be read from
     if let Ok(Ok(())) = receiver.recv_async().await {

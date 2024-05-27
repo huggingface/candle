@@ -26,14 +26,17 @@ fn visit_dirs(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not set");
 
-    let shader_dir = PathBuf::from(&manifest_dir).join("src\\wgpu_backend\\wgpu_functions");
+    let shader_dir = PathBuf::from(&manifest_dir).join("src/wgpu_backend/wgpu_functions");
+    if !shader_dir.exists(){
+        panic!("could not find shader path {:?}", shader_dir);
+    }
     println!("Searching Shaders in: {:?}", shader_dir);
     let output_file = PathBuf::from(env::var("OUT_DIR").unwrap()).join("shader_map.rs");
 
     let mut shader_map = HashMap::new();
     let mut virtual_id_counter = 1;
 
-   
+ 
 
     for file in get_all_wgsl_files(shader_dir){
         println!("Found File: {:?}", file);

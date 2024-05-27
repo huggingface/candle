@@ -1141,6 +1141,51 @@ fn randn(device: &Device) -> Result<()> {
     Ok(())
 }
 
+
+
+fn where_cond(device: &Device) -> Result<()> {
+    let cond = Tensor::new(&[0u32, 2u32, 1u32, 0, 0, 0, 35, 255, 53, 0,029,0], device)?.reshape((4,3))?;
+    let t = Tensor::arange(0f32, 12f32, device)?.reshape((4, 3))?;
+    assert_eq!(
+        t.to_vec2::<f32>()?,
+        &[
+            [0.0, 1.0, 2.0],
+            [3.0, 4.0, 5.0],
+            [6.0, 7.0, 8.0],
+            [9.0, 10.0, 11.0]
+        ]
+    );
+
+    let t_f = Tensor::arange(12f32, 24f32, device)?.reshape((4, 3))?;
+    assert_eq!(
+        t_f.to_vec2::<f32>()?,
+        &[
+            [12.0, 13.0, 14.0],
+            [15.0, 16.0, 17.0],
+            [18.0, 19.0, 20.0],
+            [21.0, 22.0, 23.0]
+        ]
+    );
+
+    for dtype in [DType::U8, DType::U32, DType::I64] {
+        if device.is_dtype_available(dtype){
+            let cond = cond.to_dtype(dtype)?;
+            let hs = cond.where_cond(&t, &t_f)?;
+            assert_eq!(
+                hs.to_vec2::<f32>()?,
+                &[
+                    [12.0, 1.0, 2.0],
+                    [15.0, 16.0, 17.0],
+                    [6.0, 7.0, 8.0],
+                    [21.0, 10.0, 23.0]
+                ]
+            );
+        }
+    }
+    Ok(())
+}
+
+
 fn zero_dim(device: &Device) -> Result<()> {
     let t = Tensor::zeros((4, 0, 1), DType::F32, device)?;
     assert_eq!(t.dims3()?, (4, 0, 1));
@@ -1194,6 +1239,14 @@ test_device!(
     index_select_gpu,
     index_select_metal,
     index_select_webgpu
+);
+
+test_device!(
+    where_cond,
+    where_cond_cpu,
+    where_cond_gpu,
+    where_cond_metal,
+    where_cond_webgpu
 );
 test_device!(index_add, index_add_cpu, index_add_gpu, index_add_metal,index_add_webgpu);
 test_device!(gather, gather_cpu, gather_gpu, gather_metal,gather_webgpu);

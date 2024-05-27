@@ -71,6 +71,7 @@ pub (crate) enum Pipelines{
     ConvertF32ToU32,
     ConvertU32ToF32,
     ConvertU8ToF32,
+    WhereCondU32
 }
 
 
@@ -84,7 +85,7 @@ impl WgpuDevice{
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
 
-        let mut limits = wgpu::Limits::downlevel_defaults();
+        let limits = wgpu::Limits::downlevel_defaults();
 
         #[cfg(feature = "wgpu_debug")]
         let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
@@ -92,7 +93,6 @@ impl WgpuDevice{
         #[cfg(not(feature = "wgpu_debug"))]
         let features = wgpu::Features::empty();
         
-        limits.max_buffer_size = 256 * 1000000000;
         //limits.max_compute_workgroups_per_dimension = 1024*1024;
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
         //  `features` being the available features.
@@ -165,6 +165,7 @@ impl WgpuDevice{
             Pipelines::IndexSelect => "index_select",
             Pipelines::Copy2d => "copy2d",
             Pipelines::CopyStrided => "copy_strided",
+            Pipelines::WhereCondU32 => "where_cond_index_u32",
           
         };
         
@@ -215,7 +216,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
     }
 
     fn location(&self) -> crate::DeviceLocation {
-        return crate::DeviceLocation::Cpu; //TODO WGPU
+        return crate::DeviceLocation::Wgpu { gpu_id: 0 }; //TODO: WGPU
     }
 
     fn same_device(&self, other: &Self) -> bool {
@@ -250,15 +251,19 @@ impl crate::backend::BackendDevice for WgpuDevice{
     }
 
     fn storage_from_slice<T: crate::WithDType>(&self, data : &[T]) -> crate::Result<Self::Storage> {
-        if T::DTYPE != crate::DType::F32 {
-            // Panic if T is not f32
+        let buffer;
+        if T::DTYPE == crate::DType::F32{
+            let data = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
+            buffer = create_buffer_init(self, &data);
+        }
+        else if T::DTYPE == crate::DType::U32{
+            let data = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u32, data.len()) };
+            buffer = create_buffer_init(self, &data);
+        }
+        else{
+            // Panic if T is not f32 or u32
             wrongType!(storage_from_slice, T::DTYPE);
         }
-        
-        // Safe to cast data to &[f32] since T is f32
-        // This is safe because T is known to be f32 due to the above check
-        let data = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, data.len()) };
-        let buffer = create_buffer_init(self, &data);
         return Ok(WgpuStorage::new(buffer, self.clone(),T::DTYPE));
     }
 

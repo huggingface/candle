@@ -1,0 +1,31 @@
+#include "../util.pwgsl"
+
+struct MetaWhereCond{
+    input1_layout : MatrixLayout,
+    input2_layout : MatrixLayout,
+    input3_layout : MatrixLayout,
+    
+}
+
+
+@group(0) @binding(1)
+var<uniform> op_where_cond : MetaWhereCond;
+
+
+@compute
+@workgroup_size(64,1,1)
+fn where_cond_index_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    let pos1 = get_index(op_where_cond.input1_layout, id);
+    if(pos1.is_valid){
+        let x = v_input1_u32[pos1.id];
+        if x == 0{
+            let pos3 = get_index(op_where_cond.input3_layout, id);
+            v_dest[id] = v_input3[pos3.id]; 
+        }
+        else{
+            let pos2 = get_index(op_where_cond.input2_layout, id);
+            v_dest[id] = v_input2[pos2.id];   
+        }
+    }
+}
