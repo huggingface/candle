@@ -65,7 +65,10 @@ impl Model {
         top_p: f64,
         prompt: String,
     ) -> Result<()> {
+        //let dev = Device::new_webgpu(0).await?;
         let dev = Device::Cpu;
+
+
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1.0 {
             None

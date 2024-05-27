@@ -15,12 +15,12 @@ current Problems:
 
 | Feature                     | Support Status                                  | Notes                                                              |
 |-----------------------------|-------------------------------------------------|--------------------------------------------------------------------|
-| **<span style="color:#1E90FF">Data Types</span>**                                  |                                                 |                                                                    |
+| **<span style="color:#1E90FF">Data Types</span>**                                  |                                       |                                                                    |
 | f32                         | ✅ Supported                                     |                                                                    |
 | u32                         | ✅ Supported                                     |                                                                    |
-| u8                          | ❌ Not Supported                                 | *Only f32, I32 and U32 are available in a webGpu shader            |
+| u8                          | ⚠️ Only Output of Cmp                            | *Only f32, I32 and U32 are available in a webGpu shader            |
+| i64                         | ❌ Not Implemented                               |                                                                    |
 | f64                         | ❌ Not Supported                                 |                                                                    |
-| i64                         | ❌ Not Supported                                 |                                                                    |
 | f16                         | ❌ Not Supported                                 |                                                                    |
 | bf16                        | ❌ Not Supported                                 |                                                                    |
 | **<span style="color:#1E90FF">Operations</span>**              |                                                 |   All operations support non-contiguous arrays                                                                   |
@@ -29,7 +29,7 @@ current Problems:
 | MatMul                      | ✅ Supported                                     |                                                                    |
 | Reduce Operations           | ✅ Supported                                     | Sum, Min, Max, (ArgMax, ArgMin works only if continues Dimensions are reduced)                                     |
 | Conv2d                      | ✅ Supported                                     |                                                                    |
-| Conv2dTranspose             | ⚠️ Implemented with errors                       | Errors in for tranposed & dialation, paddingOutput not implemented                           |
+| Conv2dTranspose             | ✅ Supported                                     | Errors in for tranposed & dialation, paddingOutput not implemented                           |
 | Index Select                | ✅ Supported                                     |                                                                    |
 | **<span style="color:#1E90FF">Not Implemented</span>**        |                                                 |                                                                    |
 | Conv1d                      | ❌ Not Implemented                               |                                                                    |

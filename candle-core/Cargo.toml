@@ -54,7 +54,7 @@ metal = ["dep:metal", "dep:candle-metal-kernels"]
 wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json"]
 
-default = ["wgpu"]
+#default = ["wgpu"]
 
 [[bench]]
 name = "bench_main"
