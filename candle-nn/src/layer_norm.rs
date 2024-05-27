@@ -11,8 +11,8 @@
 //! use candle_nn::{LayerNorm, Module};
 //! # fn main() -> candle::Result<()> {
 //!
-//! let w = Tensor::new(1f32, &Cpu)?;
-//! let b = Tensor::new(0f32, &Cpu)?;
+//! let w = Tensor::new(&[1f32, 1f32, 1f32], &Cpu)?;
+//! let b = Tensor::new(&[0f32, 0f32, 0f32], &Cpu)?;
 //! let layer = LayerNorm::new(w, b, 1e-5);
 //!
 //! let xs = Tensor::new(
@@ -130,6 +130,9 @@ impl LayerNorm {
 
 impl Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        if x.is_contiguous() && self.remove_mean {
+            return crate::ops::layer_norm(x, &self.weight, &self.bias, self.eps as f32);
+        }
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
             DType::F16 | DType::BF16 => DType::F32,

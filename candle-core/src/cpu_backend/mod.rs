@@ -10,7 +10,7 @@ pub use utils::{
 };
 
 const USE_IM2COL_CONV1D: bool = true;
-const USE_IM2COL_CONV1D_TR: bool = true;
+const USE_COL2IM_CONV1D_TR: bool = true;
 const USE_IM2COL_CONV2D: bool = true;
 
 // TODO: Maybe we should not implement [Clone] here and instead have an explicit allocator +
@@ -2249,7 +2249,7 @@ impl BackendStorage for CpuStorage {
             && params.dilation == 1
             && params.padding == 0
             && params.output_padding == 0;
-        if USE_IM2COL_CONV1D_TR && can_use_col2im {
+        if USE_COL2IM_CONV1D_TR && can_use_col2im {
             let (b_size, c_in, l_in) = l.shape().dims3()?;
             let (c_in2, c_out, k_size) = kernel_l.shape().dims3()?;
             if !kernel_l.is_contiguous() {
