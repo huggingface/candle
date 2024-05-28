@@ -9,14 +9,14 @@ use candle::test_utils::{to_vec0_round, to_vec2_round};
 use anyhow::Result;
 use candle::{DType, Device, Tensor, Var};
 use candle_nn::{
-    optim::{AdamWScheduler, SchedulerCreator, SchedulerParamsAdamW, StaticScheduler},
+    optim::{AdamWScheduler, ConstantScheduler, SchedulerCreator, SchedulerParamsAdamW},
     AdamW, Linear, Module, Optimizer, ParamsAdamW, SGD,
 };
 
 #[test]
 fn sgd_optim() -> Result<()> {
     let x = Var::new(0f32, &Device::Cpu)?;
-    let mut sgd = SGD::new(vec![x.clone()], StaticScheduler::new(0.1)?, ())?;
+    let mut sgd = SGD::new(vec![x.clone()], ConstantScheduler::new(0.1)?, ())?;
     let xt = x.as_tensor();
     for _step in 0..100 {
         let loss = ((xt - 4.2)? * (xt - 4.2)?)?;
@@ -63,7 +63,11 @@ fn sgd_linear_regression() -> Result<()> {
     let w = Var::new(&[[0f32, 0.]], &Device::Cpu)?;
     let b = Var::new(0f32, &Device::Cpu)?;
 
-    let mut sgd = SGD::new(vec![w.clone(), b.clone()], StaticScheduler::new(0.004)?, ())?;
+    let mut sgd = SGD::new(
+        vec![w.clone(), b.clone()],
+        ConstantScheduler::new(0.004)?,
+        (),
+    )?;
 
     let lin = Linear::new(w.as_tensor().clone(), Some(b.as_tensor().clone()));
     for _step in 0..1000 {

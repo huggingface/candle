@@ -73,11 +73,11 @@ macro_rules! get_scheduler {
 
 /// A scheduler which maintains a static learning rate.
 #[derive(Debug)]
-pub struct StaticScheduler {
+pub struct ConstantScheduler {
     lr: f64,
 }
 
-impl Scheduler for StaticScheduler {
+impl Scheduler for ConstantScheduler {
     type Output = f64;
 
     fn step(&mut self) -> Result<f64> {
@@ -85,7 +85,7 @@ impl Scheduler for StaticScheduler {
     }
 }
 
-impl SchedulerCreator for StaticScheduler {
+impl SchedulerCreator for ConstantScheduler {
     type Config = f64;
     type Output = f64;
 
