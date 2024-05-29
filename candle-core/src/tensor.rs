@@ -1553,6 +1553,33 @@ impl Tensor {
         }
     }
 
+    /// Returns the data contained in a 1D tensor as a vector of scalar values.
+    pub async fn to_vec1_async<S: crate::WithDType>(&self) -> Result<Vec<S>> {
+        if self.rank() != 1 {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: 1,
+                got: self.rank(),
+                shape: self.shape().clone(),
+            }
+            .bt())?
+        }
+        let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
+            let data = S::cpu_storage_as_slice(cpu_storage)?;
+            let data = match self.layout.contiguous_offsets() {
+                Some((o1, o2)) => data[o1..o2].to_vec(),
+                None => self.strided_index().map(|i| data[i]).collect(),
+            };
+            Ok::<Vec<_>, Error>(data)
+        };
+        match &*self.storage() {
+            Storage::Cpu(storage) => from_cpu_storage(storage),
+            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
+        }
+    }
+
+
     /// Returns the data contained in a 2D tensor as a vector of vector of scalar values.
     pub fn to_vec2<S: crate::WithDType>(&self) -> Result<Vec<Vec<S>>> {
         let (dim1, dim2) = self.dims2()?;

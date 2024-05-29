@@ -1,6 +1,23 @@
 use candle::{DType, Error, Result, Tensor};
 use rand::{distributions::Distribution, SeedableRng};
 
+use wasm_bindgen::prelude::wasm_bindgen;
+
+#[wasm_bindgen]
+extern "C" {
+    // Use `js_namespace` here to bind `console.log(..)` instead of just
+    // `log(..)`
+    #[wasm_bindgen(js_namespace = console)]
+    pub fn log(s: &str);
+}
+
+#[macro_export]
+macro_rules! console_log {
+    // Note that this is using the `log` function imported above during
+    // `bare_bones`
+    ($($t:tt)*) => ($crate::generation::log(&format_args!($($t)*).to_string()))
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Sampling {
     ArgMax,
@@ -55,7 +72,7 @@ impl LogitsProcessor {
     /// less likely to go "off the rails".
     fn sample_topp(&mut self, prs: &mut Vec<f32>, top_p: f32) -> Result<u32> {
         let mut argsort_indices = (0..prs.len()).collect::<Vec<_>>();
-
+        
         // Sort by descending probability.
         argsort_indices.sort_by(|&i, &j| prs[j].total_cmp(&prs[i]));
 
@@ -68,12 +85,16 @@ impl LogitsProcessor {
                 cumsum += prs[*index];
             }
         }
+        console_log!("sample_topp {:?}", prs);
         // Sample with clamped probabilities.
         self.sample_multinomial(prs)
     }
 
     // top-k sampling samples from the k tokens with the largest probabilities.
     fn sample_topk(&mut self, prs: &mut Vec<f32>, top_k: usize) -> Result<u32> {
+        
+        console_log!("sample_topk {:?}", prs);
+
         if top_k >= prs.len() {
             self.sample_multinomial(prs)
         } else {
@@ -106,8 +127,56 @@ impl LogitsProcessor {
         }
     }
 
+    pub async fn sample_async(&mut self, logits: &Tensor) -> Result<u32> {
+        self.sample_f_async(logits, |_| {}).await
+    }
+
     pub fn sample(&mut self, logits: &Tensor) -> Result<u32> {
         self.sample_f(logits, |_| {})
+    }
+
+    pub async fn sample_f_async(&mut self, logits: &Tensor, f: impl FnOnce(&mut [f32])) -> Result<u32> {
+        let logits = logits.to_dtype(DType::F32)?;
+
+        console_log!("sample f async");
+
+        async fn prs (temperature: f64,logits: &Tensor,  f: impl FnOnce(&mut [f32])) -> Result<Vec<f32>> {
+            console_log!("sample f async prs");
+            let logits = (logits / temperature)?;
+            let prs = candle_nn::ops::softmax_last_dim(&logits)?;
+            let mut prs = prs.to_vec1_async().await?;
+            console_log!("sample f async prs: Result: {:?}", prs);
+            f(&mut prs);
+            Ok(prs)
+        }
+
+        let next_token = match &self.sampling {
+            Sampling::ArgMax => self.sample_argmax(logits)?,
+            Sampling::All { temperature } => {
+                let prs : Vec<f32> = prs(*temperature,&logits,f).await?;
+                console_log!("sample_all {:?}", prs);
+                self.sample_multinomial(&prs)?
+            }
+            Sampling::TopP { p, temperature } => {
+                let mut prs : Vec<f32> = prs(*temperature,&logits,f).await?;
+                if *p <= 0.0 || *p >= 1.0 {
+                    // simply sample from the predicted probability distribution
+                    self.sample_multinomial(&prs)?
+                } else {
+                    // top-p (nucleus) sampling, clamping the least likely tokens to zero
+                    self.sample_topp(&mut prs, *p as f32)?
+                }
+            }
+            Sampling::TopK { k, temperature } => {
+                let mut prs: Vec<f32> = prs(*temperature,&logits,f).await?;
+                self.sample_topk(&mut prs, *k)?
+            }
+            Sampling::TopKThenTopP { k, p, temperature } => {
+                let mut prs: Vec<f32> = prs(*temperature,&logits,f).await?;
+                self.sample_topk_topp(&mut prs, *k, *p as f32)?
+            }
+        };
+        Ok(next_token)
     }
 
     pub fn sample_f(&mut self, logits: &Tensor, f: impl FnOnce(&mut [f32])) -> Result<u32> {

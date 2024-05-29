@@ -1,5 +1,7 @@
 import init, { Model } from "./build/m.js";
 
+Error.stackTraceLimit = 50;
+
 async function fetchArrayBuffer(url) {
   const cacheName = "llama2c-candle-cache";
   const cache = await caches.open(cacheName);
@@ -60,7 +62,7 @@ async function generate(data) {
     const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL);
 
     self.postMessage({ status: "loading", message: "Initializing model" });
-    const firstToken = model.init_with_prompt(
+    const firstToken = await model.init_with_prompt(
       prompt,
       temp,
       top_p,

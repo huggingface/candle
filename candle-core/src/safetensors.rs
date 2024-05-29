@@ -153,6 +153,7 @@ fn convert_<T: WithDType>(view: &st::TensorView<'_>, device: &Device) -> Result<
     convert_slice::<T>(view.data(), view.shape(), device)
 }
 
+
 fn convert_back_<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {
     let size_in_bytes = T::DTYPE.size_in_bytes();
     let length = vs.len() * size_in_bytes;
@@ -217,6 +218,7 @@ fn convert(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
     }
 }
 
+
 fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
     // TODO: This makes an unnecessary copy when the tensor is on the cpu.
     let tensor = tensor.flatten_all()?;
@@ -228,6 +230,20 @@ fn convert_back(tensor: &Tensor) -> Result<Vec<u8>> {
         DType::BF16 => Ok(convert_back_::<half::bf16>(tensor.to_vec1()?)),
         DType::F32 => Ok(convert_back_::<f32>(tensor.to_vec1()?)),
         DType::F64 => Ok(convert_back_::<f64>(tensor.to_vec1()?)),
+    }
+}
+
+async fn convert_back_async(tensor: &Tensor) -> Result<Vec<u8>> {
+    // TODO: This makes an unnecessary copy when the tensor is on the cpu.
+    let tensor = tensor.flatten_all()?;
+    match tensor.dtype() {
+        DType::U8 => Ok(convert_back_::<u8>(tensor.to_vec1_async().await?)),
+        DType::U32 => Ok(convert_back_::<u32>(tensor.to_vec1_async().await?)),
+        DType::I64 => Ok(convert_back_::<i64>(tensor.to_vec1_async().await?)),
+        DType::F16 => Ok(convert_back_::<half::f16>(tensor.to_vec1_async().await?)),
+        DType::BF16 => Ok(convert_back_::<half::bf16>(tensor.to_vec1_async().await?)),
+        DType::F32 => Ok(convert_back_::<f32>(tensor.to_vec1_async().await?)),
+        DType::F64 => Ok(convert_back_::<f64>(tensor.to_vec1_async().await?)),
     }
 }
 

@@ -54,6 +54,7 @@ pub struct Model {
     pub config: Config,
     pub llama: Llama,
     pub tokenizer: Tokenizer,
+    pub device : Device
 }
 
 impl Model {
@@ -65,9 +66,7 @@ impl Model {
         top_p: f64,
         prompt: String,
     ) -> Result<()> {
-        //let dev = Device::new_webgpu(0).await?;
-        let dev = Device::Cpu;
-
+        let dev = &self.device;
 
         let temp = if temp <= 0. { None } else { Some(temp) };
         let top_p = if top_p <= 0. || top_p >= 1.0 {
@@ -250,13 +249,12 @@ impl TransformerWeights {
 }
 
 impl Model {
-    pub fn load(md: ModelData) -> Result<Self> {
-        let dev = Device::Cpu;
+    pub async fn load(md: ModelData,dev : &Device) -> Result<Self> {
         let mut model = std::io::Cursor::new(md.model);
         let config = Config::from_reader(&mut model)?;
         let weights = TransformerWeights::from_reader(&mut model, &config, &dev)?;
         let vb = weights.var_builder(&config, &dev)?;
-        let cache = Cache::new(true, &config, vb.pp("rot"))?;
+        let cache = Cache::new(false, &config, vb.pp("rot"))?;
         let llama = Llama::load(vb, &cache, &config)?;
         let tokenizer =
             Tokenizer::from_bytes(&md.tokenizer).map_err(|m| candle::Error::Msg(m.to_string()))?;
@@ -265,6 +263,7 @@ impl Model {
             config,
             llama,
             tokenizer,
+            device : dev.clone()
         })
     }
 }
@@ -303,12 +302,16 @@ impl yew_agent::Worker for Worker {
 
     fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
         let output = match msg {
-            WorkerInput::ModelData(md) => match Model::load(md) {
-                Ok(model) => {
-                    self.model = Some(model);
-                    Ok(WorkerOutput::WeightsLoaded)
+            WorkerInput::ModelData(md) => 
+            {
+                let dev = pollster::block_on(Device::new_webgpu(0)).unwrap();
+                match pollster::block_on(Model::load(md,&dev)) {
+                    Ok(model) => {
+                        self.model = Some(model);
+                        Ok(WorkerOutput::WeightsLoaded)
+                    }
+                    Err(err) => Err(format!("model creation error {err:?}")),
                 }
-                Err(err) => Err(format!("model creation error {err:?}")),
             },
             WorkerInput::Run(temp, top_p, prompt) => match &mut self.model {
                 None => Err("model has not been set yet".to_string()),

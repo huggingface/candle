@@ -1,0 +1,87 @@
+#include "../util.pwgsl"
+
+struct MetaSoftmaxContiguous{
+    workgroup_count : u32,
+    workgroup_size : u32,
+    length : u32, //Length of Reduction(e.g count of elements to sum per output),
+
+    input1_offset : u32,
+}
+
+@group(0) @binding(1)
+var<uniform> op_softmax : MetaSoftmaxContiguous;
+
+var<workgroup> sharedSums: array<DTYPE, 64>; 
+
+var<workgroup> sharedM: f32; 
+
+@compute
+@workgroup_size(64,1,1)
+fn softmax(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgroup_id) output_id3: vec3<u32>,) {
+    let workgroup_id = local_id.x;
+    let output_index = output_id3.y;
+    
+    //Start Index of the Elements to Reduce
+    let length = op_softmax.length; //length of the elements to reduce
+    let start_index = output_index * length;
+    let start_index1 = start_index + op_softmax.input1_offset;
+
+    //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
+    let start = workgroup_id * op_softmax.workgroup_size;
+    let end = min(length, (workgroup_id + 1) * op_softmax.workgroup_size);
+
+    //Now Reduce from start to end
+    var sum = MINVALUE;
+    for (var i = start; i < end; i++){
+        let v = v_input1[start_index1 + i];
+        sum = max(sum,v);
+    }
+    sharedSums[workgroup_id] = sum;
+        
+    workgroupBarrier();
+    //calculate max
+    if (workgroup_id == 0){
+        let cnt = op_softmax.workgroup_count;
+        //Finnaly Sum of all worker threads:
+        var sum = MINVALUE;
+        for (var i = 0u; i < cnt; i++){
+            sum = max(sum,sharedSums[i]) ;
+        }
+
+        sharedM = sum;
+    }
+
+    workgroupBarrier();
+
+    for (var i = start; i < end; i++){
+        v_dest[start_index + i] = exp(v_input1[start_index1 + i] - sharedM);
+    }
+
+    workgroupBarrier();
+
+    //Now Calculate Sum:
+    sum = ZERO;
+    for (var i = start; i < end; i++){
+        let v = v_dest[start_index + i];
+        sum += v;
+    }
+    sharedSums[workgroup_id] = sum;
+        
+    workgroupBarrier();
+
+    if (workgroup_id == 0){
+        let cnt = op_softmax.workgroup_count;
+        //Finnaly Sum of all worker threads:
+        var sum = ZERO;
+        for (var i = 0u; i < cnt; i++){
+            sum +=  sharedSums[i];
+        }
+
+        sharedM = sum;
+    }
+
+    for (var i = start; i < end; i++){
+        v_dest[start_index + i] = v_dest[start_index + i] / sharedM;
+    }
+
+}

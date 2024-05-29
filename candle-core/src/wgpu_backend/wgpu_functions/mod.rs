@@ -10,6 +10,7 @@ pub mod reduce;
 pub mod rms_norm;
 pub mod unary;
 pub mod where_cond;
+pub mod softmax;
 
 use std::{borrow::Cow, sync::Arc};
 use wgpu::{util::DeviceExt, BindGroup, Buffer, ComputePipeline, ShaderModule};
@@ -28,7 +29,7 @@ pub use reduce::queue_reduce_from_buffer_op;
 pub use rms_norm::queue_rms_norm;
 pub use unary::{queue_unary_from_buffer_op,queue_unary_inplace_op};
 pub use where_cond::queue_where_cond_u32;
-
+pub use softmax::queue_softmax;
 
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -104,6 +105,7 @@ pub enum Shader{
     Matmul(DType),
     Reduce(DType),
     RmsNorm(DType),
+    Softmax(DType),
     Unary(DType),
     WhereCond(DType)       
 }
@@ -129,6 +131,8 @@ pub fn load_shader(shader : Shader) -> crate::Result<&'static str>{
         Shader::Reduce(DType::U32) => Ok(include_str!("reduce/generated/shader.pwgsl_generated_u32.wgsl")),
         Shader::RmsNorm(DType::F32) => Ok(include_str!("rms_norm/generated/shader.pwgsl_generated_f32.wgsl")),
         Shader::RmsNorm(DType::U32) => Ok(include_str!("rms_norm/generated/shader.pwgsl_generated_u32.wgsl")),
+        Shader::Softmax(DType::F32) => Ok(include_str!("softmax/generated/shader.pwgsl_generated_f32.wgsl")),
+        Shader::Softmax(DType::U32) => Ok(include_str!("softmax/generated/shader.pwgsl_generated_u32.wgsl")),
         Shader::Unary(DType::F32) => Ok(include_str!("unary/generated/shader.pwgsl_generated_f32.wgsl")),
         Shader::Unary(DType::U32) => Ok(include_str!("unary/generated/shader.pwgsl_generated_u32.wgsl")),
         Shader::WhereCond(DType::F32) => Ok(include_str!("where_cond/generated/shader.pwgsl_generated_f32.wgsl")),
@@ -460,6 +464,68 @@ fn create_bind_group_input3<T: bytemuck::Pod>(
     })
 }
 
+
+pub fn read_data_from_gpu<T: bytemuck::Pod>(
+    dev: &WgpuDevice,
+    buffer: &Buffer,
+) -> Vec<T> {
+
+    flush_gpu_command(dev); //send all previous commands to the gpu 
+    let dest_size = buffer.size();
+
+    let staging_buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: dest_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = dev
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+    //insert_debug_info_start(dev, &mut encoder);
+
+    encoder.copy_buffer_to_buffer(&buffer, 0, &staging_buffer, 0, dest_size);
+
+    //insert_debug_info_end(dev, &mut encoder, &format!("copy to cpu"));
+    // Submits command encoder for processing
+    dev.queue.submit(Some(encoder.finish()));
+
+    // Note that we're not calling `.await` here.
+    let buffer_slice = staging_buffer.slice(..);
+    // Sets the buffer up for mapping, sending over the result of the mapping back to us when it is finished.
+    let (sender, receiver) = flume::bounded(1);
+    buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+
+    // Poll the device in a blocking manner so that our future resolves.
+    // In an actual application, `device.poll(...)` should
+    // be called in an event loop or on another thread.
+    dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout();
+
+    //test what happens, if we block a WebWorker?
+    // Awaits until `buffer_future` can be read from
+    if let Ok(Ok(())) = receiver.recv() {
+        // Gets contents of buffer
+        let data = buffer_slice.get_mapped_range();
+        // Since contents are got in bytes, this converts these bytes back to u32
+        let result: Vec<T> = bytemuck::cast_slice(&data).to_vec();
+
+        // With the current interface, we have to make sure all mapped views are
+        // dropped before we unmap the buffer.
+        drop(data);
+        staging_buffer.unmap(); // Unmaps buffer from memory
+                                // If you are familiar with C++ these 2 lines can be thought of similarly to:
+                                //   delete myPointer;
+                                //   myPointer = NULL;
+                                // It effectively frees the memory
+
+        // Returns data from buffer
+        result
+    } else {
+        panic!("failed to run compute on gpu!")
+    }
+
+}
 
 pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,

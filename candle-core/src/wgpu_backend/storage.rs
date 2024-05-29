@@ -33,7 +33,12 @@ impl WgpuStorage {
                     read_data_from_gpu_async(&self.wgpu_device, &self.buffer).await,
                 ))
             }
-            _ => notImplemented!(to_cpu_storage_async),
+            crate::DType::U8 => {
+                return Ok(
+                    crate::CpuStorage::U8(read_data_from_gpu_async(&self.wgpu_device, &self.buffer).await)
+                )
+            }
+            _ => todo!(),
         }
     }
 
@@ -72,29 +77,13 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
     #[cfg(target_arch = "wasm32")]
     fn to_cpu_storage(&self) -> crate::Result<crate::CpuStorage> {
-        return Err(crate::Error::WebGpu("Sync copy to CpuStorage is not allowed for WebGpu device in WebAssembly. First copy the date asynchronously to a CpuStorage".to_owned().into()));
+        panic!("Sync copy to CpuStorage is not allowed for WebGpu device in WebAssembly. First copy the date asynchronously to a CpuStorage"); //panic, so we get a stacktrace and see where we wanted to copy
+        //return Err(crate::Error::WebGpu("Sync copy to CpuStorage is not allowed for WebGpu device in WebAssembly. First copy the date asynchronously to a CpuStorage".to_owned().into()));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn to_cpu_storage(&self) -> crate::Result<crate::CpuStorage> {
-        match self.dtype {
-            crate::DType::U32 => {
-                return Ok(crate::CpuStorage::U32(pollster::block_on(
-                    read_data_from_gpu_async(&self.wgpu_device, &self.buffer),
-                )))
-            }
-            crate::DType::F32 => {
-                return Ok(crate::CpuStorage::F32(pollster::block_on(
-                    read_data_from_gpu_async(&self.wgpu_device, &self.buffer),
-                )))
-            }
-            crate::DType::U8 => {
-                return Ok(crate::CpuStorage::U8(pollster::block_on(
-                    read_data_from_gpu_async(&self.wgpu_device, &self.buffer),
-                )))
-            }
-            _ => todo!(),
-        }
+        return pollster::block_on(self.to_cpu_storage_async());
     }
 
     fn affine(&self, layout: &crate::Layout, mul: f64, add: f64) -> crate::Result<Self> {
@@ -504,13 +493,15 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
     fn where_cond(
         &self,
-        _: &crate::Layout,
-        _: &Self,
-        _: &crate::Layout,
-        _: &Self,
-        _: &crate::Layout,
+        input_layout : &crate::Layout,
+        t: &Self, //true values
+        t_layout: &crate::Layout,
+        f: &Self, //false values
+        f_layout: &crate::Layout,
     ) -> crate::Result<Self> {
-        notImplemented!(where_cont)
+        let buffer_dest = wgpu_functions::create_buffer(self.device(), input_layout.shape().elem_count() * 4);
+        wgpu_functions::where_cond::queue_where_cond_u32(self.device(), &buffer_dest, &self.buffer, &t.buffer, &f.buffer, input_layout, t_layout, f_layout, t.dtype)?;
+        return Ok(WgpuStorage::new(buffer_dest,self.device().clone(),t.dtype,));
     }
 
     fn conv1d(

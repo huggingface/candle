@@ -35,6 +35,14 @@ var<storage> v_input1_u32: array<u32>;
 const ZERO : DTYPE = 0;
 const ONE : DTYPE = 1;
 
+#ifdef f32
+const MINVALUE : f32 = -3.40282e+38;
+#else
+const MINVALUE : DTYPE = 0;
+#endif
+
+
+
 //Layout Information
 struct MatrixLayout{
     shape1 : u32, 

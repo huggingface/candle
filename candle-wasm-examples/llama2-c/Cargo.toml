@@ -9,7 +9,7 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-candle = { workspace = true }
+candle = { workspace = true, features = ["wgpu"]}
 candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
 num-traits = { workspace = true }
@@ -33,6 +33,9 @@ wasm-bindgen-futures = "0.4.37"
 wasm-logger = "0.2"
 yew-agent = "0.2.0"
 yew = { version = "0.20.0", features = ["csr"] }
+
+#wgpu test:
+pollster = { workspace = true }
 
 [dependencies.web-sys]
 version = "0.3.64"

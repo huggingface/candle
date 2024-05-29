@@ -467,6 +467,42 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             candle::MetalStorage::new(output, device.clone(), elem_count, storage.dtype());
         Ok((newstorage, layout.shape().clone()))
     }
+
+    #[cfg(feature = "wgpu")]
+    fn webgpu_fwd(
+            &self,
+            storage: &WgpuStorage,
+            layout: &Layout,
+        ) -> Result<(WgpuStorage, Shape)> {
+        
+            if !(layout.is_contiguous()){
+                candle::bail!("input has to be contiguous")
+            }
+            
+            let el_count = layout.shape().elem_count();
+            let dims = layout.shape().dims();
+            let dim_m1 = dims[dims.len() - 1];
+    
+            let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
+    
+            let output_buffer = wgpu_functions::create_buffer(storage.device(), el_count * 4);
+    
+            wgpu_functions::queue_softmax(
+                storage.device(),
+                &output_buffer,
+                &storage.buffer,
+                storage.dtype,
+                layout.start_offset() as u32,
+                dim_m1 as u32,
+                dest_size as u32,
+            )?;
+            return Ok((WgpuStorage::new(
+                output_buffer,
+                storage.device().clone(),
+                storage.dtype,
+            ), Shape::from_dims(dims)));
+    }
+
 }
 
 pub fn softmax_last_dim(xs: &Tensor) -> Result<Tensor> {
