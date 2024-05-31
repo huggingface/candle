@@ -1032,6 +1032,19 @@ pub fn simple_eval(
                 let output = a.broadcast_mul(&alpha)?.broadcast_matmul(&b)?.broadcast_add(&c.broadcast_mul(&beta)?)?;
                 values.insert(node.output[0].clone(), output);
             }
+            // https://github.com/onnx/onnx/blob/main/docs/Changelog.md#ArgMax-1
+            "ArgMax" => {
+                let input = get(&node.input[0])?;
+                let axis = get_attr_opt::<i64>(node, "axis")?.copied().unwrap_or(0);
+                let keepdims = get_attr_opt::<i64>(node, "keepdims")?.copied().unwrap_or(0);
+                let axis = input.normalize_axis(axis)?;
+                let output = match keepdims {
+                    0 => input.argmax(axis)?,
+                    1 => input.argmax_keepdim(axis)?,
+                    _ => bail!("unsupported keepdims value {keepdims} for ArgMax"),
+                };
+                values.insert(node.output[0].clone(), output);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
