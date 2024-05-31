@@ -64,7 +64,7 @@ pub fn queue_index_select(
         (length + 7) / 8,
         ((lay_index.shape().elem_count() + 7) / 8) as u32,
         1,
-        &format!("index_select : dtype{:?}", input_dtype),
+        #[cfg(feature = "wgpu_debug")] &format!("index_select : dtype{:?}", input_dtype),
     );
     return Ok(());
 }

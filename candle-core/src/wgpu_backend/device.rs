@@ -86,11 +86,16 @@ impl WgpuDevice{
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
 
-        let limits = wgpu::Limits::downlevel_defaults();
+        let mut limits = wgpu::Limits::downlevel_defaults();
 
         #[cfg(feature = "wgpu_debug")]
         let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
+        #[cfg(feature = "wgpu_debug")]{
+            limits.max_buffer_size = 2560000000;
+        } 
+       
         
+
         #[cfg(not(feature = "wgpu_debug"))]
         let features = wgpu::Features::empty();
         

@@ -10,6 +10,7 @@ members = [
     "candle-wasm-examples/*",
     "candle-wasm-tests",
     "tensor-tools",
+    "candle-wasm-examples/llama2-c/xtask"
 ]
 exclude = [
    "candle-flash-attn",

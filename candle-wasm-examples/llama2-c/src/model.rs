@@ -2,6 +2,7 @@ use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     embedding, linear_no_bias as linear, rms_norm, Embedding, Linear, Module, RmsNorm, VarBuilder,
 };
+use log::info;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -258,15 +259,35 @@ impl Llama {
         }
     }
 
-    pub fn forward(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
+    pub async fn forward(&self, x: &Tensor, index_pos: usize) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
+        // info!("x:");
+        // x.debug_log().await?;
+
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = block.forward(&x, index_pos, block_idx)?;
         }
+
+        // info!("after self.blocks:");
+        // x.debug_log().await?;
+
         let x = self.ln_f.forward(&x)?;
+        
+        // info!("after ln_f:");
+        // x.debug_log().await?;
+
         let x = x.i((.., seq_len - 1, ..))?;
+
+        // info!("after x.i():");
+        // x.debug_log().await?;
+
         let logits = self.lm_head.forward(&x)?;
+
+        
+        // info!("after lm_head:");
+        // logits.debug_log().await?;
+
         logits.to_dtype(DType::F32)
     }
 

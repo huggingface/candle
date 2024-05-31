@@ -56,7 +56,7 @@ pub fn queue_cmp_buffer_from_buffer(
         pipeline,
         bind_group,
         ((layout_input1.shape().elem_count() + 3) / 4) as u32,
-        &format!("cmp op:{:?}, dtype:{:?}", op, dtype),
+        #[cfg(feature = "wgpu_debug")] &format!("cmp op:{:?}, dtype:{:?}", op, dtype),
     );
     return Ok(());
 }

@@ -6,3 +6,6 @@ rustflags = ["-C", "target-feature=+simd128"]
 
 [target.x86_64-apple-darwin]
 rustflags = ["-C", "target-feature=-avx,-avx2"]
+
+[alias]
+xtask = "run --manifest-path xtask/Cargo.toml --"

@@ -46,7 +46,7 @@ pub fn queue_copy_strided(
             pipeline,
             bind_group,
             input_layout.shape().elem_count() as u32,
-            &format!("copy strided dtype:{:?}", dtype),
+            #[cfg(feature = "wgpu_debug")] &format!("copy strided dtype:{:?}", dtype),
         );
     }
     return Ok(());
@@ -115,7 +115,7 @@ pub fn queue_copy2d(
             (d1 + 7) / 8,
             (d2 + 7) / 8,
             1,
-            &format!("copy2d dtype:{:?}", dtype),
+            #[cfg(feature = "wgpu_debug")]&format!("copy2d dtype:{:?}", dtype),
         );
     }
     return Ok(());

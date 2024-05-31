@@ -60,7 +60,7 @@ pub fn queue_binary_buffer_inplace(
         pipeline,
         bind_group,
         lay1.shape().elem_count() as u32,
-        &format!("binary inplace op:{:?}, dtype:{:?}", op, dtype),
+        #[cfg(feature = "wgpu_debug")] &format!("binary inplace op:{:?}, dtype:{:?}", op, dtype),
     );
     return Ok(());
 }
@@ -99,7 +99,7 @@ pub fn queue_binary_buffer_from_buffer(
             pipeline,
             bind_group,
             lay1.shape().elem_count() as u32,
-            &format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type),
+            #[cfg(feature = "wgpu_debug")] &format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type),
         );
         return Ok(());
     } else {
@@ -125,7 +125,7 @@ pub fn queue_binary_buffer_from_buffer(
             pipeline,
             bind_group,
             lay1.shape().elem_count() as u32,
-            &format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type),
+            #[cfg(feature = "wgpu_debug")] &format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type),
         );
         return Ok(());
     }

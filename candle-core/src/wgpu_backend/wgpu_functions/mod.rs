@@ -198,6 +198,7 @@ fn enqueue_workgroups(
     x: u32,
     y: u32,
     z: u32,
+    #[cfg(feature = "wgpu_debug")]
     _name: &str,
 ) {
     let q = MlQueue::Dispatch(
@@ -213,6 +214,7 @@ fn enqueue_workgroups_indirect(
     x: u32,
     y: u32,
     z: u32,
+    #[cfg(feature = "wgpu_debug")]
     _name: &str,
 ) {
     let data = wgpu::util::DispatchIndirectArgs { x, y, z };
@@ -324,6 +326,7 @@ fn enqueue(
     pipeline: Arc<ComputePipeline>,
     bind_group: BindGroup,
     length: u32,
+    #[cfg(feature = "wgpu_debug")]
     name: &str,
 ) {
     return enqueue_workgroups(
@@ -333,6 +336,7 @@ fn enqueue(
         (length + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE,
         1,
         1,
+        #[cfg(feature = "wgpu_debug")]
         name,
     );
 }

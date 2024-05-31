@@ -78,7 +78,7 @@ pub fn queue_reduce_from_buffer_op(
         1,
         dest_size,
         1,
-        &format!("reduce op:{:?}, dtype:{:?}", op, dtype),
+        #[cfg(feature = "wgpu_debug")] &format!("reduce op:{:?}, dtype:{:?}", op, dtype),
     );
     return Ok(());
 }

@@ -74,7 +74,7 @@ pub fn queue_matmul_buffer(
         (k + 7) / 8,
         (m + 7) / 8,
         b,
-        &format!("matmul, dtype:{:?}", dtype),
+        #[cfg(feature = "wgpu_debug")]&format!("matmul, dtype:{:?}", dtype),
     );
     return Ok(());
 }

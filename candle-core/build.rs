@@ -26,7 +26,10 @@ fn visit_dirs(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not set");
 
-    let shader_dir = PathBuf::from(&manifest_dir).join("src/wgpu_backend/wgpu_functions");
+    let candle_core_path = PathBuf::from(&manifest_dir);
+    let absolute_candle_core_path = fs::canonicalize(&candle_core_path).expect("Failed to get absolute outer folder path");
+
+    let shader_dir = candle_core_path.join("src/wgpu_backend/wgpu_functions");
     if !shader_dir.exists(){
         panic!("could not find shader path {:?}", shader_dir);
     }
@@ -68,12 +71,12 @@ fn main() {
         let new_file_path = generated_dir.join(new_file_name);
         fs::write(new_file_path, debug_s).expect("Failed to write shader file");
         
-        
-        println!("cargo::rerun-if-changed={:?}", file);
+        let absolute_file_path = fs::canonicalize(&file).expect("Failed to get absolute file path");
+        match absolute_file_path.strip_prefix(&absolute_candle_core_path) {
+            Ok(relative_path) =>  println!("cargo::rerun-if-changed={}", relative_path.to_string_lossy()),
+            Err(_) => println!("File path is not inside the outer folder"),
+        }
         virtual_id_counter += 1;
-    
-        
-
     }
 
     // Generate the shader map file

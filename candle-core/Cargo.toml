@@ -39,6 +39,11 @@ pollster = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
+#only for debugging on wasm
+wasm-bindgen = "0.2.87"
+wasm-bindgen-futures = "0.4.37"
+wasm-logger = "0.2"
+
 [dev-dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
@@ -53,8 +58,10 @@ accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = ["dep:metal", "dep:candle-metal-kernels"]
 wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json"]
-
+wgpu_async = ["wgpu"] # With this feature no async calls to get data from a tensor is allowed
 #default = ["wgpu"]
+
+default = ["wgpu_async"]
 
 [[bench]]
 name = "bench_main"

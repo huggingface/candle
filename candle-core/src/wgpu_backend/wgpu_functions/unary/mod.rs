@@ -112,7 +112,7 @@ pub fn queue_unary_inplace_op(
         pipeline,
         bind_group,
         layout.shape().elem_count() as u32,
-        &format!("unary inplace op:{:?}, dtype:{:?}", op, Pipelines::UnaryInplace),
+        #[cfg(feature = "wgpu_debug")] &format!("unary inplace op:{:?}, dtype:{:?}", op, Pipelines::UnaryInplace),
     );
     return Ok(());
 }
@@ -145,10 +145,7 @@ pub fn queue_unary_from_buffer_op(
             pipeline,
             bind_group,
             input_layout.shape().elem_count() as u32,
-            &format!(
-                "unary op:{:?}, dtype:{:?}, pipeline:{:?}",
-                op, dtype, Pipelines::UnaryFromBufferContiguous
-            ),
+            #[cfg(feature = "wgpu_debug")] &format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBufferContiguous),
         );
     } else {
         let meta = MetaUnary {
@@ -166,10 +163,7 @@ pub fn queue_unary_from_buffer_op(
             pipeline,
             bind_group,
             input_layout.shape().elem_count() as u32,
-            &format!(
-                "unary op:{:?}, dtype:{:?}, pipeline:{:?}",
-                op, dtype, Pipelines::UnaryFromBuffer
-            ),
+            #[cfg(feature = "wgpu_debug")] &format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBuffer),
         );
     }
     return Ok(());

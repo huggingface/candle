@@ -58,7 +58,7 @@ pub struct Model {
 }
 
 impl Model {
-    fn run(
+    async fn run(
         &self,
         link: &WorkerLink<Worker>,
         id: HandlerId,
@@ -96,7 +96,7 @@ impl Model {
             };
             let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
             let input = Tensor::new(ctxt, &dev)?.unsqueeze(0)?;
-            let logits = self.llama.forward(&input, index_pos)?;
+            let logits = self.llama.forward(&input, index_pos).await?;
             let logits = logits.squeeze(0)?;
             index_pos += ctxt.len();
 
@@ -322,8 +322,8 @@ impl yew_agent::Worker for Worker {
                             *elem = None
                         }
                     }
-                    let result = model
-                        .run(&self.link, id, temp, top_p, prompt)
+                    let result = pollster::block_on(model
+                        .run(&self.link, id, temp, top_p, prompt))
                         .map_err(|e| e.to_string());
                     Ok(WorkerOutput::GenerationDone(result))
                 }

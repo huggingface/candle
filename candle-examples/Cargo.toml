@@ -67,7 +67,7 @@ microphone = ["cpal"]
 encodec = ["cpal", "symphonia", "rubato"]
 wgpu = ["candle/wgpu"]
 wgpu_debug = ["candle/wgpu_debug"]
-default = []
+default = ["wgpu_debug"]
 
 [[example]]
 name = "llama_multiprocess"

@@ -3,6 +3,7 @@ use std::future::IntoFuture;
 use candle::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use candle_wasm_example_llama2::{console_log, worker::{Model as M, ModelData}};
+use log::info;
 use wasm_bindgen::prelude::*;
 extern crate console_error_panic_hook;
 
@@ -19,27 +20,29 @@ impl Model {
     async fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
         const REPEAT_LAST_N: usize = 64;
         let input = Tensor::new(tokens, &self.device)?.unsqueeze(0)?;
-        console_log!("process - converted tokens to Tensor");
-        let logits = self.inner.llama.forward(&input, tokens.len())?;
-        console_log!("process - after llama.forward");
+        //info!("INPUT:");
+        //input.debug_log().await?;
+        let logits = self.inner.llama.forward(&input, tokens.len()).await?;
+        
+        //info!("lOGITS1:");
+        //logits.debug_log().await?;
         let logits = logits.squeeze(0)?;
-        console_log!("process - logits.squeezee");
+        //info!("lOGITS2:");
+        //logits.debug_log().await?;
+
         let logits = if self.repeat_penalty == 1. || tokens.is_empty() {
             logits
         } else {
-            console_log!("process - before aturating_sub");
             let start_at = self.tokens.len().saturating_sub(REPEAT_LAST_N);
-            console_log!("process - apply_repeat_penalty");
             candle_transformers::utils::apply_repeat_penalty_async(
                 &logits,
                 self.repeat_penalty,
                 &self.tokens[start_at..],
             ).await?
         };
+    
 
-        console_log!("process - before sample");
         let next_token = self.logits_processor.sample_async(&logits).await?;
-        console_log!("process - after sample");
         self.tokens.push(next_token);
         let text = match self.inner.tokenizer.id_to_token(next_token) {
             Some(text) => text.replace('▁', " ").replace("<0x0A>", "\n"),
@@ -53,10 +56,14 @@ impl Model {
 impl Model {
     #[wasm_bindgen(constructor)]
     pub async fn new(weights: Vec<u8>, tokenizer: Vec<u8>) -> Result<Model, JsError> {
-        console_log!("create Model");
+        log::error!("create Model");
+        //wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
+        console_log::init().expect("could not initialize logger");
         console_error_panic_hook::set_once();
 
-        let dev = Device::Cpu;
+        //let dev = Device::Cpu;
+        let dev = Device::new_webgpu(0).await?;
+
         console_log!("created webgpu device");
 
         let model = M::load(ModelData {

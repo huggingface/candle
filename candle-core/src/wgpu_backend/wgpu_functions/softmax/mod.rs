@@ -45,7 +45,7 @@ pub fn queue_softmax(
         1,
         dest_size,
         1,
-        &format!("softmax, dtype:{:?}", dtype),
+        #[cfg(feature = "wgpu_debug")] &format!("softmax, dtype:{:?}", dtype),
     );
     return Ok(());
 }

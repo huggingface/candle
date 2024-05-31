@@ -30,7 +30,7 @@ pub fn queue_convert_u32_to_f32(
         pipeline,
         bind_group,
         input_layout.shape().elem_count() as u32,
-        &format!("u32_to_f32"),
+        #[cfg(feature = "wgpu_debug")] &format!("u32_to_f32"),
     );
     return Ok(());
 }
@@ -53,7 +53,7 @@ pub fn queue_convert_u8_to_f32(
         pipeline,
         bind_group,
         input_layout.shape().elem_count() as u32,
-        &format!("u8_to_f32"),
+        #[cfg(feature = "wgpu_debug")] &format!("u8_to_f32"),
     );
     return Ok(());
 }
@@ -76,7 +76,7 @@ pub fn queue_convert_f32_to_u32(
         pipeline,
         bind_group,
         input_layout.shape().elem_count() as u32,
-        &format!("f32_to_u32"),
+        #[cfg(feature = "wgpu_debug")] &format!("f32_to_u32"),
     );
     return Ok(());
 }

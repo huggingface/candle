@@ -145,7 +145,7 @@ impl LogitsProcessor {
             let logits = (logits / temperature)?;
             let prs = candle_nn::ops::softmax_last_dim(&logits)?;
             let mut prs = prs.to_vec1_async().await?;
-            console_log!("sample f async prs: Result: {:?}", prs);
+            console_log!("sample f async prs: Result:");
             f(&mut prs);
             Ok(prs)
         }
@@ -154,7 +154,7 @@ impl LogitsProcessor {
             Sampling::ArgMax => self.sample_argmax(logits)?,
             Sampling::All { temperature } => {
                 let prs : Vec<f32> = prs(*temperature,&logits,f).await?;
-                console_log!("sample_all {:?}", prs);
+                console_log!("sample_all");
                 self.sample_multinomial(&prs)?
             }
             Sampling::TopP { p, temperature } => {

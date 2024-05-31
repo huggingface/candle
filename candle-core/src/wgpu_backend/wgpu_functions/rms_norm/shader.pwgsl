@@ -28,7 +28,7 @@ fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgro
     let length = op_rms_norm_contiguous.length; //length of the elements to reduce
     let start_index = output_index * length;
     let start_index1 = start_index + op_rms_norm_contiguous.input1_offset;
-    let start_index2 = start_index + op_rms_norm_contiguous.input2_offset;
+    let start_index2 = op_rms_norm_contiguous.input2_offset;
 
     //We split the Reduction into 64 threads -> find the sub region we need to reduce over 
     let start = workgroup_id * op_rms_norm_contiguous.workgroup_size;
