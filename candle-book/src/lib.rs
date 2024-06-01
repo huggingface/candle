@@ -106,6 +106,7 @@ let tp_tensor = Tensor::from_raw_buffer(&raw, dtype, &tp_shape, &Device::Cpu).un
     }
 }
 
+    #[allow(unused)]
     #[rustfmt::skip]
     fn book_training_1() -> Result<()>{
 // ANCHOR: book_training_1
