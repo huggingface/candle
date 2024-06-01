@@ -88,10 +88,9 @@ impl CLIPImageProcessor {
         let config_filename = api
             .get("preprocessor_config.json")
             .map_err(|e| candle::Error::Msg(e.to_string()))?;
-        let image_processor = serde_json::from_slice(
-            &std::fs::read(config_filename).map_err(|e| candle::Error::Io(e))?,
-        )
-        .map_err(|e| candle::Error::Msg(e.to_string()))?;
+        let image_processor =
+            serde_json::from_slice(&std::fs::read(config_filename).map_err(candle::Error::Io)?)
+                .map_err(|e| candle::Error::Msg(e.to_string()))?;
         Ok(image_processor)
     }
 

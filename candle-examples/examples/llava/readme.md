@@ -92,7 +92,6 @@ Right now I have tested on liuhaotian/llava-v1.6-vicuna-7b and llava-hf/llava-v1
    - [ ] [EricLBuehler/mistral.rs](https://github.com/EricLBuehler/mistral.rs)
 - [ ] memory optimization for LLaVA 1.6 version
 - [ ] (long term)model training 
-c
   
 ## Tokenizer Setup  
 ```bash  
