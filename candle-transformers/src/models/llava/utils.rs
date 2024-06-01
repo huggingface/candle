@@ -233,7 +233,7 @@ pub fn tokenizer_image_token(
     let mut offset = 0;
     if !prompt_chunks.is_empty()
         && !prompt_chunks[0].is_empty()
-        && prompt_chunks[0][0] == llava_config.bos_token_id.unwrap() as i64
+        && prompt_chunks[0][0] == llava_config.bos_token_id as i64
     {
         offset = 1;
         input_ids.push(prompt_chunks[0][0]);
