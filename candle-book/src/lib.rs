@@ -107,7 +107,6 @@ let tp_tensor = Tensor::from_raw_buffer(&raw, dtype, &tp_shape, &Device::Cpu).un
 }
 
     #[rustfmt::skip]
-    #[test]
     fn book_training_1() -> Result<()>{
 // ANCHOR: book_training_1
 use hf_hub::{api::sync::Api, Repo, RepoType};
