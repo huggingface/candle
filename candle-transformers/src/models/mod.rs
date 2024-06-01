@@ -66,3 +66,4 @@ pub mod whisper;
 pub mod with_tracing;
 pub mod wuerstchen;
 pub mod yi;
+pub mod llava;
