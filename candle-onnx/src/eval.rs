@@ -877,6 +877,16 @@ pub fn simple_eval(
                 let output = input.relu()?;
                 values.insert(node.output[0].clone(), output);
             }
+            "Ceil" => {
+                let input = get(&node.input[0])?;
+                let output = input.ceil()?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "Floor" => {
+                let input = get(&node.input[0])?;
+                let output = input.floor()?;
+                values.insert(node.output[0].clone(), output);
+            }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Constant
             "Constant" => {
                 let value = match node.attribute.iter().find(|attr| attr.name == "value") {
