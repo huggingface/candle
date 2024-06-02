@@ -1023,6 +1023,27 @@ fn where_cond() {
     );
     assert_eq!(approx(results, 4), vec![-1.0f32, 2.0, -3.0, -4.0, 5.0, 6.0]);
 }
+#[test]
+fn where_cond_u32_f32() {
+    let shape = vec![6];
+    let cond = vec![0u32, 1, 0, 0, 1, 1];
+    let cond_l = (vec![1], 0);
+    let left_true = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let left_l = (vec![1], 0);
+    let right_false = vec![-1.0f32, -2.0, -3.0, -4.0, -5.0, -6.0];
+    let right_l = (vec![1], 0);
+    let results = run_where_cond(
+        &shape,
+        &cond,
+        cond_l,
+        &left_true,
+        left_l,
+        &right_false,
+        right_l,
+        "where_u32_f32",
+    );
+    assert_eq!(approx(results, 4), vec![-1.0f32, 2.0, -3.0, -4.0, 5.0, 6.0]);
+}
 
 fn run_gemm<T: Clone>(
     (b, m, n, k): (usize, usize, usize, usize),
