@@ -2,16 +2,16 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, WgpuDevice};
 
-use super::{create_bind_group_input3, enqueue, MatrixLayout};
+use super::{create_bind_group_input3, enqueue, MatrixLayout, MyArray};
 
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-struct MetaWhereCond{
-    input1_layout : MatrixLayout,
-    input2_layout : MatrixLayout,
-    input3_layout : MatrixLayout,
+// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// #[repr(C)]
+// struct MetaWhereCond{
+//     input1_layout : MatrixLayout,
+//     input2_layout : MatrixLayout,
+//     input3_layout : MatrixLayout,
     
-}
+// }
 
 pub fn queue_where_cond_u32(
     dev: &WgpuDevice,
@@ -24,14 +24,20 @@ pub fn queue_where_cond_u32(
     layout_false :&crate::Layout,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let meta = MetaWhereCond {
-        input1_layout: MatrixLayout::from_layout(&layout_input),
-        input2_layout: MatrixLayout::from_layout(&layout_true),
-        input3_layout: MatrixLayout::from_layout(&layout_false),
-    };
+
+    let mut meta = MyArray::new(12);
+    meta.add_layout(&layout_input);
+    meta.add_layout(&layout_true);
+    meta.add_layout(&layout_false);
+
+    // let meta = MetaWhereCond {
+    //     input1_layout: MatrixLayout::from_layout(&layout_input),
+    //     input2_layout: MatrixLayout::from_layout(&layout_true),
+    //     input3_layout: MatrixLayout::from_layout(&layout_false),
+    // };
     let pipeline = dev.get_pipeline(super::Shader::WhereCond(dtype), Pipelines::WhereCondU32)?;
 
-    let bind_group = create_bind_group_input3(dev, pipeline.clone(), meta,dest_buffer, input_buffer, true_buffer, false_buffer);
+    let bind_group = create_bind_group_input3(dev, pipeline.clone(), &meta.0,dest_buffer, input_buffer, true_buffer, false_buffer);
     enqueue(
         dev,
         pipeline,

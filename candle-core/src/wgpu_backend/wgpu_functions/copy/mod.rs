@@ -2,26 +2,26 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, WgpuDevice};
 
-use super::{create_bind_group_input1, enqueue, enqueue_workgroups, flush_gpu_command, MatrixLayout};
+use super::{create_bind_group_input1, enqueue, enqueue_workgroups, flush_gpu_command, MatrixLayout, MyArray};
 
 
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-struct MetaCopy2d {
-    d1: u32,
-    d2: u32,
-    input1_stride1: u32,
-    dest_stride1: u32,
-    input1_offset: u32,
-    dest_offset: u32,
-}
+// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// #[repr(C)]
+// struct MetaCopy2d {
+//     d1: u32,
+//     d2: u32,
+//     input1_stride1: u32,
+//     dest_stride1: u32,
+//     input1_offset: u32,
+//     dest_offset: u32,
+// }
 
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-struct MetaCopyStrided {
-    input1_layout: MatrixLayout,
-    dest_offset: u32,
-}
+// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// #[repr(C)]
+// struct MetaCopyStrided {
+//     input1_layout: MatrixLayout,
+//     dest_offset: u32,
+// }
 
 
 pub fn queue_copy_strided(
@@ -33,14 +33,20 @@ pub fn queue_copy_strided(
     dst_offset: u32,
 ) -> crate::Result<()> {
     if input_layout.shape().elem_count() > 0{
-        let meta = MetaCopyStrided {
-            input1_layout: MatrixLayout::from_layout(&input_layout),
-            dest_offset: dst_offset,
-        };
+
+        let mut meta = MyArray::new(5);
+        meta.add(dst_offset);
+        meta.add_layout(&input_layout);
+    
+
+        // let meta = MetaCopyStrided {
+        //     input1_layout: MatrixLayout::from_layout(&input_layout),
+        //     dest_offset: dst_offset,
+        // };
     
         let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::CopyStrided)?;
     
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
         enqueue(
             dev,
             pipeline,
@@ -96,18 +102,27 @@ pub fn queue_copy2d(
     dest_offset: u32,
 ) -> crate::Result<()> {
     if buffer_dest.size() > 0 && buffer_input.size() > 0{
-        let meta = MetaCopy2d {
-            d1,
-            d2,
-            input1_stride1: input_stride1,
-            dest_stride1,
-            input1_offset: input_offset,
-            dest_offset,
-        };
+        
+        let mut meta = MyArray::new(4);
+        meta.add(d1);
+        meta.add(d2);
+        meta.add(input_stride1);
+        meta.add(dest_stride1);
+        meta.add(input_offset);
+        meta.add(dest_offset);
+
+        // let meta = MetaCopy2d {
+        //     d1,
+        //     d2,
+        //     input1_stride1: input_stride1,
+        //     dest_stride1,
+        //     input1_offset: input_offset,
+        //     dest_offset,
+        // };
     
         let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::Copy2d)?;
     
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
         enqueue_workgroups(
             dev,
             pipeline,

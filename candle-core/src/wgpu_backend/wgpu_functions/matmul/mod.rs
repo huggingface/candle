@@ -2,27 +2,27 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, Layout, WgpuDevice};
 
-use super::{create_bind_group_input2, enqueue_workgroups};
+use super::{create_bind_group_input2, enqueue_workgroups, MyArray};
 
 
 
 //(M X N) * (N X K)
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-struct MetaInfoMatMul {
-    b: u32, //Batches
-    m: u32, //elements
-    n: u32, //elements
-    k: u32, //elements
-    input1_stride_b: u32,
-    input1_stride_m: u32,
-    input1_stride_n: u32,
-    input1_offset: u32,
-    input2_stride_b: u32,
-    input2_stride_n: u32,
-    input2_stride_k: u32,
-    input2_offset: u32,
-}
+// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// #[repr(C)]
+// struct MetaInfoMatMul {
+//     b: u32, //Batches
+//     m: u32, //elements
+//     n: u32, //elements
+//     k: u32, //elements
+//     input1_stride_b: u32,
+//     input1_stride_m: u32,
+//     input1_stride_n: u32,
+//     input1_offset: u32,
+//     input2_stride_b: u32,
+//     input2_stride_n: u32,
+//     input2_stride_k: u32,
+//     input2_offset: u32,
+// }
 
 
 pub fn queue_matmul_buffer(
@@ -41,28 +41,44 @@ pub fn queue_matmul_buffer(
     let mut input1_stride = layout_input1.stride().iter().rev();
     let mut input2_stride = layout_input2.stride().iter().rev();
 
-    let meta = MetaInfoMatMul {
-        b,
-        m,
-        n,
-        k,
-        input1_stride_n: *input1_stride.next().unwrap_or(&1) as u32,
-        input1_stride_m: *input1_stride.next().unwrap_or(&1) as u32,
-        input1_stride_b: *input1_stride.next().unwrap_or(&1) as u32,
-        input1_offset: layout_input1.start_offset() as u32,
+    let mut meta = MyArray::new(12);
+    meta.add(b);
+    meta.add(m);
+    meta.add(n);
+    meta.add(k);
 
-        input2_stride_k: *input2_stride.next().unwrap_or(&1) as u32,
-        input2_stride_n: *input2_stride.next().unwrap_or(&1) as u32,
-        input2_stride_b: *input2_stride.next().unwrap_or(&1) as u32,
-        input2_offset: layout_input2.start_offset() as u32,
-    };
+    meta.add(*input1_stride.next().unwrap_or(&1)); //input1_stride_n
+    meta.add(*input1_stride.next().unwrap_or(&1)); //input1_stride_m
+    meta.add(*input1_stride.next().unwrap_or(&1)); //input1_stride_b
+    meta.add(layout_input1.start_offset()); //input1_offset
+
+    meta.add(*input2_stride.next().unwrap_or(&1)); //input2_stride_k
+    meta.add(*input2_stride.next().unwrap_or(&1)); //input2_stride_n
+    meta.add(*input2_stride.next().unwrap_or(&1)); //input2_stride_b
+    meta.add(layout_input2.start_offset()); //input2_offset
+
+    // let meta = MetaInfoMatMul {
+    //     b,
+    //     m,
+    //     n,
+    //     k,
+    //     input1_stride_n: *input1_stride.next().unwrap_or(&1) as u32,
+    //     input1_stride_m: *input1_stride.next().unwrap_or(&1) as u32,
+    //     input1_stride_b: *input1_stride.next().unwrap_or(&1) as u32,
+    //     input1_offset: layout_input1.start_offset() as u32,
+
+    //     input2_stride_k: *input2_stride.next().unwrap_or(&1) as u32,
+    //     input2_stride_n: *input2_stride.next().unwrap_or(&1) as u32,
+    //     input2_stride_b: *input2_stride.next().unwrap_or(&1) as u32,
+    //     input2_offset: layout_input2.start_offset() as u32,
+    // };
 
     let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::MatmulBuffer)?;
   
     let bind_group = create_bind_group_input2(
         dev,
         pipeline.clone(),
-        meta,
+        &meta.0,
         buffer_dest,
         buffer_input1,
         buffer_input2,

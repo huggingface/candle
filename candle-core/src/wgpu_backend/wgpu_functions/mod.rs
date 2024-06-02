@@ -18,7 +18,7 @@ use crate::{wgpu_backend::device::WgpuDevice,Layout, WebGpuError};
 use super::device::MlQueue;
 use crate::DType;
 
-pub use binary::{queue_binary_buffer_from_buffer, queue_binary_buffer_inplace};
+pub use binary::queue_binary_buffer_from_buffer;
 pub use cmp::queue_cmp_buffer_from_buffer;
 pub use conv2d::{queue_conv2d, queue_conv2d_transpose};
 pub use convert::{queue_convert_f32_to_u32, queue_convert_u32_to_f32, queue_convert_u8_to_f32};
@@ -92,6 +92,60 @@ impl MatrixLayout {
         }
     }
 }
+
+
+struct MyArray(Vec<u32>);
+
+trait MyToU32{
+    fn to_u32(self) -> u32;
+}
+
+impl MyArray{
+
+    fn new(capacity : usize) -> Self{
+        MyArray(Vec::with_capacity(capacity))
+    }
+
+    fn add_layout(&mut self, layout : &Layout){
+        let shape = layout.shape().dims();
+        let stride = layout.stride();
+        self.0.push(shape.len() as u32);
+        self.0.push(layout.start_offset() as u32);
+
+        if(layout.is_contiguous()){
+            self.0.push(layout.shape().elem_count() as u32);
+        }
+        else{
+            self.0.push(0);
+        }
+
+        self.0.extend(shape.iter().map(|&x| x as u32));
+        self.0.extend(stride.iter().map(|&x| x as u32));
+    } 
+
+    fn add<T : MyToU32>(&mut self, value : T){
+        self.0.push(value.to_u32());
+    }
+}
+
+impl MyToU32 for u32{
+    fn to_u32(self) -> u32 {
+        return self;
+    }
+}
+
+impl MyToU32 for f32{
+    fn to_u32(self) -> u32 {
+        return f32::to_bits(self);
+    }
+}
+
+impl MyToU32 for usize{
+    fn to_u32(self) -> u32 {
+        return self as u32;
+    }
+}
+
 
 
 #[derive(Debug, Hash, std::cmp::Eq, std::cmp::PartialEq, Clone)]
@@ -176,6 +230,17 @@ pub fn create_uniform_buffer<T: bytemuck::Pod>(dev: &WgpuDevice, value: T, name:
             label: Some(name),
             contents: bytemuck::cast_slice(&[value]),
             usage: wgpu::BufferUsages::UNIFORM,
+        });
+}
+
+pub fn create_uniform_buffer_2(dev: &WgpuDevice, value: &[u32], name: &str) -> Buffer {
+    let v = bytemuck::cast_slice(value);
+    return dev
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(name),
+            contents: v,
+            usage: wgpu::BufferUsages::STORAGE,
         });
 }
 
@@ -341,14 +406,38 @@ fn enqueue(
     );
 }
 
-fn create_bind_group_input0<T: bytemuck::Pod>(
+// fn create_bind_group_input0<T: bytemuck::Pod>(
+//     dev: &WgpuDevice,
+//     pipeline: Arc<ComputePipeline>,
+//     meta: T,
+//     buffer_dest: &Buffer,
+// ) -> BindGroup {
+//     let bind_group_layout = pipeline.get_bind_group_layout(0);
+//     let buffer_meta = create_uniform_buffer(dev, meta, "input0");
+//     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
+//         label: None,
+//         layout: &bind_group_layout,
+//         entries: &[
+//             wgpu::BindGroupEntry {
+//                 binding: 0,
+//                 resource: buffer_dest.as_entire_binding(),
+//             },
+//             wgpu::BindGroupEntry {
+//                 binding: 1,
+//                 resource: buffer_meta.as_entire_binding(),
+//             },
+//         ],
+//     })
+// }
+
+fn create_bind_group_input0(
     dev: &WgpuDevice,
     pipeline: Arc<ComputePipeline>,
-    meta: T,
+    meta: &[u32],
     buffer_dest: &Buffer,
 ) -> BindGroup {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let buffer_meta = create_uniform_buffer(dev, meta, "input0");
+    let buffer_meta = create_uniform_buffer_2(dev, meta, "input0");
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
@@ -365,15 +454,44 @@ fn create_bind_group_input0<T: bytemuck::Pod>(
     })
 }
 
-fn create_bind_group_input1<T: bytemuck::Pod>(
+// fn create_bind_group_input1<T: bytemuck::Pod>(
+//     dev: &WgpuDevice,
+//     pipeline: Arc<ComputePipeline>,
+//     meta: T,
+//     buffer_dest: &Buffer,
+//     buffer_input1: &Buffer,
+// ) -> BindGroup {
+//     let bind_group_layout = pipeline.get_bind_group_layout(0);
+//     let buffer_meta = create_uniform_buffer(dev, meta, "input1");
+//     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
+//         label: None,
+//         layout: &bind_group_layout,
+//         entries: &[
+//             wgpu::BindGroupEntry {
+//                 binding: 0,
+//                 resource: buffer_dest.as_entire_binding(),
+//             },
+//             wgpu::BindGroupEntry {
+//                 binding: 1,
+//                 resource: buffer_meta.as_entire_binding(),
+//             },
+//             wgpu::BindGroupEntry {
+//                 binding: 2,
+//                 resource: buffer_input1.as_entire_binding(),
+//             },
+//         ],
+//     })
+// }
+
+fn create_bind_group_input1(
     dev: &WgpuDevice,
     pipeline: Arc<ComputePipeline>,
-    meta: T,
+    meta: &[u32],
     buffer_dest: &Buffer,
     buffer_input1: &Buffer,
 ) -> BindGroup {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let buffer_meta = create_uniform_buffer(dev, meta, "input1");
+    let buffer_meta = create_uniform_buffer_2(dev, meta, "input1");
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
@@ -394,16 +512,17 @@ fn create_bind_group_input1<T: bytemuck::Pod>(
     })
 }
 
-fn create_bind_group_input2<T: bytemuck::Pod>(
+
+fn create_bind_group_input2(
     dev: &WgpuDevice,
     pipeline: Arc<ComputePipeline>,
-    meta: T,
+    meta: &[u32],
     buffer_dest: &Buffer,
     buffer_input1: &Buffer,
     buffer_input2: &Buffer,
 ) -> BindGroup {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let buffer_meta = create_uniform_buffer(dev, meta, "input2");
+    let buffer_meta = create_uniform_buffer_2(dev, meta, "input2");
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
@@ -429,17 +548,90 @@ fn create_bind_group_input2<T: bytemuck::Pod>(
 }
 
 
-fn create_bind_group_input3<T: bytemuck::Pod>(
+// fn create_bind_group_input2<T: bytemuck::Pod>(
+//     dev: &WgpuDevice,
+//     pipeline: Arc<ComputePipeline>,
+//     meta: T,
+//     buffer_dest: &Buffer,
+//     buffer_input1: &Buffer,
+//     buffer_input2: &Buffer,
+// ) -> BindGroup {
+//     let bind_group_layout = pipeline.get_bind_group_layout(0);
+//     let buffer_meta = create_uniform_buffer(dev, meta, "input2");
+//     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
+//         label: None,
+//         layout: &bind_group_layout,
+//         entries: &[
+//             wgpu::BindGroupEntry {
+//                 binding: 0,
+//                 resource: buffer_dest.as_entire_binding(),
+//             },
+//             wgpu::BindGroupEntry {
+//                 binding: 1,
+//                 resource: buffer_meta.as_entire_binding(),
+//             },
+//             wgpu::BindGroupEntry {
+//                 binding: 2,
+//                 resource: buffer_input1.as_entire_binding(),
+//             },
+//             wgpu::BindGroupEntry {
+//                 binding: 3,
+//                 resource: buffer_input2.as_entire_binding(),
+//             },
+//         ],
+//     })
+// }
+
+// fn create_bind_group_input3<T: bytemuck::Pod>(
+//     dev: &WgpuDevice,
+//     pipeline: Arc<ComputePipeline>,
+//     meta: T,
+//     buffer_dest: &Buffer,
+//     buffer_input1: &Buffer,
+//     buffer_input2: &Buffer,
+//     buffer_input3: &Buffer,
+// ) -> BindGroup {
+//     let bind_group_layout = pipeline.get_bind_group_layout(0);
+//     let buffer_meta = create_uniform_buffer(dev, meta, "input3");
+//     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
+//         label: None,
+//         layout: &bind_group_layout,
+//         entries: &[
+//             wgpu::BindGroupEntry {
+//                 binding: 0,
+//                 resource: buffer_dest.as_entire_binding(),
+//             },
+//             wgpu::BindGroupEntry {
+//                 binding: 1,
+//                 resource: buffer_meta.as_entire_binding(),
+//             },
+//             wgpu::BindGroupEntry {
+//                 binding: 2,
+//                 resource: buffer_input1.as_entire_binding(),
+//             },
+//             wgpu::BindGroupEntry {
+//                 binding: 3,
+//                 resource: buffer_input2.as_entire_binding(),
+//             },
+//             wgpu::BindGroupEntry {
+//                 binding: 4,
+//                 resource: buffer_input3.as_entire_binding(),
+//             },
+//         ],
+//     })
+// }
+
+fn create_bind_group_input3(
     dev: &WgpuDevice,
     pipeline: Arc<ComputePipeline>,
-    meta: T,
+    meta: &[u32],
     buffer_dest: &Buffer,
     buffer_input1: &Buffer,
     buffer_input2: &Buffer,
     buffer_input3: &Buffer,
 ) -> BindGroup {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let buffer_meta = create_uniform_buffer(dev, meta, "input3");
+    let buffer_meta = create_uniform_buffer_2(dev, meta, "input3");
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,

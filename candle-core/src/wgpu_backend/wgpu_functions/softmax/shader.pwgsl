@@ -1,19 +1,27 @@
 #include "../util.pwgsl"
 
-struct MetaSoftmaxContiguous{
-    workgroup_count : u32,
-    workgroup_size : u32,
-    length : u32, //Length of Reduction(e.g count of elements to sum per output),
+// struct MetaSoftmaxContiguous{
+//     workgroup_count : u32,
+//     workgroup_size : u32,
+//     length : u32, //Length of Reduction(e.g count of elements to sum per output),
 
-    input1_offset : u32,
-}
+//     input1_offset : u32,
+// }
 
-@group(0) @binding(1)
-var<uniform> op_softmax : MetaSoftmaxContiguous;
+
+#define op_softmax.workgroup_count              op_meta[0]
+#define op_softmax.workgroup_size               op_meta[1]
+#define op_softmax.length                       op_meta[2]
+#define op_softmax.input1_offset                op_meta[3]
+
+// @group(0) @binding(1)
+// var<uniform> op_softmax : MetaSoftmaxContiguous;
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
 
 var<workgroup> sharedM: f32; 
+
+#ifdef f32
 
 @compute
 @workgroup_size(64,1,1)
@@ -85,3 +93,5 @@ fn softmax(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgrou
     }
 
 }
+
+#endif

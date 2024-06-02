@@ -1,18 +1,25 @@
 #include "../util.pwgsl"
 
-struct MetaInfoRmsNormContiguous{
-    workgroup_count : u32,
-    workgroup_size : u32,
-    length : u32, //Length of Reduction(e.g count of elements to sum per output),
+// struct MetaInfoRmsNormContiguous{
+//     workgroup_count : u32,
+//     workgroup_size : u32,
+//     length : u32, //Length of Reduction(e.g count of elements to sum per output),
 
-    input1_offset : u32,
-    input2_offset : u32,
+//     input1_offset : u32,
+//     input2_offset : u32,
 
-    eps : f32
-}
+//     eps : f32
+// }
 
-@group(0) @binding(1)
-var<uniform> op_rms_norm_contiguous : MetaInfoRmsNormContiguous;
+#define op_rms_norm_contiguous.workgroup_count              op_meta[0]
+#define op_rms_norm_contiguous.workgroup_size               op_meta[1]
+#define op_rms_norm_contiguous.length                       op_meta[2]
+#define op_rms_norm_contiguous.input1_offset                op_meta[3]
+#define op_rms_norm_contiguous.input2_offset                op_meta[4]
+#define op_rms_norm_contiguous.eps                          bitcast<f32>(op_meta[5])
+
+// @group(0) @binding(1)
+// var<uniform> op_rms_norm_contiguous : MetaInfoRmsNormContiguous;
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
 
@@ -51,14 +58,7 @@ fn rms_norm(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgro
         for (var i = 0u; i < cnt; i++){
             sum +=  sharedSums[i];
         }
-
-#ifdef f32 
-        let mean = sum / f32(length);
-#endif  
-#ifdef u32 
-        let mean = f32(sum) / f32(length);
-#endif          
-        
+        let mean = f32(sum) / f32(length);    
         let m = sqrt(mean + op_rms_norm_contiguous.eps);
         sharedM = m;
     }

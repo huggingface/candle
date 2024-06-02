@@ -1,14 +1,16 @@
 #include "../util.pwgsl"
 
-struct MetaBinary{
-    input1_layout : MatrixLayout,
-    input2_layout : MatrixLayout,
-    operation : u32,
-}
+// struct MetaBinary{
+//     input1_layout : MatrixLayout,
+//     input2_layout : MatrixLayout,
+//     operation : u32,
+// }
 
+#define op_binary.operation         op_meta[0]
+#define op_binary.input1_layout     1u
 
-@group(0) @binding(1)
-var<uniform> op_binary : MetaBinary;
+// @group(0) @binding(1)
+// var<uniform> op_binary : MetaBinary;
 
 fn bool_to_int(b : bool) -> u32{
     if b{
@@ -23,9 +25,13 @@ fn cmp_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
     var output_value = 0u;
 
+    let input1_layout = op_binary.input1_layout;
+    let input2_layout = input1_layout + get_size(input1_layout);
+
+ 
     for (var i = 0u; i < 4; i++){
-        let pos1 = get_index(op_binary.input1_layout, id * 4 + i);
-        let pos2 = get_index(op_binary.input2_layout, id * 4 + i);
+        let pos1 = get_index(input1_layout, id * 4 + i);
+        let pos2 = get_index(input2_layout, id * 4 + i);
         
         if(!pos1.is_valid){
             continue;

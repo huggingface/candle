@@ -187,6 +187,9 @@ mod shader_loader{
         for (key, value) in defines {
             processed_line = processed_line.replace(key, value);
         }
+        for (key, value) in defines {
+            processed_line = processed_line.replace(key, value);
+        }
         processed_line
     }
     

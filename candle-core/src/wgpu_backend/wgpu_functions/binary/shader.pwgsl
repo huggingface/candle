@@ -1,33 +1,56 @@
 #include "../util.pwgsl"
 
 
-struct MetaBinary{
-    input1_layout : MatrixLayout,
-    input2_layout : MatrixLayout,
-    operation : u32,
-}
+// struct MetaBinary{
+//     operation : u32,
+//     input1_layout : MatrixLayout,
+//     input2_layout : MatrixLayout,
+// }
 
-struct MetaBinaryContiguousBoth{
-    input1_length : u32,
-    input1_offset : u32,
-    input2_length : u32,
-    input2_offset : u32,
-    operation : u32,
-}
+#define op_binary.operation         op_meta[0]
+#define op_binary.input1_layout     1u
 
-@group(0) @binding(1)
-var<uniform> op_binary : MetaBinary;
 
-@group(0) @binding(1)
-var<uniform> op_binary_contiguous_both : MetaBinaryContiguousBoth;
+
+
+
+// struct MetaBinaryContiguousBoth{
+//     input1_length : u32,
+//     input1_offset : u32,
+//     input2_length : u32,
+//     input2_offset : u32,
+//     operation : u32,
+// }
+
+#define op_binary_contiguous_both.operation                 op_meta[0]
+#define op_binary_contiguous_both.input1_length             op_meta[1]
+#define op_binary_contiguous_both.input1_offset             op_meta[2]
+#define op_binary_contiguous_both.input2_length             op_meta[3]
+#define op_binary_contiguous_both.input2_offset             op_meta[4]
+
+
+//#define op_binary op_meta
+//#define op_binary_contiguous_both op_meta
+
+// @group(0) @binding(1)
+// var<uniform> op_binary : MetaBinary;
+
+// @group(0) @binding(1)
+// var<uniform> op_binary_contiguous_both : MetaBinaryContiguousBoth;
 
 
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let id = global_id.x;
+
+    let input2_layout = op_binary.input1_layout +  get_size(op_binary.input1_layout);
+
     let pos1 = get_index(op_binary.input1_layout, id);
-    let pos2 = get_index(op_binary.input2_layout, id);
+    let pos2 = get_index(input2_layout, id);
+
+    //let pos1 = get_index(op_binary.input1_layout, id);
+    //let pos2 = get_index(op_binary.input2_layout, id);
     if(pos1.is_valid){
         set_binary(op_binary.operation, id, v_input1[pos1.id], v_input2[pos2.id]);
     }

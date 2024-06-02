@@ -1,23 +1,42 @@
 #include "../util.pwgsl"
 
 //(M X N) * (N X K)
-struct MetaInfoMatMul{
-    b : u32, //batch_count ("normal" matmul = 1)
-    m : u32, 
-    n : u32, 
-    k : u32,
-    input1_stride_b : u32,
-    input1_stride_m : u32,
-    input1_stride_n : u32,
-    input1_offset   : u32,
-    input2_stride_b : u32,
-    input2_stride_n : u32,
-    input2_stride_k : u32,
-    input2_offset   : u32,
-}
+// struct MetaInfoMatMul{
+//     b : u32, //batch_count ("normal" matmul = 1)
+//     m : u32, 
+//     n : u32, 
+//     k : u32,
+//     input1_stride_b : u32,
+//     input1_stride_m : u32,
+//     input1_stride_n : u32,
+//     input1_offset   : u32,
+//     input2_stride_b : u32,
+//     input2_stride_n : u32,
+//     input2_stride_k : u32,
+//     input2_offset   : u32,
+// }
+
+// @group(0) @binding(1)
+// var<uniform> op_matmul : MetaInfoMatMul;
+
 
 @group(0) @binding(1)
-var<uniform> op_matmul : MetaInfoMatMul;
+var<storage> op_matmul : array<u32>;
+
+#define op_matmul.b                 op_matmul[0]
+#define op_matmul.m                 op_matmul[1]
+#define op_matmul.n                 op_matmul[2]
+#define op_matmul.k                 op_matmul[3]
+
+#define op_matmul.input1_stride_n   op_matmul[4]
+#define op_matmul.input1_stride_m   op_matmul[5]
+#define op_matmul.input1_stride_b   op_matmul[6]
+#define op_matmul.input1_offset     op_matmul[7]
+
+#define op_matmul.input2_stride_k   op_matmul[8]
+#define op_matmul.input2_stride_n   op_matmul[9]
+#define op_matmul.input2_stride_b   op_matmul[10]
+#define op_matmul.input2_offset     op_matmul[11]
 
 @compute
 @workgroup_size(8,8,1)

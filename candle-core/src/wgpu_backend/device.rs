@@ -93,7 +93,8 @@ impl WgpuDevice{
         #[cfg(feature = "wgpu_debug")]{
             limits.max_buffer_size = 2560000000;
         } 
-       
+        
+        limits.max_storage_buffers_per_shader_stage = 5;
         
 
         #[cfg(not(feature = "wgpu_debug"))]

@@ -3,28 +3,28 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, WgpuDevice};
 
-use super::{create_bind_group_input0, create_bind_group_input1, enqueue, MatrixLayout};
+use super::{create_bind_group_input0, create_bind_group_input1, enqueue, MatrixLayout, MyArray};
 
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-struct MetaUnary {
-    input_layout: MatrixLayout,
-    operation: u32,
-    scalar1: f32,
-    scalar2: f32,
-    seed: u32,
-}
+// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// #[repr(C)]
+// struct MetaUnary {
+//     input_layout: MatrixLayout,
+//     operation: u32,
+//     scalar1: f32,
+//     scalar2: f32,
+//     seed: u32,
+// }
 
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-struct MetaUnaryContiguous {
-    offset: u32,
-    length: u32,
-    operation: u32,
-    scalar1: f32, //optionally scalar value
-    scalar2: f32,
-    seed: u32,
-}
+// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// #[repr(C)]
+// struct MetaUnaryContiguous {
+//     offset: u32,
+//     length: u32,
+//     operation: u32,
+//     scalar1: f32, //optionally scalar value
+//     scalar2: f32,
+//     seed: u32,
+// }
 
 #[derive(Copy, Clone, Debug)]
 //#[allow(dead_code)]
@@ -97,16 +97,24 @@ pub fn queue_unary_inplace_op(
     dtype: crate::DType,
     layout: crate::Layout,
 ) -> crate::Result<()> {
-    let meta = MetaUnary {
-        operation: op as u32,
-        scalar1,
-        scalar2,
-        input_layout: MatrixLayout::from_layout(&layout),
-        seed: dev.rand_state.lock().unwrap().next_u32(),
-    };
+
+    let mut meta = MyArray::new(8);
+    meta.add(op as u32);
+    meta.add(scalar1);
+    meta.add(scalar2);
+    meta.add(dev.rand_state.lock().unwrap().next_u32());
+    meta.add_layout(&layout);
+
+    // let meta = MetaUnary {
+    //     operation: op as u32,
+    //     scalar1,
+    //     scalar2,
+    //     input_layout: MatrixLayout::from_layout(&layout),
+    //     seed: dev.rand_state.lock().unwrap().next_u32(),
+    // };
     let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryInplace)?;
 
-    let bind_group = create_bind_group_input0(dev, pipeline.clone(), meta, buffer);
+    let bind_group = create_bind_group_input0(dev, pipeline.clone(), &meta.0, buffer);
     enqueue(
         dev,
         pipeline,
@@ -128,18 +136,27 @@ pub fn queue_unary_from_buffer_op(
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
     if input_layout.is_contiguous() {
-        let meta = MetaUnaryContiguous {
-            operation: op as u32,
-            scalar1,
-            scalar2,
-            seed: dev.rand_state.lock().unwrap().next_u32(),
-            offset: input_layout.start_offset() as u32,
-            length: input_layout.shape().elem_count() as u32,
-        };
+
+        let mut meta = MyArray::new(6);
+        meta.add(op as u32);
+        meta.add(scalar1);
+        meta.add(scalar2);
+        meta.add(dev.rand_state.lock().unwrap().next_u32());
+        meta.add(input_layout.start_offset());       //offset
+        meta.add(input_layout.shape().elem_count()); //length
+
+        // let meta = MetaUnaryContiguous {
+        //     operation: op as u32,
+        //     scalar1,
+        //     scalar2,
+        //     seed: dev.rand_state.lock().unwrap().next_u32(),
+        //     offset: input_layout.start_offset() as u32,
+        //     length: input_layout.shape().elem_count() as u32,
+        // };
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBufferContiguous)?;
 
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
         enqueue(
             dev,
             pipeline,
@@ -148,16 +165,24 @@ pub fn queue_unary_from_buffer_op(
             #[cfg(feature = "wgpu_debug")] &format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBufferContiguous),
         );
     } else {
-        let meta = MetaUnary {
-            operation: op as u32,
-            scalar1,
-            scalar2,
-            input_layout: MatrixLayout::from_layout(&input_layout),
-            seed: dev.rand_state.lock().unwrap().next_u32(),
-        };
+
+        let mut meta = MyArray::new(8);
+        meta.add(op as u32);
+        meta.add(scalar1);
+        meta.add(scalar2);
+        meta.add(dev.rand_state.lock().unwrap().next_u32());
+        meta.add_layout(&input_layout);
+
+        // let meta = MetaUnary {
+        //     operation: op as u32,
+        //     scalar1,
+        //     scalar2,
+        //     input_layout: MatrixLayout::from_layout(&input_layout),
+        //     seed: dev.rand_state.lock().unwrap().next_u32(),
+        // };
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBuffer)?;
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
         enqueue(
             dev,
             pipeline,

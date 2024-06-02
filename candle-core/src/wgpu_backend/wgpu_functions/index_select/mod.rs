@@ -2,21 +2,21 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, Shape, WgpuDevice};
 
-use super::{create_bind_group_input2, enqueue_workgroups_indirect, MatrixLayout};
+use super::{create_bind_group_input2, enqueue_workgroups_indirect, MatrixLayout, MyArray};
 
 
 
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-struct MetaIndexSelect {
-    input1_layout: MatrixLayout,
-    input2_layout: MatrixLayout,
-    input_stride_x: u32,  //x specifys for values of one dim
-    input_stride_y: u32,  //y specifys per value of the index
-    output_stride_x: u32, //x specifys for values of one dim
-    output_stride_y: u32, //y specifys per value of the index
-    length: u32,
-}
+// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// #[repr(C)]
+// struct MetaIndexSelect {
+//     input1_layout: MatrixLayout,
+//     input2_layout: MatrixLayout,
+//     input_stride_x: u32,  //x specifys for values of one dim
+//     input_stride_y: u32,  //y specifys per value of the index
+//     output_stride_x: u32, //x specifys for values of one dim
+//     output_stride_y: u32, //y specifys per value of the index
+//     length: u32,
+// }
 
 
 pub fn queue_index_select(
@@ -43,20 +43,31 @@ pub fn queue_index_select(
         .iter()
         .fold(1, |prev, c| prev * *c) as u32; //Mul Strides Left of dim
 
-    let meta = MetaIndexSelect {
-        input1_layout: MatrixLayout::from_layout(&lay_input),
-        input2_layout: MatrixLayout::from_layout(&lay_index),
-        length,
-        input_stride_x,
-        input_stride_y,
-        output_stride_x,
-        output_stride_y,
-    };
+    let mut meta = MyArray::new(15);
+    meta.add(input_stride_x);
+    meta.add(input_stride_y);
+    meta.add(output_stride_x);
+    meta.add(output_stride_y);
+    meta.add(length);
+    meta.add_layout(&lay_input);
+    meta.add_layout(&lay_index);
+
+    
+    
+    // let meta = MetaIndexSelect {
+    //     input1_layout: MatrixLayout::from_layout(&lay_input),
+    //     input2_layout: MatrixLayout::from_layout(&lay_index),
+    //     length,
+    //     input_stride_x,
+    //     input_stride_y,
+    //     output_stride_x,
+    //     output_stride_y,
+    // };
 
     let pipeline = dev.get_pipeline(super::Shader::IndexSelect(input_dtype), Pipelines::IndexSelect)?;
 
     let bind_group =
-        create_bind_group_input2(dev, pipeline.clone(), meta, buffer_dest, buffer_input, buffer_index);
+        create_bind_group_input2(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups_indirect(
         dev,
         pipeline,
