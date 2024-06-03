@@ -2,7 +2,7 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, Layout, WgpuDevice};
 
-use super::{create_bind_group_input1, enqueue_workgroups, MatrixLayout, MyArray};
+use super::{create_bind_group_input1, enqueue_workgroups, get_meta, get_size};
 
 
 // #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -51,8 +51,8 @@ pub fn queue_reduce_from_buffer_op(
     let workgroup_count = u32::min(64, (reduction_length / 10 + 1) as u32);
     let workgroup_size = reduction_length as u32 / workgroup_count + 1;
     
-    let mut meta = MyArray::new(17);
-     
+    let (mut meta,  meta_offset) = get_meta(&dev, 8 + get_size(&layout_input1));
+
     meta.add(op as u32);
     meta.add(workgroup_count);
     meta.add(workgroup_size);
@@ -85,7 +85,7 @@ pub fn queue_reduce_from_buffer_op(
     };
     let pipeline = dev.get_pipeline(super::Shader::Reduce(dtype), pipeline_type)?;
 
-    let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
     enqueue_workgroups(
         dev,
         pipeline,

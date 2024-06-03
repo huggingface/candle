@@ -2,7 +2,7 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, WgpuDevice};
 
-use super::{create_bind_group_input3, enqueue, MatrixLayout, MyArray};
+use super::{create_bind_group_input3, enqueue, get_meta, get_size};
 
 // #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 // #[repr(C)]
@@ -24,8 +24,7 @@ pub fn queue_where_cond_u32(
     layout_false :&crate::Layout,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-
-    let mut meta = MyArray::new(12);
+    let (mut meta,  meta_offset) = get_meta(&dev, get_size(&layout_input) + get_size(&layout_true) + get_size(&layout_false));
     meta.add_layout(&layout_input);
     meta.add_layout(&layout_true);
     meta.add_layout(&layout_false);
@@ -37,7 +36,7 @@ pub fn queue_where_cond_u32(
     // };
     let pipeline = dev.get_pipeline(super::Shader::WhereCond(dtype), Pipelines::WhereCondU32)?;
 
-    let bind_group = create_bind_group_input3(dev, pipeline.clone(), &meta.0,dest_buffer, input_buffer, true_buffer, false_buffer);
+    let bind_group = create_bind_group_input3(dev, pipeline.clone(), meta_offset,dest_buffer, input_buffer, true_buffer, false_buffer);
     enqueue(
         dev,
         pipeline,

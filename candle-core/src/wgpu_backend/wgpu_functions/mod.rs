@@ -12,10 +12,10 @@ pub mod unary;
 pub mod where_cond;
 pub mod softmax;
 
-use std::{borrow::Cow, sync::Arc};
-use wgpu::{util::DeviceExt, BindGroup, Buffer, ComputePipeline, ShaderModule};
-use crate::{wgpu_backend::device::WgpuDevice,Layout, WebGpuError};
-use super::device::MlQueue;
+use std::{borrow::Cow, sync::{Arc, MutexGuard}};
+use wgpu::{util::DeviceExt, BindGroup, BindingResource, Buffer, BufferBinding, ComputePipeline, ShaderModule};
+use crate::{wgpu_backend::device::WgpuDevice, Layout, WebGpuError};
+use super::device::{MlQueue, META_BUFFER_SIZE};
 use crate::DType;
 
 pub use binary::queue_binary_buffer_from_buffer;
@@ -32,87 +32,88 @@ pub use where_cond::queue_where_cond_u32;
 pub use softmax::queue_softmax;
 
 
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-struct MatrixLayout {
-    shape1: u32,
-    shape2: u32,
-    shape3: u32,
-    shape4: u32,
-    shape5: u32,
-    stride1: u32,
-    stride2: u32,
-    stride3: u32,
-    stride4: u32,
-    stride5: u32,
-    offset: u32,
-    length: u32,
-}
+// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// #[repr(C)]
+// struct MatrixLayout {
+//     shape1: u32,
+//     shape2: u32,
+//     shape3: u32,
+//     shape4: u32,
+//     shape5: u32,
+//     stride1: u32,
+//     stride2: u32,
+//     stride3: u32,
+//     stride4: u32,
+//     stride5: u32,
+//     offset: u32,
+//     length: u32,
+// }
 
-impl MatrixLayout {
-    fn new(shape: &[usize; 5], stride: &[usize; 5], offset: u32, length: u32) -> Self {
-        Self {
-            shape1: shape[0] as u32,
-            shape2: shape[1] as u32,
-            shape3: shape[2] as u32,
-            shape4: shape[3] as u32,
-            shape5: shape[4] as u32,
-            stride1: stride[0] as u32,
-            stride2: stride[1] as u32,
-            stride3: stride[2] as u32,
-            stride4: stride[3] as u32,
-            stride5: stride[4] as u32,
-            offset,
-            length,
-        }
-    }
+// impl MatrixLayout {
+//     fn new(shape: &[usize; 5], stride: &[usize; 5], offset: u32, length: u32) -> Self {
+//         Self {
+//             shape1: shape[0] as u32,
+//             shape2: shape[1] as u32,
+//             shape3: shape[2] as u32,
+//             shape4: shape[3] as u32,
+//             shape5: shape[4] as u32,
+//             stride1: stride[0] as u32,
+//             stride2: stride[1] as u32,
+//             stride3: stride[2] as u32,
+//             stride4: stride[3] as u32,
+//             stride5: stride[4] as u32,
+//             offset,
+//             length,
+//         }
+//     }
 
-    fn from_layout(layout: &Layout) -> Self {
-        let shape = layout.shape().dims();
-        let mut dims = [1; 5];
-        //dims[..shape.len()].clone_from_slice(shape);
-        dims[5 - shape.len()..].clone_from_slice(shape);
+//     fn from_layout(layout: &Layout) -> Self {
+//         let shape = layout.shape().dims();
+//         let mut dims = [1; 5];
+//         //dims[..shape.len()].clone_from_slice(shape);
+//         dims[5 - shape.len()..].clone_from_slice(shape);
 
-        let mut stride_arr = [1; 5];
-        let stride = layout.stride();
-        //stride_arr[..stride.len()].clone_from_slice(stride);
-        stride_arr[5 - stride.len()..].clone_from_slice(stride);
+//         let mut stride_arr = [1; 5];
+//         let stride = layout.stride();
+//         //stride_arr[..stride.len()].clone_from_slice(stride);
+//         stride_arr[5 - stride.len()..].clone_from_slice(stride);
 
-        let offset = layout.start_offset();
+//         let offset = layout.start_offset();
 
-        if layout.is_contiguous() {
-            return Self::new(
-                &dims,
-                &stride_arr,
-                offset as u32,
-                layout.shape().elem_count() as u32,
-            );
-        } else {
-            return Self::new(&dims, &stride_arr, offset as u32, 0);
-        }
-    }
-}
+//         if layout.is_contiguous() {
+//             return Self::new(
+//                 &dims,
+//                 &stride_arr,
+//                 offset as u32,
+//                 layout.shape().elem_count() as u32,
+//             );
+//         } else {
+//             return Self::new(&dims, &stride_arr, offset as u32, 0);
+//         }
+//     }
+// }
 
 
-struct MyArray(Vec<u32>);
+#[derive(Debug)]
+pub (crate) struct MyArray(Vec<u32>);
 
-trait MyToU32{
+pub (crate) trait MyToU32{
     fn to_u32(self) -> u32;
 }
 
 impl MyArray{
 
-    fn new(capacity : usize) -> Self{
-        MyArray(Vec::with_capacity(capacity))
+    pub (crate) fn new(capacity : u32) -> Self{
+        MyArray(Vec::with_capacity(capacity as usize))
     }
 
-    fn add_layout(&mut self, layout : &Layout){
+    pub (crate) fn add_layout(&mut self, layout : &Layout){
         let shape = layout.shape().dims();
         let stride = layout.stride();
         self.0.push(shape.len() as u32);
         self.0.push(layout.start_offset() as u32);
 
-        if(layout.is_contiguous()){
+        if layout.is_contiguous() {
             self.0.push(layout.shape().elem_count() as u32);
         }
         else{
@@ -123,10 +124,15 @@ impl MyArray{
         self.0.extend(stride.iter().map(|&x| x as u32));
     } 
 
-    fn add<T : MyToU32>(&mut self, value : T){
+    pub (crate) fn add<T : MyToU32>(&mut self, value : T){
         self.0.push(value.to_u32());
     }
 }
+
+fn get_size(layout : &Layout) -> u32{
+    return 3 + layout.dims().len() as u32 * 2;
+}
+
 
 impl MyToU32 for u32{
     fn to_u32(self) -> u32 {
@@ -223,27 +229,6 @@ pub fn create_buffer(dev: &WgpuDevice, size: usize) -> Buffer {
     buffer
 }
 
-pub fn create_uniform_buffer<T: bytemuck::Pod>(dev: &WgpuDevice, value: T, name: &str) -> Buffer {
-    return dev
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(name),
-            contents: bytemuck::cast_slice(&[value]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-}
-
-pub fn create_uniform_buffer_2(dev: &WgpuDevice, value: &[u32], name: &str) -> Buffer {
-    let v = bytemuck::cast_slice(value);
-    return dev
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(name),
-            contents: v,
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-}
-
 pub fn create_buffer_init<T: bytemuck::Pod>(dev: &WgpuDevice, data: &[T]) -> Buffer {
     let buffer = dev
         .device
@@ -266,9 +251,14 @@ fn enqueue_workgroups(
     #[cfg(feature = "wgpu_debug")]
     _name: &str,
 ) {
-    let q = MlQueue::Dispatch(
-        super::device::MlQueueDispatch{ x, y, z, pipeline: pipeline, bind_group, indirect_buffer: None, #[cfg(feature = "wgpu_debug")] name: Some(_name.to_owned())});
-    dev.command_queue.lock().unwrap().push(q);
+    if x > 65535 || y > 65535 || z > 65535{
+        enqueue_workgroups_indirect(dev, pipeline, bind_group, x, y, z,  #[cfg(feature = "wgpu_debug")] _name);
+    }
+    else{
+        let q = MlQueue::Dispatch(
+            super::device::MlQueueDispatch{ x, y, z, pipeline: pipeline, bind_group, indirect_buffer: None, #[cfg(feature = "wgpu_debug")] name: Some(_name.to_owned())});
+        dev.command_queue.lock().unwrap().push(q);
+    }
 }
 
 
@@ -282,15 +272,19 @@ fn enqueue_workgroups_indirect(
     #[cfg(feature = "wgpu_debug")]
     _name: &str,
 ) {
-    let data = wgpu::util::DispatchIndirectArgs { x, y, z };
+    let data = DispatchIndirectArgs { x, y, z };
 
-    let workgroup_buffer = dev
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(data.as_bytes()),
-            usage: wgpu::BufferUsages::INDIRECT,
-        });
+    let mut indirect_array = dev.indirect_array.lock().unwrap();
+    let indirect_offset = indirect_array.len();
+    indirect_array.push(data);
+
+    // let workgroup_buffer = dev
+    //     .device
+    //     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    //         label: None,
+    //         contents: bytemuck::cast_slice(data.as_bytes()),
+    //         usage: wgpu::BufferUsages::INDIRECT,
+    //     });
     
     let q = MlQueue::Dispatch(
         super::device::MlQueueDispatch{ 
@@ -299,7 +293,7 @@ fn enqueue_workgroups_indirect(
             z, 
             pipeline: pipeline, 
             bind_group, 
-            indirect_buffer : Some(workgroup_buffer),
+            indirect_buffer : Some(indirect_offset),
             #[cfg(feature = "wgpu_debug")]
             name: Some(_name.to_owned())
     });
@@ -307,7 +301,52 @@ fn enqueue_workgroups_indirect(
 }
 
 
-fn flush_gpu_command(dev: &WgpuDevice){
+fn next_divisible_by_n(value: i32, n: i32) -> i32 {
+    if n == 0 {
+        panic!("n must be a non-zero integer");
+    }
+
+    if value % n == 0 {
+        value
+    } else {
+        value + (n - value % n)
+    }
+}
+
+//size: size you want to add
+fn get_meta(dev : &WgpuDevice, size : u32) -> (MutexGuard<MyArray>, u32){
+    let mut meta_array = dev.meta_array.lock().unwrap();
+
+    let meta_array_length = meta_array.0.len() as i32;
+
+    let meta_offset = next_divisible_by_n(meta_array_length, dev.device.limits().min_storage_buffer_offset_alignment as i32 / 4);
+
+    if meta_offset as u32 + size > META_BUFFER_SIZE / 4{
+        flush_gpu_command(dev, &mut meta_array);
+        return (meta_array, 0);
+    }
+
+    meta_array.0.extend(std::iter::repeat(0).take((meta_offset - meta_array_length) as usize));
+
+    //let meta_offset = meta_array.0.len();
+    return (meta_array, meta_offset as u32);
+}
+
+
+
+/// Argument buffer layout for dispatch_indirect commands.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DispatchIndirectArgs {
+    /// The number of work groups in X dimension.
+    pub x: u32,
+    /// The number of work groups in Y dimension.
+    pub y: u32,
+    /// The number of work groups in Z dimension.
+    pub z: u32,
+}
+
+fn flush_gpu_command(dev: &WgpuDevice, meta_array : &mut MutexGuard<MyArray>){
     let mut queue = dev.command_queue.lock().unwrap();
     if queue.len() > 0{
         #[cfg(feature = "wgpu_debug")]
@@ -319,10 +358,23 @@ fn flush_gpu_command(dev: &WgpuDevice){
             label: None,
             });
         
-        
+   
+        //let meta_array = &mut dev.meta_array.lock().unwrap().0;
+        let meta_array_slice = &meta_array.0[..];
+
+        //println!("flush_gpu_commands, meta_buffer: {}", meta_array_slice.len());
+
+        //write MetaData:
+        dev.queue.write_buffer(&dev.meta_buffer, 0, &bytemuck::cast_slice(meta_array_slice));
+
+        meta_array.0.clear(); 
+
+
+        let indirect_array = &mut dev.indirect_array.lock().unwrap();
+        dev.queue.write_buffer(&dev.indirect_buffer, 0, &bytemuck::cast_slice(&indirect_array[..]));
+        indirect_array.clear();    
 
         let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        
         {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: None,
@@ -341,8 +393,9 @@ fn flush_gpu_command(dev: &WgpuDevice){
                         
                         cpass.set_pipeline(&q.pipeline);
                         cpass.set_bind_group(0, &q.bind_group, &[]);
-                        if let Some(indirect_buffer) = &q.indirect_buffer{
-                            cpass.dispatch_workgroups_indirect(indirect_buffer, 0);
+                        if let Some(indirect_buffer_index) = &q.indirect_buffer{
+
+                            cpass.dispatch_workgroups_indirect(& dev.indirect_buffer, (indirect_buffer_index * std::mem::size_of::<DispatchIndirectArgs>()) as u64);
                         }
                         else{
                             cpass.dispatch_workgroups(q.x, q.y, q.z);
@@ -433,11 +486,17 @@ fn enqueue(
 fn create_bind_group_input0(
     dev: &WgpuDevice,
     pipeline: Arc<ComputePipeline>,
-    meta: &[u32],
+    meta_offset: u32,
     buffer_dest: &Buffer,
 ) -> BindGroup {
-    let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let buffer_meta = create_uniform_buffer_2(dev, meta, "input0");
+    let bind_group_layout = pipeline.get_bind_group_layout(0);    
+    //let buffer_meta = create_uniform_buffer_2(dev, meta, "input0");
+
+    let buffer_meta = &dev.meta_buffer;
+
+    let meta_binding = BufferBinding{ buffer: &buffer_meta, offset: meta_offset  as u64 * 4, size:  None};
+    let meta_bindung = BindingResource::Buffer(meta_binding);
+
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
@@ -448,7 +507,7 @@ fn create_bind_group_input0(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buffer_meta.as_entire_binding(),
+                resource: meta_bindung, //buffer_meta.as_entire_binding(),
             },
         ],
     })
@@ -486,12 +545,18 @@ fn create_bind_group_input0(
 fn create_bind_group_input1(
     dev: &WgpuDevice,
     pipeline: Arc<ComputePipeline>,
-    meta: &[u32],
+    meta_offset: u32,
     buffer_dest: &Buffer,
     buffer_input1: &Buffer,
 ) -> BindGroup {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let buffer_meta = create_uniform_buffer_2(dev, meta, "input1");
+
+    let buffer_meta = &dev.meta_buffer;
+
+    let meta_binding = BufferBinding{ buffer: &buffer_meta, offset: meta_offset as u64 * 4, size:  None};
+    let meta_bindung = BindingResource::Buffer(meta_binding);
+
+    //let buffer_meta = create_uniform_buffer_2(dev, meta, "input1");
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
@@ -502,7 +567,7 @@ fn create_bind_group_input1(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buffer_meta.as_entire_binding(),
+                resource: meta_bindung, //buffer_meta.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
@@ -516,13 +581,19 @@ fn create_bind_group_input1(
 fn create_bind_group_input2(
     dev: &WgpuDevice,
     pipeline: Arc<ComputePipeline>,
-    meta: &[u32],
+    meta_offset: u32,
     buffer_dest: &Buffer,
     buffer_input1: &Buffer,
     buffer_input2: &Buffer,
 ) -> BindGroup {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let buffer_meta = create_uniform_buffer_2(dev, meta, "input2");
+    //let buffer_meta = create_uniform_buffer_2(dev, meta, "input2");
+
+    let buffer_meta = &dev.meta_buffer;
+
+    let meta_binding = BufferBinding{ buffer: &buffer_meta, offset: meta_offset as u64 * 4, size:  None};
+    let meta_bindung = BindingResource::Buffer(meta_binding);
+
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
@@ -533,7 +604,7 @@ fn create_bind_group_input2(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buffer_meta.as_entire_binding(),
+                resource: meta_bindung,// buffer_meta.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
@@ -624,14 +695,20 @@ fn create_bind_group_input2(
 fn create_bind_group_input3(
     dev: &WgpuDevice,
     pipeline: Arc<ComputePipeline>,
-    meta: &[u32],
+    meta_offset: u32,
     buffer_dest: &Buffer,
     buffer_input1: &Buffer,
     buffer_input2: &Buffer,
     buffer_input3: &Buffer,
 ) -> BindGroup {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let buffer_meta = create_uniform_buffer_2(dev, meta, "input3");
+    //let buffer_meta = create_uniform_buffer_2(dev, meta, "input3");
+
+    let buffer_meta = &dev.meta_buffer;
+
+    let meta_binding = BufferBinding{ buffer: &buffer_meta, offset: meta_offset as u64 * 4, size:  None};
+    let meta_bindung = BindingResource::Buffer(meta_binding);
+
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout: &bind_group_layout,
@@ -642,7 +719,7 @@ fn create_bind_group_input3(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: buffer_meta.as_entire_binding(),
+                resource: meta_bindung, //buffer_meta.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
@@ -666,7 +743,8 @@ pub fn read_data_from_gpu<T: bytemuck::Pod>(
     buffer: &Buffer,
 ) -> Vec<T> {
 
-    flush_gpu_command(dev); //send all previous commands to the gpu 
+    flush_gpu_command(dev, &mut dev.meta_array.lock().unwrap());
+    //send all previous commands to the gpu 
     let dest_size = buffer.size();
 
     let staging_buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
@@ -727,7 +805,7 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &Buffer,
 ) -> Vec<T> {
-    flush_gpu_command(dev); //send all previous commands to the gpu 
+    flush_gpu_command(dev, &mut dev.meta_array.lock().unwrap()); //send all previous commands to the gpu 
     let dest_size = buffer.size();
 
     let staging_buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {

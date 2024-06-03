@@ -2,7 +2,7 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, WgpuDevice};
 
-use super::{create_bind_group_input1, enqueue, enqueue_workgroups, flush_gpu_command, MatrixLayout, MyArray};
+use super::{create_bind_group_input1, enqueue, enqueue_workgroups, flush_gpu_command, get_meta, get_size};
 
 
 // #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -33,8 +33,7 @@ pub fn queue_copy_strided(
     dst_offset: u32,
 ) -> crate::Result<()> {
     if input_layout.shape().elem_count() > 0{
-
-        let mut meta = MyArray::new(5);
+        let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&input_layout));
         meta.add(dst_offset);
         meta.add_layout(&input_layout);
     
@@ -46,7 +45,7 @@ pub fn queue_copy_strided(
     
         let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::CopyStrided)?;
     
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
         enqueue(
             dev,
             pipeline,
@@ -69,7 +68,7 @@ pub fn queue_copy(
     copy_size: usize,
 ) {
     if copy_size > 0{
-        flush_gpu_command(dev); 
+        flush_gpu_command(dev, &mut dev.meta_array.lock().unwrap());
         let mut encoder = dev
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -103,7 +102,7 @@ pub fn queue_copy2d(
 ) -> crate::Result<()> {
     if buffer_dest.size() > 0 && buffer_input.size() > 0{
         
-        let mut meta = MyArray::new(4);
+        let (mut meta,  meta_offset) = get_meta(&dev, 6);
         meta.add(d1);
         meta.add(d2);
         meta.add(input_stride1);
@@ -122,7 +121,7 @@ pub fn queue_copy2d(
     
         let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::Copy2d)?;
     
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
         enqueue_workgroups(
             dev,
             pipeline,

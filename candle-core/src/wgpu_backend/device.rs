@@ -10,6 +10,7 @@ use crate::{notImplemented, wrongType, Layout};
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, Measurements,MInfo};
 
+use super::wgpu_functions::{DispatchIndirectArgs, MyArray};
 use super::wgpu_functions::{self, create_buffer, create_buffer_init, unary::UnaryOperation};
 use super::WgpuStorage;
 
@@ -25,7 +26,7 @@ pub (crate) struct MlQueueDispatch{
     pub (crate) z : u32,
     pub (crate) pipeline : Arc<wgpu::ComputePipeline>,
     pub (crate) bind_group : wgpu::BindGroup,
-    pub (crate) indirect_buffer : Option<wgpu::Buffer>,
+    pub (crate) indirect_buffer : Option<usize>,
     
     #[cfg(feature = "wgpu_debug")]
     pub (crate) name : Option<String>,
@@ -46,6 +47,11 @@ pub struct  WgpuDevice {
 
     pub (crate) command_queue : Arc<Mutex<Vec<MlQueue>>>,
 
+    pub (crate) meta_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
+    pub (crate) meta_array : Arc<Mutex<MyArray>>,
+
+    pub (crate) indirect_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
+    pub (crate) indirect_array : Arc<Mutex<Vec<DispatchIndirectArgs>>>,
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
 }
@@ -55,7 +61,6 @@ pub (crate) enum Pipelines{
     UnaryInplace = 0,
     UnaryFromBuffer,
     UnaryFromBufferContiguous,
-    BinaryBufferInplace,
     BinaryBufferFromBuffer,
     BinaryBufferFromBufferContiguousBoth,
     MatmulBuffer,
@@ -76,7 +81,8 @@ pub (crate) enum Pipelines{
 }
 
 
-
+pub (crate) const META_BUFFER_SIZE : u32 = 10000;
+pub (crate) const INDIRECT_BUFFER_SIZE : u32 = 10000;
 
 impl WgpuDevice{
     pub (crate) async fn create(_: usize) -> crate::Result<Self>{
@@ -92,10 +98,9 @@ impl WgpuDevice{
         let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
         #[cfg(feature = "wgpu_debug")]{
             limits.max_buffer_size = 2560000000;
-        } 
-        
+        }
         limits.max_storage_buffers_per_shader_stage = 5;
-        
+        //limits.min_storage_buffer_offset_alignment = 4;
 
         #[cfg(not(feature = "wgpu_debug"))]
         let features = wgpu::Features::empty();
@@ -115,6 +120,20 @@ impl WgpuDevice{
        
         #[cfg(feature = "wgpu_debug")]
         let debug_info = super::debug_info::DebugInfo::new(&device);
+        
+        let meta_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: META_BUFFER_SIZE as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let indirect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: INDIRECT_BUFFER_SIZE as u64,
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Ok(WgpuDevice {
             device: Arc::new(device),
@@ -123,7 +142,12 @@ impl WgpuDevice{
             rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy())),
             #[cfg(feature = "wgpu_debug")]
             debug : debug_info,
-            command_queue: Arc::new(Mutex::new(vec![]))
+            command_queue: Arc::new(Mutex::new(vec![])),
+            meta_buffer : Arc::new(meta_buffer),
+            meta_array : Arc::new(Mutex::new(MyArray::new(META_BUFFER_SIZE))),
+            indirect_buffer : Arc::new(indirect_buffer),
+            indirect_array : Arc::new(Mutex::new(vec![]))
+
         })
     }
 
@@ -156,7 +180,6 @@ impl WgpuDevice{
             Pipelines::UnaryInplace => "unary_inplace",
             Pipelines::UnaryFromBuffer => "unary_from_buffer",
             Pipelines::UnaryFromBufferContiguous => "unary_from_buffer_contiguous",
-            Pipelines::BinaryBufferInplace => "binary_buffer_inplace",
             Pipelines::BinaryBufferFromBuffer => "binary_buffer_from_buffer",
             Pipelines::BinaryBufferFromBufferContiguousBoth => "binary_buffer_from_buffer_contiguous_both",
             Pipelines::MatmulBuffer => "matmul",

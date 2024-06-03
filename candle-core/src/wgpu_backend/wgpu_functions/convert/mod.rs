@@ -2,7 +2,7 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, WgpuDevice};
 
-use super::{create_bind_group_input1, enqueue, MatrixLayout, MyArray};
+use super::{create_bind_group_input1, enqueue, get_meta, get_size};
 
 
 // #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -19,8 +19,7 @@ pub fn queue_convert_u32_to_f32(
     buffer_input: &Buffer,
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
-
-    let mut meta = MyArray::new(4);
+    let (mut meta,  meta_offset) = get_meta(&dev, get_size(&input_layout));
     meta.add_layout(&input_layout);
 
     // let meta = MetaConvert {
@@ -28,7 +27,7 @@ pub fn queue_convert_u32_to_f32(
     // };
 
     let pipeline = dev.get_pipeline(super::Shader::Convert(crate::DType::U32), Pipelines::ConvertU32ToF32)?;
-    let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
     enqueue(
         dev,
         pipeline,
@@ -46,7 +45,7 @@ pub fn queue_convert_u8_to_f32(
     buffer_input: &Buffer,
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
-    let mut meta = MyArray::new(4);
+    let (mut meta,  meta_offset) = get_meta(&dev, get_size(&input_layout));
     meta.add_layout(&input_layout);
 
     // let meta = MetaConvert {
@@ -54,7 +53,7 @@ pub fn queue_convert_u8_to_f32(
     // };
 
     let pipeline = dev.get_pipeline(super::Shader::Convert(crate::DType::U8), Pipelines::ConvertU8ToF32)?;
-    let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
     enqueue(
         dev,
         pipeline,
@@ -71,7 +70,7 @@ pub fn queue_convert_f32_to_u32(
     buffer_input: &Buffer,
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
-    let mut meta = MyArray::new(4);
+    let (mut meta,  meta_offset) = get_meta(&dev,  get_size(&input_layout));
     meta.add_layout(&input_layout);
 
     // let meta = MetaConvert {
@@ -80,7 +79,7 @@ pub fn queue_convert_f32_to_u32(
 
     let pipeline = dev.get_pipeline(super::Shader::Convert(crate::DType::F32), Pipelines::ConvertF32ToU32)?;
 
-    let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
     enqueue(
         dev,
         pipeline,

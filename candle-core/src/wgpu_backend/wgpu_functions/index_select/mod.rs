@@ -2,7 +2,7 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, Shape, WgpuDevice};
 
-use super::{create_bind_group_input2, enqueue_workgroups_indirect, MatrixLayout, MyArray};
+use super::{create_bind_group_input2, enqueue_workgroups, get_meta, get_size};
 
 
 
@@ -43,7 +43,9 @@ pub fn queue_index_select(
         .iter()
         .fold(1, |prev, c| prev * *c) as u32; //Mul Strides Left of dim
 
-    let mut meta = MyArray::new(15);
+    //let mut meta = MyArray::new(15);
+    let (mut meta,  meta_offset) = get_meta(&dev, 5 + get_size(&lay_index) + get_size(&lay_index));
+
     meta.add(input_stride_x);
     meta.add(input_stride_y);
     meta.add(output_stride_x);
@@ -67,8 +69,8 @@ pub fn queue_index_select(
     let pipeline = dev.get_pipeline(super::Shader::IndexSelect(input_dtype), Pipelines::IndexSelect)?;
 
     let bind_group =
-        create_bind_group_input2(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input, buffer_index);
-    enqueue_workgroups_indirect(
+        create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input, buffer_index);
+    enqueue_workgroups(
         dev,
         pipeline,
         bind_group,

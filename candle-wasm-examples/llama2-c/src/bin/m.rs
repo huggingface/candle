@@ -143,14 +143,14 @@ impl Model {
 
     #[wasm_bindgen]
     pub async fn next_token(&mut self) -> Result<String, JsError> {
-        console_log!("next token");
+        //console_log!("next token");
         console_error_panic_hook::set_once();
         let last_token = *self.tokens.last().unwrap();
-        console_log!("next token before process");
+        //console_log!("next token before process");
         let text = self
             .process(&[last_token]).await
             .map_err(|m| JsError::new(&m.to_string()))?;
-        console_log!("next token after process");
+        //console_log!("next token after process");
         Ok(text)
     }
 }

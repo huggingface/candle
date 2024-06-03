@@ -2,7 +2,7 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, WgpuDevice};
 
-use super::{create_bind_group_input2, enqueue_workgroups, MyArray};
+use super::{create_bind_group_input2, enqueue_workgroups, get_meta};
 
 
 
@@ -49,7 +49,8 @@ pub fn queue_conv2d(
 ) -> crate::Result<()> {
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
-    let mut meta = MyArray::new(24);
+    
+    let (mut meta,  meta_offset) = get_meta(&dev, 24);
 
     meta.add(params.b_size);
     meta.add(params.c_in);
@@ -63,7 +64,7 @@ pub fn queue_conv2d(
     meta.add(params.i_w);   //size_in_x
     meta.add(params.i_h);   //size_in_y
     meta.add(params.out_w() * params.out_h() * params.c_out); //Stride_batch_out
-    meta.add((params.out_w() * params.out_h())); //stride_c_out
+    meta.add(params.out_w() * params.out_h()); //stride_c_out
     meta.add(params.out_w()); //stride_y_out
     meta.add(params.out_h()); //size_y_out
 
@@ -115,7 +116,7 @@ pub fn queue_conv2d(
     let bind_group = create_bind_group_input2(
         dev,
         pipeline.clone(),
-        &meta.0,
+        meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
@@ -145,7 +146,7 @@ pub fn queue_conv2d_transpose(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
     
-    let mut meta = MyArray::new(24);
+    let (mut meta,  meta_offset) = get_meta(&dev, 24);
     meta.add(params.b_size);
     meta.add(params.c_in);
     meta.add(params.k_w);
@@ -158,7 +159,7 @@ pub fn queue_conv2d_transpose(
     meta.add(params.i_w);   //size_in_x
     meta.add(params.i_h);   //size_in_y
     meta.add(params.out_w() * params.out_h() * params.c_out); //Stride_batch_out
-    meta.add((params.out_w() * params.out_h())); //stride_c_out
+    meta.add(params.out_w() * params.out_h()); //stride_c_out
     meta.add(params.out_w()); //stride_y_out
     meta.add(params.out_h()); //size_y_out
 
@@ -218,7 +219,7 @@ pub fn queue_conv2d_transpose(
     let bind_group = create_bind_group_input2(
         dev,
         pipeline.clone(),
-        &meta.0,
+        meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,

@@ -143,7 +143,7 @@ fn main() -> anyhow::Result<()> {
                 prompt: "".to_string(),
                 config: None,
                 model_id: "karpathy/tinyllamas".to_string(),
-                which_model: "stories15M.bin".to_string(),
+                which_model: "stories110M.bin".to_string(),
             };
             run_inference(&cmd, &args)?
         }
@@ -256,6 +256,7 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
     let tokenizer = common_args.tokenizer()?;
 
     //let device = candle_examples::device(common_args.cpu)?;
+    //let device = &candle::Device::Cpu;
     let device = pollster::block_on(candle::Device::new_webgpu(0))?;
 
     let is_gguf = config_path.extension().map_or(false, |v| v == "gguf");

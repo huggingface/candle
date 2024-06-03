@@ -2,7 +2,7 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, WgpuDevice};
 
-use super::{create_bind_group_input2, enqueue_workgroups, MyArray};
+use super::{create_bind_group_input2, enqueue_workgroups, get_meta};
 
 
 
@@ -34,7 +34,8 @@ pub fn queue_rms_norm(
     let workgroup_count = u32::min(64, (reduction_length / 10 + 1) as u32);
     let workgroup_size = reduction_length as u32 / workgroup_count + 1;
     
-    let mut meta = MyArray::new(5);
+    let (mut meta,  meta_offset) = get_meta(&dev, 6);
+
     meta.add(workgroup_count);
     meta.add(workgroup_size);
     meta.add(reduction_length);
@@ -53,7 +54,7 @@ pub fn queue_rms_norm(
 
     let pipeline = dev.get_pipeline(super::Shader::RmsNorm(dtype), Pipelines::RmsNorm)?;
 
-    let bind_group = create_bind_group_input2(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input1, buffer_alpha);
+    let bind_group = create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input1, buffer_alpha);
     enqueue_workgroups(
         dev,
         pipeline,

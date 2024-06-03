@@ -3,7 +3,7 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, WgpuDevice};
 
-use super::{create_bind_group_input0, create_bind_group_input1, enqueue, MatrixLayout, MyArray};
+use super::{create_bind_group_input0, create_bind_group_input1, enqueue, get_meta, get_size};
 
 // #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 // #[repr(C)]
@@ -98,7 +98,8 @@ pub fn queue_unary_inplace_op(
     layout: crate::Layout,
 ) -> crate::Result<()> {
 
-    let mut meta = MyArray::new(8);
+    //let mut meta = MyArray::new(8);
+    let (mut meta,  meta_offset) = get_meta(&dev, 4 + get_size(&layout));
     meta.add(op as u32);
     meta.add(scalar1);
     meta.add(scalar2);
@@ -114,7 +115,7 @@ pub fn queue_unary_inplace_op(
     // };
     let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryInplace)?;
 
-    let bind_group = create_bind_group_input0(dev, pipeline.clone(), &meta.0, buffer);
+    let bind_group = create_bind_group_input0(dev, pipeline.clone(), meta_offset, buffer);
     enqueue(
         dev,
         pipeline,
@@ -136,8 +137,7 @@ pub fn queue_unary_from_buffer_op(
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
     if input_layout.is_contiguous() {
-
-        let mut meta = MyArray::new(6);
+        let (mut meta,  meta_offset) = get_meta(&dev, 6);
         meta.add(op as u32);
         meta.add(scalar1);
         meta.add(scalar2);
@@ -156,7 +156,7 @@ pub fn queue_unary_from_buffer_op(
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBufferContiguous)?;
 
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
         enqueue(
             dev,
             pipeline,
@@ -165,8 +165,7 @@ pub fn queue_unary_from_buffer_op(
             #[cfg(feature = "wgpu_debug")] &format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBufferContiguous),
         );
     } else {
-
-        let mut meta = MyArray::new(8);
+        let (mut meta,  meta_offset) = get_meta(&dev, 4 + get_size(&input_layout));
         meta.add(op as u32);
         meta.add(scalar1);
         meta.add(scalar2);
@@ -182,7 +181,7 @@ pub fn queue_unary_from_buffer_op(
         // };
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBuffer)?;
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), &meta.0, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
         enqueue(
             dev,
             pipeline,

@@ -25,10 +25,6 @@ serde_json = { workspace = true }
 serde_plain = { workspace = true }
 tracing = { workspace = true }
 
-wasm-bindgen = "0.2.87"
-wasm-bindgen-futures = "0.4.37"
-wasm-logger = "0.2"
-
 [features]
 default = []
 accelerate = ["dep:accelerate-src", "candle/accelerate", "candle-nn/accelerate"]

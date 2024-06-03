@@ -2,7 +2,7 @@ use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, WgpuDevice};
 
-use super::{create_bind_group_input1, create_bind_group_input2, enqueue, MatrixLayout, MyArray};
+use super::{create_bind_group_input2, enqueue, get_meta, get_size};
 
 
 
@@ -87,7 +87,8 @@ pub fn queue_binary_buffer_from_buffer(
 ) -> crate::Result<()> {
     if lay1.is_contiguous() && lay2.is_contiguous() {
 
-        let mut meta = MyArray::new(1 + 4 + 4);
+        let (mut meta,  meta_offset) = get_meta(&dev, 5);
+        //let mut meta = MyArray::new(1 + 4 + 4);
         meta.add(op as u32);
         meta.add(lay1.shape().elem_count()); //input1_length
         meta.add(lay1.start_offset()); //input1_offset
@@ -108,7 +109,7 @@ pub fn queue_binary_buffer_from_buffer(
         let bind_group = create_bind_group_input2(
             dev,
             pipeline.clone(),
-            &meta.0,
+            meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,
@@ -122,7 +123,7 @@ pub fn queue_binary_buffer_from_buffer(
         );
         return Ok(());
     } else {
-        let mut meta = MyArray::new(1 + 4 + 4);
+        let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay1) + get_size(&lay2));
         meta.add(op as u32);
         meta.add_layout(&lay1);
         meta.add_layout(&lay2);
@@ -139,7 +140,7 @@ pub fn queue_binary_buffer_from_buffer(
         let bind_group = create_bind_group_input2(
             dev,
             pipeline.clone(),
-            &meta.0,
+            meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,

@@ -2,7 +2,6 @@ use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     embedding, linear_no_bias as linear, rms_norm, Embedding, Linear, Module, RmsNorm, VarBuilder,
 };
-use log::info;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
