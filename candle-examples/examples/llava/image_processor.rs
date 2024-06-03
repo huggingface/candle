@@ -106,11 +106,15 @@ impl ImageProcessor {
             image.clone()
         } else {
             let (new_width, new_height) = if width < height {
-                let _new_height = (((size * height) as f32) / width as f32).ceil() as u32;
-                (size, _new_height)
+                (
+                    size,
+                    (((size * height) as f32) / width as f32).ceil() as u32,
+                )
             } else {
-                let _new_width = (((size * width) as f32) / height as f32).ceil() as u32;
-                (_new_width, size)
+                (
+                    (((size * width) as f32) / height as f32).ceil() as u32,
+                    size,
+                )
             };
             image.resize(
                 new_width,
@@ -265,19 +269,23 @@ fn expand2square(image: &DynamicImage, background_color: Rgb<u8>) -> DynamicImag
 
 fn resize_and_pad_image(image: &DynamicImage, target_resolution: (u32, u32)) -> DynamicImage {
     let (original_width, original_height) = image.dimensions();
-    let _original_width_f = original_width as f32;
-    let _original_height_f = original_height as f32;
+    let original_width_f = original_width as f32;
+    let original_height_f = original_height as f32;
     let (target_width, target_height) = target_resolution;
-    let _target_width_f = target_width as f32;
-    let _target_height_f = target_height as f32;
-    let scale_w = _target_width_f / _original_width_f;
-    let scale_h = _target_height_f / _original_height_f;
+    let target_width_f = target_width as f32;
+    let target_height_f = target_height as f32;
+    let scale_w = target_width_f / original_width_f;
+    let scale_h = target_height_f / original_height_f;
     let (new_width, new_height) = if scale_w < scale_h {
-        let _new_height = min((_original_height_f * scale_w).ceil() as u32, target_height);
-        (target_width, _new_height)
+        (
+            target_width,
+            min((original_height_f * scale_w).ceil() as u32, target_height),
+        )
     } else {
-        let _new_width = min((_original_width_f * scale_h).ceil() as u32, target_width);
-        (_new_width, target_height)
+        (
+            min((original_width_f * scale_h).ceil() as u32, target_width),
+            target_height,
+        )
     };
     let resized_image = image.resize_exact(
         new_width,

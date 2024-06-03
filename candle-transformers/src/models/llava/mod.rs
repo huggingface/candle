@@ -133,7 +133,7 @@ impl ClipVisionTower {
         select_feature_method: &str,
         config: &Option<ClipVisionConfig>,
     ) -> Result<Self> {
-        let _config = if config.is_none() {
+        let config = if config.is_none() {
             ClipVisionConfig::clip_vit_large_patch14_336()
         } else {
             config.clone().unwrap()
@@ -142,12 +142,12 @@ impl ClipVisionTower {
             -1 | -2 => select_layer,
             _ => bail!("Unsupported select layer: {}", select_layer),
         };
-        let model = ClipVisionTransformer::new(vb, &_config)?;
+        let model = ClipVisionTransformer::new(vb, &config)?;
         Ok(Self {
             model,
             select_layer,
             select_feature_method: select_feature_method.to_string(),
-            config: _config,
+            config: config,
         })
     }
 

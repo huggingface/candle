@@ -13,17 +13,17 @@ pub fn select_best_resolution(
 ) -> (u32, u32) {
     let (original_width, original_height) = original_size;
     let mut best_fit = (0, 0);
-    let _original_width_f = original_width as f32;
-    let _original_height_f = original_height as f32;
+    let original_width_f = original_width as f32;
+    let original_height_f = original_height as f32;
     let mut max_effective_resolition = 0_u32;
     let mut min_wasted_resolution = u32::MAX;
     for (width, height) in possible_resolutions {
-        let _width_f = *width as f32;
-        let _height_f = *height as f32;
-        let scale = (_width_f / _original_width_f).min(_height_f / _original_height_f);
+        let width_f = *width as f32;
+        let height_f = *height as f32;
+        let scale = (width_f / original_width_f).min(height_f / original_height_f);
         let (downscaled_width, downscaled_height) = (
-            (_original_width_f * scale) as u32,
-            (_original_height_f * scale) as u32,
+            (original_width_f * scale) as u32,
+            (original_height_f * scale) as u32,
         );
         let effective_resolution =
             std::cmp::min((*width) * (*height), downscaled_width * downscaled_height);
