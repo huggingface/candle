@@ -27,8 +27,8 @@ Then the tokenizer.json file should be  tokenizer/tokenizer.json(which is the de
 ## eval
 
 ```bash
-cargo run --example llava --features cuda -- --image-file "/root/candle-llava/images/llava_logo.png" --prompt "is this a cat?" --hf # default args, use  llava-hf/llava-v1.6-vicuna-7b-hf
-cargo run --example llava --features cuda -- --model-path liuhaotian/llava-v1.6-vicuna-7b  --image-file "/root/candle-llava/images/llava_logo.png" --prompt "is this a cat?" # use liuhaotian/llava-v1.6-vicuna-7b, tokenizer setup should be done
+cargo run --example llava --features cuda -- --image-file "llava_logo.png" --prompt "is this a cat?" --hf # default args, use  llava-hf/llava-v1.6-vicuna-7b-hf. image-file is required^_^
+cargo run --example llava --features cuda -- --model-path liuhaotian/llava-v1.6-vicuna-7b  --image-file "llava_logo.png" --prompt "is this a cat?" # use liuhaotian/llava-v1.6-vicuna-7b, tokenizer setup should be done
 ```
 
 ## Major Limitations
