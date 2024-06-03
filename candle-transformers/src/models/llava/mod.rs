@@ -147,7 +147,7 @@ impl ClipVisionTower {
             model,
             select_layer,
             select_feature_method: select_feature_method.to_string(),
-            config: config,
+            config,
         })
     }
 
