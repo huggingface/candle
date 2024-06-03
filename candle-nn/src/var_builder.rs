@@ -211,6 +211,18 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
             ..self
         }
     }
+
+    /// Set the dtype of the VarBuilder.
+    pub fn set_dtype(self, dtype: DType) -> Self {
+        Self {
+            data: Arc::new(TensorData {
+                backend: self.data.backend.clone(),
+                dtype: dtype,
+                device: self.data.device.clone(),
+            }),
+            ..self
+        }
+    }
 }
 
 struct Zeros;
