@@ -6,63 +6,47 @@ use crate::models::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::models::llava::clip_image_processor::CLIPImageProcessor;
-
 // original config from liuhaotian/llava
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LLaVAConfig {
-    pub _name_or_path: String,
     pub architectures: Vec<String>,
-    //pub attention_bias: bool,
-    //pub attention_dropout: f32,
     pub bos_token_id: usize,
     pub eos_token_id: usize,
-    //pub freeze_mm_mlp_adapter: bool,
-    //pub freeze_mm_vision_resampler: bool,
-    //pub hidden_act: String,
     pub hidden_size: usize,
     #[serde(default = "default_image_aspect_ratio")]
     pub image_aspect_ratio: String,
     pub image_crop_resolution: usize,
     pub image_grid_pinpoints: Vec<(u32, u32)>,
     pub image_split_resolution: usize,
-    //pub initializer_range: f32,
     pub intermediate_size: usize,
     pub max_position_embeddings: usize,
     pub mm_hidden_size: usize,
     #[serde(default = "default_mm_patch_merge_type")]
     pub mm_patch_merge_type: String,
-    //pub mm_projector_lr: Option<f32>,
     pub mm_projector_type: String,
-    //pub mm_resampler_type: Option<String>,
-    //pub mm_use_im_patch_token: bool,
     pub mm_use_im_start_end: bool,
     pub mm_vision_select_feature: String,
     pub mm_vision_select_layer: isize,
     pub mm_vision_tower: Option<String>,
-    //pub mm_vision_tower_lr: f32,
     pub model_type: String,
     pub num_attention_heads: usize,
     pub num_hidden_layers: usize,
     pub num_key_value_heads: usize,
     pub pad_token_id: usize,
-    //pub pretraining_tp: usize,
     pub rms_norm_eps: f32,
-    //pub rope_scaling: Option<f32>,
     pub rope_theta: f32,
-    //pub tie_word_embeddings: bool,
     pub tokenizer_model_max_length: Option<usize>,
-    //pub tokenizer_padding_side: String,
     pub torch_dtype: String,
-    //pub transformers_version: String,
-    //pub tune_mm_mlp_adapter: bool
-    //pub tune_mm_vision_resampler: bool,
-    //pub unfreeze_mm_vision_tower: bool,
     pub use_cache: bool,
-    //pub use_mm_proj: bool,
     pub vocab_size: usize,
     #[serde(default = "default_image_token_index")]
     pub image_token_index: isize,
+    #[serde(default = "default_hf")]
+    pub hf: bool,
+}
+
+fn default_hf() -> bool {
+    false
 }
 
 fn default_image_token_index() -> isize {
@@ -210,22 +194,6 @@ pub struct HFPreProcessorConfig {
     pub size: HashMap<String, f32>,
 }
 
-impl HFPreProcessorConfig {
-    pub fn to_clip_image_processor(&self) -> CLIPImageProcessor {
-        CLIPImageProcessor {
-            size: self.size["shortest_edge"] as u32,
-            do_resize: self.do_resize,
-            do_center_crop: self.do_center_crop,
-            crop_size: self.crop_size["height"] as u32,
-            do_rescale: self.do_rescale,
-            rescale_factor: self.rescale_factor,
-            do_normalize: self.do_normalize,
-            image_mean: self.image_mean.clone(),
-            image_std: self.image_std.clone(),
-        }
-    }
-}
-
 impl HFLLaVAConfig {
     pub fn to_clip_vision_config(&self) -> ClipVisionConfig {
         ClipVisionConfig {
@@ -258,12 +226,11 @@ impl HFLLaVAConfig {
 
     pub fn to_llava_config(
         &self,
-        name: &str,
         generation_config: &HFGenerationConfig,
         preprocessor_config: &HFPreProcessorConfig,
     ) -> LLaVAConfig {
         LLaVAConfig {
-            _name_or_path: name.to_string(),
+            hf: true,
             architectures: self.architectures.clone(),
             bos_token_id: generation_config.bos_token_id,
             eos_token_id: generation_config.eos_token_id,

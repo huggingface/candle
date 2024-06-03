@@ -1,4 +1,3 @@
-pub mod clip_image_processor;
 pub mod config;
 pub mod constants;
 pub mod conversation;
@@ -66,7 +65,7 @@ pub struct MMProjector {
 impl MMProjector {
     pub fn load(vb: &VarBuilder, config: &LLaVAConfig) -> Result<Self> {
         if config.mm_projector_type == "linear" {
-            let vb_prefix = if config._name_or_path.contains("hf") {
+            let vb_prefix = if config.hf {
                 "multi_modal_projector.linear_1"
             } else {
                 "model.mm_projector.0"
@@ -75,7 +74,7 @@ impl MMProjector {
             let modules = seq().add(linear);
             Ok(Self { modules })
         } else if let Some(mlp_depth) = mlp_gelu_match(&config.mm_projector_type) {
-            let modules = if config._name_or_path.contains("hf") {
+            let modules = if config.hf {
                 let mut modules = seq().add(linear(
                     config.mm_hidden_size,
                     config.hidden_size,
@@ -188,7 +187,7 @@ impl LLaVA {
         let device = vb.device().clone();
         let llama_config = config.to_llama_config();
         let mm_projector = MMProjector::load(&vb, config)?;
-        let (clip_vision_tower, image_newline, llama) = if config._name_or_path.contains("hf") {
+        let (clip_vision_tower, image_newline, llama) = if config.hf {
             (
                 ClipVisionTower::new(
                     vb.pp("vision_tower.vision_model"),

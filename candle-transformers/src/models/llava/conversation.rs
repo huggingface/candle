@@ -1,9 +1,6 @@
 pub enum SeparatorStyle {
-    //SINGLE,
     Two,
     Mpt,
-    //PLAIN,
-    //LLAMA2,
 }
 pub struct Conversation {
     pub system: String,

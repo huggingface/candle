@@ -1,24 +1,21 @@
+pub mod image_processor;
+
 use candle_transformers::generation::{LogitsProcessor, Sampling};
 use candle_transformers::models::llama::Cache;
 
 use anyhow::{bail, Error as E, Result};
-use candle::{DType, IndexOp, Tensor};
+use candle::{DType, Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::llava::config::{
     HFGenerationConfig, HFLLaVAConfig, HFPreProcessorConfig,
 };
 use candle_transformers::models::llava::{
-    clip_image_processor::CLIPImageProcessor,
-    config::LLaVAConfig,
-    constants::*,
-    conversation::Conversation,
-    utils::{get_model_name_from_path, process_image, tokenizer_image_token},
-    LLaVA,
+    config::LLaVAConfig, constants::*, conversation::Conversation, LLaVA,
 };
 use clap::Parser;
 use hf_hub::api::sync::Api;
+use image_processor::{process_image, ImageProcessor};
 use std::io::Write;
-use std::process::Command;
 use tokenizers::Tokenizer;
 
 #[derive(Parser, Debug)]
@@ -26,9 +23,11 @@ use tokenizers::Tokenizer;
 struct Args {
     #[arg(long, default_value = "llava-hf/llava-v1.6-vicuna-7b-hf")]
     model_path: String,
+    #[arg(long, default_value = "tokenizer/tokenizer.json")]
+    tokenizer_path: String,
     #[arg(long)]
     model_base: Option<String>,
-    #[arg(long, default_value = "candle-examples/examples/llava/llava_logo.png")]
+    #[arg(long)]
     image_file: String, // Required
     #[arg(long)]
     conv_mode: Option<String>,
@@ -37,16 +36,12 @@ struct Args {
     #[arg(long, default_value_t = 512)]
     max_new_tokens: usize,
     #[arg(long, action)]
-    load_8bit: bool, // now useless
-    #[arg(long, action)]
-    load_4bit: bool, //now useless
-    #[arg(long, action)]
-    debug: bool, // now useless
+    hf: bool,
     #[arg(long, action)]
     cpu: bool,
     #[arg(long, action)]
     no_kv_cache: bool,
-    #[arg(long, default_value = "Is this a cat?")]
+    #[arg(long)]
     prompt: String,
     /// The seed to use when generating random samples. Copy from candle llama. Not exist in python llava.
     #[arg(long, default_value_t = 299792458)]
@@ -56,17 +51,113 @@ struct Args {
 //from https://github.com/huggingface/candle/blob/main/candle-examples/examples/clip/main.rs
 fn load_image<T: AsRef<std::path::Path>>(
     path: T,
-    processor: &CLIPImageProcessor,
+    processor: &ImageProcessor,
     llava_config: &LLaVAConfig,
     dtype: DType,
-) -> anyhow::Result<((u32, u32), Tensor)> {
+) -> Result<((u32, u32), Tensor)> {
     let img = image::io::Reader::open(path)?.decode()?;
     let img_tensor = process_image(&img, processor, llava_config)?;
     Ok(((img.width(), img.height()), img_tensor.to_dtype(dtype)?))
 }
 
-fn get_model_name(path: &str) -> String {
-    path.split('/').last().unwrap().to_string()
+fn hf_preprocessor_config_to_image_processor(
+    hf_preprocessor_config: &HFPreProcessorConfig,
+) -> ImageProcessor {
+    ImageProcessor {
+        size: hf_preprocessor_config.size["shortest_edge"] as u32,
+        do_resize: hf_preprocessor_config.do_resize,
+        do_center_crop: hf_preprocessor_config.do_center_crop,
+        crop_size: hf_preprocessor_config.crop_size["height"] as u32,
+        do_rescale: hf_preprocessor_config.do_rescale,
+        rescale_factor: hf_preprocessor_config.rescale_factor,
+        do_normalize: hf_preprocessor_config.do_normalize,
+        image_mean: hf_preprocessor_config.image_mean.clone(),
+        image_std: hf_preprocessor_config.image_std.clone(),
+    }
+}
+
+fn get_model_name_from_path(model_path: &str) -> String {
+    let model_paths: Vec<String> = model_path
+        .trim_matches('/')
+        .split('/')
+        .map(|s| s.to_string())
+        .collect();
+    if model_paths.last().unwrap().starts_with("checkpoint-") {
+        format!(
+            "{}_{}",
+            model_paths[model_paths.len() - 2],
+            model_paths.last().unwrap()
+        )
+    } else {
+        model_paths.last().unwrap().to_string()
+    }
+}
+
+fn duplicate_vec<T>(vec: &[T], n: usize) -> Vec<T>
+where
+    T: Clone,
+{
+    let mut res = Vec::new();
+    for _ in 0..n {
+        res.extend(vec.to_owned());
+    }
+    res
+}
+
+fn insert_separator<T>(x: Vec<Vec<T>>, sep: Vec<T>) -> Vec<Vec<T>>
+where
+    T: Clone,
+{
+    let sep = vec![sep];
+    let sep = duplicate_vec(&sep, x.len());
+    let mut res = x
+        .iter()
+        .zip(sep.iter())
+        .flat_map(|(x, y)| vec![x.clone(), y.clone()])
+        .collect::<Vec<Vec<T>>>();
+    res.pop();
+    res
+}
+
+fn tokenizer_image_token(
+    prompt: &str,
+    tokenizer: &Tokenizer,
+    image_token_index: i64,
+    llava_config: &LLaVAConfig,
+) -> Result<Tensor> {
+    let prompt_chunks = prompt
+        .split("<image>")
+        .map(|s| {
+            tokenizer
+                .encode(s, true)
+                .unwrap()
+                .get_ids()
+                .to_vec()
+                .iter()
+                .map(|x| *x as i64)
+                .collect()
+        })
+        .collect::<Vec<Vec<i64>>>();
+    let mut input_ids = Vec::new();
+    let mut offset = 0;
+    if !prompt_chunks.is_empty()
+        && !prompt_chunks[0].is_empty()
+        && prompt_chunks[0][0] == llava_config.bos_token_id as i64
+    {
+        offset = 1;
+        input_ids.push(prompt_chunks[0][0]);
+    }
+
+    for x in insert_separator(
+        prompt_chunks,
+        duplicate_vec(&[image_token_index], offset + 1),
+    )
+    .iter()
+    {
+        input_ids.extend(x[1..].to_vec())
+    }
+    let input_len = input_ids.len();
+    Tensor::from_vec(input_ids, (1, input_len), &Device::Cpu).map_err(E::msg)
 }
 
 fn main() -> Result<()> {
@@ -75,10 +166,7 @@ fn main() -> Result<()> {
     println!("Start loading model");
     let api = Api::new()?;
     let api = api.model(args.model_path.clone());
-    let model_name = get_model_name(&args.model_path);
-    let (llava_config, tokenizer, clip_vision_config, image_processor) = if model_name
-        .contains("hf")
-    {
+    let (llava_config, tokenizer, clip_vision_config, image_processor) = if args.hf {
         let config_filename = api.get("config.json")?;
         let hf_llava_config: HFLLaVAConfig =
             serde_json::from_slice(&std::fs::read(config_filename)?)?;
@@ -89,7 +177,7 @@ fn main() -> Result<()> {
         let preprocessor_config: HFPreProcessorConfig =
             serde_json::from_slice(&std::fs::read(preprocessor_config_filename)?)?;
         let llava_config =
-            hf_llava_config.to_llava_config(&model_name, &generation_config, &preprocessor_config);
+            hf_llava_config.to_llava_config(&generation_config, &preprocessor_config);
         let tokenizer_filename = api.get("tokenizer.json")?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
         let clip_vision_config = hf_llava_config.to_clip_vision_config();
@@ -97,27 +185,18 @@ fn main() -> Result<()> {
             llava_config,
             tokenizer,
             Some(clip_vision_config),
-            preprocessor_config.to_clip_image_processor(),
+            hf_preprocessor_config_to_image_processor(&preprocessor_config),
         )
     } else {
         let config_filename = api.get("config.json")?;
         let llava_config: LLaVAConfig = serde_json::from_slice(&std::fs::read(config_filename)?)?;
-        println!(
-            "use python to generate tokenizer.json. Will save tokenizer to tokenizer/tokenizer.json"
-        );
-        let cmd = format!("python -c \"from transformers import AutoTokenizer;tokenizer=AutoTokenizer.from_pretrained('{}');tokenizer.save_pretrained('tokenizer')\"", args.model_path);
-        let output = Command::new("python")
-            .args(["-c", &cmd])
-            .output()
-            .expect("python error!");
-        println!("python output: {:?}", output);
-        println!("loading tokenizer from tokenizer/tokenizer.json");
-        let tokenizer = Tokenizer::from_file("tokenizer/tokenizer.json").map_err(E::msg)?;
+        let tokenizer = Tokenizer::from_file(&args.tokenizer_path)
+            .map_err(|e| E::msg(format!("Error loading {}: {}", &args.tokenizer_path, e)))?;
         (
             llava_config.clone(),
             tokenizer,
             None,
-            CLIPImageProcessor::from_pretrained(&llava_config.mm_vision_tower.unwrap())?,
+            ImageProcessor::from_pretrained(&llava_config.mm_vision_tower.unwrap())?,
         )
     };
 
@@ -194,7 +273,8 @@ fn main() -> Result<()> {
     let prompt = conv.get_prompt();
     println!("loading image");
     let (image_size, image_tensor) =
-        load_image(&args.image_file, &image_processor, &llava_config, dtype)?;
+        load_image(&args.image_file, &image_processor, &llava_config, dtype)
+            .map_err(|e| E::msg(format!("Error loading {}: {}", &args.image_file, e)))?;
     let image_tensor = image_tensor.to_device(&device)?;
 
     let mut logits_processor = {
@@ -214,20 +294,19 @@ fn main() -> Result<()> {
         llava_config.image_token_index as i64,
         &llava_config,
     )?;
-    let input_embeds =
+    let mut input_embeds =
         llava.prepare_inputs_labels_for_multimodal(&tokens, &[image_tensor], &[image_size])?;
     //inference loop, based on https://github.com/huggingface/candle/blob/main/candle-examples/examples/llama/main.rs
     let mut tokenizer = candle_examples::token_output_stream::TokenOutputStream::new(tokenizer);
     let mut index_pos = 0;
-    let mut _input_embeds = input_embeds.clone();
     for index in 0..args.max_new_tokens {
-        let (_, input_embeds_len, _) = _input_embeds.dims3()?;
+        let (_, input_embeds_len, _) = input_embeds.dims3()?;
         let (context_size, context_index) = if cache.use_kv_cache && index > 0 {
             (1, index_pos)
         } else {
             (input_embeds_len, 0)
         };
-        let input = _input_embeds.i((.., input_embeds_len.saturating_sub(context_size).., ..))?;
+        let input = input_embeds.i((.., input_embeds_len.saturating_sub(context_size).., ..))?;
         let logits = llava.forward(&input, context_index, &mut cache)?; //[1,32000]
         let logits = logits.squeeze(0)?;
         let (_, input_len, _) = input.dims3()?;
@@ -235,7 +314,7 @@ fn main() -> Result<()> {
         let next_token = logits_processor.sample(&logits)?;
         let next_token_tensor = Tensor::from_vec(vec![next_token], 1, &device)?;
         let next_embeds = llava.llama.embed(&next_token_tensor)?.unsqueeze(0)?;
-        _input_embeds = Tensor::cat(&[_input_embeds, next_embeds], 1)?;
+        input_embeds = Tensor::cat(&[input_embeds, next_embeds], 1)?;
         if next_token == eos_token_id as u32 {
             break;
         }
@@ -247,6 +326,5 @@ fn main() -> Result<()> {
     if let Some(rest) = tokenizer.decode_rest().map_err(E::msg)? {
         print!("{rest}");
     }
-
     Ok(())
 }
