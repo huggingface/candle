@@ -718,6 +718,7 @@ impl BackendStorage for MetalStorage {
         }
         let name = match (self.dtype, t.dtype()) {
             (DType::U8, DType::F32) => "where_u8_f32",
+            (DType::U32, DType::F32) => "where_u32_f32",
             (DType::U8, DType::BF16) => "where_u8_bf16",
             (DType::U8, DType::F16) => "where_u8_f16",
             (DType::U8, DType::I64) => "where_u8_i64",
