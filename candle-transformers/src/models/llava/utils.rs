@@ -15,7 +15,7 @@ pub fn select_best_resolution(
     let mut best_fit = (0, 0);
     let original_width_f = original_width as f32;
     let original_height_f = original_height as f32;
-    let mut max_effective_resolition = 0_u32;
+    let mut max_effective_resolution = 0_u32;
     let mut min_wasted_resolution = u32::MAX;
     for (width, height) in possible_resolutions {
         let width_f = *width as f32;
@@ -28,12 +28,12 @@ pub fn select_best_resolution(
         let effective_resolution =
             std::cmp::min((*width) * (*height), downscaled_width * downscaled_height);
         let wasted_resolution = (*width) * (*height) - effective_resolution;
-        if effective_resolution > max_effective_resolition
-            || (effective_resolution == max_effective_resolition
+        if effective_resolution > max_effective_resolution
+            || (effective_resolution == max_effective_resolution
                 && wasted_resolution < min_wasted_resolution)
         {
             best_fit = (*width, *height);
-            max_effective_resolition = effective_resolution;
+            max_effective_resolution = effective_resolution;
             min_wasted_resolution = wasted_resolution;
         }
     }
