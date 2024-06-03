@@ -1,3 +1,5 @@
+pub mod constants;
+pub mod conversation;
 pub mod image_processor;
 
 use candle_transformers::generation::{LogitsProcessor, Sampling};
@@ -9,10 +11,10 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::llava::config::{
     HFGenerationConfig, HFLLaVAConfig, HFPreProcessorConfig,
 };
-use candle_transformers::models::llava::{
-    config::LLaVAConfig, constants::*, conversation::Conversation, LLaVA,
-};
+use candle_transformers::models::llava::{config::LLaVAConfig, LLaVA};
 use clap::Parser;
+use constants::*;
+use conversation::Conversation;
 use hf_hub::api::sync::Api;
 use image_processor::{process_image, ImageProcessor};
 use std::io::Write;
@@ -58,22 +60,6 @@ fn load_image<T: AsRef<std::path::Path>>(
     let img = image::io::Reader::open(path)?.decode()?;
     let img_tensor = process_image(&img, processor, llava_config)?;
     Ok(((img.width(), img.height()), img_tensor.to_dtype(dtype)?))
-}
-
-fn hf_preprocessor_config_to_image_processor(
-    hf_preprocessor_config: &HFPreProcessorConfig,
-) -> ImageProcessor {
-    ImageProcessor {
-        size: hf_preprocessor_config.size["shortest_edge"] as u32,
-        do_resize: hf_preprocessor_config.do_resize,
-        do_center_crop: hf_preprocessor_config.do_center_crop,
-        crop_size: hf_preprocessor_config.crop_size["height"] as u32,
-        do_rescale: hf_preprocessor_config.do_rescale,
-        rescale_factor: hf_preprocessor_config.rescale_factor,
-        do_normalize: hf_preprocessor_config.do_normalize,
-        image_mean: hf_preprocessor_config.image_mean.clone(),
-        image_std: hf_preprocessor_config.image_std.clone(),
-    }
 }
 
 fn get_model_name_from_path(model_path: &str) -> String {
@@ -185,7 +171,7 @@ fn main() -> Result<()> {
             llava_config,
             tokenizer,
             Some(clip_vision_config),
-            hf_preprocessor_config_to_image_processor(&preprocessor_config),
+            ImageProcessor::from_hf_preprocessor_config(&preprocessor_config),
         )
     } else {
         let config_filename = api.get("config.json")?;

@@ -1,6 +1,4 @@
 pub mod config;
-pub mod constants;
-pub mod conversation;
 pub mod utils;
 
 use crate::models::clip::vision_model::{ClipVisionConfig, ClipVisionTransformer};

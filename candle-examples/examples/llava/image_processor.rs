@@ -1,7 +1,10 @@
 use std::cmp::min;
 
 use candle::{bail, DType, Device, Result, Tensor};
-use candle_transformers::models::llava::{config::LLaVAConfig, utils::select_best_resolution};
+use candle_transformers::models::llava::{
+    config::{HFPreProcessorConfig, LLaVAConfig},
+    utils::select_best_resolution,
+};
 use hf_hub::api::sync::Api;
 use image::{imageops::overlay, DynamicImage, GenericImageView, Rgb, RgbImage};
 use serde::{Deserialize, Serialize};
@@ -79,6 +82,20 @@ impl ImageProcessor {
             serde_json::from_slice(&std::fs::read(config_filename).map_err(candle::Error::Io)?)
                 .map_err(|e| candle::Error::Msg(e.to_string()))?;
         Ok(image_processor)
+    }
+
+    pub fn from_hf_preprocessor_config(hf_preprocessor_config: &HFPreProcessorConfig) -> Self {
+        Self {
+            size: hf_preprocessor_config.size["shortest_edge"] as u32,
+            do_resize: hf_preprocessor_config.do_resize,
+            do_center_crop: hf_preprocessor_config.do_center_crop,
+            crop_size: hf_preprocessor_config.crop_size["height"] as u32,
+            do_rescale: hf_preprocessor_config.do_rescale,
+            rescale_factor: hf_preprocessor_config.rescale_factor,
+            do_normalize: hf_preprocessor_config.do_normalize,
+            image_mean: hf_preprocessor_config.image_mean.clone(),
+            image_std: hf_preprocessor_config.image_std.clone(),
+        }
     }
 
     ///shortest edge to self.resize, other edge is resized to maintain aspect ratio
