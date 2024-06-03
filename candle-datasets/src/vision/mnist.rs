@@ -89,7 +89,7 @@ fn load_parquet(parquet: SerializedFileReader<std::fs::File>) -> Result<(Tensor,
 
 pub fn load() -> Result<crate::vision::Dataset> {
     let api = Api::new().map_err(|e| Error::Msg(format!("Api error: {e}")))?;
-    let dataset_id = "mnist".to_string();
+    let dataset_id = "ylecun/mnist".to_string();
     let repo = Repo::with_revision(
         dataset_id,
         RepoType::Dataset,
