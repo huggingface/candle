@@ -262,6 +262,20 @@ impl ClipEncoder {
         }
         Ok(xs)
     }
+    // required by LLaVA
+    pub fn output_hidden_states(
+        &self,
+        xs: &Tensor,
+        causal_attention_mask: Option<&Tensor>,
+    ) -> Result<Vec<Tensor>> {
+        let mut xs = xs.clone();
+        let mut hidden_states = Vec::new();
+        for layer in self.layers.iter() {
+            xs = layer.forward(&xs, causal_attention_mask)?;
+            hidden_states.push(xs.clone());
+        }
+        Ok(hidden_states)
+    }
 }
 
 /// A CLIP transformer based model.
