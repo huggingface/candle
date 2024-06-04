@@ -1027,6 +1027,46 @@ pub fn simple_eval(
                 };
                 values.insert(node.output[0].clone(), output);
             }
+            "ArgMin" => {
+                let input = get(&node.input[0])?;
+                let axis_i64: i64 = get_attr_opt(node, "axis")?.copied().unwrap_or(0);
+                let rank_i64: i64 = input.rank().try_into().unwrap();
+                if axis_i64 < -rank_i64 || axis_i64 >= rank_i64 {
+                    bail!("axis ({}) out of accepted range [-rank, rank-1] which was [{}, {}]", axis_i64, -rank_i64, rank_i64-1)
+                }
+                let axis = input.normalize_axis(axis_i64)?;
+                let keepdims: i64 = get_attr_opt(node, "keepdims")?.copied().unwrap_or(1);
+                let select_last_index: i64 = get_attr_opt(node, "select_last_index")?.copied().unwrap_or(0);
+                if select_last_index == 1 {
+                    bail!("select_last_index for ArgMin is currently not supported")
+                }
+                let output = if keepdims == 1 {
+                    input.argmin_keepdim(axis)?
+                } else {
+                    input.argmin(axis)?
+                }.to_dtype(DType::I64)?;
+                values.insert(node.output[0].clone(), output);
+            }
+            "ArgMax" => {
+                let input = get(&node.input[0])?;
+                let axis_i64: i64 = get_attr_opt(node, "axis")?.copied().unwrap_or(0);
+                let rank_i64: i64 = input.rank().try_into().unwrap();
+                if axis_i64 < -rank_i64 || axis_i64 >= rank_i64 {
+                    bail!("axis ({}) out of accepted range [-rank, rank-1] which was [{}, {}]", axis_i64, -rank_i64, rank_i64-1)
+                }
+                let axis = input.normalize_axis(axis_i64)?;
+                let keepdims: i64 = get_attr_opt(node, "keepdims")?.copied().unwrap_or(1);
+                let select_last_index: i64 = get_attr_opt(node, "select_last_index")?.copied().unwrap_or(0);
+                if select_last_index == 1 {
+                    bail!("select_last_index for ArgMin is currently not supported")
+                }
+                let output = if keepdims == 1 {
+                    input.argmax_keepdim(axis)?
+                } else {
+                    input.argmax(axis)?
+                }.to_dtype(DType::I64)?;
+                values.insert(node.output[0].clone(), output);
+            }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
     }
