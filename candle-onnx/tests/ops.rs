@@ -2711,7 +2711,7 @@ fn test_ceil() -> Result<()> {
 
 // "ArgMin"
 #[test]
-fn test_argmin() -> std::result::Result<()> {
+fn test_argmin() -> Result<()> {
     // tests from https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-7
     // default_axes_keepdims
     test(
@@ -2790,7 +2790,7 @@ fn test_argmin() -> std::result::Result<()> {
         None,
         &[[2i64], [1i64], [3i64], [1i64]],
     )?;
-    fn test(data: impl NdArray, axis: Option<i64>, keepdims: Option<i64>, select_last_index: Option<i64>, expected: impl NdArray) -> std::result::Result<()> {
+    fn test(data: impl NdArray, axis: Option<i64>, keepdims: Option<i64>, select_last_index: Option<i64>, expected: impl NdArray) -> Result<()> {
         let att_axis = AttributeProto {
             name: "axis".to_string(),
             ref_attr_name: "axis".to_string(),
@@ -2907,7 +2907,7 @@ fn test_argmin() -> std::result::Result<()> {
 
 // "ArgMax"
 #[test]
-fn test_argmax() -> std::result::Result<()> {
+fn test_argmax() -> Result<()> {
     // tests from https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-6
     // default_axes_keepdims
     test(
@@ -2986,7 +2986,7 @@ fn test_argmax() -> std::result::Result<()> {
         None,
         &[[0i64], [2i64], [0i64], [1i64]],
     )?;
-    fn test(data: impl NdArray, axis: Option<i64>, keepdims: Option<i64>, select_last_index: Option<i64>, expected: impl NdArray) -> std::result::Result<()> {
+    fn test(data: impl NdArray, axis: Option<i64>, keepdims: Option<i64>, select_last_index: Option<i64>, expected: impl NdArray) -> Result<()> {
         let att_axis = AttributeProto {
             name: "axis".to_string(),
             ref_attr_name: "axis".to_string(),
