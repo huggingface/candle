@@ -1,21 +1,9 @@
 #include "../util.pwgsl"
 
-// struct MetaSoftmaxContiguous{
-//     workgroup_count : u32,
-//     workgroup_size : u32,
-//     length : u32, //Length of Reduction(e.g count of elements to sum per output),
-
-//     input1_offset : u32,
-// }
-
-
 #define op_softmax.workgroup_count              op_meta[0]
 #define op_softmax.workgroup_size               op_meta[1]
 #define op_softmax.length                       op_meta[2]
 #define op_softmax.input1_offset                op_meta[3]
-
-// @group(0) @binding(1)
-// var<uniform> op_softmax : MetaSoftmaxContiguous;
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
 

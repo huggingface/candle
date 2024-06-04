@@ -33,8 +33,20 @@ impl LogitsProcessor {
         Self::from_sampling(seed, sampling)
     }
 
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `sample_argmax_async` for wasm support instead"))]
     fn sample_argmax(&mut self, logits: Tensor) -> Result<u32> {
         let logits_v: Vec<f32> = logits.to_vec1()?;
+        let next_token = logits_v
+            .iter()
+            .enumerate()
+            .max_by(|(_, u), (_, v)| u.total_cmp(v))
+            .map(|(i, _)| i as u32)
+            .unwrap();
+        Ok(next_token)
+    }
+
+    async fn sample_argmax_async(&mut self, logits: Tensor) -> Result<u32> {
+        let logits_v: Vec<f32> = logits.to_vec1_async().await?;
         let next_token = logits_v
             .iter()
             .enumerate()
@@ -110,6 +122,7 @@ impl LogitsProcessor {
         self.sample_f_async(logits, |_| {}).await
     }
 
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `sample_async` for wasm support instead"))]
     pub fn sample(&mut self, logits: &Tensor) -> Result<u32> {
         self.sample_f(logits, |_| {})
     }
@@ -126,7 +139,7 @@ impl LogitsProcessor {
         }
 
         let next_token = match &self.sampling {
-            Sampling::ArgMax => self.sample_argmax(logits)?,
+            Sampling::ArgMax => self.sample_argmax_async(logits).await?,
             Sampling::All { temperature } => {
                 let prs : Vec<f32> = prs(*temperature,&logits,f).await?;
                 self.sample_multinomial(&prs)?
@@ -153,6 +166,7 @@ impl LogitsProcessor {
         Ok(next_token)
     }
 
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `sample_f_async` for wasm support instead"))]
     pub fn sample_f(&mut self, logits: &Tensor, f: impl FnOnce(&mut [f32])) -> Result<u32> {
         let logits = logits.to_dtype(DType::F32)?;
         let prs = |temperature: f64| -> Result<Vec<f32>> {

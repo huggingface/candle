@@ -10,7 +10,7 @@ use crate::{notImplemented, wrongType, Layout};
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, Measurements,MInfo};
 
-use super::wgpu_functions::{DispatchIndirectArgs, MyArray};
+use super::wgpu_functions::{DispatchIndirectArgs, MetaArray};
 use super::wgpu_functions::{self, create_buffer, create_buffer_init, unary::UnaryOperation};
 use super::WgpuStorage;
 
@@ -48,7 +48,7 @@ pub struct  WgpuDevice {
     pub (crate) command_queue : Arc<Mutex<Vec<MlQueue>>>,
 
     pub (crate) meta_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
-    pub (crate) meta_array : Arc<Mutex<MyArray>>,
+    pub (crate) meta_array : Arc<Mutex<MetaArray>>,
 
     pub (crate) indirect_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
     pub (crate) indirect_array : Arc<Mutex<Vec<DispatchIndirectArgs>>>,
@@ -71,6 +71,8 @@ pub (crate) enum Pipelines{
     CmpFromBuffer ,
     Conv2D,
     Conv2DTranspose,
+    Conv1D,
+    Conv1DTranspose,
     IndexSelect,
     Copy2d,
     CopyStrided,
@@ -144,7 +146,7 @@ impl WgpuDevice{
             debug : debug_info,
             command_queue: Arc::new(Mutex::new(vec![])),
             meta_buffer : Arc::new(meta_buffer),
-            meta_array : Arc::new(Mutex::new(MyArray::new(META_BUFFER_SIZE))),
+            meta_array : Arc::new(Mutex::new(MetaArray::new(META_BUFFER_SIZE))),
             indirect_buffer : Arc::new(indirect_buffer),
             indirect_array : Arc::new(Mutex::new(vec![]))
 
@@ -190,6 +192,8 @@ impl WgpuDevice{
             Pipelines::CmpFromBuffer => "cmp_buffer_from_buffer",
             Pipelines::Conv2D => "conv2d",
             Pipelines::Conv2DTranspose => "conv2d_transpose",
+            Pipelines::Conv1D => "conv1d",
+            Pipelines::Conv1DTranspose => "conv1d_transpose",
             Pipelines::ConvertF32ToU32 => "convert_to_u32",
             Pipelines::ConvertU32ToF32 => "convert_to_f32",
             Pipelines::ConvertU8ToF32 => "convert_u8_to_f32",

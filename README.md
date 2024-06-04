@@ -30,10 +30,11 @@ current Problems:
 | Reduce Operations           | ✅ Supported                                     | Sum, Min, Max, (ArgMax, ArgMin works only if continues Dimensions are reduced)                                     |
 | Conv2d                      | ✅ Supported                                     |                                                                    |
 | Conv2dTranspose             | ✅ Supported                                     | Errors in for tranposed & dialation, paddingOutput not implemented                           |
+| Conv1d                      | ✅ Supported                                     |                                                                    |
+| Conv1dTranspose             | ✅ Supported                                     |                                                                    |
 | Index Select                | ✅ Supported                                     |                                                                    |
+| Where_cond                  | ✅ Supported                                     |                                                                    |
 | **<span style="color:#1E90FF">Not Implemented</span>**        |                                                 |                                                                    |
-| Conv1d                      | ❌ Not Implemented                               |                                                                    |
-| Conv1dTranspose             | ❌ Not Implemented                               |                                                                    |
 | Pool2dMax                   | ❌ Not Implemented                               |                                                                    |
 | Pool2dAvg                   | ❌ Not Implemented                               |                                                                    |
 | ArgSort                     | ❌ Not Implemented                               |                                                                    |

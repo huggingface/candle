@@ -1,19 +1,5 @@
 #include "../util.pwgsl"
 
-// struct MetaIndexSelect{
-//     input1_layout : MatrixLayout,
-//     input2_layout : MatrixLayout,
-//     input_stride_x : u32,   //x specifys for values of one dim
-//     input_stride_y : u32,   //y specifys per value of the index
-//     output_stride_x : u32,  //x specifys for values of one dim
-//     output_stride_y : u32,  //y specifys per value of the index
-//     length : u32
-// }
-
-
-// @group(0) @binding(1)
-// var<uniform> op_index : MetaIndexSelect;
-
 #define op_index.input_stride_x    op_meta[0]
 #define op_index.input_stride_y    op_meta[1]
 #define op_index.output_stride_x   op_meta[2]

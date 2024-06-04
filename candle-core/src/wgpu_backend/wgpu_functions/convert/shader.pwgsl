@@ -1,12 +1,5 @@
 #include "../util.pwgsl"
 
-// struct MetaConvert{
-//     input1_layout : MatrixLayout
-// }
-
-// @group(0) @binding(1)
-// var<uniform> op_convert : MetaConvert;
-
 #ifdef u32
 #else
 

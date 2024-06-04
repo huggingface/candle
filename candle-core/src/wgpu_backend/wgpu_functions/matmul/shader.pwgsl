@@ -1,25 +1,5 @@
 #include "../util.pwgsl"
 
-//(M X N) * (N X K)
-// struct MetaInfoMatMul{
-//     b : u32, //batch_count ("normal" matmul = 1)
-//     m : u32, 
-//     n : u32, 
-//     k : u32,
-//     input1_stride_b : u32,
-//     input1_stride_m : u32,
-//     input1_stride_n : u32,
-//     input1_offset   : u32,
-//     input2_stride_b : u32,
-//     input2_stride_n : u32,
-//     input2_stride_k : u32,
-//     input2_offset   : u32,
-// }
-
-// @group(0) @binding(1)
-// var<uniform> op_matmul : MetaInfoMatMul;
-
-
 @group(0) @binding(1)
 var<storage> op_matmul : array<u32>;
 

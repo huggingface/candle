@@ -1,9 +1,6 @@
-use std::future::IntoFuture;
-
 use candle::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use candle_wasm_example_llama2::{console_log, worker::{Model as M, ModelData}};
-use log::info;
 use wasm_bindgen::prelude::*;
 extern crate console_error_panic_hook;
 

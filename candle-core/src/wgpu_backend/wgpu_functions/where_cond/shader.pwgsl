@@ -1,17 +1,5 @@
 #include "../util.pwgsl"
 
-// struct MetaWhereCond{
-//     input1_layout : MatrixLayout,
-//     input2_layout : MatrixLayout,
-//     input3_layout : MatrixLayout,
-    
-// }
-
-
-// @group(0) @binding(1)
-// var<uniform> op_where_cond : MetaWhereCond;
-
-
 @compute
 @workgroup_size(64,1,1)
 fn where_cond_index_u32(@builtin(global_invocation_id) global_id: vec3<u32>) {

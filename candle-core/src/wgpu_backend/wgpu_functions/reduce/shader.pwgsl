@@ -1,20 +1,5 @@
 #include "../util.pwgsl"
 
-// struct MetaInfoReduce{
-//     input_layout : MatrixLayout,
-//     operation : u32,
-//     workgroup_count : u32,
-//     workgroup_size : u32,
-//     length : u32, //Length of Reduction(e.g count of elements to sum per output),
-
-//     output_to_start_stride1 : u32, //Stride between each new Output Index
-    
-//     output_to_start_shape_stride2 : u32, //After x Outputs use Stride 2 
-//     output_to_start_stride2 : u32,
-
-//     stride_reduction : u32, //The Stride to use for elements in Reduction
-// }
-
 #define op_reduce.operation                     op_meta[0]
 #define op_reduce.workgroup_count               op_meta[1]
 #define op_reduce.workgroup_size                op_meta[2]
@@ -24,9 +9,6 @@
 #define op_reduce.output_to_start_stride2       op_meta[6]
 #define op_reduce.stride_reduction              op_meta[7]
 #define op_reduce.input_layout                  8u
-
-// @group(0) @binding(1)
-// var<uniform> op_reduce : MetaInfoReduce;
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
 var<workgroup> sharedIndex: array<u32, 64>; 

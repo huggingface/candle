@@ -561,6 +561,36 @@ impl Tensor {
         }
     }
 
+    /// Retrieves the single scalar value hold in the tensor. If the tensor contains multiple
+    /// dimensions, an error is returned instead.
+    pub async fn to_scalar_async<S: crate::WithDType>(&self) -> Result<S> {
+        if self.rank() != 0 {
+            Err(Error::UnexpectedNumberOfDims {
+                expected: 0,
+                got: self.rank(),
+                shape: self.shape().clone(),
+            }
+            .bt())?
+        }
+        let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
+            let data = S::cpu_storage_as_slice(cpu_storage)?;
+            Ok::<_, Error>(data[self.layout().start_offset()])
+        };
+        match &*self.storage() {
+            Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
+            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
+        }
+    }
+
+
+    /// An alias for `to_scalar`.
+    pub async fn to_vec0_async<S: crate::WithDType>(&self) -> Result<S> {
+        self.to_scalar_async::<S>().await
+    }
+
+
     /// An alias for `to_scalar`.
     pub fn to_vec0<S: crate::WithDType>(&self) -> Result<S> {
         self.to_scalar::<S>()

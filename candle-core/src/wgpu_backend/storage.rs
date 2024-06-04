@@ -506,22 +506,58 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
     fn conv1d(
         &self,
-        _l: &crate::Layout,
-        _kernel: &Self,
-        _kernel_l: &crate::Layout,
-        _params: &crate::conv::ParamsConv1D,
+        l: &crate::Layout,
+        kernel: &Self,
+        kernel_l: &crate::Layout,
+        params: &crate::conv::ParamsConv1D,
     ) -> crate::Result<Self> {
-        notImplemented!(conv1d)
+        let buffer_dest = wgpu_functions::create_buffer(
+            self.device(),
+            (params.b_size * params.c_out * params.l_out()) * 4,
+        );
+        wgpu_functions::queue_conv1d(
+            self.device(),
+            &buffer_dest,
+            &self.buffer,
+            &kernel.buffer,
+            self.dtype,
+            params,
+            l,
+            kernel_l,
+        )?;
+        return Ok(WgpuStorage::new(
+            buffer_dest,
+            self.device().clone(),
+            self.dtype,
+        ));
     }
 
     fn conv_transpose1d(
         &self,
-        _l: &crate::Layout,
-        _kernel: &Self,
-        _kernel_l: &crate::Layout,
-        _params: &crate::conv::ParamsConvTranspose1D,
+        l: &crate::Layout,
+        kernel: &Self,
+        kernel_l: &crate::Layout,
+        params: &crate::conv::ParamsConvTranspose1D,
     ) -> crate::Result<Self> {
-        notImplemented!(conv_transpose1d)
+        let buffer_dest = wgpu_functions::create_buffer(
+            self.device(),
+            (params.b_size * params.c_out * params.l_out()) * 4,
+        );
+        wgpu_functions::queue_conv1d_transpose(
+            self.device(),
+            &buffer_dest,
+            &self.buffer,
+            &kernel.buffer,
+            self.dtype,
+            params,
+            l,
+            kernel_l,
+        )?;
+        return Ok(WgpuStorage::new(
+            buffer_dest,
+            self.device().clone(),
+            self.dtype,
+        ));
     }
 
     fn conv2d(

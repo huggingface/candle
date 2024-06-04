@@ -203,7 +203,7 @@ impl Sam {
         img.maximum(&img.zeros_like()?)?
             .minimum(&(img.ones_like()? * 255.)?)
     }
-
+    
     pub fn preprocess(&self, img: &Tensor) -> Result<Tensor> {
         let (_c, h, w) = img.dims3()?;
         let img = img
@@ -217,6 +217,109 @@ impl Sam {
         img.pad_with_zeros(2, 0, IMAGE_SIZE - w)
     }
 
+    async fn process_crop_async(
+        &self,
+        img: &Tensor,
+        cb: CropBox,
+        point_grids: &[(f64, f64)],
+    ) -> Result<Vec<crate::object_detection::Bbox<Tensor>>> {
+        // Crop the image and calculate embeddings.
+        let img = img.i((.., cb.y0..cb.y1, cb.x0..cb.x1))?;
+        let img = self.preprocess(&img)?.unsqueeze(0)?;
+        let img_embeddings = self.image_encoder.forward(&img)?;
+
+        let crop_w = cb.x1 - cb.x0;
+        let crop_h = cb.y1 - cb.y0;
+
+        // Generate masks for this crop.
+        let image_pe = self.prompt_encoder.get_dense_pe()?;
+        let points = point_grids
+            .iter()
+            .map(|&(x, y)| vec![x as f32 * crop_w as f32, y as f32 * crop_h as f32])
+            .collect::<Vec<_>>();
+
+        let mut bboxes = Vec::new();
+        for points in points.chunks(64) {
+            // Run the model on this batch.
+            let points_len = points.len();
+            let in_points = Tensor::new(points.to_vec(), img.device())?.unsqueeze(1)?;
+            let in_labels = Tensor::ones((points_len, 1), DType::F32, img.device())?;
+            let (sparse_prompt_embeddings, dense_prompt_embeddings) =
+                self.prompt_encoder
+                    .forward(Some((&in_points, &in_labels)), None, None)?;
+
+            let (low_res_mask, iou_predictions) = self.mask_decoder.forward(
+                &img_embeddings,
+                &image_pe,
+                &sparse_prompt_embeddings,
+                &dense_prompt_embeddings,
+                /* multimask_output */ true,
+            )?;
+            let low_res_mask = low_res_mask.flatten(0, 1)?;
+            let iou_predictions = iou_predictions.flatten(0, 1)?.to_vec1_async::<f32>().await?;
+            let dev = low_res_mask.device();
+
+            for (i, iou) in iou_predictions.iter().enumerate() {
+                // Filter by predicted IoU.
+                if *iou < PRED_IOU_THRESH {
+                    continue;
+                }
+                let low_res_mask = low_res_mask.get(i)?;
+
+                // Calculate stability score.
+                let bound = Tensor::new(MODEL_MASK_THRESHOLD + STABILITY_SCORE_OFFSET, dev)?
+                    .broadcast_as(low_res_mask.shape())?;
+                let intersections = low_res_mask
+                    .ge(&bound)?
+                    .to_dtype(DType::F32)?
+                    .sum_all()?
+                    .to_vec0_async::<f32>().await?;
+                let bound = Tensor::new(MODEL_MASK_THRESHOLD - STABILITY_SCORE_OFFSET, dev)?
+                    .broadcast_as(low_res_mask.shape())?;
+                let unions = low_res_mask
+                    .ge(&bound)?
+                    .to_dtype(DType::F32)?
+                    .sum_all()?
+                    .to_vec0_async::<f32>().await?;
+                let stability_score = intersections / unions;
+                if stability_score < STABILITY_SCORE_THRESHOLD {
+                    continue;
+                }
+
+                // Threshold masks and calculate boxes.
+                let low_res_mask = low_res_mask
+                    .ge(&Tensor::new(0f32, dev)?.broadcast_as(low_res_mask.shape())?)?
+                    .to_dtype(DType::U32)?;
+                let low_res_mask_per_x = low_res_mask.sum(0)?.to_vec1_async::<u32>().await?;
+                let low_res_mask_per_y = low_res_mask.sum(1)?.to_vec1_async::<u32>().await?;
+                let min_max_x = min_max_indexes(&low_res_mask_per_x);
+                let min_max_y = min_max_indexes(&low_res_mask_per_y);
+                if let Some(((x0, x1), (y0, y1))) = min_max_x.zip(min_max_y) {
+                    let bbox = crate::object_detection::Bbox {
+                        xmin: x0 as f32,
+                        ymin: y0 as f32,
+                        xmax: x1 as f32,
+                        ymax: y1 as f32,
+                        confidence: *iou,
+                        data: low_res_mask,
+                    };
+                    bboxes.push(bbox);
+                }
+                // TODO:
+                // Filter boxes that touch crop boundaries
+                // Compress to RLE.
+            }
+        }
+
+        let mut bboxes = vec![bboxes];
+        // Remove duplicates within this crop.
+        crate::object_detection::non_maximum_suppression(&mut bboxes, CROP_NMS_THRESH);
+
+        // TODO: Return to the original image frame.
+        Ok(bboxes.remove(0))
+    }
+
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `process_crop_async` for wasm support instead"))]
     fn process_crop(
         &self,
         img: &Tensor,
@@ -319,6 +422,7 @@ impl Sam {
         Ok(bboxes.remove(0))
     }
 
+    #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `generate_masks_async` for wasm support instead"))]
     pub fn generate_masks(
         &self,
         img: &Tensor,
@@ -338,6 +442,31 @@ impl Sam {
         for crop_box in crop_boxes.into_iter() {
             let layer_idx = crop_box.layer_idx;
             let b = self.process_crop(img, crop_box, &point_grids[layer_idx])?;
+            bboxes.extend(b)
+        }
+        // TODO: remove duplicates
+        Ok(bboxes)
+    }
+
+    pub async fn generate_masks_async(
+        &self,
+        img: &Tensor,
+        points_per_side: usize,
+        crop_n_layer: usize,
+        crop_overlap_ratio: f64,
+        crop_n_points_downscale_factor: usize,
+    ) -> Result<Vec<crate::object_detection::Bbox<Tensor>>> {
+        let (_c, h, w) = img.dims3()?;
+        let point_grids = build_all_layer_point_grids(
+            points_per_side,
+            crop_n_layer,
+            crop_n_points_downscale_factor,
+        );
+        let crop_boxes = generate_crop_boxes((h, w), crop_n_layer, crop_overlap_ratio);
+        let mut bboxes = Vec::new();
+        for crop_box in crop_boxes.into_iter() {
+            let layer_idx = crop_box.layer_idx;
+            let b = self.process_crop_async(img, crop_box, &point_grids[layer_idx]).await?;
             bboxes.extend(b)
         }
         // TODO: remove duplicates

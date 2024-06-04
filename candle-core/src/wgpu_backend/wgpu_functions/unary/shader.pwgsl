@@ -1,27 +1,11 @@
 #include "../util.pwgsl"
 
-// struct MetaUnary{
-//     input1_layout : MatrixLayout,
-//     operation : u32,
-//     scalar1 : DTYPE, //optionally scalar value
-//     scalar2 : DTYPE,
-//     seed : u32,
-// }
-
 #define op_unary.operation           op_meta[0]
 #define op_unary.scalar1             bitcast<DTYPE>(op_meta[1])
 #define op_unary.scalar2             bitcast<DTYPE>(op_meta[2])
 #define op_unary.seed                op_meta[3]
 #define op_unary.input1_layout       4u
 
-// struct MetaUnaryContiguous{
-//     offset : u32,
-//     length : u32,
-//     operation : u32,
-//     scalar1 : DTYPE, //optionally scalar value
-//     scalar2 : DTYPE,
-//     seed : u32,
-// }
 
 #define op_unary_contiguous.operation           op_meta[0]
 #define op_unary_contiguous.scalar1             bitcast<DTYPE>(op_meta[1])
@@ -29,14 +13,6 @@
 #define op_unary_contiguous.seed                op_meta[3]
 #define op_unary_contiguous.offset              op_meta[4]
 #define op_unary_contiguous.length              op_meta[5]
-
-
-// @group(0) @binding(1)
-// var<uniform> op_unary : MetaUnary;
-
-// @group(0) @binding(1)
-// var<uniform> op_unary_contiguous : MetaUnaryContiguous;
-
 
 @compute
 @workgroup_size(64,1,1)

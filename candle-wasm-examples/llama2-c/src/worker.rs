@@ -100,7 +100,7 @@ impl Model {
             let logits = logits.squeeze(0)?;
             index_pos += ctxt.len();
 
-            let next_token = logits_processor.sample(&logits)?;
+            let next_token = logits_processor.sample_async(&logits).await?;
             tokens.push(next_token);
             if let Some(text) = self.tokenizer.id_to_token(next_token) {
                 let text = text.replace('▁', " ").replace("<0x0A>", "\n");

@@ -1,16 +1,7 @@
 #include "../util.pwgsl"
 
-// struct MetaBinary{
-//     input1_layout : MatrixLayout,
-//     input2_layout : MatrixLayout,
-//     operation : u32,
-// }
-
 #define op_binary.operation         op_meta[0]
 #define op_binary.input1_layout     1u
-
-// @group(0) @binding(1)
-// var<uniform> op_binary : MetaBinary;
 
 fn bool_to_int(b : bool) -> u32{
     if b{

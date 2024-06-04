@@ -1,6 +1,6 @@
 use candle::{Result, Tensor};
 
-
+#[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `apply_repeat_penalty_async` for wasm support instead"))]
 pub fn apply_repeat_penalty(logits: &Tensor, penalty: f32, context: &[u32]) -> Result<Tensor> {
     let device = logits.device();
     let mut logits = logits.to_dtype(candle::DType::F32)?.to_vec1::<f32>()?;

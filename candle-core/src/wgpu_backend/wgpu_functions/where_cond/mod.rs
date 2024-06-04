@@ -4,15 +4,6 @@ use crate::{wgpu::device::Pipelines, WgpuDevice};
 
 use super::{create_bind_group_input3, enqueue, get_meta, get_size};
 
-// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-// #[repr(C)]
-// struct MetaWhereCond{
-//     input1_layout : MatrixLayout,
-//     input2_layout : MatrixLayout,
-//     input3_layout : MatrixLayout,
-    
-// }
-
 pub fn queue_where_cond_u32(
     dev: &WgpuDevice,
     dest_buffer: &Buffer,
@@ -29,11 +20,6 @@ pub fn queue_where_cond_u32(
     meta.add_layout(&layout_true);
     meta.add_layout(&layout_false);
 
-    // let meta = MetaWhereCond {
-    //     input1_layout: MatrixLayout::from_layout(&layout_input),
-    //     input2_layout: MatrixLayout::from_layout(&layout_true),
-    //     input3_layout: MatrixLayout::from_layout(&layout_false),
-    // };
     let pipeline = dev.get_pipeline(super::Shader::WhereCond(dtype), Pipelines::WhereCondU32)?;
 
     let bind_group = create_bind_group_input3(dev, pipeline.clone(), meta_offset,dest_buffer, input_buffer, true_buffer, false_buffer);

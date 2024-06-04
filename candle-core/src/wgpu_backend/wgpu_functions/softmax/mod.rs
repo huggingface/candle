@@ -4,19 +4,6 @@ use crate::{wgpu::device::Pipelines, WgpuDevice};
 
 use super::{create_bind_group_input1, enqueue_workgroups, get_meta};
 
-
-
-// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-// #[repr(C)]
-// struct MetaSoftmaxContiguous{
-//     workgroup_count : u32,
-//     workgroup_size : u32,
-//     length : u32, //Length of Reduction(e.g count of elements to sum per output),
-
-//     input1_offset : u32,
-// }
-
-
 pub fn queue_softmax(
     dev: &WgpuDevice,
     buffer_dest: &Buffer,
@@ -34,13 +21,6 @@ pub fn queue_softmax(
     meta.add(workgroup_size);
     meta.add(reduction_length);
     meta.add(input1_offset);
-
-    // let meta = MetaSoftmaxContiguous {
-    //     workgroup_count,
-    //     workgroup_size,
-    //     length: reduction_length as u32,
-    //     input1_offset,
-    // };
 
     let pipeline = dev.get_pipeline(super::Shader::Softmax(dtype), Pipelines::Softmax)?;
 

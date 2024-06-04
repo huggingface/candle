@@ -1,25 +1,5 @@
 #include "../util.pwgsl"
 
-// struct MetaCopy2d{
-//     d1 : u32,
-//     d2 : u32,
-//     input1_stride1 : u32,
-//     dest_stride1 : u32,
-//     input1_offset : u32,
-//     dest_offset : u32,
-// }
-
-// struct MetaCopyStrided{
-//     input1_layout : MatrixLayout,
-//     dest_offset : u32,
-// }
-
-// @group(0) @binding(1)
-// var<uniform> op_copy2d : MetaCopy2d;
-
-// @group(0) @binding(1)
-// var<uniform> op_copy_strided : MetaCopyStrided;
-
 #define op_copy2d.d1                op_meta[0]
 #define op_copy2d.d2                op_meta[1]
 #define op_copy2d.input1_stride1    op_meta[2]

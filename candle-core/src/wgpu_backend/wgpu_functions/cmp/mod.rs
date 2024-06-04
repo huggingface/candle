@@ -4,15 +4,6 @@ use crate::{wgpu::device::Pipelines, Layout, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue, get_meta, get_size};
 
-// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-// #[repr(C)]
-// struct MetaBinary {
-//     input1_layout: MatrixLayout,
-//     input2_layout: MatrixLayout,
-//     operation: u32,
-// }
-
-
 #[derive(Copy, Clone, Debug)]
 #[allow(dead_code)]
 pub enum CmpOperation {
@@ -39,11 +30,6 @@ pub fn queue_cmp_buffer_from_buffer(
     meta.add(op as u32);
     meta.add_layout(&layout_input1);
     meta.add_layout(&layout_input2);
-    // let meta = MetaBinary {
-    //     operation: op as u32,
-    //     input1_layout: MatrixLayout::from_layout(&layout_input1),
-    //     input2_layout: MatrixLayout::from_layout(&layout_input2),
-    // };
 
     let pipeline = dev.get_pipeline(super::Shader::Cmp(dtype), Pipelines::CmpFromBuffer)?;
 

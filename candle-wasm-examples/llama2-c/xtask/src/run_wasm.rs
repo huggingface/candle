@@ -45,7 +45,7 @@ fn compile(shell: &Shell, mut args: Arguments, name : &str, is_bench : bool) -> 
 
     
 
-    log::info!("building");
+    log::info!("building, outdir:{output_dir}");
 
     let cargo_args = args.finish();
 
@@ -59,6 +59,7 @@ fn compile(shell: &Shell, mut args: Arguments, name : &str, is_bench : bool) -> 
     .context("Failed to build tests examples for wasm")?;
 
     if is_bench{ //When running benchmark, we need to copy that file from deps folder:
+        log::info!("copy bench");
         copy_newest_matching_file(
             &format!("target/wasm32-unknown-unknown/{output_dir}/deps"), 
             &format!("target/wasm32-unknown-unknown/{output_dir}"), 
@@ -69,7 +70,7 @@ fn compile(shell: &Shell, mut args: Arguments, name : &str, is_bench : bool) -> 
 
     xshell::cmd!(
         shell,
-        "wasm-bindgen ../../target/wasm32-unknown-unknown/release/m.wasm  --target web --no-typescript --out-dir build --out-name m"
+        "wasm-bindgen ../../target/wasm32-unknown-unknown/{output_dir}/m.wasm  --target web --no-typescript --out-dir build --out-name m"
     )
     .quiet()
     .run().inspect_err(|f| println!("{:?}",f))

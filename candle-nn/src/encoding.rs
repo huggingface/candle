@@ -84,6 +84,7 @@ use candle::{bail, DType, Result, Tensor, WithDType};
 /// # API Design
 ///
 /// The api design for this method is loosely based on the [TensorFlow One-Hot](https://www.tensorflow.org/api_docs/python/tf/one_hot) method.
+#[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `one_hot_async` for wasm support instead"))]
 pub fn one_hot<D: WithDType>(
     indices: Tensor,
     depth: usize,
