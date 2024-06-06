@@ -977,7 +977,11 @@ fn simple_eval_(
             "If" => {
                 // protobuf encodes boolean false as 0 and true as 1
                 let cond = get(&node.input[0])?.get(0)?.to_scalar::<u8>()?;
-                let attr_name = if cond != 0 {"then_branch"} else {"else_branch"};
+                let attr_name = if cond != 0 {
+                    "then_branch"
+                } else {
+                    "else_branch"
+                };
                 let sub_graph = get_attr::<GraphProto>(node, attr_name)?;
                 if sub_graph.output.len() != node.output.len() {
                     bail!(
@@ -1001,12 +1005,16 @@ fn simple_eval_(
                 let data = get(&node.input[0])?;
                 let pads = get(&node.input[1])?;
                 if node.input.len() > 2 {
-                    bail!("unsupported number of inputs {} for Pad node {:?}, expected 2", node.input.len(), node.name);
+                    bail!(
+                        "unsupported number of inputs {} for Pad node {:?}, expected 2",
+                        node.input.len(),
+                        node.name
+                    );
                 }
                 if pads.rank() != 1 {
                     bail!("Pad expects 'pads' input to be 1D vector: {pads:?}");
                 }
-                if pads.dim(0).unwrap() != 2*data.rank() {
+                if pads.dim(0).unwrap() != 2 * data.rank() {
                     bail!("Pad expects 'pads' input len to be 2 * rank of 'data' input: pads: {}, data rank: {}", pads, data.rank());
                 }
 
@@ -1021,12 +1029,14 @@ fn simple_eval_(
                                 continue;
                             }
                             fn zigzag(min: i64, max: i64) -> impl Iterator<Item = i64> {
-                                std::iter::repeat((min..max).chain((min+1..=max).rev())).flatten()
+                                std::iter::repeat((min..max).chain((min + 1..=max).rev())).flatten()
                             }
                             let idx = if dim > 1 {
-                                let cycle_len = dim*2-1;
+                                let cycle_len = dim * 2 - 1;
                                 let skip = (pads_pre[i] as usize) % cycle_len;
-                                let idx = zigzag(0, (dim-1) as i64).skip(skip).take((pads_pre[i] as usize) + dim + (pads_post[i] as usize));
+                                let idx = zigzag(0, (dim - 1) as i64)
+                                    .skip(skip)
+                                    .take((pads_pre[i] as usize) + dim + (pads_post[i] as usize));
                                 Tensor::from_iter(idx, out.device())?
                             } else {
                                 Tensor::full(0i64, (dim,), out.device())?
@@ -1037,7 +1047,10 @@ fn simple_eval_(
 
                         values.insert(node.output[0].clone(), out);
                     }
-                    _ => bail!("unsupported 'mode' value {mode:?} for Pad node {:?}", node.name),
+                    _ => bail!(
+                        "unsupported 'mode' value {mode:?} for Pad node {:?}",
+                        node.name
+                    ),
                 }
             }
             // https://onnx.ai/onnx/operators/onnx__ReduceMean.html#reducemean-13
