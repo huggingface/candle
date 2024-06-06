@@ -11,6 +11,9 @@ pub mod rms_norm;
 pub mod unary;
 pub mod where_cond;
 pub mod softmax;
+pub mod pool2d;
+pub mod upsample;
+pub mod gather;
 
 use std::{borrow::Cow, sync::{Arc, MutexGuard}};
 use wgpu::{util::DeviceExt, BindGroup, BindingResource, Buffer, BufferBinding, ComputePipeline, ShaderModule};
@@ -30,6 +33,9 @@ pub use rms_norm::queue_rms_norm;
 pub use unary::{queue_unary_from_buffer_op,queue_unary_inplace_op};
 pub use where_cond::queue_where_cond_u32;
 pub use softmax::queue_softmax;
+pub use pool2d::{queue_max_pool2d, queue_avg_pool2d};
+pub use upsample::{queue_upsample1d, queue_upsample2d};
+pub use gather::{queue_gather, queue_scatter_add_inplace, queue_index_add_inplace};
 
 #[derive(Debug)]
 pub (crate) struct MetaArray(Vec<u32>);
@@ -104,7 +110,10 @@ pub enum Shader{
     RmsNorm(DType),
     Softmax(DType),
     Unary(DType),
-    WhereCond(DType)       
+    WhereCond(DType),
+    Pool2d(DType),
+    Upsample(DType),
+    Gather(DType)       
 }
 
 pub fn load_shader(shader : Shader) -> crate::Result<&'static str>{
@@ -134,6 +143,12 @@ pub fn load_shader(shader : Shader) -> crate::Result<&'static str>{
         Shader::Unary(DType::U32) => Ok(include_str!("unary/generated/shader.pwgsl_generated_u32.wgsl")),
         Shader::WhereCond(DType::F32) => Ok(include_str!("where_cond/generated/shader.pwgsl_generated_f32.wgsl")),
         Shader::WhereCond(DType::U32) => Ok(include_str!("where_cond/generated/shader.pwgsl_generated_u32.wgsl")),
+        Shader::Pool2d(DType::F32) => Ok(include_str!("pool2d/generated/shader.pwgsl_generated_f32.wgsl")),
+        Shader::Pool2d(DType::U32) => Ok(include_str!("pool2d/generated/shader.pwgsl_generated_u32.wgsl")),
+        Shader::Upsample(DType::F32) => Ok(include_str!("upsample/generated/shader.pwgsl_generated_f32.wgsl")),
+        Shader::Upsample(DType::U32) => Ok(include_str!("upsample/generated/shader.pwgsl_generated_u32.wgsl")),
+        Shader::Gather(DType::F32) => Ok(include_str!("gather/generated/shader.pwgsl_generated_f32.wgsl")),
+        Shader::Gather(DType::U32) => Ok(include_str!("gather/generated/shader.pwgsl_generated_u32.wgsl")),
        
         _ => Err(crate::Error::WebGpu(WebGpuError::Message(format!("Could not find Pipeline: {:?}", shader))))
     }

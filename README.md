@@ -25,23 +25,23 @@ current Problems:
 | bf16                        | ❌ Not Supported                                 |                                                                    |
 | **<span style="color:#1E90FF">Operations</span>**              |                                                 |   All operations support non-contiguous arrays                                                                   |
 | Unary Operations            | ✅ Supported                                     |                                                   |
-| Binary Operations           | ✅ Supported                                     | All binary operations supported                                    |
+| Binary Operations           | ✅ Supported                                     |                                |
 | MatMul                      | ✅ Supported                                     |                                                                    |
 | Reduce Operations           | ✅ Supported                                     | Sum, Min, Max, (ArgMax, ArgMin works only if continues Dimensions are reduced)                                     |
 | Conv2d                      | ✅ Supported                                     |                                                                    |
-| Conv2dTranspose             | ✅ Supported                                     | Errors in for tranposed & dialation, paddingOutput not implemented                           |
+| Conv2dTranspose             | ✅ Supported                                     |       |
 | Conv1d                      | ✅ Supported                                     |                                                                    |
 | Conv1dTranspose             | ✅ Supported                                     |                                                                    |
 | Index Select                | ✅ Supported                                     |                                                                    |
 | Where_cond                  | ✅ Supported                                     |                                                                    |
+| Pool2dMax                   | ✅ Supported                               |                                                                    |
+| Pool2dAvg                   | ✅ Supported                               |                                                                    |
+| Upsample                    | ✅ Supported                               |                                                                    |
+| Gather                      | ✅ Supported                               |                                                                    |
+| Scatter_add                 | ✅ Supported                               |                                                                    |
+| Index_add                   | ✅ Supported                              |                                                                    |
 | **<span style="color:#1E90FF">Not Implemented</span>**        |                                                 |                                                                    |
-| Pool2dMax                   | ❌ Not Implemented                               |                                                                    |
-| Pool2dAvg                   | ❌ Not Implemented                               |                                                                    |
 | ArgSort                     | ❌ Not Implemented                               |                                                                    |
-| Upsample                    | ❌ Not Implemented                               |                                                                    |
-| Gather                      | ❌ Not Implemented                               |                                                                    |
-| Scatter_add                 | ❌ Not Implemented                               |                                                                    |
-| Index_add                   | ❌ Not Implemented                               |                                                                    |
 | Quantized Matrices          | ❌ Not Supported?                                 |                                                                    |
 
 

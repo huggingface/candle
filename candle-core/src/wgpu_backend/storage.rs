@@ -1,4 +1,4 @@
-use crate::{notImplemented, DType, Layout, Shape};
+use crate::{backend::BackendStorage, DType, Layout, Shape};
 
 use super::{
     device::WgpuDevice,
@@ -45,6 +45,33 @@ impl WgpuStorage {
     pub fn get_length(&self) -> usize {
         return (self.buffer.size() / 4) as usize; //f32
     }
+
+    fn copy_strided_src(
+        &self,
+        dst: &wgpu::Buffer,
+        dst_offset: usize,
+        src_l: &crate::Layout,
+    ) -> crate::Result<()> {
+        match src_l.contiguous_offsets() {
+            Some((start, end)) => {
+                let len = end - start;
+                let to_copy = ((dst.size() as usize / 4) - dst_offset).min(len);
+                wgpu_functions::queue_copy(
+                    self.device(),
+                    &dst,
+                    &self.buffer,
+                    dst_offset,
+                    start,
+                    to_copy,
+                );
+            }
+            None => {
+                wgpu_functions::queue_copy_strided(self.device(), &dst, &self.buffer,  self.dtype, src_l, dst_offset as u32)?; 
+            }
+        }
+        return Ok(());
+    }
+
 }
 
 impl crate::backend::BackendStorage for WgpuStorage {
@@ -618,50 +645,130 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
     fn avg_pool2d(
         &self,
-        _layout: &crate::Layout,
-        _kernel_size: (usize, usize),
-        _stride: (usize, usize),
+        layout: &crate::Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
     ) -> crate::Result<Self> {
-        notImplemented!(avg_pool2d)
+        
+        let (b, c, h, w) = layout.shape().dims4()?;
+        let h_out = (h - kernel_size.1) / stride.1 + 1;
+        let w_out = (w - kernel_size.0) / stride.0 + 1;
+
+
+        let buffer_dest = wgpu_functions::create_buffer(
+            self.device(),
+            (b * c * h_out * w_out) * 4,
+        );
+        wgpu_functions::queue_avg_pool2d(self.device(), &buffer_dest, &self.buffer,layout, self.dtype(), kernel_size, stride)?;
+          
+        return Ok(WgpuStorage::new(
+            buffer_dest,
+            self.device().clone(),
+            self.dtype,
+        ));
     }
 
     fn max_pool2d(
         &self,
-        _layout: &crate::Layout,
-        _kernel_size: (usize, usize),
-        _stride: (usize, usize),
+        layout: &crate::Layout,
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
     ) -> crate::Result<Self> {
-        notImplemented!(max_pool2d)
+
+        let (b, c, h, w) = layout.shape().dims4()?;
+        let h_out = (h - kernel_size.1) / stride.1 + 1;
+        let w_out = (w - kernel_size.0) / stride.0 + 1;
+
+
+        let buffer_dest = wgpu_functions::create_buffer(
+            self.device(),
+            (b * c * h_out * w_out) * 4,
+        );
+        wgpu_functions::queue_max_pool2d(self.device(), &buffer_dest, &self.buffer,layout, self.dtype(), kernel_size, stride)?;
+          
+        return Ok(WgpuStorage::new(
+            buffer_dest,
+            self.device().clone(),
+            self.dtype,
+        ));
     }
 
-    fn upsample_nearest1d(&self, _: &crate::Layout, _: usize) -> crate::Result<Self> {
-        notImplemented!(upsample_nearest1d)
+    fn upsample_nearest1d(&self, layout: &crate::Layout, target_size: usize) -> crate::Result<Self> {
+        let (b, c, _) = layout.shape().dims3()?;
+
+        let buffer_dest = wgpu_functions::create_buffer(
+            self.device(),
+            (b * c * target_size) * 4,
+        );
+        wgpu_functions::queue_upsample1d(self.device(), &buffer_dest, &self.buffer,layout, self.dtype(), target_size)?;
+          
+        return Ok(WgpuStorage::new(
+            buffer_dest,
+            self.device().clone(),
+            self.dtype,
+        ));
     }
 
-    fn upsample_nearest2d(&self, _: &crate::Layout, _: usize, _: usize) -> crate::Result<Self> {
-        notImplemented!(upsample_nearest2d)
+    fn upsample_nearest2d(&self, layout: &crate::Layout, target_size_y: usize, target_size_x: usize) -> crate::Result<Self> {
+        let (b, c, _, _) = layout.shape().dims4()?;
+
+        let buffer_dest = wgpu_functions::create_buffer(
+            self.device(),
+            (b * c * target_size_x * target_size_y) * 4,
+        );
+        wgpu_functions::queue_upsample2d(self.device(), &buffer_dest, &self.buffer,layout, self.dtype(), (target_size_y, target_size_x))?;
+          
+        return Ok(WgpuStorage::new(
+            buffer_dest,
+            self.device().clone(),
+            self.dtype,
+        ));
     }
 
     fn gather(
         &self,
-        _: &crate::Layout,
-        _: &Self,
-        _: &crate::Layout,
-        _: usize,
+        l: &Layout,
+        indexes: &Self,
+        indexes_l: &Layout,
+        d: usize,
     ) -> crate::Result<Self> {
-        notImplemented!(gather)
+        let buffer_dest = wgpu_functions::create_buffer(
+            self.device(),
+            (indexes_l.shape().elem_count()) * 4,
+        );
+        wgpu_functions::queue_gather(self.device(), &buffer_dest, &self.buffer,&indexes.buffer, self.dtype(), l, indexes_l, d)?;
+          
+        return Ok(WgpuStorage::new(
+            buffer_dest,
+            self.device().clone(),
+            self.dtype,
+        ));
     }
 
     fn scatter_add(
         &self,
-        _: &crate::Layout,
-        _: &Self,
-        _: &crate::Layout,
-        _: &Self,
-        _: &crate::Layout,
-        _: usize,
+        l: &Layout,
+        indexes: &Self,
+        indexes_l: &Layout,
+        source: &Self,
+        source_l: &Layout,
+        d: usize,
     ) -> crate::Result<Self> {
-        notImplemented!(scatter_add)
+        let buffer_dest = wgpu_functions::create_buffer(
+            self.device(),
+            (l.shape().elem_count()) * 4,
+        );
+
+        self.copy_strided_src(&buffer_dest, 0, l)?;
+
+       
+        wgpu_functions::queue_scatter_add_inplace(self.device(), &buffer_dest,&indexes.buffer, &source.buffer, self.dtype(), &Layout::contiguous(l.shape().clone()), indexes_l, source_l, d)?;
+          
+        return Ok(WgpuStorage::new(
+            buffer_dest,
+            self.device().clone(),
+            self.dtype,
+        ));
     }
 
     fn index_select(
@@ -696,14 +803,28 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
     fn index_add(
         &self,
-        _: &crate::Layout,
-        _: &Self,
-        _: &crate::Layout,
-        _: &Self,
-        _: &crate::Layout,
-        _: usize,
+        l: &Layout,
+        indexes: &Self,
+        indexes_l: &Layout,
+        source: &Self,
+        source_l: &Layout,
+        d: usize,
     ) -> crate::Result<Self> {
-        notImplemented!(index_add)
+        let buffer_dest = wgpu_functions::create_buffer(
+            self.device(),
+            (l.shape().elem_count()) * 4,
+        );
+
+        self.copy_strided_src(&buffer_dest, 0, l)?;
+
+       
+        wgpu_functions::queue_index_add_inplace(self.device(), &buffer_dest,&indexes.buffer, &source.buffer, self.dtype(), &Layout::contiguous(l.shape().clone()), indexes_l, source_l, d)?;
+          
+        return Ok(WgpuStorage::new(
+            buffer_dest,
+            self.device().clone(),
+            self.dtype,
+        ));
     }
 
     fn matmul(
@@ -745,24 +866,7 @@ impl crate::backend::BackendStorage for WgpuStorage {
         dst_offset: usize,
         src_l: &crate::Layout,
     ) -> crate::Result<()> {
-        match src_l.contiguous_offsets() {
-            Some((start, end)) => {
-                let len = end - start;
-                let to_copy = (dst.get_length() - dst_offset).min(len);
-                wgpu_functions::queue_copy(
-                    self.device(),
-                    &dst.buffer,
-                    &self.buffer,
-                    dst_offset,
-                    start,
-                    to_copy,
-                );
-            }
-            None => {
-                wgpu_functions::queue_copy_strided(self.device(), &dst.buffer, &self.buffer,  self.dtype, src_l, dst_offset as u32)?; 
-            }
-        }
-        return Ok(());
+        return self.copy_strided_src(&dst.buffer, dst_offset, src_l);
     }
 
     fn copy2d(

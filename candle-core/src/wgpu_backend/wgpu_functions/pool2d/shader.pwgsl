@@ -1,0 +1,138 @@
+#include "../util.pwgsl"
+
+#define op_pool2d.b                 op_meta[0]
+#define op_pool2d.c_in              op_meta[1]
+#define op_pool2d.kernel_x_size          op_meta[2]
+#define op_pool2d.kernel_y_size          op_meta[3]
+
+#define op_pool2d.size_in_x         op_meta[4]
+#define op_pool2d.size_in_y         op_meta[5]
+
+#define op_pool2d.stride_batch_out  op_meta[6]
+#define op_pool2d.stride_c_out      op_meta[7]
+#define op_pool2d.stride_y_out      op_meta[8]
+#define op_pool2d.size_y_out        op_meta[9]
+
+#define op_pool2d.stride_batch_input op_meta[10]
+#define op_pool2d.stride_c_in       op_meta[11]
+#define op_pool2d.stride_y_in       op_meta[12]
+#define op_pool2d.stride_x_in       op_meta[13]
+#define op_pool2d.stride_conv_x       op_meta[14]
+#define op_pool2d.stride_conv_y       op_meta[15]
+#define op_pool2d.offset_input      op_meta[16]
+
+
+//(N, C, H, W) maxPool (K_H, K_W) = (N,C, H_OUT, W_OUT)
+@compute
+@workgroup_size(8,8,1)
+fn max_pool2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let i_out_x = global_id.x;
+    let i_out_y = global_id.y;
+    let i_c_in = global_id.z;
+
+    let size_y_out = op_pool2d.size_y_out;
+    let size_x_out = op_pool2d.stride_y_out;
+
+    if i_out_x >= size_x_out || i_out_y >= size_y_out {
+        return;
+    }
+
+    let kernel_size_x = op_pool2d.kernel_x_size;
+    let kernel_size_y = op_pool2d.kernel_y_size;
+
+    let size_in_x = op_pool2d.size_in_x;
+    let size_in_y =  op_pool2d.size_in_y;
+    let stride_batch_out =  op_pool2d.stride_batch_out;
+    let stride_c_out =  op_pool2d.stride_c_out;
+    let stride_y_out =  op_pool2d.stride_y_out;
+    
+    let stride_batch_input = op_pool2d.stride_batch_input;
+    let stride_c_in =  op_pool2d.stride_c_in;
+    let stride_y_in =  op_pool2d.stride_y_in;
+    let stride_x_in  = op_pool2d.stride_x_in;
+
+    let stride_conv_x = op_pool2d.stride_conv_x;
+    let stride_conv_y = op_pool2d.stride_conv_y;
+
+    let x_coord_offset = i_out_x * stride_conv_x;
+    let y_coord_offset = i_out_y * stride_conv_y;
+  
+    for (var i_b = 0u; i_b < op_pool2d.b; i_b = i_b + 1u) { //For each Batch:
+        var sum = MINVALUE;
+        let image_offset = i_b * stride_batch_input + i_c_in * stride_c_in ;
+        for (var x_k = 0u; x_k < kernel_size_x; x_k = x_k + 1u) { //For each Kernel X
+            for (var y_k = 0u; y_k < kernel_size_y; y_k = y_k + 1u) { //For each Kernel X
+                let x_coord = x_coord_offset + x_k;
+                let y_coord = y_coord_offset + y_k;
+                if !(x_coord < 0 || y_coord < 0 || x_coord >= size_in_x || y_coord >= size_in_y){
+                    let input_pixel = v_input1[image_offset + y_coord * stride_y_in + x_coord * stride_x_in + op_pool2d.offset_input];
+                    sum = max(sum, input_pixel);
+                }
+            } 
+        }
+        v_dest[i_b * stride_batch_out + i_c_in * stride_c_out + stride_y_out * i_out_y + i_out_x] = sum;
+    }
+}
+
+
+
+#ifdef f32
+
+//(N, C, H, W) maxPool (K_H, K_W) = (N,C, H_OUT, W_OUT)
+@compute
+@workgroup_size(8,8,1)
+fn avg_pool2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let i_out_x = global_id.x;
+    let i_out_y = global_id.y;
+    let i_c_in = global_id.z;
+
+    let size_y_out = op_pool2d.size_y_out;
+    let size_x_out = op_pool2d.stride_y_out;
+
+    if i_out_x >= size_x_out || i_out_y >= size_y_out {
+        return;
+    }
+
+    let kernel_size_x = op_pool2d.kernel_x_size;
+    let kernel_size_y = op_pool2d.kernel_y_size;
+
+    let kernel_length = kernel_size_x * kernel_size_y;
+
+    let size_in_x = op_pool2d.size_in_x;
+    let size_in_y =  op_pool2d.size_in_y;
+    let stride_batch_out =  op_pool2d.stride_batch_out;
+    let stride_c_out =  op_pool2d.stride_c_out;
+    let stride_y_out =  op_pool2d.stride_y_out;
+    
+    let stride_batch_input = op_pool2d.stride_batch_input;
+    let stride_c_in =  op_pool2d.stride_c_in;
+    let stride_y_in =  op_pool2d.stride_y_in;
+    let stride_x_in  = op_pool2d.stride_x_in;
+
+    let stride_conv_x = op_pool2d.stride_conv_x;
+    let stride_conv_y = op_pool2d.stride_conv_y;
+
+    let x_coord_offset = i_out_x * stride_conv_x;
+    let y_coord_offset = i_out_y * stride_conv_y;
+  
+    for (var i_b = 0u; i_b < op_pool2d.b; i_b = i_b + 1u) { //For each Batch:
+        var sum = ZERO;
+        let image_offset = i_b * stride_batch_input + i_c_in * stride_c_in ;
+        for (var x_k = 0u; x_k < kernel_size_x; x_k = x_k + 1u) { //For each Kernel X
+            for (var y_k = 0u; y_k < kernel_size_y; y_k = y_k + 1u) { //For each Kernel X
+                let x_coord = x_coord_offset + x_k;
+                let y_coord = y_coord_offset + y_k;
+                if !(x_coord < 0 || y_coord < 0 || x_coord >= size_in_x || y_coord >= size_in_y){
+                    let input_pixel = v_input1[image_offset + y_coord * stride_y_in + x_coord * stride_x_in + op_pool2d.offset_input];
+                    sum += input_pixel;
+                }
+            } 
+        }
+
+        sum /= f32(kernel_length);
+
+        v_dest[i_b * stride_batch_out + i_c_in * stride_c_out + stride_y_out * i_out_y + i_out_x] = sum;
+    }
+}
+
+#endif

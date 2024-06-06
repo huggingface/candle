@@ -44,54 +44,10 @@ const MINVALUE : f32 = -3.40282e+38;
 const MINVALUE : DTYPE = 0;
 #endif
 
-
-
-//Layout Information
-// struct MatrixLayout{
-//     shape1 : u32, 
-//     shape2 : u32, 
-//     shape3 : u32, 
-//     shape4 : u32, 
-//     shape5 : u32, 
-//     stride1 : u32, 
-//     stride2 : u32, 
-//     stride3 : u32, 
-//     stride4 : u32, 
-//     stride5 : u32, 
-//     offset : u32,
-//     length : u32, //length if contiguous, else 0 
-// }
-
 struct MatrixIndex{
     id : u32,
     is_valid : bool
 }
-
-// fn get_index(l : MatrixLayout, index : u32) -> MatrixIndex{
-//     if l.length != 0{ //Contiguous memory:
-//         if index < l.length{
-//             return MatrixIndex((l.offset + index), true);
-//         }
-//         return MatrixIndex(0, false);
-//     }
-//     else { //not contiguous:
-//         let shapes1 = l.shape5;
-//         let shapes2 =  (shapes1 * l.shape4);
-//         let shapes3 =  (shapes2 * l.shape3);
-//         let shapes4 =  (shapes3 * l.shape2);
-//         let shapes5 =  (shapes4 * l.shape1);
-       
-//         let s1 = (index / shapes4);
-//         let s2 = (index / shapes3) % (shapes4 / shapes3);
-//         let s3 = (index / shapes2) % (shapes3 / shapes2);
-//         let s4 = (index / shapes1) % (shapes2 / shapes1);
-//         let s5 = index             % (shapes1);
-
-//         let new_index = l.offset + s1 * l.stride1 + s2 * l.stride2 + s3 * l.stride3 + s4 * l.stride4 + s5 * l.stride5;
-//          return MatrixIndex(new_index, true);
-//     }
-// }
-
 
 fn get_index(input_offset : u32, index : u32) -> MatrixIndex{
     let dims = op_meta[input_offset];

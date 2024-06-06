@@ -79,7 +79,14 @@ pub (crate) enum Pipelines{
     ConvertF32ToU32,
     ConvertU32ToF32,
     ConvertU8ToF32,
-    WhereCondU32
+    WhereCondU32,
+    MaxPool2d,
+    AvgPool2d,
+    Upsample1d,
+    Upsample2d,
+    Gather,
+    ScatterAddInplace,
+    IndexAddInplace
 }
 
 
@@ -201,7 +208,13 @@ impl WgpuDevice{
             Pipelines::Copy2d => "copy2d",
             Pipelines::CopyStrided => "copy_strided",
             Pipelines::WhereCondU32 => "where_cond_index_u32",
-          
+            Pipelines::MaxPool2d => "max_pool2d",
+            Pipelines::AvgPool2d => "avg_pool2d",
+            Pipelines::Upsample1d => "upsample1d",
+            Pipelines::Upsample2d => "upsample2d",
+            Pipelines::Gather => "gather",
+            Pipelines::ScatterAddInplace => "scatter_add_inplace",
+            Pipelines::IndexAddInplace => "index_add_inplace",
         };
         
         return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
