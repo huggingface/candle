@@ -360,6 +360,6 @@ impl crate::backend::BackendDevice for WgpuDevice{
     }
 
     fn synchronize(&self) -> crate::Result<()> {
-        notImplemented!(synchronize)
+        wgpu_functions::synchronize(self)
     }
 }

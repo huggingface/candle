@@ -51,8 +51,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
         run_benchmark(c, &device, DType::F32, "conv_transpose2d_f32");
-        run_benchmark(c, &device, DType::F16, "conv_transpose2d_f16");
-        run_benchmark(c, &device, DType::BF16, "conv_transpose2d_bf16");
+        if device.is_dtype_available(DType::F16){
+            run_benchmark(c, &device, DType::F16, "conv_transpose2d_f16");
+        }
+        if device.is_dtype_available(DType::BF16){
+            run_benchmark(c, &device, DType::BF16, "conv_transpose2d_bf16");
+        }
     }
 }
 

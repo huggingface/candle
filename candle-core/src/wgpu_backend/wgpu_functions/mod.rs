@@ -17,7 +17,7 @@ pub mod gather;
 
 use std::{borrow::Cow, sync::{Arc, MutexGuard}};
 use wgpu::{util::DeviceExt, BindGroup, BindingResource, Buffer, BufferBinding, ComputePipeline, ShaderModule};
-use crate::{wgpu_backend::device::WgpuDevice, Layout, WebGpuError};
+use crate::{wgpu_backend::device::WgpuDevice, Error, Layout, WebGpuError};
 use super::device::{MlQueue, META_BUFFER_SIZE};
 use crate::DType;
 
@@ -289,7 +289,7 @@ pub struct DispatchIndirectArgs {
     pub z: u32,
 }
 
-fn flush_gpu_command(dev: &WgpuDevice, meta_array : &mut MutexGuard<MetaArray>){
+pub (crate) fn flush_gpu_command(dev: &WgpuDevice, meta_array : &mut MutexGuard<MetaArray>){
     let mut queue = dev.command_queue.lock().unwrap();
     if queue.len() > 0{
         #[cfg(feature = "wgpu_debug")]
@@ -542,6 +542,17 @@ fn create_bind_group_input3(
 }
 
 
+pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()>{
+    flush_gpu_command(dev, &mut dev.meta_array.lock().unwrap());
+
+    let (sender, receiver) = flume::bounded(1);
+    dev.queue.on_submitted_work_done(move || sender.send(()).unwrap());
+
+    dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout();
+    receiver.recv(). map_err(|e| Error::WebGpu(WebGpuError::from(format!("failed to synchronize {}", e))))?;
+    Ok(())
+}
+
 pub fn read_data_from_gpu<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &Buffer,
@@ -580,7 +591,6 @@ pub fn read_data_from_gpu<T: bytemuck::Pod>(
     // be called in an event loop or on another thread.
     dev.device.poll(wgpu::Maintain::wait()).panic_on_timeout();
 
-    //test what happens, if we block a WebWorker?
     // Awaits until `buffer_future` can be read from
     if let Ok(Ok(())) = receiver.recv() {
         // Gets contents of buffer

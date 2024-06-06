@@ -140,6 +140,10 @@ impl Device {
         Ok(Self::WebGpu(crate::WgpuDevice::create(ordinal).await?))
     }
 
+    pub fn new_webgpu_sync(ordinal: usize) -> Result<Self> {
+        return pollster::block_on(Device::new_webgpu(ordinal));
+    }
+
     pub fn set_seed(&self, seed: u64) -> Result<()> {
         match self {
             Self::Cpu => CpuDevice.set_seed(seed),

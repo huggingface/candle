@@ -50,6 +50,9 @@ fn run_bench(c: &mut Criterion, device: &Device, dtype: GgmlDType) {
 fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
+        if device.is_webgpu(){ //qmatmul not suported on wgpu
+            continue;
+        }
         for dtype in vec![
             GgmlDType::F32,
             GgmlDType::F16,

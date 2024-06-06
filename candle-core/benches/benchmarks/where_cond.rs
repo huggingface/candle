@@ -17,15 +17,33 @@ const fn create_cond_arr<const N: usize>() -> [u8; N] {
     arr
 }
 
+const fn create_cond_arr_u32<const N: usize>() -> [u32; N] {
+    let mut arr = [0u32; N];
+    let mut i = 0;
+    while i < N {
+        arr[i] = (i % 2) as u32;
+        i += 1;
+    }
+    arr
+}
+
 const B: usize = 1;
 const M: usize = 1024;
 const K: usize = 1024;
 const SIZE: usize = B * M * K;
 
 const DATA: [u8; SIZE] = create_cond_arr::<SIZE>();
+const DATA_U32: [u32; SIZE] = create_cond_arr_u32::<SIZE>();
 
 fn run_where_cond_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
-    let tensor = Tensor::from_slice(DATA.as_slice(), (B, M, K), &device).unwrap();
+    let tensor : Tensor;
+
+    if device.is_webgpu(){
+        tensor = Tensor::from_slice(DATA_U32.as_slice(), (B, M, K), &device).unwrap();
+    }
+    else{
+        tensor = Tensor::from_slice(DATA.as_slice(), (B, M, K), &device).unwrap();
+    }
     let on_true = Tensor::ones((B, M, K), dtype, &device).unwrap();
     let on_false = Tensor::zeros((B, M, K), dtype, &device).unwrap();
 
@@ -56,8 +74,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let device = BenchDeviceHandler::new().unwrap();
     for d in device.devices {
         run_where_cond_benchmark(c, &d, DType::F32, "where_cond_f32");
-        run_where_cond_benchmark(c, &d, DType::BF16, "where_cond_bf16");
-        run_where_cond_benchmark(c, &d, DType::F16, "where_cond_f16");
+        if d.is_dtype_available(DType::BF16) {
+            run_where_cond_benchmark(c, &d, DType::BF16, "where_cond_bf16");
+        }
+        if d.is_dtype_available(DType::F16) {
+            run_where_cond_benchmark(c, &d, DType::F16, "where_cond_f16");
+        }
     }
 }
 

@@ -35,8 +35,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let handler = BenchDeviceHandler::new().unwrap();
     for device in handler.devices {
         run_affine_benchmark(c, &device, DType::F32, "affine_f32");
-        run_affine_benchmark(c, &device, DType::F16, "affine_f16");
-        run_affine_benchmark(c, &device, DType::BF16, "affine_bf16");
+        if device.is_dtype_available(DType::F16) {
+            run_affine_benchmark(c, &device, DType::F16, "affine_f16");
+        }
+        if device.is_dtype_available(DType::BF16) {
+            run_affine_benchmark(c, &device, DType::BF16, "affine_bf16");
+        }
     }
 }
 
