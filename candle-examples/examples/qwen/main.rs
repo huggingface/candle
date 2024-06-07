@@ -144,6 +144,8 @@ enum WhichModel {
     W72b,
     #[value(name = "moe-a2.7b")]
     MoeA27b,
+    #[value(name = "2-0.5b")]
+    W2_0_5b,
 }
 
 #[derive(Parser, Debug)]
@@ -234,16 +236,17 @@ fn main() -> Result<()> {
     let model_id = match args.model_id {
         Some(model_id) => model_id,
         None => {
-            let size = match args.model {
-                WhichModel::W0_5b => "0.5B",
-                WhichModel::W1_8b => "1.8B",
-                WhichModel::W4b => "4B",
-                WhichModel::W7b => "7B",
-                WhichModel::W14b => "14B",
-                WhichModel::W72b => "72B",
-                WhichModel::MoeA27b => "MoE-A2.7B",
+            let (version, size) = match args.model {
+                WhichModel::W2_0_5b => ("2", "0.5B"),
+                WhichModel::W0_5b => ("1.5", "0.5B"),
+                WhichModel::W1_8b => ("1.5", "1.8B"),
+                WhichModel::W4b => ("1.5", "4B"),
+                WhichModel::W7b => ("1.5", "7B"),
+                WhichModel::W14b => ("1.5", "14B"),
+                WhichModel::W72b => ("1.5", "72B"),
+                WhichModel::MoeA27b => ("1.5", "MoE-A2.7B"),
             };
-            format!("Qwen/Qwen1.5-{size}")
+            format!("Qwen/Qwen{version}-{size}")
         }
     };
     let repo = api.repo(Repo::with_revision(
@@ -261,7 +264,9 @@ fn main() -> Result<()> {
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
         None => match args.model {
-            WhichModel::W0_5b | WhichModel::W1_8b => vec![repo.get("model.safetensors")?],
+            WhichModel::W0_5b | WhichModel::W2_0_5b | WhichModel::W1_8b => {
+                vec![repo.get("model.safetensors")?]
+            }
             WhichModel::W4b
             | WhichModel::W7b
             | WhichModel::W14b
