@@ -146,6 +146,12 @@ enum WhichModel {
     MoeA27b,
     #[value(name = "2-0.5b")]
     W2_0_5b,
+    #[value(name = "2-1.5b")]
+    W2_1_5b,
+    #[value(name = "2-7b")]
+    W2_7b,
+    #[value(name = "2-72b")]
+    W2_72b,
 }
 
 #[derive(Parser, Debug)]
@@ -238,6 +244,9 @@ fn main() -> Result<()> {
         None => {
             let (version, size) = match args.model {
                 WhichModel::W2_0_5b => ("2", "0.5B"),
+                WhichModel::W2_1_5b => ("2", "1.5B"),
+                WhichModel::W2_7b => ("2", "7B"),
+                WhichModel::W2_72b => ("2", "72B"),
                 WhichModel::W0_5b => ("1.5", "0.5B"),
                 WhichModel::W1_8b => ("1.5", "1.8B"),
                 WhichModel::W4b => ("1.5", "4B"),
@@ -264,13 +273,15 @@ fn main() -> Result<()> {
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
         None => match args.model {
-            WhichModel::W0_5b | WhichModel::W2_0_5b | WhichModel::W1_8b => {
+            WhichModel::W0_5b | WhichModel::W2_0_5b | WhichModel::W2_1_5b | WhichModel::W1_8b => {
                 vec![repo.get("model.safetensors")?]
             }
             WhichModel::W4b
             | WhichModel::W7b
+            | WhichModel::W2_7b
             | WhichModel::W14b
             | WhichModel::W72b
+            | WhichModel::W2_72b
             | WhichModel::MoeA27b => {
                 candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
             }
