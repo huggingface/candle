@@ -22,6 +22,7 @@ pub struct Model {
     tokens: Vec<u32>,
     repeat_penalty: f32,
     repeat_last_n: usize,
+    device : Device
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -33,15 +34,20 @@ pub struct ModelName {
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn load(
+    pub async fn load(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,
         config: Vec<u8>,
         quantized: bool,
+        use_wgpu : bool
     ) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let device = Device::Cpu;
+        let device = match use_wgpu{
+            true => Device::new_webgpu(0).await?,
+            false => Device::Cpu,
+        };
+
         let name: ModelName = serde_json::from_slice(&config)?;
         let config: Config = serde_json::from_slice(&config)?;
 
@@ -63,8 +69,7 @@ impl Model {
                 SelectedModel::Quantized(model)
             }
         } else {
-            let device = &Device::Cpu;
-            let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, device)?;
+            let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
             let model = MixFormer::new(&config, vb)?;
             SelectedModel::MixFormer(model)
         };
@@ -77,10 +82,11 @@ impl Model {
             logits_processor,
             repeat_penalty: 1.,
             repeat_last_n: 64,
+            device
         })
     }
     #[wasm_bindgen]
-    pub fn init_with_prompt(
+    pub async fn init_with_prompt(
         &mut self,
         prompt: String,
         temp: f64,
@@ -110,23 +116,23 @@ impl Model {
             .get_ids()
             .to_vec();
         let text = self
-            .process(&tokens)
+            .process(&tokens).await
             .map_err(|m| JsError::new(&m.to_string()))?;
         Ok(text)
     }
     #[wasm_bindgen]
-    pub fn next_token(&mut self) -> Result<String, JsError> {
+    pub async fn next_token(&mut self) -> Result<String, JsError> {
         let last_token = *self.tokens.last().unwrap();
         let text = self
-            .process(&[last_token])
+            .process(&[last_token]).await
             .map_err(|m| JsError::new(&m.to_string()))?;
         Ok(text)
     }
 }
 
 impl Model {
-    fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
-        let dev = Device::Cpu;
+    async fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
+        let dev = &self.device;
         let input = Tensor::new(tokens, &dev)?.unsqueeze(0)?;
         let logits = match &mut self.model {
             SelectedModel::MixFormer(m) => m.forward(&input)?,
@@ -137,14 +143,14 @@ impl Model {
             logits
         } else {
             let start_at = tokens.len().saturating_sub(self.repeat_last_n);
-            candle_transformers::utils::apply_repeat_penalty(
+            candle_transformers::utils::apply_repeat_penalty_async(
                 &logits,
                 self.repeat_penalty,
                 &tokens[start_at..],
-            )?
+            ).await?
         };
 
-        let next_token = self.logits_processor.sample(&logits)?;
+        let next_token = self.logits_processor.sample_async(&logits).await?;
         self.tokens.push(next_token);
         let token = match self.tokenizer.decode(&[next_token], false) {
             Ok(token) => token,

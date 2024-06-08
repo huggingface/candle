@@ -124,6 +124,7 @@ impl LogitsProcessor {
 
     #[cfg_attr(all(target_arch = "wasm32", feature="wgpu"), deprecated(note="use `sample_async` for wasm support instead"))]
     pub fn sample(&mut self, logits: &Tensor) -> Result<u32> {
+        #[allow(deprecated)] //we are already ina deprecated function!
         self.sample_f(logits, |_| {})
     }
 
@@ -176,9 +177,11 @@ impl LogitsProcessor {
             f(&mut prs);
             Ok(prs)
         };
-
+        
+        #[allow(deprecated)] //we are already ina deprecated function!
         let next_token = match &self.sampling {
-            Sampling::ArgMax => self.sample_argmax(logits)?,
+            Sampling::ArgMax => 
+                self.sample_argmax(logits)?,
             Sampling::All { temperature } => {
                 let prs = prs(*temperature)?;
                 self.sample_multinomial(&prs)?

@@ -1,6 +1,6 @@
 use wgpu::Buffer;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+use crate::{wgpu::device::{Pipelines, QueueDebugInfo}, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue_workgroups, get_meta};
 
@@ -58,10 +58,12 @@ pub fn queue_conv2d(
         dev,
         pipeline,
         bind_group,
-        (params.out_w() as u32 + 7) / 8,
-        (params.out_h() as u32 + 7) / 8,
+        (params.out_w() as u32 + 9) / 10,
+        (params.out_h() as u32 + 9) / 10,
         params.c_out as u32,
-        #[cfg(feature = "wgpu_debug")] &format!("conv2d, dtype:{:?}", dtype),
+        #[cfg(feature = "wgpu_debug")] 
+        QueueDebugInfo::new(&format!("conv2d, dtype:{:?}", dtype), params.out_w() * params.out_h() * params.c_out * params.b_size * kernel_layout.shape().elem_count() )
+
     );
     return Ok(());
 }
@@ -122,7 +124,7 @@ pub fn queue_conv2d_transpose(
         ((params.out_w() - params.output_padding) as u32 + 7) / 8,
         ((params.out_h() - params.output_padding) as u32 + 7) / 8,
         params.c_out as u32,
-        #[cfg(feature = "wgpu_debug")] &format!("conv2d_transpose, dtype:{:?}", dtype),
+        #[cfg(feature = "wgpu_debug")] QueueDebugInfo::new(&format!("conv2d_transpose, dtype:{:?}", dtype),params.out_w() * params.out_h() * params.c_out * params.b_size * kernel_layout.shape().elem_count()),
     );
     return Ok(());
 }
@@ -181,7 +183,7 @@ pub fn queue_conv1d(
         (params.l_out() as u32 + 63) / 64,
         params.c_out as u32,
         1,
-        #[cfg(feature = "wgpu_debug")] &format!("conv1d, dtype:{:?}", dtype),
+        #[cfg(feature = "wgpu_debug")] QueueDebugInfo::new(&format!("conv1d, dtype:{:?}", dtype), params.l_out() * params.c_out * params.b_size * kernel_layout.shape().elem_count()),
     );
     return Ok(());
 }
@@ -237,7 +239,8 @@ pub fn queue_conv1d_transpose(
         ((params.l_out() - params.output_padding) as u32 + 63) / 64,
         params.c_out as u32,
         1u32,
-        #[cfg(feature = "wgpu_debug")] &format!("conv2d_transpose, dtype:{:?}", dtype),
+        #[cfg(feature = "wgpu_debug")] 
+        QueueDebugInfo::new(&format!("conv1d_transpose, dtype:{:?}", dtype), params.l_out() * params.c_out * params.b_size * kernel_layout.shape().elem_count()),
     );
     return Ok(());
 }

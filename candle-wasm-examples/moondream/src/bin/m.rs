@@ -26,6 +26,7 @@ pub struct Model {
     index: usize,
     bos_token: Option<Tensor>,
     image_embeddings: Option<Tensor>,
+    device : Device
 }
 
 #[derive(Serialize, Deserialize)]
@@ -47,10 +48,13 @@ struct InitInput {
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn load(weights: Vec<u8>, tokenizer: Vec<u8>, quantized: bool) -> Result<Model, JsError> {
+    pub async fn load(weights: Vec<u8>, tokenizer: Vec<u8>, quantized: bool, use_wgpu : bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let device = Device::Cpu;
+        let device = match use_wgpu{
+            true => Device::new_webgpu(0).await?,
+            false => Device::Cpu,
+        };
         let config = moondream::Config::v2();
 
         console_log!("config loaded in {:?}", Date::now());
@@ -83,15 +87,14 @@ impl Model {
             bos_token: None,
             image_embeddings: None,
             index: 0,
+            device
         })
     }
 
     pub fn set_image_embeddings(&mut self, image: Vec<u8>) -> Result<(), JsError> {
-        let device = Device::Cpu;
-
         console_log!("loading image as tensor");
         let start = Date::now();
-        let image: Tensor = self.load_image(image)?.to_device(&device)?;
+        let image: Tensor = self.load_image(image)?.to_device(&self.device)?;
         console_log!("image loaded in {:?}s", (Date::now() - start) / 1000.);
         let start = Date::now();
         let image_embeds = &image.unsqueeze(0)?;
@@ -108,7 +111,7 @@ impl Model {
     }
 
     #[wasm_bindgen]
-    pub fn init_with_image_prompt(&mut self, input: JsValue) -> Result<JsValue, JsError> {
+    pub async fn init_with_image_prompt(&mut self, input: JsValue) -> Result<JsValue, JsError> {
         let InitInput {
             prompt,
             seed,
@@ -119,7 +122,6 @@ impl Model {
             verbose_prompt,
         } = serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
 
-        let device = Device::Cpu;
         let prompt = format!("\n\nQuestion: {0}\n\nAnswer:", prompt);
         match &mut self.model {
             SelectedModel::Moondream(m) => m.text_model.clear_kv_cache(),
@@ -145,7 +147,7 @@ impl Model {
             None => return Err(JsError::new("BOS token not found in the tokenizer.")),
         };
 
-        self.bos_token = Some(Tensor::new(&[special_token], &device)?.unsqueeze(0)?);
+        self.bos_token = Some(Tensor::new(&[special_token], &self.device)?.unsqueeze(0)?);
 
         let tokens = self
             .tokenizer
@@ -165,7 +167,7 @@ impl Model {
             }
         }
         let tokens = tokens.get_ids().to_vec();
-        let text = match self.process(&tokens) {
+        let text = match self.process(&tokens).await {
             Ok(text) => text,
             Err(_e) => {
                 console_log!("error decoding token");
@@ -178,9 +180,9 @@ impl Model {
         Ok(serde_wasm_bindgen::to_value(&text)?)
     }
     #[wasm_bindgen]
-    pub fn next_token(&mut self) -> Result<JsValue, JsError> {
+    pub async fn next_token(&mut self) -> Result<JsValue, JsError> {
         let last_token = *self.tokens.last().unwrap();
-        let text = match self.process(&[last_token]) {
+        let text = match self.process(&[last_token]).await {
             Ok(text) => text,
             Err(_e) => {
                 console_log!("error decoding token");
@@ -202,9 +204,9 @@ impl Model {
             .resize_to_fill(378, 378, image::imageops::FilterType::Triangle); // Adjusted to 378x378
         let img = img.to_rgb8();
         let data = img.into_raw();
-        let data = Tensor::from_vec(data, (378, 378, 3), &Device::Cpu)?.permute((2, 0, 1))?;
-        let mean = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
-        let std = Tensor::new(&[0.5f32, 0.5, 0.5], &Device::Cpu)?.reshape((3, 1, 1))?;
+        let data = Tensor::from_vec(data, (378, 378, 3), &self.device)?.permute((2, 0, 1))?;
+        let mean = Tensor::new(&[0.5f32, 0.5, 0.5], &self.device)?.reshape((3, 1, 1))?;
+        let std = Tensor::new(&[0.5f32, 0.5, 0.5], &self.device)?.reshape((3, 1, 1))?;
         (data.to_dtype(candle::DType::F32)? / 255.)?
             .broadcast_sub(&mean)?
             .broadcast_div(&std)
@@ -213,7 +215,7 @@ impl Model {
 }
 
 impl Model {
-    fn process(&mut self, tokens: &[u32]) -> Result<Output, JsError> {
+    async fn process(&mut self, tokens: &[u32]) -> Result<Output, JsError> {
         let image_embeddings = match &self.image_embeddings {
             Some(embeddings) => embeddings,
             None => return Err(JsError::new("Image embeddings are not set.")),
@@ -251,13 +253,13 @@ impl Model {
             logits
         } else {
             let start_at = tokens.len().saturating_sub(self.repeat_last_n);
-            candle_transformers::utils::apply_repeat_penalty(
+            candle_transformers::utils::apply_repeat_penalty_async(
                 &logits,
                 self.repeat_penalty,
                 &tokens[start_at..],
-            )?
+            ).await?
         };
-        let next_token = self.logits_processor.sample(&logits)?;
+        let next_token = self.logits_processor.sample_async(&logits).await?;
         self.tokens.push(next_token);
         let token = match self.tokenizer.decode(&[next_token], true) {
             Ok(token) => token,

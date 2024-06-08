@@ -441,6 +441,7 @@ impl Sam {
         let mut bboxes = Vec::new();
         for crop_box in crop_boxes.into_iter() {
             let layer_idx = crop_box.layer_idx;
+            #[allow(deprecated)] //we are already ina deprecated function!
             let b = self.process_crop(img, crop_box, &point_grids[layer_idx])?;
             bboxes.extend(b)
         }

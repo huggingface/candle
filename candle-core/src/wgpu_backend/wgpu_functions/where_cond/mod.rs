@@ -28,7 +28,8 @@ pub fn queue_where_cond_u32(
         pipeline,
         bind_group,
         layout_input.shape().elem_count() as u32,
-        #[cfg(feature = "wgpu_debug")] &format!("where cond u32, dtype:{:?}", Pipelines::WhereCondU32),
+        #[cfg(feature = "wgpu_debug")] 
+        crate::wgpu::device::QueueDebugInfo::new(&format!("where cond u32, dtype:{:?}", Pipelines::WhereCondU32), layout_input.shape().elem_count()),
     );
     return Ok(());
 }

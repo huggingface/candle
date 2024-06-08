@@ -9,6 +9,7 @@ use wasm_bindgen::prelude::*;
 pub struct ModelEncoder {
     model: T5EncoderModel,
     tokenizer: Tokenizer,
+    device : Device
 }
 #[wasm_bindgen]
 
@@ -16,20 +17,25 @@ pub struct ModelConditionalGeneration {
     model: T5ForConditionalGeneration,
     tokenizer: Tokenizer,
     config: Config,
+    device : Device
 }
 
 #[wasm_bindgen]
 impl ModelConditionalGeneration {
     #[wasm_bindgen(constructor)]
-    pub fn load(
+    pub async fn load(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,
         config: Vec<u8>,
+        use_wgpu : bool
     ) -> Result<ModelConditionalGeneration, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let device = &Device::Cpu;
-        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, device)?;
+        let device = match use_wgpu{
+            true => Device::new_webgpu(0).await?,
+            false => Device::Cpu,
+        };
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
         let mut config: Config = serde_json::from_slice(&config)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
@@ -39,12 +45,12 @@ impl ModelConditionalGeneration {
             model,
             tokenizer,
             config,
+            device
         })
     }
-    pub fn decode(&mut self, input: JsValue) -> Result<JsValue, JsError> {
+    pub async fn decode(&mut self, input: JsValue) -> Result<JsValue, JsError> {
         let input: ConditionalGenerationParams =
             serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
-        let device = &Device::Cpu;
         self.model.clear_kv_cache();
         let mut output_token_ids = [self.config.pad_token_id as u32].to_vec();
         let prompt = input.prompt;
@@ -70,7 +76,7 @@ impl ModelConditionalGeneration {
             .get_ids()
             .to_vec();
 
-        let input_token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
+        let input_token_ids = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
         let encoder_output = self.model.encode(&input_token_ids)?;
         let mut decoded = String::new();
         for index in 0.. {
@@ -78,10 +84,10 @@ impl ModelConditionalGeneration {
                 break;
             }
             let decoder_token_ids = if index == 0 {
-                Tensor::new(output_token_ids.as_slice(), device)?.unsqueeze(0)?
+                Tensor::new(output_token_ids.as_slice(), &self.device)?.unsqueeze(0)?
             } else {
                 let last_token = *output_token_ids.last().unwrap();
-                Tensor::new(&[last_token], device)?.unsqueeze(0)?
+                Tensor::new(&[last_token], &self.device)?.unsqueeze(0)?
             };
             let logits = self
                 .model
@@ -91,14 +97,14 @@ impl ModelConditionalGeneration {
                 logits
             } else {
                 let start_at = output_token_ids.len().saturating_sub(repeat_last_n);
-                candle_transformers::utils::apply_repeat_penalty(
+                candle_transformers::utils::apply_repeat_penalty_async(
                     &logits,
                     repeat_penalty,
                     &output_token_ids[start_at..],
-                )?
+                ).await?
             };
 
-            let next_token_id = logits_processor.sample(&logits)?;
+            let next_token_id = logits_processor.sample_async(&logits).await?;
             if next_token_id as usize == self.config.eos_token_id {
                 break;
             }
@@ -119,25 +125,28 @@ impl ModelConditionalGeneration {
 #[wasm_bindgen]
 impl ModelEncoder {
     #[wasm_bindgen(constructor)]
-    pub fn load(
+    pub async fn load(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,
         config: Vec<u8>,
+        use_wgpu : bool
     ) -> Result<ModelEncoder, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
-        let device = &Device::Cpu;
-        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, device)?;
+        let device = match use_wgpu{
+            true => Device::new_webgpu(0).await?,
+            false => Device::Cpu,
+        };
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F32, &device)?;
         let mut config: Config = serde_json::from_slice(&config)?;
         config.use_cache = false;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
         let model = T5EncoderModel::load(vb, &config)?;
-        Ok(Self { model, tokenizer })
+        Ok(Self { model, tokenizer, device })
     }
 
-    pub fn decode(&mut self, input: JsValue) -> Result<JsValue, JsError> {
-        let device = &Device::Cpu;
+    pub async fn decode(&mut self, input: JsValue) -> Result<JsValue, JsError> {
         let input: DecoderParams =
             serde_wasm_bindgen::from_value(input).map_err(|m| JsError::new(&m.to_string()))?;
 
@@ -153,7 +162,7 @@ impl ModelEncoder {
                 .map_err(|m| JsError::new(&m.to_string()))?
                 .get_ids()
                 .to_vec();
-            let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
+            let token_ids = Tensor::new(&tokens[..], &self.device)?.unsqueeze(0)?;
             let embeddings = self.model.forward(&token_ids)?;
             console_log!("generated embeddings {:?}", embeddings.shape());
             // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
@@ -165,7 +174,7 @@ impl ModelEncoder {
                 embeddings
             };
             console_log!("{:?}", embeddings.shape());
-            all_embeddings.push(embeddings.squeeze(0)?.to_vec1::<f32>()?);
+            all_embeddings.push(embeddings.squeeze(0)?.to_vec1_async::<f32>().await?);
         }
 
         Ok(serde_wasm_bindgen::to_value(&DecoderOutput {

@@ -1,4 +1,4 @@
-use candle::{DType, IndexOp, Result, Tensor, D};
+use candle::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder,
 };
@@ -653,7 +653,7 @@ impl PoseHead {
 pub struct YoloV8 {
     net: DarkNet,
     fpn: YoloV8Neck,
-    head: DetectionHead,
+    head: DetectionHead
 }
 
 impl YoloV8 {
@@ -731,7 +731,7 @@ fn iou(b1: &Bbox, b2: &Bbox) -> f32 {
     i_area / (b1_area + b2_area - i_area)
 }
 
-pub fn report_detect(
+pub async fn report_detect(
     pred: &Tensor,
     img: DynamicImage,
     w: usize,
@@ -747,7 +747,7 @@ pub fn report_detect(
     let mut bboxes: Vec<Vec<Bbox>> = (0..nclasses).map(|_| vec![]).collect();
     // Extract the bounding boxes for which confidence is above the threshold.
     for index in 0..npreds {
-        let pred = Vec::<f32>::try_from(pred.i((.., index))?)?;
+        let pred = Vec::<f32>::try_from_async(pred.i((.., index)).await?)?;
         let confidence = *pred[4..].iter().max_by(|x, y| x.total_cmp(y)).unwrap();
         if confidence > conf_threshold {
             let mut class_index = 0;

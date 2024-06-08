@@ -25,7 +25,8 @@ pub fn queue_copy_strided(
             pipeline,
             bind_group,
             input_layout.shape().elem_count() as u32,
-            #[cfg(feature = "wgpu_debug")] &format!("copy strided dtype:{:?}", dtype),
+            #[cfg(feature = "wgpu_debug")] 
+            crate::wgpu::device::QueueDebugInfo::new(&format!("copy strided dtype:{:?}", dtype), input_layout.shape().elem_count()),
         );
     }
     return Ok(());
@@ -43,9 +44,16 @@ pub fn queue_copy(
 ) {
     if copy_size > 0{
         flush_gpu_command(dev, &mut dev.meta_array.lock().unwrap());
+
+        #[cfg(feature = "wgpu_debug")]
+        let (global_index, query_set) = super::init_debug_queue(dev,  2);
+        
+
         let mut encoder = dev
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        #[cfg(feature = "wgpu_debug")]
+        encoder.write_timestamp(&query_set, 0);
         encoder.copy_buffer_to_buffer(
             buffer_input,
             source_offset as u64 * 4,
@@ -53,6 +61,12 @@ pub fn queue_copy(
             destination_offset as u64 * 4,
             copy_size as u64 * 4,
         );
+        #[cfg(feature = "wgpu_debug")]
+        encoder.write_timestamp(&query_set, 1);
+        #[cfg(feature = "wgpu_debug")]
+        dev.debug.insert_info(global_index,("copy".to_owned(), copy_size as u64, 0, 0, 0));
+        #[cfg(feature = "wgpu_debug")]
+        super::end_debug_queue(dev, 2, global_index, &mut encoder, &query_set);
         dev.queue.submit(Some(encoder.finish()));
     }
 }
@@ -92,7 +106,8 @@ pub fn queue_copy2d(
             (d1 + 7) / 8,
             (d2 + 7) / 8,
             1,
-            #[cfg(feature = "wgpu_debug")]&format!("copy2d dtype:{:?}", dtype),
+            #[cfg(feature = "wgpu_debug")]
+            crate::wgpu::device::QueueDebugInfo::new(&format!("copy2d dtype:{:?}", dtype), d1 * d2),
         );
     }
     return Ok(());

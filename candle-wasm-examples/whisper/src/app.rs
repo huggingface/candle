@@ -61,6 +61,7 @@ pub struct App {
 async fn model_data_load() -> Result<ModelData, JsValue> {
     let quantized = false;
     let is_multilingual = false;
+    let use_wgpu = true;
 
     let (tokenizer, mel_filters, weights, config) = if quantized {
         console_log!("loading quantized weights");
@@ -99,6 +100,7 @@ async fn model_data_load() -> Result<ModelData, JsValue> {
         task: None,
         is_multilingual,
         language: None,
+        use_wgpu
     })
 }
 

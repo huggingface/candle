@@ -53,7 +53,8 @@ pub fn queue_matmul_buffer(
         (k + 7) / 8,
         (m + 7) / 8,
         b,
-        #[cfg(feature = "wgpu_debug")]&format!("matmul, dtype:{:?}", dtype),
+        #[cfg(feature = "wgpu_debug")]
+        crate::wgpu::device::QueueDebugInfo::new(&format!("matmul, dtype:{:?}", dtype), k * m * n),
     );
     return Ok(());
 }

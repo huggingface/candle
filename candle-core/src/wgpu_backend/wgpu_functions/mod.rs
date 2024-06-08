@@ -18,7 +18,7 @@ pub mod gather;
 use std::{borrow::Cow, sync::{Arc, MutexGuard}};
 use wgpu::{util::DeviceExt, BindGroup, BindingResource, Buffer, BufferBinding, ComputePipeline, ShaderModule};
 use crate::{wgpu_backend::device::WgpuDevice, Error, Layout, WebGpuError};
-use super::device::{MlQueue, META_BUFFER_SIZE};
+use super::device::{MlQueue, QueueDebugInfo, META_BUFFER_SIZE};
 use crate::DType;
 
 pub use binary::queue_binary_buffer_from_buffer;
@@ -201,14 +201,14 @@ fn enqueue_workgroups(
     y: u32,
     z: u32,
     #[cfg(feature = "wgpu_debug")]
-    _name: &str,
+    _debug: QueueDebugInfo,
 ) {
     if x > 65535 || y > 65535 || z > 65535{
-        enqueue_workgroups_indirect(dev, pipeline, bind_group, x, y, z,  #[cfg(feature = "wgpu_debug")] _name);
+        enqueue_workgroups_indirect(dev, pipeline, bind_group, x, y, z,  #[cfg(feature = "wgpu_debug")] _debug);
     }
     else{
         let q = MlQueue::Dispatch(
-            super::device::MlQueueDispatch{ x, y, z, pipeline: pipeline, bind_group, indirect_buffer: None, #[cfg(feature = "wgpu_debug")] name: Some(_name.to_owned())});
+            super::device::MlQueueDispatch{ x, y, z, pipeline: pipeline, bind_group, indirect_buffer: None, #[cfg(feature = "wgpu_debug")] debug: _debug});
         dev.command_queue.lock().unwrap().push(q);
     }
 }
@@ -222,7 +222,7 @@ fn enqueue_workgroups_indirect(
     y: u32,
     z: u32,
     #[cfg(feature = "wgpu_debug")]
-    _name: &str,
+    _debug: QueueDebugInfo,
 ) {
     let data = DispatchIndirectArgs { x, y, z };
 
@@ -239,7 +239,7 @@ fn enqueue_workgroups_indirect(
             bind_group, 
             indirect_buffer : Some(indirect_offset),
             #[cfg(feature = "wgpu_debug")]
-            name: Some(_name.to_owned())
+            debug: _debug
     });
     dev.command_queue.lock().unwrap().push(q);
 }
@@ -289,18 +289,49 @@ pub struct DispatchIndirectArgs {
     pub z: u32,
 }
 
+#[cfg(feature = "wgpu_debug")]
+fn init_debug_queue(dev: &WgpuDevice, length : u32) -> (u32, wgpu::QuerySet){
+    let global_index =  dev.debug.counter.load(std::sync::atomic::Ordering::Relaxed);
+    let query_set = dev.device.create_query_set(&wgpu::QuerySetDescriptor {
+        count: length as u32 * 2, // We need 2 queries: one for start and one for end
+        ty: wgpu::QueryType::Timestamp,
+        label: None,
+        });
+    return (global_index, query_set);
+}
+
+#[cfg(feature = "wgpu_debug")]
+fn end_debug_queue(dev: &WgpuDevice, length : u32, global_index : u32, encoder : &mut wgpu::CommandEncoder, query_set : &wgpu::QuerySet){
+    if global_index % 256 != 0{
+        panic!("global_index was:{global_index}")
+    }
+    encoder.resolve_query_set(
+        &query_set,
+        0..length,
+        &dev.debug.query_set_buffer,
+        global_index as u64,
+    );
+    let global_index = global_index + (length * 8) as u32;
+
+    let remainder = global_index % 256;
+    let global_index = if remainder == 0 {
+        global_index
+    } else {
+        global_index + (256 - remainder)
+    };
+    dev.debug.counter.store(global_index, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub (crate) fn flush_gpu_command(dev: &WgpuDevice, meta_array : &mut MutexGuard<MetaArray>){
     let mut queue = dev.command_queue.lock().unwrap();
     if queue.len() > 0{
+
         #[cfg(feature = "wgpu_debug")]
-        let global_index =  dev.debug.counter.load(std::sync::atomic::Ordering::Relaxed);
-        #[cfg(feature = "wgpu_debug")]
-        let query_set = dev.device.create_query_set(&wgpu::QuerySetDescriptor {
-            count: queue.len() as u32 * 2, // We need 2 queries: one for start and one for end
-            ty: wgpu::QueryType::Timestamp,
-            label: None,
-            });
+        let (global_index, query_set) =  init_debug_queue(dev, queue.len() as u32 * 2);
         
+        #[cfg(feature = "wgpu_debug")]
+        let mut debug_index = 0;
+
         let meta_array_slice = &meta_array.0[..];
         dev.queue.write_buffer(&dev.meta_buffer, 0, &bytemuck::cast_slice(meta_array_slice));
         meta_array.0.clear(); 
@@ -315,10 +346,7 @@ pub (crate) fn flush_gpu_command(dev: &WgpuDevice, meta_array : &mut MutexGuard<
                 label: None,
                 timestamp_writes: None,
             });
-
-            #[cfg(feature = "wgpu_debug")]
-            let mut debug_index = 0;
-            
+   
             for q in queue.iter(){
                 match q{
                     MlQueue::Dispatch(q) => {
@@ -339,7 +367,7 @@ pub (crate) fn flush_gpu_command(dev: &WgpuDevice, meta_array : &mut MutexGuard<
                         #[cfg(feature = "wgpu_debug")]
                         {
                             cpass.write_timestamp(&query_set, debug_index + 1);
-                            dev.debug.insert_info(global_index + debug_index * 8, q.name.as_ref().unwrap().to_owned());
+                            dev.debug.insert_info(global_index + debug_index * 8,(q.debug.name.as_ref().unwrap().to_owned(), q.debug.output_size, q.x, q.y, q.z));
                             debug_index+= 2;
                         }
                     }
@@ -347,26 +375,7 @@ pub (crate) fn flush_gpu_command(dev: &WgpuDevice, meta_array : &mut MutexGuard<
             }
         }
         #[cfg(feature = "wgpu_debug")]
-        {
-            if global_index % 256 != 0{
-                panic!("global_index was:{global_index}")
-            }
-            encoder.resolve_query_set(
-                &query_set,
-                0..queue.len() as u32,
-                &dev.debug.query_set_buffer,
-                global_index as u64,
-            );
-            let global_index = global_index + (queue.len() * 2 * 8) as u32;
-    
-            let remainder = global_index % 256;
-            let global_index = if remainder == 0 {
-                global_index
-            } else {
-                global_index + (256 - remainder)
-            };
-            dev.debug.counter.store(global_index, std::sync::atomic::Ordering::Relaxed);
-        }
+        end_debug_queue(dev, queue.len() as u32 * 2, global_index, &mut encoder, &query_set);
         
         dev.queue.submit(Some(encoder.finish()));
         queue.clear();
@@ -380,7 +389,7 @@ fn enqueue(
     bind_group: BindGroup,
     length: u32,
     #[cfg(feature = "wgpu_debug")]
-    name: &str,
+    _debug: QueueDebugInfo,
 ) {
     return enqueue_workgroups(
         dev,
@@ -390,7 +399,7 @@ fn enqueue(
         1,
         1,
         #[cfg(feature = "wgpu_debug")]
-        name,
+        _debug,
     );
 }
 

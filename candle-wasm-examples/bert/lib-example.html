@@ -44,6 +44,7 @@
       const searchWikiEl = document.querySelector("#search-wiki");
       const outputStatusEl = document.querySelector("#output-status");
       const modelSelectEl = document.querySelector("#model");
+      const useWgpuEl = document.querySelector("#useWgpu");
 
       const sentencesRegex =
         /(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<![A-Z]\.)(?<=\.|\?)\s/gm;
@@ -96,6 +97,7 @@
         if (isCalculating || currInputText === "") return;
         toggleInputs(true);
         const modelID = modelSelectEl.value;
+        const useWgpu = useWgpuEl.value;
         const { modelURL, tokenizerURL, configURL, search_prefix } =
           getModelInfo(modelID);
 
@@ -110,7 +112,8 @@
           tokenizerURL,
           configURL,
           modelID,
-          [query]
+          [query],
+          useWgpu
         );
         outputStatusEl.classList.add("invisible");
         const queryEmbeddings = out.output[0];
@@ -176,6 +179,7 @@
             configURL,
             modelID,
             [query],
+            useWgpuEl.value,
             updateStatus
           );
           allEmbeddings.push(embeddings);
@@ -285,6 +289,18 @@
           </option>
           <option value="sentence_transformers_all_MiniLM_L12_v2">
             sentence-transformers/all-MiniLM-L12-v2 (133 MB)
+          </option>
+        </select>
+      </div>
+      <div>
+        <label for="useWgpu" class="font-medium block">UseWgpu</label>
+        <select
+          id="useWgpu"
+          class="border-2 border-gray-500 rounded-md font-light interactive disabled:cursor-not-allowed w-full max-w-max"
+        >
+          <option value="true" selected>True
+          </option>
+          <option value="false">False
           </option>
         </select>
       </div>

@@ -8,7 +8,7 @@ use serde_json::to_writer;
 pub struct DebugInfo{
     pub (crate) query_set_buffer : Arc<wgpu::Buffer>,
     pub (crate) counter :  Arc<AtomicU32>,
-    pub (crate) shader_pipeline : Arc<Mutex<HashMap<u32, String>>>,
+    pub (crate) shader_pipeline : Arc<Mutex<HashMap<u32, (String, u64, u32, u32, u32)>>>,
 }
 
 impl DebugInfo {
@@ -26,7 +26,7 @@ impl DebugInfo {
             query_set_buffer : Arc::new(query_buffer)};
     }
 
-    pub (crate) fn insert_info(&self, index : u32, info : String){
+    pub (crate) fn insert_info(&self, index : u32, info : (String, u64, u32, u32, u32)){
         //let backtrace = std::backtrace::Backtrace::force_capture().to_string();
         //let filtered_lines: Vec<&str> = backtrace
         //.lines()
@@ -44,14 +44,19 @@ impl DebugInfo {
 pub struct MInfo{
     pub label: String,
     pub start_time : u64,
-    pub end_time : u64
+    pub end_time : u64,
+    pub output_size : u64,
+    pub x : u32,
+    pub y : u32,
+    pub z : u32,
 }
 
 impl MInfo {
-    pub fn new(label: String, start_time: u64, end_time: u64) -> Self {
-        Self { label, start_time, end_time }
+    pub fn new(label: String, start_time: u64, end_time: u64, output_size: u64, x: u32, y: u32, z: u32) -> Self {
+        Self { label, start_time, end_time, output_size, x, y, z }
     }
 }
+
 
 #[derive(Serialize, Deserialize)]
 
@@ -82,6 +87,13 @@ impl MeasurementInfo {
 }
 
 
+#[derive(Serialize, Deserialize)]
+pub enum MeasurementType{
+    Duration, 
+    OutputSize,
+    DispatchSize
+}
+
 
 #[derive(Serialize, Deserialize)]
 pub struct Measurement {
@@ -90,26 +102,64 @@ pub struct Measurement {
     pub min: f64,
     pub max: f64,
     pub std: f64,
-    pub count : u32
+    pub count : u32,
+    pub m_type : MeasurementType,
 }
 
-pub fn calulate_measurment(map: &HashMap<String, Vec<u64>>) -> Vec<Measurement>{
+pub fn calulate_measurment(map: &HashMap<String, Vec<(u64, u64, u32, u32, u32)>>) -> Vec<Measurement>{
     const NANO : f64 = 1e9;
     
-    return map.iter().map(|(k,data)| {
+    return map.iter().flat_map(|(k,data)| {
         let count = data.len();
-        let sum: u64 = data.iter().sum();
+        
+        //dur
+        let iter = data.iter().map(|f| f.0);
+       
+        let sum: u64 = iter.clone().sum();
         let mean = (sum as f64 / count as f64) / NANO;
-        let max = *data.iter().max().unwrap() as f64 / NANO;
-        let min = *data.iter().min().unwrap() as f64  / NANO;
+        let max = iter.clone().max().unwrap() as f64 / NANO;
+        let min = iter.clone().min().unwrap() as f64  / NANO;
 
-        let variance = data.iter().map(|&value| {
+        let variance = iter.clone().map(|value| {
             let diff = mean - (value as f64 / NANO) as f64;
             diff * diff
         }).sum::<f64>() / count as f64;
         let std_dev = variance.sqrt();
-        return Measurement{ label: k.to_owned(), mean, min, max, std: std_dev, count: count as u32 }
 
+        let m1 = Measurement{ label: k.to_owned(), mean , min , max , std: std_dev, count: count as u32, m_type : MeasurementType::Duration};
+        
+        //out_size
+        let iter = data.iter().map(|f| f.1);
+
+        let sum: u64 = iter.clone().sum();
+        let mean = sum as f64 / count as f64;
+        let max = iter.clone().max().unwrap() as f64;
+        let min = iter.clone().min().unwrap() as f64;
+
+        let variance = iter.clone().map(|value| {
+            let diff = mean - (value as f64) as f64;
+            diff * diff
+        }).sum::<f64>() / count as f64;
+        let std_dev = variance.sqrt();
+        let m2 = Measurement{ label: k.to_owned(), mean , min , max , std: std_dev, count: count as u32, m_type : MeasurementType::OutputSize};
+        
+
+        //dispatch size
+        let iter = data.iter().map(|f| f.2 * f.3 * f.4);
+
+        let sum: u32 = iter.clone().sum();
+        let mean = sum as f64 / count as f64;
+        let max = iter.clone().max().unwrap() as f64;
+        let min = iter.clone().min().unwrap() as f64;
+
+        let variance = iter.clone().map(|value| {
+            let diff = mean - (value as f64) as f64;
+            diff * diff
+        }).sum::<f64>() / count as f64;
+        let std_dev = variance.sqrt();
+        let m3 = Measurement{ label: k.to_owned(), mean , min , max , std: std_dev, count: count as u32, m_type : MeasurementType::DispatchSize};
+        
+        return [m1, m2, m3];
     }).collect();
 }
 

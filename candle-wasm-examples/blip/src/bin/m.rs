@@ -38,17 +38,19 @@ impl SelectedModel {
 pub struct Model {
     model: SelectedModel,
     tokenizer: TokenOutputStream,
+    device : Device
 }
 const SEP_TOKEN_ID: u32 = 102;
 
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn load(
+    pub async fn load(
         weights: Vec<u8>,
         tokenizer: Vec<u8>,
         config: Vec<u8>,
         quantized: bool,
+        use_wgpu : bool
     ) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
         console_log!("loading model");
@@ -57,7 +59,10 @@ impl Model {
         let tokenizer = TokenOutputStream::new(tokenizer);
 
         let config: blip::Config = serde_json::from_slice(&config)?;
-        let device = Device::Cpu;
+        let device = match use_wgpu{
+            true => Device::new_webgpu(0).await?,
+            false => Device::Cpu,
+        };
 
         let start = Date::now();
         let model: SelectedModel = if quantized {
@@ -71,16 +76,15 @@ impl Model {
         };
 
         console_log!("model loaded in {:?}s", (Date::now() - start) / 1000.);
-        Ok(Self { model, tokenizer })
+        Ok(Self { model, tokenizer, device })
     }
     #[wasm_bindgen]
     pub fn generate_caption_from_image(&mut self, image: Vec<u8>) -> Result<String, JsError> {
         self.model.reset_kv_cache();
 
-        let device = Device::Cpu;
         console_log!("loading image as tensor");
         let start = Date::now();
-        let image: Tensor = self.load_image(image)?.to_device(&device)?;
+        let image: Tensor = self.load_image(image)?.to_device(&self.device)?;
         console_log!("image loaded in {:?}s", (Date::now() - start) / 1000.);
         let start = Date::now();
         let image_embeds: Tensor = match &mut self.model {
@@ -96,7 +100,7 @@ impl Model {
         for index in 0..1000 {
             let context_size = if index > 0 { 1 } else { token_ids.len() };
             let start_pos = token_ids.len().saturating_sub(context_size);
-            let input_ids = Tensor::new(&token_ids[start_pos..], &device)?.unsqueeze(0)?;
+            let input_ids = Tensor::new(&token_ids[start_pos..], &self.device)?.unsqueeze(0)?;
             let logits = self.model.text_decoder_forward(&input_ids, &image_embeds)?;
             let logits = logits.squeeze(0)?;
             let logits = logits.get(logits.dim(0)? - 1)?;
@@ -123,7 +127,6 @@ impl Model {
 
 impl Model {
     fn load_image(&self, image: Vec<u8>) -> Result<Tensor, JsError> {
-        let device = &Device::Cpu;
         let img = image::io::Reader::new(std::io::Cursor::new(image))
             .with_guessed_format()?
             .decode()
@@ -131,11 +134,11 @@ impl Model {
             .resize_to_fill(384, 384, image::imageops::FilterType::Triangle);
         let img = img.to_rgb8();
         let data = img.into_raw();
-        let data = Tensor::from_vec(data, (384, 384, 3), device)?.permute((2, 0, 1))?;
+        let data = Tensor::from_vec(data, (384, 384, 3), &self.device)?.permute((2, 0, 1))?;
         let mean =
-            Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], device)?.reshape((3, 1, 1))?;
+            Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073],  &self.device)?.reshape((3, 1, 1))?;
         let std =
-            Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1], device)?.reshape((3, 1, 1))?;
+            Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1],  &self.device)?.reshape((3, 1, 1))?;
         (data.to_dtype(candle::DType::F32)? / 255.)?
             .broadcast_sub(&mean)?
             .broadcast_div(&std)

@@ -17,7 +17,7 @@ async function fetchArrayBuffer(url) {
 class Llama2C {
   static instance = {};
 
-  static async getInstance(weightsURL, modelID, tokenizerURL) {
+  static async getInstance(weightsURL, modelID, tokenizerURL, useWgpu) {
     // load individual modelID only once
     if (!this.instance[modelID]) {
       await init();
@@ -29,7 +29,7 @@ class Llama2C {
         fetchArrayBuffer(tokenizerURL),
       ]);
 
-      this.instance[modelID] = new Model(weightsArrayU8, tokenizerArrayU8);
+      this.instance[modelID] = new Model(weightsArrayU8, tokenizerArrayU8, useWgpu);
     }
     return this.instance[modelID];
   }
@@ -56,10 +56,17 @@ async function generate(data) {
     repeatPenalty,
     seed,
     maxSeqLen,
+    useWgpu
   } = data;
   try {
     self.postMessage({ status: "loading", message: "Starting llama2.c" });
-    const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL);
+
+    console.log("generate useWgpu:")
+    console.log(useWgpu)
+    console.log((useWgpu === 'true'))
+    console.log((useWgpu === 'True'))
+
+    const model = await Llama2C.getInstance(weightsURL, modelID, tokenizerURL,(useWgpu === 'true'));
 
     self.postMessage({ status: "loading", message: "Initializing model" });
     const firstToken = await model.init_with_prompt(

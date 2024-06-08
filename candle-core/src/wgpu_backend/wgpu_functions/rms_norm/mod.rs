@@ -38,7 +38,8 @@ pub fn queue_rms_norm(
         1,
         dest_size,
         1,
-        #[cfg(feature = "wgpu_debug")] &format!("rms_norm, dtype:{:?}", dtype),
+        #[cfg(feature = "wgpu_debug")] 
+        crate::wgpu::device::QueueDebugInfo::new(&format!("rms_norm, dtype:{:?}", dtype), reduction_length * dest_size),
     );
     return Ok(());
 }

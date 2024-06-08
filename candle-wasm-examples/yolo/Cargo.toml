@@ -9,8 +9,8 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-candle = { workspace = true }
-candle-nn = { workspace = true }
+candle = { workspace = true, features = ["wgpu"]}
+candle-nn = { workspace = true, features = ["wgpu"]}
 num-traits = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+
 use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, Shape, WgpuDevice};
@@ -47,9 +49,10 @@ pub fn queue_index_select(
         pipeline,
         bind_group,
         (length + 7) / 8,
-        ((lay_index.shape().elem_count() + 7) / 8) as u32,
+        ((index_length + 7) / 8) as u32,
         1,
-        #[cfg(feature = "wgpu_debug")] &format!("index_select : dtype{:?}", input_dtype),
+        #[cfg(feature = "wgpu_debug")] 
+        crate::wgpu::device::QueueDebugInfo::new(&format!("index_select : dtype{:?}", input_dtype), length as usize * index_length),
     );
     return Ok(());
 }

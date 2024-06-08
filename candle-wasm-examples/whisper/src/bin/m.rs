@@ -20,6 +20,7 @@ impl Decoder {
         timestamps: bool,
         task: Option<String>,
         language: Option<String>,
+        use_wgpu : bool
     ) -> Result<Decoder, JsError> {
         let decoder = D::load(ModelData {
             tokenizer,
@@ -31,6 +32,7 @@ impl Decoder {
             timestamps,
             task,
             language,
+            use_wgpu
         });
 
         match decoder {

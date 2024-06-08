@@ -5,7 +5,7 @@ pub mod imagenet;
 pub mod token_output_stream;
 pub mod wav;
 
-use candle::utils::{cuda_is_available, metal_is_available};
+use candle::utils::{cuda_is_available, metal_is_available, wgpu_is_available};
 use candle::{Device, Result, Tensor};
 
 pub fn device(cpu: bool) -> Result<Device> {
@@ -15,16 +15,18 @@ pub fn device(cpu: bool) -> Result<Device> {
         Ok(Device::new_cuda(0)?)
     } else if metal_is_available() {
         Ok(Device::new_metal(0)?)
+    } else if wgpu_is_available(){
+        Ok(Device::new_webgpu_sync(0)?)
     } else {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
             println!(
-                "Running on CPU, to run on GPU(metal), build this example with `--features metal`"
+                "Running on CPU, to run on GPU(metal), build this example with `--features metal` or `--features wgpu`"
             );
         }
         #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
         {
-            println!("Running on CPU, to run on GPU, build this example with `--features cuda`");
+            println!("Running on CPU, to run on GPU, build this example with `--features cuda` or `--features wgpu`");
         }
         Ok(Device::Cpu)
     }

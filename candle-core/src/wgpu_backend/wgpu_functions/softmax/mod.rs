@@ -32,7 +32,8 @@ pub fn queue_softmax(
         1,
         dest_size,
         1,
-        #[cfg(feature = "wgpu_debug")] &format!("softmax, dtype:{:?}", dtype),
+        #[cfg(feature = "wgpu_debug")] 
+        crate::wgpu::device::QueueDebugInfo::new(&format!("softmax, dtype:{:?}", dtype), reduction_length * dest_size),
     );
     return Ok(());
 }

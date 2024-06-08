@@ -9,22 +9,27 @@ use wasm_bindgen::prelude::*;
 pub struct Model {
     bert: BertModel,
     tokenizer: Tokenizer,
+    device : Device
 }
 
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn load(weights: Vec<u8>, tokenizer: Vec<u8>, config: Vec<u8>) -> Result<Model, JsError> {
+    pub async fn load(weights: Vec<u8>, tokenizer: Vec<u8>, config: Vec<u8>, use_wgpu : bool) -> Result<Model, JsError> {
         console_error_panic_hook::set_once();
-        console_log!("loading model");
-        let device = &Device::Cpu;
-        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F64, device)?;
+        console_log!("loading model, gpu:{use_wgpu}");
+        let device = match use_wgpu{
+            true => Device::new_webgpu(0).await?,
+            false => Device::Cpu,
+        };
+
+        let vb = VarBuilder::from_buffered_safetensors(weights, DType::F64, &device)?;
         let config: Config = serde_json::from_slice(&config)?;
         let tokenizer =
             Tokenizer::from_bytes(&tokenizer).map_err(|m| JsError::new(&m.to_string()))?;
         let bert = BertModel::load(vb, &config)?;
 
-        Ok(Self { bert, tokenizer })
+        Ok(Self { bert, tokenizer, device})
     }
 
     pub fn get_embeddings(&mut self, input: JsValue) -> Result<JsValue, JsError> {
@@ -33,7 +38,7 @@ impl Model {
         let sentences = input.sentences;
         let normalize_embeddings = input.normalize_embeddings;
 
-        let device = &Device::Cpu;
+       
         if let Some(pp) = self.tokenizer.get_padding_mut() {
             pp.strategy = tokenizers::PaddingStrategy::BatchLongest
         } else {
@@ -52,7 +57,7 @@ impl Model {
             .iter()
             .map(|tokens| {
                 let tokens = tokens.get_ids().to_vec();
-                Tensor::new(tokens.as_slice(), device)
+                Tensor::new(tokens.as_slice(), &self.device)
             })
             .collect::<Result<Vec<_>, _>>()?;
 

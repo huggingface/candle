@@ -46,6 +46,7 @@ impl st::View for Tensor {
     fn data(&self) -> Cow<[u8]> {
         // This copies data from GPU to CPU.
         // TODO: Avoid the unwrap here.
+        #[allow(deprecated)] //no way to use this external crates trait async
         Cow::Owned(convert_back(self).unwrap())
     }
 
@@ -67,6 +68,7 @@ impl st::View for &Tensor {
     fn data(&self) -> Cow<[u8]> {
         // This copies data from GPU to CPU.
         // TODO: Avoid the unwrap here.
+        #[allow(deprecated)] //no way to use this external crates trait async
         Cow::Owned(convert_back(self).unwrap())
     }
 

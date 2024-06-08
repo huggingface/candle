@@ -53,6 +53,7 @@
       async function generateSequence(controller) {
         const getValue = (id) => document.querySelector(`#${id}`).value;
         const modelID = getValue("model");
+        const useWgpu = getValue("useWgpu");
         const model = MODELS[modelID];
         const weightsURL = `${MODELS_BASE_URL}/${model.url}`;
         const prompt = getValue("prompt");
@@ -106,6 +107,7 @@
             seed: BigInt(seed),
             maxSeqLen,
             command: "start",
+            useWgpu
           });
 
           const handleAbort = () => {
@@ -221,6 +223,15 @@
           <option value="stories15M" selected>stories 15M (60.8 MB)</option>
           <option value="stories42M">stories 42M (167 MB)</option>
           <option value="stories110M">stories 110M (438 MB)</option>
+        </select>
+      </div>
+      <div>
+        <label for="useWgpu" class="font-medium">Use Wgpu </label>
+        <select
+          id="useWgpu"
+          class="border-2 border-gray-500 rounded-md font-light">
+          <option value="true" selected>True</option>
+          <option value="false">False</option>
         </select>
       </div>
       <form

@@ -19,6 +19,43 @@ pub (crate) enum MlQueue{
     Dispatch(MlQueueDispatch),
 }
 
+
+trait ToU64 {
+    fn to_u64(self) -> u64;
+}
+
+macro_rules! impl_to_u64 {
+    ($($ty:ty)*) => {
+        $(
+            impl ToU64 for $ty {
+                #[inline]
+                fn to_u64(self) -> u64 {
+                    self as u64
+                }
+            }
+        )*
+    }
+}
+
+impl_to_u64!(u8 u16 u32 u64 usize);
+
+#[derive(Debug)]
+pub struct QueueDebugInfo{
+    pub (crate) name : Option<String>,
+    pub (crate) output_size : u64,
+}
+
+impl QueueDebugInfo {
+    pub fn new<T : Into<String>, O : ToU64>(name: T, output_size: O) -> Self {
+        Self { name : Some(name.into()), output_size: output_size.to_u64()}
+    }
+    pub fn new_noname<O : ToU64>(output_size: O) -> Self {
+        Self { name : None, output_size: output_size.to_u64() }
+    }
+}
+
+
+
 #[derive(Debug)]
 pub (crate) struct MlQueueDispatch{
     pub (crate) x : u32, 
@@ -29,7 +66,7 @@ pub (crate) struct MlQueueDispatch{
     pub (crate) indirect_buffer : Option<usize>,
     
     #[cfg(feature = "wgpu_debug")]
-    pub (crate) name : Option<String>,
+    pub (crate) debug : QueueDebugInfo,
 }
 
 #[derive(Debug)]
@@ -109,7 +146,10 @@ impl WgpuDevice{
             limits.max_buffer_size = 2560000000;
         }
         limits.max_storage_buffers_per_shader_stage = 5;
+        
         //limits.min_storage_buffer_offset_alignment = 4;
+        limits.max_storage_buffer_binding_size = 2147483648; //1gib
+        limits.max_buffer_size = 4000_000_000; //1gib
 
         #[cfg(not(feature = "wgpu_debug"))]
         let features = wgpu::Features::empty();
@@ -166,20 +206,37 @@ impl WgpuDevice{
         let data = wgpu_functions::read_data_from_gpu_async::<u64>(self, &self.debug.query_set_buffer).await;
         let period = self.queue.get_timestamp_period();
         let mut result = Measurements::new(period);
-        for p in self.debug.shader_pipeline.lock().unwrap().iter(){
-            result.data.push(MInfo::new(p.1.to_owned(), data[(*p.0) as usize], data[(*p.0) as usize + 1]));
+        let mut last_end_time = 0u64;
+        let mut i = 0;
+        let shader_pipeline = self.debug.shader_pipeline.lock().unwrap();
+        let shader_pipeline = shader_pipeline.clone();
+        let mut indexes : Vec<_> = shader_pipeline.into_iter().collect();
+        indexes.sort_by_key(|f| f.0);
+        for p in indexes{
+            let start_time =data[(p.0 / 8) as usize];
+            let end_time = data[(p.0 / 8) as usize + 1];
+            if end_time < start_time {
+                panic!("Start Time was after End Time! startTime: {start_time}, endTime:{end_time}, i:{i}");
+            }
+
+            if start_time < last_end_time {
+                panic!("Start Time was before last End Time! startTime: {start_time}, last endTime:{last_end_time}, i:{i}");
+            }
+            last_end_time = end_time;
+            i += 1;
+            result.data.push(MInfo::new(p.1.0.to_owned(), start_time, end_time, p.1.1, p.1.2, p.1.3, p.1.4));
         }
         
         Ok(result)
     }
 
     #[cfg(feature = "wgpu_debug")]
-    pub async fn get_debug_info(&self) -> crate::Result<std::collections::HashMap<String, Vec<u64>>>{
+    pub async fn get_debug_info(&self) -> crate::Result<std::collections::HashMap<String, Vec<(u64, u64, u32, u32, u32)>>>{
         let info = self.get_debug_info_full().await?;
-        let mut map: std::collections::HashMap<String, Vec<u64>> = std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<String, Vec<(u64, u64, u32, u32, u32)>> = std::collections::HashMap::new();
 
         for item in info.data.iter() {
-            map.entry(item.label.clone()).or_insert_with(Vec::new).push(item.end_time - item.start_time);
+            map.entry(item.label.clone()).or_insert_with(Vec::new).push((item.end_time - item.start_time, item.output_size, item.x, item.y, item.z));
         }
         return Ok(map);
     }

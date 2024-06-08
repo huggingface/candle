@@ -7,6 +7,7 @@ use rand::{distributions::Distribution, rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
+use yew::platform::spawn_local;
 use yew_agent::{HandlerId, Public, WorkerLink};
 
 #[wasm_bindgen]
@@ -100,6 +101,7 @@ pub struct Decoder {
     eot_token: u32,
     no_speech_token: u32,
     no_timestamps_token: u32,
+    device : Device
 }
 
 impl Decoder {
@@ -108,7 +110,7 @@ impl Decoder {
         model: Model,
         tokenizer: Tokenizer,
         mel_filters: Vec<f32>,
-        device: &Device,
+        device: Device,
         task: Option<Task>,
         language: Option<String>,
         is_multilingual: bool,
@@ -124,7 +126,7 @@ impl Decoder {
             })
             .collect();
         let no_timestamps_token = token_id(&tokenizer, m::NO_TIMESTAMPS_TOKEN)?;
-        let suppress_tokens = Tensor::new(suppress_tokens.as_slice(), device)?;
+        let suppress_tokens = Tensor::new(suppress_tokens.as_slice(), &device)?;
         let sot_token = token_id(&tokenizer, m::SOT_TOKEN)?;
         let transcribe_token = token_id(&tokenizer, m::TRANSCRIBE_TOKEN)?;
         let translate_token = token_id(&tokenizer, m::TRANSLATE_TOKEN)?;
@@ -153,6 +155,7 @@ impl Decoder {
             eot_token,
             no_speech_token,
             no_timestamps_token,
+            device
         })
     }
 
@@ -303,9 +306,13 @@ impl Decoder {
         Ok(segments)
     }
 
-    pub fn load(md: ModelData) -> anyhow::Result<Self> {
-        let device = Device::Cpu;
+    pub async fn load(md: ModelData) -> anyhow::Result<Self> {
         let tokenizer = Tokenizer::from_bytes(&md.tokenizer).map_err(E::msg)?;
+
+        let device = match md.use_wgpu{
+            true => Device::new_webgpu(0).await?,
+            false => Device::Cpu,
+        };
 
         let mel_filters = safetensors::tensor::SafeTensors::deserialize(&md.mel_filters)?;
         let mel_filters = mel_filters.tensor("mel_80")?.load(&device)?;
@@ -333,7 +340,7 @@ impl Decoder {
             model,
             tokenizer,
             mel_filters,
-            &device,
+            device,
             task,
             md.language,
             md.is_multilingual,
@@ -343,7 +350,6 @@ impl Decoder {
     }
 
     pub fn convert_and_run(&mut self, wav_input: &[u8]) -> anyhow::Result<Vec<Segment>> {
-        let device = Device::Cpu;
         let mut wav_input = std::io::Cursor::new(wav_input);
         let (header, data) = wav::read(&mut wav_input)?;
         console_log!("loaded wav data: {header:?}");
@@ -359,7 +365,7 @@ impl Decoder {
         let mel = crate::audio::pcm_to_mel(self.model.config(), &pcm_data, &self.mel_filters)?;
         let mel_len = mel.len();
         let n_mels = self.model.config().num_mel_bins;
-        let mel = Tensor::from_vec(mel, (1, n_mels, mel_len / n_mels), &device)?;
+        let mel = Tensor::from_vec(mel, (1, n_mels, mel_len / n_mels), &self.device)?;
         console_log!("loaded mel: {:?}", mel.dims());
         let segments = self.run(&mel)?;
         Ok(segments)
@@ -424,6 +430,7 @@ pub struct ModelData {
     pub config: Vec<u8>,
     pub quantized: bool,
     pub timestamps: bool,
+    pub use_wgpu : bool,
     pub is_multilingual: bool,
     pub language: Option<String>,
     pub task: Option<String>,
@@ -446,6 +453,28 @@ pub enum WorkerOutput {
     WeightsLoaded,
 }
 
+impl Worker{
+    async fn handle_input_async(&mut self, msg: WorkerInput, id: HandlerId) {
+        let output = match msg {
+            WorkerInput::ModelData(md) => match Decoder::load(md).await {
+                Ok(decoder) => {
+                    self.decoder = Some(decoder);
+                    Ok(WorkerOutput::WeightsLoaded)
+                }
+                Err(err) => Err(format!("model creation error {err:?}")),
+            },
+            WorkerInput::DecodeTask { wav_bytes } => match &mut self.decoder {
+                None => Err("model has not been set".to_string()),
+                Some(decoder) => decoder
+                    .convert_and_run(&wav_bytes)
+                    .map(WorkerOutput::Decoded)
+                    .map_err(|e| e.to_string()),
+            },
+        };
+        self.link.respond(id, output);
+    }
+}
+
 impl yew_agent::Worker for Worker {
     type Input = WorkerInput;
     type Message = ();
@@ -463,25 +492,7 @@ impl yew_agent::Worker for Worker {
         // no messaging
     }
 
-    fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
-        let output = match msg {
-            WorkerInput::ModelData(md) => match Decoder::load(md) {
-                Ok(decoder) => {
-                    self.decoder = Some(decoder);
-                    Ok(WorkerOutput::WeightsLoaded)
-                }
-                Err(err) => Err(format!("model creation error {err:?}")),
-            },
-            WorkerInput::DecodeTask { wav_bytes } => match &mut self.decoder {
-                None => Err("model has not been set".to_string()),
-                Some(decoder) => decoder
-                    .convert_and_run(&wav_bytes)
-                    .map(WorkerOutput::Decoded)
-                    .map_err(|e| e.to_string()),
-            },
-        };
-        self.link.respond(id, output);
-    }
+    
 
     fn name_of_resource() -> &'static str {
         "worker.js"
@@ -489,5 +500,9 @@ impl yew_agent::Worker for Worker {
 
     fn resource_path_is_relative() -> bool {
         true
+    }
+    
+    fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
+        spawn_local(self.handle_input_async(msg, id));
     }
 }

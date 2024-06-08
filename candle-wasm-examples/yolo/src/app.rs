@@ -52,10 +52,12 @@ pub struct App {
 async fn model_data_load() -> Result<ModelData, JsValue> {
     let weights = fetch_url("yolov8s.safetensors").await?;
     let model_size = "s".to_string();
+    let use_wgpu = true;
     console_log!("loaded weights {}", weights.len());
     Ok(ModelData {
         weights,
         model_size,
+        use_wgpu
     })
 }
 

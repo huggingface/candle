@@ -58,10 +58,7 @@ accelerate = ["dep:libc", "dep:accelerate-src"]
 metal = ["dep:metal", "dep:candle-metal-kernels"]
 wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json"]
-wgpu_async = ["wgpu"] # With this feature no async calls to get data from a tensor is allowed
-#default = ["wgpu"]
-
-default = ["wgpu_async"]
+default = ["wgpu_debug"]
 
 [[bench]]
 name = "bench_main"

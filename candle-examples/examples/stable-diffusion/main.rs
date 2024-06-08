@@ -479,6 +479,7 @@ fn run(args: Args) -> Result<()> {
 
     let scheduler = sd_config.build_scheduler(n_steps)?;
     let device = candle_examples::device(cpu)?;
+    
     if let Some(seed) = seed {
         device.set_seed(seed)?;
     }
@@ -611,6 +612,15 @@ fn run(args: Args) -> Result<()> {
             idx + 1,
             num_samples
         );
+        #[cfg(feature = "wgpu_debug")]
+        match &device {
+            candle::Device::WebGpu(gpu) => {
+                let info = pollster::block_on(gpu.get_debug_info()).unwrap();
+                let map2 = candle::wgpu::debug_info::calulate_measurment(&info);
+                candle::wgpu::debug_info::save_list(&map2, "wgpu_infostable_defusion_small.json").unwrap();
+            },
+            _ => {},
+        };
         save_image(
             &vae,
             &latents,

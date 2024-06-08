@@ -52,21 +52,24 @@ impl Model {
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub async fn new(weights: Vec<u8>, tokenizer: Vec<u8>) -> Result<Model, JsError> {
-        log::error!("create Model");
+    pub async fn new(weights: Vec<u8>, tokenizer: Vec<u8>, use_wgpu : bool) -> Result<Model, JsError> {
+        
         //wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
         console_log::init().expect("could not initialize logger");
         console_error_panic_hook::set_once();
 
-        //let dev = Device::Cpu;
-        let dev = Device::new_webgpu(0).await?;
+        log::info!("create Model, wgpu: {use_wgpu}");
+        let device = match use_wgpu{
+            true => Device::new_webgpu(0).await?,
+            false => Device::Cpu,
+        };
 
         console_log!("created webgpu device");
 
         let model = M::load(ModelData {
             tokenizer,
             model: weights,
-        }, &dev).await;
+        }, &device).await;
         console_log!("Model Loaded:");
         let logits_processor = LogitsProcessor::new(299792458, None, None);
         
@@ -80,7 +83,7 @@ impl Model {
                 logits_processor,
                 tokens: vec![],
                 repeat_penalty: 1.,
-                device : dev
+                device
             }),
             Err(e) => {
                 console_log!("Error at model: {:?}", e);

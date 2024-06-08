@@ -93,7 +93,8 @@ pub fn queue_unary_inplace_op(
         pipeline,
         bind_group,
         layout.shape().elem_count() as u32,
-        #[cfg(feature = "wgpu_debug")] &format!("unary inplace op:{:?}, dtype:{:?}", op, Pipelines::UnaryInplace),
+        #[cfg(feature = "wgpu_debug")] 
+        crate::wgpu::device::QueueDebugInfo::new(&format!("unary inplace op:{:?}, dtype:{:?}", op, Pipelines::UnaryInplace), layout.shape().elem_count()),
     );
     return Ok(());
 }
@@ -125,7 +126,8 @@ pub fn queue_unary_from_buffer_op(
             pipeline,
             bind_group,
             input_layout.shape().elem_count() as u32,
-            #[cfg(feature = "wgpu_debug")] &format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBufferContiguous),
+            #[cfg(feature = "wgpu_debug")] 
+            crate::wgpu::device::QueueDebugInfo::new(&format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBufferContiguous), input_layout.shape().elem_count()),
         );
     } else {
         let (mut meta,  meta_offset) = get_meta(&dev, 4 + get_size(&input_layout));
@@ -142,7 +144,8 @@ pub fn queue_unary_from_buffer_op(
             pipeline,
             bind_group,
             input_layout.shape().elem_count() as u32,
-            #[cfg(feature = "wgpu_debug")] &format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBuffer),
+            #[cfg(feature = "wgpu_debug")] 
+            crate::wgpu::device::QueueDebugInfo::new(&format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBuffer), input_layout.shape().elem_count()),
         );
     }
     return Ok(());

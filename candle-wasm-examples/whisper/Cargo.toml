@@ -9,9 +9,9 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-candle = { workspace = true }
-candle-nn = { workspace = true }
-candle-transformers = { workspace = true }
+candle = { workspace = true, features = ["wgpu"]}
+candle-nn = { workspace = true , features = ["wgpu"]}
+candle-transformers = { workspace = true , features = ["wgpu"]}
 num-traits = { workspace = true }
 tokenizers = { workspace = true, features = ["unstable_wasm"] }
 

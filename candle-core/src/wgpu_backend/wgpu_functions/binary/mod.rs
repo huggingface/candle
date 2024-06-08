@@ -51,7 +51,8 @@ pub fn queue_binary_buffer_from_buffer(
             pipeline,
             bind_group,
             lay1.shape().elem_count() as u32,
-            #[cfg(feature = "wgpu_debug")] &format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type),
+            #[cfg(feature = "wgpu_debug")] 
+            crate::wgpu::device::QueueDebugInfo::new(&format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type), lay1.shape().elem_count()),
         );
         return Ok(());
     } else {
@@ -77,7 +78,8 @@ pub fn queue_binary_buffer_from_buffer(
             pipeline,
             bind_group,
             lay1.shape().elem_count() as u32,
-            #[cfg(feature = "wgpu_debug")] &format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type),
+            #[cfg(feature = "wgpu_debug")] 
+            crate::wgpu::device::QueueDebugInfo::new(&format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type), lay1.shape().elem_count()),
         );
         return Ok(());
     }

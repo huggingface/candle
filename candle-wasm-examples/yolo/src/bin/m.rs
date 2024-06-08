@@ -12,8 +12,8 @@ pub struct Model {
 #[wasm_bindgen]
 impl Model {
     #[wasm_bindgen(constructor)]
-    pub fn new(data: Vec<u8>, model_size: &str) -> Result<Model, JsError> {
-        let inner = M::load_(data, model_size)?;
+    pub async fn new(data: Vec<u8>, model_size: &str, use_wgpu : bool) -> Result<Model, JsError> {
+        let inner = M::load_(data, model_size, use_wgpu).await?;
         Ok(Self { inner })
     }
 
@@ -45,8 +45,8 @@ pub struct ModelPose {
 #[wasm_bindgen]
 impl ModelPose {
     #[wasm_bindgen(constructor)]
-    pub fn new(data: Vec<u8>, model_size: &str) -> Result<ModelPose, JsError> {
-        let inner = P::load_(data, model_size)?;
+    pub fn new(data: Vec<u8>, model_size: &str, use_wgpu : bool) -> Result<ModelPose, JsError> {
+        let inner = P::load_(data, model_size, use_wgpu).await?;
         Ok(Self { inner })
     }
 
