@@ -217,7 +217,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
         Self {
             data: Arc::new(TensorData {
                 backend: self.data.backend.clone(),
-                dtype: dtype,
+                dtype,
                 device: self.data.device.clone(),
             }),
             ..self
