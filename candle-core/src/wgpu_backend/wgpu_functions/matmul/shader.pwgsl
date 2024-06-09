@@ -19,8 +19,8 @@ var<storage> op_matmul : array<u32>;
 #define op_matmul.input2_offset     op_matmul[11]
 
 @compute
-@workgroup_size(8,8,1)
-fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
+@workgroup_size(16,16,1)
+fn matmul1(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = global_id.x;
     let y = global_id.y;
     let b = global_id.z;
@@ -78,3 +78,282 @@ fn matmul(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     v_dest[b * output_size_of_one_batch + y * op_matmul.k + x] = sum;
 }
+
+
+@compute @workgroup_size(8, 8, 1)
+fn matmul2(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x * 4;
+    let y = global_id.y * 4;
+    let batch = global_id.z;
+
+    if(x >= op_matmul.k){
+        return;
+    }
+    if(y >= op_matmul.m){
+        return;
+    }
+  
+    let output_size_of_one_batch = op_matmul.m * op_matmul.k; 
+
+    let input1_offset = op_matmul.input1_offset;
+    let input2_offset = op_matmul.input2_offset;
+
+    let input1_stride_b = op_matmul.input1_stride_b;
+    let input1_stride_m = op_matmul.input1_stride_m;
+    let input1_stride_n = op_matmul.input1_stride_n;
+
+    let input2_stride_b = op_matmul.input2_stride_b;
+    let input2_stride_n = op_matmul.input2_stride_n;
+    let input2_stride_k = op_matmul.input2_stride_k;
+
+    let m_input1_offset = input1_offset + input1_stride_m * y + batch * input1_stride_b;
+    let m_input2_offset = input2_offset + input2_stride_k * x + batch * input2_stride_b;
+
+    var a = mat4x4<DTYPE>();
+    var b = mat4x4<DTYPE>();
+    var c = mat4x4<DTYPE>();
+    
+    let count = (op_matmul.n + 3) / 4;
+
+    for(var t = 0u; t < count; t++){
+        
+        //load tiles:
+        for(var ix= 0u; ix < 4; ix++){
+            let ix2 = ix + t * 4;
+            for(var iy = 0u; iy < 4; iy++){
+                let iy2 = iy + t * 4;
+                let a_x = input1_stride_n * ix2 + input1_stride_m * iy + m_input1_offset;    
+                let b_x = input2_stride_n * iy2 + input2_stride_k * ix  + m_input2_offset;
+
+                if(ix2 >= op_matmul.n || y + iy >= op_matmul.m){
+                    a[iy][ix] = ZERO;
+                }
+                else{
+                    a[iy][ix] = v_input1[a_x];
+                }
+
+                if(iy2 >= op_matmul.n || x + ix >= op_matmul.k){
+                    b[iy][ix] = ZERO;
+                }
+                else{
+                    b[iy][ix] = v_input2[b_x];
+                }
+            }
+        }
+        //add to c
+        c += b * a;
+
+    }
+    let dest_offset = batch * output_size_of_one_batch + y * op_matmul.k + x;
+    //write to v_dest:
+    for(var ix= 0u; ix < 4; ix++){
+        if (ix + x < op_matmul.k){
+            for(var iy = 0u; iy < 4; iy++){
+                if (iy + y < op_matmul.m){
+                    v_dest[dest_offset + ix + iy * op_matmul.k] = c[iy][ix];
+                }
+            } 
+        }     
+    }
+}
+
+#define TS 8u
+
+#define op_matmul.b                 op_matmul[0]
+#define op_matmul.m                 op_matmul[1]
+#define op_matmul.k                 op_matmul[2]
+#define op_matmul.n                 op_matmul[3]
+
+#define op_matmul.input1_stride_k   op_matmul[4]
+#define op_matmul.input1_stride_m   op_matmul[5]
+#define op_matmul.input1_stride_b   op_matmul[6]
+#define op_matmul.input1_offset     op_matmul[7]
+
+#define op_matmul.input2_stride_n   op_matmul[8]
+#define op_matmul.input2_stride_k   op_matmul[9]
+#define op_matmul.input2_stride_b   op_matmul[10]
+#define op_matmul.input2_offset     op_matmul[11]
+
+var<workgroup> Asub: array<array<f32, TS>, TS>;
+var<workgroup> Bsub: array<array<f32, TS>, TS>;
+
+@compute @workgroup_size(TS, TS, 1)
+//MxK * KxN = MxN
+fn matmul3(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
+    let gx = global_id.x;
+    let gy = global_id.y;
+    
+    let lx = local_id.x;
+    let ly = local_id.y;
+
+
+
+    let batch = global_id.z;
+
+  
+    let output_size_of_one_batch = op_matmul.m * op_matmul.n; 
+
+    let input1_offset = op_matmul.input1_offset;
+    let input2_offset = op_matmul.input2_offset;
+
+    let input1_stride_b = op_matmul.input1_stride_b;
+    let input1_stride_m = op_matmul.input1_stride_m;
+    let input1_stride_k = op_matmul.input1_stride_k;
+
+    let input2_stride_b = op_matmul.input2_stride_b;
+    let input2_stride_n = op_matmul.input2_stride_n;
+    let input2_stride_k = op_matmul.input2_stride_k;
+
+    let m_input1_offset = input1_offset + input1_stride_m * gy + batch * input1_stride_b;
+    let m_input2_offset = input2_offset + input2_stride_n * gx + batch * input2_stride_b;
+
+    if(gy >= op_matmul.m && gx >= op_matmul.n){
+        return;
+    }
+
+    var acc = ZERO;
+    for(var t = 0u; t < op_matmul.k; t+=TS){
+        if(gy < op_matmul.m){
+            let tiledX = t + lx;
+            //if (tiledX < op_matmul.k){
+                Asub[lx][ly] = v_input1[m_input1_offset + tiledX * input1_stride_k]; //may read at invalid key, but the value will not be used
+            //}
+        }
+        if(gx < op_matmul.n){
+            let tiledY = t + ly;
+            //if (tiledY < op_matmul.k){
+                Bsub[ly][lx] = v_input2[m_input2_offset + tiledY * input2_stride_k]; //may read at invalid key, but the value will not be used
+            //} 
+        }
+
+        workgroupBarrier();
+
+        if(gy < op_matmul.m && gx < op_matmul.n){
+            let count = min(op_matmul.k - t, TS);
+
+            for(var k = 0u; k < count; k++){
+                acc += Asub[k][ly]*Bsub[k][lx];
+            }
+
+        }
+
+        workgroupBarrier();
+    }
+    if(gy < op_matmul.m && gx < op_matmul.n){
+        v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx] = acc;
+    }
+}
+
+//optimizations:
+
+// const TSM: u32 = 128; // The tile-size in dimension M
+// const TSN: u32 = 128; // The tile-size in dimension N
+// const TSK: u32 = 16;  // The tile-size in dimension K
+// const WPTM: u32 = 8;  // The amount of work-per-thread in dimension M
+// const WPTN: u32 = 8;  // The amount of work-per-thread in dimension N
+// const LPTA: u32 = (TSK * WPTM * WPTN) / TSN; // The amount of loads-per-thread for A
+// const LPTB: u32 = (TSK * WPTM * WPTN) / TSM; // The amount of loads-per-thread for B
+// const RTSM: u32 = 16; // The reduced tile-size in dimension M (TSM / WPTM number of threads)
+// const RTSN: u32 = 16; // The reduced tile-size in dimension N (TSN / WPTN number of threads)
+
+// fn mod2(x: u32, y: u32) -> u32 {
+//     return x % y;
+// }
+
+// fn div2(x: u32, y: u32) -> u32 {
+//     return x / y;
+// }
+
+// @group(0) @binding(0) var<storage, read> ssbA: array<f32>;
+// @group(0) @binding(1) var<storage, read> ssbB: array<f32>;
+// @group(0) @binding(2) var<storage, write> ssbC: array<f32>;
+
+// var<workgroup> Asub: array<array<f32, TSM>, TSK>;
+// var<workgroup> Bsub: array<array<f32, TSK + 2>, TSN>;
+
+// #define op_matmul.b                 op_matmul[0]
+// #define op_matmul.m                 op_matmul[1]
+// #define op_matmul.n                 op_matmul[2]
+// #define op_matmul.k                 op_matmul[3]
+
+// @compute @workgroup_size(RTSM, RTSN, 1)
+// fn matmul2(@builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) group_id: vec3<u32>) {
+//     //let B = op_matmul[0];
+//     let M = op_matmul[1];
+//     let N = op_matmul[3];
+//     let K = op_matmul[2];
+
+//     // Thread identifiers
+//     let tidm = local_id.x; // Local row ID (max: TSM / WPTM == RTSM)
+//     let tidn = local_id.y; // Local col ID (max: TSN / WPTN == RTSN)
+//     let offsetM = TSM * group_id.x; // Work-group offset
+//     let offsetN = TSN * group_id.y; // Work-group offset
+
+//     // Allocate register space
+//     var Areg: f32;
+//     var Breg: array<f32, WPTN>;
+//     var acc: array<array<f32, WPTN>, WPTM>;
+
+//     // Initialise the accumulation registers
+//     for (var wm: u32 = 0; wm < WPTM; wm++) {
+//         for (var wn: u32 = 0; wn < WPTN; wn++) {
+//             acc[wm][wn] = 0.0;
+//         }
+//     }
+
+//     // Loop over all tiles
+//     let numTiles = K / TSK;
+//     var t: u32 = 0;
+//     loop {
+//         if (t >= numTiles) {
+//             break;
+//         }
+
+//         // Load one tile of A and B into local memory
+//         for (var la: u32 = 0; la < LPTA; la++) {
+//             let tid = tidn * RTSM + tidm;
+//             let id = la * RTSN * RTSM + tid;
+//             let row = mod2(id, TSM);
+//             let col = div2(id, TSM);
+//             let tiledIndex = TSK * t + col;
+//             Asub[col][row] = ssbA[tiledIndex * M + offsetM + row];
+//             Bsub[row][col] = ssbB[tiledIndex * N + offsetN + row];
+//         }
+
+//         // Synchronise to make sure the tile is loaded
+//         workgroupBarrier();
+
+//         // Loop over the values of a single tile
+//         for (var k: u32 = 0; k < TSK; k++) {
+//             // Cache the values of Bsub in registers
+//             for (var wn: u32 = 0; wn < WPTN; wn++) {
+//                 let col = tidn + wn * RTSN;
+//                 Breg[wn] = Bsub[col][k];
+//             }
+
+//             // Perform the computation
+//             for (var wm: u32 = 0; wm < WPTM; wm++) {
+//                 let row = tidm + wm * RTSM;
+//                 Areg = Asub[k][row];
+//                 for (var wn: u32 = 0; wn < WPTN; wn++) {
+//                     acc[wm][wn] += Areg * Breg[wn];
+//                 }
+//             }
+//         }
+
+//         // Synchronise before loading the next tile
+//         workgroupBarrier();
+
+//         // Next tile
+//         t++;
+//     }
+
+//     // Store the final result in C
+//     for (var wm: u32 = 0; wm < WPTM; wm++) {
+//         let globalRow = offsetM + tidm + wm * RTSM;
+//         for (var wn: u32 = 0; wn < WPTN; wn++) {
+//             let globalCol = offsetN + tidn + wn * RTSN;
+//             ssbC[globalCol * M + globalRow] = acc[wm][wn];
+//         }
+//     }
+// }
