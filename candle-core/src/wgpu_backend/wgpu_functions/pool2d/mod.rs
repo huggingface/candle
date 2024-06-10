@@ -1,6 +1,6 @@
 use wgpu::Buffer;
 
-use crate::{wgpu::device::{Pipelines, QueueDebugInfo}, WgpuDevice};
+use crate::{wgpu::device::Pipelines, WgpuDevice};
 
 use super::{create_bind_group_input1, enqueue_workgroups, get_meta};
 
@@ -59,7 +59,7 @@ pub fn queue_max_pool2d(
         (h_out as u32 + 7) / 8,
         c as u32,
         #[cfg(feature = "wgpu_debug")] 
-        QueueDebugInfo::new(&format!("max_pool2d, dtype:{:?}", dtype),h_out * w_out * b * c ),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("max_pool2d, dtype:{:?}", dtype),h_out * w_out * b * c ),
     );
     return Ok(());
 }
@@ -121,7 +121,7 @@ pub fn queue_avg_pool2d(
         (h_out as u32 + 7) / 8,
         c as u32,
         #[cfg(feature = "wgpu_debug")] 
-        QueueDebugInfo::new(&format!("avg_pool2d, dtype:{:?}", dtype),w_out * h_out * c * b),
+        crate::wgpu::device::QueueDebugInfo::new(&format!("avg_pool2d, dtype:{:?}", dtype),w_out * h_out * c * b),
     );
     return Ok(());
 }

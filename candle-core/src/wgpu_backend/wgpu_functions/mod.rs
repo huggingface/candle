@@ -18,7 +18,7 @@ pub mod gather;
 use std::{borrow::Cow, sync::{Arc, MutexGuard}};
 use wgpu::{util::DeviceExt, BindGroup, BindingResource, Buffer, BufferBinding, ComputePipeline, ShaderModule};
 use crate::{wgpu_backend::device::WgpuDevice, Error, Layout, WebGpuError};
-use super::device::{MlQueue, QueueDebugInfo, META_BUFFER_SIZE};
+use super::device::{MlQueue, META_BUFFER_SIZE};
 use crate::DType;
 
 pub use binary::queue_binary_buffer_from_buffer;
@@ -201,7 +201,7 @@ fn enqueue_workgroups(
     y: u32,
     z: u32,
     #[cfg(feature = "wgpu_debug")]
-    _debug: QueueDebugInfo,
+    _debug: super::device::QueueDebugInfo,
 ) {
     if x > 65535 || y > 65535 || z > 65535{
         enqueue_workgroups_indirect(dev, pipeline, bind_group, x, y, z,  #[cfg(feature = "wgpu_debug")] _debug);
@@ -222,7 +222,7 @@ fn enqueue_workgroups_indirect(
     y: u32,
     z: u32,
     #[cfg(feature = "wgpu_debug")]
-    _debug: QueueDebugInfo,
+    _debug: super::device::QueueDebugInfo,
 ) {
     let data = DispatchIndirectArgs { x, y, z };
 
@@ -389,7 +389,7 @@ fn enqueue(
     bind_group: BindGroup,
     length: u32,
     #[cfg(feature = "wgpu_debug")]
-    _debug: QueueDebugInfo,
+    _debug: super::device::QueueDebugInfo,
 ) {
     return enqueue_workgroups(
         dev,

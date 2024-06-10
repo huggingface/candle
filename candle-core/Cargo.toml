@@ -47,8 +47,8 @@ wasm-logger = "0.2"
 [dev-dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
-criterion = { workspace = true }
-
+#criterion = { workspace = true, features = ["html_reports"]}
+criterion = {version= "0.5.1", features = ["html_reports"]}
 
 [features]
 cuda = ["cudarc", "dep:candle-kernels"]
@@ -59,7 +59,7 @@ metal = ["dep:metal", "dep:candle-metal-kernels"]
 wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:flume"]
 wgpu_debug = ["wgpu", "dep:serde", "dep:serde_json"]
 #default = ["wgpu_debug"]
-default = []
+default = ["wgpu"]
 
 [[bench]]
 name = "bench_main"

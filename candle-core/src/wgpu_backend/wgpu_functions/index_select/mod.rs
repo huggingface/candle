@@ -1,5 +1,3 @@
-use std::borrow::Borrow;
-
 use wgpu::Buffer;
 
 use crate::{wgpu::device::Pipelines, Shape, WgpuDevice};

@@ -19,11 +19,11 @@ pub (crate) enum MlQueue{
     Dispatch(MlQueueDispatch),
 }
 
-
-trait ToU64 {
+#[cfg(feature = "wgpu_debug")]
+pub trait ToU64 {
     fn to_u64(self) -> u64;
 }
-
+#[cfg(feature = "wgpu_debug")]
 macro_rules! impl_to_u64 {
     ($($ty:ty)*) => {
         $(
@@ -36,22 +36,24 @@ macro_rules! impl_to_u64 {
         )*
     }
 }
-
+#[cfg(feature = "wgpu_debug")]
 impl_to_u64!(u8 u16 u32 u64 usize);
 
+#[cfg(feature = "wgpu_debug")]
 #[derive(Debug)]
 pub struct QueueDebugInfo{
     pub (crate) name : Option<String>,
     pub (crate) output_size : u64,
 }
 
+#[cfg(feature = "wgpu_debug")]
 impl QueueDebugInfo {
     pub fn new<T : Into<String>, O : ToU64>(name: T, output_size: O) -> Self {
         Self { name : Some(name.into()), output_size: output_size.to_u64()}
     }
-    pub fn new_noname<O : ToU64>(output_size: O) -> Self {
-        Self { name : None, output_size: output_size.to_u64() }
-    }
+    // pub fn new_noname<O : ToU64>(output_size: O) -> Self {
+    //     Self { name : None, output_size: output_size.to_u64() }
+    // }
 }
 
 
@@ -101,7 +103,12 @@ pub (crate) enum Pipelines{
     BinaryBufferFromBuffer,
     BinaryBufferFromBufferContiguousBoth,
     MatmulBuffer,
+    MatmulBuffer1b,
     Matmul3Buffer,
+    Matmul4Buffer,
+    Matmul4endBuffer,
+    Matmul5Buffer, 
+    Matmul6Buffer,
     Reduce,
     ReduceIndex,
     RmsNorm,
@@ -209,8 +216,8 @@ impl WgpuDevice{
         let mut result = Measurements::new(period);
         let mut last_end_time = 0u64;
         let mut i = 0;
-        let shader_pipeline = self.debug.shader_pipeline.lock().unwrap();
-        let shader_pipeline = shader_pipeline.clone();
+        let mut shader_pipeline2 = self.debug.shader_pipeline.lock().unwrap();
+        let shader_pipeline = shader_pipeline2.clone();
         let mut indexes : Vec<_> = shader_pipeline.into_iter().collect();
         indexes.sort_by_key(|f| f.0);
         for p in indexes{
@@ -227,7 +234,8 @@ impl WgpuDevice{
             i += 1;
             result.data.push(MInfo::new(p.1.0.to_owned(), start_time, end_time, p.1.1, p.1.2, p.1.3, p.1.4));
         }
-        
+        self.debug.counter.store(0u32, std::sync::atomic::Ordering::Relaxed);
+        shader_pipeline2.clear();
         Ok(result)
     }
 
@@ -250,7 +258,12 @@ impl WgpuDevice{
             Pipelines::BinaryBufferFromBuffer => "binary_buffer_from_buffer",
             Pipelines::BinaryBufferFromBufferContiguousBoth => "binary_buffer_from_buffer_contiguous_both",
             Pipelines::MatmulBuffer => "matmul1",
+            Pipelines::MatmulBuffer1b => "matmul1b",
             Pipelines::Matmul3Buffer => "matmul3",
+            Pipelines::Matmul4Buffer => "matmul4",
+            Pipelines::Matmul4endBuffer => "matmul4_end",
+            Pipelines::Matmul5Buffer => "matmul5",
+            Pipelines::Matmul6Buffer => "matmul6",
             Pipelines::Reduce => "reduce",
             Pipelines::ReduceIndex => "reduce_index",
             Pipelines::RmsNorm => "rms_norm",
