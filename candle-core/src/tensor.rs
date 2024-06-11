@@ -177,6 +177,15 @@ pub(crate) fn from_storage<S: Into<Shape>>(
 }
 
 impl Tensor {
+    /// Perform L_`p` normalization of inputs over a specified dimension, `dim`.
+    pub fn normalize<D>(&self, p: f64, dim: D) -> Result<Self>
+    where
+        D: Dims,
+    {
+        let q = self.powf(p)?.sum_keepdim(dim)?.powf(1. / p)?;
+        self.broadcast_div(&q)
+    }
+
     pub(crate) fn ones_impl<S: Into<Shape>>(
         shape: S,
         dtype: DType,
@@ -2592,5 +2601,19 @@ impl std::ops::Div<&Tensor> for f64 {
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: &Tensor) -> Self::Output {
         rhs.recip()? * self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tensor_normalize() {
+        let t = Tensor::arange(1f32, 10f32, &Device::Cpu)
+            .unwrap()
+            .reshape((3, 3))
+            .unwrap();
+        println!("{}", t.normalize(3.0, 0).unwrap());
     }
 }
