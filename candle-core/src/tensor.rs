@@ -2603,17 +2603,3 @@ impl std::ops::Div<&Tensor> for f64 {
         rhs.recip()? * self
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_tensor_normalize() {
-        let t = Tensor::arange(1f32, 10f32, &Device::Cpu)
-            .unwrap()
-            .reshape((3, 3))
-            .unwrap();
-        println!("{}", t.normalize(3.0, 0).unwrap());
-    }
-}
