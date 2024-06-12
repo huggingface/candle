@@ -109,6 +109,7 @@ pub (crate) enum Pipelines{
     Matmul4endBuffer,
     Matmul5Buffer, 
     Matmul6Buffer,
+    Matmul1endBuffer,
     Reduce,
     ReduceIndex,
     RmsNorm,
@@ -150,14 +151,10 @@ impl WgpuDevice{
 
         #[cfg(feature = "wgpu_debug")]
         let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
-        #[cfg(feature = "wgpu_debug")]{
-            limits.max_buffer_size = 2560000000;
-        }
         limits.max_storage_buffers_per_shader_stage = 5;
         
-        //limits.min_storage_buffer_offset_alignment = 4;
-        limits.max_storage_buffer_binding_size = 2147483648; //1gib
-        limits.max_buffer_size = 4000_000_000; //1gib
+        limits.max_storage_buffer_binding_size = adapter.limits().max_storage_buffer_binding_size; //use as much as possible
+        limits.max_buffer_size = adapter.limits().max_buffer_size; //use as much as possible
 
         #[cfg(not(feature = "wgpu_debug"))]
         let features = wgpu::Features::empty();
@@ -174,7 +171,8 @@ impl WgpuDevice{
                 },
                 None,
             ).await.map_err(|err| crate::Error::WebGpu(err.to_string().into()))?;
-       
+    
+        
         #[cfg(feature = "wgpu_debug")]
         let debug_info = super::debug_info::DebugInfo::new(&device);
         
@@ -262,6 +260,7 @@ impl WgpuDevice{
             Pipelines::Matmul3Buffer => "matmul3",
             Pipelines::Matmul4Buffer => "matmul4",
             Pipelines::Matmul4endBuffer => "matmul4_end",
+            Pipelines::Matmul1endBuffer => "matmul1_end",
             Pipelines::Matmul5Buffer => "matmul5",
             Pipelines::Matmul6Buffer => "matmul6",
             Pipelines::Reduce => "reduce",

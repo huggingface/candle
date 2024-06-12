@@ -58,11 +58,11 @@ pub fn queue_conv2d(
         dev,
         pipeline,
         bind_group,
-        (params.out_w() as u32 + 9) / 10,
-        (params.out_h() as u32 + 9) / 10,
+        (params.out_w() as u32 + 15) / 16,
+        (params.out_h() as u32 + 16) / 16,
         params.c_out as u32,
         #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("conv2d, dtype:{:?}", dtype), params.out_w() * params.out_h() * params.c_out * params.b_size * kernel_layout.shape().elem_count() )
+        crate::wgpu::device::QueueDebugInfo::new(&format!("conv2d, kernel:{:?} dtype:{:?}", dtype, kernel_layout.shape()), params.out_w() * params.out_h() * params.c_out * params.b_size * kernel_layout.shape().elem_count() )
 
     );
     return Ok(());

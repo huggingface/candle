@@ -347,7 +347,7 @@ pub fn queue_matmul_buffer(
             m  / 16,
             b,
             #[cfg(feature = "wgpu_debug")]
-            crate::wgpu::device::QueueDebugInfo::new(&format!("matmul4, dtype:{:?}", dtype), k * m * n),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("matmul5, dtype:{:?}", dtype), k * m * n),
         );
     }
     //calcualte rest:
@@ -370,7 +370,7 @@ pub fn queue_matmul_buffer(
         meta.add((k  / 16) * 16); //xoffset
         meta.add((m  / 16) * 16); //xoffset
     
-        let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul4endBuffer)?;
+        let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul1endBuffer)?;
       
         let bind_group = create_bind_group_input2(
             dev,
@@ -388,7 +388,7 @@ pub fn queue_matmul_buffer(
             (m + 15) / 16,
             b,
             #[cfg(feature = "wgpu_debug")]
-            crate::wgpu::device::QueueDebugInfo::new(&format!("matmul5end, dtype:{:?}", dtype), k * m * n),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("matmul1end, dtype:{:?}", dtype), k * m * n),
         );
     }
 

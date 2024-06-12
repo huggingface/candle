@@ -58,6 +58,49 @@ fn matmul1(@builtin(global_invocation_id) global_id: vec3<u32>) {
     v_dest[b * output_size_of_one_batch + y * op_matmul.k + x] = sum;
 }
 
+
+#define op_matmul.gx_offset     op_matmul[12]
+#define op_matmul.gy_offset     op_matmul[13]
+
+@compute
+@workgroup_size(16,16,1)
+fn matmul1_end(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x;
+    let y = global_id.y;
+    let b = global_id.z;
+
+    if(x >= op_matmul.k || y >= op_matmul.m || (global_id.x < op_matmul.gx_offset && global_id.y < op_matmul.gy_offset)){
+        return;
+    }
+
+
+    let output_size_of_one_batch = op_matmul.m * op_matmul.k; 
+
+    let input1_offset = op_matmul.input1_offset;
+    let input2_offset = op_matmul.input2_offset;
+
+    let input1_stride_b = op_matmul.input1_stride_b;
+    let input1_stride_m = op_matmul.input1_stride_m;
+    let input1_stride_n = op_matmul.input1_stride_n;
+
+    let input2_stride_b = op_matmul.input2_stride_b;
+    let input2_stride_n = op_matmul.input2_stride_n;
+    let input2_stride_k = op_matmul.input2_stride_k;
+
+    var sum = ZERO;
+    
+    let m_input1_offset = input1_offset + input1_stride_m * y + b * input1_stride_b;
+    let m_input2_offset = input2_offset + input2_stride_k * x + b * input2_stride_b;
+
+    for (var i = 0u; i < op_matmul.n; i++){
+        sum +=  v_input1[input1_stride_n * i + m_input1_offset] 
+                * v_input2[input2_stride_n * i + m_input2_offset];
+    }
+    
+    v_dest[b * output_size_of_one_batch + y * op_matmul.k + x] = sum;
+}
+
+
 #define TSM1 16u
 
 @compute
@@ -224,8 +267,8 @@ fn matmul2(@builtin(global_invocation_id) global_id: vec3<u32>) {
 #define op_matmul.input2_stride_b   op_matmul[10]
 #define op_matmul.input2_offset     op_matmul[11]
 
-var<workgroup> Asub: array<array<f32, TS1>, TS1>;
-var<workgroup> Bsub: array<array<f32, TS1>, TS1>;
+var<workgroup> Asub: array<array<DTYPE, TS1>, TS1>;
+var<workgroup> Bsub: array<array<DTYPE, TS1>, TS1>;
 
 @compute @workgroup_size(TS1, TS1, 1)
 //MxK * KxN = MxN
@@ -338,8 +381,7 @@ fn matmul4(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_i
     v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx] = acc;
 }
 
-#define op_matmul.gx_offset     op_matmul[12]
-#define op_matmul.gy_offset     op_matmul[13]
+
 
 @compute @workgroup_size(TS1, TS1, 1)
 //MxK * KxN = MxN
