@@ -270,72 +270,72 @@ fn matmul2(@builtin(global_invocation_id) global_id: vec3<u32>) {
 var<workgroup> Asub: array<array<DTYPE, TS1>, TS1>;
 var<workgroup> Bsub: array<array<DTYPE, TS1>, TS1>;
 
-@compute @workgroup_size(TS1, TS1, 1)
-//MxK * KxN = MxN
-fn matmul3(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
-    let gx = global_id.x;
-    let gy = global_id.y;
+// @compute @workgroup_size(TS1, TS1, 1)
+// //MxK * KxN = MxN
+// fn matmul3(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
+//     let gx = global_id.x;
+//     let gy = global_id.y;
     
-    let lx = local_id.x;
-    let ly = local_id.y;
+//     let lx = local_id.x;
+//     let ly = local_id.y;
 
 
 
-    let batch = global_id.z;
+//     let batch = global_id.z;
 
   
-    let output_size_of_one_batch = op_matmul.m * op_matmul.n; 
+//     let output_size_of_one_batch = op_matmul.m * op_matmul.n; 
 
-    let input1_offset = op_matmul.input1_offset;
-    let input2_offset = op_matmul.input2_offset;
+//     let input1_offset = op_matmul.input1_offset;
+//     let input2_offset = op_matmul.input2_offset;
 
-    let input1_stride_b = op_matmul.input1_stride_b;
-    let input1_stride_m = op_matmul.input1_stride_m;
-    let input1_stride_k = op_matmul.input1_stride_k;
+//     let input1_stride_b = op_matmul.input1_stride_b;
+//     let input1_stride_m = op_matmul.input1_stride_m;
+//     let input1_stride_k = op_matmul.input1_stride_k;
 
-    let input2_stride_b = op_matmul.input2_stride_b;
-    let input2_stride_n = op_matmul.input2_stride_n;
-    let input2_stride_k = op_matmul.input2_stride_k;
+//     let input2_stride_b = op_matmul.input2_stride_b;
+//     let input2_stride_n = op_matmul.input2_stride_n;
+//     let input2_stride_k = op_matmul.input2_stride_k;
 
-    let m_input1_offset = input1_offset + input1_stride_m * gy + batch * input1_stride_b;
-    let m_input2_offset = input2_offset + input2_stride_n * gx + batch * input2_stride_b;
+//     let m_input1_offset = input1_offset + input1_stride_m * gy + batch * input1_stride_b;
+//     let m_input2_offset = input2_offset + input2_stride_n * gx + batch * input2_stride_b;
 
-    if(gy >= op_matmul.m && gx >= op_matmul.n){
-        return;
-    }
+//     if(gy >= op_matmul.m && gx >= op_matmul.n){
+//         return;
+//     }
 
-    var acc = ZERO;
-    for(var t = 0u; t < op_matmul.k; t+=TS1){
-        if(gy < op_matmul.m){
-            let tiledX = t + lx;
-            //if (tiledX < op_matmul.k){
-                Asub[lx][ly] = v_input1[m_input1_offset + tiledX * input1_stride_k]; //may read at invalid key, but the value will not be used
-            //}
-        }
-        if(gx < op_matmul.n){
-            let tiledY = t + ly;
-            //if (tiledY < op_matmul.k){
-                Bsub[ly][lx] = v_input2[m_input2_offset + tiledY * input2_stride_k]; //may read at invalid key, but the value will not be used
-            //} 
-        }
+//     var acc = ZERO;
+//     for(var t = 0u; t < op_matmul.k; t+=TS1){
+//         if(gy < op_matmul.m){
+//             let tiledX = t + lx;
+//             //if (tiledX < op_matmul.k){
+//                 Asub[lx][ly] = v_input1[m_input1_offset + tiledX * input1_stride_k]; //may read at invalid key, but the value will not be used
+//             //}
+//         }
+//         if(gx < op_matmul.n){
+//             let tiledY = t + ly;
+//             //if (tiledY < op_matmul.k){
+//                 Bsub[ly][lx] = v_input2[m_input2_offset + tiledY * input2_stride_k]; //may read at invalid key, but the value will not be used
+//             //} 
+//         }
 
-        workgroupBarrier();
+//         workgroupBarrier();
 
-        if(gy < op_matmul.m && gx < op_matmul.n){
-            let count = min(op_matmul.k - t, TS1);
+//         if(gy < op_matmul.m && gx < op_matmul.n){
+//             let count = min(op_matmul.k - t, TS1);
 
-            for(var k = 0u; k < count; k++){
-                acc += Asub[k][ly]*Bsub[k][lx];
-            }
+//             for(var k = 0u; k < count; k++){
+//                 acc += Asub[k][ly]*Bsub[k][lx];
+//             }
 
-        }
+//         }
 
-        workgroupBarrier();
-    }
-    if(gy < op_matmul.m && gx < op_matmul.n){
-        v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx] = acc;
-    }
-}
+//         workgroupBarrier();
+//     }
+//     if(gy < op_matmul.m && gx < op_matmul.n){
+//         v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx] = acc;
+//     }
+// }
 
 
 @compute @workgroup_size(TS1, TS1, 1)
@@ -383,78 +383,78 @@ fn matmul4(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_i
 
 
 
-@compute @workgroup_size(TS1, TS1, 1)
-//MxK * KxN = MxN
-fn matmul4_end(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
+// @compute @workgroup_size(TS1, TS1, 1)
+// //MxK * KxN = MxN
+// fn matmul4_end(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>) {
     
-    if  (global_id.x < op_matmul.gx_offset && global_id.y < op_matmul.gy_offset){
-        return;
-    }
+//     if  (global_id.x < op_matmul.gx_offset && global_id.y < op_matmul.gy_offset){
+//         return;
+//     }
     
-    let gx = global_id.x;
-    let gy = global_id.y;
+//     let gx = global_id.x;
+//     let gy = global_id.y;
     
-    let lx = local_id.x;
-    let ly = local_id.y;
+//     let lx = local_id.x;
+//     let ly = local_id.y;
 
 
 
-    let batch = global_id.z;
+//     let batch = global_id.z;
 
   
-    let output_size_of_one_batch = op_matmul.m * op_matmul.n; 
+//     let output_size_of_one_batch = op_matmul.m * op_matmul.n; 
 
-    let input1_offset = op_matmul.input1_offset;
-    let input2_offset = op_matmul.input2_offset;
+//     let input1_offset = op_matmul.input1_offset;
+//     let input2_offset = op_matmul.input2_offset;
 
-    let input1_stride_b = op_matmul.input1_stride_b;
-    let input1_stride_m = op_matmul.input1_stride_m;
-    let input1_stride_k = op_matmul.input1_stride_k;
+//     let input1_stride_b = op_matmul.input1_stride_b;
+//     let input1_stride_m = op_matmul.input1_stride_m;
+//     let input1_stride_k = op_matmul.input1_stride_k;
 
-    let input2_stride_b = op_matmul.input2_stride_b;
-    let input2_stride_n = op_matmul.input2_stride_n;
-    let input2_stride_k = op_matmul.input2_stride_k;
+//     let input2_stride_b = op_matmul.input2_stride_b;
+//     let input2_stride_n = op_matmul.input2_stride_n;
+//     let input2_stride_k = op_matmul.input2_stride_k;
 
-    let m_input1_offset = input1_offset + input1_stride_m * gy + batch * input1_stride_b;
-    let m_input2_offset = input2_offset + input2_stride_n * gx + batch * input2_stride_b;
+//     let m_input1_offset = input1_offset + input1_stride_m * gy + batch * input1_stride_b;
+//     let m_input2_offset = input2_offset + input2_stride_n * gx + batch * input2_stride_b;
 
 
-    if(gy >= op_matmul.m && gx >= op_matmul.n){
-         return;
-    }
+//     if(gy >= op_matmul.m && gx >= op_matmul.n){
+//          return;
+//     }
 
-    var acc = ZERO;
-    for(var t = 0u; t < op_matmul.k; t+=TS1){
-        if(gy < op_matmul.m){
-            let tiledX = t + lx;
-            if (tiledX < op_matmul.k){
-                Asub[lx][ly] = v_input1[m_input1_offset + tiledX * input1_stride_k]; //may read at invalid key, but the value will not be used
-            }
-        }
-        if(gx < op_matmul.n){
-            let tiledY = t + ly;
-            if (tiledY < op_matmul.k){
-                Bsub[ly][lx] = v_input2[m_input2_offset + tiledY * input2_stride_k]; //may read at invalid key, but the value will not be used
-            } 
-        }
+//     var acc = ZERO;
+//     for(var t = 0u; t < op_matmul.k; t+=TS1){
+//         if(gy < op_matmul.m){
+//             let tiledX = t + lx;
+//             if (tiledX < op_matmul.k){
+//                 Asub[lx][ly] = v_input1[m_input1_offset + tiledX * input1_stride_k]; //may read at invalid key, but the value will not be used
+//             }
+//         }
+//         if(gx < op_matmul.n){
+//             let tiledY = t + ly;
+//             if (tiledY < op_matmul.k){
+//                 Bsub[ly][lx] = v_input2[m_input2_offset + tiledY * input2_stride_k]; //may read at invalid key, but the value will not be used
+//             } 
+//         }
 
-        workgroupBarrier();
+//         workgroupBarrier();
 
-        if(gy < op_matmul.m && gx < op_matmul.n){
-            let count = min(op_matmul.k - t, TS1);
+//         if(gy < op_matmul.m && gx < op_matmul.n){
+//             let count = min(op_matmul.k - t, TS1);
 
-            for(var k = 0u; k < count; k++){
-                acc += Asub[k][ly]*Bsub[k][lx];
-            }
+//             for(var k = 0u; k < count; k++){
+//                 acc += Asub[k][ly]*Bsub[k][lx];
+//             }
 
-        }
+//         }
 
-        workgroupBarrier();
-    }
-    if(gy < op_matmul.m && gx < op_matmul.n){
-        v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx] = acc;
-    }
-}
+//         workgroupBarrier();
+//     }
+//     if(gy < op_matmul.m && gx < op_matmul.n){
+//         v_dest[batch * output_size_of_one_batch + gy * op_matmul.n + gx] = acc;
+//     }
+// }
 
 #define WPT1 8
 #define RTRS 2u
