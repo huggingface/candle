@@ -66,6 +66,18 @@ impl Attr for GraphProto {
     }
 }
 
+impl AttrOwned for Vec<String> {
+    const TYPE: AttributeType = AttributeType::Strings;
+    fn get(attr: &onnx::AttributeProto) -> Result<Self> {
+        let mut ret = vec![];
+        for bytes in attr.strings.iter() {
+            let s = String::from_utf8(bytes.clone()).map_err(candle::Error::wrap)?;
+            ret.push(s);
+        }
+        Ok(ret)
+    }
+}
+
 impl AttrOwned for Tensor {
     const TYPE: AttributeType = AttributeType::Tensor;
     fn get(attr: &onnx::AttributeProto) -> Result<Self> {
@@ -1273,6 +1285,231 @@ fn simple_eval_(
                 let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(0.01);
                 let output = candle_nn::ops::leaky_relu(input, alpha.into())?;
                 values.insert(node.output[0].clone(), output);
+            }
+            "LSTM" => {
+                let direction = get_attr_opt(node, "direction")?.unwrap_or("forward");
+                let num_directions = if direction == "bidirectional" { 2 } else { 1 };
+                let hidden_size: i64 = get_attr(node, "hidden_size").copied()?;
+                let input_forget = get_attr_opt(node, "input_forget")?.copied().unwrap_or(0);
+                if input_forget != 0 {
+                    bail!("LSTM currently only supports input_forget == 0");
+                }
+                let activations_default = vec![
+                    "Sigmoid".to_string(),
+                    "Tanh".to_string(),
+                    "Tanh".to_string(),
+                ];
+                let activations = get_attr_opt_owned::<Vec<String>>(node, "activations")?
+                    .unwrap_or(activations_default.clone());
+                if activations != activations_default {
+                    bail!("LSTM currently only supports default activations ({activations_default:?})");
+                }
+                // activation_alpha and activation_beta don't apply to (Sigmoid, Tanh, Tanh) so ignoring them is okay
+                if get_attr_opt::<f32>(node, "clip")?.is_some() {
+                    bail!("LSTM does not currently support clip attribute");
+                }
+
+                // The shape format of inputs X, initial_h and outputs Y, Y_h.
+                // If 0, the following shapes are expected:
+                //     X.shape = [seq_length, batch_size, input_size],
+                //     Y.shape = [seq_length, num_directions, batch_size, hidden_size],
+                //     initial_h.shape = Y_h.shape = [num_directions, batch_size, hidden_size].
+                // If 1, the following shapes are expected:
+                //     X.shape = [batch_size, seq_length, input_size],
+                //     Y.shape = [batch_size, seq_length, num_directions, hidden_size],
+                //     initial_h.shape = Y_h.shape = [batch_size, num_directions, hidden_size].
+                let layout = get_attr_opt(node, "layout")?.copied().unwrap_or(0);
+                if layout != 0 {
+                    bail!("LSTM currently only supports layout == 0");
+                }
+
+                // The input sequences packed (and potentially padded) into one 3-D tensor
+                // with the shape of `[seq_length, batch_size, input_size]`.
+                let x = get(&node.input[0])?;
+                // XXX: depends on layout
+                let (seq_length, batch_size, _) = x.dims3()?;
+                // The weight tensor for the gates.
+                // Concatenation of `W[iofc]` and `WB[iofc]` (if bidirectional) along dimension 0.
+                // The tensor has shape `[num_directions, 4*hidden_size, input_size]`.
+                let w = get(&node.input[1])?;
+                // The recurrence weight tensor.
+                // Concatenation of `R[iofc]` and `RB[iofc]` (if bidirectional) along dimension 0.
+                // This tensor has shape `[num_directions, 4*hidden_size, hidden_size]`.
+                let r = get(&node.input[2])?;
+
+                // The bias tensor for input gate.
+                // Concatenation of `[Wb[iofc], Rb[iofc]]`, and `[WBb[iofc], RBb[iofc]]` (if bidirectional) along dimension 0.
+                // This tensor has shape `[num_directions, 8*hidden_size]`.
+                // Optional: If not specified - assumed to be 0.
+                let b_default: Tensor;
+                let b = match node.input.get(3) {
+                    Some(n) if !n.is_empty() => get(n)?,
+                    _ => {
+                        b_default = Tensor::zeros(
+                            (num_directions, 8 * hidden_size as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &b_default
+                    }
+                };
+
+                // Optional tensor specifying lengths of the sequences in a batch.
+                // If not specified - assumed all sequences in the batch to have length `seq_length`.
+                // It has shape `[batch_size]`.
+                let seq_lens_default: Tensor;
+                let seq_lens = match node.input.get(4) {
+                    Some(n) if !n.is_empty() => get(n)?,
+                    _ => {
+                        seq_lens_default =
+                            Tensor::full(seq_length as i64, (batch_size,), x.device())?;
+                        &seq_lens_default
+                    }
+                };
+
+                // Optional initial value of the hidden. If not specified - assumed to be 0.
+                // It has shape `[num_directions, batch_size, hidden_size]`.
+                let initial_h_default: Tensor;
+                let initial_h = match node.input.get(5) {
+                    Some(n) if !n.is_empty() => get(n)?,
+                    _ => {
+                        initial_h_default = Tensor::zeros(
+                            (num_directions, batch_size, hidden_size as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &initial_h_default
+                    }
+                };
+
+                // Optional initial value of the cell.
+                // If not specified - assumed to be 0.
+                // It has shape `[num_directions, batch_size, hidden_size]`.
+                let initial_c_default: Tensor;
+                let initial_c = match node.input.get(6) {
+                    Some(n) if !n.is_empty() => get(n)?,
+                    _ => {
+                        initial_c_default = Tensor::zeros(
+                            (num_directions, batch_size, hidden_size as usize),
+                            DType::F32,
+                            x.device(),
+                        )?;
+                        &initial_c_default
+                    }
+                };
+
+                // The weight tensor for peepholes.
+                // Concatenation of `P[iof]` and `PB[iof]` (if bidirectional) along dimension 0.
+                // It has shape `[num_directions, 3*hidde_size]`. Optional: If not specified - assumed to be 0.
+                let p_default = Tensor::zeros(
+                    (num_directions, 3 * hidden_size as usize),
+                    DType::F32,
+                    x.device(),
+                )?;
+                let p = match node.input.get(7) {
+                    Some(n) if !n.is_empty() => get(n)?,
+                    _ => &p_default,
+                };
+
+                // Equations (Default: f=Sigmoid, g=Tanh, h=Tanh):
+                //
+                // * it = f(Xt*(Wi^T) + Ht_1 * (Ri^T) + Pi (.) Ct_1 + Wbi + Rbi)
+                // * ft = f(Xt*(Wf^T) + Ht_1 * (Rf^T) + Pf (.) Ct_1 + Wbf + Rbf)
+                // * ct = g(Xt*(Wc^T) + Ht_1 * (Rc^T) + Wbc + Rbc)
+                // * Ct = ft (.) Ct_1 + it (.) ct
+                // * ot = f(Xt*(Wo^T) + Ht_1 * (Ro^T) + Po (.) Ct + Wbo + Rbo)
+                // * Ht = ot (.) h(Ct)
+                //
+                // `xt` denotes `x` at time `t`
+                // `xt_1` denotes `x` at time `t-1`
+                // `x (.) y` denotes Hadamard product (element-wise product)
+
+                // right now, limited to simple case
+                let p_is_zeros = (p.to_vec2::<f32>()?.iter()).all(|v| v.iter().all(|e| *e == 0.0));
+                let seq_lens_is_default =
+                    (seq_lens.to_vec1::<i64>()?.iter()).all(|e| *e as usize == seq_length);
+                if direction != "forward" || !p_is_zeros || !seq_lens_is_default {
+                    bail!("LSTM currently only supports direction == 'forward', p all zeros, and sequence lens with default value")
+                }
+
+                let idx_i = Tensor::arange(0 * hidden_size, 1 * hidden_size, x.device())?;
+                let idx_o = Tensor::arange(1 * hidden_size, 2 * hidden_size, x.device())?;
+                let idx_f = Tensor::arange(2 * hidden_size, 3 * hidden_size, x.device())?;
+                let idx_c = Tensor::arange(3 * hidden_size, 4 * hidden_size, x.device())?;
+                // these all have [num_directions, ...] shapes
+                let w = w.get(0)?; // w[iofc] has shape [4*hidden_size, input_size]
+                let r = r.get(0)?; // r[iofc] has shape [4*hidden_size, hidden_size]
+                let b = b.get(0)?; // concat of [wb[iofc],rb[iofc]] has shape [8*hidden_size]
+                let idx_wb = Tensor::arange(0 * hidden_size, 4 * hidden_size, x.device())?;
+                let idx_rb = Tensor::arange(4 * hidden_size, 8 * hidden_size, x.device())?;
+                let wb = b.index_select(&idx_wb, 0)?;
+                let rb = b.index_select(&idx_rb, 0)?;
+                let bias = wb.add(&rb)?;
+                let c = initial_c.get(0)?;
+                let h = initial_h.get(0)?;
+
+                let f1 = candle_nn::ops::sigmoid;
+                let f2 = Tensor::tanh;
+                let f3 = Tensor::tanh;
+                let mut c_last = c;
+                let mut h_last = h;
+
+                // for p == 0, P[ifo] = 0
+                //
+                // * it = f(Xt*(Wi^T) + Ht_1*(Ri^T) + Wbi + Rbi)
+                // * ft = f(Xt*(Wf^T) + Ht_1*(Rf^T) + Wbf + Rbf)
+                // * ct = g(Xt*(Wc^T) + Ht_1*(Rc^T) + Wbc + Rbc)
+                // * Ct = ft (.) Ct_1 + it (.) ct
+                // * ot = f(Xt*(Wo^T) + Ht_1*(Ro^T) + Wbo + Rbo)
+                // * Ht = ot (.) h(Ct)
+                let h_acc = if node.output.get(0).map(String::as_str).unwrap_or("") != "" {
+                    Some(Tensor::zeros(
+                        (seq_length, num_directions, batch_size, hidden_size as usize),
+                        x.dtype(),
+                        x.device(),
+                    )?)
+                } else {
+                    None
+                };
+                let w = w.transpose(0, 1)?;
+                let r = r.transpose(0, 1)?;
+                for t in 0..seq_length {
+                    let x = x.get(t)?;
+                    let iofc_lt = x.matmul(&w)?; // [batch_size, input_size] * [input_size, 4*hidden_size]
+                    let iofc_rt = h_last.matmul(&r)?; // [batch_size, hidden_size] * [hidden_size, 4*hidden_size]
+                    let iofc_inner = iofc_lt.add(&iofc_rt)?.add(&bias.repeat((batch_size, 1))?)?; // [batch_size, 4*hidden_size] + [batch_size, 4*hidden_size] + [4*hidden_size]
+                    let i_inner = iofc_inner.index_select(&idx_i, 1)?; // [batch_size, hidden_size]
+                    let o_inner = iofc_inner.index_select(&idx_o, 1)?; // [batch_size, hidden_size]
+                    let f_inner = iofc_inner.index_select(&idx_f, 1)?; // [batch_size, hidden_size]
+                    let c_inner = iofc_inner.index_select(&idx_c, 1)?; // [batch_size, hidden_size]
+                    let i = f1(&i_inner)?; // [batch_size, hidden_size]
+                    let f = f1(&f_inner)?; // [batch_size, hidden_size]
+                    let c = f2(&c_inner)?; // [batch_size, hidden_size]
+                    let c = f.mul(&c_last)?.add(&i.mul(&c)?)?; // [batch_size, hidden_size] (.) [batch_size, hidden_size] + [batch_size, hidden_size] (.) [batch_size, hidden_size]
+                    let o = f1(&o_inner)?; // [batch_size, hidden_size]
+                    h_last = o.mul(&f3(&c)?)?; // [batch_size, hidden_size] (.) [batch_size, hidden_size]
+                    c_last = c;
+                    if let Some(h_acc) = &h_acc {
+                        let h_last = h_last.reshape((1, 1, batch_size, hidden_size as usize))?;
+                        h_acc.slice_set(&h_last, 0, t)?;
+                    }
+                }
+
+                if let Some(name) = node.output.get(0) {
+                    values.insert(name.clone(), h_acc.unwrap());
+                }
+                if let Some(name) = node.output.get(1) {
+                    values.insert(
+                        name.clone(),
+                        h_last.reshape((num_directions, batch_size, hidden_size as usize))?,
+                    );
+                }
+                if let Some(name) = node.output.get(2) {
+                    values.insert(
+                        name.clone(),
+                        c_last.reshape((num_directions, batch_size, hidden_size as usize))?,
+                    );
+                }
             }
             op_type => bail!("unsupported op_type {op_type} for op {node:?}"),
         }
