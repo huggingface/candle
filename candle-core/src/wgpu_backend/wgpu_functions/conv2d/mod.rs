@@ -55,7 +55,7 @@ pub fn queue_conv2d(
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (params.out_w() as u32 + 15) / 16,
@@ -118,7 +118,7 @@ pub fn queue_conv2d_transpose(
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((params.out_w() - params.output_padding) as u32 + 7) / 8,
@@ -177,7 +177,7 @@ pub fn queue_conv1d(
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (params.l_out() as u32 + 63) / 64,
@@ -233,7 +233,7 @@ pub fn queue_conv1d_transpose(
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((params.l_out() - params.output_padding) as u32 + 63) / 64,

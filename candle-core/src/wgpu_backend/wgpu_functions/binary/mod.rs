@@ -47,7 +47,7 @@ pub fn queue_binary_buffer_from_buffer(
             buffer_input2,
         );
         enqueue(
-            dev,
+            meta,
             pipeline,
             bind_group,
             lay1.shape().elem_count() as u32,
@@ -74,7 +74,7 @@ pub fn queue_binary_buffer_from_buffer(
         );
 
         enqueue(
-            dev,
+            meta,
             pipeline,
             bind_group,
             lay1.shape().elem_count() as u32,

@@ -42,7 +42,7 @@ pub fn queue_cmp_buffer_from_buffer(
         buffer_input2,
     );
     enqueue(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((layout_input1.shape().elem_count() + 3) / 4) as u32,

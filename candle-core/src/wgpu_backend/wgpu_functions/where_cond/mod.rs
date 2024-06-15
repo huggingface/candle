@@ -24,7 +24,7 @@ pub fn queue_where_cond_u32(
 
     let bind_group = create_bind_group_input3(dev, pipeline.clone(), meta_offset,dest_buffer, input_buffer, true_buffer, false_buffer);
     enqueue(
-        dev,
+        meta,
         pipeline,
         bind_group,
         layout_input.shape().elem_count() as u32,

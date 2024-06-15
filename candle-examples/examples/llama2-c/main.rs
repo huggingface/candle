@@ -143,7 +143,7 @@ fn main() -> anyhow::Result<()> {
                 prompt: "".to_string(),
                 config: None,
                 model_id: "karpathy/tinyllamas".to_string(),
-                which_model: "stories15M.bin".to_string(),
+                which_model: "stories110M.bin".to_string(),
             };
             run_inference(&cmd, &args)?
         }

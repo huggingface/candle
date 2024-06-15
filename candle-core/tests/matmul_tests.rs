@@ -112,7 +112,7 @@ test_device!(mm_layout, mm_layout_cpu, mm_layout_gpu, mm_layout_metal, mm_layout
 
 #[test]
 fn big_matmul_webgpu()-> Result<()> {
-    let b = 1;
+    //let b = 1;
     let m = 17;
     let n = 17;
     let k = 17;

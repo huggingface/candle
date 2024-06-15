@@ -18,7 +18,7 @@ pub mod gather;
 use std::{borrow::Cow, sync::{Arc, MutexGuard}};
 use wgpu::{util::DeviceExt, BindGroup, BindingResource, Buffer, BufferBinding, ComputePipeline, ShaderModule};
 use crate::{wgpu_backend::device::WgpuDevice, Error, Layout, WebGpuError};
-use super::device::{MlQueue, META_BUFFER_SIZE};
+use super::device::{MlQueue, QueueBuffer, META_BUFFER_SIZE};
 use crate::DType;
 
 pub use binary::queue_binary_buffer_from_buffer;
@@ -194,7 +194,7 @@ pub fn create_buffer_init<T: bytemuck::Pod>(dev: &WgpuDevice, data: &[T]) -> Buf
 }
 
 fn enqueue_workgroups(
-    dev: &WgpuDevice,
+    mut command_queue : MutexGuard<QueueBuffer>,
     pipeline: Arc<ComputePipeline>,
     bind_group: BindGroup,
     x: u32,
@@ -204,18 +204,18 @@ fn enqueue_workgroups(
     _debug: super::device::QueueDebugInfo,
 ) {
     if x > 65535 || y > 65535 || z > 65535{
-        enqueue_workgroups_indirect(dev, pipeline, bind_group, x, y, z,  #[cfg(feature = "wgpu_debug")] _debug);
+        enqueue_workgroups_indirect(command_queue, pipeline, bind_group,  x, y, z,  #[cfg(feature = "wgpu_debug")] _debug);
     }
     else{
         let q = MlQueue::Dispatch(
             super::device::MlQueueDispatch{ x, y, z, pipeline: pipeline, bind_group, indirect_buffer: None, #[cfg(feature = "wgpu_debug")] debug: _debug});
-        dev.command_queue.lock().unwrap().push(q);
+            command_queue.command_queue.push(q);
     }
 }
 
 
 fn enqueue_workgroups_indirect(
-    dev: &WgpuDevice,
+    mut command_queue : MutexGuard<QueueBuffer>,
     pipeline: Arc<ComputePipeline>,
     bind_group: BindGroup,
     x: u32,
@@ -226,7 +226,8 @@ fn enqueue_workgroups_indirect(
 ) {
     let data = DispatchIndirectArgs { x, y, z };
 
-    let mut indirect_array = dev.indirect_array.lock().unwrap();
+
+    let indirect_array = &mut command_queue.indirect_array;
     let indirect_offset = indirect_array.len();
     indirect_array.push(data);
     
@@ -241,7 +242,7 @@ fn enqueue_workgroups_indirect(
             #[cfg(feature = "wgpu_debug")]
             debug: _debug
     });
-    dev.command_queue.lock().unwrap().push(q);
+   command_queue.command_queue.push(q);
 }
 
 
@@ -258,21 +259,19 @@ fn next_divisible_by_n(value: i32, n: i32) -> i32 {
 }
 
 //size: size you want to add
-fn get_meta(dev : &WgpuDevice, size : u32) -> (MutexGuard<MetaArray>, u32){
-    let mut meta_array = dev.meta_array.lock().unwrap();
-
-    let meta_array_length = meta_array.0.len() as i32;
-
+fn get_meta(dev : &WgpuDevice, size : u32) -> (MutexGuard<QueueBuffer>, u32){
+    let mut command_queue = dev.command_queue.lock().unwrap();
+    let meta_array_length = command_queue.meta_array.0.len() as i32;
     let meta_offset = next_divisible_by_n(meta_array_length, dev.device.limits().min_storage_buffer_offset_alignment as i32 / 4);
 
     if meta_offset as u32 + size > META_BUFFER_SIZE / 4{
-        flush_gpu_command(dev, &mut meta_array);
-        return (meta_array, 0);
+        flush_gpu_command(dev, &mut command_queue);
+        return (command_queue, 0);
     }
 
-    meta_array.0.extend(std::iter::repeat(0).take((meta_offset - meta_array_length) as usize));
+    command_queue.meta_array.0.extend(std::iter::repeat(0).take((meta_offset - meta_array_length) as usize));
 
-    return (meta_array, meta_offset as u32);
+    return (command_queue, meta_offset as u32);
 }
 
 
@@ -322,69 +321,146 @@ fn end_debug_queue(dev: &WgpuDevice, length : u32, global_index : u32, encoder :
     dev.debug.counter.store(global_index, std::sync::atomic::Ordering::Relaxed);
 }
 
-pub (crate) fn flush_gpu_command(dev: &WgpuDevice, meta_array : &mut MutexGuard<MetaArray>){
-    let mut queue = dev.command_queue.lock().unwrap();
-    if queue.len() > 0{
+pub (crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer : &mut QueueBuffer){
+    if queue_buffer.command_queue.len() > 0{
+
+        let mut cache = dev.cache.lock().unwrap();
+        let cache = cache.as_mut(); 
+        match cache{
+            Some(cache) => {
+                let mut queue = cache.queue.lock().unwrap();
+
+                let mut new_buffer = QueueBuffer::new();
+
+                new_buffer.command_queue.append(&mut queue_buffer.command_queue);
+                new_buffer.meta_array.0.append(&mut queue_buffer.meta_array.0);
+                new_buffer.indirect_array.append(&mut queue_buffer.indirect_array);
+                queue.push(new_buffer);
+                return;
+            },
+            None => {},
+        };
 
         #[cfg(feature = "wgpu_debug")]
         let (global_index, query_set) =  init_debug_queue(dev, queue.len() as u32 * 2);
         
         #[cfg(feature = "wgpu_debug")]
         let mut debug_index = 0;
+        
+        dev.queue.write_buffer(&dev.meta_buffer, 0, &bytemuck::cast_slice(&queue_buffer.meta_array.0[..]));
+        queue_buffer.meta_array.0.clear(); 
 
-        let meta_array_slice = &meta_array.0[..];
-        dev.queue.write_buffer(&dev.meta_buffer, 0, &bytemuck::cast_slice(meta_array_slice));
-        meta_array.0.clear(); 
-
-        let indirect_array = &mut dev.indirect_array.lock().unwrap();
-        dev.queue.write_buffer(&dev.indirect_buffer, 0, &bytemuck::cast_slice(&indirect_array[..]));
-        indirect_array.clear();    
-
-        let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        dev.queue.write_buffer(&dev.indirect_buffer, 0, &bytemuck::cast_slice(&queue_buffer.indirect_array[..]));
+        queue_buffer.indirect_array.clear();    
         {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: None,
-                timestamp_writes: None,
-            });
-   
-            for q in queue.iter(){
-                match q{
-                    MlQueue::Dispatch(q) => {
-                        
-                        #[cfg(feature = "wgpu_debug")]
-                        cpass.write_timestamp(&query_set, debug_index);
-                        
-                        cpass.set_pipeline(&q.pipeline);
-                        cpass.set_bind_group(0, &q.bind_group, &[]);
-                        if let Some(indirect_buffer_index) = &q.indirect_buffer{
+            let queue = &queue_buffer.command_queue;
 
-                            cpass.dispatch_workgroups_indirect(& dev.indirect_buffer, (indirect_buffer_index * std::mem::size_of::<DispatchIndirectArgs>()) as u64);
-                        }
-                        else{
-                            cpass.dispatch_workgroups(q.x, q.y, q.z);
-                        }
+            let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: None,
+                    timestamp_writes: None,
+                });
+    
+                for q in queue.iter(){
+                    match q{
+                        MlQueue::Dispatch(q) => {
+                            
+                            #[cfg(feature = "wgpu_debug")]
+                            cpass.write_timestamp(&query_set, debug_index);
+                            
+                            cpass.set_pipeline(&q.pipeline);
+                            cpass.set_bind_group(0, &q.bind_group, &[]);
+                            if let Some(indirect_buffer_index) = &q.indirect_buffer{
 
-                        #[cfg(feature = "wgpu_debug")]
-                        {
-                            cpass.write_timestamp(&query_set, debug_index + 1);
-                            dev.debug.insert_info(global_index + debug_index * 8,(q.debug.name.as_ref().unwrap().to_owned(), q.debug.output_size, q.x, q.y, q.z));
-                            debug_index+= 2;
+                                cpass.dispatch_workgroups_indirect(& dev.indirect_buffer, (indirect_buffer_index * std::mem::size_of::<DispatchIndirectArgs>()) as u64);
+                            }
+                            else{
+                                cpass.dispatch_workgroups(q.x, q.y, q.z);
+                            }
+
+                            #[cfg(feature = "wgpu_debug")]
+                            {
+                                cpass.write_timestamp(&query_set, debug_index + 1);
+                                dev.debug.insert_info(global_index + debug_index * 8,(q.debug.name.as_ref().unwrap().to_owned(), q.debug.output_size, q.x, q.y, q.z));
+                                debug_index+= 2;
+                            }
                         }
                     }
                 }
             }
+            #[cfg(feature = "wgpu_debug")]
+            end_debug_queue(dev, queue.len() as u32 * 2, global_index, &mut encoder, &query_set);
+            
+            dev.queue.submit(Some(encoder.finish()));
         }
-        #[cfg(feature = "wgpu_debug")]
-        end_debug_queue(dev, queue.len() as u32 * 2, global_index, &mut encoder, &query_set);
-        
-        dev.queue.submit(Some(encoder.finish()));
-        queue.clear();
+        queue_buffer.command_queue.clear();
     }
 }
 
+// pub (crate) fn flush_gpu_command_old(dev: &WgpuDevice, meta_array : &mut MutexGuard<MetaArray>){
+//     let mut queue = dev.command_queue.command_queue.lock().unwrap();
+//     if queue.len() > 0{
+
+//         #[cfg(feature = "wgpu_debug")]
+//         let (global_index, query_set) =  init_debug_queue(dev, queue.len() as u32 * 2);
+        
+//         #[cfg(feature = "wgpu_debug")]
+//         let mut debug_index = 0;
+
+//         let meta_array_slice = &meta_array.0[..];
+//         dev.queue.write_buffer(&dev.meta_buffer, 0, &bytemuck::cast_slice(meta_array_slice));
+//         meta_array.0.clear(); 
+
+//         let indirect_array = &mut dev.command_queue.indirect_array.lock().unwrap();
+//         dev.queue.write_buffer(&dev.indirect_buffer, 0, &bytemuck::cast_slice(&indirect_array[..]));
+//         indirect_array.clear();    
+
+//         let mut encoder = dev.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+//         {
+//             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+//                 label: None,
+//                 timestamp_writes: None,
+//             });
+   
+//             for q in queue.iter(){
+//                 match q{
+//                     MlQueue::Dispatch(q) => {
+                        
+//                         #[cfg(feature = "wgpu_debug")]
+//                         cpass.write_timestamp(&query_set, debug_index);
+                        
+//                         cpass.set_pipeline(&q.pipeline);
+//                         cpass.set_bind_group(0, &q.bind_group, &[]);
+//                         if let Some(indirect_buffer_index) = &q.indirect_buffer{
+
+//                             cpass.dispatch_workgroups_indirect(& dev.indirect_buffer, (indirect_buffer_index * std::mem::size_of::<DispatchIndirectArgs>()) as u64);
+//                         }
+//                         else{
+//                             cpass.dispatch_workgroups(q.x, q.y, q.z);
+//                         }
+
+//                         #[cfg(feature = "wgpu_debug")]
+//                         {
+//                             cpass.write_timestamp(&query_set, debug_index + 1);
+//                             dev.debug.insert_info(global_index + debug_index * 8,(q.debug.name.as_ref().unwrap().to_owned(), q.debug.output_size, q.x, q.y, q.z));
+//                             debug_index+= 2;
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//         #[cfg(feature = "wgpu_debug")]
+//         end_debug_queue(dev, queue.len() as u32 * 2, global_index, &mut encoder, &query_set);
+        
+//         dev.queue.submit(Some(encoder.finish()));
+//         queue.clear();
+//     }
+// }
+
 
 fn enqueue(
-    dev: &WgpuDevice,
+    command_queue : MutexGuard<QueueBuffer>,
     pipeline: Arc<ComputePipeline>,
     bind_group: BindGroup,
     length: u32,
@@ -392,7 +468,7 @@ fn enqueue(
     _debug: super::device::QueueDebugInfo,
 ) {
     return enqueue_workgroups(
-        dev,
+        command_queue,
         pipeline,
         bind_group,
         (length + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE,
@@ -552,7 +628,8 @@ fn create_bind_group_input3(
 
 
 pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()>{
-    flush_gpu_command(dev, &mut dev.meta_array.lock().unwrap());
+    let mut command_queue = dev.command_queue.lock().unwrap();
+    flush_gpu_command(dev, &mut command_queue);
 
     let (sender, receiver) = flume::bounded(1);
     dev.queue.on_submitted_work_done(move || sender.send(()).unwrap());
@@ -566,8 +643,19 @@ pub fn read_data_from_gpu<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &Buffer,
 ) -> Vec<T> {
+    {
+        let mut cache = dev.cache.lock().unwrap();
+        let cache = cache.as_mut(); 
+        match cache{
+            Some(_) => {
+                panic!("can not read data to cpu, while in recording mode")
+            },
+            None => {},
+        };
+    }
 
-    flush_gpu_command(dev, &mut dev.meta_array.lock().unwrap());
+    let mut command_queue = dev.command_queue.lock().unwrap();
+    flush_gpu_command(dev, &mut command_queue);
     //send all previous commands to the gpu 
     let dest_size = buffer.size();
 
@@ -628,7 +716,20 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &Buffer,
 ) -> Vec<T> {
-    flush_gpu_command(dev, &mut dev.meta_array.lock().unwrap()); //send all previous commands to the gpu 
+
+    {
+        let mut cache = dev.cache.lock().unwrap();
+        let cache = cache.as_mut(); 
+        match cache{
+            Some(_) => {
+                panic!("can not read data to cpu, while in recording mode")
+            },
+            None => {},
+        };
+    }
+
+    let mut command_queue = dev.command_queue.lock().unwrap();
+    flush_gpu_command(dev, &mut command_queue); //send all previous commands to the gpu 
     let dest_size = buffer.size();
 
     let staging_buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {

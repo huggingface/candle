@@ -27,7 +27,7 @@ pub fn queue_gather(
     let bind_group =
         create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (lay_index.shape().elem_count() as u32 + 63) / 64,
@@ -66,7 +66,7 @@ pub fn queue_scatter_add_inplace(
     let bind_group =
         create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_index, buffer_src);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((lay_index.shape().elem_count() / selected_index_length) as u32 + 63) / 64,
@@ -103,7 +103,7 @@ pub fn queue_index_add_inplace(
     let bind_group =
         create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_index, buffer_src);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((lay_input.shape().elem_count() / selected_index_length) as u32 + 63) / 64,

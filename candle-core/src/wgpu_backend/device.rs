@@ -10,7 +10,8 @@ use crate::{notImplemented, wrongType, Layout};
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, Measurements,MInfo};
 
-use super::wgpu_functions::{DispatchIndirectArgs, MetaArray};
+use super::model::ModelCache;
+use super::wgpu_functions::{DispatchIndirectArgs, MetaArray, MetaArrayToU32};
 use super::wgpu_functions::{self, create_buffer, create_buffer_init, unary::UnaryOperation};
 use super::WgpuStorage;
 
@@ -77,20 +78,42 @@ pub struct ShaderModuleComputePipelines{
     pipelines : Mutex<HashMap<Pipelines, Arc<wgpu::ComputePipeline>>>
 }
 
+//a struct, where all operations are chunked 
+#[derive(Debug)]
+pub struct QueueBuffer{
+    pub (crate) command_queue : Vec<MlQueue>,
+    pub (crate) meta_array : MetaArray,
+    pub (crate) indirect_array : Vec<DispatchIndirectArgs>,
+}
+
+impl QueueBuffer {
+    pub fn new() -> Self {
+        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), indirect_array : vec![] }
+    }
+
+    pub (crate) fn add_layout(&mut self, layout : &Layout){
+        self.meta_array.add_layout(layout);
+    } 
+
+    pub (crate) fn add<T : MetaArrayToU32>(&mut self, value : T){
+        self.meta_array.add(value);
+    }
+
+}
+
 #[derive(Debug, Clone)]
 pub struct  WgpuDevice {
     pub device : Arc<wgpu::Device>, 
     pub queue : Arc<wgpu::Queue>,
     pub (crate) shader : Arc<Mutex<HashMap<wgpu_functions::Shader, ShaderModuleComputePipelines>>>,
-    pub (crate) rand_state : Arc<Mutex<rand::rngs::StdRng>>,
+    pub (crate) rand_state : Arc<Mutex<rand::rngs::StdRng>>,   
 
-    pub (crate) command_queue : Arc<Mutex<Vec<MlQueue>>>,
-
+    pub (crate) command_queue : Arc<Mutex<QueueBuffer>>,
     pub (crate) meta_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
-    pub (crate) meta_array : Arc<Mutex<MetaArray>>,
-
     pub (crate) indirect_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
-    pub (crate) indirect_array : Arc<Mutex<Vec<DispatchIndirectArgs>>>,
+
+    pub (crate) cache : Arc<Mutex<Option<Arc<ModelCache>>>>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
+
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
 }
@@ -122,6 +145,7 @@ pub (crate) enum Pipelines{
     IndexSelect,
     Copy2d,
     CopyStrided,
+    Copy,
     ConvertF32ToU32,
     ConvertU32ToF32,
     ConvertU8ToF32,
@@ -151,15 +175,14 @@ impl WgpuDevice{
 
         #[cfg(feature = "wgpu_debug")]
         let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
+        #[cfg(not(feature = "wgpu_debug"))]
+        let features = wgpu::Features::empty();
+
         limits.max_storage_buffers_per_shader_stage = 5;
-        
         limits.max_storage_buffer_binding_size = adapter.limits().max_storage_buffer_binding_size; //use as much as possible
         limits.max_buffer_size = adapter.limits().max_buffer_size; //use as much as possible
 
-        #[cfg(not(feature = "wgpu_debug"))]
-        let features = wgpu::Features::empty();
-        
-        //limits.max_compute_workgroups_per_dimension = 1024*1024;
+     
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
         //  `features` being the available features.
         let (device, queue) = adapter
@@ -197,12 +220,10 @@ impl WgpuDevice{
             rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy())),
             #[cfg(feature = "wgpu_debug")]
             debug : debug_info,
-            command_queue: Arc::new(Mutex::new(vec![])),
+            command_queue: Arc::new(Mutex::new(QueueBuffer::new())),
             meta_buffer : Arc::new(meta_buffer),
-            meta_array : Arc::new(Mutex::new(MetaArray::new(META_BUFFER_SIZE))),
             indirect_buffer : Arc::new(indirect_buffer),
-            indirect_array : Arc::new(Mutex::new(vec![]))
-
+            cache : Arc::new(Mutex::new(None))
         })
     }
 
@@ -278,6 +299,7 @@ impl WgpuDevice{
             Pipelines::IndexSelect => "index_select",
             Pipelines::Copy2d => "copy2d",
             Pipelines::CopyStrided => "copy_strided",
+            Pipelines::Copy => "copy",
             Pipelines::WhereCondU32 => "where_cond_index_u32",
             Pipelines::MaxPool2d => "max_pool2d",
             Pipelines::AvgPool2d => "avg_pool2d",

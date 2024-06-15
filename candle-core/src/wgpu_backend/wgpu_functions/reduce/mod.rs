@@ -55,7 +55,7 @@ pub fn queue_reduce_from_buffer_op(
 
     let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         1,

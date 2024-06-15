@@ -63,7 +63,8 @@ impl WgpuStorage {
                     dst_offset,
                     start,
                     to_copy,
-                );
+                    self.dtype
+                )?;
             }
             None => {
                 wgpu_functions::queue_copy_strided(self.device(), &dst, &self.buffer,  self.dtype, src_l, dst_offset as u32)?; 
@@ -86,7 +87,8 @@ impl crate::backend::BackendStorage for WgpuStorage {
             0,
             layout.start_offset(),
             layout.shape().elem_count() as usize,
-        );
+            self.dtype
+        )?;
         return Ok(WgpuStorage::new(
             buffer_dest,
             self.device().clone(),

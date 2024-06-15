@@ -41,7 +41,7 @@ pub fn queue_upsample1d(
         buffer_input1,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (target_size as u32 + 63) / 63,
@@ -95,7 +95,7 @@ pub fn queue_upsample2d(
         buffer_input1,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (target_size.1 as u32 + 7) / 8,

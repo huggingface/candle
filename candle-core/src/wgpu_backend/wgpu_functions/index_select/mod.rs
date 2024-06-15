@@ -43,7 +43,7 @@ pub fn queue_index_select(
     let bind_group =
         create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (length + 7) / 8,

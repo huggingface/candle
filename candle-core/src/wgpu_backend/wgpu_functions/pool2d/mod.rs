@@ -52,7 +52,7 @@ pub fn queue_max_pool2d(
         buffer_input1,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (w_out as u32 + 7) / 8,
@@ -114,7 +114,7 @@ pub fn queue_avg_pool2d(
         buffer_input1,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (w_out as u32 + 7) / 8,

@@ -32,7 +32,7 @@ pub fn queue_rms_norm(
 
     let bind_group = create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input1, buffer_alpha);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         1,

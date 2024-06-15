@@ -26,7 +26,7 @@ pub fn queue_softmax(
 
     let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input1);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         1,

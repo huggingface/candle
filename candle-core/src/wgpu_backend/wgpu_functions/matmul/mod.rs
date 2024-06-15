@@ -47,7 +47,7 @@ pub fn queue_matmul_buffer1(
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (k  + 15) / 16,
@@ -104,7 +104,7 @@ pub fn queue_matmul_buffer1b(
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((k + 15) / 16  + 15) / 16,
@@ -161,7 +161,7 @@ pub fn queue_matmul_buffer3(
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (k + 15) / 16,
@@ -229,7 +229,7 @@ pub fn queue_matmul_buffer4(
             buffer_input2,
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             k  / 16,
@@ -270,7 +270,7 @@ pub fn queue_matmul_buffer4(
             buffer_input2,
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             (k + 15)  / 16,
@@ -340,7 +340,7 @@ pub fn queue_matmul_buffer(
             buffer_input2,
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             k  / 16,
@@ -381,7 +381,7 @@ pub fn queue_matmul_buffer(
             buffer_input2,
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             (k + 15)  / 16,
@@ -451,7 +451,7 @@ pub fn queue_matmul_buffer6(
             buffer_input2,
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             k  / 16,
@@ -492,7 +492,7 @@ pub fn queue_matmul_buffer6(
             buffer_input2,
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             (k + 15)  / 16,
