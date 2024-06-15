@@ -55,6 +55,10 @@ pub struct LSTMState {
 }
 
 impl LSTMState {
+    pub fn new(h: Tensor, c: Tensor) -> Self {
+        LSTMState { h, c }
+    }
+
     /// The hidden state vector, which is also the output of the LSTM.
     pub fn h(&self) -> &Tensor {
         &self.h
