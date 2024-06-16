@@ -10,12 +10,15 @@ pub struct Model {
     logits_processor: LogitsProcessor,
     tokens: Vec<u32>,
     repeat_penalty: f32,
-    device : Device,
+    device : Device
 }
 
 impl Model {
     async fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
         const REPEAT_LAST_N: usize = 64;
+        
+        candle::wgpu::model::start_cache(&self.device, 1);
+       
         let input = Tensor::new(tokens, &self.device)?.unsqueeze(0)?;
         //info!("INPUT:");
         //input.debug_log().await?;

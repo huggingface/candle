@@ -65,7 +65,7 @@ pub (crate) struct MlQueueDispatch{
     pub (crate) y : u32, 
     pub (crate) z : u32,
     pub (crate) pipeline : Arc<wgpu::ComputePipeline>,
-    pub (crate) bind_group : wgpu::BindGroup,
+    pub (crate) bind_group : Arc<wgpu::BindGroup>,
     pub (crate) indirect_buffer : Option<usize>,
     
     #[cfg(feature = "wgpu_debug")]
@@ -104,6 +104,8 @@ impl QueueBuffer {
 #[derive(Debug, Clone)]
 pub struct  WgpuDevice {
     pub device : Arc<wgpu::Device>, 
+    pub device_limits : Arc<wgpu::Limits>, //we cache the limits here, because device.limit() was relatively slow on the browser
+
     pub queue : Arc<wgpu::Queue>,
     pub (crate) shader : Arc<Mutex<HashMap<wgpu_functions::Shader, ShaderModuleComputePipelines>>>,
     pub (crate) rand_state : Arc<Mutex<rand::rngs::StdRng>>,   
@@ -112,7 +114,9 @@ pub struct  WgpuDevice {
     pub (crate) meta_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
     pub (crate) indirect_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
 
-    pub (crate) cache : Arc<Mutex<Option<Arc<ModelCache>>>>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
+    pub (crate) cache : Arc<Mutex<Option<ModelCache>>>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
+    pub (crate) cache_counter : Arc<Mutex<u32>>,
+
 
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
@@ -160,7 +164,7 @@ pub (crate) enum Pipelines{
 }
 
 
-pub (crate) const META_BUFFER_SIZE : u32 = 10000;
+pub (crate) const META_BUFFER_SIZE : u32 = 65536;
 pub (crate) const INDIRECT_BUFFER_SIZE : u32 = 10000;
 
 impl WgpuDevice{
@@ -213,8 +217,10 @@ impl WgpuDevice{
             mapped_at_creation: false,
         });
 
+        let device_limits = device.limits();
         Ok(WgpuDevice {
             device: Arc::new(device),
+            device_limits: Arc::new(device_limits),
             queue: Arc::new(queue),
             shader : Arc::new(Mutex::new(HashMap::new())),
             rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy())),
@@ -223,7 +229,8 @@ impl WgpuDevice{
             command_queue: Arc::new(Mutex::new(QueueBuffer::new())),
             meta_buffer : Arc::new(meta_buffer),
             indirect_buffer : Arc::new(indirect_buffer),
-            cache : Arc::new(Mutex::new(None))
+            cache : Arc::new(Mutex::new(None)),
+            cache_counter : Arc::new(Mutex::new(0))
         })
     }
 

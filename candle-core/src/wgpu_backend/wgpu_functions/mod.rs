@@ -169,34 +169,93 @@ pub fn get_shader(device: &wgpu::Device, shader: &'static str) -> ShaderModule {
 }
 
 /// Size is in Bytes!
-pub fn create_buffer(dev: &WgpuDevice, size: usize) -> Buffer {
-    let buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
+pub fn create_buffer(dev: &WgpuDevice, size: usize) -> Arc<Buffer> {
+    let mut cache = dev.cache.lock().unwrap();
+
+    let create_new = || { Arc::new(dev.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: size as u64,
         usage: wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_SRC
             | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
-    });
-    buffer
+    }))};
+
+    match cache.as_mut() {
+        Some(cache) => {
+            let buffer_index = cache.counter_buffer;
+            let buffer;
+            if cache.cached_buffer.len() > buffer_index as usize {
+                buffer = cache.cached_buffer[buffer_index as usize].clone();
+                
+                if buffer.size() as usize != size{
+                    panic!("Error using Cache, Size mismatch: cached: {}, creating: {}", buffer.size(), size)
+                }
+            }
+            else{
+                buffer = create_new();
+                cache.cached_buffer.push(buffer.clone());
+                create_new();
+            };
+            cache.counter_buffer += 1;
+            return buffer;
+        },
+        None => create_new()
+    }
 }
 
-pub fn create_buffer_init<T: bytemuck::Pod>(dev: &WgpuDevice, data: &[T]) -> Buffer {
-    let buffer = dev
+pub fn create_buffer_init<T: bytemuck::Pod>(dev: &WgpuDevice, data: &[T]) -> Arc<Buffer> {
+
+    let create_new = || {
+        let buffer = dev
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(data),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
         });
+        Arc::new(buffer)
+    };
 
-    buffer
+    let mut cache = dev.cache.lock().unwrap();
+    match cache.as_mut() {
+        Some(cache) => {
+            let buffer_index = cache.counter_buffer;
+            let buffer;
+            if cache.cached_buffer.len() > buffer_index as usize {
+                buffer = cache.cached_buffer[buffer_index as usize].clone();
+                let data = bytemuck::cast_slice(data);
+                if buffer.size() as usize != data.len(){
+                    panic!("Error using Cache, Size mismatch: cached: {}, creating: {}", buffer.size(), data.len())
+                }
+                dev.queue.write_buffer(&buffer, 0, data);
+            }
+            else{
+                buffer = create_new();
+                cache.cached_buffer.push(buffer.clone());
+                create_new();
+            };
+            cache.counter_buffer += 1;
+            return buffer;
+        },
+        None => create_new()
+    }
+
+    // let cache = dev.cache.lock().unwrap();
+    // match cache.as_ref() {
+    //     Some(_) => {
+    //         panic!("Cache currently not Supported for Buffers, that input Values")
+    //     },
+    //     None => {}
+    // }
+
+   
 }
 
 fn enqueue_workgroups(
     mut command_queue : MutexGuard<QueueBuffer>,
     pipeline: Arc<ComputePipeline>,
-    bind_group: BindGroup,
+    bind_group: Arc<BindGroup>,
     x: u32,
     y: u32,
     z: u32,
@@ -217,7 +276,7 @@ fn enqueue_workgroups(
 fn enqueue_workgroups_indirect(
     mut command_queue : MutexGuard<QueueBuffer>,
     pipeline: Arc<ComputePipeline>,
-    bind_group: BindGroup,
+    bind_group: Arc<BindGroup>,
     x: u32,
     y: u32,
     z: u32,
@@ -262,7 +321,7 @@ fn next_divisible_by_n(value: i32, n: i32) -> i32 {
 fn get_meta(dev : &WgpuDevice, size : u32) -> (MutexGuard<QueueBuffer>, u32){
     let mut command_queue = dev.command_queue.lock().unwrap();
     let meta_array_length = command_queue.meta_array.0.len() as i32;
-    let meta_offset = next_divisible_by_n(meta_array_length, dev.device.limits().min_storage_buffer_offset_alignment as i32 / 4);
+    let meta_offset = next_divisible_by_n(meta_array_length, dev.device_limits.min_storage_buffer_offset_alignment as i32 / 4);
 
     if meta_offset as u32 + size > META_BUFFER_SIZE / 4{
         flush_gpu_command(dev, &mut command_queue);
@@ -324,22 +383,22 @@ fn end_debug_queue(dev: &WgpuDevice, length : u32, global_index : u32, encoder :
 pub (crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer : &mut QueueBuffer){
     if queue_buffer.command_queue.len() > 0{
 
-        let mut cache = dev.cache.lock().unwrap();
-        let cache = cache.as_mut(); 
-        match cache{
-            Some(cache) => {
-                let mut queue = cache.queue.lock().unwrap();
+        // let mut cache = dev.cache.lock().unwrap();
+        // let cache = cache.as_mut(); 
+        // match cache{
+        //     Some(cache) => {
+        //         let mut queue = cache.queue.lock().unwrap();
 
-                let mut new_buffer = QueueBuffer::new();
+        //         let mut new_buffer = QueueBuffer::new();
 
-                new_buffer.command_queue.append(&mut queue_buffer.command_queue);
-                new_buffer.meta_array.0.append(&mut queue_buffer.meta_array.0);
-                new_buffer.indirect_array.append(&mut queue_buffer.indirect_array);
-                queue.push(new_buffer);
-                return;
-            },
-            None => {},
-        };
+        //         new_buffer.command_queue.append(&mut queue_buffer.command_queue);
+        //         new_buffer.meta_array.0.append(&mut queue_buffer.meta_array.0);
+        //         new_buffer.indirect_array.append(&mut queue_buffer.indirect_array);
+        //         queue.push(new_buffer);
+        //         return;
+        //     },
+        //     None => {},
+        // };
 
         #[cfg(feature = "wgpu_debug")]
         let (global_index, query_set) =  init_debug_queue(dev, queue.len() as u32 * 2);
@@ -462,7 +521,7 @@ pub (crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer : &mut QueueBuff
 fn enqueue(
     command_queue : MutexGuard<QueueBuffer>,
     pipeline: Arc<ComputePipeline>,
-    bind_group: BindGroup,
+    bind_group: Arc<BindGroup>,
     length: u32,
     #[cfg(feature = "wgpu_debug")]
     _debug: super::device::QueueDebugInfo,
@@ -479,18 +538,49 @@ fn enqueue(
     );
 }
 
+fn bind_group_helper<F : Fn() -> wgpu::BindGroup>( dev: &WgpuDevice, compute_pipeline : Arc<wgpu::ComputePipeline>,
+     create_new : F) -> Arc<BindGroup>{
+    let mut cache = dev.cache.lock().unwrap();
+    match cache.as_mut() {
+        Some(cache) => {
+            let bindgroup_index = cache.counter_bindgroup;
+            let bindgroup;
+            if cache.cached_bindgroup.len() > bindgroup_index as usize {
+                bindgroup = cache.cached_bindgroup[bindgroup_index as usize].clone();
+                let cached_pipeline =  cache.cached_pipeline[bindgroup_index as usize].clone();
+      
+                if cached_pipeline.global_id() != compute_pipeline.global_id(){
+                    panic!("Trying to use a bindgroup of an different pipeline! Index:{bindgroup_index}");
+                }
+
+            }
+            else{
+                bindgroup = Arc::new(create_new());
+                cache.cached_bindgroup.push(bindgroup.clone());
+                cache.cached_pipeline.push(compute_pipeline);
+                create_new();
+            };
+            cache.counter_bindgroup += 1;
+            return bindgroup;
+        },
+        None => Arc::new(create_new())
+    }
+}
+
 fn create_bind_group_input0(
     dev: &WgpuDevice,
     pipeline: Arc<ComputePipeline>,
     meta_offset: u32,
     buffer_dest: &Buffer,
-) -> BindGroup {
+) -> Arc<BindGroup> {
+    bind_group_helper(dev,pipeline.clone(), || {
     let bind_group_layout = pipeline.get_bind_group_layout(0);    
 
     let buffer_meta = &dev.meta_buffer;
 
     let meta_binding = BufferBinding{ buffer: &buffer_meta, offset: meta_offset  as u64 * 4, size:  None};
     let meta_bindung = BindingResource::Buffer(meta_binding);
+
 
     dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
@@ -505,7 +595,7 @@ fn create_bind_group_input0(
                 resource: meta_bindung, //buffer_meta.as_entire_binding(),
             },
         ],
-    })
+    })})
 }
 
 fn create_bind_group_input1(
@@ -514,7 +604,8 @@ fn create_bind_group_input1(
     meta_offset: u32,
     buffer_dest: &Buffer,
     buffer_input1: &Buffer,
-) -> BindGroup {
+) -> Arc<BindGroup> {
+    bind_group_helper(dev,pipeline.clone(), || {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
 
     let buffer_meta = &dev.meta_buffer;
@@ -539,7 +630,7 @@ fn create_bind_group_input1(
                 resource: buffer_input1.as_entire_binding(),
             },
         ],
-    })
+    })})
 }
 
 
@@ -550,7 +641,8 @@ fn create_bind_group_input2(
     buffer_dest: &Buffer,
     buffer_input1: &Buffer,
     buffer_input2: &Buffer,
-) -> BindGroup {
+) -> Arc<BindGroup> {
+    bind_group_helper(dev,pipeline.clone(), || {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
 
     let buffer_meta = &dev.meta_buffer;
@@ -579,7 +671,7 @@ fn create_bind_group_input2(
                 resource: buffer_input2.as_entire_binding(),
             },
         ],
-    })
+    })})
 }
 
 fn create_bind_group_input3(
@@ -590,7 +682,8 @@ fn create_bind_group_input3(
     buffer_input1: &Buffer,
     buffer_input2: &Buffer,
     buffer_input3: &Buffer,
-) -> BindGroup {
+) -> Arc<BindGroup> {
+    bind_group_helper(dev,pipeline.clone(), || {
     let bind_group_layout = pipeline.get_bind_group_layout(0);
 
     let buffer_meta = &dev.meta_buffer;
@@ -623,7 +716,7 @@ fn create_bind_group_input3(
                 resource: buffer_input3.as_entire_binding(),
             },
         ],
-    })
+    })})
 }
 
 
@@ -643,17 +736,6 @@ pub fn read_data_from_gpu<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &Buffer,
 ) -> Vec<T> {
-    {
-        let mut cache = dev.cache.lock().unwrap();
-        let cache = cache.as_mut(); 
-        match cache{
-            Some(_) => {
-                panic!("can not read data to cpu, while in recording mode")
-            },
-            None => {},
-        };
-    }
-
     let mut command_queue = dev.command_queue.lock().unwrap();
     flush_gpu_command(dev, &mut command_queue);
     //send all previous commands to the gpu 
@@ -716,18 +798,6 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
     buffer: &Buffer,
 ) -> Vec<T> {
-
-    {
-        let mut cache = dev.cache.lock().unwrap();
-        let cache = cache.as_mut(); 
-        match cache{
-            Some(_) => {
-                panic!("can not read data to cpu, while in recording mode")
-            },
-            None => {},
-        };
-    }
-
     let mut command_queue = dev.command_queue.lock().unwrap();
     flush_gpu_command(dev, &mut command_queue); //send all previous commands to the gpu 
     let dest_size = buffer.size();

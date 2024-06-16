@@ -213,6 +213,7 @@ impl Tensor {
         let block_size: usize = cat_dims.iter().skip(1 + dim).product();
         let shape = Shape::from(cat_dims);
         let op = crate::op::BackpropOp::new(args, |args| crate::op::Op::Cat(args, dim));
+        println!("cat_contiguos alloc shape: {:?}", &shape);
         let mut storage = unsafe { device.alloc_uninit(&shape, dtype)? };
         let mut dst_o = 0;
         for arg in args.iter() {

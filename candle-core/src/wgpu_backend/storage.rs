@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{backend::BackendStorage, DType, Layout, Shape};
 
 use super::{
@@ -7,13 +9,13 @@ use super::{
 
 #[derive(Debug)]
 pub struct WgpuStorage {
-    pub buffer: wgpu::Buffer,
+    pub buffer: Arc<wgpu::Buffer>,
     pub wgpu_device: WgpuDevice,
     pub dtype: crate::DType,
 }
 
 impl WgpuStorage {
-    pub fn new(buffer: wgpu::Buffer, wgpu_device: WgpuDevice, dtype: crate::DType) -> Self {
+    pub fn new(buffer: Arc<wgpu::Buffer>, wgpu_device: WgpuDevice, dtype: crate::DType) -> Self {
         Self {
             buffer,
             wgpu_device,
