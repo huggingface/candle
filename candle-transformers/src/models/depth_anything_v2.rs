@@ -1,4 +1,4 @@
-use candle::Result;
+use candle::{Module, Result, Tensor};
 use candle_nn::{Activation, batch_norm, BatchNorm, BatchNormConfig, Conv2d, conv2d, Conv2dConfig, Sequential, VarBuilder};
 
 use crate::models::dinov2::DinoVisionTransformer;
@@ -23,7 +23,7 @@ impl ResidualConvUnit {
         let conv1 = conv2d(num_features, num_features, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("conv1"))?;
         let conv2 = conv2d(num_features, num_features, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("conv2"))?;
 
-        
+
         let (batch_norm1, batch_norm2) = match use_batch_norm {
             true => {
                 let batch_norm_cfg = BatchNormConfig {
@@ -33,18 +33,39 @@ impl ResidualConvUnit {
                     momentum: 0.1,
                 };
                 (Some(batch_norm(num_features, batch_norm_cfg, var_builder.push_prefix("batch_norm1"))?), Some(batch_norm(num_features, batch_norm_cfg, var_builder.push_prefix("batch_norm2"))?))
-            },
+            }
             false => (None, None)
         };
 
         Ok(Self {
-          activation,
+            activation,
             conv1,
             conv2,
             batch_norm1,
-            batch_norm2
+            batch_norm2,
         })
+    }
+}
 
+impl Module for ResidualConvUnit {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let out = self.activation.forward(xs)?;
+        let out = self.conv1(&out)?;
+        let out = if let Some(batch_norm1) = &self.batch_norm1 {
+            batch_norm1.forward_train(&out)?
+        } else {
+            out
+        };
+
+        let out = self.activation.forward(out)?;
+        let out = self.conv2(&out)?;
+        let out = if let Some(batch_norm2) = &self.batch_norm2 {
+            batch_norm2.forward_train(&out)?
+        } else {
+            out
+        };
+
+        out + xs
     }
 }
 

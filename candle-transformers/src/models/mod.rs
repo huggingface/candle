@@ -6,6 +6,7 @@ pub mod chatglm;
 pub mod clip;
 pub mod convmixer;
 pub mod convnext;
+pub mod depth_anything_v2;
 pub mod dinov2;
 pub mod distilbert;
 pub mod efficientnet;
@@ -67,4 +68,4 @@ pub mod whisper;
 pub mod with_tracing;
 pub mod wuerstchen;
 pub mod yi;
-mod depth_anything_v2;
+
