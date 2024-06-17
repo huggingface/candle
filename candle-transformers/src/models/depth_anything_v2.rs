@@ -73,7 +73,45 @@ pub struct FeatureFusionBlock {
     res_conv_unit1: ResidualConvUnit,
     res_conv_unit2: ResidualConvUnit,
     output_conv: Conv2d,
+    size: (usize, usize),
+}
 
+impl FeatureFusionBlock {
+    pub fn new(num_features: usize, activation: Activation, use_batch_norm: bool, size: (usize, usize), var_builder: VarBuilder) -> Result<Self> {
+        const KERNEL_SIZE: usize = 1;
+        let conv_cfg = Conv2dConfig {
+            padding: 1,
+            stride: 1,
+            dilation: 1,
+            groups: 1,
+        };
+        let output_conv = conv2d(num_features, num_features, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("output_conf"))?;
+        let res_conv_unit1 = ResidualConvUnit::new(num_features, activation, use_batch_norm, var_builder.push_prefix("res_conv_unit1"))?;
+        let res_conv_unit2 = ResidualConvUnit::new(num_features, activation, use_batch_norm, var_builder.push_prefix("res_conv_unit2"))?;
+
+
+        Ok(Self {
+            res_conv_unit1,
+            res_conv_unit2,
+            output_conv,
+            size,
+        })
+    }
+}
+
+impl Module for FeatureFusionBlock {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let out = xs.get(0)?;
+        let out = match xs.elem_count() {
+            2 => self.res_conv_unit1.forward(&xs.get(1)?)?,
+            _ => out
+        };
+
+        let out = self.res_conv_unit2.forward(&out)?;
+        let out = out.interpolate2d(self.size.1, self.size.0)?;
+
+        self.output_conv.forward(&out)
+    }
 }
 
 pub struct Scratch {
