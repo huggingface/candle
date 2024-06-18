@@ -1964,15 +1964,13 @@ unsafe fn gemm_strided_batched_bf16(
 
     let alpha_f32: f32 = cfg.gemm.alpha.to_f32();
     let beta_f32: f32 = cfg.gemm.beta.to_f32();
-    let alpha = f16::from_f32(alpha_f32);
-    let beta = f16::from_f32(beta_f32);
     // The type for alpha and beta depends on the computeType.
     // https://docs.nvidia.com/cuda/cublas/index.html#cublasgemmstridedbatchedex
     let (compute_type, alpha, beta) = if gemm_reduced_precision_bf16() {
         (
-            sys::cublasComputeType_t::CUBLAS_COMPUTE_16F,
-            (&alpha) as *const f16 as *const _,
-            (&beta) as *const f16 as *const _,
+            sys::cublasComputeType_t::CUBLAS_COMPUTE_32F_FAST_16BF,
+            (&alpha_f32) as *const f32 as *const _,
+            (&beta_f32) as *const f32 as *const _,
         )
     } else {
         (
