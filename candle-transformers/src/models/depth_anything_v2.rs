@@ -375,12 +375,6 @@ impl DPTHead {
         use_class_token: bool,
         var_builder: VarBuilder,
     ) -> Result<Self> {
-        let conv_cfg = Conv2dConfig {
-            padding: 0,
-            stride: 1,
-            dilation: 1,
-            groups: 1,
-        };
 
         let projections = out_channel_sizes
             .iter()
@@ -390,7 +384,12 @@ impl DPTHead {
                     in_channel_size,
                     *out_channel_size,
                     1,
-                    conv_cfg,
+                    Conv2dConfig {
+                        padding: 0,
+                        stride: 1,
+                        dilation: 1,
+                        groups: 1,
+                    },
                     var_builder.push_prefix(format!("projection_{}", conv_index)),
                 )?
             })
@@ -446,7 +445,7 @@ impl DPTHead {
                             var_builder
                                 .push_prefix(format!("readout_projections_linear_{}", rop_index)),
                         )?)
-                        .add(Activation::Relu)
+                        .add(Activation::Gelu)
                 })
                 .collect()
         } else {
@@ -551,7 +550,6 @@ impl Module for DepthAnythingV2 {
             .pretrained
             .get_intermediate_layers(xs, 4, false, false, true)?;
         let depth = self.depth_head.forward(&features)?;
-        let depth = depth.interpolate2d(dims[-2], dims[-1])?;
         let depth = depth.relu()?;
 
         depth.squeeze(1)
