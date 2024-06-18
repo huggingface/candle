@@ -347,7 +347,7 @@ impl Module for Scratch {
         // TODO this needs to be scaled to the correct width and height
         // which the Python implementation does somewhere else
         let dims = xs.shape().dims()?;
-        println!("Got dims: {:?}", dims);
+        println!("Scratch got dims: {:?}", dims);
         let [height, width] = dims[-2..];
 
         let out = out.interpolate2d(height, width)?;
@@ -475,7 +475,7 @@ impl Module for DPTHead {
         // TODO this needs to be scaled to the correct width and height
         // which the Python implementation does somewhere else
         let dims = xs.shape().dims()?;
-        println!("Got dims: {:?}", dims);
+        println!("DPTHead got dims: {:?}", dims);
         let [height, width] = dims[-2..];
         const PATCH_DENOMINATOR: i32 = 14;
         let patch_height = height / PATCH_DENOMINATOR;
@@ -512,7 +512,48 @@ impl Module for DPTHead {
     }
 }
 
-pub struct DepthAnythingV2 {
-    pretrained: DinoVisionTransformer,
+pub struct DepthAnythingV2<'a> {
+    pretrained: &'a DinoVisionTransformer,
     depth_head: DPTHead,
+}
+
+impl DepthAnythingV2 {
+    pub fn new(
+        pretrained: &DinoVisionTransformer,
+        in_channel_size: usize,
+        var_builder: VarBuilder,
+    ) -> Result<Self> {
+        let out_channel_sizes = vec![256usize, 512, 1024, 1024];
+        const NUM_FEATURES: usize = 256;
+
+        let depth_head = DPTHead::new(
+            out_channel_sizes,
+            in_channel_size,
+            NUM_FEATURES,
+            false,
+            false,
+            var_builder,
+        )?;
+
+        Ok(Self {
+            pretrained,
+            depth_head,
+        })
+    }
+}
+
+impl Module for DepthAnythingV2 {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let dims = xs.shape().dims();
+        println!("DepthAnythingV2 got dims: {:?}", dims);
+
+        let features = self
+            .pretrained
+            .get_intermediate_layers(xs, 4, false, false, true)?;
+        let depth = self.depth_head.forward(&features)?;
+        let depth = depth.interpolate2d(dims[-2], dims[-1])?;
+        let depth = depth.relu()?;
+
+        depth.squeeze(1)
+    }
 }
