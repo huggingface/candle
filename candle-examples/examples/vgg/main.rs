@@ -60,7 +60,6 @@ pub fn main() -> anyhow::Result<()> {
         .to_vec1::<f32>()?;
 
     // Sort the predictions and take the top 5
-    #[allow(clippy::unused_enumerate_index)]
     let mut top: Vec<_> = prs.iter().enumerate().collect();
     top.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap());
     let top = top.into_iter().take(5).collect::<Vec<_>>();
