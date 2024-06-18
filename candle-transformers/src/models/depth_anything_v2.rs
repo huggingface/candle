@@ -1,5 +1,8 @@
 use candle::{Module, Result, Tensor};
-use candle_nn::{Activation, batch_norm, BatchNorm, BatchNormConfig, Conv2d, conv2d, Conv2dConfig, Sequential, sequential, VarBuilder};
+use candle_nn::{
+    batch_norm, conv2d, conv_transpose2d, linear, seq, Activation, BatchNorm, BatchNormConfig,
+    Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
+};
 
 use crate::models::dinov2::DinoVisionTransformer;
 
@@ -12,7 +15,12 @@ pub struct ResidualConvUnit {
 }
 
 impl ResidualConvUnit {
-    pub fn new(num_features: usize, activation: Activation, use_batch_norm: bool, var_builder: VarBuilder) -> Result<Self> {
+    pub fn new(
+        num_features: usize,
+        activation: Activation,
+        use_batch_norm: bool,
+        var_builder: VarBuilder,
+    ) -> Result<Self> {
         const KERNEL_SIZE: usize = 3;
         let conv_cfg = Conv2dConfig {
             padding: 1,
@@ -20,9 +28,20 @@ impl ResidualConvUnit {
             dilation: 1,
             groups: 1,
         };
-        let conv1 = conv2d(num_features, num_features, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("conv1"))?;
-        let conv2 = conv2d(num_features, num_features, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("conv2"))?;
-
+        let conv1 = conv2d(
+            num_features,
+            num_features,
+            KERNEL_SIZE,
+            conv_cfg,
+            var_builder.push_prefix("conv1"),
+        )?;
+        let conv2 = conv2d(
+            num_features,
+            num_features,
+            KERNEL_SIZE,
+            conv_cfg,
+            var_builder.push_prefix("conv2"),
+        )?;
 
         let (batch_norm1, batch_norm2) = match use_batch_norm {
             true => {
@@ -32,9 +51,20 @@ impl ResidualConvUnit {
                     affine: true,
                     momentum: 0.1,
                 };
-                (Some(batch_norm(num_features, batch_norm_cfg, var_builder.push_prefix("batch_norm1"))?), Some(batch_norm(num_features, batch_norm_cfg, var_builder.push_prefix("batch_norm2"))?))
+                (
+                    Some(batch_norm(
+                        num_features,
+                        batch_norm_cfg,
+                        var_builder.push_prefix("batch_norm1"),
+                    )?),
+                    Some(batch_norm(
+                        num_features,
+                        batch_norm_cfg,
+                        var_builder.push_prefix("batch_norm2"),
+                    )?),
+                )
             }
-            false => (None, None)
+            false => (None, None),
         };
 
         Ok(Self {
@@ -77,7 +107,13 @@ pub struct FeatureFusionBlock {
 }
 
 impl FeatureFusionBlock {
-    pub fn new(num_features: usize, activation: Activation, use_batch_norm: bool, use_scaling: bool, var_builder: VarBuilder) -> Result<Self> {
+    pub fn new(
+        num_features: usize,
+        activation: Activation,
+        use_batch_norm: bool,
+        use_scaling: bool,
+        var_builder: VarBuilder,
+    ) -> Result<Self> {
         const KERNEL_SIZE: usize = 1;
         let conv_cfg = Conv2dConfig {
             padding: 1,
@@ -85,10 +121,25 @@ impl FeatureFusionBlock {
             dilation: 1,
             groups: 1,
         };
-        let output_conv = conv2d(num_features, num_features, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("output_conv"))?;
-        let res_conv_unit1 = ResidualConvUnit::new(num_features, activation, use_batch_norm, var_builder.push_prefix("res_conv_unit1"))?;
-        let res_conv_unit2 = ResidualConvUnit::new(num_features, activation, use_batch_norm, var_builder.push_prefix("res_conv_unit2"))?;
-
+        let output_conv = conv2d(
+            num_features,
+            num_features,
+            KERNEL_SIZE,
+            conv_cfg,
+            var_builder.push_prefix("output_conv"),
+        )?;
+        let res_conv_unit1 = ResidualConvUnit::new(
+            num_features,
+            activation,
+            use_batch_norm,
+            var_builder.push_prefix("res_conv_unit1"),
+        )?;
+        let res_conv_unit2 = ResidualConvUnit::new(
+            num_features,
+            activation,
+            use_batch_norm,
+            var_builder.push_prefix("res_conv_unit2"),
+        )?;
 
         Ok(Self {
             res_conv_unit1,
@@ -111,8 +162,16 @@ impl Module for FeatureFusionBlock {
         let out = self.res_conv_unit2.forward(&xs)?;
         let size = xs.shape();
         let dims = size.dims();
-        let target_h = if self.use_scaling { dims[-1] * 2 } else { dims[-1] };
-        let target_w = if self.use_scaling { dims[-2] * 2 } else { dims[-2] };
+        let target_h = if self.use_scaling {
+            dims[-1] * 2
+        } else {
+            dims[-1]
+        };
+        let target_w = if self.use_scaling {
+            dims[-2] * 2
+        } else {
+            dims[-2]
+        };
 
         let out = out.interpolate2d(target_h, target_w)?;
 
@@ -134,7 +193,12 @@ pub struct Scratch {
 }
 
 impl Scratch {
-    pub fn new(num_channels: Vec<usize>, num_features: usize, use_batch_norm: bool, var_builder: VarBuilder) -> Result<Self> {
+    pub fn new(
+        channel_sizes: Vec<usize>,
+        num_features: usize,
+        use_batch_norm: bool,
+        var_builder: VarBuilder,
+    ) -> Result<Self> {
         const KERNEL_SIZE: usize = 3;
         let conv_cfg = Conv2dConfig {
             padding: 1,
@@ -143,18 +207,65 @@ impl Scratch {
             groups: 1,
         };
 
-        let conv1 = conv2d(*num_channels.get(0)?, num_features, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("conv1"))?;
-        let conv2 = conv2d(*num_channels.get(1)?, num_features, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("conv2"))?;
-        let conv3 = conv2d(*num_channels.get(2)?, num_features, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("conv3"))?;
-        let conv4 = num_channels.get(3).map(
-            |in_shape|
-                conv2d(*num_channels.get(2)?, num_features, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("conv4"))?
-        );
+        let conv1 = conv2d(
+            *channel_sizes.get(0)?,
+            num_features,
+            KERNEL_SIZE,
+            conv_cfg,
+            var_builder.push_prefix("conv1"),
+        )?;
+        let conv2 = conv2d(
+            *channel_sizes.get(1)?,
+            num_features,
+            KERNEL_SIZE,
+            conv_cfg,
+            var_builder.push_prefix("conv2"),
+        )?;
+        let conv3 = conv2d(
+            *channel_sizes.get(2)?,
+            num_features,
+            KERNEL_SIZE,
+            conv_cfg,
+            var_builder.push_prefix("conv3"),
+        )?;
+        let conv4 = channel_sizes.get(3).map(|in_shape| {
+            conv2d(
+                *channel_sizes.get(2)?,
+                num_features,
+                KERNEL_SIZE,
+                conv_cfg,
+                var_builder.push_prefix("conv4"),
+            )?
+        });
 
-        let refine_net1 = FeatureFusionBlock::new(num_features, Activation::Relu, use_batch_norm, true, var_builder.push_prefix("refine_net1"))?;
-        let refine_net2 = FeatureFusionBlock::new(num_features, Activation::Relu, use_batch_norm, false, var_builder.push_prefix("refine_net2"))?;
-        let refine_net3 = FeatureFusionBlock::new(num_features, Activation::Relu, use_batch_norm, false, var_builder.push_prefix("refine_net3"))?;
-        let refine_net4 = FeatureFusionBlock::new(num_features, Activation::Relu, use_batch_norm, false, var_builder.push_prefix("refine_net4"))?;
+        let refine_net1 = FeatureFusionBlock::new(
+            num_features,
+            Activation::Relu,
+            use_batch_norm,
+            true,
+            var_builder.push_prefix("refine_net1"),
+        )?;
+        let refine_net2 = FeatureFusionBlock::new(
+            num_features,
+            Activation::Relu,
+            use_batch_norm,
+            false,
+            var_builder.push_prefix("refine_net2"),
+        )?;
+        let refine_net3 = FeatureFusionBlock::new(
+            num_features,
+            Activation::Relu,
+            use_batch_norm,
+            false,
+            var_builder.push_prefix("refine_net3"),
+        )?;
+        let refine_net4 = FeatureFusionBlock::new(
+            num_features,
+            Activation::Relu,
+            use_batch_norm,
+            false,
+            var_builder.push_prefix("refine_net4"),
+        )?;
 
         let conv_cfg = Conv2dConfig {
             padding: 1,
@@ -162,16 +273,36 @@ impl Scratch {
             dilation: 1,
             groups: 1,
         };
-        let output_conv1 = conv2d(num_features, num_features / 2, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("output_conv1"))?;
+        let output_conv1 = conv2d(
+            num_features,
+            num_features / 2,
+            KERNEL_SIZE,
+            conv_cfg,
+            var_builder.push_prefix("output_conv1"),
+        )?;
 
-        let output_conv2 = sequential::seq();
+        let output_conv2 = seq();
         const HEAD_FEATURES_2: usize = 32;
         const OUT_CHANNELS_2: usize = 1;
         const KERNEL_SIZE_2: usize = 1;
-        let output_conv2 = output_conv2.add(conv2d(num_features / 2, HEAD_FEATURES_2, KERNEL_SIZE, conv_cfg, var_builder.push_prefix("output_conv2_conv1"))?);
-        let output_conv2 = output_conv2.add(Activation::Relu);
-        let output_conv2 = output_conv2.add(conv2d(HEAD_FEATURES_2, OUT_CHANNELS_2, KERNEL_SIZE_2, conv_cfg, var_builder.push_prefix("output_conv2_conv2"))?);
-        let output_conv2 = output_conv2.add(Activation::Relu);
+        let output_conv2 = output_conv2.add(conv2d(
+            num_features / 2,
+            HEAD_FEATURES_2,
+            KERNEL_SIZE,
+            conv_cfg,
+            var_builder.push_prefix("output_conv2_conv1"),
+        )?);
+        let output_conv2 = output_conv2
+            .add(Activation::Relu)
+            .add(conv2d(
+                HEAD_FEATURES_2,
+                OUT_CHANNELS_2,
+                KERNEL_SIZE_2,
+                conv_cfg,
+                var_builder.push_prefix("output_conv2_conv2"),
+            )?)
+            .add(Activation::Relu);
+        // TODO currently skipping the identity() call, doesn't seem necessary
 
         Ok(Self {
             conv1,
@@ -190,8 +321,6 @@ impl Scratch {
 
 impl Module for Scratch {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-
-
         // these are called layer_*_rn in the Python impl
         let conv1_out = self.conv1.forward(&xs.get(0)?)?;
         let conv2_out = self.conv2.forward(&xs.get(1)?)?;
@@ -227,11 +356,111 @@ impl Module for Scratch {
 }
 
 pub struct DPTHead {
-    num_classes: usize,
     use_class_token: bool,
     projections: Sequential,
     resize_layers: Sequential,
     readout_projections: Option<Sequential>,
+    scratch: Scratch,
+}
+
+impl DPTHead {
+    pub fn new(
+        out_channel_sizes: Vec<usize>,
+        in_channel_size: usize,
+        num_features: usize,
+        use_batch_norm: bool,
+        use_class_token: bool,
+        var_builder: VarBuilder,
+    ) -> Result<Self> {
+        let conv_cfg = Conv2dConfig {
+            padding: 0,
+            stride: 1,
+            dilation: 1,
+            groups: 1,
+        };
+
+        let projections = out_channel_sizes.iter().enumerate().fold(
+            seq(),
+            |acc_seq, (conv_index, out_channel_size)| {
+                acc_seq.add(conv2d(
+                    in_channel_size,
+                    *out_channel_size,
+                    1,
+                    conv_cfg,
+                    var_builder.push_prefix(format!("projection_{}", conv_index)),
+                ))
+            },
+        );
+
+        let resize_layers = seq();
+        let resize_layers = resize_layers.add(conv_transpose2d(
+            *out_channel_sizes.get(0)?,
+            *out_channel_sizes.get(0)?,
+            4,
+            ConvTranspose2dConfig {
+                padding: 0,
+                stride: 4,
+                dilation: 1,
+                output_padding: 0,
+            },
+            var_builder.push_prefix("resize_layer1"),
+        )?);
+        let resize_layers = resize_layers.add(conv_transpose2d(
+            *out_channel_sizes.get(1)?,
+            *out_channel_sizes.get(1)?,
+            2,
+            ConvTranspose2dConfig {
+                padding: 0,
+                stride: 2,
+                dilation: 1,
+                output_padding: 0,
+            },
+            var_builder.push_prefix("resize_layer2"),
+        )?);
+        // TODO currently skipping the identity() call, doesn't seem necessary
+        let resize_layers = resize_layers.add(conv2d(
+            *out_channel_sizes.get(3)?,
+            *out_channel_sizes.get(3)?,
+            2,
+            Conv2dConfig {
+                padding: 0,
+                stride: 2,
+                dilation: 1,
+                groups: 1,
+            },
+            var_builder.push_prefix("resize_layer3"),
+        )?);
+
+        let readout_projections = if use_class_token {
+            Some((0..projections.len()).fold(seq(), |acc_seq, rop_index| {
+                acc_seq
+                    .add(linear(
+                        2 * in_channel_size,
+                        in_channel_size,
+                        var_builder
+                            .push_prefix(format!("readout_projections_linear_{}", rop_index)),
+                    )?)
+                    .add(Activation::Relu)
+            }))
+        } else {
+            None
+        };
+
+        let scratch = Scratch::new(
+            out_channel_sizes,
+            num_features,
+            use_batch_norm,
+            var_builder.push_prefix("scratch"),
+        )?;
+
+        Ok(Self {
+            use_class_token,
+            projections,
+            resize_layers,
+            readout_projections,
+            scratch,
+        })
+    }
 }
 
 pub struct DepthAnythingV2 {
