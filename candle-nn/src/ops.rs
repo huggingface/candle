@@ -926,3 +926,22 @@ pub fn replication_pad2d(xs: &Tensor, pad: usize) -> Result<Tensor> {
         n => candle::bail!("replication-pad with a size of {n} is not supported"),
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct Identity {}
+
+impl Identity {
+    pub fn new() -> Identity {
+        Self { }
+    }
+
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        Ok(xs.clone())
+    }
+}
+
+impl candle::ModuleT for Identity {
+    fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
+        Ok(xs.clone())
+    }
+}
