@@ -94,8 +94,11 @@
       }
       form.addEventListener("submit", (e) => {
         e.preventDefault();
-
+        
+        const getValue = (id) => document.querySelector(`#${id}`).value;
         const promptText = promptEl.value;
+        const useWgpu = getValue("useWgpu") === "true";
+        console.log("useWgpu", useWgpu);
         const modelID = modelEl.value;
         const { modelURL, configURL, tokenizerURL, maxLength } = getModelInfo(
           modelID,
@@ -123,7 +126,8 @@
             if (status.status === "decoding") {
               outputEl.innerText = "Generating...";
             }
-          }
+          },
+          useWgpu
         ).then(({ output }) => {
           outputEl.innerText = output.generation;
         });
@@ -188,6 +192,16 @@
         <select
           id="model"
           class="border-2 border-gray-500 rounded-md font-light"></select>
+      </div>
+
+      <div>
+        <label for="useWgpu" class="font-medium">Use Wgpu </label>
+        <select
+          id="useWgpu"
+          class="border-2 border-gray-500 rounded-md font-light">
+          <option value="true" selected>True</option>
+          <option value="false">False</option>
+        </select>
       </div>
 
       <div>

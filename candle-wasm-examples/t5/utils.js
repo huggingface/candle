@@ -6,7 +6,8 @@ export async function extractEmbeddings(
   modelID,
   sentences,
   updateStatus,
-  normalize_embeddings = true
+  normalize_embeddings = true,
+  webGpu
 ) {
   return new Promise((resolve, reject) => {
     worker.postMessage({
@@ -16,6 +17,7 @@ export async function extractEmbeddings(
       modelID,
       sentences,
       normalize_embeddings,
+      webGpu
     });
     function messageHandler(event) {
       if ("error" in event.data) {
@@ -40,7 +42,8 @@ export async function generateText(
   modelID,
   prompt,
   params,
-  updateStatus
+  updateStatus,
+  webGpu
 ) {
   return new Promise((resolve, reject) => {
     worker.postMessage({
@@ -50,6 +53,7 @@ export async function generateText(
       modelID,
       prompt,
       params,
+      webGpu
     });
     function messageHandler(event) {
       if ("error" in event.data) {
@@ -115,6 +119,29 @@ export const MODELS = {
     size: "308 MB",
     base_url:
       "https://huggingface.co/google/flan-t5-small/resolve/refs%2Fpr%2F14/",
+    model: "model.safetensors",
+    tokenizer: "tokenizer.json",
+    config: "config.json",
+    tasks: {
+      translation_en_to_de: {
+        prefix: "translate English to German: ",
+        max_length: 300,
+      },
+      translation_en_to_fr: {
+        prefix: "translate English to French: ",
+        max_length: 300,
+      },
+      translation_en_to_ro: {
+        prefix: "translate English to Romanian: ",
+        max_length: 300,
+      },
+      summarization: { prefix: "summarize: ", max_length: 200 },
+    },
+  },
+  flan_t5_large: {
+    size: "3.3 GB",
+    base_url:
+      "https://huggingface.co/t5-large/resolve/main/",
     model: "model.safetensors",
     tokenizer: "tokenizer.json",
     config: "config.json",

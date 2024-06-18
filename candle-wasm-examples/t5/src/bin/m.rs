@@ -54,7 +54,7 @@ impl ModelConditionalGeneration {
         self.model.clear_kv_cache();
         let mut output_token_ids = [self.config.pad_token_id as u32].to_vec();
         let prompt = input.prompt;
-        let repeat_penalty = input.repeat_penalty;
+        let repeat_penalty: f32 = input.repeat_penalty;
         let repeat_last_n = input.repeat_last_n;
         let seed = input.seed;
         let max_length = usize::clamp(input.max_length.unwrap_or(512), 0, 512);
@@ -63,7 +63,7 @@ impl ModelConditionalGeneration {
         } else {
             Some(input.temperature)
         };
-        let top_p = if input.top_p <= 0. || input.top_p >= 1. {
+        let top_p: Option<f64> = if input.top_p <= 0. || input.top_p >= 1. {
             None
         } else {
             Some(input.top_p)
