@@ -1,7 +1,8 @@
-use rand::RngCore;
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+use rand::RngCore;
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input0, create_bind_group_input1, enqueue, get_meta, get_size};
 
@@ -70,7 +71,7 @@ pub enum UnaryOperation {
 
 pub fn queue_unary_inplace_op(
     dev: &WgpuDevice,
-    buffer: &Buffer,
+    buffer: Arc<BufferReference>,
     op: UnaryOperation,
     scalar1: f32,
     scalar2: f32,
@@ -101,8 +102,8 @@ pub fn queue_unary_inplace_op(
 
 pub fn queue_unary_from_buffer_op(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
     op: UnaryOperation,
     scalar1: f32,
     scalar2: f32,

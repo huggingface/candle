@@ -489,8 +489,8 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     
             wgpu_functions::queue_softmax(
                 storage.device(),
-                &output_buffer,
-                &storage.buffer,
+                output_buffer.clone(),
+                storage.buffer.clone(),
                 storage.dtype,
                 layout.start_offset() as u32,
                 dim_m1 as u32,
@@ -716,9 +716,9 @@ impl candle::CustomOp2 for RmsNorm {
 
         wgpu_functions::queue_rms_norm(
             src.device(),
-            &output_buffer,
-            &src.buffer,
-            &alpha.buffer,
+            output_buffer.clone(),
+            src.buffer.clone(),
+            alpha.buffer.clone(),
             src.dtype,
             layout.start_offset() as u32,
             alpha_layout.start_offset() as u32,

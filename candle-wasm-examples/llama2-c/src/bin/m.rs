@@ -17,7 +17,7 @@ impl Model {
     async fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
         const REPEAT_LAST_N: usize = 64;
         
-        candle::wgpu::model::start_cache(&self.device, 1);
+        //candle::wgpu::model::start_cache(&self.device, 1);
        
         let input = Tensor::new(tokens, &self.device)?.unsqueeze(0)?;
         //info!("INPUT:");
@@ -153,6 +153,11 @@ impl Model {
         let text = self
             .process(&[last_token]).await
             .map_err(|m| JsError::new(&m.to_string()))?;
+        match  &self.device{
+            Device::WebGpu(gpu) => gpu.print_bindgroup_reuseinfo(),
+            _ => {},
+        }
+        
         //console_log!("next token after process");
         Ok(text)
     }

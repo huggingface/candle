@@ -45,17 +45,55 @@ use std::sync::Arc;
 
 use crate::WgpuDevice;
 
-use super::{device::Pipelines, wgpu_functions::Shader};
+use super::device::BufferReference;
 
 
-struct BufferType(Shader, Pipelines);
+struct BufferCache{
+    buffers : Vec<CachedBuffer>
+}
+
+impl BufferCache{
+    fn get_buffer(&mut self, dev : &WgpuDevice, size : u64) -> CachedBuffer{
+        for buffer in self.buffers{
+            if buffer.buffer.size() >= size{
+                return buffer;
+            }
+        }
+
+        CachedBuffer::new(dev.device.create_buffer(todo!()))
+
+    }
+}
+
+
+struct BindGroupCache{
+    bindgroups : Vec<CachedBindGroup>
+}
+
 
 struct CachedBuffer{
-    buffer : Arc<wgpu::Buffer>, //reference to the buffer, if Arc::strong_count is 1, the tensor is free to be reused, as long as it is big enaugh and not other enqued commands depend on that buffer
-    id : u32, 
-    buffer_type : BufferType,
-    bindgroups : Vec<u32> //reference to Bindgroups, if we need to resize this Buffer, we also need to invalidate the referenced Bindgroups
+    buffer : wgpu::Buffer, //reference to the buffer, if Arc::strong_count is 1, the tensor is free to be reused, as long as it is big enaugh and not other enqued commands depend on that buffer
+    //bindgroups : Vec<u32> //reference to Bindgroups, if we need to resize this Buffer, we also need to invalidate the referenced Bindgroups
 }
+
+impl CachedBuffer {
+    fn new(buffer: wgpu::Buffer) -> Self {
+        Self { buffer }
+    }
+}
+
+
+struct CachedBindGroup{
+    bindgroup : wgpu::BindGroup
+
+}
+
+impl CachedBindGroup {
+    fn new(bindgroup: wgpu::BindGroup) -> Self {
+        Self { bindgroup }
+    }
+}
+
 
 #[derive(Debug)]
 pub struct ModelCache{

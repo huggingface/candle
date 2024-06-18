@@ -1,13 +1,13 @@
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input1, enqueue, enqueue_workgroups, get_meta, get_size};
 
 pub fn queue_copy_strided(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
     dtype: crate::DType,
     input_layout: &crate::Layout,
     dst_offset: u32,
@@ -37,8 +37,8 @@ pub fn queue_copy_strided(
 //In addition the copy is often not the bottle neck(but matmul or conv-dispatch call)
 // pub fn queue_copy_old(
 //     dev: &WgpuDevice,
-//     buffer_dest: &Buffer,
-//     buffer_input: &Buffer,
+//     buffer_dest: Arc<BufferReference>,
+//     buffer_input: Arc<BufferReference>,
 //     destination_offset: usize,
 //     source_offset: usize,
 //     copy_size: usize,
@@ -77,8 +77,8 @@ pub fn queue_copy_strided(
 
 pub fn queue_copy(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
     destination_offset: usize,
     source_offset: usize,
     copy_size: usize,
@@ -110,8 +110,8 @@ pub fn queue_copy(
 
 pub fn queue_copy2d(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
     dtype: crate::DType,
     d1: u32,
     d2: u32,
@@ -120,7 +120,7 @@ pub fn queue_copy2d(
     input_offset: u32,
     dest_offset: u32,
 ) -> crate::Result<()> {
-    if buffer_dest.size() > 0 && buffer_input.size() > 0{
+    if buffer_dest.size > 0 && buffer_input.size > 0{
         
         let (mut meta,  meta_offset) = get_meta(&dev, 6);
         meta.add(d1);

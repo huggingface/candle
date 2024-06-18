@@ -307,9 +307,9 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        println!("llama Block1: {:?}", x.shape());
+        //println!("llama Block1: {:?}", x.shape());
         let x = (self.attn.forward(&x, index_pos, block_idx, cache)? + residual)?;
-        println!("llama Block attn: {:?}", x.shape());
+        //println!("llama Block attn: {:?}", x.shape());
         let residual = &x;
         let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)

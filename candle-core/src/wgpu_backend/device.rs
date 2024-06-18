@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
 use rand::SeedableRng;
@@ -10,8 +11,8 @@ use crate::{notImplemented, wrongType, Layout};
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, Measurements,MInfo};
 
-use super::model::ModelCache;
-use super::wgpu_functions::{DispatchIndirectArgs, MetaArray, MetaArrayToU32};
+use super::cache::{BindGroupReferenceBase, BufferReference, ModelCache};
+use super::wgpu_functions::{DispatchIndirectArgs, MetaArray, MetaArrayToU32, Shader};
 use super::wgpu_functions::{self, create_buffer, create_buffer_init, unary::UnaryOperation};
 use super::WgpuStorage;
 
@@ -57,15 +58,28 @@ impl QueueDebugInfo {
     // }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub (crate) struct PipelineType(pub Shader, pub Pipelines);
 
+
+
+pub (crate) type BindGroupReference = BindGroupReferenceBase<Arc<BufferReference>>;
+
+// #[derive(Debug)]
+// pub (crate) enum BindGroupReference{
+//     Bindgroup0(u32, Arc<BufferReference>), //dest,
+//     Bindgroup1(u32, Arc<BufferReference>,Arc<BufferReference>), //dest, input1
+//     Bindgroup2(u32, Arc<BufferReference>,Arc<BufferReference>,Arc<BufferReference>), //dest, input1, input2
+//     Bindgroup3(u32, Arc<BufferReference>,Arc<BufferReference>,Arc<BufferReference>,Arc<BufferReference>) //dest, input1, input2, input3
+// }
 
 #[derive(Debug)]
 pub (crate) struct MlQueueDispatch{
     pub (crate) x : u32, 
     pub (crate) y : u32, 
     pub (crate) z : u32,
-    pub (crate) pipeline : Arc<wgpu::ComputePipeline>,
-    pub (crate) bind_group : Arc<wgpu::BindGroup>,
+    pub (crate) pipeline : PipelineType,
+    pub (crate) bindgroup : BindGroupReference,
     pub (crate) indirect_buffer : Option<usize>,
     
     #[cfg(feature = "wgpu_debug")]
@@ -114,10 +128,14 @@ pub struct  WgpuDevice {
     pub (crate) meta_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
     pub (crate) indirect_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
 
-    pub (crate) cache : Arc<Mutex<Option<ModelCache>>>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
-    pub (crate) cache_counter : Arc<Mutex<u32>>,
+    pub (crate) cache : Arc<Mutex<ModelCache>>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
+    pub (crate) cached_buffer_counter : Arc<AtomicU32>,
+    pub (crate) cached_bindgroup_counter : Arc<AtomicU32>,
 
+    pub (crate) cached_bindgroup_reuse_counter : Arc<AtomicU32>,
+    pub (crate) cached_buffer_reuse_counter : Arc<AtomicU32>,
 
+    pub (crate) cached_buffer_reference_counter : Arc<AtomicU32>,
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
 }
@@ -164,7 +182,8 @@ pub (crate) enum Pipelines{
 }
 
 
-pub (crate) const META_BUFFER_SIZE : u32 = 65536;
+//pub (crate) const META_BUFFER_SIZE : u32 = 65536;
+pub (crate) const META_BUFFER_SIZE : u32 = 1000000;
 pub (crate) const INDIRECT_BUFFER_SIZE : u32 = 10000;
 
 impl WgpuDevice{
@@ -182,9 +201,11 @@ impl WgpuDevice{
         #[cfg(not(feature = "wgpu_debug"))]
         let features = wgpu::Features::empty();
 
+        let adatper_limits = adapter.limits();
+        limits.min_storage_buffer_offset_alignment = adatper_limits.min_storage_buffer_offset_alignment;
         limits.max_storage_buffers_per_shader_stage = 5;
-        limits.max_storage_buffer_binding_size = adapter.limits().max_storage_buffer_binding_size; //use as much as possible
-        limits.max_buffer_size = adapter.limits().max_buffer_size; //use as much as possible
+        limits.max_storage_buffer_binding_size = adatper_limits.max_storage_buffer_binding_size; //use as much as possible
+        limits.max_buffer_size = adatper_limits.max_buffer_size; //use as much as possible
 
      
         // `request_device` instantiates the feature specific connection to the GPU, defining some parameters,
@@ -229,11 +250,23 @@ impl WgpuDevice{
             command_queue: Arc::new(Mutex::new(QueueBuffer::new())),
             meta_buffer : Arc::new(meta_buffer),
             indirect_buffer : Arc::new(indirect_buffer),
-            cache : Arc::new(Mutex::new(None)),
-            cache_counter : Arc::new(Mutex::new(0))
+            cache : Arc::new(Mutex::new(ModelCache::new())),
+            cached_buffer_counter : Arc::new(AtomicU32::new(0)),
+            cached_bindgroup_counter  : Arc::new(AtomicU32::new(0)),
+            cached_bindgroup_reuse_counter: Arc::new(AtomicU32::new(0)),
+            cached_buffer_reuse_counter: Arc::new(AtomicU32::new(0)),
+            cached_buffer_reference_counter: Arc::new(AtomicU32::new(0)),
         })
     }
 
+    pub fn print_bindgroup_reuseinfo(&self){
+        log::info!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_buffer_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
+        log::info!("Bindgroup: created: {}, resued : {}", self.cached_bindgroup_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_bindgroup_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
+    }
+    pub fn print_bindgroup_reuseinfo2(&self){
+        println!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_buffer_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
+        println!("Bindgroup: created: {}, resued : {}", self.cached_bindgroup_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_bindgroup_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
+    }
     
     #[cfg(feature = "wgpu_debug")]
     pub async fn get_debug_info_full(&self) -> crate::Result<Measurements>{
@@ -325,16 +358,23 @@ impl WgpuDevice{
         });
     }
 
-    pub (crate) fn get_pipeline(&self, shader : wgpu_functions::Shader, pipeline: Pipelines) -> crate::Result<Arc<wgpu::ComputePipeline>> {
+    pub (crate) fn get_pipeline(&self, shader : wgpu_functions::Shader, pipeline: Pipelines) -> crate::Result<PipelineType> {
+        return Ok(PipelineType(shader, pipeline));
+    }
+
+    pub (crate) fn get_pipeline2(&self, shader : wgpu_functions::Shader, pipeline: Pipelines) -> crate::Result<Arc<wgpu::ComputePipeline>> {
+        //println!("get_pipeline2 self.shader.lock() lock_start");
         let mut shaders = self.shader.lock().unwrap();
-        
+        //println!("get_pipeline2 self.shader.lock() lock_end");
         if !shaders.contains_key(&shader){
             let s = wgpu_functions::get_shader(&self.device, wgpu_functions::load_shader(shader.clone())?);
             shaders.insert(shader.clone(), ShaderModuleComputePipelines{ shader: Arc::new(s), pipelines: Mutex::new(HashMap::new())});
         }
      
         if let Some(s) = shaders.get(&shader){
+            //println!("get_pipeline2 shader.pipelines.lock() lock_start");
             let mut pipelines = s.pipelines.lock().unwrap();
+            //println!("get_pipeline2 shader.pipelines.lock() lock_end");
 
             if !pipelines.contains_key(&pipeline){
                 let p = crate::WgpuDevice::load_pipeline(&self.device, s.shader.clone(), pipeline.clone());
@@ -374,7 +414,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
     fn zeros_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
         let buffer = create_buffer(self, shape.elem_count() * 4);
         if shape.elem_count() > 0{
-            wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::SetZero, 0.0, 0.0,dtype, Layout::contiguous(shape))?;
+            wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::SetZero, 0.0, 0.0,dtype, Layout::contiguous(shape))?;
         }
         
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
@@ -383,7 +423,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
     fn ones_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
         let buffer = create_buffer(self, shape.elem_count() * 4);
         if shape.elem_count() > 0{
-            wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::SetOne, 0.0, 0.0,dtype,Layout::contiguous(shape))?;
+            wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::SetOne, 0.0, 0.0,dtype,Layout::contiguous(shape))?;
         }
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
@@ -445,13 +485,13 @@ impl crate::backend::BackendDevice for WgpuDevice{
 
     fn rand_uniform(&self, shape: &crate::Shape, dtype: crate::DType, lo: f64, up: f64) -> crate::Result<Self::Storage> {
         let buffer = create_buffer(self, shape.elem_count() * 4);
-        wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::RandUniform, lo as f32, up as f32,dtype,Layout::contiguous(shape))?;
+        wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::RandUniform, lo as f32, up as f32,dtype,Layout::contiguous(shape))?;
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 
     fn rand_normal(&self, shape: &crate::Shape, dtype: crate::DType, mean: f64, std: f64) -> crate::Result<Self::Storage> {
         let buffer = create_buffer(self, shape.elem_count() * 4);
-        wgpu_functions::queue_unary_inplace_op(self, &buffer, UnaryOperation::RandNormal, mean as  f32, std as f32, dtype,Layout::contiguous(shape))?;
+        wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::RandNormal, mean as  f32, std as f32, dtype,Layout::contiguous(shape))?;
         return Ok(WgpuStorage::new(buffer, self.clone(),dtype));
     }
 
