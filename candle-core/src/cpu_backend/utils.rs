@@ -174,7 +174,9 @@ pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [
         (Some((o_l1, o_l2)), Some((o_r1, o_r2))) => {
             let mut ys: Vec<T> = Vec::with_capacity(el_count);
             let ys_to_set = ys.spare_capacity_mut();
-            let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
+            let ys_to_set = unsafe {
+                std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(ys_to_set)
+            };
             f_vec(&lhs[o_l1..o_l2], &rhs[o_r1..o_r2], ys_to_set);
             // SAFETY: values are all set by f_vec.
             unsafe { ys.set_len(el_count) };
@@ -185,7 +187,9 @@ pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [
                 let rhs = &rhs[ob.start..ob.start + ob.len];
                 let mut ys: Vec<T> = Vec::with_capacity(el_count);
                 let ys_to_set = ys.spare_capacity_mut();
-                let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
+                let ys_to_set = unsafe {
+                    std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(ys_to_set)
+                };
                 let mut dst_i = 0;
                 for src_i in (o_l1..o_l2).step_by(ob.len) {
                     f_vec(
@@ -224,7 +228,9 @@ pub fn binary_map_vec<T: Copy, F: FnMut(T, T) -> T, FV: FnMut(&[T], &[T], &mut [
                 let lhs = &lhs[ob.start..ob.start + ob.len];
                 let mut ys: Vec<T> = Vec::with_capacity(el_count);
                 let ys_to_set = ys.spare_capacity_mut();
-                let ys_to_set = unsafe { std::mem::transmute::<_, &mut [T]>(ys_to_set) };
+                let ys_to_set = unsafe {
+                    std::mem::transmute::<&mut [std::mem::MaybeUninit<T>], &mut [T]>(ys_to_set)
+                };
                 let mut dst_i = 0;
                 for src_i in (o_r1..o_r2).step_by(ob.len) {
                     f_vec(
@@ -311,7 +317,9 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
         crate::StridedBlocks::SingleBlock { start_offset, len } => {
             let mut ys: Vec<U> = Vec::with_capacity(len);
             let ys_to_set = ys.spare_capacity_mut();
-            let ys_to_set = unsafe { std::mem::transmute::<_, &mut [U]>(ys_to_set) };
+            let ys_to_set = unsafe {
+                std::mem::transmute::<&mut [std::mem::MaybeUninit<U>], &mut [U]>(ys_to_set)
+            };
             f_vec(&vs[start_offset..start_offset + len], ys_to_set);
             // SAFETY: values are all set by f_vec.
             unsafe { ys.set_len(len) };
@@ -333,7 +341,9 @@ pub fn unary_map_vec<T: Copy, U: Copy, F: FnMut(T) -> U, FV: FnMut(&[T], &mut [U
             } else {
                 let mut ys: Vec<U> = Vec::with_capacity(el_count);
                 let ys_to_set = ys.spare_capacity_mut();
-                let ys_to_set = unsafe { std::mem::transmute::<_, &mut [U]>(ys_to_set) };
+                let ys_to_set = unsafe {
+                    std::mem::transmute::<&mut [std::mem::MaybeUninit<U>], &mut [U]>(ys_to_set)
+                };
                 let mut dst_index = 0;
                 for src_index in block_start_index {
                     let vs = &vs[src_index..src_index + block_len];
