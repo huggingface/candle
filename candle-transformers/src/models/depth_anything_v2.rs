@@ -1,4 +1,5 @@
 use candle::{Module, Result, Tensor};
+use candle_nn::ops::Identity;
 use candle_nn::{
     batch_norm, conv2d, conv_transpose2d, linear, seq, Activation, BatchNorm, BatchNormConfig,
     Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
@@ -355,11 +356,13 @@ impl Module for Scratch {
     }
 }
 
+const NUM_CHANNELS: usize = 4;
+
 pub struct DPTHead {
     use_class_token: bool,
-    projections: Sequential,
-    resize_layers: Sequential,
-    readout_projections: Option<Sequential>,
+    projections: Vec<Conv2d>,
+    resize_layers: Vec<dyn Module>,
+    readout_projections: Vec<Sequential>,
     scratch: Scratch,
 }
 
@@ -379,71 +382,75 @@ impl DPTHead {
             groups: 1,
         };
 
-        let projections = out_channel_sizes.iter().enumerate().fold(
-            seq(),
-            |acc_seq, (conv_index, out_channel_size)| {
-                acc_seq.add(conv2d(
+        let projections = out_channel_sizes
+            .iter()
+            .enumerate()
+            .map(|(conv_index, out_channel_size)| {
+                conv2d(
                     in_channel_size,
                     *out_channel_size,
                     1,
                     conv_cfg,
                     var_builder.push_prefix(format!("projection_{}", conv_index)),
-                ))
-            },
-        );
+                )?
+            })
+            .collect();
 
-        let resize_layers = seq();
-        let resize_layers = resize_layers.add(conv_transpose2d(
-            *out_channel_sizes.get(0)?,
-            *out_channel_sizes.get(0)?,
-            4,
-            ConvTranspose2dConfig {
-                padding: 0,
-                stride: 4,
-                dilation: 1,
-                output_padding: 0,
-            },
-            var_builder.push_prefix("resize_layer1"),
-        )?);
-        let resize_layers = resize_layers.add(conv_transpose2d(
-            *out_channel_sizes.get(1)?,
-            *out_channel_sizes.get(1)?,
-            2,
-            ConvTranspose2dConfig {
-                padding: 0,
-                stride: 2,
-                dilation: 1,
-                output_padding: 0,
-            },
-            var_builder.push_prefix("resize_layer2"),
-        )?);
-        // TODO currently skipping the identity() call, doesn't seem necessary
-        let resize_layers = resize_layers.add(conv2d(
-            *out_channel_sizes.get(3)?,
-            *out_channel_sizes.get(3)?,
-            2,
-            Conv2dConfig {
-                padding: 0,
-                stride: 2,
-                dilation: 1,
-                groups: 1,
-            },
-            var_builder.push_prefix("resize_layer3"),
-        )?);
+        let resize_layers: Vec<dyn Module> = vec![
+            conv_transpose2d(
+                *out_channel_sizes.get(0)?,
+                *out_channel_sizes.get(0)?,
+                4,
+                ConvTranspose2dConfig {
+                    padding: 0,
+                    stride: 4,
+                    dilation: 1,
+                    output_padding: 0,
+                },
+                var_builder.push_prefix("resize_layer1"),
+            )?,
+            conv_transpose2d(
+                *out_channel_sizes.get(1)?,
+                *out_channel_sizes.get(1)?,
+                2,
+                ConvTranspose2dConfig {
+                    padding: 0,
+                    stride: 2,
+                    dilation: 1,
+                    output_padding: 0,
+                },
+                var_builder.push_prefix("resize_layer2"),
+            )?,
+            Identity::new(),
+            conv2d(
+                *out_channel_sizes.get(3)?,
+                *out_channel_sizes.get(3)?,
+                2,
+                Conv2dConfig {
+                    padding: 0,
+                    stride: 2,
+                    dilation: 1,
+                    groups: 1,
+                },
+                var_builder.push_prefix("resize_layer4"),
+            )?,
+        ];
 
         let readout_projections = if use_class_token {
-            Some((0..projections.len()).fold(seq(), |acc_seq, rop_index| {
-                acc_seq
-                    .add(linear(
-                        2 * in_channel_size,
-                        in_channel_size,
-                        var_builder
-                            .push_prefix(format!("readout_projections_linear_{}", rop_index)),
-                    )?)
-                    .add(Activation::Relu)
-            }))
+            (0..NUM_CHANNELS)
+                .map(|rop_index| {
+                    seq()
+                        .add(linear(
+                            2 * in_channel_size,
+                            in_channel_size,
+                            var_builder
+                                .push_prefix(format!("readout_projections_linear_{}", rop_index)),
+                        )?)
+                        .add(Activation::Relu)
+                })
+                .collect()
         } else {
-            None
+            vec![]
         };
 
         let scratch = Scratch::new(
@@ -460,6 +467,48 @@ impl DPTHead {
             readout_projections,
             scratch,
         })
+    }
+}
+
+impl Module for DPTHead {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        // TODO this needs to be scaled to the correct width and height
+        // which the Python implementation does somewhere else
+        let dims = xs.shape().dims()?;
+        println!("Got dims: {:?}", dims);
+        let [height, width] = dims[-2..];
+        const PATCH_DENOMINATOR: i32 = 14;
+        let patch_height = height / PATCH_DENOMINATOR;
+        let patch_width = width / PATCH_DENOMINATOR;
+
+        let out = Tensor::stack(
+            (0..NUM_CHANNELS)
+                .map(|i| {
+                    let x = if self.use_class_token {
+                        let x = xs.get(0)?;
+                        let class_token = xs.get(1)?;
+                        let readout = class_token.unsqueeze(1).unwrap().expand(x.shape())?;
+                        let cat = Tensor::cat(&*[x, readout], -1)?;
+                        self.readout_projections[i].forward(&cat)?
+                    } else {
+                        xs.get(0)?
+                    };
+                    let x_dims = x.dims();
+                    let x = x.permute((0, 2, 1))?.reshape((
+                        x_dims[0],
+                        x_dims[-1],
+                        patch_height,
+                        patch_width,
+                    ))?;
+                    let x = self.projections[i].forward(&x)?;
+
+                    self.resize_layers[i].forward(&x)
+                })
+                .collect(),
+            0,
+        )?;
+
+        self.scratch.forward(&out)
     }
 }
 
