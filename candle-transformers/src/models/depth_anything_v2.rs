@@ -1,9 +1,9 @@
-use candle::{Module, Result, Tensor};
 use candle::D::Minus1;
+use candle::{Module, Result, Tensor};
 use candle_nn::ops::Identity;
 use candle_nn::{
-    batch_norm, conv2d, conv_transpose2d, linear, seq, Activation, BatchNorm, BatchNormConfig,
-    Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
+    batch_norm, conv2d, conv2d_no_bias, conv_transpose2d, linear, seq, Activation, BatchNorm,
+    BatchNormConfig, Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
 };
 
 use crate::models::dinov2::DinoVisionTransformer;
@@ -57,12 +57,12 @@ impl ResidualConvUnit {
                     Some(batch_norm(
                         num_features,
                         batch_norm_cfg,
-                        var_builder.push_prefix("batch_norm1"),
+                        var_builder.push_prefix("bn1"),
                     )?),
                     Some(batch_norm(
                         num_features,
                         batch_norm_cfg,
-                        var_builder.push_prefix("batch_norm2"),
+                        var_builder.push_prefix("bn2"),
                     )?),
                 )
             }
@@ -128,19 +128,19 @@ impl FeatureFusionBlock {
             num_features,
             KERNEL_SIZE,
             conv_cfg,
-            var_builder.push_prefix("output_conv"),
+            var_builder.push_prefix("out_conv"),
         )?;
         let res_conv_unit1 = ResidualConvUnit::new(
             num_features,
             activation,
             use_batch_norm,
-            var_builder.push_prefix("res_conv_unit1"),
+            var_builder.push_prefix("resConfUnit1"),
         )?;
         let res_conv_unit2 = ResidualConvUnit::new(
             num_features,
             activation,
             use_batch_norm,
-            var_builder.push_prefix("res_conv_unit2"),
+            var_builder.push_prefix("resConfUnit2"),
         )?;
 
         Ok(Self {
@@ -209,33 +209,33 @@ impl Scratch {
             groups: 1,
         };
 
-        let conv1 = conv2d(
+        let conv1 = conv2d_no_bias(
             *channel_sizes.get(0).unwrap(),
             num_features,
             KERNEL_SIZE,
             conv_cfg,
-            var_builder.push_prefix("conv1"),
+            var_builder.push_prefix("layer1_rn"),
         )?;
-        let conv2 = conv2d(
+        let conv2 = conv2d_no_bias(
             *channel_sizes.get(1).unwrap(),
             num_features,
             KERNEL_SIZE,
             conv_cfg,
-            var_builder.push_prefix("conv2"),
+            var_builder.push_prefix("layer2_rn"),
         )?;
-        let conv3 = conv2d(
+        let conv3 = conv2d_no_bias(
             *channel_sizes.get(2).unwrap(),
             num_features,
             KERNEL_SIZE,
             conv_cfg,
-            var_builder.push_prefix("conv3"),
+            var_builder.push_prefix("layer3_rn"),
         )?;
-        let conv4 = conv2d(
+        let conv4 = conv2d_no_bias(
             *channel_sizes.get(3).unwrap(),
             num_features,
             KERNEL_SIZE,
             conv_cfg,
-            var_builder.push_prefix("conv4"),
+            var_builder.push_prefix("layer4_rn"),
         )?;
 
         let refine_net1 = FeatureFusionBlock::new(
@@ -243,28 +243,28 @@ impl Scratch {
             Activation::Relu,
             use_batch_norm,
             true,
-            var_builder.push_prefix("refine_net1"),
+            var_builder.push_prefix("refinenet1"),
         )?;
         let refine_net2 = FeatureFusionBlock::new(
             num_features,
             Activation::Relu,
             use_batch_norm,
             false,
-            var_builder.push_prefix("refine_net2"),
+            var_builder.push_prefix("refinenet2"),
         )?;
         let refine_net3 = FeatureFusionBlock::new(
             num_features,
             Activation::Relu,
             use_batch_norm,
             false,
-            var_builder.push_prefix("refine_net3"),
+            var_builder.push_prefix("refinenet3"),
         )?;
         let refine_net4 = FeatureFusionBlock::new(
             num_features,
             Activation::Relu,
             use_batch_norm,
             false,
-            var_builder.push_prefix("refine_net4"),
+            var_builder.push_prefix("refinenet4"),
         )?;
 
         let conv_cfg = Conv2dConfig {
@@ -290,7 +290,7 @@ impl Scratch {
             HEAD_FEATURES_2,
             KERNEL_SIZE,
             conv_cfg,
-            var_builder.push_prefix("output_conv2_conv1"),
+            var_builder.push_prefix("output_conv2").push_prefix("0"),
         )?);
         let output_conv2 = output_conv2
             .add(Activation::Relu)
@@ -299,7 +299,7 @@ impl Scratch {
                 OUT_CHANNELS_2,
                 KERNEL_SIZE_2,
                 conv_cfg,
-                var_builder.push_prefix("output_conv2_conv2"),
+                var_builder.push_prefix("output_conv2").push_prefix("2"),
             )?)
             .add(Activation::Relu);
         // TODO currently skipping the identity() call, doesn't seem necessary
@@ -348,7 +348,9 @@ impl Module for Scratch {
         let dims = xs.shape().dims();
         println!("Scratch got dims: {:?}", dims);
         let (_, last_two_dims) = dims.split_at(dims.len() - 2);
-        let [height, width] = last_two_dims else { unreachable!() };
+        let [height, width] = last_two_dims else {
+            unreachable!()
+        };
 
         let out = out.interpolate2d(*height, *width)?;
 
@@ -389,8 +391,11 @@ impl DPTHead {
                         dilation: 1,
                         groups: 1,
                     },
-                    var_builder.push_prefix(format!("projection_{}", conv_index)),
-                ).unwrap()
+                    var_builder
+                        .push_prefix("projects")
+                        .push_prefix(conv_index.to_string()),
+                )
+                .unwrap()
             })
             .collect();
 
@@ -405,7 +410,7 @@ impl DPTHead {
                     dilation: 1,
                     output_padding: 0,
                 },
-                var_builder.push_prefix("resize_layer1"),
+                var_builder.push_prefix("resize_layers").push_prefix("0"),
             )?),
             Box::new(conv_transpose2d(
                 *out_channel_sizes.get(1).unwrap(),
@@ -417,20 +422,20 @@ impl DPTHead {
                     dilation: 1,
                     output_padding: 0,
                 },
-                var_builder.push_prefix("resize_layer2"),
+                var_builder.push_prefix("resize_layers").push_prefix("1"),
             )?),
             Box::new(Identity::new()),
             Box::new(conv2d(
                 *out_channel_sizes.get(3).unwrap(),
                 *out_channel_sizes.get(3).unwrap(),
-                2,
+                3,
                 Conv2dConfig {
                     padding: 0,
                     stride: 2,
                     dilation: 1,
                     groups: 1,
                 },
-                var_builder.push_prefix("resize_layer4"),
+                var_builder.push_prefix("resize_layers").push_prefix("3"),
             )?),
         ];
 
@@ -438,12 +443,16 @@ impl DPTHead {
             (0..NUM_CHANNELS)
                 .map(|rop_index| {
                     seq()
-                        .add(linear(
-                            2 * in_channel_size,
-                            in_channel_size,
-                            var_builder
-                                .push_prefix(format!("readout_projections_linear_{}", rop_index)),
-                        ).unwrap())
+                        .add(
+                            linear(
+                                2 * in_channel_size,
+                                in_channel_size,
+                                var_builder
+                                    .push_prefix("readout_projects")
+                                    .push_prefix(rop_index.to_string()),
+                            )
+                            .unwrap(),
+                        )
                         .add(Activation::Gelu)
                 })
                 .collect()
@@ -475,7 +484,9 @@ impl Module for DPTHead {
         let dims = xs.shape().dims();
         println!("DPTHead got dims: {:?}", dims);
         let (_, last_two_dims) = dims.split_at(dims.len() - 2);
-        let [height, width] = last_two_dims else { unreachable!() };
+        let [height, width] = last_two_dims else {
+            unreachable!()
+        };
         const PATCH_DENOMINATOR: usize = 14;
         let patch_height = height / PATCH_DENOMINATOR;
         let patch_width = width / PATCH_DENOMINATOR;
@@ -493,12 +504,16 @@ impl Module for DPTHead {
                     xs.get(0).unwrap()
                 };
                 let x_dims = x.dims();
-                let x = x.permute((0, 2, 1)).unwrap().reshape((
-                    x_dims[0],
-                    x_dims[x_dims.len()-1],
-                    patch_height,
-                    patch_width,
-                )).unwrap();
+                let x = x
+                    .permute((0, 2, 1))
+                    .unwrap()
+                    .reshape((
+                        x_dims[0],
+                        x_dims[x_dims.len() - 1],
+                        patch_height,
+                        patch_width,
+                    ))
+                    .unwrap();
                 let x = self.projections[i].forward(&x).unwrap();
 
                 self.resize_layers[i].forward(&x).unwrap()
@@ -520,18 +535,16 @@ impl<'a> DepthAnythingV2<'a> {
         pretrained: &'a DinoVisionTransformer,
         in_channel_size: usize,
         out_channel_sizes: Vec<usize>,
+        num_features: usize,
         var_builder: VarBuilder,
     ) -> Result<Self> {
-
-        const NUM_FEATURES: usize = 256;
-
         let depth_head = DPTHead::new(
             out_channel_sizes,
             in_channel_size,
-            NUM_FEATURES,
+            num_features,
             false,
             false,
-            var_builder,
+            var_builder.push_prefix("depth_head"),
         )?;
 
         Ok(Self {
@@ -551,9 +564,9 @@ impl<'a> Module for DepthAnythingV2<'a> {
         // let layer_ids_vitl = vec![4, 11, 17, 23];
         // let layer_ids_vitg = vec![9, 19, 29, 39];
 
-        let features = self
-            .pretrained
-            .get_intermediate_layers(xs, layer_ids_vits, false, false, true)?;
+        let features =
+            self.pretrained
+                .get_intermediate_layers(xs, layer_ids_vits, false, false, true)?;
         let depth = self.depth_head.forward(&features)?;
         let depth = depth.relu()?;
 
