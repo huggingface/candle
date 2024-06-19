@@ -479,17 +479,7 @@ impl DPTHead {
 
 impl Module for DPTHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        // TODO this needs to be scaled to the correct width and height
-        // which the Python implementation does somewhere else
-        let dims = xs.shape().dims();
-        println!("DPTHead got dims: {:?}", dims);
-        let (_, last_two_dims) = dims.split_at(dims.len() - 2);
-        let [height, width] = last_two_dims else {
-            unreachable!()
-        };
-        const PATCH_DENOMINATOR: usize = 14;
-        let patch_height = height / PATCH_DENOMINATOR;
-        let patch_width = width / PATCH_DENOMINATOR;
+        const PATCH_SIZE: usize = 37; //  518 // 14 TODO see how to solve this dynamically
 
         let to_stack = (0..NUM_CHANNELS)
             .map(|i| {
@@ -510,8 +500,8 @@ impl Module for DPTHead {
                     .reshape((
                         x_dims[0],
                         x_dims[x_dims.len() - 1],
-                        patch_height,
-                        patch_width,
+                        PATCH_SIZE,
+                        PATCH_SIZE,
                     ))
                     .unwrap();
                 let x = self.projections[i].forward(&x).unwrap();
@@ -519,6 +509,10 @@ impl Module for DPTHead {
                 self.resize_layers[i].forward(&x).unwrap()
             })
             .collect::<Vec<Tensor>>();
+
+        for (i, t) in to_stack.iter().enumerate() {
+            println!("{} has dims {:?}", i, t.dims());
+        }
         let out = Tensor::stack(&to_stack, 0)?;
 
         self.scratch.forward(&out)
