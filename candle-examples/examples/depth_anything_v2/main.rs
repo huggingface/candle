@@ -8,11 +8,11 @@ extern crate intel_mkl_src;
 
 use clap::Parser;
 
+use candle::DType::{F32, U8};
 use candle::{DType, Module, Result, Tensor};
-use candle::DType::F32;
 use candle_examples::{load_image, load_image_and_resize, save_image};
 use candle_nn::VarBuilder;
-use candle_transformers::models::depth_anything_v2::DepthAnythingV2;
+use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DINO_IMG_SIZE};
 use candle_transformers::models::dinov2;
 
 #[derive(Parser)]
@@ -30,8 +30,6 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 }
-
-const DINO_IMG_SIZE: usize = 518; // multiple of 14: 37
 
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -54,8 +52,7 @@ pub fn main() -> anyhow::Result<()> {
     };
     println!("Using file {:?}", dinov2_model_file);
 
-    let vb =
-        unsafe { VarBuilder::from_mmaped_safetensors(&[dinov2_model_file], F32, &device)? };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[dinov2_model_file], F32, &device)? };
     let dinov2 = dinov2::vit_small(vb)?;
     println!("DinoV2 model built");
 
@@ -91,7 +88,8 @@ pub fn main() -> anyhow::Result<()> {
 
     let depth = post_process_image(&depth, original_height, original_width)?;
 
-    save_image(&depth, "depth_output")?;
+    println!("Saving image");
+    save_image(&depth, "depth_output.png")?;
 
     Ok(())
 }
@@ -101,22 +99,34 @@ fn post_process_image(
     original_height: usize,
     original_width: usize,
 ) -> Result<Tensor> {
-    let out = image.interpolate2d(original_height, original_width);
-    // let out = normalize_and_scale(&out);
-    out
+    let out = image.interpolate2d(original_height, original_width)?;
+    let out = normalize_and_scale(&out)?;
+    let out = out.squeeze(1)?;
+    let out = out.to_dtype(U8)?;
+
+    let rgb_slice = [&out, &out, &out];
+    Tensor::cat(&rgb_slice, 0)
 }
 
-// fn normalize_and_scale(depth: &Tensor) -> Result<Tensor> {
-//
-//     let min_val = depth.min(0)?;
-//     let max_val = depth.max(0)?;
-//
-//     let depth = depth - &min_val;
-//
-//     let range = &max_val - &min_val;
-//     let depth = depth / &range;
-//
-//     let depth = depth * 255.0;
-//
-//     Ok(depth)
-// }
+fn normalize_and_scale(depth: &Tensor) -> Result<Tensor> {
+    let flat_values: Vec<f32> = depth.flatten_all()?.to_vec1()?;
+
+    let min_val = flat_values.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
+    let max_val = flat_values.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
+
+    let min_val_tensor = Tensor::try_from(*min_val)?
+        .to_device(depth.device())?
+        .broadcast_as(depth.shape())?;
+    let depth = (depth - min_val_tensor)?;
+
+    let range = max_val - min_val;
+    let range_tensor = Tensor::try_from(range)?
+        .to_device(depth.device())?
+        .broadcast_as(depth.shape())?;
+    let depth = (depth / range_tensor)?;
+
+    let max_pixel_val = Tensor::try_from(255.0f32)?
+        .to_device(depth.device())?
+        .broadcast_as(depth.shape())?;
+    depth * max_pixel_val
+}

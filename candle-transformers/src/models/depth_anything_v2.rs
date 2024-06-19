@@ -105,7 +105,7 @@ pub struct FeatureFusionBlock {
     res_conv_unit1: ResidualConvUnit,
     res_conv_unit2: ResidualConvUnit,
     output_conv: Conv2d,
-    use_scaling: bool,
+    target_patch_size: usize,
 }
 
 impl FeatureFusionBlock {
@@ -113,12 +113,12 @@ impl FeatureFusionBlock {
         num_features: usize,
         activation: Activation,
         use_batch_norm: bool,
-        use_scaling: bool,
+        target_patch_size: usize,
         var_builder: VarBuilder,
     ) -> Result<Self> {
         const KERNEL_SIZE: usize = 1;
         let conv_cfg = Conv2dConfig {
-            padding: 1,
+            padding: 0,
             stride: 1,
             dilation: 1,
             groups: 1,
@@ -147,45 +147,25 @@ impl FeatureFusionBlock {
             res_conv_unit1,
             res_conv_unit2,
             output_conv,
-            use_scaling,
+            target_patch_size,
         })
     }
 }
 
 impl Module for FeatureFusionBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        // TODO for now this call is moved to Scratch. Not great....
-        // let out = xs.get(0)?;
-        // let out = match xs.elem_count() {
-        //     2 => self.res_conv_unit1.forward(&xs.get(1)?)?,
-        //     _ => out
-        // };
-
         let out = self.res_conv_unit2.forward(&xs)?;
-        let size = xs.shape();
-        let dims = size.dims();
-        let target_h = if self.use_scaling {
-            dims[dims.len() - 1] * 2
-        } else {
-            dims[dims.len() - 1]
-        };
-        let target_w = if self.use_scaling {
-            dims[dims.len() - 2] * 2
-        } else {
-            dims[dims.len() - 2]
-        };
-
-        let out = out.interpolate2d(target_h, target_w)?;
+        let out = out.interpolate2d(self.target_patch_size, self.target_patch_size)?;
 
         self.output_conv.forward(&out)
     }
 }
 
 pub struct Scratch {
-    conv1: Conv2d,
-    conv2: Conv2d,
-    conv3: Conv2d,
-    conv4: Conv2d,
+    layer1_rn: Conv2d,
+    layer2_rn: Conv2d,
+    layer3_rn: Conv2d,
+    layer4_rn: Conv2d,
     refine_net1: FeatureFusionBlock,
     refine_net2: FeatureFusionBlock,
     refine_net3: FeatureFusionBlock,
@@ -209,28 +189,28 @@ impl Scratch {
             groups: 1,
         };
 
-        let conv1 = conv2d_no_bias(
+        let layer1_rn = conv2d_no_bias(
             *channel_sizes.get(0).unwrap(),
             num_features,
             KERNEL_SIZE,
             conv_cfg,
             var_builder.push_prefix("layer1_rn"),
         )?;
-        let conv2 = conv2d_no_bias(
+        let layer2_rn = conv2d_no_bias(
             *channel_sizes.get(1).unwrap(),
             num_features,
             KERNEL_SIZE,
             conv_cfg,
             var_builder.push_prefix("layer2_rn"),
         )?;
-        let conv3 = conv2d_no_bias(
+        let layer3_rn = conv2d_no_bias(
             *channel_sizes.get(2).unwrap(),
             num_features,
             KERNEL_SIZE,
             conv_cfg,
             var_builder.push_prefix("layer3_rn"),
         )?;
-        let conv4 = conv2d_no_bias(
+        let layer4_rn = conv2d_no_bias(
             *channel_sizes.get(3).unwrap(),
             num_features,
             KERNEL_SIZE,
@@ -242,28 +222,28 @@ impl Scratch {
             num_features,
             Activation::Relu,
             use_batch_norm,
-            true,
+            PATCH_SIZE * 8,
             var_builder.push_prefix("refinenet1"),
         )?;
         let refine_net2 = FeatureFusionBlock::new(
             num_features,
             Activation::Relu,
             use_batch_norm,
-            false,
+            PATCH_SIZE * 4,
             var_builder.push_prefix("refinenet2"),
         )?;
         let refine_net3 = FeatureFusionBlock::new(
             num_features,
             Activation::Relu,
             use_batch_norm,
-            false,
+            PATCH_SIZE * 2,
             var_builder.push_prefix("refinenet3"),
         )?;
         let refine_net4 = FeatureFusionBlock::new(
             num_features,
             Activation::Relu,
             use_batch_norm,
-            false,
+            PATCH_SIZE,
             var_builder.push_prefix("refinenet4"),
         )?;
 
@@ -305,10 +285,10 @@ impl Scratch {
         // TODO currently skipping the identity() call, doesn't seem necessary
 
         Ok(Self {
-            conv1,
-            conv2,
-            conv3,
-            conv4,
+            layer1_rn,
+            layer2_rn,
+            layer3_rn,
+            layer4_rn,
             refine_net1,
             refine_net2,
             refine_net3,
@@ -316,45 +296,6 @@ impl Scratch {
             output_conv1,
             output_conv2,
         })
-    }
-}
-
-impl Module for Scratch {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        // these are called layer_*_rn in the Python impl
-        let conv1_out = self.conv1.forward(&xs.get(0)?)?;
-        let conv2_out = self.conv2.forward(&xs.get(1)?)?;
-        let conv3_out = self.conv3.forward(&xs.get(2)?)?;
-        let conv4_out = self.conv4.forward(&xs.get(3)?)?;
-
-        let path4 = self.refine_net4.forward(&conv4_out)?;
-
-        let res3_out = self.refine_net3.res_conv_unit1.forward(&conv3_out)?;
-        let res3_out = path4.add(&res3_out)?;
-        let path3 = self.refine_net3.forward(&res3_out)?;
-
-        let res2_out = self.refine_net2.res_conv_unit1.forward(&conv2_out)?;
-        let res2_out = path3.add(&res2_out)?;
-        let path2 = self.refine_net2.forward(&res2_out)?;
-
-        let res1_out = self.refine_net1.res_conv_unit1.forward(&conv1_out)?;
-        let res1_out = path2.add(&res1_out)?;
-        let path1 = self.refine_net1.forward(&res1_out)?;
-
-        let out = self.output_conv1.forward(&path1)?;
-
-        // TODO this needs to be scaled to the correct width and height
-        // which the Python implementation does somewhere else
-        let dims = xs.shape().dims();
-        println!("Scratch got dims: {:?}", dims);
-        let (_, last_two_dims) = dims.split_at(dims.len() - 2);
-        let [height, width] = last_two_dims else {
-            unreachable!()
-        };
-
-        let out = out.interpolate2d(*height, *width)?;
-
-        self.output_conv2.forward(&out)
     }
 }
 
@@ -430,7 +371,7 @@ impl DPTHead {
                 *out_channel_sizes.get(3).unwrap(),
                 3,
                 Conv2dConfig {
-                    padding: 0,
+                    padding: 1,
                     stride: 2,
                     dilation: 1,
                     groups: 1,
@@ -476,33 +417,29 @@ impl DPTHead {
         })
     }
 }
+pub const DINO_IMG_SIZE: usize = 518;
+const PATCH_SIZE: usize = 37; //  518 // 14 TODO see how to solve this dynamically
 
 impl Module for DPTHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        const PATCH_SIZE: usize = 37; //  518 // 14 TODO see how to solve this dynamically
-
-        let to_stack = (0..NUM_CHANNELS)
+        let out = (0..NUM_CHANNELS)
             .map(|i| {
                 let x = if self.use_class_token {
-                    let x = xs.get(0).unwrap();
-                    let class_token = xs.get(1).unwrap();
+                    let x = xs.get(i).unwrap().get(0).unwrap();
+                    let class_token = xs.get(i).unwrap().get(1).unwrap();
                     let readout = class_token.unsqueeze(1).unwrap().expand(x.shape()).unwrap();
                     let to_cat = [x, readout];
                     let cat = Tensor::cat(&to_cat, Minus1).unwrap();
                     self.readout_projections[i].forward(&cat).unwrap()
                 } else {
-                    xs.get(0).unwrap()
+                    xs.get(i).unwrap()
                 };
                 let x_dims = x.dims();
+
                 let x = x
                     .permute((0, 2, 1))
                     .unwrap()
-                    .reshape((
-                        x_dims[0],
-                        x_dims[x_dims.len() - 1],
-                        PATCH_SIZE,
-                        PATCH_SIZE,
-                    ))
+                    .reshape((x_dims[0], x_dims[x_dims.len() - 1], PATCH_SIZE, PATCH_SIZE))
                     .unwrap();
                 let x = self.projections[i].forward(&x).unwrap();
 
@@ -510,12 +447,42 @@ impl Module for DPTHead {
             })
             .collect::<Vec<Tensor>>();
 
-        for (i, t) in to_stack.iter().enumerate() {
-            println!("{} has dims {:?}", i, t.dims());
-        }
-        let out = Tensor::stack(&to_stack, 0)?;
+        let layer_1_rn = self.scratch.layer1_rn.forward(out.get(0).unwrap())?;
+        let layer_2_rn = self.scratch.layer2_rn.forward(out.get(1).unwrap())?;
+        let layer_3_rn = self.scratch.layer3_rn.forward(out.get(2).unwrap())?;
+        let layer_4_rn = self.scratch.layer4_rn.forward(out.get(3).unwrap())?;
 
-        self.scratch.forward(&out)
+        let path4 = self.scratch.refine_net4.forward(&layer_4_rn)?;
+
+        let res3_out = self
+            .scratch
+            .refine_net3
+            .res_conv_unit1
+            .forward(&layer_3_rn)?;
+        let res3_out = path4.add(&res3_out)?;
+        let path3 = self.scratch.refine_net3.forward(&res3_out)?;
+
+        let res2_out = self
+            .scratch
+            .refine_net2
+            .res_conv_unit1
+            .forward(&layer_2_rn)?;
+        let res2_out = path3.add(&res2_out)?;
+        let path2 = self.scratch.refine_net2.forward(&res2_out)?;
+
+        let res1_out = self
+            .scratch
+            .refine_net1
+            .res_conv_unit1
+            .forward(&layer_1_rn)?;
+        let res1_out = path2.add(&res1_out)?;
+        let path1 = self.scratch.refine_net1.forward(&res1_out)?;
+
+        let out = self.scratch.output_conv1.forward(&path1)?;
+
+        let out = out.interpolate2d(DINO_IMG_SIZE, DINO_IMG_SIZE)?;
+
+        self.scratch.output_conv2.forward(&out)
     }
 }
 
@@ -562,8 +529,7 @@ impl<'a> Module for DepthAnythingV2<'a> {
             self.pretrained
                 .get_intermediate_layers(xs, layer_ids_vits, false, false, true)?;
         let depth = self.depth_head.forward(&features)?;
-        let depth = depth.relu()?;
 
-        depth.squeeze(1)
+        depth.relu()
     }
 }
