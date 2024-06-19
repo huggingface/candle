@@ -1,4 +1,4 @@
-use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor, D};
+use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor, D, Module};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -935,13 +935,10 @@ impl Identity {
         Self { }
     }
 
-    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        Ok(xs.clone())
-    }
 }
 
-impl candle::ModuleT for Identity {
-    fn forward_t(&self, xs: &Tensor, _train: bool) -> Result<Tensor> {
+impl Module for Identity {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         Ok(xs.clone())
     }
 }

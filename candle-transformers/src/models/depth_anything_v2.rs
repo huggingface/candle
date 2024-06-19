@@ -1,4 +1,5 @@
 use candle::{Module, Result, Tensor};
+use candle::D::Minus1;
 use candle_nn::ops::Identity;
 use candle_nn::{
     batch_norm, conv2d, conv_transpose2d, linear, seq, Activation, BatchNorm, BatchNormConfig,
@@ -81,15 +82,15 @@ impl ResidualConvUnit {
 impl Module for ResidualConvUnit {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let out = self.activation.forward(xs)?;
-        let out = self.conv1(&out)?;
+        let out = self.conv1.forward(&out)?;
         let out = if let Some(batch_norm1) = &self.batch_norm1 {
             batch_norm1.forward_train(&out)?
         } else {
             out
         };
 
-        let out = self.activation.forward(out)?;
-        let out = self.conv2(&out)?;
+        let out = self.activation.forward(&out)?;
+        let out = self.conv2.forward(&out)?;
         let out = if let Some(batch_norm2) = &self.batch_norm2 {
             batch_norm2.forward_train(&out)?
         } else {
@@ -164,14 +165,14 @@ impl Module for FeatureFusionBlock {
         let size = xs.shape();
         let dims = size.dims();
         let target_h = if self.use_scaling {
-            dims[-1] * 2
+            dims[dims.len() - 1] * 2
         } else {
-            dims[-1]
+            dims[dims.len() - 1]
         };
         let target_w = if self.use_scaling {
-            dims[-2] * 2
+            dims[dims.len() - 2] * 2
         } else {
-            dims[-2]
+            dims[dims.len() - 2]
         };
 
         let out = out.interpolate2d(target_h, target_w)?;
@@ -184,7 +185,7 @@ pub struct Scratch {
     conv1: Conv2d,
     conv2: Conv2d,
     conv3: Conv2d,
-    conv4: Option<Conv2d>,
+    conv4: Conv2d,
     refine_net1: FeatureFusionBlock,
     refine_net2: FeatureFusionBlock,
     refine_net3: FeatureFusionBlock,
@@ -209,35 +210,33 @@ impl Scratch {
         };
 
         let conv1 = conv2d(
-            *channel_sizes.get(0)?,
+            *channel_sizes.get(0).unwrap(),
             num_features,
             KERNEL_SIZE,
             conv_cfg,
             var_builder.push_prefix("conv1"),
         )?;
         let conv2 = conv2d(
-            *channel_sizes.get(1)?,
+            *channel_sizes.get(1).unwrap(),
             num_features,
             KERNEL_SIZE,
             conv_cfg,
             var_builder.push_prefix("conv2"),
         )?;
         let conv3 = conv2d(
-            *channel_sizes.get(2)?,
+            *channel_sizes.get(2).unwrap(),
             num_features,
             KERNEL_SIZE,
             conv_cfg,
             var_builder.push_prefix("conv3"),
         )?;
-        let conv4 = channel_sizes.get(3).map(|in_shape| {
-            conv2d(
-                *channel_sizes.get(2)?,
-                num_features,
-                KERNEL_SIZE,
-                conv_cfg,
-                var_builder.push_prefix("conv4"),
-            )?
-        });
+        let conv4 = conv2d(
+            *channel_sizes.get(3).unwrap(),
+            num_features,
+            KERNEL_SIZE,
+            conv_cfg,
+            var_builder.push_prefix("conv4"),
+        )?;
 
         let refine_net1 = FeatureFusionBlock::new(
             num_features,
@@ -346,11 +345,12 @@ impl Module for Scratch {
 
         // TODO this needs to be scaled to the correct width and height
         // which the Python implementation does somewhere else
-        let dims = xs.shape().dims()?;
+        let dims = xs.shape().dims();
         println!("Scratch got dims: {:?}", dims);
-        let [height, width] = dims[-2..];
+        let (_, last_two_dims) = dims.split_at(dims.len() - 2);
+        let [height, width] = last_two_dims else { unreachable!() };
 
-        let out = out.interpolate2d(height, width)?;
+        let out = out.interpolate2d(*height, *width)?;
 
         self.output_conv2.forward(&out)
     }
@@ -361,7 +361,7 @@ const NUM_CHANNELS: usize = 4;
 pub struct DPTHead {
     use_class_token: bool,
     projections: Vec<Conv2d>,
-    resize_layers: Vec<dyn Module>,
+    resize_layers: Vec<Box<dyn Module>>,
     readout_projections: Vec<Sequential>,
     scratch: Scratch,
 }
@@ -375,7 +375,6 @@ impl DPTHead {
         use_class_token: bool,
         var_builder: VarBuilder,
     ) -> Result<Self> {
-
         let projections = out_channel_sizes
             .iter()
             .enumerate()
@@ -391,14 +390,14 @@ impl DPTHead {
                         groups: 1,
                     },
                     var_builder.push_prefix(format!("projection_{}", conv_index)),
-                )?
+                ).unwrap()
             })
             .collect();
 
-        let resize_layers: Vec<dyn Module> = vec![
-            conv_transpose2d(
-                *out_channel_sizes.get(0)?,
-                *out_channel_sizes.get(0)?,
+        let resize_layers: Vec<Box<dyn Module>> = vec![
+            Box::new(conv_transpose2d(
+                *out_channel_sizes.get(0).unwrap(),
+                *out_channel_sizes.get(0).unwrap(),
                 4,
                 ConvTranspose2dConfig {
                     padding: 0,
@@ -407,10 +406,10 @@ impl DPTHead {
                     output_padding: 0,
                 },
                 var_builder.push_prefix("resize_layer1"),
-            )?,
-            conv_transpose2d(
-                *out_channel_sizes.get(1)?,
-                *out_channel_sizes.get(1)?,
+            )?),
+            Box::new(conv_transpose2d(
+                *out_channel_sizes.get(1).unwrap(),
+                *out_channel_sizes.get(1).unwrap(),
                 2,
                 ConvTranspose2dConfig {
                     padding: 0,
@@ -419,11 +418,11 @@ impl DPTHead {
                     output_padding: 0,
                 },
                 var_builder.push_prefix("resize_layer2"),
-            )?,
-            Identity::new(),
-            conv2d(
-                *out_channel_sizes.get(3)?,
-                *out_channel_sizes.get(3)?,
+            )?),
+            Box::new(Identity::new()),
+            Box::new(conv2d(
+                *out_channel_sizes.get(3).unwrap(),
+                *out_channel_sizes.get(3).unwrap(),
                 2,
                 Conv2dConfig {
                     padding: 0,
@@ -432,7 +431,7 @@ impl DPTHead {
                     groups: 1,
                 },
                 var_builder.push_prefix("resize_layer4"),
-            )?,
+            )?),
         ];
 
         let readout_projections = if use_class_token {
@@ -444,7 +443,7 @@ impl DPTHead {
                             in_channel_size,
                             var_builder
                                 .push_prefix(format!("readout_projections_linear_{}", rop_index)),
-                        )?)
+                        ).unwrap())
                         .add(Activation::Gelu)
                 })
                 .collect()
@@ -473,39 +472,39 @@ impl Module for DPTHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         // TODO this needs to be scaled to the correct width and height
         // which the Python implementation does somewhere else
-        let dims = xs.shape().dims()?;
+        let dims = xs.shape().dims();
         println!("DPTHead got dims: {:?}", dims);
-        let [height, width] = dims[-2..];
-        const PATCH_DENOMINATOR: i32 = 14;
+        let (_, last_two_dims) = dims.split_at(dims.len() - 2);
+        let [height, width] = last_two_dims else { unreachable!() };
+        const PATCH_DENOMINATOR: usize = 14;
         let patch_height = height / PATCH_DENOMINATOR;
         let patch_width = width / PATCH_DENOMINATOR;
 
-        let out = Tensor::stack(
-            (0..NUM_CHANNELS)
-                .map(|i| {
-                    let x = if self.use_class_token {
-                        let x = xs.get(0)?;
-                        let class_token = xs.get(1)?;
-                        let readout = class_token.unsqueeze(1).unwrap().expand(x.shape())?;
-                        let cat = Tensor::cat(&*[x, readout], -1)?;
-                        self.readout_projections[i].forward(&cat)?
-                    } else {
-                        xs.get(0)?
-                    };
-                    let x_dims = x.dims();
-                    let x = x.permute((0, 2, 1))?.reshape((
-                        x_dims[0],
-                        x_dims[-1],
-                        patch_height,
-                        patch_width,
-                    ))?;
-                    let x = self.projections[i].forward(&x)?;
+        let to_stack = (0..NUM_CHANNELS)
+            .map(|i| {
+                let x = if self.use_class_token {
+                    let x = xs.get(0).unwrap();
+                    let class_token = xs.get(1).unwrap();
+                    let readout = class_token.unsqueeze(1).unwrap().expand(x.shape()).unwrap();
+                    let to_cat = [x, readout];
+                    let cat = Tensor::cat(&to_cat, Minus1).unwrap();
+                    self.readout_projections[i].forward(&cat).unwrap()
+                } else {
+                    xs.get(0).unwrap()
+                };
+                let x_dims = x.dims();
+                let x = x.permute((0, 2, 1)).unwrap().reshape((
+                    x_dims[0],
+                    x_dims[x_dims.len()-1],
+                    patch_height,
+                    patch_width,
+                )).unwrap();
+                let x = self.projections[i].forward(&x).unwrap();
 
-                    self.resize_layers[i].forward(&x)
-                })
-                .collect(),
-            0,
-        )?;
+                self.resize_layers[i].forward(&x).unwrap()
+            })
+            .collect::<Vec<Tensor>>();
+        let out = Tensor::stack(&to_stack, 0)?;
 
         self.scratch.forward(&out)
     }
@@ -516,13 +515,14 @@ pub struct DepthAnythingV2<'a> {
     depth_head: DPTHead,
 }
 
-impl DepthAnythingV2 {
+impl<'a> DepthAnythingV2<'a> {
     pub fn new(
-        pretrained: &DinoVisionTransformer,
+        pretrained: &'a DinoVisionTransformer,
         in_channel_size: usize,
+        out_channel_sizes: Vec<usize>,
         var_builder: VarBuilder,
     ) -> Result<Self> {
-        let out_channel_sizes = vec![256usize, 512, 1024, 1024];
+
         const NUM_FEATURES: usize = 256;
 
         let depth_head = DPTHead::new(
@@ -541,14 +541,19 @@ impl DepthAnythingV2 {
     }
 }
 
-impl Module for DepthAnythingV2 {
+impl<'a> Module for DepthAnythingV2<'a> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let dims = xs.shape().dims();
         println!("DepthAnythingV2 got dims: {:?}", dims);
 
+        let layer_ids_vits = vec![2, 5, 8, 11];
+        // let layer_ids_vitb = vec![2, 5, 8, 11];
+        // let layer_ids_vitl = vec![4, 11, 17, 23];
+        // let layer_ids_vitg = vec![9, 19, 29, 39];
+
         let features = self
             .pretrained
-            .get_intermediate_layers(xs, 4, false, false, true)?;
+            .get_intermediate_layers(xs, layer_ids_vits, false, false, true)?;
         let depth = self.depth_head.forward(&features)?;
         let depth = depth.relu()?;
 

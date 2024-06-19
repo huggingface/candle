@@ -259,11 +259,9 @@ impl DinoVisionTransformer {
         &xs + &self.interpolate_pos_encoding(&xs, w, h)?
     }
 
-    fn get_intermediate_layers_not_chunked(&self, xs: &Tensor, n: usize) -> Result<Vec<Tensor>> {
+    fn get_intermediate_layers_not_chunked(&self, xs: &Tensor, blocks_to_take: Vec<usize>) -> Result<Vec<Tensor>> {
         let mut xs = self.prepare_tokens_with_mask(xs)?;
         let mut output = Vec::new();
-        let total_block_len = self.blocks.len();
-        let blocks_to_take = (total_block_len - n..total_block_len).collect::<Vec<_>>();
         for (i, blk) in self.blocks.iter().enumerate() {
             xs = blk.forward(&xs)?;
             if blocks_to_take.contains(&i) {
@@ -278,12 +276,12 @@ impl DinoVisionTransformer {
     pub fn get_intermediate_layers(
         &self,
         xs: &Tensor,
-        n: usize,  // Layers or n last layers to take
+        blocks_to_take: Vec<usize>,
         reshape: bool,
         return_class_token: bool,
         norm: bool,
     ) -> Result<Tensor> {
-        let outputs = self.get_intermediate_layers_not_chunked(xs, n)?;
+        let outputs = self.get_intermediate_layers_not_chunked(xs, blocks_to_take)?;
         let outputs = if norm {
             outputs.iter().map(|out| self.norm.forward(out)).collect::<Result<Vec<_>>>()?
         } else {
@@ -301,8 +299,9 @@ impl DinoVisionTransformer {
         let outputs =  if reshape {
             let (b, _c, w, h) = xs.dims4()?;
             let patch_size = self.patch_embed.patch_size.0;
+            let num_channels = outputs[0].elem_count() / (b * (w / patch_size) * (h / patch_size));
             outputs.iter().map(|out| {
-                out.reshape((b, w / patch_size, h / patch_size, -1))?
+                out.reshape((b, w / patch_size, h / patch_size, num_channels))?
                     .transpose(2, 3)?
                     .transpose(1, 2)
             }).collect::<Result<Vec<_>>>()?
@@ -315,10 +314,10 @@ impl DinoVisionTransformer {
                 .iter()
                 .zip(class_tokens.iter())
                 .map(|(out, class_token)| Tensor::cat(&[out, class_token], D::Minus1))
-                .collect::<Result<Vec<_>>>()?)
+                .collect::<Result<Vec<_>>>()?
         } else {
             outputs
-        }
+        };
 
         Tensor::stack(&outputs[..], 0)
     }
