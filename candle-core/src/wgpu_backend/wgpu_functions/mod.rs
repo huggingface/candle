@@ -16,15 +16,14 @@ pub mod where_cond;
 
 use std::io::Write;
 
-use super::{
-    cache::{BufferReference, CachedBindGroupReference},
-    device::{BindGroupReference, MlQueue, PipelineType, QueueBuffer, META_BUFFER_SIZE},
-};
+use super::cache::{BindGroupReference, BindGroupReferenceBase, BufferReference, ModelCache};
+use super::device::{MlQueue, PipelineType, QueueBuffer, META_BUFFER_SIZE};
+use super::{BindgroupReferenceId, BufferReferenceId};
 use crate::DType;
 use crate::{wgpu_backend::device::WgpuDevice, Error, Layout, WebGpuError};
 use std::{
     borrow::Cow,
-    sync::{Arc, MutexGuard},
+    sync::MutexGuard,
 };
 use wgpu::ShaderModule;
 
@@ -47,9 +46,6 @@ pub use where_cond::queue_where_cond_u32;
 #[derive(Debug)]
 pub(crate) struct MetaArray(Vec<u32>);
 
-pub(crate) trait MetaArrayToU32 {
-    fn to_u32(self) -> u32;
-}
 
 impl MetaArray {
     pub(crate) fn new(capacity: u32) -> Self {
@@ -72,7 +68,7 @@ impl MetaArray {
         self.0.extend(stride.iter().map(|&x| x as u32));
     }
 
-    pub(crate) fn add<T: MetaArrayToU32>(&mut self, value: T) {
+    pub(crate) fn add<T: ToU32>(&mut self, value: T) {
         self.0.push(value.to_u32());
     }
 }
@@ -81,23 +77,54 @@ fn get_size(layout: &Layout) -> u32 {
     return 3 + layout.dims().len() as u32 * 2;
 }
 
-impl MetaArrayToU32 for u32 {
+
+pub(crate) trait ToU32 {
+    fn to_u32(self) -> u32;
+}
+
+impl ToU32 for u32 {
     fn to_u32(self) -> u32 {
         return self;
     }
 }
 
-impl MetaArrayToU32 for f32 {
+
+impl ToU32 for f32 {
     fn to_u32(self) -> u32 {
         return f32::to_bits(self);
     }
 }
 
-impl MetaArrayToU32 for usize {
+impl ToU32 for usize {
     fn to_u32(self) -> u32 {
         return self as u32;
     }
 }
+
+
+
+pub(crate) trait ToU64 {
+    fn to_u64(self) -> u64;
+}
+
+impl ToU64 for u32 {
+    fn to_u64(self) -> u64 {
+        return self as u64;
+    }
+}
+
+impl ToU64 for u64 {
+    fn to_u64(self) -> u64 {
+        return self;
+    }
+}
+
+impl ToU64 for usize {
+    fn to_u64(self) -> u64 {
+        return self as u64;
+    }
+}
+
 
 #[derive(Debug, Hash, std::cmp::Eq, std::cmp::PartialEq, Clone)]
 pub enum Shader {
@@ -232,51 +259,28 @@ pub fn get_shader(device: &wgpu::Device, shader: &'static str) -> ShaderModule {
 }
 
 /// Size is in Bytes!
-pub fn create_buffer(dev: &WgpuDevice, size: usize) -> Arc<BufferReference> {
+pub fn create_buffer<T : ToU64>(dev: &WgpuDevice, size: T) -> BufferReferenceId {
     //let mut cache = dev.cache.lock().unwrap();
-
-    return BufferReference::new(dev, size as u64);
-
-    // let create_new = || { Arc::new(dev.device.create_buffer(&wgpu::BufferDescriptor {
-    //     label: None,
-    //     size: size as u64,
-    //     usage: wgpu::BufferUsages::STORAGE
-    //         | wgpu::BufferUsages::COPY_SRC
-    //         | wgpu::BufferUsages::COPY_DST,
-    //     mapped_at_creation: false,
-    // }))};
-
-    // match cache.as_mut() {
-    //     Some(cache) => {
-    //         let buffer_index = cache.counter_buffer;
-    //         let buffer;
-    //         if cache.cached_buffer.len() > buffer_index as usize {
-    //             buffer = cache.cached_buffer[buffer_index as usize].clone();
-
-    //             if buffer.size() as usize != size{
-    //                 panic!("Error using Cache, Size mismatch: cached: {}, creating: {}", buffer.size(), size)
-    //             }
-    //         }
-    //         else{
-    //             buffer = create_new();
-    //             cache.cached_buffer.push(buffer.clone());
-    //             create_new();
-    //         };
-    //         cache.counter_buffer += 1;
-    //         return buffer;
-    //     },
-    //     None => create_new()
-    // }
+    let mut cache = dev.cache.lock().unwrap();
+    return cache.buffer_reference.insert(BufferReference::new(size.to_u64()));
 }
 
-pub fn create_buffer_init<T: bytemuck::Pod>(dev: &WgpuDevice, data: &[T]) -> Arc<BufferReference> {
-    return BufferReference::new_init(dev, bytemuck::cast_slice(data));
+pub fn create_buffer_init<T: bytemuck::Pod>(dev: &WgpuDevice, data: &[T]) -> BufferReferenceId {
+    let mut cache = dev.cache.lock().unwrap();
+    let data = bytemuck::cast_slice(data);
+    let size = data.len();
+    let reference = cache.buffer_reference.insert(BufferReference::new(size.to_u64()));
+   
+    let buffer_id =  cache.get_free_buffer(dev, reference);
+    dev.queue.write_buffer(&cache.buffers[buffer_id].buffer, 0, data);
+    return reference;
+        
 }
 
 fn enqueue_workgroups(
     mut command_queue: MutexGuard<QueueBuffer>,
     pipeline: PipelineType,
-    bind_group: BindGroupReference,
+    bind_group: BindgroupReferenceId,
     x: u32,
     y: u32,
     z: u32,
@@ -311,7 +315,7 @@ fn enqueue_workgroups(
 fn enqueue_workgroups_indirect(
     mut command_queue: MutexGuard<QueueBuffer>,
     pipeline: PipelineType,
-    bind_group: BindGroupReference,
+    bind_group: BindgroupReferenceId,
     x: u32,
     y: u32,
     z: u32,
@@ -475,19 +479,49 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
         {
             let queue = &mut queue_buffer.command_queue;
 
+            let mut cache = dev.cache.lock().unwrap();
+
             let mut wgpu_data = Vec::with_capacity(queue.len());
-            for q in queue.drain(..) {
+            for q in queue.iter() {
                 {
                     //println!("flush_gpu_command cache lock_start");
-                    let mut cache = dev.cache.lock().unwrap();
+                    
            
                     //println!("flush_gpu_command cache lock_end");
                     match q {
                         MlQueue::Dispatch(q) => {
                             let pipeline = dev.get_pipeline2(q.pipeline.0.clone(), q.pipeline.1.clone()).unwrap();
-                            let bindgroup = cache.get_bind_group(dev, &q.bindgroup, pipeline.clone(), q.pipeline);
+                            let bindgroup = cache.get_bind_group(dev, q.bindgroup, pipeline.clone());
+
+                            let check_buffer  = |b : BufferReferenceId, cache : &mut ModelCache| {
+                                let buffer_ref = b.get(&cache);
+                                if !buffer_ref.referenced && *buffer_ref.bindgroups.last().unwrap() == q.bindgroup{
+                                    cache.release_buffer_reference_cache(b);
+                                }
+                            };
+
+                            match q.bindgroup.get(&cache).buffers{
+                                BindGroupReferenceBase::Bindgroup0(_, b1) => {
+                                    check_buffer(b1, &mut cache);
+                                },
+                                BindGroupReferenceBase::Bindgroup1(_, b1, b2) =>{
+                                    check_buffer(b1, &mut cache);
+                                    check_buffer(b2, &mut cache);
+                                },
+                                BindGroupReferenceBase::Bindgroup2(_, b1, b2, b3) => {
+                                    check_buffer(b1, &mut cache);
+                                    check_buffer(b2, &mut cache);
+                                    check_buffer(b3, &mut cache);
+                                },
+                                BindGroupReferenceBase::Bindgroup3(_, b1, b2, b3, b4) => {
+                                    check_buffer(b1, &mut cache);
+                                    check_buffer(b2, &mut cache);
+                                    check_buffer(b3, &mut cache);
+                                    check_buffer(b4, &mut cache);
+                                },
+                            }
+
                             wgpu_data.push((pipeline, bindgroup, q.x, q.y, q.z, q.indirect_buffer));
-                            drop(cache);
                         }
                     }
                 }
@@ -508,9 +542,8 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                     cpass.write_timestamp(&query_set, debug_index);
 
                     cpass.set_pipeline(&data.0);
-
                     
-                    cpass.set_bind_group(0, &data.1.bindgroup, &[]);
+                    cpass.set_bind_group(0, &data.1.get(&cache).bindgroup, &[]);
 
                     if let Some(indirect_buffer_index) = &data.5 {
                         cpass.dispatch_workgroups_indirect(
@@ -618,7 +651,7 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
 fn enqueue(
     command_queue: MutexGuard<QueueBuffer>,
     pipeline: PipelineType,
-    bind_group: BindGroupReference,
+    bind_group: BindgroupReferenceId,
     length: u32,
     #[cfg(feature = "wgpu_debug")] _debug: super::device::QueueDebugInfo,
 ) {
@@ -667,49 +700,66 @@ fn create_bind_group_input0(
     dev: &WgpuDevice,
     pipeline: PipelineType,
     meta_offset: u32,
-    buffer_dest: Arc<BufferReference>,
-) -> BindGroupReference {
-    BindGroupReference::Bindgroup0(meta_offset, buffer_dest)
+    buffer_dest: BufferReferenceId,
+) -> BindgroupReferenceId {
+    let mut cache = dev.cache.lock().unwrap();
+    let id = cache.bindgroups_reference.insert(BindGroupReference::new(BindGroupReferenceBase::Bindgroup0(meta_offset, buffer_dest), pipeline));
+    buffer_dest.get_mut(&mut cache).bindgroups.push(id);
+    return id;
 }
 
 fn create_bind_group_input1(
     dev: &WgpuDevice,
     pipeline: PipelineType,
     meta_offset: u32,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input1: Arc<BufferReference>,
-) -> BindGroupReference {
-    BindGroupReference::Bindgroup1(meta_offset, buffer_dest, buffer_input1)
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+) -> BindgroupReferenceId {
+    let mut cache = dev.cache.lock().unwrap();
+    let id =  cache.bindgroups_reference.insert(BindGroupReference::new(BindGroupReferenceBase::Bindgroup1(meta_offset, buffer_dest, buffer_input1), pipeline));
+    buffer_dest.get_mut(&mut cache).bindgroups.push(id);
+    buffer_input1.get_mut(&mut cache).bindgroups.push(id);
+    return id;
 }
 
 fn create_bind_group_input2(
     dev: &WgpuDevice,
     pipeline: PipelineType,
     meta_offset: u32,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input1: Arc<BufferReference>,
-    buffer_input2: Arc<BufferReference>,
-) -> BindGroupReference {
-    BindGroupReference::Bindgroup2(meta_offset, buffer_dest, buffer_input1, buffer_input2)
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    buffer_input2: BufferReferenceId,
+) -> BindgroupReferenceId {
+    let mut cache = dev.cache.lock().unwrap();
+    let id =  cache.bindgroups_reference.insert(BindGroupReference::new(BindGroupReferenceBase::Bindgroup2(meta_offset, buffer_dest, buffer_input1, buffer_input2), pipeline));
+    buffer_dest.get_mut(&mut cache).bindgroups.push(id);
+    buffer_input1.get_mut(&mut cache).bindgroups.push(id);
+    buffer_input2.get_mut(&mut cache).bindgroups.push(id);
+    return id;
 }
 
 fn create_bind_group_input3(
     dev: &WgpuDevice,
     pipeline: PipelineType,
     meta_offset: u32,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input1: Arc<BufferReference>,
-    buffer_input2: Arc<BufferReference>,
-    buffer_input3: Arc<BufferReference>,
-) -> BindGroupReference {
-    BindGroupReference::Bindgroup3(
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    buffer_input2: BufferReferenceId,
+    buffer_input3: BufferReferenceId,
+) -> BindgroupReferenceId {
+    let mut cache = dev.cache.lock().unwrap();
+    let id =  cache.bindgroups_reference.insert(BindGroupReference::new(BindGroupReferenceBase::Bindgroup3(
         meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
         buffer_input3,
-    )
-}
+    ), pipeline));
+    buffer_dest.get_mut(&mut cache).bindgroups.push(id);
+    buffer_input1.get_mut(&mut cache).bindgroups.push(id);
+    buffer_input2.get_mut(&mut cache).bindgroups.push(id);
+    buffer_input3.get_mut(&mut cache).bindgroups.push(id);
+    return id;}
 
 pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
     //println!("synchronize dev.command_queue lock_start");
@@ -730,13 +780,16 @@ pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
 
 pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     dev: &WgpuDevice,
-    buffer: Arc<BufferReference>,
+    buffer: BufferReferenceId,
 ) -> Vec<T> {
     //println!("read_data_from_gpu_async dev.command_queue lock_start");
     let mut command_queue = dev.command_queue.lock().unwrap();
     //println!("read_data_from_gpu_async dev.command_queue lock_end");
     flush_gpu_command(dev, &mut command_queue); //send all previous commands to the gpu
-    let dest_size = buffer.size;
+    
+    let cache = dev.cache.lock().unwrap();
+
+    let dest_size = buffer.get(&cache).size;
 
     //TODO: use cached staging buffer!
     let staging_buffer = dev.device.create_buffer(&wgpu::BufferDescriptor {
@@ -750,11 +803,8 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
     //insert_debug_info_start(dev, &mut encoder);
-    //println!("read_data_from_gpu_async BufferReference,storage lock_start");
-    let buffer_storage = buffer.storage.lock().unwrap();
-    //println!("read_data_from_gpu_async BufferReference,storage lock_end");
-    if let Some(buffer) = buffer_storage.as_ref() {
-        encoder.copy_buffer_to_buffer(&buffer.buffer, 0, &staging_buffer, 0, dest_size);
+    if let Some(buffer_id) = buffer.get(&cache).cache {
+        encoder.copy_buffer_to_buffer(&buffer_id.get(&cache), 0, &staging_buffer, 0, dest_size);
     } else {
         panic!("Unespected error at read_data from gpu. Tensor WgpuStorage did not Point to a wgpu Buffer")
     }

@@ -1,6 +1,4 @@
-use std::sync::Arc;
-
-use crate::{wgpu::{cache::BufferReference, device::{PipelineType, Pipelines}}, WgpuDevice};
+use crate::{wgpu::{device::{PipelineType, Pipelines}, BufferReferenceId}, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue, get_meta, get_size};
 
@@ -18,9 +16,9 @@ pub enum BinaryOperation {
 }
 pub fn queue_binary_buffer_from_buffer(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input1: Arc<BufferReference>,
-    buffer_input2: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    buffer_input2: BufferReferenceId,
     op: BinaryOperation,
     dtype: crate::DType,
     lay1: &crate::Layout,

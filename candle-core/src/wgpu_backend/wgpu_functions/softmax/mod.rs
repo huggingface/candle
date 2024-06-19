@@ -1,14 +1,11 @@
-use std::sync::Arc;
-
-
-use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
+use crate::{wgpu::{device::Pipelines, BufferReferenceId}, WgpuDevice};
 
 use super::{create_bind_group_input1, enqueue_workgroups, get_meta};
 
 pub fn queue_softmax(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input1: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
     dtype: crate::DType,
     input1_offset : u32,
     reduction_length : u32,

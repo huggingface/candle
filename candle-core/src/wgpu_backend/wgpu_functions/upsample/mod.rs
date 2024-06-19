@@ -1,14 +1,11 @@
-use std::sync::Arc;
-
-
-use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
+use crate::{wgpu::{device::Pipelines, BufferReferenceId}, WgpuDevice};
 
 use super::{create_bind_group_input1, enqueue_workgroups, get_meta};
 
 pub fn queue_upsample1d(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input1: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
     layout: &crate::Layout,
     dtype: crate::DType,
     target_size: usize,
@@ -57,8 +54,8 @@ pub fn queue_upsample1d(
 
 pub fn queue_upsample2d(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input1: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
     layout: &crate::Layout,
     dtype: crate::DType,
     target_size: (usize, usize),

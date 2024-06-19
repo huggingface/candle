@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 
-use crate::{wgpu::{cache::BufferReference, device::Pipelines}, Layout, WgpuDevice};
+use crate::{wgpu::{device::Pipelines, BufferReferenceId}, Layout, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue, get_meta, get_size};
 
@@ -19,9 +19,9 @@ pub enum CmpOperation {
 
 pub fn queue_cmp_buffer_from_buffer(
     dev: &WgpuDevice,
-    buffer_dest: Arc<BufferReference>,
-    buffer_input1: Arc<BufferReference>,
-    buffer_input2: Arc<BufferReference>,
+    buffer_dest: BufferReferenceId,
+    buffer_input1: BufferReferenceId,
+    buffer_input2: BufferReferenceId,
     op: CmpOperation,
     dtype: crate::DType,
     layout_input1: &Layout,

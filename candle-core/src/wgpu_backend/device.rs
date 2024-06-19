@@ -11,10 +11,10 @@ use crate::{notImplemented, wrongType, Layout};
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, Measurements,MInfo};
 
-use super::cache::{BindGroupReferenceBase, BufferReference, ModelCache};
-use super::wgpu_functions::{DispatchIndirectArgs, MetaArray, MetaArrayToU32, Shader};
+use super::cache::ModelCache;
+use super::wgpu_functions::{DispatchIndirectArgs, MetaArray, ToU32, Shader};
 use super::wgpu_functions::{self, create_buffer, create_buffer_init, unary::UnaryOperation};
-use super::WgpuStorage;
+use super::{BindgroupReferenceId, WgpuStorage};
 
 #[derive(Debug)]
 pub (crate) enum MlQueue{
@@ -61,25 +61,13 @@ impl QueueDebugInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub (crate) struct PipelineType(pub Shader, pub Pipelines);
 
-
-
-pub (crate) type BindGroupReference = BindGroupReferenceBase<Arc<BufferReference>>;
-
-// #[derive(Debug)]
-// pub (crate) enum BindGroupReference{
-//     Bindgroup0(u32, Arc<BufferReference>), //dest,
-//     Bindgroup1(u32, Arc<BufferReference>,Arc<BufferReference>), //dest, input1
-//     Bindgroup2(u32, Arc<BufferReference>,Arc<BufferReference>,Arc<BufferReference>), //dest, input1, input2
-//     Bindgroup3(u32, Arc<BufferReference>,Arc<BufferReference>,Arc<BufferReference>,Arc<BufferReference>) //dest, input1, input2, input3
-// }
-
 #[derive(Debug)]
 pub (crate) struct MlQueueDispatch{
     pub (crate) x : u32, 
     pub (crate) y : u32, 
     pub (crate) z : u32,
     pub (crate) pipeline : PipelineType,
-    pub (crate) bindgroup : BindGroupReference,
+    pub (crate) bindgroup : BindgroupReferenceId,
     pub (crate) indirect_buffer : Option<usize>,
     
     #[cfg(feature = "wgpu_debug")]
@@ -109,7 +97,7 @@ impl QueueBuffer {
         self.meta_array.add_layout(layout);
     } 
 
-    pub (crate) fn add<T : MetaArrayToU32>(&mut self, value : T){
+    pub (crate) fn add<T : ToU32>(&mut self, value : T){
         self.meta_array.add(value);
     }
 
