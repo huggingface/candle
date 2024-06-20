@@ -7,6 +7,8 @@ extern crate accelerate_src;
 extern crate intel_mkl_src;
 
 use clap::Parser;
+use std::ffi::OsString;
+use std::path::PathBuf;
 
 use candle::DType::{F32, U8};
 use candle::{DType, Module, Result, Tensor};
@@ -18,13 +20,16 @@ use candle_transformers::models::dinov2;
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
-    dinov2_model: Option<String>,
+    dinov2_model: Option<PathBuf>,
 
     #[arg(long)]
-    depth_anything_v2_model: Option<String>,
+    depth_anything_v2_model: Option<PathBuf>,
 
     #[arg(long)]
-    image: String,
+    image: PathBuf,
+
+    #[arg(long)]
+    output_dir: Option<PathBuf>,
 
     /// Run on CPU rather than on GPU.
     #[arg(long)]
@@ -35,20 +40,13 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
 
-    let (_original_image, original_height, original_width) = load_image(&args.image, None)?;
-    let image = load_image_and_resize(&args.image, DINO_IMG_SIZE, DINO_IMG_SIZE)?
-        .unsqueeze(0)?
-        .to_dtype(F32)?
-        .to_device(&device)?;
-    println!("Loaded image {image:?}");
-
     let dinov2_model_file = match args.dinov2_model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
             let api = api.model("lmz/candle-dino-v2".into());
             api.get("dinov2_vits14.safetensors")?
         }
-        Some(dinov2_model) => dinov2_model.into(),
+        Some(dinov2_model) => dinov2_model,
     };
     println!("Using file {:?}", dinov2_model_file);
 
@@ -62,15 +60,13 @@ pub fn main() -> anyhow::Result<()> {
             let api = api.model("jeroenvlek/depth-anything-v2-safetensors".into());
             api.get("depth_anything_v2_vits.safetensors")?
         }
-        Some(depth_anything_model) => depth_anything_model.into(),
+        Some(depth_anything_model) => depth_anything_model,
     };
-
     println!("Using file {:?}", depth_anything_model_file);
 
     let vb = unsafe {
         VarBuilder::from_mmaped_safetensors(&[depth_anything_model_file], DType::F32, &device)?
     };
-
     let out_channel_sizes = vec![48, 96, 192, 384];
     const IN_CHANNEL_SIZE: usize = 384;
     const NUM_FEATURES: usize = 64;
@@ -82,14 +78,31 @@ pub fn main() -> anyhow::Result<()> {
         vb,
     )?;
 
+    let (_original_image, original_height, original_width) = load_image(&args.image, None)?;
+
+    let image = load_image_and_resize(&args.image, DINO_IMG_SIZE, DINO_IMG_SIZE)?
+        .unsqueeze(0)?
+        .to_dtype(F32)?
+        .to_device(&device)?;
+    println!("Loaded image {image:?}");
+
     let depth = depth_anything.forward(&image)?;
 
-    println!("Got image {:?}", depth.shape());
+    println!("Got predictions {:?}", depth.shape());
 
     let depth = post_process_image(&depth, original_height, original_width)?;
 
-    println!("Saving image");
-    save_image(&depth, "depth_output.png")?;
+    let input_file_name = args.image.file_name().unwrap();
+    let mut output_file_name = OsString::from("depth_");
+    output_file_name.push(input_file_name);
+    let mut output_path = match args.output_dir {
+        None => args.image.parent().unwrap().to_path_buf(),
+        Some(output_path) => output_path,
+    };
+    output_path.push(output_file_name);
+    println!("Saving image to {}", output_path.to_string_lossy());
+
+    save_image(&depth, output_path)?;
 
     Ok(())
 }
@@ -113,8 +126,8 @@ fn normalize_and_scale(depth: &Tensor) -> Result<Tensor> {
 
     let min_val = flat_values.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
     let max_val = flat_values.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
-    println!("Min: {}", min_val);
-    println!("Max: {}", max_val);
+    println!("Min: {min_val}");
+    println!("Max: {max_val}");
 
     let min_val_tensor = Tensor::try_from(*min_val)?
         .to_device(depth.device())?
