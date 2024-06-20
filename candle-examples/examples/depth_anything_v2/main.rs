@@ -84,6 +84,12 @@ pub fn main() -> anyhow::Result<()> {
         .unsqueeze(0)?
         .to_dtype(F32)?
         .to_device(&device)?;
+
+    let max_pixel_val = Tensor::try_from(255.0f32)?
+        .to_device(&device)?
+        .broadcast_as(image.shape())?;
+    let image = (image / max_pixel_val)?;
+
     println!("Loaded image {image:?}");
 
     let depth = depth_anything.forward(&image)?;
