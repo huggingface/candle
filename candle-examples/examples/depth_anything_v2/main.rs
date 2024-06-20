@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use candle::DType::{F32, U8};
-use candle::{DType, Module, Result, Tensor};
+use candle::{Device, DType, Module, Result, Tensor};
 use candle_examples::{load_image, load_image_and_resize, save_image};
 use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DINO_IMG_SIZE};
@@ -78,17 +78,7 @@ pub fn main() -> anyhow::Result<()> {
         vb,
     )?;
 
-    let (_original_image, original_height, original_width) = load_image(&args.image, None)?;
-
-    let image = load_image_and_resize(&args.image, DINO_IMG_SIZE, DINO_IMG_SIZE)?
-        .unsqueeze(0)?
-        .to_dtype(F32)?
-        .to_device(&device)?;
-
-    let max_pixel_val = Tensor::try_from(255.0f32)?
-        .to_device(&device)?
-        .broadcast_as(image.shape())?;
-    let image = (image / max_pixel_val)?;
+    let (original_height, original_width, image) = load_and_prep_image(&args.image, &device)?;
 
     println!("Loaded image {image:?}");
 
@@ -111,6 +101,21 @@ pub fn main() -> anyhow::Result<()> {
     save_image(&depth, output_path)?;
 
     Ok(())
+}
+
+fn load_and_prep_image(image_path: &PathBuf, device: &Device) -> anyhow::Result<(usize, usize, Tensor)> {
+    let (_original_image, original_height, original_width) = load_image(&image_path, None)?;
+
+    let image = load_image_and_resize(&image_path, DINO_IMG_SIZE, DINO_IMG_SIZE)?
+        .unsqueeze(0)?
+        .to_dtype(F32)?
+        .to_device(&device)?;
+
+    let max_pixel_val = Tensor::try_from(255.0f32)?
+        .to_device(&device)?
+        .broadcast_as(image.shape())?;
+    let image = (image / max_pixel_val)?;
+    Ok((original_height, original_width, image))
 }
 
 fn post_process_image(
