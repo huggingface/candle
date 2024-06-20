@@ -88,20 +88,26 @@ pub fn main() -> anyhow::Result<()> {
 
     let depth = post_process_image(&depth, original_height, original_width)?;
 
-    let input_file_name = args.image.file_name().unwrap();
-    let mut output_file_name = OsString::from("depth_");
-    output_file_name.push(input_file_name);
-    let mut output_path = match args.output_dir {
-        None => args.image.parent().unwrap().to_path_buf(),
-        Some(output_path) => output_path,
-    };
-    output_path.push(output_file_name);
+    let output_path = full_output_path(&args.image, &args.output_dir);
     println!("Saving image to {}", output_path.to_string_lossy());
-
     save_image(&depth, output_path)?;
 
     Ok(())
 }
+
+fn full_output_path(image_path: &PathBuf, output_dir: &Option<PathBuf>) -> PathBuf {
+    let input_file_name = image_path.file_name().unwrap();
+    let mut output_file_name = OsString::from("depth_");
+    output_file_name.push(input_file_name);
+    let mut output_path = match output_dir {
+        None => image_path.parent().unwrap().to_path_buf(),
+        Some(output_path) => output_path.clone(),
+    };
+    output_path.push(output_file_name);
+
+    output_path
+}
+
 
 fn load_and_prep_image(image_path: &PathBuf, device: &Device) -> anyhow::Result<(usize, usize, Tensor)> {
     let (_original_image, original_height, original_width) = load_image(&image_path, None)?;
