@@ -11,11 +11,15 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use candle::DType::{F32, U8};
-use candle::{Device, DType, Module, Result, Tensor};
+use candle::{DType, Device, Module, Result, Tensor};
 use candle_examples::{load_image, load_image_and_resize, save_image};
 use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DINO_IMG_SIZE};
 use candle_transformers::models::dinov2;
+
+// taken these from: https://huggingface.co/spaces/depth-anything/Depth-Anything-V2/blob/main/depth_anything_v2/dpt.py#L207
+const MAGIC_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+const MAGIC_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 #[derive(Parser)]
 struct Args {
@@ -108,8 +112,10 @@ fn full_output_path(image_path: &PathBuf, output_dir: &Option<PathBuf>) -> PathB
     output_path
 }
 
-
-fn load_and_prep_image(image_path: &PathBuf, device: &Device) -> anyhow::Result<(usize, usize, Tensor)> {
+fn load_and_prep_image(
+    image_path: &PathBuf,
+    device: &Device,
+) -> anyhow::Result<(usize, usize, Tensor)> {
     let (_original_image, original_height, original_width) = load_image(&image_path, None)?;
 
     let image = load_image_and_resize(&image_path, DINO_IMG_SIZE, DINO_IMG_SIZE)?
@@ -121,7 +127,17 @@ fn load_and_prep_image(image_path: &PathBuf, device: &Device) -> anyhow::Result<
         .to_device(&device)?
         .broadcast_as(image.shape())?;
     let image = (image / max_pixel_val)?;
+    let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD)?;
+
     Ok((original_height, original_width, image))
+}
+
+fn normalize_image(image: &Tensor, mean: &[f32; 3], std: &[f32; 3]) -> Result<Tensor> {
+    let mean_tensor =
+        Tensor::from_vec(mean.to_vec(), (3, 1, 1), &image.device())?.broadcast_as(image.shape())?;
+    let std_tensor =
+        Tensor::from_vec(std.to_vec(), (3, 1, 1), &image.device())?.broadcast_as(image.shape())?;
+    image.sub(&mean_tensor)?.div(&std_tensor)
 }
 
 fn post_process_image(
@@ -130,7 +146,7 @@ fn post_process_image(
     original_width: usize,
 ) -> Result<Tensor> {
     let out = image.interpolate2d(original_height, original_width)?;
-    let out = normalize_and_scale(&out)?;
+    let out = scale_image(&out)?;
     let out = out.squeeze(1)?;
     let out = out.to_dtype(U8)?;
 
@@ -138,7 +154,7 @@ fn post_process_image(
     Tensor::cat(&rgb_slice, 0)
 }
 
-fn normalize_and_scale(depth: &Tensor) -> Result<Tensor> {
+fn scale_image(depth: &Tensor) -> Result<Tensor> {
     let flat_values: Vec<f32> = depth.flatten_all()?.to_vec1()?;
 
     let min_val = flat_values.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
