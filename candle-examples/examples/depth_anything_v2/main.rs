@@ -162,10 +162,8 @@ fn post_process_image(
         spectral_r.gray2color(&out)?
     } else {
         let rgb_slice = [&out, &out, &out];
-        Tensor::cat(&rgb_slice, 0)?
+        Tensor::cat(&rgb_slice, 0)?.squeeze(1)?
     };
-
-    let out = out.squeeze(1)?;
 
     let max_pixel_val = Tensor::try_from(255.0f32)?
         .to_device(out.device())?
