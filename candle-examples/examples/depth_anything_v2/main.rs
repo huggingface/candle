@@ -6,9 +6,10 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use clap::Parser;
 use std::ffi::OsString;
 use std::path::PathBuf;
+
+use clap::Parser;
 
 use candle::DType::{F32, U8};
 use candle::{DType, Device, Module, Result, Tensor};
@@ -16,6 +17,10 @@ use candle_examples::{load_image, load_image_and_resize, save_image};
 use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DINO_IMG_SIZE};
 use candle_transformers::models::dinov2;
+
+use crate::color_map::SpectralRColormap;
+
+mod color_map;
 
 // taken these from: https://huggingface.co/spaces/depth-anything/Depth-Anything-V2/blob/main/depth_anything_v2/dpt.py#L207
 const MAGIC_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
@@ -35,9 +40,11 @@ struct Args {
     #[arg(long)]
     output_dir: Option<PathBuf>,
 
-    /// Run on CPU rather than on GPU.
     #[arg(long)]
     cpu: bool,
+
+    #[arg(long)]
+    color_map: bool,
 }
 
 pub fn main() -> anyhow::Result<()> {
@@ -74,6 +81,7 @@ pub fn main() -> anyhow::Result<()> {
     let out_channel_sizes = vec![48, 96, 192, 384];
     const IN_CHANNEL_SIZE: usize = 384;
     const NUM_FEATURES: usize = 64;
+    // TODO wrap everything into a config object
     let depth_anything = DepthAnythingV2::new(
         &dinov2,
         IN_CHANNEL_SIZE,
@@ -90,11 +98,11 @@ pub fn main() -> anyhow::Result<()> {
 
     println!("Got predictions {:?}", depth.shape());
 
-    let depth = post_process_image(&depth, original_height, original_width)?;
+    let output_image = post_process_image(&depth, original_height, original_width, args.color_map)?;
 
     let output_path = full_output_path(&args.image, &args.output_dir);
     println!("Saving image to {}", output_path.to_string_lossy());
-    save_image(&depth, output_path)?;
+    save_image(&output_image, output_path)?;
 
     Ok(())
 }
@@ -144,14 +152,27 @@ fn post_process_image(
     image: &Tensor,
     original_height: usize,
     original_width: usize,
+    color_map: bool,
 ) -> Result<Tensor> {
     let out = image.interpolate2d(original_height, original_width)?;
     let out = scale_image(&out)?;
-    let out = out.squeeze(1)?;
-    let out = out.to_dtype(U8)?;
 
-    let rgb_slice = [&out, &out, &out];
-    Tensor::cat(&rgb_slice, 0)
+    let out = if color_map {
+        let spectral_r = SpectralRColormap::new();
+        spectral_r.gray2color(&out)?
+    } else {
+        let rgb_slice = [&out, &out, &out];
+        Tensor::cat(&rgb_slice, 0)?
+    };
+
+    let out = out.squeeze(1)?;
+
+    let max_pixel_val = Tensor::try_from(255.0f32)?
+        .to_device(out.device())?
+        .broadcast_as(out.shape())?;
+    let out = (out * max_pixel_val)?;
+
+    out.to_dtype(U8)
 }
 
 fn scale_image(depth: &Tensor) -> Result<Tensor> {
@@ -171,10 +192,6 @@ fn scale_image(depth: &Tensor) -> Result<Tensor> {
     let range_tensor = Tensor::try_from(range)?
         .to_device(depth.device())?
         .broadcast_as(depth.shape())?;
-    let depth = (depth / range_tensor)?;
 
-    let max_pixel_val = Tensor::try_from(255.0f32)?
-        .to_device(depth.device())?
-        .broadcast_as(depth.shape())?;
-    depth * max_pixel_val
+    depth / range_tensor
 }
