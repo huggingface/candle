@@ -848,7 +848,6 @@ impl BackendStorage for MetalStorage {
                 .device
                 .new_buffer(dst_el, self.dtype, "conv_transpose1d")?;
 
-            let command_buffer = self.device.command_buffer()?;
             let name = match self.dtype {
                 DType::F32 => "col2im1d_f32",
                 DType::U32 => "col2im1d_u32",
@@ -869,6 +868,12 @@ impl BackendStorage for MetalStorage {
                     &kernel_l_mm,
                 )?
             };
+            // It is important for the command buffer to be obtained *after* the matmul
+            // kernel has run, otherwise we might use a command-buffer that has been commited
+            // already resulting in the following error.
+            // _status < MTLCommandBufferStatusCommitted >
+            // -[IOGPUMetalCommandBuffer setCurrentCommandEncoder:]
+            let command_buffer = self.device.command_buffer()?;
             candle_metal_kernels::call_col2im1d(
                 &self.device.device,
                 &command_buffer,
