@@ -1,11 +1,136 @@
-use std::{fs::{File, OpenOptions}, sync::{Arc, Mutex}};
+use std::{collections::{BTreeMap, HashMap}, fs::{File, OpenOptions}, num::NonZeroU64, sync::{Arc, Mutex}};
 use std::io::Write;
-use wgpu::BindGroup;
+use wgpu::{BindGroup, BindGroupLayoutDescriptor};
 
 use crate::WgpuDevice;
 
 use super::device::{BindGroupReference, PipelineType};
 
+
+#[derive(Debug)]
+pub(crate) struct BindgroupLayouts {
+    pub bind_group_layout0: wgpu::BindGroupLayout,
+    pub bind_group_layout1: wgpu::BindGroupLayout,
+    pub bind_group_layout2: wgpu::BindGroupLayout,
+    pub bind_group_layout3: wgpu::BindGroupLayout,
+    pub pipeline_layout0: wgpu::PipelineLayout,
+    pub pipeline_layout1: wgpu::PipelineLayout,
+    pub pipeline_layout2: wgpu::PipelineLayout,
+    pub pipeline_layout3: wgpu::PipelineLayout,
+}
+
+impl BindgroupLayouts {
+    pub(crate) fn new(dev: &wgpu::Device) -> Self {
+        let dest_entry = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+            },
+            count: None,
+        };
+
+        let meta_entry = wgpu::BindGroupLayoutEntry {
+            binding: 1,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: true,
+                min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+            },
+            count: None,
+        };
+
+        let input1_entry = wgpu::BindGroupLayoutEntry {
+            binding: 2,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+            },
+            count: None,
+        };
+
+        let input2_entry = wgpu::BindGroupLayoutEntry {
+            binding: 3,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+            },
+            count: None,
+        };
+
+        let input3_entry = wgpu::BindGroupLayoutEntry {
+            binding: 4,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+            },
+            count: None,
+        };
+        let bind_group_layout0 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[dest_entry, meta_entry],
+        });
+        let bind_group_layout1 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[dest_entry, meta_entry, input1_entry],
+        });
+        let bind_group_layout2 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[dest_entry, meta_entry, input1_entry, input2_entry],
+        });
+        let bind_group_layout3 = dev.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                dest_entry,
+                meta_entry,
+                input1_entry,
+                input2_entry,
+                input3_entry,
+            ],
+        });
+
+        let pipeline_layout0 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bind_group_layout0],
+            push_constant_ranges: &[],
+        });
+        let pipeline_layout1 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bind_group_layout1],
+            push_constant_ranges: &[],
+        });
+        let pipeline_layout2 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bind_group_layout2],
+            push_constant_ranges: &[],
+        });
+        let pipeline_layout3 = dev.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bind_group_layout3],
+            push_constant_ranges: &[],
+        });
+
+        Self {
+            bind_group_layout0,
+            bind_group_layout1,
+            bind_group_layout2,
+            bind_group_layout3,
+            pipeline_layout0,
+            pipeline_layout1,
+            pipeline_layout2,
+            pipeline_layout3,
+        }
+    }
+}
 
 /// Virtual Buffer, used in Compute Graph
 #[derive(Debug)]
@@ -24,13 +149,13 @@ impl Drop for BufferReference{
         if let Some(s) = storage.as_ref(){
             {
 
-                let mut file = OpenOptions::new()
-                .write(true)
-                .append(true)
-                .create(true)
-                .open("debug-llama2c.txt")
-                .unwrap();
-                writeln!(file, "Buffer Cache {} dropped from {}", s.id, self.id).unwrap();
+                // let mut file = OpenOptions::new()
+                // .write(true)
+                // .append(true)
+                // .create(true)
+                // .open("debug-llama2c.txt")
+                // .unwrap();
+                // writeln!(file, "Buffer Cache {} dropped from {}", s.id, self.id).unwrap();
                 //println!("BufferReference.drop  self.device.cache.lock_start");
                 let mut cache = self.device.cache.lock().unwrap();
 
@@ -76,26 +201,44 @@ fn create_buffer(dev : &WgpuDevice, size : u64) -> wgpu::Buffer{
 
 fn create_bindgroup(dev : &WgpuDevice, bindgroup : CachedBindGroupReference, pipeline: Arc<wgpu::ComputePipeline>) -> wgpu::BindGroup{
 
-    let meta_offset= bindgroup.get_meta();
+    // let meta_offset= bindgroup.get_meta();
 
-    let bind_group_layout = pipeline.get_bind_group_layout(0);    
+    // let bind_group_layout = pipeline.get_bind_group_layout(0);    
+
+    // let buffer_meta = &dev.meta_buffer;
+
+    // let meta_binding = wgpu::BufferBinding{ buffer: &buffer_meta, offset: meta_offset  as u64 * 4, size:  None};
+    // let meta_bindung = wgpu::BindingResource::Buffer(meta_binding);
 
     let buffer_meta = &dev.meta_buffer;
 
-    let meta_binding = wgpu::BufferBinding{ buffer: &buffer_meta, offset: meta_offset  as u64 * 4, size:  None};
-    let meta_bindung = wgpu::BindingResource::Buffer(meta_binding);
+    let meta_binding = wgpu::BufferBinding {
+        buffer: &buffer_meta,
+        offset: 0,
+        size: Some(NonZeroU64::new(256).unwrap()),
+    };
+    let meta_binding = wgpu::BindingResource::Buffer(meta_binding);
 
-   match bindgroup{
+    let meta_entry = wgpu::BindGroupEntry {
+        binding: 1,
+        resource: meta_binding, //buffer_meta.as_entire_binding(),
+    };
+
+    let bind_group_layout = match bindgroup {
+        BindGroupReferenceBase::Bindgroup0(_,_) => &dev.bindgroup_layouts.bind_group_layout0,
+        BindGroupReferenceBase::Bindgroup1(_,_, _) => &dev.bindgroup_layouts.bind_group_layout1,
+        BindGroupReferenceBase::Bindgroup2(_,_, _, _) => &dev.bindgroup_layouts.bind_group_layout2,
+        BindGroupReferenceBase::Bindgroup3(_,_, _, _, _) => &dev.bindgroup_layouts.bind_group_layout3,
+    };
+
+    match bindgroup{
         CachedBindGroupReference::Bindgroup0(_, buffer_dest) => {
             let entries = &[
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: buffer_dest.buffer.as_entire_binding(),
             },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: meta_bindung, //buffer_meta.as_entire_binding(),
-            }];
+            meta_entry];
             dev.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: &bind_group_layout,
@@ -108,10 +251,7 @@ fn create_bindgroup(dev : &WgpuDevice, bindgroup : CachedBindGroupReference, pip
                 binding: 0,
                 resource: buffer_dest.buffer.as_entire_binding(),
             },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: meta_bindung, //buffer_meta.as_entire_binding(),
-            },
+            meta_entry,
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: buffer_input1.buffer.as_entire_binding(),
@@ -128,10 +268,7 @@ fn create_bindgroup(dev : &WgpuDevice, bindgroup : CachedBindGroupReference, pip
                 binding: 0,
                 resource: buffer_dest.buffer.as_entire_binding(),
             },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: meta_bindung, //buffer_meta.as_entire_binding(),
-            },
+            meta_entry,
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: buffer_input1.buffer.as_entire_binding(),
@@ -152,10 +289,7 @@ fn create_bindgroup(dev : &WgpuDevice, bindgroup : CachedBindGroupReference, pip
                 binding: 0,
                 resource: buffer_dest.buffer.as_entire_binding(),
             },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: meta_bindung, //buffer_meta.as_entire_binding(),
-            },
+            meta_entry,
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: buffer_input1.buffer.as_entire_binding(),
@@ -179,42 +313,118 @@ fn create_bindgroup(dev : &WgpuDevice, bindgroup : CachedBindGroupReference, pip
 
 
 
+#[derive(Debug)]
+pub(crate) struct HashMapMulti<K, V>{
+    map : HashMap<K, Vec<V>>,
+    empty : Vec<V>,
+}
+
+#[derive(Debug)]
+pub(crate) struct BTreeMulti<K, V>{
+    map : BTreeMap<K, Vec<V>>,
+    empty : Vec<V>,
+}
+
+impl<K: std::cmp::Eq + PartialEq + std::hash::Hash, V : std::cmp::PartialEq> HashMapMulti<K, V>{
+    
+    pub fn new() -> Self{
+        Self{map : HashMap::new(), empty : vec![]}
+    } 
+    
+    pub fn add_mapping(&mut self, key: K, value: V) {
+       self.map.entry(key).or_insert_with(Vec::new).push(value);
+    }
+    
+    pub fn remove_mapping(&mut self, key : K, value: &V) {
+         if let Some(vec) = self.map.get_mut(&key) {
+            if let Some(pos) = vec.iter().position(|x| x == value) {
+                vec.remove(pos);
+            }
+            
+            if vec.is_empty() {
+                self.map.remove(&key);
+            }
+        }
+    }
+
+    pub fn get(&self, key : &K) -> &Vec<V>{
+        self.map.get(key).unwrap_or(&self.empty)
+    }
+}
+
+
+impl<K: std::cmp::Eq + PartialEq + std::hash::Hash + Ord, V : std::cmp::PartialEq> BTreeMulti<K, V>{
+    
+    pub fn new() -> Self{
+        Self{map : BTreeMap::new(), empty : vec![]}
+    } 
+    
+    pub fn add_mapping(&mut self, key: K, value: V) {
+       let values = self.map.entry(key).or_insert_with(Vec::new);
+       if !values.contains(&value){
+        values.push(value);
+       }
+    }
+    
+    pub fn remove_mapping(&mut self, key : K, value: &V) {
+         if let Some(vec) = self.map.get_mut(&key) {
+            if let Some(pos) = vec.iter().position(|x| x == value) {
+                vec.remove(pos);
+            }
+            
+            if vec.is_empty() {
+                self.map.remove(&key);
+            }
+        }
+    }
+
+    pub fn get(&self, key : &K) -> &Vec<V>{
+        self.map.get(key).unwrap_or(&self.empty)
+    }
+
+    pub fn get_mut(&mut self, key : &K) -> &mut Vec<V>{
+        self.map.get_mut(key).unwrap_or(&mut self.empty)
+    }
+}
 
 /// Cache of all free CachedBuffers
 #[derive(Debug)]
 pub (crate) struct BufferCache{
-    buffers : Vec<Arc<CachedBuffer>>
+    //buffers : Vec<Arc<CachedBuffer>>,
+    buffers: BTreeMulti<u64, Arc<CachedBuffer>>,
 }
 
 impl BufferCache{
     fn new() -> Self{ 
-        return Self{buffers: vec![]}
+        return Self{buffers: BTreeMulti::new()}
     }
 
     fn get_buffer(&mut self, dev : &WgpuDevice, size : u64, buffer_reference_id : u32) -> Arc<CachedBuffer>{
-        let mut file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .create(true)
-        .open("debug-llama2c.txt")
-        .unwrap();
-        for (index, buffer) in self.buffers.iter().enumerate(){
-            if buffer.buffer.size() >= size{
-                let buffer = self.buffers.remove(index);
-                writeln!(file, "Buffer Reuse {} for {}", buffer.id, buffer_reference_id).unwrap();
-                //println!("Reuse Buffer {}", buffer.id);
+        // let mut file = OpenOptions::new()
+        // .write(true)
+        // .append(true)
+        // .create(true)
+        // .open("debug-llama2c.txt")
+        // .unwrap();
+        
+        for (buffer_size, buffers) in self.buffers.map.range_mut(size..){
+            if *buffer_size < size{
+                panic!("Did not expect size to be smaller, than key");
+            }
+
+            if let Some(buffer) = buffers.pop(){
                 dev.cached_buffer_reuse_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 return buffer;
             }
         }
 
         let id = dev.cached_buffer_counter.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
-        writeln!(file, "Buffer Create {} for {}", id, buffer_reference_id).unwrap();
+        //writeln!(file, "Buffer Create {} for {}", id, buffer_reference_id).unwrap();
         Arc::new(CachedBuffer::new(create_buffer(dev, size),  id))
     }
 
     fn add_buffer(&mut self, buffer : Arc<CachedBuffer>){
-        self.buffers.push(buffer);
+        self.buffers.add_mapping(buffer.buffer.size(), buffer);
     }
 
     pub (crate) fn load_buffer(&mut self, dev : &WgpuDevice, buffer : Arc<BufferReference>) -> Arc<CachedBuffer>{
@@ -244,9 +454,12 @@ impl BufferCache{
             }
         }
         else{ //is the cached buffer free, and is is bit enaugh?
-            if let Some(index) = self.buffers.iter().position(|c| c == cached)
-            {
-                if self.buffers[index].buffer.size() >= reference.size{
+
+           
+            if cached.buffer.size() >= reference.size{
+                let buffers = self.buffers.get(&cached.buffer.size());
+                if let Some(_) = buffers.iter().position(|c| c == cached)
+                {
                     return true;
                 }
             }
@@ -258,9 +471,12 @@ impl BufferCache{
     fn match_buffer(&mut self, cached : &Arc<CachedBuffer>, reference : &Arc<BufferReference>){
         let mut reference_storage = reference.storage.lock().unwrap();
         if let None = reference_storage.as_ref(){
-            if let Some(index) = self.buffers.iter().position(|c| c == cached)
+
+            let buffers = self.buffers.get_mut(&cached.buffer.size());
+
+            if let Some(index) = buffers.iter().position(|c| c == cached)
             {
-               *reference_storage = Some(self.buffers.remove(index));
+               *reference_storage = Some(buffers.remove(index));
             }
         }   
     }
@@ -333,7 +549,7 @@ pub (crate) enum BindGroupReferenceBase<T>{
 }
 
 impl<T> BindGroupReferenceBase<T> {
-    fn get_meta(&self) -> u32{
+    pub(crate) fn get_meta(&self) -> u32{
         match self{
             BindGroupReferenceBase::Bindgroup0(meta, _) => *meta,
             BindGroupReferenceBase::Bindgroup1(meta, _, _) => *meta,
@@ -428,12 +644,12 @@ impl ModelCache {
 
     
     pub (crate) fn get_bind_group(&mut self, dev : &WgpuDevice, bindgroup_reference : &BindGroupReference, pipeline: Arc<wgpu::ComputePipeline>, pipeline_type: PipelineType) -> Arc<CachedBindGroup>{
-        let mut file = OpenOptions::new()
-        .write(true)
-        .append(true)
-        .create(true)
-        .open("debug-llama2c.txt")
-        .unwrap();
+        // let mut file = OpenOptions::new()
+        // .write(true)
+        // .append(true)
+        // .create(true)
+        // .open("debug-llama2c.txt")
+        // .unwrap();
 
         
         // let bindgroup_reference = match bindgroup_reference {
@@ -523,7 +739,7 @@ impl ModelCache {
                     _ => {continue;}
                 }
                 dev.cached_bindgroup_reuse_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                writeln!(file, "Bindgroup Reuse Cached: {}, reference_dest id: {}, pipeline: {:?}", cached_bindgroup.id, bindgroup_reference.get_dest().id, pipeline_type).unwrap();
+                //writeln!(file, "Bindgroup Reuse Cached: {}, reference_dest id: {}, pipeline: {:?}", cached_bindgroup.id, bindgroup_reference.get_dest().id, pipeline_type).unwrap();
                 //println!("Reuse Bindgroup: {}", cached_bindgroup.id);
                 return cached_bindgroup.clone();
             }
@@ -583,7 +799,7 @@ impl ModelCache {
             )},
         };
         let id = dev.cached_bindgroup_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        writeln!(file, "Bindgroup Create Cached: {}, reference_dest id: {}, pipeline: {:?}", id, bindgroup_reference.get_dest().id, pipeline_type).unwrap();
+        //writeln!(file, "Bindgroup Create Cached: {}, reference_dest id: {}, pipeline: {:?}", id, bindgroup_reference.get_dest().id, pipeline_type).unwrap();
         let bindgroup = Arc::new(CachedBindGroup::new(create_bindgroup(dev, bindgroup_reference.clone(), pipeline), bindgroup_reference, id, pipeline_type));
         self.bindgroups.bindgroups.push(bindgroup.clone());
         return bindgroup;
@@ -629,13 +845,13 @@ pub fn start_cache(device : &crate::Device, value : u32){
         crate::Device::Cuda(_) => {},
         crate::Device::Metal(_) => {},
         crate::Device::WebGpu(device) => {
-            let mut file = OpenOptions::new()
-            .write(true)
-            .append(true)
-            .create(true)
-            .open("debug-llama2c.txt")
-            .unwrap();
-            writeln!(file, "START CACHE").unwrap();
+            // let mut file = OpenOptions::new()
+            // .write(true)
+            // .append(true)
+            // .create(true)
+            // .open("debug-llama2c.txt")
+            // .unwrap();
+            //writeln!(file, "START CACHE").unwrap();
             device.cached_buffer_reference_counter.store(value, std::sync::atomic::Ordering::Relaxed);
         },
     }

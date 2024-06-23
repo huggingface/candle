@@ -11,7 +11,7 @@ use crate::{notImplemented, wrongType, Layout};
 #[cfg(feature = "wgpu_debug")]
 use super::debug_info::{DebugInfo, Measurements,MInfo};
 
-use super::cache::{BindGroupReferenceBase, BufferReference, ModelCache};
+use super::cache::{BindGroupReferenceBase, BindgroupLayouts, BufferReference, ModelCache};
 use super::wgpu_functions::{DispatchIndirectArgs, MetaArray, MetaArrayToU32, Shader};
 use super::wgpu_functions::{self, create_buffer, create_buffer_init, unary::UnaryOperation};
 use super::WgpuStorage;
@@ -65,13 +65,6 @@ pub (crate) struct PipelineType(pub Shader, pub Pipelines);
 
 pub (crate) type BindGroupReference = BindGroupReferenceBase<Arc<BufferReference>>;
 
-// #[derive(Debug)]
-// pub (crate) enum BindGroupReference{
-//     Bindgroup0(u32, Arc<BufferReference>), //dest,
-//     Bindgroup1(u32, Arc<BufferReference>,Arc<BufferReference>), //dest, input1
-//     Bindgroup2(u32, Arc<BufferReference>,Arc<BufferReference>,Arc<BufferReference>), //dest, input1, input2
-//     Bindgroup3(u32, Arc<BufferReference>,Arc<BufferReference>,Arc<BufferReference>,Arc<BufferReference>) //dest, input1, input2, input3
-// }
 
 #[derive(Debug)]
 pub (crate) struct MlQueueDispatch{
@@ -127,6 +120,8 @@ pub struct  WgpuDevice {
     pub (crate) command_queue : Arc<Mutex<QueueBuffer>>,
     pub (crate) meta_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
     pub (crate) indirect_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
+
+    pub (crate) bindgroup_layouts : Arc<BindgroupLayouts>,
 
     pub (crate) cache : Arc<Mutex<ModelCache>>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
     pub (crate) cached_buffer_counter : Arc<AtomicU32>,
@@ -239,6 +234,7 @@ impl WgpuDevice{
         });
 
         let device_limits = device.limits();
+        let bindgroup_layouts = Arc::new(BindgroupLayouts::new(&device));
         Ok(WgpuDevice {
             device: Arc::new(device),
             device_limits: Arc::new(device_limits),
@@ -251,6 +247,7 @@ impl WgpuDevice{
             meta_buffer : Arc::new(meta_buffer),
             indirect_buffer : Arc::new(indirect_buffer),
             cache : Arc::new(Mutex::new(ModelCache::new())),
+            bindgroup_layouts,
             cached_buffer_counter : Arc::new(AtomicU32::new(0)),
             cached_bindgroup_counter  : Arc::new(AtomicU32::new(0)),
             cached_bindgroup_reuse_counter: Arc::new(AtomicU32::new(0)),
@@ -309,7 +306,7 @@ impl WgpuDevice{
         return Ok(map);
     }
 
-    fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : Pipelines) -> wgpu::ComputePipeline{
+    fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : Pipelines, pipeline_layout : &wgpu::PipelineLayout) -> wgpu::ComputePipeline{
         let entry_point = match pipeline{
             Pipelines::UnaryInplace => "unary_inplace",
             Pipelines::UnaryFromBuffer => "unary_from_buffer",
@@ -352,7 +349,7 @@ impl WgpuDevice{
         
         return  device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
-            layout: None,
+            layout: Some(pipeline_layout),
             module: &shader,
             entry_point: entry_point,
         });
@@ -362,7 +359,7 @@ impl WgpuDevice{
         return Ok(PipelineType(shader, pipeline));
     }
 
-    pub (crate) fn get_pipeline2(&self, shader : wgpu_functions::Shader, pipeline: Pipelines) -> crate::Result<Arc<wgpu::ComputePipeline>> {
+    pub (crate) fn get_pipeline2(&self, shader : wgpu_functions::Shader, pipeline: Pipelines, pipeline_layout : &wgpu::PipelineLayout) -> crate::Result<Arc<wgpu::ComputePipeline>> {
         //println!("get_pipeline2 self.shader.lock() lock_start");
         let mut shaders = self.shader.lock().unwrap();
         //println!("get_pipeline2 self.shader.lock() lock_end");
@@ -377,7 +374,7 @@ impl WgpuDevice{
             //println!("get_pipeline2 shader.pipelines.lock() lock_end");
 
             if !pipelines.contains_key(&pipeline){
-                let p = crate::WgpuDevice::load_pipeline(&self.device, s.shader.clone(), pipeline.clone());
+                let p = crate::WgpuDevice::load_pipeline(&self.device, s.shader.clone(), pipeline.clone(),pipeline_layout);
                 pipelines.insert(pipeline.clone(), Arc::new(p));
             }
             

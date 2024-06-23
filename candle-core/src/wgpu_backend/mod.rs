@@ -4,7 +4,7 @@ mod storage;
 pub mod error;
 pub mod wgpu_functions;
 pub mod cache;
-pub mod debug;
+//pub mod debug;
 
 #[cfg(feature = "wgpu_debug")]
 pub mod debug_info;

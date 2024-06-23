@@ -17,7 +17,7 @@ pub mod where_cond;
 use std::io::Write;
 
 use super::{
-    cache::{BufferReference, CachedBindGroupReference},
+    cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference},
     device::{BindGroupReference, MlQueue, PipelineType, QueueBuffer, META_BUFFER_SIZE},
 };
 use crate::DType;
@@ -443,15 +443,15 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
         //     },
         //     None => {},
         // };
-        {
-            let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .append(true)
-            .create(true)
-            .open("debug-llama2c.txt")
-            .unwrap();
-            writeln!(file, "FLUSHING COMMANDS");
-        }
+        // {
+        //     let mut file = std::fs::OpenOptions::new()
+        //     .write(true)
+        //     .append(true)
+        //     .create(true)
+        //     .open("debug-llama2c.txt")
+        //     .unwrap();
+        //     writeln!(file, "FLUSHING COMMANDS");
+        // }
        
         #[cfg(feature = "wgpu_debug")]
         let (global_index, query_set) = init_debug_queue(dev, queue.len() as u32 * 2);
@@ -484,9 +484,18 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                     //println!("flush_gpu_command cache lock_end");
                     match q {
                         MlQueue::Dispatch(q) => {
-                            let pipeline = dev.get_pipeline2(q.pipeline.0.clone(), q.pipeline.1.clone()).unwrap();
+
+                            let meta = q.bindgroup.get_meta();
+                            let pl: &wgpu::PipelineLayout = match q.bindgroup{
+                                BindGroupReferenceBase::Bindgroup0(_,_) => &dev.bindgroup_layouts.pipeline_layout0,
+                                BindGroupReferenceBase::Bindgroup1(_,_, _) => &dev.bindgroup_layouts.pipeline_layout1,
+                                BindGroupReferenceBase::Bindgroup2(_,_, _, _) => &dev.bindgroup_layouts.pipeline_layout2,
+                                BindGroupReferenceBase::Bindgroup3(_,_, _, _, _) => &dev.bindgroup_layouts.pipeline_layout3,
+                            };
+
+                            let pipeline = dev.get_pipeline2(q.pipeline.0.clone(), q.pipeline.1.clone(),pl).unwrap();
                             let bindgroup = cache.get_bind_group(dev, &q.bindgroup, pipeline.clone(), q.pipeline);
-                            wgpu_data.push((pipeline, bindgroup, q.x, q.y, q.z, q.indirect_buffer));
+                            wgpu_data.push((pipeline, bindgroup, q.x, q.y, q.z, q.indirect_buffer, meta));
                             drop(cache);
                         }
                     }
@@ -504,15 +513,16 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                 });
 
                 for data in wgpu_data.iter() {
-                    #[cfg(feature = "wgpu_debug")]
+                    let (pipline, bindgroup, qx, qy, qz, qindirect_buffer, meta) = data;
+                     #[cfg(feature = "wgpu_debug")]
                     cpass.write_timestamp(&query_set, debug_index);
 
-                    cpass.set_pipeline(&data.0);
+                    cpass.set_pipeline(&pipline);
 
-                    
-                    cpass.set_bind_group(0, &data.1.bindgroup, &[]);
+                
+                    cpass.set_bind_group(0, &bindgroup.bindgroup, &[meta * 4]);
 
-                    if let Some(indirect_buffer_index) = &data.5 {
+                    if let Some(indirect_buffer_index) = &qindirect_buffer {
                         cpass.dispatch_workgroups_indirect(
                             &dev.indirect_buffer,
                             (indirect_buffer_index
@@ -520,7 +530,7 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                                 as u64,
                         );
                     } else {
-                        cpass.dispatch_workgroups(data.2, data.3, data.4);
+                        cpass.dispatch_workgroups(*qx, *qy, *qz);
                     }
 
                     #[cfg(feature = "wgpu_debug")]
