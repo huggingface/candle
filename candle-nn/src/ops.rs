@@ -928,7 +928,7 @@ pub fn replication_pad2d(xs: &Tensor, pad: usize) -> Result<Tensor> {
 }
 
 #[derive(Clone, Debug)]
-pub struct Identity {}
+pub struct Identity;
 
 impl Identity {
     pub fn new() -> Identity {
