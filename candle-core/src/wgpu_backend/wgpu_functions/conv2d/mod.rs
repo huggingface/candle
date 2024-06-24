@@ -48,8 +48,6 @@ pub fn queue_conv2d(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv2D)?;
 
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
@@ -111,8 +109,6 @@ pub fn queue_conv2d_transpose(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv2DTranspose)?;
 
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
@@ -170,9 +166,7 @@ pub fn queue_conv1d(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv1D)?;
 
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
-        meta_offset,
+                meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
@@ -226,8 +220,6 @@ pub fn queue_conv1d_transpose(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv1DTranspose)?;
 
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,

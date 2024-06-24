@@ -54,7 +54,7 @@ pub fn queue_reduce_from_buffer_op(
     };
     let pipeline = dev.get_pipeline(super::Shader::Reduce(dtype), pipeline_type)?;
 
-    let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
     enqueue_workgroups(
         meta,
         pipeline,

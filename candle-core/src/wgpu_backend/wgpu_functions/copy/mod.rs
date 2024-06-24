@@ -19,7 +19,7 @@ pub fn queue_copy_strided(
     
         let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::CopyStrided)?;
     
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
         enqueue(
             meta,
             pipeline,
@@ -92,7 +92,7 @@ pub fn queue_copy(
         
         let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::Copy)?;
     
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
         enqueue(
             meta,
             pipeline,
@@ -132,7 +132,7 @@ pub fn queue_copy2d(
 
         let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::Copy2d)?;
     
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
         enqueue_workgroups(
             meta,
             pipeline,

@@ -26,7 +26,7 @@ pub fn queue_gather(
     let pipeline = dev.get_pipeline(super::Shader::Gather(input_dtype), Pipelines::Gather)?;
 
     let bind_group =
-        create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input, buffer_index);
+        create_bind_group_input2(meta_offset, buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups(
         meta,
         pipeline,
@@ -65,7 +65,7 @@ pub fn queue_scatter_add_inplace(
     let pipeline = dev.get_pipeline(super::Shader::Gather(input_dtype), Pipelines::ScatterAddInplace)?;
 
     let bind_group =
-        create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_index, buffer_src);
+        create_bind_group_input2(meta_offset, buffer_dest, buffer_index, buffer_src);
     enqueue_workgroups(
         meta,
         pipeline,
@@ -102,7 +102,7 @@ pub fn queue_index_add_inplace(
     let pipeline = dev.get_pipeline(super::Shader::Gather(input_dtype), Pipelines::IndexAddInplace)?;
 
     let bind_group =
-        create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_index, buffer_src);
+        create_bind_group_input2(meta_offset, buffer_dest, buffer_index, buffer_src);
     enqueue_workgroups(
         meta,
         pipeline,

@@ -40,8 +40,6 @@ pub fn queue_matmul_buffer1(
     let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::MatmulBuffer)?;
   
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
@@ -97,8 +95,6 @@ pub fn queue_matmul_buffer1b(
     let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::MatmulBuffer1b)?;
   
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
@@ -154,8 +150,6 @@ pub fn queue_matmul_buffer3(
     let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul3Buffer)?;
   
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
@@ -222,8 +216,6 @@ pub fn queue_matmul_buffer4(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul4Buffer)?;
     
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest.clone(),
             buffer_input1.clone(),
@@ -263,8 +255,6 @@ pub fn queue_matmul_buffer4(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul4endBuffer)?;
       
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest,
             buffer_input1,
@@ -333,8 +323,6 @@ pub fn queue_matmul_buffer(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul5Buffer)?;
     
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest.clone(),
             buffer_input1.clone(),
@@ -374,8 +362,6 @@ pub fn queue_matmul_buffer(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul1endBuffer)?;
       
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest,
             buffer_input1,
@@ -444,8 +430,6 @@ pub fn queue_matmul_buffer6(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul6Buffer)?;
     
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest.clone(),
             buffer_input1.clone(),
@@ -485,8 +469,6 @@ pub fn queue_matmul_buffer6(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul4endBuffer)?;
       
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest,
             buffer_input1,

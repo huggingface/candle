@@ -41,8 +41,7 @@ pub fn queue_index_select(
 
     let pipeline = dev.get_pipeline(super::Shader::IndexSelect(input_dtype), Pipelines::IndexSelect)?;
 
-    let bind_group =
-        create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input, buffer_index);
+    let bind_group = create_bind_group_input2(meta_offset, buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups(
         meta,
         pipeline,

@@ -35,8 +35,6 @@ pub fn queue_cmp_buffer_from_buffer(
     let pipeline = dev.get_pipeline(super::Shader::Cmp(dtype), Pipelines::CmpFromBuffer)?;
 
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,

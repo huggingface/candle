@@ -36,11 +36,8 @@ pub fn queue_binary_buffer_from_buffer(
         meta.add(lay2.start_offset()); //input2_offset
 
         let pipeline_type = Pipelines::BinaryBufferFromBufferContiguousBoth;
-        let pipeline = dev.get_pipeline(super::Shader::Binary(dtype), pipeline_type.clone())?;
 
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest,
             buffer_input1,
@@ -65,8 +62,6 @@ pub fn queue_binary_buffer_from_buffer(
         let pipeline = dev.get_pipeline(super::Shader::Binary(dtype), pipeline_type.clone())?;
         
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest,
             buffer_input1,

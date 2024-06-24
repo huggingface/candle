@@ -12,8 +12,9 @@ use crate::{notImplemented, wrongType, Layout};
 use super::debug_info::{DebugInfo, Measurements,MInfo};
 
 use super::cache::{BindGroupReferenceBase, BindgroupLayouts, BufferReference, ModelCache};
-use super::wgpu_functions::{DispatchIndirectArgs, MetaArray, MetaArrayToU32, Shader};
-use super::wgpu_functions::{self, create_buffer, create_buffer_init, unary::UnaryOperation};
+use super::util::ToU32;
+use super::wgpu_functions::{DispatchIndirectArgs, MetaArray, Shader};
+use super::wgpu_functions::{self, create_buffer_init, unary::UnaryOperation};
 use super::WgpuStorage;
 
 #[derive(Debug)]
@@ -102,7 +103,7 @@ impl QueueBuffer {
         self.meta_array.add_layout(layout);
     } 
 
-    pub (crate) fn add<T : MetaArrayToU32>(&mut self, value : T){
+    pub (crate) fn add<T : ToU32>(&mut self, value : T){
         self.meta_array.add(value);
     }
 
@@ -130,7 +131,6 @@ pub struct  WgpuDevice {
     pub (crate) cached_bindgroup_reuse_counter : Arc<AtomicU32>,
     pub (crate) cached_buffer_reuse_counter : Arc<AtomicU32>,
 
-    pub (crate) cached_buffer_reference_counter : Arc<AtomicU32>,
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
 }
@@ -252,7 +252,6 @@ impl WgpuDevice{
             cached_bindgroup_counter  : Arc::new(AtomicU32::new(0)),
             cached_bindgroup_reuse_counter: Arc::new(AtomicU32::new(0)),
             cached_buffer_reuse_counter: Arc::new(AtomicU32::new(0)),
-            cached_buffer_reference_counter: Arc::new(AtomicU32::new(0)),
         })
     }
 
@@ -409,7 +408,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
     }
 
     fn zeros_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
-        let buffer = create_buffer(self, shape.elem_count() * 4);
+        let buffer = BufferReference::new(self, shape.elem_count() * 4);
         if shape.elem_count() > 0{
             wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::SetZero, 0.0, 0.0,dtype, Layout::contiguous(shape))?;
         }
@@ -418,7 +417,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
     }
 
     fn ones_impl(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
-        let buffer = create_buffer(self, shape.elem_count() * 4);
+        let buffer = BufferReference::new(self, shape.elem_count() * 4);
         if shape.elem_count() > 0{
             wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::SetOne, 0.0, 0.0,dtype,Layout::contiguous(shape))?;
         }
@@ -427,7 +426,7 @@ impl crate::backend::BackendDevice for WgpuDevice{
 
     unsafe fn alloc_uninit(&self, shape: &crate::Shape, dtype: crate::DType) -> crate::Result<Self::Storage> {
         if dtype == crate::DType::F32 || dtype == crate::DType::U32{
-            let buffer = create_buffer(self, shape.elem_count() * 4);
+            let buffer = BufferReference::new(self, shape.elem_count() * 4);
             return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
         }
         else{
@@ -481,13 +480,13 @@ impl crate::backend::BackendDevice for WgpuDevice{
     }
 
     fn rand_uniform(&self, shape: &crate::Shape, dtype: crate::DType, lo: f64, up: f64) -> crate::Result<Self::Storage> {
-        let buffer = create_buffer(self, shape.elem_count() * 4);
+        let buffer = BufferReference::new(self, shape.elem_count() * 4);
         wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::RandUniform, lo as f32, up as f32,dtype,Layout::contiguous(shape))?;
         return Ok(WgpuStorage::new(buffer, self.clone(), dtype));
     }
 
     fn rand_normal(&self, shape: &crate::Shape, dtype: crate::DType, mean: f64, std: f64) -> crate::Result<Self::Storage> {
-        let buffer = create_buffer(self, shape.elem_count() * 4);
+        let buffer = BufferReference::new(self, shape.elem_count() * 4);
         wgpu_functions::queue_unary_inplace_op(self, buffer.clone(), UnaryOperation::RandNormal, mean as  f32, std as f32, dtype,Layout::contiguous(shape))?;
         return Ok(WgpuStorage::new(buffer, self.clone(),dtype));
     }
