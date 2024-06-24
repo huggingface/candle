@@ -1,4 +1,4 @@
-use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor, D};
+use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -952,4 +952,25 @@ pub fn kvconcat(ltensor: &Tensor, rtensor: &Tensor, concat_dim: usize) -> Result
 #[cfg(not(feature = "cuda"))]
 pub fn kvconcat(ltensor: &Tensor, rtensor: &Tensor, concat_dim: i32) -> Result<Tensor> {
     Tensor::cat(&[ltensor, rtensor], concat_dim as usize)?.contiguous()
+}
+
+#[derive(Clone, Debug)]
+pub struct Identity;
+
+impl Identity {
+    pub fn new() -> Identity {
+        Self
+    }
+}
+
+impl Default for Identity {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl Module for Identity {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        Ok(xs.clone())
+    }
 }
