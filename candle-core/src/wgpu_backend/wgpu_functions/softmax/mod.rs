@@ -25,7 +25,7 @@ pub fn queue_softmax(
 
     let pipeline = dev.get_pipeline(super::Shader::Softmax(dtype), Pipelines::Softmax)?;
 
-    let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input1);
+    let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input1);
     enqueue_workgroups(
         meta,
         pipeline,

@@ -35,8 +35,6 @@ pub fn queue_upsample1d(
     let pipeline = dev.get_pipeline(super::Shader::Upsample(dtype), Pipelines::Upsample1d)?;
 
     let bind_group = create_bind_group_input1(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
@@ -89,8 +87,6 @@ pub fn queue_upsample2d(
     let pipeline = dev.get_pipeline(super::Shader::Upsample(dtype), Pipelines::Upsample2d)?;
 
     let bind_group = create_bind_group_input1(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,

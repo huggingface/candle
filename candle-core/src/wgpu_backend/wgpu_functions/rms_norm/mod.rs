@@ -31,7 +31,7 @@ pub fn queue_rms_norm(
 
     let pipeline = dev.get_pipeline(super::Shader::RmsNorm(dtype), Pipelines::RmsNorm)?;
 
-    let bind_group = create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input1, buffer_alpha);
+    let bind_group = create_bind_group_input2(meta_offset, buffer_dest, buffer_input1, buffer_alpha);
     enqueue_workgroups(
         meta,
         pipeline,

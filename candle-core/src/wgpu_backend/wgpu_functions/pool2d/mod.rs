@@ -46,8 +46,6 @@ pub fn queue_max_pool2d(
     let pipeline = dev.get_pipeline(super::Shader::Pool2d(dtype), Pipelines::MaxPool2d)?;
 
     let bind_group = create_bind_group_input1(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
@@ -108,8 +106,6 @@ pub fn queue_avg_pool2d(
     let pipeline = dev.get_pipeline(super::Shader::Pool2d(dtype), Pipelines::AvgPool2d)?;
 
     let bind_group = create_bind_group_input1(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,

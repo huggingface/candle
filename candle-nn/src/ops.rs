@@ -474,6 +474,8 @@ impl candle::CustomOp1 for SoftmaxLastDim {
             storage: &WgpuStorage,
             layout: &Layout,
         ) -> Result<(WgpuStorage, Shape)> {
+            use candle::wgpu::cache::BufferReference;
+
         
             if !(layout.is_contiguous()){
                 candle::bail!("input has to be contiguous")
@@ -485,7 +487,7 @@ impl candle::CustomOp1 for SoftmaxLastDim {
     
             let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
     
-            let output_buffer = wgpu_functions::create_buffer(storage.device(), el_count * 4);
+            let output_buffer = BufferReference::new(storage.device(), el_count * 4);
     
             wgpu_functions::queue_softmax(
                 storage.device(),
@@ -699,6 +701,8 @@ impl candle::CustomOp2 for RmsNorm {
     ) -> Result<(WgpuStorage, Shape)> {
         //start offset and length:
 
+        use candle::wgpu::cache::BufferReference;
+
         if !(layout.is_contiguous()){
             candle::bail!("input has to be contiguous")
         }
@@ -712,7 +716,7 @@ impl candle::CustomOp2 for RmsNorm {
 
         let dest_size = dims[0..dims.len() - 1].iter().fold(1, |prev, c| prev * *c);
 
-        let output_buffer = wgpu_functions::create_buffer(src.device(), el_count * 4);
+        let output_buffer = BufferReference::new(src.device(), el_count * 4);
 
         wgpu_functions::queue_rms_norm(
             src.device(),

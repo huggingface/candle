@@ -49,6 +49,18 @@ fn unary_from_buffer_contiguous(@builtin(global_invocation_id) global_id: vec3<u
 }
 
 
+@compute
+@workgroup_size(64,1,1)
+fn unary_inplace_contiguous(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    if (id >= op_unary_contiguous.length){
+        return;
+    }
+    let x = v_dest[id + op_unary_contiguous.offset];
+    set_unary(op_unary_contiguous.operation, id, x, op_unary_contiguous.scalar1, op_unary_contiguous.scalar2, op_unary_contiguous.seed);
+}
+
+
 #ifdef f32
 fn rand_uniform(value: u32, seed : u32) -> f32 {
     // Use XORShift algorithm to generate a pseudo-random float

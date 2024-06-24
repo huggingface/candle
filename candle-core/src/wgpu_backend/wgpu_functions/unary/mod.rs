@@ -88,7 +88,7 @@ pub fn queue_unary_inplace_op(
 
     let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryInplace)?;
 
-    let bind_group = create_bind_group_input0(dev, pipeline.clone(), meta_offset, buffer);
+    let bind_group = create_bind_group_input0(meta_offset, buffer);
     enqueue(
         meta,
         pipeline,
@@ -121,7 +121,7 @@ pub fn queue_unary_from_buffer_op(
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBufferContiguous)?;
 
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
         enqueue(
             meta,
             pipeline,
@@ -139,7 +139,7 @@ pub fn queue_unary_from_buffer_op(
         meta.add_layout(&input_layout);
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBuffer)?;
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
         enqueue(
             meta,
             pipeline,

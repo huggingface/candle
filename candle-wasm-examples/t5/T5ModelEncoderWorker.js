@@ -35,10 +35,11 @@ class Encoder {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = new ModelEncoder(
+      this.instance[modelID] = await new ModelEncoder(
         weightsArrayU8,
         tokenizerArrayU8,
-        configArrayU8
+        configArrayU8, 
+        true
       );
     } else {
       self.postMessage({ status: "ready", message: "Model Already Loaded" });
@@ -68,7 +69,7 @@ self.addEventListener("message", async (event) => {
       status: "encoding",
       message: "Encoding Sentences",
     });
-    const output = model.decode({
+    const output = await model.decode({
       sentences: sentences,
       normalize_embeddings: normalize_embeddings || true,
     });
