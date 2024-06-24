@@ -1,10 +1,10 @@
-use candle::D::Minus1;
 use candle::{Module, Result, Tensor};
-use candle_nn::ops::Identity;
+use candle::D::Minus1;
 use candle_nn::{
-    batch_norm, conv2d, conv2d_no_bias, conv_transpose2d, linear, seq, Activation, BatchNorm,
-    BatchNormConfig, Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
+    Activation, batch_norm, BatchNorm, BatchNormConfig, conv2d, Conv2d, conv2d_no_bias, Conv2dConfig,
+    conv_transpose2d, ConvTranspose2dConfig, linear, seq, Sequential, VarBuilder,
 };
+use candle_nn::ops::Identity;
 
 use crate::models::dinov2::DinoVisionTransformer;
 
@@ -274,7 +274,6 @@ impl Scratch {
                 vb.pp("output_conv2").pp("2"),
             )?)
             .add(Activation::Relu);
-        // TODO currently skipping the identity() call, doesn't seem necessary
 
         Ok(Self {
             layer1_rn,
@@ -310,25 +309,16 @@ impl DPTHead {
         use_class_token: bool,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let projections = out_channel_sizes
-            .iter()
-            .enumerate()
-            .map(|(conv_index, out_channel_size)| {
-                conv2d(
-                    in_channel_size,
-                    *out_channel_size,
-                    1,
-                    Conv2dConfig {
-                        padding: 0,
-                        stride: 1,
-                        dilation: 1,
-                        groups: 1,
-                    },
-                    vb.pp("projects").pp(conv_index.to_string()),
-                )
-                .unwrap()
-            })
-            .collect();
+        let mut projections: Vec<Conv2d> = Vec::with_capacity(out_channel_sizes.len());
+        for (conv_index, out_channel_size) in out_channel_sizes.iter().enumerate() {
+            projections.push(conv2d(
+                in_channel_size,
+                *out_channel_size,
+                1,
+                Default::default(),
+                vb.pp("projects").pp(conv_index.to_string()),
+            )?);
+        }
 
         let resize_layers: Vec<Box<dyn Module>> = vec![
             Box::new(conv_transpose2d(
@@ -371,20 +361,17 @@ impl DPTHead {
         ];
 
         let readout_projections = if use_class_token {
-            (0..NUM_CHANNELS)
-                .map(|rop_index| {
-                    seq()
-                        .add(
-                            linear(
-                                2 * in_channel_size,
-                                in_channel_size,
-                                vb.pp("readout_projects").pp(rop_index.to_string()),
-                            )
-                            .unwrap(),
-                        )
-                        .add(Activation::Gelu)
-                })
-                .collect()
+            let rop = Vec::with_capacity(NUM_CHANNELS);
+            for rop_index in 0..NUM_CHANNELS {
+                seq()
+                    .add(linear(
+                        2 * in_channel_size,
+                        in_channel_size,
+                        vb.pp("readout_projects").pp(rop_index.to_string()),
+                    )?)
+                    .add(Activation::Gelu);
+            }
+            rop
         } else {
             vec![]
         };
@@ -410,30 +397,31 @@ const PATCH_SIZE: usize = 37; //  518 // 14 TODO see how to solve this dynamical
 
 impl Module for DPTHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let out = (0..NUM_CHANNELS)
-            .map(|i| {
-                let x = if self.use_class_token {
-                    let x = xs.get(i).unwrap().get(0).unwrap();
-                    let class_token = xs.get(i).unwrap().get(1).unwrap();
-                    let readout = class_token.unsqueeze(1).unwrap().expand(x.shape()).unwrap();
-                    let to_cat = [x, readout];
-                    let cat = Tensor::cat(&to_cat, Minus1).unwrap();
-                    self.readout_projections[i].forward(&cat).unwrap()
-                } else {
-                    xs.get(i).unwrap()
-                };
-                let x_dims = x.dims();
+        let mut out: Vec<Tensor> = Vec::with_capacity(NUM_CHANNELS);
+        for i in 0..NUM_CHANNELS {
+            let x = if self.use_class_token {
+                let x = xs.get(i)?.get(0)?;
+                let class_token = xs.get(i)?.get(1)?;
+                let readout = class_token.unsqueeze(1)?.expand(x.shape())?;
+                let to_cat = [x, readout];
+                let cat = Tensor::cat(&to_cat, Minus1)?;
+                self.readout_projections[i].forward(&cat)?
+            } else {
+                xs.get(i)?
+            };
+            let x_dims = x.dims();
 
-                let x = x
-                    .permute((0, 2, 1))
-                    .unwrap()
-                    .reshape((x_dims[0], x_dims[x_dims.len() - 1], PATCH_SIZE, PATCH_SIZE))
-                    .unwrap();
-                let x = self.projections[i].forward(&x).unwrap();
+            let x = x.permute((0, 2, 1))?.reshape((
+                x_dims[0],
+                x_dims[x_dims.len() - 1],
+                PATCH_SIZE,
+                PATCH_SIZE,
+            ))?;
+            let x = self.projections[i].forward(&x)?;
 
-                self.resize_layers[i].forward(&x).unwrap()
-            })
-            .collect::<Vec<Tensor>>();
+            let x = self.resize_layers[i].forward(&x)?;
+            out.push(x);
+        }
 
         let layer_1_rn = self.scratch.layer1_rn.forward(out.get(0).unwrap())?;
         let layer_2_rn = self.scratch.layer2_rn.forward(out.get(1).unwrap())?;
@@ -505,9 +493,6 @@ impl<'a> DepthAnythingV2<'a> {
 
 impl<'a> Module for DepthAnythingV2<'a> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let dims = xs.shape().dims();
-        println!("DepthAnythingV2 got dims: {:?}", dims);
-
         let layer_ids_vits = vec![2, 5, 8, 11];
         // let layer_ids_vitb = vec![2, 5, 8, 11];
         // let layer_ids_vitl = vec![4, 11, 17, 23];
