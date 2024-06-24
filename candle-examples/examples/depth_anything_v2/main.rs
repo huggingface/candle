@@ -178,8 +178,6 @@ fn scale_image(depth: &Tensor) -> Result<Tensor> {
 
     let min_val = flat_values.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
     let max_val = flat_values.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
-    println!("Min: {min_val}");
-    println!("Max: {max_val}");
 
     let min_val_tensor = Tensor::try_from(*min_val)?
         .to_device(depth.device())?

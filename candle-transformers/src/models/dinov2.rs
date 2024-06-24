@@ -268,7 +268,9 @@ impl DinoVisionTransformer {
                 output.push(xs.clone());
             }
         }
-        assert_eq!(output.len(), blocks_to_take.len(), "only {} / {} blocks found", output.len(), blocks_to_take.len());
+        if output.len() != blocks_to_take.len() {
+            candle::bail!("only {} / {} blocks found", output.len(), blocks_to_take.len());
+        }
         Ok(output)
     }
 
