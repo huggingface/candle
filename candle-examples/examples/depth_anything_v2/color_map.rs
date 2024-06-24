@@ -39,7 +39,7 @@ impl SpectralRColormap {
             .collect();
 
         let [.., height, width] = gray.dims() else {
-            panic!("Not enough dims!")
+            candle::bail!("Not enough dims!")
         };
 
         let color = Tensor::from_vec(rgb_values, Shape::from((*height, *width, 3)), gray.device())?;
