@@ -35,7 +35,7 @@ class Encoder {
           fetchArrayBuffer(configURL),
         ]);
 
-      this.instance[modelID] = new ModelEncoder(
+      this.instance[modelID] = await new ModelEncoder(
         weightsArrayU8,
         tokenizerArrayU8,
         configArrayU8,
@@ -81,6 +81,6 @@ self.addEventListener("message", async (event) => {
       output: output,
     });
   } catch (e) {
-    self.postMessage({ error: e });
+    self.postMessage({ error: e.toString() }); // Convert error to string
   }
 });

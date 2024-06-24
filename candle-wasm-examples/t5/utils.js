@@ -23,12 +23,12 @@ export async function extractEmbeddings(
       if ("error" in event.data) {
         worker.removeEventListener("message", messageHandler);
         reject(new Error(event.data.error));
-      }
-      if (event.data.status === "complete") {
+      } else if (event.data.status === "complete") {
         worker.removeEventListener("message", messageHandler);
-        resolve(event.data);
+        resolve(event.data.output);
+      } else if (updateStatus) {
+        updateStatus(event.data);
       }
-      if (updateStatus) updateStatus(event.data);
     }
     worker.addEventListener("message", messageHandler);
   });
