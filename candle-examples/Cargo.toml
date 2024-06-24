@@ -26,7 +26,7 @@ image = { workspace = true }
 intel-mkl-src = { workspace = true, optional = true }
 num-traits = { workspace = true }
 palette = { version = "0.7.6", optional = true }
-enterpolation = "0.2.1"
+enterpolation = { version = "0.2.1", optional = true}
 pyo3 = { version = "0.21.0", features = ["auto-initialize"], optional = true }
 rayon = { workspace = true }
 rubato = { version = "0.15.0", optional = true }
@@ -67,7 +67,7 @@ onnx = ["candle-onnx"]
 metal = ["candle/metal", "candle-nn/metal"]
 microphone = ["cpal"]
 encodec = ["cpal", "symphonia", "rubato"]
-depth_anything_v2 = ["palette"]
+depth_anything_v2 = ["palette", "enterpolation"]
 
 [[example]]
 name = "llama_multiprocess"
