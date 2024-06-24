@@ -262,7 +262,7 @@ impl DinoVisionTransformer {
     fn get_intermediate_layers_not_chunked(
         &self,
         xs: &Tensor,
-        blocks_to_take: &Vec<usize>,
+        blocks_to_take: &[usize],
     ) -> Result<Vec<Tensor>> {
         let mut xs = self.prepare_tokens_with_mask(xs)?;
         let mut output = Vec::new();
@@ -285,7 +285,7 @@ impl DinoVisionTransformer {
     pub fn get_intermediate_layers(
         &self,
         xs: &Tensor,
-        blocks_to_take: &Vec<usize>,
+        blocks_to_take: &[usize],
         reshape: bool,
         return_class_token: bool,
         norm: bool,
@@ -305,7 +305,7 @@ impl DinoVisionTransformer {
             .collect::<Result<Vec<_>>>()?;
         let outputs = outputs
             .iter()
-            .map(|out| out.i((.., 1..)).map(|out| out.clone()))
+            .map(|out| out.i((.., 1..)))
             .collect::<Result<Vec<_>>>()?;
 
         let outputs = if reshape {
