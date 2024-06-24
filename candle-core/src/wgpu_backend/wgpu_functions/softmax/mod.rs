@@ -1,13 +1,14 @@
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input1, enqueue_workgroups, get_meta};
 
 pub fn queue_softmax(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
     dtype: crate::DType,
     input1_offset : u32,
     reduction_length : u32,
@@ -24,9 +25,9 @@ pub fn queue_softmax(
 
     let pipeline = dev.get_pipeline(super::Shader::Softmax(dtype), Pipelines::Softmax)?;
 
-    let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input1);
+    let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input1);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         1,

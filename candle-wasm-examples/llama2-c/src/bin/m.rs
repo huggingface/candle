@@ -10,22 +10,15 @@ pub struct Model {
     logits_processor: LogitsProcessor,
     tokens: Vec<u32>,
     repeat_penalty: f32,
-    device : Device,
+    device : Device
 }
 
 impl Model {
     async fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
         const REPEAT_LAST_N: usize = 64;
         let input = Tensor::new(tokens, &self.device)?.unsqueeze(0)?;
-        //info!("INPUT:");
-        //input.debug_log().await?;
         let logits = self.inner.llama.forward(&input, tokens.len()).await?;
-        
-        //info!("lOGITS1:");
-        //logits.debug_log().await?;
         let logits = logits.squeeze(0)?;
-        //info!("lOGITS2:");
-        //logits.debug_log().await?;
 
         let logits = if self.repeat_penalty == 1. || tokens.is_empty() {
             logits
@@ -37,7 +30,6 @@ impl Model {
                 &self.tokens[start_at..],
             ).await?
         };
-    
 
         let next_token = self.logits_processor.sample_async(&logits).await?;
         self.tokens.push(next_token);
@@ -143,14 +135,15 @@ impl Model {
 
     #[wasm_bindgen]
     pub async fn next_token(&mut self) -> Result<String, JsError> {
-        //console_log!("next token");
         console_error_panic_hook::set_once();
-        let last_token = *self.tokens.last().unwrap();
-        //console_log!("next token before process");
+        let last_token = *self.tokens.last().unwrap();;
         let text = self
             .process(&[last_token]).await
             .map_err(|m| JsError::new(&m.to_string()))?;
-        //console_log!("next token after process");
+        // match  &self.device{
+        //     Device::WebGpu(gpu) => gpu.print_bindgroup_reuseinfo(),
+        //     _ => {},
+        // }
         Ok(text)
     }
 }

@@ -1,7 +1,8 @@
-use rand::RngCore;
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+use rand::RngCore;
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input0, create_bind_group_input1, enqueue, get_meta, get_size};
 
@@ -70,7 +71,7 @@ pub enum UnaryOperation {
 
 pub fn queue_unary_inplace_op(
     dev: &WgpuDevice,
-    buffer: &Buffer,
+    buffer: Arc<BufferReference>,
     op: UnaryOperation,
     scalar1: f32,
     scalar2: f32,
@@ -87,9 +88,9 @@ pub fn queue_unary_inplace_op(
 
     let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryInplace)?;
 
-    let bind_group = create_bind_group_input0(dev, pipeline.clone(), meta_offset, buffer);
+    let bind_group = create_bind_group_input0(meta_offset, buffer);
     enqueue(
-        dev,
+        meta,
         pipeline,
         bind_group,
         layout.shape().elem_count() as u32,
@@ -101,8 +102,8 @@ pub fn queue_unary_inplace_op(
 
 pub fn queue_unary_from_buffer_op(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
     op: UnaryOperation,
     scalar1: f32,
     scalar2: f32,
@@ -120,9 +121,9 @@ pub fn queue_unary_from_buffer_op(
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBufferContiguous)?;
 
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
         enqueue(
-            dev,
+            meta,
             pipeline,
             bind_group,
             input_layout.shape().elem_count() as u32,
@@ -138,9 +139,9 @@ pub fn queue_unary_from_buffer_op(
         meta.add_layout(&input_layout);
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBuffer)?;
-        let bind_group = create_bind_group_input1(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
         enqueue(
-            dev,
+            meta,
             pipeline,
             bind_group,
             input_layout.shape().elem_count() as u32,

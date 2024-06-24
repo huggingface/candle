@@ -1,14 +1,15 @@
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue_workgroups, get_meta};
 
 pub fn queue_conv2d(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     dtype: crate::DType,
     params: &crate::conv::ParamsConv2D,
     input_layout: &crate::Layout,
@@ -47,15 +48,13 @@ pub fn queue_conv2d(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv2D)?;
 
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (params.out_w() as u32 + 15) / 16,
@@ -70,9 +69,9 @@ pub fn queue_conv2d(
 
 pub fn queue_conv2d_transpose(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     dtype: crate::DType,
     params: &crate::conv::ParamsConvTranspose2D,
     input_layout: &crate::Layout,
@@ -110,15 +109,13 @@ pub fn queue_conv2d_transpose(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv2DTranspose)?;
 
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((params.out_w() - params.output_padding) as u32 + 7) / 8,
@@ -133,9 +130,9 @@ pub fn queue_conv2d_transpose(
 
 pub fn queue_conv1d(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     dtype: crate::DType,
     params: &crate::conv::ParamsConv1D,
     input_layout: &crate::Layout,
@@ -169,15 +166,13 @@ pub fn queue_conv1d(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv1D)?;
 
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
-        meta_offset,
+                meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (params.l_out() as u32 + 63) / 64,
@@ -190,9 +185,9 @@ pub fn queue_conv1d(
 
 pub fn queue_conv1d_transpose(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     dtype: crate::DType,
     params: &crate::conv::ParamsConvTranspose1D,
     input_layout: &crate::Layout,
@@ -225,15 +220,13 @@ pub fn queue_conv1d_transpose(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv1DTranspose)?;
 
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((params.l_out() - params.output_padding) as u32 + 63) / 64,

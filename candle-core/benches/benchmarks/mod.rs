@@ -5,6 +5,7 @@ pub(crate) mod qmatmul;
 pub(crate) mod random;
 pub(crate) mod unary;
 pub(crate) mod where_cond;
+pub(crate) mod copy;
 
 use candle_core::{backend::BackendDevice, Device, Result};
 

@@ -1,6 +1,7 @@
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue_workgroups, get_meta, get_size};
 
@@ -8,9 +9,9 @@ use super::{create_bind_group_input2, enqueue_workgroups, get_meta, get_size};
 
 pub fn queue_gather(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input: &Buffer,
-    buffer_index: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
+    buffer_index: Arc<BufferReference>,
     input_dtype: crate::DType,
     lay_input: &crate::Layout,
     lay_index: &crate::Layout,
@@ -25,9 +26,9 @@ pub fn queue_gather(
     let pipeline = dev.get_pipeline(super::Shader::Gather(input_dtype), Pipelines::Gather)?;
 
     let bind_group =
-        create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_input, buffer_index);
+        create_bind_group_input2(meta_offset, buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (lay_index.shape().elem_count() as u32 + 63) / 64,
@@ -43,9 +44,9 @@ pub fn queue_gather(
 
 pub fn queue_scatter_add_inplace(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_index: &Buffer,
-    buffer_src: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_index: Arc<BufferReference>,
+    buffer_src: Arc<BufferReference>,
     input_dtype: crate::DType,
     lay_input: &crate::Layout,
     lay_index: &crate::Layout,
@@ -64,9 +65,9 @@ pub fn queue_scatter_add_inplace(
     let pipeline = dev.get_pipeline(super::Shader::Gather(input_dtype), Pipelines::ScatterAddInplace)?;
 
     let bind_group =
-        create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_index, buffer_src);
+        create_bind_group_input2(meta_offset, buffer_dest, buffer_index, buffer_src);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((lay_index.shape().elem_count() / selected_index_length) as u32 + 63) / 64,
@@ -80,9 +81,9 @@ pub fn queue_scatter_add_inplace(
 
 pub fn queue_index_add_inplace(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_index: &Buffer,
-    buffer_src: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_index: Arc<BufferReference>,
+    buffer_src: Arc<BufferReference>,
     input_dtype: crate::DType,
     lay_input: &crate::Layout,
     lay_index: &crate::Layout,
@@ -101,9 +102,9 @@ pub fn queue_index_add_inplace(
     let pipeline = dev.get_pipeline(super::Shader::Gather(input_dtype), Pipelines::IndexAddInplace)?;
 
     let bind_group =
-        create_bind_group_input2(dev, pipeline.clone(), meta_offset, buffer_dest, buffer_index, buffer_src);
+        create_bind_group_input2(meta_offset, buffer_dest, buffer_index, buffer_src);
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((lay_input.shape().elem_count() / selected_index_length) as u32 + 63) / 64,

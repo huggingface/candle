@@ -10,6 +10,10 @@
 #define op_copy_strided.dest_offset op_meta[0]
 #define op_copy_strided.input1_layout 1u
 
+#define op_copy.copy_size op_meta[0]
+#define op_copy.dest_offset op_meta[1]
+#define op_copy.src_offset op_meta[2]
+
 
 @compute
 @workgroup_size(64,1,1)
@@ -19,6 +23,16 @@ fn copy_strided(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if(pos1.is_valid){
         let x = v_input1[pos1.id];
         v_dest[op_copy_strided.dest_offset + id] = x;
+    }
+}
+
+
+@compute
+@workgroup_size(64,1,1)
+fn copy(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let id = global_id.x;
+    if(id < op_copy.copy_size){
+        v_dest[op_copy.dest_offset + id] = v_input1[op_copy.src_offset + id];
     }
 }
 

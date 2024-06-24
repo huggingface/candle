@@ -1,13 +1,14 @@
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input1, enqueue_workgroups, get_meta};
 
 pub fn queue_max_pool2d(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
     layout: &crate::Layout,
     dtype: crate::DType,
     kernel_size: (usize, usize),
@@ -45,14 +46,12 @@ pub fn queue_max_pool2d(
     let pipeline = dev.get_pipeline(super::Shader::Pool2d(dtype), Pipelines::MaxPool2d)?;
 
     let bind_group = create_bind_group_input1(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (w_out as u32 + 7) / 8,
@@ -68,8 +67,8 @@ pub fn queue_max_pool2d(
 
 pub fn queue_avg_pool2d(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
     layout: &crate::Layout,
     dtype: crate::DType,
     kernel_size: (usize, usize),
@@ -107,14 +106,12 @@ pub fn queue_avg_pool2d(
     let pipeline = dev.get_pipeline(super::Shader::Pool2d(dtype), Pipelines::AvgPool2d)?;
 
     let bind_group = create_bind_group_input1(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (w_out as u32 + 7) / 8,

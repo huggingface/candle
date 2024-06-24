@@ -1,4 +1,4 @@
-use candle::{DType, Device, IndexOp, Result, Tensor, D};
+use candle::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, BatchNorm, Conv2d, Conv2dConfig, Module, VarBuilder,
 };

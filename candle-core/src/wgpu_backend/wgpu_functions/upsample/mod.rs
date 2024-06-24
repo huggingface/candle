@@ -1,13 +1,14 @@
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input1, enqueue_workgroups, get_meta};
 
 pub fn queue_upsample1d(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
     layout: &crate::Layout,
     dtype: crate::DType,
     target_size: usize,
@@ -34,14 +35,12 @@ pub fn queue_upsample1d(
     let pipeline = dev.get_pipeline(super::Shader::Upsample(dtype), Pipelines::Upsample1d)?;
 
     let bind_group = create_bind_group_input1(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (target_size as u32 + 63) / 63,
@@ -56,8 +55,8 @@ pub fn queue_upsample1d(
 
 pub fn queue_upsample2d(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
     layout: &crate::Layout,
     dtype: crate::DType,
     target_size: (usize, usize),
@@ -88,14 +87,12 @@ pub fn queue_upsample2d(
     let pipeline = dev.get_pipeline(super::Shader::Upsample(dtype), Pipelines::Upsample2d)?;
 
     let bind_group = create_bind_group_input1(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (target_size.1 as u32 + 7) / 8,

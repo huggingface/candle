@@ -8,5 +8,6 @@ criterion_main!(
     benchmarks::where_cond::benches,
     benchmarks::conv_transpose2d::benches,
     //benchmarks::qmatmul::benches,
-    benchmarks::unary::benches
+    benchmarks::unary::benches,
+    benchmarks::copy::benches
 );

@@ -38,11 +38,12 @@ bytemuck = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+log = {workspace = true}
 
 #only for debugging on wasm
-wasm-bindgen = "0.2.87"
-wasm-bindgen-futures = "0.4.37"
-wasm-logger = "0.2"
+#wasm-bindgen = "0.2.87"
+#wasm-bindgen-futures = "0.4.37"
+#wasm-logger = "0.2"
 
 [dev-dependencies]
 anyhow = { workspace = true }

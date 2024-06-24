@@ -40,7 +40,8 @@ class ConditionalGeneration {
       this.instance[modelID] = await new ModelConditionalGeneration(
         weightsArrayU8,
         tokenizerArrayU8,
-        configArrayU8, true
+        configArrayU8,
+        true
       );
     } else {
       self.postMessage({ status: "ready", message: "Model Already Loaded" });

@@ -1,15 +1,16 @@
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input3, enqueue, get_meta, get_size};
 
 pub fn queue_where_cond_u32(
     dev: &WgpuDevice,
-    dest_buffer: &Buffer,
-    input_buffer: &Buffer,
-    true_buffer : &Buffer,
-    false_buffer : &Buffer,
+    dest_buffer: Arc<BufferReference>,
+    input_buffer: Arc<BufferReference>,
+    true_buffer : Arc<BufferReference>,
+    false_buffer : Arc<BufferReference>,
     layout_input : &crate::Layout,
     layout_true : &crate::Layout,
     layout_false :&crate::Layout,
@@ -22,9 +23,9 @@ pub fn queue_where_cond_u32(
 
     let pipeline = dev.get_pipeline(super::Shader::WhereCond(dtype), Pipelines::WhereCondU32)?;
 
-    let bind_group = create_bind_group_input3(dev, pipeline.clone(), meta_offset,dest_buffer, input_buffer, true_buffer, false_buffer);
+    let bind_group = create_bind_group_input3(meta_offset,dest_buffer, input_buffer, true_buffer, false_buffer);
     enqueue(
-        dev,
+        meta,
         pipeline,
         bind_group,
         layout_input.shape().elem_count() as u32,

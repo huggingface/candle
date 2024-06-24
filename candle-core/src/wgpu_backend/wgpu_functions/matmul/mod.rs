@@ -1,14 +1,15 @@
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, Layout, WgpuDevice};
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, Layout, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue_workgroups, get_meta};
 
 pub fn queue_matmul_buffer1(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     b: u32,
     m: u32,
     n: u32,
@@ -39,15 +40,13 @@ pub fn queue_matmul_buffer1(
     let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::MatmulBuffer)?;
   
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (k  + 15) / 16,
@@ -63,9 +62,9 @@ pub fn queue_matmul_buffer1(
 //shader1b
 pub fn queue_matmul_buffer1b(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     b: u32,
     m: u32,
     n: u32,
@@ -96,15 +95,13 @@ pub fn queue_matmul_buffer1b(
     let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::MatmulBuffer1b)?;
   
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         ((k + 15) / 16  + 15) / 16,
@@ -120,9 +117,9 @@ pub fn queue_matmul_buffer1b(
 //shader3
 pub fn queue_matmul_buffer3(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     b: u32,
     m: u32,
     n: u32,
@@ -153,15 +150,13 @@ pub fn queue_matmul_buffer3(
     let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul3Buffer)?;
   
     let bind_group = create_bind_group_input2(
-        dev,
-        pipeline.clone(),
         meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
     );
     enqueue_workgroups(
-        dev,
+        meta,
         pipeline,
         bind_group,
         (k + 15) / 16,
@@ -179,9 +174,9 @@ pub fn queue_matmul_buffer3(
 //shader4
 pub fn queue_matmul_buffer4(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     b: u32,
     m: u32,
     n: u32,
@@ -221,15 +216,13 @@ pub fn queue_matmul_buffer4(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul4Buffer)?;
     
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
-            buffer_dest,
-            buffer_input1,
-            buffer_input2,
+            buffer_dest.clone(),
+            buffer_input1.clone(),
+            buffer_input2.clone(),
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             k  / 16,
@@ -262,15 +255,13 @@ pub fn queue_matmul_buffer4(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul4endBuffer)?;
       
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             (k + 15)  / 16,
@@ -289,9 +280,9 @@ pub fn queue_matmul_buffer4(
 //shader5
 pub fn queue_matmul_buffer(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     b: u32,
     m: u32,
     n: u32,
@@ -332,15 +323,13 @@ pub fn queue_matmul_buffer(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul5Buffer)?;
     
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
-            buffer_dest,
-            buffer_input1,
-            buffer_input2,
+            buffer_dest.clone(),
+            buffer_input1.clone(),
+            buffer_input2.clone(),
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             k  / 16,
@@ -373,15 +362,13 @@ pub fn queue_matmul_buffer(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul1endBuffer)?;
       
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             (k + 15)  / 16,
@@ -400,9 +387,9 @@ pub fn queue_matmul_buffer(
 //shader6
 pub fn queue_matmul_buffer6(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     b: u32,
     m: u32,
     n: u32,
@@ -443,15 +430,13 @@ pub fn queue_matmul_buffer6(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul6Buffer)?;
     
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
-            buffer_dest,
-            buffer_input1,
-            buffer_input2,
+            buffer_dest.clone(),
+            buffer_input1.clone(),
+            buffer_input2.clone(),
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             k  / 16,
@@ -484,15 +469,13 @@ pub fn queue_matmul_buffer6(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul4endBuffer)?;
       
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,
         );
         enqueue_workgroups(
-            dev,
+            meta,
             pipeline,
             bind_group,
             (k + 15)  / 16,

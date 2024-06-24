@@ -1,6 +1,6 @@
-use wgpu::Buffer;
+use std::sync::Arc;
 
-use crate::{wgpu::device::Pipelines, WgpuDevice};
+use crate::{wgpu::{cache::BufferReference, device::{PipelineType, Pipelines}}, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue, get_meta, get_size};
 
@@ -18,9 +18,9 @@ pub enum BinaryOperation {
 }
 pub fn queue_binary_buffer_from_buffer(
     dev: &WgpuDevice,
-    buffer_dest: &Buffer,
-    buffer_input1: &Buffer,
-    buffer_input2: &Buffer,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_input2: Arc<BufferReference>,
     op: BinaryOperation,
     dtype: crate::DType,
     lay1: &crate::Layout,
@@ -35,24 +35,19 @@ pub fn queue_binary_buffer_from_buffer(
         meta.add(lay2.shape().elem_count()); //input2_length
         meta.add(lay2.start_offset()); //input2_offset
 
-        let pipeline_type = Pipelines::BinaryBufferFromBufferContiguousBoth;
-        let pipeline = dev.get_pipeline(super::Shader::Binary(dtype), pipeline_type.clone())?;
-
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,
         );
         enqueue(
-            dev,
-            pipeline,
+            meta,
+            PipelineType(super::Shader::Binary(dtype),Pipelines::BinaryBufferFromBufferContiguousBoth),
             bind_group,
             lay1.shape().elem_count() as u32,
             #[cfg(feature = "wgpu_debug")] 
-            crate::wgpu::device::QueueDebugInfo::new(&format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type), lay1.shape().elem_count()),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, Pipelines::BinaryBufferFromBufferContiguousBoth), lay1.shape().elem_count()),
         );
         return Ok(());
     } else {
@@ -65,8 +60,6 @@ pub fn queue_binary_buffer_from_buffer(
         let pipeline = dev.get_pipeline(super::Shader::Binary(dtype), pipeline_type.clone())?;
         
         let bind_group = create_bind_group_input2(
-            dev,
-            pipeline.clone(),
             meta_offset,
             buffer_dest,
             buffer_input1,
@@ -74,7 +67,7 @@ pub fn queue_binary_buffer_from_buffer(
         );
 
         enqueue(
-            dev,
+            meta,
             pipeline,
             bind_group,
             lay1.shape().elem_count() as u32,
