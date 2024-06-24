@@ -9,7 +9,7 @@ use candle_nn::{
 use crate::models::dinov2::DinoVisionTransformer;
 
 pub struct DepthAnythingV2Config {
-    out_channel_sizes: Vec<usize>,
+    out_channel_sizes: [usize; 4],
     in_channel_size: usize, // embed_dim in the Dino model
     num_features: usize,
     use_batch_norm: bool,
@@ -22,7 +22,7 @@ pub struct DepthAnythingV2Config {
 impl DepthAnythingV2Config {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        out_channel_sizes: Vec<usize>,
+        out_channel_sizes: [usize; 4],
         in_channel_size: usize,
         num_features: usize,
         use_batch_norm: bool,
@@ -45,7 +45,7 @@ impl DepthAnythingV2Config {
 
     pub fn vit_small() -> Self {
         Self {
-            out_channel_sizes: vec![48, 96, 192, 384],
+            out_channel_sizes: [48, 96, 192, 384],
             in_channel_size: 384,
             num_features: 64,
             use_batch_norm: false,
@@ -58,7 +58,7 @@ impl DepthAnythingV2Config {
 
     pub fn vit_base() -> Self {
         Self {
-            out_channel_sizes: vec![96, 192, 384, 768],
+            out_channel_sizes: [96, 192, 384, 768],
             in_channel_size: 768,
             num_features: 128,
             use_batch_norm: false,
@@ -71,7 +71,7 @@ impl DepthAnythingV2Config {
 
     pub fn vit_large() -> Self {
         Self {
-            out_channel_sizes: vec![256, 512, 1024, 1024],
+            out_channel_sizes: [256, 512, 1024, 1024],
             in_channel_size: 1024,
             num_features: 256,
             use_batch_norm: false,
@@ -84,7 +84,7 @@ impl DepthAnythingV2Config {
 
     pub fn vit_giant() -> Self {
         Self {
-            out_channel_sizes: vec![1536, 1536, 1536, 1536],
+            out_channel_sizes: [1536, 1536, 1536, 1536],
             in_channel_size: 1536,
             num_features: 384,
             use_batch_norm: false,
@@ -253,28 +253,28 @@ impl Scratch {
         };
 
         let layer1_rn = conv2d_no_bias(
-            *conf.out_channel_sizes.first().unwrap(),
+            conf.out_channel_sizes[0],
             conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("layer1_rn"),
         )?;
         let layer2_rn = conv2d_no_bias(
-            *conf.out_channel_sizes.get(1).unwrap(),
+            conf.out_channel_sizes[1],
             conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("layer2_rn"),
         )?;
         let layer3_rn = conv2d_no_bias(
-            *conf.out_channel_sizes.get(2).unwrap(),
+            conf.out_channel_sizes[2],
             conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("layer3_rn"),
         )?;
         let layer4_rn = conv2d_no_bias(
-            *conf.out_channel_sizes.get(3).unwrap(),
+            conf.out_channel_sizes[3],
             conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
@@ -382,8 +382,8 @@ impl<'a> DPTHead<'a> {
 
         let resize_layers: Vec<Box<dyn Module>> = vec![
             Box::new(conv_transpose2d(
-                *conf.out_channel_sizes.get(0).unwrap(),
-                *conf.out_channel_sizes.get(0).unwrap(),
+                conf.out_channel_sizes[0],
+                conf.out_channel_sizes[0],
                 4,
                 ConvTranspose2dConfig {
                     padding: 0,
@@ -394,8 +394,8 @@ impl<'a> DPTHead<'a> {
                 vb.pp("resize_layers").pp("0"),
             )?),
             Box::new(conv_transpose2d(
-                *conf.out_channel_sizes.get(1).unwrap(),
-                *conf.out_channel_sizes.get(1).unwrap(),
+                conf.out_channel_sizes[1],
+                conf.out_channel_sizes[1],
                 2,
                 ConvTranspose2dConfig {
                     padding: 0,
@@ -407,8 +407,8 @@ impl<'a> DPTHead<'a> {
             )?),
             Box::new(Identity::new()),
             Box::new(conv2d(
-                *conf.out_channel_sizes.get(3).unwrap(),
-                *conf.out_channel_sizes.get(3).unwrap(),
+                conf.out_channel_sizes[3],
+                conf.out_channel_sizes[3],
                 3,
                 Conv2dConfig {
                     padding: 1,
@@ -476,10 +476,10 @@ impl Module for DPTHead<'_> {
             out.push(x);
         }
 
-        let layer_1_rn = self.scratch.layer1_rn.forward(out.get(0).unwrap())?;
-        let layer_2_rn = self.scratch.layer2_rn.forward(out.get(1).unwrap())?;
-        let layer_3_rn = self.scratch.layer3_rn.forward(out.get(2).unwrap())?;
-        let layer_4_rn = self.scratch.layer4_rn.forward(out.get(3).unwrap())?;
+        let layer_1_rn = self.scratch.layer1_rn.forward(&out[0])?;
+        let layer_2_rn = self.scratch.layer2_rn.forward(&out[1])?;
+        let layer_3_rn = self.scratch.layer3_rn.forward(&out[2])?;
+        let layer_4_rn = self.scratch.layer4_rn.forward(&out[3])?;
 
         let path4 = self.scratch.refine_net4.forward(&layer_4_rn)?;
 
