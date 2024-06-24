@@ -109,31 +109,67 @@ impl QueueBuffer {
 
 }
 
+#[derive(Debug)]
+pub struct WgpuDeviceInner{
+    pub device : wgpu::Device, 
+    pub device_limits : wgpu::Limits, //we cache the limits here, because device.limit() was relatively slow on the browser
+
+    pub queue : wgpu::Queue,
+    pub (crate) shader : Mutex<HashMap<wgpu_functions::Shader, ShaderModuleComputePipelines>>,
+    pub (crate) rand_state : Mutex<rand::rngs::StdRng>,   
+
+    pub (crate) command_queue : Mutex<QueueBuffer>,
+    pub (crate) meta_buffer : wgpu::Buffer, //buffer for storing meta information
+    pub (crate) indirect_buffer : wgpu::Buffer, //buffer for storing meta information
+
+    pub (crate) bindgroup_layouts : BindgroupLayouts,
+
+    pub (crate) cache : Mutex<ModelCache>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
+    pub (crate) cached_buffer_counter : AtomicU32,
+    pub (crate) cached_bindgroup_counter : AtomicU32,
+    pub (crate) cached_bindgroup_use_counter : AtomicU32,
+    pub (crate) cached_bindgroup_reuse_counter : AtomicU32,
+    pub (crate) cached_buffer_reuse_counter : AtomicU32,
+    pub (crate) cached_buffer_inplace_counter : AtomicU32,
+
+}
+
 #[derive(Debug, Clone)]
 pub struct  WgpuDevice {
-    pub device : Arc<wgpu::Device>, 
-    pub device_limits : Arc<wgpu::Limits>, //we cache the limits here, because device.limit() was relatively slow on the browser
 
-    pub queue : Arc<wgpu::Queue>,
-    pub (crate) shader : Arc<Mutex<HashMap<wgpu_functions::Shader, ShaderModuleComputePipelines>>>,
-    pub (crate) rand_state : Arc<Mutex<rand::rngs::StdRng>>,   
+    pub inner : Arc<WgpuDeviceInner>,
 
-    pub (crate) command_queue : Arc<Mutex<QueueBuffer>>,
-    pub (crate) meta_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
-    pub (crate) indirect_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
+    // pub device : Arc<wgpu::Device>, 
+    // pub device_limits : Arc<wgpu::Limits>, //we cache the limits here, because device.limit() was relatively slow on the browser
 
-    pub (crate) bindgroup_layouts : Arc<BindgroupLayouts>,
+    // pub queue : Arc<wgpu::Queue>,
+    // pub (crate) shader : Arc<Mutex<HashMap<wgpu_functions::Shader, ShaderModuleComputePipelines>>>,
+    // pub (crate) rand_state : Arc<Mutex<rand::rngs::StdRng>>,   
 
-    pub (crate) cache : Arc<Mutex<ModelCache>>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
-    pub (crate) cached_buffer_counter : Arc<AtomicU32>,
-    pub (crate) cached_bindgroup_counter : Arc<AtomicU32>,
-    pub (crate) cached_bindgroup_use_counter : Arc<AtomicU32>,
-    pub (crate) cached_bindgroup_reuse_counter : Arc<AtomicU32>,
-    pub (crate) cached_buffer_reuse_counter : Arc<AtomicU32>,
-    pub (crate) cached_buffer_inplace_counter : Arc<AtomicU32>,
+    // pub (crate) command_queue : Arc<Mutex<QueueBuffer>>,
+    // pub (crate) meta_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
+    // pub (crate) indirect_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
+
+    // pub (crate) bindgroup_layouts : Arc<BindgroupLayouts>,
+
+    // pub (crate) cache : Arc<Mutex<ModelCache>>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
+    // pub (crate) cached_buffer_counter : Arc<AtomicU32>,
+    // pub (crate) cached_bindgroup_counter : Arc<AtomicU32>,
+    // pub (crate) cached_bindgroup_use_counter : Arc<AtomicU32>,
+    // pub (crate) cached_bindgroup_reuse_counter : Arc<AtomicU32>,
+    // pub (crate) cached_buffer_reuse_counter : Arc<AtomicU32>,
+    // pub (crate) cached_buffer_inplace_counter : Arc<AtomicU32>,
 
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
+}
+
+impl std::ops::Deref for WgpuDevice{
+    type Target = WgpuDeviceInner;
+
+    fn deref(&self) -> &Self::Target {
+        return &self.inner;
+    }
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -236,29 +272,55 @@ impl WgpuDevice{
         });
 
         let device_limits = device.limits();
-        let bindgroup_layouts = Arc::new(BindgroupLayouts::new(&device));
+        let bindgroup_layouts = BindgroupLayouts::new(&device);
+        
         Ok(WgpuDevice {
-            device: Arc::new(device),
-            device_limits: Arc::new(device_limits),
-            queue: Arc::new(queue),
-            shader : Arc::new(Mutex::new(HashMap::new())),
-            rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy())),
-            #[cfg(feature = "wgpu_debug")]
-            debug : debug_info,
-            command_queue: Arc::new(Mutex::new(QueueBuffer::new())),
-            meta_buffer : Arc::new(meta_buffer),
-            indirect_buffer : Arc::new(indirect_buffer),
-            cache : Arc::new(Mutex::new(ModelCache::new())),
-            bindgroup_layouts,
-            cached_buffer_counter : Arc::new(AtomicU32::new(0)),
-
-            cached_bindgroup_use_counter : Arc::new(AtomicU32::new(0)),
-            cached_bindgroup_counter  : Arc::new(AtomicU32::new(0)),
-            cached_bindgroup_reuse_counter: Arc::new(AtomicU32::new(0)),
-
-            cached_buffer_reuse_counter: Arc::new(AtomicU32::new(0)),
-            cached_buffer_inplace_counter : Arc::new(AtomicU32::new(0)),
+            inner : Arc::new(WgpuDeviceInner{
+                device: device,
+                device_limits: device_limits,
+                queue: queue,
+                shader : Mutex::new(HashMap::new()),
+                rand_state: Mutex::new(rand::rngs::StdRng::from_entropy()),
+                #[cfg(feature = "wgpu_debug")]
+                debug : debug_info,
+                command_queue: Mutex::new(QueueBuffer::new()),
+                meta_buffer : meta_buffer,
+                indirect_buffer : indirect_buffer,
+                cache : Mutex::new(ModelCache::new()),
+                bindgroup_layouts,
+                cached_buffer_counter : AtomicU32::new(0),
+    
+                cached_bindgroup_use_counter : AtomicU32::new(0),
+                cached_bindgroup_counter  : AtomicU32::new(0),
+                cached_bindgroup_reuse_counter: AtomicU32::new(0),
+    
+                cached_buffer_reuse_counter: AtomicU32::new(0),
+                cached_buffer_inplace_counter : AtomicU32::new(0),
+            })
         })
+        
+        // Ok(WgpuDevice {
+        //     device: Arc::new(device),
+        //     device_limits: Arc::new(device_limits),
+        //     queue: Arc::new(queue),
+        //     shader : Arc::new(Mutex::new(HashMap::new())),
+        //     rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy())),
+        //     #[cfg(feature = "wgpu_debug")]
+        //     debug : debug_info,
+        //     command_queue: Arc::new(Mutex::new(QueueBuffer::new())),
+        //     meta_buffer : Arc::new(meta_buffer),
+        //     indirect_buffer : Arc::new(indirect_buffer),
+        //     cache : Arc::new(Mutex::new(ModelCache::new())),
+        //     bindgroup_layouts,
+        //     cached_buffer_counter : Arc::new(AtomicU32::new(0)),
+
+        //     cached_bindgroup_use_counter : Arc::new(AtomicU32::new(0)),
+        //     cached_bindgroup_counter  : Arc::new(AtomicU32::new(0)),
+        //     cached_bindgroup_reuse_counter: Arc::new(AtomicU32::new(0)),
+
+        //     cached_buffer_reuse_counter: Arc::new(AtomicU32::new(0)),
+        //     cached_buffer_inplace_counter : Arc::new(AtomicU32::new(0)),
+        // })
     }
 
     pub fn print_bindgroup_reuseinfo(&self){

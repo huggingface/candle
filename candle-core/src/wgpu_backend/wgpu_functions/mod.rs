@@ -14,7 +14,7 @@ pub mod unary;
 pub mod upsample;
 pub mod where_cond;
 
-use std::{collections::HashSet, num::NonZeroU64};
+use std::num::NonZeroU64;
 
 use super::{
     cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference},
@@ -372,23 +372,23 @@ fn end_debug_queue(
         .store(global_index, std::sync::atomic::Ordering::Relaxed);
 }
 
-fn unique_by_ptr<T, I>(iter: I) -> Vec<Arc<T>> 
-where
-    T: 'static,
-    I: IntoIterator<Item = Arc<T>>,
-{
-    let mut seen = HashSet::new();
-    let mut unique = Vec::new();
+// fn unique_by_ptr<T, I>(iter: I) -> Vec<Arc<T>> 
+// where
+//     T: 'static,
+//     I: IntoIterator<Item = Arc<T>>,
+// {
+//     let mut seen = HashSet::new();
+//     let mut unique = Vec::new();
 
-    for arc in iter {
-        let ptr = Arc::as_ptr(&arc);
-        if seen.insert(ptr) {
-            unique.push(arc);
-        }
-    }
+//     for arc in iter {
+//         let ptr = Arc::as_ptr(&arc);
+//         if seen.insert(ptr) {
+//             unique.push(arc);
+//         }
+//     }
 
-    unique
-}
+//     unique
+// }
 
 
 pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer) {

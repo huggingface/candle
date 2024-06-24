@@ -1,4 +1,4 @@
-use std::{num::NonZeroU64, sync::{atomic::AtomicU32, Arc, Mutex}, thread::panicking};
+use std::{num::NonZeroU64, sync::{atomic::AtomicU32, Arc, Mutex}};
 use wgpu::BindGroupLayoutDescriptor;
 
 use crate::WgpuDevice;
@@ -190,21 +190,21 @@ impl BufferCache{
         });
     }
 
-    pub (crate) fn create_buffer_if_needed(&mut self, dev : &WgpuDevice, size : u64){
-        for (buffer_size, buffers) in self.buffers.map.range_mut(size..){
-            if *buffer_size < size{
-                panic!("Did not expect size to be smaller, than key");
-            }
+    // pub (crate) fn create_buffer_if_needed(&mut self, dev : &WgpuDevice, size : u64){
+    //     for (buffer_size, buffers) in self.buffers.map.range_mut(size..){
+    //         if *buffer_size < size{
+    //             panic!("Did not expect size to be smaller, than key");
+    //         }
 
-            if buffers.len() > 0{
-                return;
-            }
-        }
+    //         if buffers.len() > 0{
+    //             return;
+    //         }
+    //     }
 
-        let id = dev.cached_buffer_counter.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
-        let buffer = Arc::new(CachedBuffer::new(wgpu_functions::create_buffer(dev, size),  id));
-        self.add_buffer(buffer);
-    }
+    //     let id = dev.cached_buffer_counter.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+    //     let buffer = Arc::new(CachedBuffer::new(wgpu_functions::create_buffer(dev, size),  id));
+    //     self.add_buffer(buffer);
+    // }
 
 
     fn get_buffer(&mut self, dev : &WgpuDevice, size : u64) -> BufferId{
