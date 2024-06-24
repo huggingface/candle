@@ -35,8 +35,6 @@ pub fn queue_binary_buffer_from_buffer(
         meta.add(lay2.shape().elem_count()); //input2_length
         meta.add(lay2.start_offset()); //input2_offset
 
-        let pipeline_type = Pipelines::BinaryBufferFromBufferContiguousBoth;
-
         let bind_group = create_bind_group_input2(
             meta_offset,
             buffer_dest,
@@ -49,7 +47,7 @@ pub fn queue_binary_buffer_from_buffer(
             bind_group,
             lay1.shape().elem_count() as u32,
             #[cfg(feature = "wgpu_debug")] 
-            crate::wgpu::device::QueueDebugInfo::new(&format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, pipeline_type), lay1.shape().elem_count()),
+            crate::wgpu::device::QueueDebugInfo::new(&format!("binary op:{:?}, dtype:{:?}, pipeline:{:?}", op, dtype, Pipelines::BinaryBufferFromBufferContiguousBoth), lay1.shape().elem_count()),
         );
         return Ok(());
     } else {

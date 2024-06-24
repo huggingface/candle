@@ -127,9 +127,10 @@ pub struct  WgpuDevice {
     pub (crate) cache : Arc<Mutex<ModelCache>>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
     pub (crate) cached_buffer_counter : Arc<AtomicU32>,
     pub (crate) cached_bindgroup_counter : Arc<AtomicU32>,
-
+    pub (crate) cached_bindgroup_use_counter : Arc<AtomicU32>,
     pub (crate) cached_bindgroup_reuse_counter : Arc<AtomicU32>,
     pub (crate) cached_buffer_reuse_counter : Arc<AtomicU32>,
+    pub (crate) cached_buffer_inplace_counter : Arc<AtomicU32>,
 
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
@@ -140,6 +141,7 @@ pub (crate) enum Pipelines{
     UnaryInplace = 0,
     UnaryFromBuffer,
     UnaryFromBufferContiguous,
+    UnaryInplaceContiguous,
     BinaryBufferFromBuffer,
     BinaryBufferFromBufferContiguousBoth,
     MatmulBuffer,
@@ -249,19 +251,25 @@ impl WgpuDevice{
             cache : Arc::new(Mutex::new(ModelCache::new())),
             bindgroup_layouts,
             cached_buffer_counter : Arc::new(AtomicU32::new(0)),
+
+            cached_bindgroup_use_counter : Arc::new(AtomicU32::new(0)),
             cached_bindgroup_counter  : Arc::new(AtomicU32::new(0)),
             cached_bindgroup_reuse_counter: Arc::new(AtomicU32::new(0)),
+
             cached_buffer_reuse_counter: Arc::new(AtomicU32::new(0)),
+            cached_buffer_inplace_counter : Arc::new(AtomicU32::new(0)),
         })
     }
 
     pub fn print_bindgroup_reuseinfo(&self){
         log::info!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_buffer_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
         log::info!("Bindgroup: created: {}, resued : {}", self.cached_bindgroup_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_bindgroup_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
+        log::info!("Bindgroup Inplace used: {}", self.cached_buffer_inplace_counter.load(std::sync::atomic::Ordering::Relaxed));
     }
     pub fn print_bindgroup_reuseinfo2(&self){
         println!("Buffer: created: {}, resued : {}", self.cached_buffer_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_buffer_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
         println!("Bindgroup: created: {}, resued : {}", self.cached_bindgroup_counter.load(std::sync::atomic::Ordering::Relaxed), self.cached_bindgroup_reuse_counter.load(std::sync::atomic::Ordering::Relaxed));
+        println!("Bindgroup Inplace used: {}", self.cached_buffer_inplace_counter.load(std::sync::atomic::Ordering::Relaxed));
     }
     
     #[cfg(feature = "wgpu_debug")]
@@ -308,6 +316,7 @@ impl WgpuDevice{
     fn load_pipeline(device : &wgpu::Device, shader : Arc<wgpu::ShaderModule>, pipeline : Pipelines, pipeline_layout : &wgpu::PipelineLayout) -> wgpu::ComputePipeline{
         let entry_point = match pipeline{
             Pipelines::UnaryInplace => "unary_inplace",
+            Pipelines::UnaryInplaceContiguous => "unary_inplace_contiguous",
             Pipelines::UnaryFromBuffer => "unary_from_buffer",
             Pipelines::UnaryFromBufferContiguous => "unary_from_buffer_contiguous",
             Pipelines::BinaryBufferFromBuffer => "binary_buffer_from_buffer",

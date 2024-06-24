@@ -18,7 +18,7 @@ use std::{collections::HashSet, num::NonZeroU64};
 
 use super::{
     cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference},
-    device::{BindGroupReference, MlQueue, PipelineType, QueueBuffer, META_BUFFER_SIZE}, util::ToU32,
+    device::{BindGroupReference, MlQueue, PipelineType, Pipelines, QueueBuffer, META_BUFFER_SIZE}, util::ToU32,
 };
 use crate::DType;
 use crate::{wgpu_backend::device::WgpuDevice, Error, Layout, WebGpuError};
@@ -417,31 +417,66 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
         {
             let queue = &mut queue_buffer.command_queue;
 
-            {
-                let mut cache = dev.cache.lock().unwrap();
+            // {
+            //     let mut cache = dev.cache.lock().unwrap();
                 
-                //1. get unique dest_buffer sort by buffer size list
-                let mut dest_buffers = unique_by_ptr(queue.iter().map(|q| 
-                match q {
-                    MlQueue::Dispatch(q) => {
-                        q.bindgroup.get_dest().clone()
-                    },
-                }));
+            //     //1. get unique dest_buffer sort by buffer size list
+            //     // let mut dest_buffers = unique_by_ptr(queue.iter().map(|q| 
+            //     // match q {
+            //     //     MlQueue::Dispatch(q) => {
+            //     //         q.bindgroup.get_dest().clone()
+            //     //     },
+            //     // }));
                 
-                dest_buffers.sort_by_key(|f| std::cmp::Reverse(f.size));
+            //     // dest_buffers.sort_by_key(|f| std::cmp::Reverse(f.size));
                 
-                //add buffer to cache, if no buffer big enaugh is free
-                for buffer in dest_buffers.iter().take(1){
-                    cache.buffers.create_buffer_if_needed(dev, buffer.size);
-                }
-            }
+            //     //add buffer to cache, if no buffer big enaugh is free
+            //     for buffer in dest_buffers.iter().take(1){
+            //         cache.buffers.create_buffer_if_needed(dev, buffer.size);
+            //     }
+            // }
 
             let mut wgpu_data = Vec::with_capacity(queue.len());
             for q in queue.drain(..) {
                 {
                     let mut cache = dev.cache.lock().unwrap();
                     match q {
-                        MlQueue::Dispatch(q) => {
+                        MlQueue::Dispatch(mut q) => {
+
+                            let mut optimize_unary_inplace = false;
+                            let mut v1_ref = None;
+                            let mut v2_ref = None;
+                            if q.pipeline.1 == Pipelines::UnaryFromBufferContiguous{
+                                if let BindGroupReferenceBase::Bindgroup1(meta, v1, v2) = &q.bindgroup{
+                                    if Arc::strong_count(&v2) == 1{ //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
+                                        if v1.size == v2.size{
+                                            if v1.storage.lock().unwrap().is_none(){
+                                                q.pipeline.1 = Pipelines::UnaryInplaceContiguous;
+                                                v1_ref = Some(v1.clone());
+                                                v2_ref = Some(v2.clone());
+                                                q.bindgroup = BindGroupReferenceBase::Bindgroup0(*meta, v2.clone());
+                                                optimize_unary_inplace = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if q.pipeline.1 == Pipelines::UnaryFromBuffer{
+                                if let BindGroupReferenceBase::Bindgroup1(meta, v1, v2) = &q.bindgroup{
+                                    if Arc::strong_count(&v2) == 1{ //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
+                                        if v1.size == v2.size{
+                                            if v1.storage.lock().unwrap().is_none(){
+                                                q.pipeline.1 = Pipelines::UnaryInplace;
+                                                v1_ref = Some(v1.clone());
+                                                v2_ref = Some(v2.clone());
+                                                q.bindgroup = BindGroupReferenceBase::Bindgroup0(*meta, v2.clone());
+                                                optimize_unary_inplace = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             let meta = q.bindgroup.get_meta();
                             let pl: &wgpu::PipelineLayout = match q.bindgroup{
@@ -453,8 +488,22 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
 
                             let pipeline = dev.get_pipeline2(q.pipeline.0.clone(), q.pipeline.1.clone(),pl).unwrap();
                             let bindgroup = cache.get_bind_group(dev, &q.bindgroup);
+
                             wgpu_data.push((pipeline, bindgroup, q.x, q.y, q.z, q.indirect_buffer, meta));
                             drop(cache);
+
+                            if optimize_unary_inplace{
+                                dev.cached_buffer_inplace_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if let Some(v1_ref) = v1_ref{
+                                    if let Some(v2_ref) = v2_ref{
+                                        let mut v1_storage = v1_ref.storage.lock().unwrap();
+                                        let mut v2_storage = v2_ref.storage.lock().unwrap();
+                                        *v1_storage = v2_storage.as_ref().cloned();
+                                        *v2_storage = None;
+                                    }
+                                }
+                            }
+
                         }
                     }
                 }
@@ -518,8 +567,15 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
             );
 
             dev.queue.submit(Some(encoder.finish()));
+
         }
         queue_buffer.command_queue.clear();
+
+        {
+            let mut cache = dev.cache.lock().unwrap();
+            cache.bindgroups.remove_unused(u32::max(1000, dev.cached_bindgroup_use_counter.load(std::sync::atomic::Ordering::Relaxed)) - 1000);
+            cache.buffers.remove_unused();
+        }
     }
 }
 
@@ -555,6 +611,8 @@ pub fn create_buffer(dev : &WgpuDevice, size : u64) -> wgpu::Buffer{
 }
 
 pub fn create_bindgroup(dev : &WgpuDevice, bindgroup : CachedBindGroupReference) -> wgpu::BindGroup{
+    dev.cached_bindgroup_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
     let buffer_meta = &dev.meta_buffer;
 
     let meta_binding = wgpu::BufferBinding {

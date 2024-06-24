@@ -143,7 +143,7 @@ fn main() -> anyhow::Result<()> {
                 prompt: "".to_string(),
                 config: None,
                 model_id: "karpathy/tinyllamas".to_string(),
-                which_model: "stories15M.bin".to_string(),
+                which_model: "stories110M.bin".to_string(),
             };
             run_inference(&cmd, &args)?
         }
@@ -331,14 +331,14 @@ fn run_inference(args: &InferenceCmd, common_args: &Args) -> Result<()> {
     let mut tokenizer = candle_examples::token_output_stream::TokenOutputStream::new(tokenizer);
 
     let start_gen = std::time::Instant::now();
-    let get_cache_reference = candle::wgpu::cache::get_reference_cache(&device);
+    //let get_cache_reference = candle::wgpu::cache::get_reference_cache(&device);
     for index in 0.. {
         if tokens.len() >= config.seq_len {
             break;
         }
 
         //println!("LOOP_Start: {}", index);
-        candle::wgpu::cache::start_cache(&device, get_cache_reference);
+        //candle::wgpu::cache::start_cache(&device, get_cache_reference);
         let context_size = if index > 0 { 1 } else { tokens.len() };
         let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
         let input = Tensor::new(ctxt, &device)?.unsqueeze(0)?;

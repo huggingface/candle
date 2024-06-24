@@ -1,4 +1,4 @@
-use std::{num::NonZeroU64, sync::{Arc, Mutex}};
+use std::{num::NonZeroU64, sync::{atomic::AtomicU32, Arc, Mutex}, thread::panicking};
 use wgpu::BindGroupLayoutDescriptor;
 
 use crate::WgpuDevice;
@@ -183,6 +183,13 @@ impl BufferCache{
         return Self{buffers: BTreeMulti::new()}
     }
 
+    pub (crate) fn remove_unused(&mut self){
+        self.buffers.map.retain(|_, buffers|{
+            buffers.retain(|b| Arc::strong_count(b) != 1);
+            return  buffers.len() > 1;
+        });
+    }
+
     pub (crate) fn create_buffer_if_needed(&mut self, dev : &WgpuDevice, size : u64){
         for (buffer_size, buffers) in self.buffers.map.range_mut(size..){
             if *buffer_size < size{
@@ -326,7 +333,6 @@ impl std::hash::Hash for BindGroupInput {
 #[derive(Debug)]
 pub (crate) struct BindGroupCache{
     pub(crate) bindgroups: HashMapMulti<BindGroupInput, BindgroupId>,
-    //bindgroups : Vec<BindgroupId>
 }
 
 
@@ -334,6 +340,40 @@ pub (crate) struct BindGroupCache{
 impl BindGroupCache {
     fn new() -> Self{ 
         return Self{bindgroups: HashMapMulti::new()}
+    }
+
+    pub (crate) fn remove_unused(&mut self, counter : u32){
+
+        self.bindgroups.map.retain(|_, bindgroups|{
+
+            bindgroups.retain(|b| 
+                {
+                    let is_bindgroup_used = b.last_used.load(std::sync::atomic::Ordering::Relaxed) > counter;
+
+                    if Arc::strong_count(b) != 1{
+                        panic!("Expected to have a strong Count to this CachedBindGroup");
+                    }
+                    return is_bindgroup_used;
+                });
+            
+            return bindgroups.len() > 0;
+        });
+        // for (_, bindgroups) in self.bindgroups.map.iter_mut(){
+        //     bindgroups.retain(|b| 
+        //         {
+        //             let is_bindgroup_used = b.last_used.load(std::sync::atomic::Ordering::Relaxed) > counter;
+
+        //             if Arc::strong_count(b) != 1{
+        //                 panic!("Expected to have a strong Count to this CachedBindGroup");
+        //             }
+
+        //             // if !is_bindgroup_used{
+        //             //     println!("Bindgroup is not used -> Remove");
+        //             // }
+        //             return is_bindgroup_used;
+        //         }
+        //        );
+        // }
     }
 }
 
@@ -417,14 +457,14 @@ impl Eq for CachedBindGroupReference {}
 #[derive(Debug)]
 pub struct CachedBindGroup{
     pub(crate) bindgroup : wgpu::BindGroup,
-    last_used : u32, //An Index referencing, when this cached item was used the last time,
+    last_used : AtomicU32, //An Index referencing, when this cached item was used the last time,
     buffers : CachedBindGroupReference,
     //id : u32
 }
 
 impl CachedBindGroup {
     fn new(bindgroup: wgpu::BindGroup, buffers : CachedBindGroupReference ) -> Self {
-        Self { bindgroup, last_used : 0, buffers}
+        Self { bindgroup, last_used : AtomicU32::new(0), buffers}
     }
 }
 
@@ -487,6 +527,7 @@ impl ModelCache {
             self.buffers.match_buffer(cbuf1, buf_dest);
 
             dev.cached_bindgroup_reuse_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            cached_bindgroup.last_used.store(dev.cached_bindgroup_use_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
             return cached_bindgroup.clone();
         }
 
@@ -534,6 +575,7 @@ impl ModelCache {
         };
         let bindgroup = Arc::new(CachedBindGroup::new(wgpu_functions::create_bindgroup(dev, bindgroup_reference.clone()), bindgroup_reference));
         self.bindgroups.bindgroups.add_mapping(bindgroup.buffers.clone().into(), bindgroup.clone());
+        bindgroup.last_used.store(dev.cached_bindgroup_use_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
         return bindgroup;
     }
 
