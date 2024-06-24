@@ -1,4 +1,4 @@
-use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor, D, Module};
+use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -932,9 +932,8 @@ pub struct Identity;
 
 impl Identity {
     pub fn new() -> Identity {
-        Self { }
+        Self {}
     }
-
 }
 
 impl Module for Identity {

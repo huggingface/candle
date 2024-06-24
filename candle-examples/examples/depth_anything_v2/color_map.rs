@@ -1,5 +1,5 @@
-use enterpolation::Generator;
 use enterpolation::linear::ConstEquidistantLinear;
+use enterpolation::Generator;
 use palette::LinSrgb;
 
 use candle::Tensor;

@@ -207,16 +207,8 @@ impl FeatureFusionBlock {
             conv_cfg,
             vb.pp("out_conv"),
         )?;
-        let res_conv_unit1 = ResidualConvUnit::new(
-            conf,
-            activation,
-            vb.pp("resConfUnit1"),
-        )?;
-        let res_conv_unit2 = ResidualConvUnit::new(
-            conf,
-            activation,
-            vb.pp("resConfUnit2"),
-        )?;
+        let res_conv_unit1 = ResidualConvUnit::new(conf, activation, vb.pp("resConfUnit1"))?;
+        let res_conv_unit2 = ResidualConvUnit::new(conf, activation, vb.pp("resConfUnit2"))?;
 
         Ok(Self {
             res_conv_unit1,
@@ -250,10 +242,7 @@ pub struct Scratch {
 }
 
 impl Scratch {
-    pub fn new(
-        conf: &DepthAnythingV2Config,
-        vb: VarBuilder,
-    ) -> Result<Self> {
+    pub fn new(conf: &DepthAnythingV2Config, vb: VarBuilder) -> Result<Self> {
         const KERNEL_SIZE: usize = 3;
         let conv_cfg = Conv2dConfig {
             padding: 1,
@@ -293,7 +282,7 @@ impl Scratch {
 
         let refine_net1 = FeatureFusionBlock::new(
             conf,
-        conf.target_patch_size * 8,
+            conf.target_patch_size * 8,
             Activation::Relu,
             vb.pp("refinenet1"),
         )?;
@@ -378,10 +367,7 @@ pub struct DPTHead<'a> {
 }
 
 impl<'a> DPTHead<'a> {
-    pub fn new(
-        conf: &'a DepthAnythingV2Config,
-        vb: VarBuilder,
-    ) -> Result<Self> {
+    pub fn new(conf: &'a DepthAnythingV2Config, vb: VarBuilder) -> Result<Self> {
         let mut projections: Vec<Conv2d> = Vec::with_capacity(conf.out_channel_sizes.len());
         for (conv_index, out_channel_size) in conf.out_channel_sizes.iter().enumerate() {
             projections.push(conv2d(
@@ -449,10 +435,7 @@ impl<'a> DPTHead<'a> {
             vec![]
         };
 
-        let scratch = Scratch::new(
-            conf,
-            vb.pp("scratch"),
-        )?;
+        let scratch = Scratch::new(conf, vb.pp("scratch"))?;
 
         Ok(Self {
             conf,
@@ -543,25 +526,25 @@ impl<'a> DepthAnythingV2<'a> {
         conf: &'a DepthAnythingV2Config,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let depth_head = DPTHead::new(
-            conf,
-            vb.pp("depth_head"),
-        )?;
+        let depth_head = DPTHead::new(conf, vb.pp("depth_head"))?;
 
         Ok(Self {
             pretrained,
             depth_head,
-            conf
+            conf,
         })
     }
 }
 
 impl<'a> Module for DepthAnythingV2<'a> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-
-        let features =
-            self.pretrained
-                .get_intermediate_layers(xs, &self.conf.layer_ids_vits, false, false, true)?;
+        let features = self.pretrained.get_intermediate_layers(
+            xs,
+            &self.conf.layer_ids_vits,
+            false,
+            false,
+            true,
+        )?;
         let depth = self.depth_head.forward(&features)?;
 
         depth.relu()
