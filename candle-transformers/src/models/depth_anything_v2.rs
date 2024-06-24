@@ -1,12 +1,99 @@
-use candle::{Module, Result, Tensor};
 use candle::D::Minus1;
-use candle_nn::{
-    Activation, batch_norm, BatchNorm, BatchNormConfig, conv2d, Conv2d, conv2d_no_bias, Conv2dConfig,
-    conv_transpose2d, ConvTranspose2dConfig, linear, seq, Sequential, VarBuilder,
-};
+use candle::{Module, Result, Tensor};
 use candle_nn::ops::Identity;
+use candle_nn::{
+    batch_norm, conv2d, conv2d_no_bias, conv_transpose2d, linear, seq, Activation, BatchNorm,
+    BatchNormConfig, Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
+};
 
 use crate::models::dinov2::DinoVisionTransformer;
+
+pub struct DepthAnythingV2Config {
+    out_channel_sizes: Vec<usize>,
+    in_channel_size: usize, // embed_dim in the Dino model
+    num_features: usize,
+    use_batch_norm: bool,
+    use_class_token: bool,
+    layer_ids_vits: Vec<usize>,
+    input_image_size: usize,
+    target_patch_size: usize,
+}
+
+impl DepthAnythingV2Config {
+    pub fn new(
+        out_channel_sizes: Vec<usize>,
+        in_channel_size: usize,
+        num_features: usize,
+        use_batch_norm: bool,
+        use_class_token: bool,
+        layer_ids_vits: Vec<usize>,
+        input_image_size: usize,
+        target_patch_size: usize,
+    ) -> Self {
+        Self {
+            out_channel_sizes,
+            in_channel_size,
+            num_features,
+            use_batch_norm,
+            use_class_token,
+            layer_ids_vits,
+            input_image_size,
+            target_patch_size,
+        }
+    }
+
+    pub fn vit_small() -> Self {
+        Self {
+            out_channel_sizes: vec![48, 96, 192, 384],
+            in_channel_size: 384,
+            num_features: 64,
+            use_batch_norm: false,
+            use_class_token: false,
+            layer_ids_vits: vec![2, 5, 8, 11],
+            input_image_size: 518,
+            target_patch_size: 518 / 14,
+        }
+    }
+
+    pub fn vit_base() -> Self {
+        Self {
+            out_channel_sizes: vec![96, 192, 384, 768],
+            in_channel_size: 768,
+            num_features: 128,
+            use_batch_norm: false,
+            use_class_token: false,
+            layer_ids_vits: vec![2, 5, 8, 11],
+            input_image_size: 518,
+            target_patch_size: 518 / 14,
+        }
+    }
+
+    pub fn vit_large() -> Self {
+        Self {
+            out_channel_sizes: vec![256, 512, 1024, 1024],
+            in_channel_size: 1024,
+            num_features: 256,
+            use_batch_norm: false,
+            use_class_token: false,
+            layer_ids_vits: vec![4, 11, 17, 23],
+            input_image_size: 518,
+            target_patch_size: 518 / 14,
+        }
+    }
+
+    pub fn vit_giant() -> Self {
+        Self {
+            out_channel_sizes: vec![1536, 1536, 1536, 1536],
+            in_channel_size: 1536,
+            num_features: 384,
+            use_batch_norm: false,
+            use_class_token: false,
+            layer_ids_vits: vec![9, 19, 29, 39],
+            input_image_size: 518,
+            target_patch_size: 518 / 14,
+        }
+    }
+}
 
 pub struct ResidualConvUnit {
     activation: Activation,
@@ -18,9 +105,8 @@ pub struct ResidualConvUnit {
 
 impl ResidualConvUnit {
     pub fn new(
-        num_features: usize,
+        conf: &DepthAnythingV2Config,
         activation: Activation,
-        use_batch_norm: bool,
         vb: VarBuilder,
     ) -> Result<Self> {
         const KERNEL_SIZE: usize = 3;
@@ -31,21 +117,21 @@ impl ResidualConvUnit {
             groups: 1,
         };
         let conv1 = conv2d(
-            num_features,
-            num_features,
+            conf.num_features,
+            conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("conv1"),
         )?;
         let conv2 = conv2d(
-            num_features,
-            num_features,
+            conf.num_features,
+            conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("conv2"),
         )?;
 
-        let (batch_norm1, batch_norm2) = match use_batch_norm {
+        let (batch_norm1, batch_norm2) = match conf.use_batch_norm {
             true => {
                 let batch_norm_cfg = BatchNormConfig {
                     eps: 1e-05,
@@ -54,8 +140,8 @@ impl ResidualConvUnit {
                     momentum: 0.1,
                 };
                 (
-                    Some(batch_norm(num_features, batch_norm_cfg, vb.pp("bn1"))?),
-                    Some(batch_norm(num_features, batch_norm_cfg, vb.pp("bn2"))?),
+                    Some(batch_norm(conf.num_features, batch_norm_cfg, vb.pp("bn1"))?),
+                    Some(batch_norm(conf.num_features, batch_norm_cfg, vb.pp("bn2"))?),
                 )
             }
             false => (None, None),
@@ -102,10 +188,9 @@ pub struct FeatureFusionBlock {
 
 impl FeatureFusionBlock {
     pub fn new(
-        num_features: usize,
-        activation: Activation,
-        use_batch_norm: bool,
+        conf: &DepthAnythingV2Config,
         target_patch_size: usize,
+        activation: Activation,
         vb: VarBuilder,
     ) -> Result<Self> {
         const KERNEL_SIZE: usize = 1;
@@ -116,22 +201,20 @@ impl FeatureFusionBlock {
             groups: 1,
         };
         let output_conv = conv2d(
-            num_features,
-            num_features,
+            conf.num_features,
+            conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("out_conv"),
         )?;
         let res_conv_unit1 = ResidualConvUnit::new(
-            num_features,
+            conf,
             activation,
-            use_batch_norm,
             vb.pp("resConfUnit1"),
         )?;
         let res_conv_unit2 = ResidualConvUnit::new(
-            num_features,
+            conf,
             activation,
-            use_batch_norm,
             vb.pp("resConfUnit2"),
         )?;
 
@@ -168,9 +251,7 @@ pub struct Scratch {
 
 impl Scratch {
     pub fn new(
-        channel_sizes: Vec<usize>,
-        num_features: usize,
-        use_batch_norm: bool,
+        conf: &DepthAnythingV2Config,
         vb: VarBuilder,
     ) -> Result<Self> {
         const KERNEL_SIZE: usize = 3;
@@ -182,60 +263,56 @@ impl Scratch {
         };
 
         let layer1_rn = conv2d_no_bias(
-            *channel_sizes.get(0).unwrap(),
-            num_features,
+            *conf.out_channel_sizes.get(0).unwrap(),
+            conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("layer1_rn"),
         )?;
         let layer2_rn = conv2d_no_bias(
-            *channel_sizes.get(1).unwrap(),
-            num_features,
+            *conf.out_channel_sizes.get(1).unwrap(),
+            conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("layer2_rn"),
         )?;
         let layer3_rn = conv2d_no_bias(
-            *channel_sizes.get(2).unwrap(),
-            num_features,
+            *conf.out_channel_sizes.get(2).unwrap(),
+            conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("layer3_rn"),
         )?;
         let layer4_rn = conv2d_no_bias(
-            *channel_sizes.get(3).unwrap(),
-            num_features,
+            *conf.out_channel_sizes.get(3).unwrap(),
+            conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("layer4_rn"),
         )?;
 
         let refine_net1 = FeatureFusionBlock::new(
-            num_features,
+            conf,
+        conf.target_patch_size * 8,
             Activation::Relu,
-            use_batch_norm,
-            PATCH_SIZE * 8,
             vb.pp("refinenet1"),
         )?;
         let refine_net2 = FeatureFusionBlock::new(
-            num_features,
+            conf,
+            conf.target_patch_size * 4,
             Activation::Relu,
-            use_batch_norm,
-            PATCH_SIZE * 4,
             vb.pp("refinenet2"),
         )?;
         let refine_net3 = FeatureFusionBlock::new(
-            num_features,
+            conf,
+            conf.target_patch_size * 2,
             Activation::Relu,
-            use_batch_norm,
-            PATCH_SIZE * 2,
             vb.pp("refinenet3"),
         )?;
         let refine_net4 = FeatureFusionBlock::new(
-            num_features,
+            conf,
+            conf.target_patch_size,
             Activation::Relu,
-            use_batch_norm,
-            PATCH_SIZE,
             vb.pp("refinenet4"),
         )?;
 
@@ -246,8 +323,8 @@ impl Scratch {
             groups: 1,
         };
         let output_conv1 = conv2d(
-            num_features,
-            num_features / 2,
+            conf.num_features,
+            conf.num_features / 2,
             KERNEL_SIZE,
             conv_cfg,
             vb.pp("output_conv1"),
@@ -258,7 +335,7 @@ impl Scratch {
         const OUT_CHANNELS_2: usize = 1;
         const KERNEL_SIZE_2: usize = 1;
         let output_conv2 = output_conv2.add(conv2d(
-            num_features / 2,
+            conf.num_features / 2,
             HEAD_FEATURES_2,
             KERNEL_SIZE,
             conv_cfg,
@@ -292,27 +369,23 @@ impl Scratch {
 
 const NUM_CHANNELS: usize = 4;
 
-pub struct DPTHead {
-    use_class_token: bool,
+pub struct DPTHead<'a> {
+    conf: &'a DepthAnythingV2Config,
     projections: Vec<Conv2d>,
     resize_layers: Vec<Box<dyn Module>>,
     readout_projections: Vec<Sequential>,
     scratch: Scratch,
 }
 
-impl DPTHead {
+impl<'a> DPTHead<'a> {
     pub fn new(
-        out_channel_sizes: Vec<usize>,
-        in_channel_size: usize,
-        num_features: usize,
-        use_batch_norm: bool,
-        use_class_token: bool,
+        conf: &'a DepthAnythingV2Config,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let mut projections: Vec<Conv2d> = Vec::with_capacity(out_channel_sizes.len());
-        for (conv_index, out_channel_size) in out_channel_sizes.iter().enumerate() {
+        let mut projections: Vec<Conv2d> = Vec::with_capacity(conf.out_channel_sizes.len());
+        for (conv_index, out_channel_size) in conf.out_channel_sizes.iter().enumerate() {
             projections.push(conv2d(
-                in_channel_size,
+                conf.in_channel_size,
                 *out_channel_size,
                 1,
                 Default::default(),
@@ -322,8 +395,8 @@ impl DPTHead {
 
         let resize_layers: Vec<Box<dyn Module>> = vec![
             Box::new(conv_transpose2d(
-                *out_channel_sizes.get(0).unwrap(),
-                *out_channel_sizes.get(0).unwrap(),
+                *conf.out_channel_sizes.get(0).unwrap(),
+                *conf.out_channel_sizes.get(0).unwrap(),
                 4,
                 ConvTranspose2dConfig {
                     padding: 0,
@@ -334,8 +407,8 @@ impl DPTHead {
                 vb.pp("resize_layers").pp("0"),
             )?),
             Box::new(conv_transpose2d(
-                *out_channel_sizes.get(1).unwrap(),
-                *out_channel_sizes.get(1).unwrap(),
+                *conf.out_channel_sizes.get(1).unwrap(),
+                *conf.out_channel_sizes.get(1).unwrap(),
                 2,
                 ConvTranspose2dConfig {
                     padding: 0,
@@ -347,8 +420,8 @@ impl DPTHead {
             )?),
             Box::new(Identity::new()),
             Box::new(conv2d(
-                *out_channel_sizes.get(3).unwrap(),
-                *out_channel_sizes.get(3).unwrap(),
+                *conf.out_channel_sizes.get(3).unwrap(),
+                *conf.out_channel_sizes.get(3).unwrap(),
                 3,
                 Conv2dConfig {
                     padding: 1,
@@ -360,13 +433,13 @@ impl DPTHead {
             )?),
         ];
 
-        let readout_projections = if use_class_token {
+        let readout_projections = if conf.use_class_token {
             let rop = Vec::with_capacity(NUM_CHANNELS);
             for rop_index in 0..NUM_CHANNELS {
                 seq()
                     .add(linear(
-                        2 * in_channel_size,
-                        in_channel_size,
+                        2 * conf.in_channel_size,
+                        conf.in_channel_size,
                         vb.pp("readout_projects").pp(rop_index.to_string()),
                     )?)
                     .add(Activation::Gelu);
@@ -377,14 +450,12 @@ impl DPTHead {
         };
 
         let scratch = Scratch::new(
-            out_channel_sizes,
-            num_features,
-            use_batch_norm,
+            conf,
             vb.pp("scratch"),
         )?;
 
         Ok(Self {
-            use_class_token,
+            conf,
             projections,
             resize_layers,
             readout_projections,
@@ -392,14 +463,12 @@ impl DPTHead {
         })
     }
 }
-pub const DINO_IMG_SIZE: usize = 518;
-const PATCH_SIZE: usize = 37; //  518 // 14 TODO see how to solve this dynamically
 
-impl Module for DPTHead {
+impl Module for DPTHead<'_> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut out: Vec<Tensor> = Vec::with_capacity(NUM_CHANNELS);
         for i in 0..NUM_CHANNELS {
-            let x = if self.use_class_token {
+            let x = if self.conf.use_class_token {
                 let x = xs.get(i)?.get(0)?;
                 let class_token = xs.get(i)?.get(1)?;
                 let readout = class_token.unsqueeze(1)?.expand(x.shape())?;
@@ -414,8 +483,8 @@ impl Module for DPTHead {
             let x = x.permute((0, 2, 1))?.reshape((
                 x_dims[0],
                 x_dims[x_dims.len() - 1],
-                PATCH_SIZE,
-                PATCH_SIZE,
+                self.conf.target_patch_size,
+                self.conf.target_patch_size,
             ))?;
             let x = self.projections[i].forward(&x)?;
 
@@ -456,7 +525,7 @@ impl Module for DPTHead {
 
         let out = self.scratch.output_conv1.forward(&path1)?;
 
-        let out = out.interpolate2d(DINO_IMG_SIZE, DINO_IMG_SIZE)?;
+        let out = out.interpolate2d(self.conf.input_image_size, self.conf.input_image_size)?;
 
         self.scratch.output_conv2.forward(&out)
     }
@@ -464,43 +533,35 @@ impl Module for DPTHead {
 
 pub struct DepthAnythingV2<'a> {
     pretrained: &'a DinoVisionTransformer,
-    depth_head: DPTHead,
+    depth_head: DPTHead<'a>,
+    conf: &'a DepthAnythingV2Config,
 }
 
 impl<'a> DepthAnythingV2<'a> {
     pub fn new(
         pretrained: &'a DinoVisionTransformer,
-        in_channel_size: usize,
-        out_channel_sizes: Vec<usize>,
-        num_features: usize,
+        conf: &'a DepthAnythingV2Config,
         vb: VarBuilder,
     ) -> Result<Self> {
         let depth_head = DPTHead::new(
-            out_channel_sizes,
-            in_channel_size,
-            num_features,
-            false,
-            false,
+            conf,
             vb.pp("depth_head"),
         )?;
 
         Ok(Self {
             pretrained,
             depth_head,
+            conf
         })
     }
 }
 
 impl<'a> Module for DepthAnythingV2<'a> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let layer_ids_vits = vec![2, 5, 8, 11];
-        // let layer_ids_vitb = vec![2, 5, 8, 11];
-        // let layer_ids_vitl = vec![4, 11, 17, 23];
-        // let layer_ids_vitg = vec![9, 19, 29, 39];
 
         let features =
             self.pretrained
-                .get_intermediate_layers(xs, layer_ids_vits, false, false, true)?;
+                .get_intermediate_layers(xs, &self.conf.layer_ids_vits, false, false, true)?;
         let depth = self.depth_head.forward(&features)?;
 
         depth.relu()

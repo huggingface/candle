@@ -15,7 +15,7 @@ use candle::DType::{F32, U8};
 use candle::{DType, Device, Module, Result, Tensor};
 use candle_examples::{load_image, load_image_and_resize, save_image};
 use candle_nn::VarBuilder;
-use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DINO_IMG_SIZE};
+use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DepthAnythingV2Config};
 use candle_transformers::models::dinov2;
 
 use crate::color_map::SpectralRColormap;
@@ -25,6 +25,8 @@ mod color_map;
 // taken these from: https://huggingface.co/spaces/depth-anything/Depth-Anything-V2/blob/main/depth_anything_v2/dpt.py#L207
 const MAGIC_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const MAGIC_STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+const DINO_IMG_SIZE: usize = 518;
 
 #[derive(Parser)]
 struct Args {
@@ -78,17 +80,9 @@ pub fn main() -> anyhow::Result<()> {
     let vb = unsafe {
         VarBuilder::from_mmaped_safetensors(&[depth_anything_model_file], DType::F32, &device)?
     };
-    let out_channel_sizes = vec![48, 96, 192, 384];
-    const IN_CHANNEL_SIZE: usize = 384;
-    const NUM_FEATURES: usize = 64;
-    // TODO wrap everything into a config object
-    let depth_anything = DepthAnythingV2::new(
-        &dinov2,
-        IN_CHANNEL_SIZE,
-        out_channel_sizes,
-        NUM_FEATURES,
-        vb,
-    )?;
+
+    let config = DepthAnythingV2Config::vit_small();
+    let depth_anything = DepthAnythingV2::new(&dinov2, &config, vb)?;
 
     let (original_height, original_width, image) = load_and_prep_image(&args.image, &device)?;
 

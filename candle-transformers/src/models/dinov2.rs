@@ -259,7 +259,7 @@ impl DinoVisionTransformer {
         &xs + &self.interpolate_pos_encoding(&xs, w, h)?
     }
 
-    fn get_intermediate_layers_not_chunked(&self, xs: &Tensor, blocks_to_take: Vec<usize>) -> Result<Vec<Tensor>> {
+    fn get_intermediate_layers_not_chunked(&self, xs: &Tensor, blocks_to_take: &Vec<usize>) -> Result<Vec<Tensor>> {
         let mut xs = self.prepare_tokens_with_mask(xs)?;
         let mut output = Vec::new();
         for (i, blk) in self.blocks.iter().enumerate() {
@@ -278,7 +278,7 @@ impl DinoVisionTransformer {
     pub fn get_intermediate_layers(
         &self,
         xs: &Tensor,
-        blocks_to_take: Vec<usize>,
+        blocks_to_take: &Vec<usize>,
         reshape: bool,
         return_class_token: bool,
         norm: bool,
