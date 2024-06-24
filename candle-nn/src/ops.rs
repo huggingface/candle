@@ -932,7 +932,13 @@ pub struct Identity;
 
 impl Identity {
     pub fn new() -> Identity {
-        Self {}
+        Self
+    }
+}
+
+impl Default for Identity {
+    fn default() -> Self {
+        Self
     }
 }
 

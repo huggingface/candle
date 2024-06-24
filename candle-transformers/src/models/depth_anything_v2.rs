@@ -20,6 +20,7 @@ pub struct DepthAnythingV2Config {
 }
 
 impl DepthAnythingV2Config {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         out_channel_sizes: Vec<usize>,
         in_channel_size: usize,
@@ -221,7 +222,7 @@ impl FeatureFusionBlock {
 
 impl Module for FeatureFusionBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let out = self.res_conv_unit2.forward(&xs)?;
+        let out = self.res_conv_unit2.forward(xs)?;
         let out = out.interpolate2d(self.target_patch_size, self.target_patch_size)?;
 
         self.output_conv.forward(&out)
@@ -252,7 +253,7 @@ impl Scratch {
         };
 
         let layer1_rn = conv2d_no_bias(
-            *conf.out_channel_sizes.get(0).unwrap(),
+            *conf.out_channel_sizes.first().unwrap(),
             conf.num_features,
             KERNEL_SIZE,
             conv_cfg,
