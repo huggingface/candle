@@ -1,7 +1,8 @@
-use candle::{Shape, Tensor};
-use enterpolation::linear::ConstEquidistantLinear;
 use enterpolation::Generator;
+use enterpolation::linear::ConstEquidistantLinear;
 use palette::LinSrgb;
+
+use candle::Tensor;
 
 pub struct SpectralRColormap {
     gradient: ConstEquidistantLinear<f32, LinSrgb, 9>,
@@ -42,7 +43,7 @@ impl SpectralRColormap {
             candle::bail!("Not enough dims!")
         };
 
-        let color = Tensor::from_vec(rgb_values, Shape::from((*height, *width, 3)), gray.device())?;
+        let color = Tensor::from_vec(rgb_values, (*height, *width, 3), gray.device())?;
 
         color.permute((2, 0, 1))
     }
