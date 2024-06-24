@@ -1,4 +1,4 @@
-use candle::{CpuStorage, DType, Layout, Result, Shape, Tensor, D};
+use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D};
 use rayon::prelude::*;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
@@ -924,5 +924,26 @@ pub fn replication_pad2d(xs: &Tensor, pad: usize) -> Result<Tensor> {
             Tensor::cat(&[&first, &xs, &last], 2)
         }
         n => candle::bail!("replication-pad with a size of {n} is not supported"),
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Identity;
+
+impl Identity {
+    pub fn new() -> Identity {
+        Self
+    }
+}
+
+impl Default for Identity {
+    fn default() -> Self {
+        Self
+    }
+}
+
+impl Module for Identity {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        Ok(xs.clone())
     }
 }
