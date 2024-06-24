@@ -52,30 +52,6 @@ impl EncoderConfig {
     }
 }
 
-// #[derive(Clone, Debug)]
-// pub struct ClipConfig {
-//     pub text_config: text_model::ClipTextConfig,
-//     pub vision_config: vision_model::ClipVisionConfig,
-//     pub logit_scale_init_value: f32,
-//     pub image_size: usize,
-// }
-//
-// impl ClipConfig {
-//     // base image size is 224, model size is 600Mb
-//     pub fn vit_base_patch32() -> Self {
-//         let text_config = text_model::ClipTextConfig::vit_base_patch32();
-//         let vision_config = vision_model::ClipVisionConfig::vit_base_patch32();
-//
-//         Self {
-//             text_config,
-//             vision_config,
-//             logit_scale_init_value: 2.6592,
-//             image_size: 224,
-//         }
-//     }
-// }
-
-
 #[derive(Clone, Debug)]
 pub struct ClipModel {
     text_model: text_model::ClipTextTransformer,
