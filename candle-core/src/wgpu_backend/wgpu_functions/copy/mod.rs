@@ -1,11 +1,13 @@
-use crate::{wgpu::{device::Pipelines, BufferReferenceId}, WgpuDevice};
+use std::sync::Arc;
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input1, enqueue, enqueue_workgroups, get_meta, get_size};
 
 pub fn queue_copy_strided(
     dev: &WgpuDevice,
-    buffer_dest: BufferReferenceId,
-    buffer_input: BufferReferenceId,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
     dtype: crate::DType,
     input_layout: &crate::Layout,
     dst_offset: u32,
@@ -35,8 +37,8 @@ pub fn queue_copy_strided(
 //In addition the copy is often not the bottle neck(but matmul or conv-dispatch call)
 // pub fn queue_copy_old(
 //     dev: &WgpuDevice,
-//     buffer_dest: BufferId,
-//     buffer_input: BufferId,
+//     buffer_dest: Arc<BufferReference>,
+//     buffer_input: Arc<BufferReference>,
 //     destination_offset: usize,
 //     source_offset: usize,
 //     copy_size: usize,
@@ -75,8 +77,8 @@ pub fn queue_copy_strided(
 
 pub fn queue_copy(
     dev: &WgpuDevice,
-    buffer_dest: BufferReferenceId,
-    buffer_input: BufferReferenceId,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
     destination_offset: usize,
     source_offset: usize,
     copy_size: usize,
@@ -108,8 +110,8 @@ pub fn queue_copy(
 
 pub fn queue_copy2d(
     dev: &WgpuDevice,
-    buffer_dest: BufferReferenceId,
-    buffer_input: BufferReferenceId,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
     dtype: crate::DType,
     d1: u32,
     d2: u32,
@@ -118,17 +120,7 @@ pub fn queue_copy2d(
     input_offset: u32,
     dest_offset: u32,
 ) -> crate::Result<()> {
-
-
-    let buffer_dest_size;
-    let buffer_input_size;
-    {
-        let cache = dev.cache.lock().unwrap();
-        buffer_dest_size = buffer_dest.get(&cache).size;
-        buffer_input_size = buffer_input.get(&cache).size;
-    }
-    
-    if buffer_dest_size > 0 && buffer_input_size > 0{
+    if buffer_dest.size > 0 && buffer_input.size > 0{
         
         let (mut meta,  meta_offset) = get_meta(&dev, 6);
         meta.add(d1);

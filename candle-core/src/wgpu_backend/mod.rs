@@ -16,5 +16,3 @@ pub use storage::WgpuStorage;
 pub use debug_info::Measurements;
 #[cfg(feature = "wgpu_debug")]
 pub use debug_info::MInfo;
-
-pub use cache::{BufferReferenceId, BindgroupId, BindgroupReferenceId, BufferId};

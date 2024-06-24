@@ -1,12 +1,15 @@
-use crate::{wgpu::{device::Pipelines, BufferReferenceId}, Shape, WgpuDevice};
+use std::sync::Arc;
+
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, Shape, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue_workgroups, get_meta, get_size};
 
 pub fn queue_index_select(
     dev: &WgpuDevice,
-    buffer_dest: BufferReferenceId,
-    buffer_input: BufferReferenceId,
-    buffer_index: BufferReferenceId,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
+    buffer_index: Arc<BufferReference>,
     input_dtype: crate::DType,
     lay_input: &crate::Layout,
     lay_index: &crate::Layout,

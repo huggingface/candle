@@ -1,4 +1,7 @@
-use crate::{wgpu::{device::Pipelines, BufferReferenceId}, WgpuDevice};
+use std::sync::Arc;
+
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue_workgroups, get_meta, get_size};
 
@@ -6,9 +9,9 @@ use super::{create_bind_group_input2, enqueue_workgroups, get_meta, get_size};
 
 pub fn queue_gather(
     dev: &WgpuDevice,
-    buffer_dest: BufferReferenceId,
-    buffer_input: BufferReferenceId,
-    buffer_index: BufferReferenceId,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
+    buffer_index: Arc<BufferReference>,
     input_dtype: crate::DType,
     lay_input: &crate::Layout,
     lay_index: &crate::Layout,
@@ -41,9 +44,9 @@ pub fn queue_gather(
 
 pub fn queue_scatter_add_inplace(
     dev: &WgpuDevice,
-    buffer_dest: BufferReferenceId,
-    buffer_index: BufferReferenceId,
-    buffer_src: BufferReferenceId,
+    buffer_dest: Arc<BufferReference>,
+    buffer_index: Arc<BufferReference>,
+    buffer_src: Arc<BufferReference>,
     input_dtype: crate::DType,
     lay_input: &crate::Layout,
     lay_index: &crate::Layout,
@@ -78,9 +81,9 @@ pub fn queue_scatter_add_inplace(
 
 pub fn queue_index_add_inplace(
     dev: &WgpuDevice,
-    buffer_dest: BufferReferenceId,
-    buffer_index: BufferReferenceId,
-    buffer_src: BufferReferenceId,
+    buffer_dest: Arc<BufferReference>,
+    buffer_index: Arc<BufferReference>,
+    buffer_src: Arc<BufferReference>,
     input_dtype: crate::DType,
     lay_input: &crate::Layout,
     lay_index: &crate::Layout,

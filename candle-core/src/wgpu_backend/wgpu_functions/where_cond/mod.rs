@@ -1,13 +1,16 @@
-use crate::{wgpu::{device::Pipelines, BufferReferenceId}, WgpuDevice};
+use std::sync::Arc;
+
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input3, enqueue, get_meta, get_size};
 
 pub fn queue_where_cond_u32(
     dev: &WgpuDevice,
-    dest_buffer: BufferReferenceId,
-    input_buffer: BufferReferenceId,
-    true_buffer : BufferReferenceId,
-    false_buffer : BufferReferenceId,
+    dest_buffer: Arc<BufferReference>,
+    input_buffer: Arc<BufferReference>,
+    true_buffer : Arc<BufferReference>,
+    false_buffer : Arc<BufferReference>,
     layout_input : &crate::Layout,
     layout_true : &crate::Layout,
     layout_false :&crate::Layout,

@@ -1,12 +1,15 @@
-use crate::{wgpu::{device::Pipelines, BufferReferenceId}, WgpuDevice};
+use std::sync::Arc;
+
+
+use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
 use super::{create_bind_group_input2, enqueue_workgroups, get_meta};
 
 pub fn queue_rms_norm(
     dev: &WgpuDevice,
-    buffer_dest: BufferReferenceId,
-    buffer_input1: BufferReferenceId,
-    buffer_alpha: BufferReferenceId,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input1: Arc<BufferReference>,
+    buffer_alpha: Arc<BufferReference>,
     dtype: crate::DType,
     input1_offset : u32,
     alpha_offset : u32,
