@@ -72,7 +72,7 @@ tracing-chrome = "0.7.1"
 tracing-subscriber = "0.3.7"
 yoke = { version = "0.7.2", features = ["derive"] }
 zip = { version = "1.1.1", default-features = false }
-metal = { version = "0.27.0", features = ["mps"]}
+metal = { version = "0.28.0", features = ["mps"]}
 
 [profile.release-with-debug]
 inherits = "release"
