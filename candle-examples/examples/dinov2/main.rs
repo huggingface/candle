@@ -9,8 +9,8 @@ extern crate accelerate_src;
 
 use clap::Parser;
 
-use candle::{DType, IndexOp, D};
 use candle::DType::F32;
+use candle::{DType, IndexOp, D};
 use candle_nn::{Module, VarBuilder};
 use candle_transformers::models::dinov2;
 
@@ -46,7 +46,7 @@ pub fn main() -> anyhow::Result<()> {
         }
         Some(dinov2_model) => dinov2_model.into(),
     };
-    println!("Using dinov2 file {:?}", dinov2_model_file);
+    println!("Using Dinov2 file {:?}", dinov2_model_file);
 
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[dinov2_model_file], F32, &device)? };
 
@@ -58,12 +58,12 @@ pub fn main() -> anyhow::Result<()> {
         }
         Some(dinov2_head) => dinov2_head.into(),
     };
-    println!("Using dinov2 head file {:?}", dinov2_head_file);
+    println!("Using Dinov2 head file {:?}", dinov2_head_file);
 
     let vb_head =
         unsafe { VarBuilder::from_mmaped_safetensors(&[dinov2_head_file], F32, &device)? };
 
-    let model = dinov2::vit_small(vb, vb_head)?;
+    let model = dinov2::vit_small(vb, Some(vb_head))?;
     println!("DinoV2 model built");
 
     let logits = model.forward(&image.unsqueeze(0)?)?;

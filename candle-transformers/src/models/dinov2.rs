@@ -217,13 +217,13 @@ pub struct DinoVisionTransformer {
     pos_embed: Tensor,
     blocks: Vec<Block>,
     norm: LayerNorm,
-    head: Linear,
+    head: Option<Linear>,
 }
 
 impl DinoVisionTransformer {
     pub fn new(
         vb: VarBuilder,
-        vb_head: VarBuilder,
+        vb_head: Option<VarBuilder>,
         depth: usize,
         embed_dim: usize,
         num_heads: usize,
@@ -242,7 +242,10 @@ impl DinoVisionTransformer {
             (1, patch_embed.num_patches + num_tokens, embed_dim),
             "position_embeddings",
         )?;
-        let head = linear(vb_head, 2 * embed_dim, NUM_CLASSES, true)?;
+        let head = match vb_head {
+            Some(vb_head) => Some(linear(vb_head, 2 * embed_dim, NUM_CLASSES, true)?),
+            None => None,
+        };
         let norm = layer_norm(embed_dim, 1e-5, vb.pp("layernorm"))?;
         let vb_layer = vb.pp("encoder").pp("layer");
         let blocks = (0..depth)
@@ -380,10 +383,14 @@ impl Module for DinoVisionTransformer {
         let xs_norm_clstoken = xs.i((.., 0))?;
         let xs_norm_patchtokens = xs.i((.., 1..))?.mean(1)?;
         let xs = Tensor::cat(&[xs_norm_clstoken, xs_norm_patchtokens], D::Minus1)?;
-        self.head.forward(&xs)
+
+        match &self.head {
+            Some(head) => head.forward(&xs),
+            None => Ok(xs),
+        }
     }
 }
 
-pub fn vit_small(vb: VarBuilder, vb_head: VarBuilder) -> Result<DinoVisionTransformer> {
+pub fn vit_small(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisionTransformer> {
     DinoVisionTransformer::new(vb, vb_head, 12, 384, 6)
 }

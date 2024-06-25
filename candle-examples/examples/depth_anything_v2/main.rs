@@ -80,7 +80,7 @@ pub fn main() -> anyhow::Result<()> {
 
     let vb_head = unsafe { VarBuilder::from_mmaped_safetensors(&[head_path], F32, &device)? };
 
-    let dinov2 = dinov2::vit_small(vb, vb_head)?;
+    let dinov2 = dinov2::vit_small(vb, Some(vb_head))?;
     println!("DinoV2 model built");
 
     let depth_anything_path = match args.depth_anything_v2_model {
