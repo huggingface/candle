@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use candle::DType::{F32, U8};
-use candle::{DType, Device, Module, Result, Tensor};
+use candle::{Device, Module, Result, Tensor};
 use candle_examples::{load_image, load_image_and_resize, save_image};
 use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DepthAnythingV2Config};
@@ -34,6 +34,9 @@ struct Args {
     dinov2_model: Option<PathBuf>,
 
     #[arg(long)]
+    dinov2_head: Option<PathBuf>,
+
+    #[arg(long)]
     depth_anything_v2_model: Option<PathBuf>,
 
     #[arg(long)]
@@ -53,21 +56,34 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
 
-    let dinov2_model_file = match args.dinov2_model {
+    let model_path = match args.dinov2_model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("lmz/candle-dino-v2".into());
-            api.get("dinov2_vits14.safetensors")?
+            let api = api.model("facebook/dinov2-small".into());
+            api.get("model.safetensors")?
         }
-        Some(dinov2_model) => dinov2_model,
+        Some(path) => path,
     };
-    println!("Using file {:?}", dinov2_model_file);
+    println!("Using dinov2 file {:?}", model_path);
 
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[dinov2_model_file], F32, &device)? };
-    let dinov2 = dinov2::vit_small(vb)?;
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], F32, &device)? };
+
+    let head_path = match args.dinov2_head {
+        None => {
+            let api = hf_hub::api::sync::Api::new()?;
+            let api = api.model("jeroenvlek/dinov2-linear-heads-safetensors".into());
+            api.get("dinov2_vits14_linear_head.safetensors")?
+        }
+        Some(path) => path,
+    };
+    println!("Using dinov2 head file {:?}", head_path);
+
+    let vb_head = unsafe { VarBuilder::from_mmaped_safetensors(&[head_path], F32, &device)? };
+
+    let dinov2 = dinov2::vit_small(vb, vb_head)?;
     println!("DinoV2 model built");
 
-    let depth_anything_model_file = match args.depth_anything_v2_model {
+    let depth_anything_path = match args.depth_anything_v2_model {
         None => {
             let api = hf_hub::api::sync::Api::new()?;
             let api = api.model("jeroenvlek/depth-anything-v2-safetensors".into());
@@ -75,11 +91,9 @@ pub fn main() -> anyhow::Result<()> {
         }
         Some(depth_anything_model) => depth_anything_model,
     };
-    println!("Using file {:?}", depth_anything_model_file);
+    println!("Using file {:?}", depth_anything_path);
 
-    let vb = unsafe {
-        VarBuilder::from_mmaped_safetensors(&[depth_anything_model_file], DType::F32, &device)?
-    };
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[depth_anything_path], F32, &device)? };
 
     let config = DepthAnythingV2Config::vit_small();
     let depth_anything = DepthAnythingV2::new(&dinov2, &config, vb)?;

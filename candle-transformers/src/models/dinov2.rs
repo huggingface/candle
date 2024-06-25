@@ -1,3 +1,4 @@
+use candle::D::Minus1;
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
@@ -16,7 +17,7 @@ fn linear(vb: VarBuilder, in_dim: usize, out_dim: usize, bias: bool) -> Result<L
 #[derive(Debug)]
 struct Attention {
     qkv: Linear,
-    proj: Linear,
+    output: Linear,
     num_heads: usize,
     scale: f64,
 }
@@ -29,12 +30,31 @@ impl Attention {
         qkv_bias: bool,
         proj_bias: bool,
     ) -> Result<Self> {
-        let qkv = linear(vb.pp("qkv"), dim, dim * 3, qkv_bias)?;
-        let proj = linear(vb.pp("proj"), dim, dim, proj_bias)?;
+        let query = linear(vb.pp("attention").pp("query"), dim, dim, qkv_bias)?;
+        let key = linear(vb.pp("attention").pp("key"), dim, dim, qkv_bias)?;
+        let value = linear(vb.pp("attention").pp("value"), dim, dim, qkv_bias)?;
+
+        let qkv_weight = Tensor::cat(&[query.weight(), key.weight(), value.weight()], 0)?;
+        let qkv_bias = if qkv_bias {
+            Some(Tensor::cat(
+                &[
+                    query.bias().unwrap(),
+                    key.bias().unwrap(),
+                    value.bias().unwrap(),
+                ],
+                0,
+            )?)
+        } else {
+            None
+        };
+
+        let qkv = Linear::new(qkv_weight, qkv_bias);
+
+        let output = linear(vb.pp("output").pp("dense"), dim, dim, proj_bias)?;
         let scale = 1. / ((dim / num_heads) as f64).sqrt();
         Ok(Self {
             qkv,
-            proj,
+            output,
             num_heads,
             scale,
         })
@@ -54,27 +74,27 @@ impl Module for Attention {
         let q = (qkv.i(0)? * self.scale)?;
         let k = qkv.i(1)?.contiguous()?;
         let v = qkv.i(2)?.contiguous()?;
-        let attn = candle_nn::ops::softmax(&q.matmul(&k.t()?)?, D::Minus1)?;
+        let attn = candle_nn::ops::softmax(&q.matmul(&k.t()?)?, Minus1)?;
         let attn = attn.matmul(&v)?.transpose(1, 2)?.reshape((b, n, c))?;
-        self.proj.forward(&attn)
+        self.output.forward(&attn)
     }
 }
 
 #[derive(Debug)]
 struct LayerScale {
-    gamma: Tensor,
+    lambda: Tensor,
 }
 
 impl LayerScale {
     fn new(vb: VarBuilder, dim: usize) -> Result<Self> {
-        let gamma = vb.get(dim, "gamma")?;
-        Ok(Self { gamma })
+        let gamma = vb.get(dim, "lambda1")?;
+        Ok(Self { lambda: gamma })
     }
 }
 
 impl Module for LayerScale {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        xs.broadcast_mul(&self.gamma)
+        xs.broadcast_mul(&self.lambda)
     }
 }
 
@@ -113,11 +133,11 @@ struct Block {
 impl Block {
     fn new(vb: VarBuilder, dim: usize, num_heads: usize) -> Result<Self> {
         let norm1 = layer_norm(dim, 1e-5, vb.pp("norm1"))?;
-        let attn = Attention::new(vb.pp("attn"), dim, num_heads, true, true)?;
-        let ls1 = LayerScale::new(vb.pp("ls1"), dim)?;
+        let attn = Attention::new(vb.pp("attention"), dim, num_heads, true, true)?;
+        let ls1 = LayerScale::new(vb.pp("layer_scale1"), dim)?;
         let norm2 = layer_norm(dim, 1e-5, vb.pp("norm2"))?;
         let mlp = Mlp::new(vb.pp("mlp"), dim, dim * 4, true)?;
-        let ls2 = LayerScale::new(vb.pp("ls2"), dim)?;
+        let ls2 = LayerScale::new(vb.pp("layer_scale2"), dim)?;
         Ok(Self {
             norm1,
             attn,
@@ -163,7 +183,7 @@ impl PatchEmbed {
             stride: patch_size,
             ..Default::default()
         };
-        let proj = candle_nn::conv2d(in_chans, embed_dim, patch_size, config, vb.pp("proj"))?;
+        let proj = candle_nn::conv2d(in_chans, embed_dim, patch_size, config, vb.pp("projection"))?;
         let num_patches = (img_size / patch_size) * (img_size / patch_size);
         Ok(Self {
             proj,
@@ -201,20 +221,32 @@ pub struct DinoVisionTransformer {
 }
 
 impl DinoVisionTransformer {
-    pub fn new(vb: VarBuilder, depth: usize, embed_dim: usize, num_heads: usize) -> Result<Self> {
-        let patch_embed =
-            PatchEmbed::new(vb.pp("patch_embed"), IMG_SIZE, PATCH_SIZE, 3, embed_dim)?;
-        let cls_token = vb.get((1, 1, embed_dim), "cls_token")?;
-        let num_tokens = 1;
-        let pos_embed = vb.get(
-            (1, patch_embed.num_patches + num_tokens, embed_dim),
-            "pos_embed",
+    pub fn new(
+        vb: VarBuilder,
+        vb_head: VarBuilder,
+        depth: usize,
+        embed_dim: usize,
+        num_heads: usize,
+    ) -> Result<Self> {
+        let vb_embeddings = vb.pp("embeddings");
+        let patch_embed = PatchEmbed::new(
+            vb_embeddings.pp("patch_embeddings"),
+            IMG_SIZE,
+            PATCH_SIZE,
+            3,
+            embed_dim,
         )?;
-        let head = linear(vb.pp("head"), 2 * embed_dim, NUM_CLASSES, true)?;
-        let norm = layer_norm(embed_dim, 1e-5, vb.pp("norm"))?;
-        let vb_b = vb.pp("blocks");
+        let cls_token = vb_embeddings.get((1, 1, embed_dim), "cls_token")?;
+        let num_tokens = 1;
+        let pos_embed = vb_embeddings.get(
+            (1, patch_embed.num_patches + num_tokens, embed_dim),
+            "position_embeddings",
+        )?;
+        let head = linear(vb_head, 2 * embed_dim, NUM_CLASSES, true)?;
+        let norm = layer_norm(embed_dim, 1e-5, vb.pp("layernorm"))?;
+        let vb_layer = vb.pp("encoder").pp("layer");
         let blocks = (0..depth)
-            .map(|i| Block::new(vb_b.pp(&i.to_string()), embed_dim, num_heads))
+            .map(|i| Block::new(vb_layer.pp(&i.to_string()), embed_dim, num_heads))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             patch_embed,
@@ -352,6 +384,6 @@ impl Module for DinoVisionTransformer {
     }
 }
 
-pub fn vit_small(vb: VarBuilder) -> Result<DinoVisionTransformer> {
-    DinoVisionTransformer::new(vb, 12, 384, 6)
+pub fn vit_small(vb: VarBuilder, vb_head: VarBuilder) -> Result<DinoVisionTransformer> {
+    DinoVisionTransformer::new(vb, vb_head, 12, 384, 6)
 }
