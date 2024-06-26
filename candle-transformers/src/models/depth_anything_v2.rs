@@ -358,8 +358,6 @@ impl Scratch {
     }
 }
 
-const NUM_CHANNELS: usize = 4;
-
 pub struct DPTHead {
     conf: DepthAnythingV2Config,
     projections: Vec<Conv2d>,
@@ -422,8 +420,8 @@ impl DPTHead {
         ];
 
         let readout_projections = if conf.use_class_token {
-            let rop = Vec::with_capacity(NUM_CHANNELS);
-            for rop_index in 0..NUM_CHANNELS {
+            let rop = Vec::with_capacity(conf.layer_ids_vits.len());
+            for rop_index in 0..conf.layer_ids_vits.len() {
                 seq()
                     .add(linear(
                         2 * conf.in_channel_size,
@@ -451,8 +449,8 @@ impl DPTHead {
 
 impl Module for DPTHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut out: Vec<Tensor> = Vec::with_capacity(NUM_CHANNELS);
-        for i in 0..NUM_CHANNELS {
+        let mut out: Vec<Tensor> = Vec::with_capacity(self.conf.layer_ids_vits.len());
+        for i in 0..self.conf.layer_ids_vits.len() {
             let x = if self.conf.use_class_token {
                 let x = xs.get(i)?.get(0)?;
                 let class_token = xs.get(i)?.get(1)?;
@@ -544,7 +542,7 @@ impl<'a> Module for DepthAnythingV2<'a> {
             xs,
             &self.conf.layer_ids_vits,
             false,
-            true,
+            false,
             true,
         )?;
         let depth = self.depth_head.forward(&features)?;
