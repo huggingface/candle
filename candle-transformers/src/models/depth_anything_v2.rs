@@ -177,7 +177,7 @@ impl Module for ResidualConvUnit {
             out
         };
 
-        out + xs
+        out.add(xs)
     }
 }
 
@@ -195,18 +195,12 @@ impl FeatureFusionBlock {
         activation: Activation,
         vb: VarBuilder,
     ) -> Result<Self> {
-        const KERNEL_SIZE: usize = 1;
-        let conv_cfg = Conv2dConfig {
-            padding: 0,
-            stride: 1,
-            dilation: 1,
-            groups: 1,
-        };
+
         let output_conv = conv2d(
             conf.num_features,
             conf.num_features,
-            KERNEL_SIZE,
-            conv_cfg,
+            1,
+            Default::default(),
             vb.pp("out_conv"),
         )?;
         let res_conv_unit1 = ResidualConvUnit::new(conf.clone(), activation, vb.pp("resConfUnit1"))?;
@@ -341,7 +335,8 @@ impl Scratch {
                 conv_cfg,
                 vb.pp("output_conv2").pp("2"),
             )?)
-            .add(Activation::Relu);
+            .add(Activation::Relu)
+            .add(Identity::new());
 
         Ok(Self {
             layer1_rn,
@@ -478,9 +473,7 @@ impl Module for DPTHead {
         let layer_1_rn = self.scratch.layer1_rn.forward(&out[0])?;
         let layer_2_rn = self.scratch.layer2_rn.forward(&out[1])?;
         let layer_3_rn = self.scratch.layer3_rn.forward(&out[2])?;
-        let layer_4_rn = self.scratch.layer4_rn.forward(&out[3])?;
-
-        let path4 = self.scratch.refine_net4.forward(&layer_4_rn)?;
+        let layer_4_rn = self.scratch.layer4_rn.forward(&out[3])?;    let path4 = self.scratch.refine_net4.forward(&layer_4_rn)?;
 
         let res3_out = self
             .scratch
@@ -542,7 +535,7 @@ impl<'a> Module for DepthAnythingV2<'a> {
             xs,
             &self.conf.layer_ids_vits,
             false,
-            false,
+            self.conf.use_class_token,
             true,
         )?;
         let depth = self.depth_head.forward(&features)?;
