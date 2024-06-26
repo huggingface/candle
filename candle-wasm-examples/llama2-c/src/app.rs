@@ -1,4 +1,3 @@
-use crate::console_log;
 use crate::worker::{ModelData, Worker, WorkerInput, WorkerOutput};
 use std::str::FromStr;
 use wasm_bindgen::prelude::*;
@@ -57,7 +56,7 @@ pub struct App {
 async fn model_data_load() -> Result<ModelData, JsValue> {
     let tokenizer = fetch_url("tokenizer.json").await?;
     let model = fetch_url("model.bin").await?;
-    console_log!("{}", model.len());
+    log::info!("{}", model.len());
     Ok(ModelData { tokenizer, model })
 }
 
@@ -110,7 +109,7 @@ impl Component for App {
             Msg::SetModel(md) => {
                 self.status = "weights loaded successfully!".to_string();
                 self.loaded = true;
-                console_log!("loaded weights");
+                log::info!("loaded weights");
                 self.worker.send(WorkerInput::ModelData(md));
                 true
             }
@@ -126,7 +125,7 @@ impl Component for App {
                     let temp = *self.temperature.borrow();
                     let top_p = *self.top_p.borrow();
                     let prompt = self.prompt.borrow().clone();
-                    console_log!("temp: {}, top_p: {}, prompt: {}", temp, top_p, prompt);
+                    log::info!("temp: {}, top_p: {}, prompt: {}", temp, top_p, prompt);
                     ctx.link()
                         .send_message(Msg::WorkerIn(WorkerInput::Run(temp, top_p, prompt)))
                 }

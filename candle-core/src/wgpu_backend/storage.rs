@@ -431,6 +431,34 @@ impl crate::backend::BackendStorage for WgpuStorage {
                     self.device().clone(),
                     crate::DType::U32,
                 ))
+            },
+            (DType::F32, DType::U8) => {
+                if !layout.is_contiguous(){
+                    panic!("conversion from {:?} to {:?} not suported for non contiguous matrix", self.dtype, dtype);
+                }
+                let buffer_dest = BufferReference::new(self.device(), layout.shape().elem_count());
+                wgpu_functions::queue_convert_f32_to_u8(
+                    self.device(),
+                    buffer_dest.clone(),
+                    self.buffer.clone(),
+                    layout.start_offset() as u32,
+                    layout.shape().elem_count() as u32
+                )?;
+                Ok(WgpuStorage::new(buffer_dest,  self.device().clone(),crate::DType::U8))
+            },
+            (DType::U32, DType::U8) => {
+                if !layout.is_contiguous(){
+                    panic!("conversion from {:?} to {:?} not suported for non contiguous matrix", self.dtype, dtype);
+                }
+                let buffer_dest = BufferReference::new(self.device(), layout.shape().elem_count());
+                wgpu_functions::queue_convert_u32_to_u8(
+                    self.device(),
+                    buffer_dest.clone(),
+                    self.buffer.clone(),
+                    layout.start_offset() as u32,
+                    layout.shape().elem_count() as u32
+                )?;
+                Ok(WgpuStorage::new(buffer_dest,  self.device().clone(),crate::DType::U8,))
             }
             _ => panic!("conversion from {:?} to {:?} not suported on wgpu", self.dtype, dtype),
         }

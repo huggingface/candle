@@ -147,8 +147,10 @@ impl Drop for BufferReference{
         let mut storage = self.storage.lock().unwrap();
         if let Some(s) = storage.as_ref(){
             {
-                let mut cache = self.device.cache.lock().unwrap();
-                cache.buffers.add_buffer(s.clone());
+                if self.device.use_cache{
+                    let mut cache = self.device.cache.lock().unwrap();
+                    cache.buffers.add_buffer(s.clone());
+                }
             }
             *storage = None;
         }
@@ -208,17 +210,19 @@ impl BufferCache{
 
 
     fn get_buffer(&mut self, dev : &WgpuDevice, size : u64) -> BufferId{
-        for (buffer_size, buffers) in self.buffers.map.range_mut(size..){
-            if *buffer_size < size{
-                panic!("Did not expect size to be smaller, than key");
-            }
-
-            if let Some(buffer) = buffers.pop(){
-                dev.cached_buffer_reuse_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return buffer;
+        if dev.use_cache{
+            for (buffer_size, buffers) in self.buffers.map.range_mut(size..){
+                if *buffer_size < size{
+                    panic!("Did not expect size to be smaller, than key");
+                }
+    
+                if let Some(buffer) = buffers.pop(){
+                    dev.cached_buffer_reuse_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return buffer;
+                }
             }
         }
-
+        
         let id = dev.cached_buffer_counter.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
         Arc::new(CachedBuffer::new(wgpu_functions::create_buffer(dev, size),  id))
     }
@@ -482,55 +486,56 @@ impl ModelCache {
 
     
     pub (crate) fn get_bind_group(&mut self, dev : &WgpuDevice, bindgroup_reference : &BindGroupReference) -> BindgroupId{
-
-        fn get_storage(v : &BufferReferenceId) -> BufferId{
-            v.storage.lock().unwrap().as_ref().unwrap().clone()
+        if dev.use_cache{
+            fn get_storage(v : &BufferReferenceId) -> BufferId{
+                v.storage.lock().unwrap().as_ref().unwrap().clone()
+            }
+    
+            let bindgroup_reference_buffers = bindgroup_reference;
+            let bindgroup_inputs = match bindgroup_reference_buffers {
+                BindGroupReferenceBase::Bindgroup0(_,_) => BindGroupInput::Bindgroup0,
+                BindGroupReferenceBase::Bindgroup1(_,_, v1) => {
+                    BindGroupInput::Bindgroup1(get_storage(v1))
+                }
+                BindGroupReferenceBase::Bindgroup2(_,_, v1, v2) => {
+                    BindGroupInput::Bindgroup2(get_storage(v1), get_storage(v2))
+                }
+                BindGroupReferenceBase::Bindgroup3(_,_, v1, v2, v3) => {
+                    BindGroupInput::Bindgroup3(get_storage(v1), get_storage(v2), get_storage(v3))
+                }
+            };
+            let buf_dest = bindgroup_reference_buffers.get_dest();
+    
+            let candidates_to_process = self.bindgroups.bindgroups.get(&bindgroup_inputs)
+            .iter()
+            .filter(|id| {
+                let cbuf_dest = id.buffers.get_dest();
+                return self.buffers.can_match_buffer(cbuf_dest, buf_dest);
+            });
+    
+            let mut candidate_to_process = None;
+            let mut best_size = u64::MAX;
+    
+            for ele in candidates_to_process{
+                
+                let cbuf_dest = ele.buffers.get_dest();
+                let buffer_size = cbuf_dest.buffer.size();
+                if buffer_size < best_size{
+                    candidate_to_process = Some(ele);
+                    best_size = buffer_size;
+                }
+            }
+    
+            if let Some(cached_bindgroup) = candidate_to_process {
+                let cbuf1 = cached_bindgroup.buffers.get_dest();
+                self.buffers.match_buffer(cbuf1, buf_dest);
+    
+                dev.cached_bindgroup_reuse_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                cached_bindgroup.last_used.store(dev.cached_bindgroup_use_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
+                return cached_bindgroup.clone();
+            }
         }
-
-        let bindgroup_reference_buffers = bindgroup_reference;
-        let bindgroup_inputs = match bindgroup_reference_buffers {
-            BindGroupReferenceBase::Bindgroup0(_,_) => BindGroupInput::Bindgroup0,
-            BindGroupReferenceBase::Bindgroup1(_,_, v1) => {
-                BindGroupInput::Bindgroup1(get_storage(v1))
-            }
-            BindGroupReferenceBase::Bindgroup2(_,_, v1, v2) => {
-                BindGroupInput::Bindgroup2(get_storage(v1), get_storage(v2))
-            }
-            BindGroupReferenceBase::Bindgroup3(_,_, v1, v2, v3) => {
-                BindGroupInput::Bindgroup3(get_storage(v1), get_storage(v2), get_storage(v3))
-            }
-        };
-        let buf_dest = bindgroup_reference_buffers.get_dest();
-
-        let candidates_to_process = self.bindgroups.bindgroups.get(&bindgroup_inputs)
-        .iter()
-        .filter(|id| {
-            let cbuf_dest = id.buffers.get_dest();
-            return self.buffers.can_match_buffer(cbuf_dest, buf_dest);
-        });
-
-        let mut candidate_to_process = None;
-        let mut best_size = u64::MAX;
-
-        for ele in candidates_to_process{
-            
-            let cbuf_dest = ele.buffers.get_dest();
-            let buffer_size = cbuf_dest.buffer.size();
-            if buffer_size < best_size{
-                candidate_to_process = Some(ele);
-                best_size = buffer_size;
-            }
-        }
-
-        if let Some(cached_bindgroup) = candidate_to_process {
-            let cbuf1 = cached_bindgroup.buffers.get_dest();
-            self.buffers.match_buffer(cbuf1, buf_dest);
-
-            dev.cached_bindgroup_reuse_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            cached_bindgroup.last_used.store(dev.cached_bindgroup_use_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
-            return cached_bindgroup.clone();
-        }
-
+        
         //create complete new Bindgroup, use first matching buffer
         let bindgroup_reference = match &bindgroup_reference {
             BindGroupReference::Bindgroup0(meta, dest_buffer) => {
@@ -574,8 +579,11 @@ impl ModelCache {
             )},
         };
         let bindgroup = Arc::new(CachedBindGroup::new(wgpu_functions::create_bindgroup(dev, bindgroup_reference.clone()), bindgroup_reference));
-        self.bindgroups.bindgroups.add_mapping(bindgroup.buffers.clone().into(), bindgroup.clone());
-        bindgroup.last_used.store(dev.cached_bindgroup_use_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
+        
+        if dev.use_cache{
+            self.bindgroups.bindgroups.add_mapping(bindgroup.buffers.clone().into(), bindgroup.clone());
+            bindgroup.last_used.store(dev.cached_bindgroup_use_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
+        }
         return bindgroup;
     }
 

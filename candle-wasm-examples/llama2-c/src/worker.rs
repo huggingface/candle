@@ -8,21 +8,6 @@ use tokenizers::Tokenizer;
 use wasm_bindgen::prelude::*;
 use yew_agent::{HandlerId, Public, WorkerLink};
 
-#[wasm_bindgen]
-extern "C" {
-    // Use `js_namespace` here to bind `console.log(..)` instead of just
-    // `log(..)`
-    #[wasm_bindgen(js_namespace = console)]
-    pub fn log(s: &str);
-}
-
-#[macro_export]
-macro_rules! console_log {
-    // Note that this is using the `log` function imported above during
-    // `bare_bones`
-    ($($t:tt)*) => ($crate::worker::log(&format_args!($($t)*).to_string()))
-}
-
 // Communication to the worker happens through bincode, the model weights and configs are fetched
 // on the main thread and transferred via the following structure.
 #[derive(Serialize, Deserialize)]
@@ -74,7 +59,7 @@ impl Model {
         } else {
             Some(top_p)
         };
-        console_log!("temp: {temp:?} top_p: {top_p:?} prompt: {prompt}");
+        log::info!("temp: {temp:?} top_p: {top_p:?} prompt: {prompt}");
         let mut logits_processor = LogitsProcessor::new(299792458, temp, top_p);
         let mut index_pos = 0;
         let mut tokens = self

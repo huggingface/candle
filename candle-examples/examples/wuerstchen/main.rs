@@ -174,10 +174,15 @@ fn encode_prompt(
     }
     let tokens = Tensor::new(tokens.as_slice(), device)?.unsqueeze(0)?;
 
+   
     println!("Building the clip transformer.");
     let text_model =
         stable_diffusion::build_clip_transformer(&clip_config, clip_weights, device, DType::F32)?;
     let text_embeddings = text_model.forward_with_mask(&tokens, tokens_len - 1)?;
+
+    
+
+
     match uncond_prompt {
         None => Ok(text_embeddings),
         Some(uncond_prompt) => {
@@ -246,6 +251,7 @@ fn run(args: Args) -> Result<()> {
         )?
     };
     println!("generated prior text embeddings {prior_text_embeddings:?}");
+ 
 
     let text_embeddings = {
         let tokenizer = ModelFile::Tokenizer.get(tokenizer)?;
@@ -261,6 +267,8 @@ fn run(args: Args) -> Result<()> {
     };
     println!("generated text embeddings {text_embeddings:?}");
 
+  
+    
     println!("Building the prior.");
     let b_size = 1;
     let image_embeddings = {
@@ -290,7 +298,7 @@ fn run(args: Args) -> Result<()> {
                 vb,
             )?
         };
-        let prior_scheduler = wuerstchen::ddpm::DDPMWScheduler::new(60, Default::default())?;
+        let prior_scheduler = wuerstchen::ddpm::DDPMWScheduler::new(1, Default::default())?;
         let timesteps = prior_scheduler.timesteps();
         let timesteps = &timesteps[..timesteps.len() - 1];
         println!("prior denoising");
@@ -305,6 +313,7 @@ fn run(args: Args) -> Result<()> {
                 + ((noise_pred_text - noise_pred_uncond)? * PRIOR_GUIDANCE_SCALE)?)?;
             latents = prior_scheduler.step(&noise_pred, t, &latents)?;
             let dt = start_time.elapsed().as_secs_f32();
+            device.synchronize().unwrap();
             println!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
         }
         ((latents * 42.)? - 1.)?
@@ -339,6 +348,8 @@ fn run(args: Args) -> Result<()> {
         )?
     };
 
+    device.synchronize().unwrap();   
+
     for idx in 0..num_samples {
         // https://huggingface.co/warp-ai/wuerstchen/blob/main/model_index.json
         let latent_height = (image_embeddings.dim(2)? as f64 * LATENT_DIM_SCALE) as usize;
@@ -352,16 +363,36 @@ fn run(args: Args) -> Result<()> {
         )?;
 
         println!("diffusion process with prior {image_embeddings:?}");
-        let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(12, Default::default())?;
+        let scheduler = wuerstchen::ddpm::DDPMWScheduler::new(1, Default::default())?;
         let timesteps = scheduler.timesteps();
         let timesteps = &timesteps[..timesteps.len() - 1];
+        
+        println!("Write test_embedings_xpu5.npy");
+        if image_embeddings.device().is_cpu(){
+            image_embeddings.write_npy(format!("test_embedings_cpu5.npy"))?;
+        }
+        else{
+            image_embeddings.write_npy(format!("test_embedings_gpu5.npy"))?;
+        }
+
         for (index, &t) in timesteps.iter().enumerate() {
             let start_time = std::time::Instant::now();
             let ratio = (Tensor::ones(1, DType::F32, &device)? * t)?;
             let noise_pred =
                 decoder.forward(&latents, &ratio, &image_embeddings, Some(&text_embeddings))?;
+
+            println!("Write test_embedings_xpu1.npy");
+            if noise_pred.device().is_cpu(){
+                noise_pred.write_npy(format!("test_embedings_cpu1.npy"))?;
+            }
+            else{
+                noise_pred.write_npy(format!("test_embedings_gpu1.npy"))?;
+            }
+            //panic!("end");
+
             latents = scheduler.step(&noise_pred, t, &latents)?;
             let dt = start_time.elapsed().as_secs_f32();
+            //device.synchronize().unwrap();
             println!("step {}/{} done, {:.2}s", index + 1, timesteps.len(), dt);
         }
         println!(
@@ -369,9 +400,27 @@ fn run(args: Args) -> Result<()> {
             idx + 1,
             num_samples
         );
+        
+        println!("Write test_embedings_xpu2.npy");
+        if latents.device().is_cpu(){
+            latents.write_npy(format!("test_embedings_cpu2.npy"))?;
+        }
+        else{
+            latents.write_npy(format!("test_embedings_gpu2.npy"))?;
+        }
+        
         let image = vqgan.decode(&(&latents * 0.3764)?)?;
+        
+        println!("Write test_embedings_xpu3.npy");
+        if image.device().is_cpu(){
+            image.write_npy(format!("test_embedings_cpu3.npy"))?;
+        }
+        else{
+            image.write_npy(format!("test_embedings_gpu3.npy"))?;
+        }
+
         let image = (image.clamp(0f32, 1f32)? * 255.)?
-            .to_dtype(DType::U8)?
+            .to_dtype(DType::U8)?.to_device(&Device::Cpu)?
             .i(0)?;
         let image_filename = output_filename(&final_image, idx + 1, num_samples, None);
         candle_examples::save_image(&image, image_filename)?

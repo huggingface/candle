@@ -1,6 +1,6 @@
-use candle::{Device, Tensor};
+use candle::{DType, Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
-use candle_wasm_example_llama2::{console_log, worker::{Model as M, ModelData}};
+use candle_wasm_example_llama2::worker::{Model as M, ModelData};
 use wasm_bindgen::prelude::*;
 extern crate console_error_panic_hook;
 
@@ -17,7 +17,10 @@ impl Model {
     async fn process(&mut self, tokens: &[u32]) -> candle::Result<String> {
         const REPEAT_LAST_N: usize = 64;
         let input = Tensor::new(tokens, &self.device)?.unsqueeze(0)?;
+        
         let logits = self.inner.llama.forward(&input, tokens.len()).await?;
+        
+  
         let logits = logits.squeeze(0)?;
 
         let logits = if self.repeat_penalty == 1. || tokens.is_empty() {
@@ -30,6 +33,7 @@ impl Model {
                 &self.tokens[start_at..],
             ).await?
         };
+      
 
         let next_token = self.logits_processor.sample_async(&logits).await?;
         self.tokens.push(next_token);
@@ -45,27 +49,22 @@ impl Model {
 impl Model {
     #[wasm_bindgen(constructor)]
     pub async fn new(weights: Vec<u8>, tokenizer: Vec<u8>, use_wgpu : bool) -> Result<Model, JsError> {
-        
-        //wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
-        console_log::init().expect("could not initialize logger");
-        console_error_panic_hook::set_once();
-
         log::info!("create Model, wgpu: {use_wgpu}");
         let device = match use_wgpu{
             true => Device::new_webgpu(0).await?,
             false => Device::Cpu,
         };
 
-        console_log!("created webgpu device");
+        log::info!("created webgpu device");
 
         let model = M::load(ModelData {
             tokenizer,
             model: weights,
         }, &device).await;
-        console_log!("Model Loaded:");
+        log::info!("Model Loaded:");
         let logits_processor = LogitsProcessor::new(299792458, None, None);
         
-        console_log!("created logits processor");
+        log::info!("created logits processor");
 
        
        
@@ -78,7 +77,7 @@ impl Model {
                 device
             }),
             Err(e) => {
-                console_log!("Error at model: {:?}", e);
+                log::error!("Error at model: {:?}", e);
                 return Err(JsError::new(&e.to_string()))},
         }
     }
@@ -97,8 +96,7 @@ impl Model {
         repeat_penalty: f32,
         seed: u64,
     ) -> Result<String, JsError> {
-        console_log!("Init With Prompt");
-        console_error_panic_hook::set_once();
+        log::info!("Init With Prompt");
         // First reset the cache.
         {
             let mut cache = self.inner.cache.kvs.lock().unwrap();
@@ -123,19 +121,18 @@ impl Model {
             .get_ids()
             .to_vec();
 
-        console_log!("Before Process");
+        log::info!("Before Process");
 
         let text = self
             .process(&tokens).await
             .map_err(|m| JsError::new(&m.to_string()))?;
         
-        console_log!("After Process");
+        log::info!("After Process");
         Ok(text)
     }
 
     #[wasm_bindgen]
     pub async fn next_token(&mut self) -> Result<String, JsError> {
-        console_error_panic_hook::set_once();
         let last_token = *self.tokens.last().unwrap();;
         let text = self
             .process(&[last_token]).await
@@ -150,4 +147,5 @@ impl Model {
 
 fn main() {
     console_error_panic_hook::set_once();
+    console_log::init().expect("could not initialize logger");
 }

@@ -131,35 +131,12 @@ pub struct WgpuDeviceInner{
     pub (crate) cached_bindgroup_reuse_counter : AtomicU32,
     pub (crate) cached_buffer_reuse_counter : AtomicU32,
     pub (crate) cached_buffer_inplace_counter : AtomicU32,
-
+    pub (crate) use_cache : bool
 }
 
 #[derive(Debug, Clone)]
 pub struct  WgpuDevice {
-
     pub inner : Arc<WgpuDeviceInner>,
-
-    // pub device : Arc<wgpu::Device>, 
-    // pub device_limits : Arc<wgpu::Limits>, //we cache the limits here, because device.limit() was relatively slow on the browser
-
-    // pub queue : Arc<wgpu::Queue>,
-    // pub (crate) shader : Arc<Mutex<HashMap<wgpu_functions::Shader, ShaderModuleComputePipelines>>>,
-    // pub (crate) rand_state : Arc<Mutex<rand::rngs::StdRng>>,   
-
-    // pub (crate) command_queue : Arc<Mutex<QueueBuffer>>,
-    // pub (crate) meta_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
-    // pub (crate) indirect_buffer : Arc<wgpu::Buffer>, //buffer for storing meta information
-
-    // pub (crate) bindgroup_layouts : Arc<BindgroupLayouts>,
-
-    // pub (crate) cache : Arc<Mutex<ModelCache>>, //if cache is set, all commands are not queued to the gpu, but are cached inside ModelCache, so there can be reused later on
-    // pub (crate) cached_buffer_counter : Arc<AtomicU32>,
-    // pub (crate) cached_bindgroup_counter : Arc<AtomicU32>,
-    // pub (crate) cached_bindgroup_use_counter : Arc<AtomicU32>,
-    // pub (crate) cached_bindgroup_reuse_counter : Arc<AtomicU32>,
-    // pub (crate) cached_buffer_reuse_counter : Arc<AtomicU32>,
-    // pub (crate) cached_buffer_inplace_counter : Arc<AtomicU32>,
-
     #[cfg(feature = "wgpu_debug")]
     pub debug : DebugInfo,
 }
@@ -204,6 +181,8 @@ pub (crate) enum Pipelines{
     ConvertF32ToU32,
     ConvertU32ToF32,
     ConvertU8ToF32,
+    ConvertU32ToU8,
+    ConvertF32ToU8,
     WhereCondU32,
     MaxPool2d,
     AvgPool2d,
@@ -215,8 +194,8 @@ pub (crate) enum Pipelines{
 }
 
 
-//pub (crate) const META_BUFFER_SIZE : u32 = 65536;
-pub (crate) const META_BUFFER_SIZE : u32 = 1000000;
+pub (crate) const META_BUFFER_SIZE : u32 = 65536;
+//pub (crate) const META_BUFFER_SIZE : u32 = 1_000_000;
 pub (crate) const INDIRECT_BUFFER_SIZE : u32 = 10000;
 
 impl WgpuDevice{
@@ -296,31 +275,9 @@ impl WgpuDevice{
     
                 cached_buffer_reuse_counter: AtomicU32::new(0),
                 cached_buffer_inplace_counter : AtomicU32::new(0),
+                use_cache : true
             })
         })
-        
-        // Ok(WgpuDevice {
-        //     device: Arc::new(device),
-        //     device_limits: Arc::new(device_limits),
-        //     queue: Arc::new(queue),
-        //     shader : Arc::new(Mutex::new(HashMap::new())),
-        //     rand_state: Arc::new(Mutex::new(rand::rngs::StdRng::from_entropy())),
-        //     #[cfg(feature = "wgpu_debug")]
-        //     debug : debug_info,
-        //     command_queue: Arc::new(Mutex::new(QueueBuffer::new())),
-        //     meta_buffer : Arc::new(meta_buffer),
-        //     indirect_buffer : Arc::new(indirect_buffer),
-        //     cache : Arc::new(Mutex::new(ModelCache::new())),
-        //     bindgroup_layouts,
-        //     cached_buffer_counter : Arc::new(AtomicU32::new(0)),
-
-        //     cached_bindgroup_use_counter : Arc::new(AtomicU32::new(0)),
-        //     cached_bindgroup_counter  : Arc::new(AtomicU32::new(0)),
-        //     cached_bindgroup_reuse_counter: Arc::new(AtomicU32::new(0)),
-
-        //     cached_buffer_reuse_counter: Arc::new(AtomicU32::new(0)),
-        //     cached_buffer_inplace_counter : Arc::new(AtomicU32::new(0)),
-        // })
     }
 
     pub fn print_bindgroup_reuseinfo(&self){
@@ -403,6 +360,8 @@ impl WgpuDevice{
             Pipelines::ConvertF32ToU32 => "convert_to_u32",
             Pipelines::ConvertU32ToF32 => "convert_to_f32",
             Pipelines::ConvertU8ToF32 => "convert_u8_to_f32",
+            Pipelines::ConvertU32ToU8 => "convert_u32_to_u8",
+            Pipelines::ConvertF32ToU8 => "convert_f32_to_u8",
             Pipelines::IndexSelect => "index_select",
             Pipelines::Copy2d => "copy2d",
             Pipelines::CopyStrided => "copy_strided",

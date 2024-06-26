@@ -72,3 +72,54 @@ pub fn queue_convert_f32_to_u32(
     );
     return Ok(());
 }
+
+
+pub fn queue_convert_u32_to_u8(
+    dev: &WgpuDevice,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
+    start_offset: u32,
+    size : u32
+) -> crate::Result<()> {
+    let (mut meta,  meta_offset) = get_meta(&dev,  2);
+    meta.add(start_offset);
+    meta.add(size);
+
+    let pipeline = dev.get_pipeline(super::Shader::Convert(crate::DType::U32), Pipelines::ConvertU32ToU8)?;
+
+    let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
+    enqueue(
+        meta,
+        pipeline,
+        bind_group,
+        ((size + 3) / 4) as u32,
+        #[cfg(feature = "wgpu_debug")] 
+        crate::wgpu::device::QueueDebugInfo::new(&format!("u32_to_u8"), size),
+    );
+    return Ok(());
+}
+
+pub fn queue_convert_f32_to_u8(
+    dev: &WgpuDevice,
+    buffer_dest: Arc<BufferReference>,
+    buffer_input: Arc<BufferReference>,
+    start_offset: u32,
+    size : u32
+) -> crate::Result<()> {
+    let (mut meta,  meta_offset) = get_meta(&dev,  2);
+    meta.add(start_offset);
+    meta.add(size);
+
+    let pipeline = dev.get_pipeline(super::Shader::Convert(crate::DType::F32), Pipelines::ConvertF32ToU8)?;
+
+    let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
+    enqueue(
+        meta,
+        pipeline,
+        bind_group,
+        ((size + 3) / 4) as u32,
+        #[cfg(feature = "wgpu_debug")] 
+        crate::wgpu::device::QueueDebugInfo::new(&format!("f32_to_u8"), size),
+    );
+    return Ok(());
+}

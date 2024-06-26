@@ -31,7 +31,7 @@ use wgpu::ShaderModule;
 pub use binary::queue_binary_buffer_from_buffer;
 pub use cmp::queue_cmp_buffer_from_buffer;
 pub use conv2d::{queue_conv1d, queue_conv1d_transpose, queue_conv2d, queue_conv2d_transpose};
-pub use convert::{queue_convert_f32_to_u32, queue_convert_u32_to_f32, queue_convert_u8_to_f32};
+pub use convert::{queue_convert_f32_to_u32, queue_convert_u32_to_f32, queue_convert_u8_to_f32, queue_convert_f32_to_u8, queue_convert_u32_to_u8};
 pub use copy::{queue_copy, queue_copy2d, queue_copy_strided};
 pub use gather::{queue_gather, queue_index_add_inplace, queue_scatter_add_inplace};
 pub use index_select::queue_index_select;
@@ -306,7 +306,8 @@ fn get_meta(dev: &WgpuDevice, size: u32) -> (MutexGuard<QueueBuffer>, u32) {
         dev.device_limits.min_storage_buffer_offset_alignment as i32 / 4,
     );
 
-    if meta_offset as u32 + size > META_BUFFER_SIZE / 4 {
+    if meta_offset as u32 + size + 256 > META_BUFFER_SIZE / 4 {
+        println!("get_meta: {}",command_queue.command_queue.len());
         flush_gpu_command(dev, &mut command_queue);
         return (command_queue, 0);
     }
@@ -449,7 +450,7 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                             if q.pipeline.1 == Pipelines::UnaryFromBufferContiguous{
                                 if let BindGroupReferenceBase::Bindgroup1(meta, v1, v2) = &q.bindgroup{
                                     if Arc::strong_count(&v2) == 1{ //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
-                                        if v1.size == v2.size{
+                                        if v1.size <= v2.size{
                                             if v1.storage.lock().unwrap().is_none(){
                                                 q.pipeline.1 = Pipelines::UnaryInplaceContiguous;
                                                 v1_ref = Some(v1.clone());
@@ -465,7 +466,7 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                             if q.pipeline.1 == Pipelines::UnaryFromBuffer{
                                 if let BindGroupReferenceBase::Bindgroup1(meta, v1, v2) = &q.bindgroup{
                                     if Arc::strong_count(&v2) == 1{ //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
-                                        if v1.size == v2.size{
+                                        if v1.size <=  v2.size{
                                             if v1.storage.lock().unwrap().is_none(){
                                                 q.pipeline.1 = Pipelines::UnaryInplace;
                                                 v1_ref = Some(v1.clone());
@@ -758,6 +759,7 @@ fn create_bind_group_input3(
 
 pub fn synchronize(dev: &WgpuDevice) -> crate::Result<()> {
     let mut command_queue = dev.command_queue.lock().unwrap();
+    println!("synchronize: {}", command_queue.command_queue.len());
     flush_gpu_command(dev, &mut command_queue);
 
     let (sender, receiver) = flume::bounded(1);
@@ -776,6 +778,7 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     buffer: Arc<BufferReference>,
 ) -> Vec<T> {
     let mut command_queue = dev.command_queue.lock().unwrap();
+    println!("read_data_from_gpu_async: {}", command_queue.command_queue.len());
     flush_gpu_command(dev, &mut command_queue); //send all previous commands to the gpu
     let dest_size = buffer.size;
 

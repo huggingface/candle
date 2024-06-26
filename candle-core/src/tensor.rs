@@ -1642,6 +1642,38 @@ impl Tensor {
         }
     }
 
+     /// Returns the data contained in a 2D tensor as a vector of vector of scalar values.
+     pub async fn to_vec2_async<S: crate::WithDType>(&self) -> Result<Vec<Vec<S>>> {
+        let (dim1, dim2) = self.dims2()?;
+        let from_cpu_storage = |cpu_storage: &crate::CpuStorage| {
+            let data = S::cpu_storage_as_slice(cpu_storage)?;
+            let mut rows = vec![];
+            match self.layout.contiguous_offsets() {
+                Some((o1, o2)) => {
+                    let data = &data[o1..o2];
+                    for idx_row in 0..dim1 {
+                        rows.push(data[idx_row * dim2..(idx_row + 1) * dim2].to_vec())
+                    }
+                }
+                None => {
+                    let mut src_index = self.strided_index();
+                    for _idx_row in 0..dim1 {
+                        let row = (0..dim2).map(|_| data[src_index.next().unwrap()]).collect();
+                        rows.push(row)
+                    }
+                    assert!(src_index.next().is_none());
+                }
+            }
+            Ok(rows)
+        };
+        match &*self.storage() {
+            Storage::Cpu(storage) => from_cpu_storage(storage),
+            Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::WebGpu(storage) => from_cpu_storage(&storage.to_cpu_storage_async().await?),
+        }
+    }
+
     /// Returns the data contained in a 3D tensor.
     pub fn to_vec3<S: crate::WithDType>(&self) -> Result<Vec<Vec<Vec<S>>>> {
         let (dim1, dim2, dim3) = self.dims3()?;
