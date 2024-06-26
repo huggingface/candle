@@ -12,3 +12,4 @@ cargo run --features cuda,depth_anything_v2 --package candle-examples --example 
 ```
 
 
+![Depth Estimation of Leading group, Giro d'Italia 2021](./assets/depth_bike.jpg)
