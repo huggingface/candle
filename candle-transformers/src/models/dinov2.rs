@@ -394,3 +394,7 @@ impl Module for DinoVisionTransformer {
 pub fn vit_small(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisionTransformer> {
     DinoVisionTransformer::new(vb, vb_head, 12, 384, 6)
 }
+
+pub fn vit_base(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisionTransformer> {
+    DinoVisionTransformer::new(vb, vb_head, 12, 768, 12)
+}

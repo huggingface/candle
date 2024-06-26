@@ -9,7 +9,7 @@ extern crate intel_mkl_src;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use candle::DType::{F32, U8};
 use candle::{Device, Module, Result, Tensor};
@@ -17,6 +17,7 @@ use candle_examples::{load_image, load_image_and_resize, save_image};
 use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DepthAnythingV2Config};
 use candle_transformers::models::dinov2;
+use candle_transformers::models::dinov2::DinoVisionTransformer;
 
 use crate::color_map::SpectralRColormap;
 
@@ -28,6 +29,14 @@ const MAGIC_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 const DINO_IMG_SIZE: usize = 518;
 
+#[derive(ValueEnum, Clone, Debug)]
+enum ModelSize {
+    S,
+    B,
+    L,
+    G,
+}
+
 #[derive(Parser)]
 struct Args {
     #[arg(long)]
@@ -38,6 +47,9 @@ struct Args {
 
     #[arg(long)]
     depth_anything_v2_model: Option<PathBuf>,
+
+    #[arg(long, value_enum, default_value_t = ModelSize::B)]
+    size: ModelSize,
 
     #[arg(long)]
     image: PathBuf,
@@ -56,47 +68,12 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
 
-    let model_path = match args.dinov2_model {
-        None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("facebook/dinov2-small".into());
-            api.get("model.safetensors")?
-        }
-        Some(path) => path,
-    };
-    println!("Using dinov2 file {:?}", model_path);
-
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], F32, &device)? };
-
-    let head_path = match args.dinov2_head {
-        None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("jeroenvlek/dinov2-linear-heads-safetensors".into());
-            api.get("dinov2_vits14_linear_head.safetensors")?
-        }
-        Some(path) => path,
-    };
-    println!("Using dinov2 head file {:?}", head_path);
-
-    let vb_head = unsafe { VarBuilder::from_mmaped_safetensors(&[head_path], F32, &device)? };
-
-    let dinov2 = dinov2::vit_small(vb, Some(vb_head))?;
+    let dinov2 = dino_model(&args.size, args.dinov2_model, args.dinov2_head, &device)?;
     println!("DinoV2 model built");
 
-    let depth_anything_path = match args.depth_anything_v2_model {
-        None => {
-            let api = hf_hub::api::sync::Api::new()?;
-            let api = api.model("jeroenvlek/depth-anything-v2-safetensors".into());
-            api.get("depth_anything_v2_vits.safetensors")?
-        }
-        Some(depth_anything_model) => depth_anything_model,
-    };
-    println!("Using file {:?}", depth_anything_path);
-
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[depth_anything_path], F32, &device)? };
-
-    let config = DepthAnythingV2Config::vit_small();
-    let depth_anything = DepthAnythingV2::new(&dinov2, &config, vb)?;
+    let depth_anything =
+        depth_anything_model(&dinov2, &args.size, args.depth_anything_v2_model, &device)?;
+    println!("Depth Anything model built");
 
     let (original_height, original_width, image) = load_and_prep_image(&args.image, &device)?;
 
@@ -113,6 +90,83 @@ pub fn main() -> anyhow::Result<()> {
     save_image(&output_image, output_path)?;
 
     Ok(())
+}
+
+fn depth_anything_model<'a>(
+    dinov2: &'a DinoVisionTransformer,
+    model_size: &ModelSize,
+    depth_anything_v2_model: Option<PathBuf>,
+    device: &'a Device,
+) -> anyhow::Result<DepthAnythingV2<'a>> {
+    let api = hf_hub::api::sync::Api::new()?;
+    let depth_anything_path = match depth_anything_v2_model {
+        None => match model_size {
+            ModelSize::S => api
+                .model("jeroenvlek/depth-anything-v2-safetensors".into())
+                .get("depth_anything_v2_vits.safetensors")?,
+            ModelSize::B => api
+                .model("jeroenvlek/depth-anything-v2-safetensors".into())
+                .get("depth_anything_v2_vitb.safetensors")?,
+            _ => todo!(),
+        },
+        Some(depth_anything_model) => depth_anything_model,
+    };
+    println!("Using file {:?}", depth_anything_path);
+
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[depth_anything_path], F32, &device)? };
+    let config = match model_size {
+        ModelSize::S => DepthAnythingV2Config::vit_small(),
+        ModelSize::B => DepthAnythingV2Config::vit_base(),
+        _ => todo!(),
+    };
+
+    Ok(DepthAnythingV2::new(dinov2, config, vb)?)
+}
+
+fn dino_model(
+    model_size: &ModelSize,
+    dinov2_model: Option<PathBuf>,
+    dinov2_head: Option<PathBuf>,
+    device: &Device,
+) -> anyhow::Result<DinoVisionTransformer> {
+    let api = hf_hub::api::sync::Api::new()?;
+    let model_path = match dinov2_model {
+        None => match model_size {
+            ModelSize::S => api
+                .model("facebook/dinov2-small".into())
+                .get("model.safetensors")?,
+            ModelSize::B => api
+                .model("facebook/dinov2-base".into())
+                .get("model.safetensors")?,
+            _ => todo!(),
+        },
+        Some(path) => path,
+    };
+    println!("Using dinov2 file {:?}", model_path);
+
+    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], F32, &device)? };
+
+    let head_path = match dinov2_head {
+        None => match model_size {
+            ModelSize::S => api
+                .model("jeroenvlek/dinov2-linear-heads-safetensors".into())
+                .get("dinov2_vits14_linear_head.safetensors")?,
+            ModelSize::B => api
+                .model("jeroenvlek/dinov2-linear-heads-safetensors".into())
+                .get("dinov2_vitb14_linear_head.safetensors")?,
+            _ => todo!(),
+        },
+        Some(path) => path,
+    };
+    println!("Using dinov2 head file {:?}", head_path);
+    let vb_head = unsafe { VarBuilder::from_mmaped_safetensors(&[head_path], F32, &device)? };
+
+    let model = match model_size {
+        ModelSize::S => dinov2::vit_small(vb, Some(vb_head))?,
+        ModelSize::B => dinov2::vit_base(vb, Some(vb_head))?,
+        _ => todo!(),
+    };
+    Ok(model)
 }
 
 fn full_output_path(image_path: &PathBuf, output_dir: &Option<PathBuf>) -> PathBuf {

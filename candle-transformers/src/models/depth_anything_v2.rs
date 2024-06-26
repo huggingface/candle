@@ -8,6 +8,7 @@ use candle_nn::{
 
 use crate::models::dinov2::DinoVisionTransformer;
 
+#[derive(Clone)]
 pub struct DepthAnythingV2Config {
     out_channel_sizes: [usize; 4],
     in_channel_size: usize, // embed_dim in the Dino model
@@ -106,7 +107,7 @@ pub struct ResidualConvUnit {
 
 impl ResidualConvUnit {
     pub fn new(
-        conf: &DepthAnythingV2Config,
+        conf: DepthAnythingV2Config,
         activation: Activation,
         vb: VarBuilder,
     ) -> Result<Self> {
@@ -189,7 +190,7 @@ pub struct FeatureFusionBlock {
 
 impl FeatureFusionBlock {
     pub fn new(
-        conf: &DepthAnythingV2Config,
+        conf: DepthAnythingV2Config,
         target_patch_size: usize,
         activation: Activation,
         vb: VarBuilder,
@@ -208,8 +209,8 @@ impl FeatureFusionBlock {
             conv_cfg,
             vb.pp("out_conv"),
         )?;
-        let res_conv_unit1 = ResidualConvUnit::new(conf, activation, vb.pp("resConfUnit1"))?;
-        let res_conv_unit2 = ResidualConvUnit::new(conf, activation, vb.pp("resConfUnit2"))?;
+        let res_conv_unit1 = ResidualConvUnit::new(conf.clone(), activation, vb.pp("resConfUnit1"))?;
+        let res_conv_unit2 = ResidualConvUnit::new(conf.clone(), activation, vb.pp("resConfUnit2"))?;
 
         Ok(Self {
             res_conv_unit1,
@@ -243,7 +244,7 @@ pub struct Scratch {
 }
 
 impl Scratch {
-    pub fn new(conf: &DepthAnythingV2Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(conf: DepthAnythingV2Config, vb: VarBuilder) -> Result<Self> {
         const KERNEL_SIZE: usize = 3;
         let conv_cfg = Conv2dConfig {
             padding: 1,
@@ -282,25 +283,25 @@ impl Scratch {
         )?;
 
         let refine_net1 = FeatureFusionBlock::new(
-            conf,
+            conf.clone(),
             conf.target_patch_size * 8,
             Activation::Relu,
             vb.pp("refinenet1"),
         )?;
         let refine_net2 = FeatureFusionBlock::new(
-            conf,
+            conf.clone(),
             conf.target_patch_size * 4,
             Activation::Relu,
             vb.pp("refinenet2"),
         )?;
         let refine_net3 = FeatureFusionBlock::new(
-            conf,
+            conf.clone(),
             conf.target_patch_size * 2,
             Activation::Relu,
             vb.pp("refinenet3"),
         )?;
         let refine_net4 = FeatureFusionBlock::new(
-            conf,
+            conf.clone(),
             conf.target_patch_size,
             Activation::Relu,
             vb.pp("refinenet4"),
@@ -359,16 +360,16 @@ impl Scratch {
 
 const NUM_CHANNELS: usize = 4;
 
-pub struct DPTHead<'a> {
-    conf: &'a DepthAnythingV2Config,
+pub struct DPTHead {
+    conf: DepthAnythingV2Config,
     projections: Vec<Conv2d>,
     resize_layers: Vec<Box<dyn Module>>,
     readout_projections: Vec<Sequential>,
     scratch: Scratch,
 }
 
-impl<'a> DPTHead<'a> {
-    pub fn new(conf: &'a DepthAnythingV2Config, vb: VarBuilder) -> Result<Self> {
+impl DPTHead {
+    pub fn new(conf: DepthAnythingV2Config, vb: VarBuilder) -> Result<Self> {
         let mut projections: Vec<Conv2d> = Vec::with_capacity(conf.out_channel_sizes.len());
         for (conv_index, out_channel_size) in conf.out_channel_sizes.iter().enumerate() {
             projections.push(conv2d(
@@ -436,7 +437,7 @@ impl<'a> DPTHead<'a> {
             vec![]
         };
 
-        let scratch = Scratch::new(conf, vb.pp("scratch"))?;
+        let scratch = Scratch::new(conf.clone(), vb.pp("scratch"))?;
 
         Ok(Self {
             conf,
@@ -448,7 +449,7 @@ impl<'a> DPTHead<'a> {
     }
 }
 
-impl Module for DPTHead<'_> {
+impl Module for DPTHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let mut out: Vec<Tensor> = Vec::with_capacity(NUM_CHANNELS);
         for i in 0..NUM_CHANNELS {
@@ -517,17 +518,17 @@ impl Module for DPTHead<'_> {
 
 pub struct DepthAnythingV2<'a> {
     pretrained: &'a DinoVisionTransformer,
-    depth_head: DPTHead<'a>,
-    conf: &'a DepthAnythingV2Config,
+    depth_head: DPTHead,
+    conf: DepthAnythingV2Config,
 }
 
 impl<'a> DepthAnythingV2<'a> {
     pub fn new(
         pretrained: &'a DinoVisionTransformer,
-        conf: &'a DepthAnythingV2Config,
+        conf: DepthAnythingV2Config,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let depth_head = DPTHead::new(conf, vb.pp("depth_head"))?;
+        let depth_head = DPTHead::new(conf.clone(), vb.pp("depth_head"))?;
 
         Ok(Self {
             pretrained,
