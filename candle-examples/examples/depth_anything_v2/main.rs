@@ -107,7 +107,10 @@ fn depth_anything_model<'a>(
             ModelSize::B => api
                 .model("jeroenvlek/depth-anything-v2-safetensors".into())
                 .get("depth_anything_v2_vitb.safetensors")?,
-            _ => todo!(),
+            ModelSize::L => api
+                .model("jeroenvlek/depth-anything-v2-safetensors".into())
+                .get("depth_anything_v2_vitl.safetensors")?,
+            ModelSize::G => todo!("At the time of writing the giant model isn't released yet"),
         },
         Some(depth_anything_model) => depth_anything_model,
     };
@@ -117,7 +120,8 @@ fn depth_anything_model<'a>(
     let config = match model_size {
         ModelSize::S => DepthAnythingV2Config::vit_small(),
         ModelSize::B => DepthAnythingV2Config::vit_base(),
-        _ => todo!(),
+        ModelSize::L => DepthAnythingV2Config::vit_large(),
+        ModelSize::G => DepthAnythingV2Config::vit_giant(),
     };
 
     Ok(DepthAnythingV2::new(dinov2, config, vb)?)
@@ -138,7 +142,13 @@ fn dino_model(
             ModelSize::B => api
                 .model("facebook/dinov2-base".into())
                 .get("model.safetensors")?,
-            _ => todo!(),
+
+            ModelSize::L => api
+                .model("facebook/dinov2-large".into())
+                .get("model.safetensors")?,
+            ModelSize::G => api
+                .model("facebook/dinov2-giant".into())
+                .get("model.safetensors")?,
         },
         Some(path) => path,
     };
@@ -154,7 +164,13 @@ fn dino_model(
             ModelSize::B => api
                 .model("jeroenvlek/dinov2-linear-heads-safetensors".into())
                 .get("dinov2_vitb14_linear_head.safetensors")?,
-            _ => todo!(),
+            ModelSize::L => api
+                .model("jeroenvlek/dinov2-linear-heads-safetensors".into())
+                .get("dinov2_vitl14_linear_head.safetensors")?,
+            ModelSize::G => api
+                .model("jeroenvlek/dinov2-linear-heads-safetensors".into())
+                .get("dinov2_vitg14_linear_head.safetensors")?,
+
         },
         Some(path) => path,
     };
@@ -164,7 +180,8 @@ fn dino_model(
     let model = match model_size {
         ModelSize::S => dinov2::vit_small(vb, Some(vb_head))?,
         ModelSize::B => dinov2::vit_base(vb, Some(vb_head))?,
-        _ => todo!(),
+        ModelSize::L => dinov2::vit_large(vb, Some(vb_head))?,
+        ModelSize::G => dinov2::vit_giant(vb, Some(vb_head))?,
     };
     Ok(model)
 }

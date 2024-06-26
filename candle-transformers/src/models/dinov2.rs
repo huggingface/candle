@@ -398,3 +398,11 @@ pub fn vit_small(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisi
 pub fn vit_base(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisionTransformer> {
     DinoVisionTransformer::new(vb, vb_head, 12, 768, 12)
 }
+
+pub fn vit_large(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisionTransformer> {
+    DinoVisionTransformer::new(vb, vb_head, 24, 1024, 16)
+}
+
+pub fn vit_giant(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisionTransformer> {
+    DinoVisionTransformer::new(vb, vb_head, 40, 1536, 24)
+}
