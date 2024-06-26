@@ -363,7 +363,7 @@ impl DinoVisionTransformer {
             outputs
                 .iter()
                 .zip(class_tokens.iter())
-                .map(|(out, class_token)| Tensor::cat(&[out, class_token], D::Minus1))
+                .map(|(out, class_token)| Tensor::stack(&[out, class_token], 0))
                 .collect::<Result<Vec<_>>>()?
         } else {
             outputs
