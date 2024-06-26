@@ -463,8 +463,8 @@ impl Module for DPTHead {
             } else {
                 xs.get(i)?
             };
-            let x_dims = x.dims();
 
+            let x_dims = x.dims();
             let x = x.permute((0, 2, 1))?.reshape((
                 x_dims[0],
                 x_dims[x_dims.len() - 1],
@@ -544,7 +544,7 @@ impl<'a> Module for DepthAnythingV2<'a> {
             xs,
             &self.conf.layer_ids_vits,
             false,
-            false,
+            true,
             true,
         )?;
         let depth = self.depth_head.forward(&features)?;
