@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use candle::{Device, Tensor};
 use candle::DType::{F32, U8};
+use candle::{Device, Tensor};
 use candle_examples::{load_image, load_image_and_resize};
 use candle_transformers::models::depth_anything_v2::PATCH_MULTIPLE;
 
@@ -22,8 +22,16 @@ pub fn load_and_prep_image(
 ) -> anyhow::Result<(usize, usize, Tensor)> {
     let (_original_image, original_height, original_width) = load_image(&image_path, None)?;
 
-    let (target_height, target_width) = get_new_size(original_height, original_width, DINO_IMG_SIZE, DINO_IMG_SIZE, true, LOWER_BOUND, PATCH_MULTIPLE);
-    let image = load_image_and_resize(&image_path, target_width,  target_height)?
+    let (target_height, target_width) = get_new_size(
+        original_height,
+        original_width,
+        DINO_IMG_SIZE,
+        DINO_IMG_SIZE,
+        true,
+        LOWER_BOUND,
+        PATCH_MULTIPLE,
+    );
+    let image = load_image_and_resize(&image_path, target_width, target_height)?
         .permute((0, 2, 1))? // see issue #2291
         .unsqueeze(0)?
         .to_dtype(F32)?
@@ -90,7 +98,12 @@ fn scale_image(depth: &Tensor) -> candle::Result<Tensor> {
     depth / range_tensor
 }
 
-fn constrain_to_multiple_of(value: f32, multiple_of: usize, min_val: f32, max_val: Option<f32>) -> usize {
+fn constrain_to_multiple_of(
+    value: f32,
+    multiple_of: usize,
+    min_val: f32,
+    max_val: Option<f32>,
+) -> usize {
     let mut constrained_value = (value / multiple_of as f32).round() * multiple_of as f32;
 
     if let Some(max_val) = max_val {
@@ -124,21 +137,30 @@ fn get_new_size(
                 if scale_width > scale_height {
                     (target_width, (scale_width * height as f32).round() as usize)
                 } else {
-                    ((scale_height * width as f32).round() as usize, target_height)
+                    (
+                        (scale_height * width as f32).round() as usize,
+                        target_height,
+                    )
                 }
             }
             UPPER_BOUND => {
                 if scale_width < scale_height {
                     (target_width, (scale_width * height as f32).round() as usize)
                 } else {
-                    ((scale_height * width as f32).round() as usize, target_height)
+                    (
+                        (scale_height * width as f32).round() as usize,
+                        target_height,
+                    )
                 }
             }
             MINIMAL => {
                 if (1.0 - scale_width).abs() < (1.0 - scale_height).abs() {
                     (target_width, (scale_width * height as f32).round() as usize)
                 } else {
-                    ((scale_height * width as f32).round() as usize, target_height)
+                    (
+                        (scale_height * width as f32).round() as usize,
+                        target_height,
+                    )
                 }
             }
             _ => panic!("resize_method {} not implemented", resize_method),
@@ -147,11 +169,10 @@ fn get_new_size(
         (target_width, target_height)
     };
 
-    let new_height = constrain_to_multiple_of(new_height as f32, multiple_of, target_height as f32, None);
-    let new_width = constrain_to_multiple_of(new_width as f32, multiple_of, target_width as f32, None);
+    let new_height =
+        constrain_to_multiple_of(new_height as f32, multiple_of, target_height as f32, None);
+    let new_width =
+        constrain_to_multiple_of(new_width as f32, multiple_of, target_width as f32, None);
 
     (new_height, new_width) // switching height and width because the tensor is also height first
 }
-
-
-

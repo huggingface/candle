@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use args::Args;
-use candle::{Device, Module};
 use candle::DType::F32;
+use candle::{Device, Module};
 use candle_examples::save_image;
 use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DepthAnythingV2Config};

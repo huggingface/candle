@@ -2,8 +2,8 @@ use candle::D::Minus1;
 use candle::{Module, Result, Tensor};
 use candle_nn::ops::Identity;
 use candle_nn::{
-    Activation, batch_norm, BatchNorm, BatchNormConfig, conv2d, Conv2d, conv2d_no_bias, Conv2dConfig,
-    conv_transpose2d, ConvTranspose2dConfig, linear, seq, Sequential, VarBuilder,
+    batch_norm, conv2d, conv2d_no_bias, conv_transpose2d, linear, seq, Activation, BatchNorm,
+    BatchNormConfig, Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
 };
 
 use crate::models::dinov2::DinoVisionTransformer;
@@ -18,8 +18,6 @@ pub struct DepthAnythingV2Config {
     use_batch_norm: bool,
     use_class_token: bool,
     layer_ids_vits: Vec<usize>,
-    input_image_size: usize,
-    target_patch_size: usize,
 }
 
 impl DepthAnythingV2Config {
@@ -31,8 +29,6 @@ impl DepthAnythingV2Config {
         use_batch_norm: bool,
         use_class_token: bool,
         layer_ids_vits: Vec<usize>,
-        input_image_size: usize,
-        target_patch_size: usize,
     ) -> Self {
         Self {
             out_channel_sizes,
@@ -41,8 +37,6 @@ impl DepthAnythingV2Config {
             use_batch_norm,
             use_class_token,
             layer_ids_vits,
-            input_image_size,
-            target_patch_size,
         }
     }
 
@@ -54,8 +48,6 @@ impl DepthAnythingV2Config {
             use_batch_norm: false,
             use_class_token: false,
             layer_ids_vits: vec![2, 5, 8, 11],
-            input_image_size: 518,
-            target_patch_size: 518 / 14,
         }
     }
 
@@ -67,8 +59,6 @@ impl DepthAnythingV2Config {
             use_batch_norm: false,
             use_class_token: false,
             layer_ids_vits: vec![2, 5, 8, 11],
-            input_image_size: 518,
-            target_patch_size: 518 / 14,
         }
     }
 
@@ -80,8 +70,6 @@ impl DepthAnythingV2Config {
             use_batch_norm: false,
             use_class_token: false,
             layer_ids_vits: vec![4, 11, 17, 23],
-            input_image_size: 518,
-            target_patch_size: 518 / 14,
         }
     }
 
@@ -93,8 +81,6 @@ impl DepthAnythingV2Config {
             use_batch_norm: false,
             use_class_token: false,
             layer_ids_vits: vec![9, 19, 29, 39],
-            input_image_size: 518,
-            target_patch_size: 518 / 14,
         }
     }
 }
@@ -184,17 +170,17 @@ pub struct FeatureFusionBlock {
     res_conv_unit1: ResidualConvUnit,
     res_conv_unit2: ResidualConvUnit,
     output_conv: Conv2d,
-    target_patch_size: usize,
+    patch_multiplier: usize,
+    target_patch_size: Option<(usize, usize)>,
 }
 
 impl FeatureFusionBlock {
     pub fn new(
         conf: DepthAnythingV2Config,
-        target_patch_size: usize,
+        patch_multiplier: usize,
         activation: Activation,
         vb: VarBuilder,
     ) -> Result<Self> {
-
         let output_conv = conv2d(
             conf.num_features,
             conf.num_features,
@@ -202,22 +188,35 @@ impl FeatureFusionBlock {
             Default::default(),
             vb.pp("out_conv"),
         )?;
-        let res_conv_unit1 = ResidualConvUnit::new(conf.clone(), activation, vb.pp("resConfUnit1"))?;
-        let res_conv_unit2 = ResidualConvUnit::new(conf.clone(), activation, vb.pp("resConfUnit2"))?;
+        let res_conv_unit1 =
+            ResidualConvUnit::new(conf.clone(), activation, vb.pp("resConfUnit1"))?;
+        let res_conv_unit2 =
+            ResidualConvUnit::new(conf.clone(), activation, vb.pp("resConfUnit2"))?;
 
         Ok(Self {
             res_conv_unit1,
             res_conv_unit2,
             output_conv,
-            target_patch_size,
+            patch_multiplier,
+            target_patch_size: None,
         })
+    }
+
+    fn set_target_patch_size(&mut self, target_patch_height: usize, target_patch_width: usize) {
+        self.target_patch_size = Some((
+            target_patch_height * self.patch_multiplier,
+            target_patch_width * self.patch_multiplier,
+        ));
     }
 }
 
 impl Module for FeatureFusionBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let out = self.res_conv_unit2.forward(xs)?;
-        let out = out.interpolate2d(self.target_patch_size, self.target_patch_size)?;
+        let out = out.interpolate2d(
+            self.target_patch_size.unwrap().0,
+            self.target_patch_size.unwrap().1,
+        )?;
 
         self.output_conv.forward(&out)
     }
@@ -273,30 +272,14 @@ impl Scratch {
             vb.pp("layer4_rn"),
         )?;
 
-        let refine_net1 = FeatureFusionBlock::new(
-            conf.clone(),
-            conf.target_patch_size * 8,
-            Activation::Relu,
-            vb.pp("refinenet1"),
-        )?;
-        let refine_net2 = FeatureFusionBlock::new(
-            conf.clone(),
-            conf.target_patch_size * 4,
-            Activation::Relu,
-            vb.pp("refinenet2"),
-        )?;
-        let refine_net3 = FeatureFusionBlock::new(
-            conf.clone(),
-            conf.target_patch_size * 2,
-            Activation::Relu,
-            vb.pp("refinenet3"),
-        )?;
-        let refine_net4 = FeatureFusionBlock::new(
-            conf.clone(),
-            conf.target_patch_size,
-            Activation::Relu,
-            vb.pp("refinenet4"),
-        )?;
+        let refine_net1 =
+            FeatureFusionBlock::new(conf.clone(), 8, Activation::Relu, vb.pp("refinenet1"))?;
+        let refine_net2 =
+            FeatureFusionBlock::new(conf.clone(), 4, Activation::Relu, vb.pp("refinenet2"))?;
+        let refine_net3 =
+            FeatureFusionBlock::new(conf.clone(), 2, Activation::Relu, vb.pp("refinenet3"))?;
+        let refine_net4 =
+            FeatureFusionBlock::new(conf.clone(), 1, Activation::Relu, vb.pp("refinenet4"))?;
 
         let output_conv1 = conv2d(
             conf.num_features,
@@ -373,10 +356,8 @@ impl DPTHead {
                 conf.out_channel_sizes[0],
                 4,
                 ConvTranspose2dConfig {
-                    padding: 0,
                     stride: 4,
-                    dilation: 1,
-                    output_padding: 0,
+                    ..Default::default()
                 },
                 vb.pp("resize_layers").pp("0"),
             )?),
@@ -384,7 +365,7 @@ impl DPTHead {
                 conf.out_channel_sizes[1],
                 conf.out_channel_sizes[1],
                 2,
-            ConvTranspose2dConfig {
+                ConvTranspose2dConfig {
                     stride: 2,
                     ..Default::default()
                 },
@@ -395,7 +376,7 @@ impl DPTHead {
                 conf.out_channel_sizes[3],
                 conf.out_channel_sizes[3],
                 3,
-            Conv2dConfig {
+                Conv2dConfig {
                     padding: 1,
                     stride: 2,
                     ..Default::default()
@@ -429,13 +410,27 @@ impl DPTHead {
             readout_projections,
             scratch,
             image_size: None,
-            patch_size: None
+            patch_size: None,
         })
     }
 
-    fn set_image_and_patch_size(&mut self, image_height:usize, image_width: usize) {
+    fn set_image_and_patch_size(&mut self, image_height: usize, image_width: usize) {
         self.image_size = Some((image_height, image_width));
-        self.patch_size = Some((image_height / PATCH_MULTIPLE, image_width / PATCH_MULTIPLE))
+        let patch_height = image_height / PATCH_MULTIPLE;
+        let patch_width = image_width / PATCH_MULTIPLE;
+        self.patch_size = Some((patch_height, patch_width));
+        self.scratch
+            .refine_net1
+            .set_target_patch_size(patch_height, patch_width);
+        self.scratch
+            .refine_net2
+            .set_target_patch_size(patch_height, patch_width);
+        self.scratch
+            .refine_net3
+            .set_target_patch_size(patch_height, patch_width);
+        self.scratch
+            .refine_net4
+            .set_target_patch_size(patch_height, patch_width);
     }
 }
 
@@ -527,8 +522,9 @@ impl<'a> DepthAnythingV2<'a> {
         })
     }
 
-    pub fn set_image_and_patch_size(&mut self, image_height:usize, image_width: usize) {
-        self.depth_head.set_image_and_patch_size(image_height, image_width);
+    pub fn set_image_and_patch_size(&mut self, image_height: usize, image_width: usize) {
+        self.depth_head
+            .set_image_and_patch_size(image_height, image_width);
     }
 }
 
@@ -546,6 +542,4 @@ impl<'a> Module for DepthAnythingV2<'a> {
 
         depth.relu()
     }
-
 }
-
