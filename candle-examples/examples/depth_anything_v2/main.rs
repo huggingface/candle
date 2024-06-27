@@ -6,11 +6,7 @@ extern crate accelerate_src;
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
-use std::ffi::OsString;
-use std::path::PathBuf;
-
-use clap::{Parser, ValueEnum};
-
+use args::Args;
 use candle::DType::{F32, U8};
 use candle::{Device, Module, Result, Tensor};
 use candle_examples::{load_image, load_image_and_resize, save_image};
@@ -18,9 +14,14 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DepthAnythingV2Config};
 use candle_transformers::models::dinov2;
 use candle_transformers::models::dinov2::DinoVisionTransformer;
+use clap::Parser;
+use std::ffi::OsString;
+use std::path::PathBuf;
 
+use crate::args::ModelSize;
 use crate::color_map::SpectralRColormap;
 
+mod args;
 mod color_map;
 
 // taken these from: https://huggingface.co/spaces/depth-anything/Depth-Anything-V2/blob/main/depth_anything_v2/dpt.py#L207
@@ -28,41 +29,6 @@ const MAGIC_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const MAGIC_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 const DINO_IMG_SIZE: usize = 518;
-
-#[derive(ValueEnum, Clone, Debug)]
-enum ModelSize {
-    S,
-    B,
-    L,
-    G,
-}
-
-#[derive(Parser)]
-struct Args {
-    #[arg(long)]
-    dinov2_model: Option<PathBuf>,
-
-    #[arg(long)]
-    dinov2_head: Option<PathBuf>,
-
-    #[arg(long)]
-    depth_anything_v2_model: Option<PathBuf>,
-
-    #[arg(long, value_enum, default_value_t = ModelSize::B)]
-    size: ModelSize,
-
-    #[arg(long)]
-    image: PathBuf,
-
-    #[arg(long)]
-    output_dir: Option<PathBuf>,
-
-    #[arg(long)]
-    cpu: bool,
-
-    #[arg(long)]
-    color_map: bool,
-}
 
 pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -170,7 +136,6 @@ fn dino_model(
             ModelSize::G => api
                 .model("jeroenvlek/dinov2-linear-heads-safetensors".into())
                 .get("dinov2_vitg14_linear_head.safetensors")?,
-
         },
         Some(path) => path,
     };
