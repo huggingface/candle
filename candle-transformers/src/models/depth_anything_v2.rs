@@ -2,11 +2,13 @@ use candle::D::Minus1;
 use candle::{Module, Result, Tensor};
 use candle_nn::ops::Identity;
 use candle_nn::{
-    batch_norm, conv2d, conv2d_no_bias, conv_transpose2d, linear, seq, Activation, BatchNorm,
-    BatchNormConfig, Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
+    Activation, batch_norm, BatchNorm, BatchNormConfig, conv2d, Conv2d, conv2d_no_bias, Conv2dConfig,
+    conv_transpose2d, ConvTranspose2dConfig, linear, seq, Sequential, VarBuilder,
 };
 
 use crate::models::dinov2::DinoVisionTransformer;
+
+pub const PATCH_MULTIPLE: usize = 14;
 
 #[derive(Clone)]
 pub struct DepthAnythingV2Config {
@@ -348,6 +350,8 @@ pub struct DPTHead {
     resize_layers: Vec<Box<dyn Module>>,
     readout_projections: Vec<Sequential>,
     scratch: Scratch,
+    image_size: Option<(usize, usize)>,
+    patch_size: Option<(usize, usize)>,
 }
 
 impl DPTHead {
@@ -424,7 +428,14 @@ impl DPTHead {
             resize_layers,
             readout_projections,
             scratch,
+            image_size: None,
+            patch_size: None
         })
+    }
+
+    fn set_image_and_patch_size(&mut self, image_height:usize, image_width: usize) {
+        self.image_size = Some((image_height, image_width));
+        self.patch_size = Some((image_height / PATCH_MULTIPLE, image_width / PATCH_MULTIPLE))
     }
 }
 
@@ -447,8 +458,8 @@ impl Module for DPTHead {
             let x = x.permute((0, 2, 1))?.reshape((
                 x_dims[0],
                 x_dims[x_dims.len() - 1],
-                self.conf.target_patch_size,
-                self.conf.target_patch_size,
+                self.patch_size.unwrap().0,
+                self.patch_size.unwrap().1,
             ))?;
             let x = self.projections[i].forward(&x)?;
 
@@ -459,7 +470,9 @@ impl Module for DPTHead {
         let layer_1_rn = self.scratch.layer1_rn.forward(&out[0])?;
         let layer_2_rn = self.scratch.layer2_rn.forward(&out[1])?;
         let layer_3_rn = self.scratch.layer3_rn.forward(&out[2])?;
-        let layer_4_rn = self.scratch.layer4_rn.forward(&out[3])?;    let path4 = self.scratch.refine_net4.forward(&layer_4_rn)?;
+        let layer_4_rn = self.scratch.layer4_rn.forward(&out[3])?;
+
+        let path4 = self.scratch.refine_net4.forward(&layer_4_rn)?;
 
         let res3_out = self
             .scratch
@@ -487,7 +500,7 @@ impl Module for DPTHead {
 
         let out = self.scratch.output_conv1.forward(&path1)?;
 
-        let out = out.interpolate2d(self.conf.input_image_size, self.conf.input_image_size)?;
+        let out = out.interpolate2d(self.image_size.unwrap().0, self.image_size.unwrap().1)?;
 
         self.scratch.output_conv2.forward(&out)
     }
@@ -513,6 +526,10 @@ impl<'a> DepthAnythingV2<'a> {
             conf,
         })
     }
+
+    pub fn set_image_and_patch_size(&mut self, image_height:usize, image_width: usize) {
+        self.depth_head.set_image_and_patch_size(image_height, image_width);
+    }
 }
 
 impl<'a> Module for DepthAnythingV2<'a> {
@@ -524,8 +541,11 @@ impl<'a> Module for DepthAnythingV2<'a> {
             self.conf.use_class_token,
             true,
         )?;
+
         let depth = self.depth_head.forward(&features)?;
 
         depth.relu()
     }
+
 }
+

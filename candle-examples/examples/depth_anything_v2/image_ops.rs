@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use candle::{Device, Tensor};
 use candle::DType::{F32, U8};
 use candle_examples::{load_image, load_image_and_resize};
+use candle_transformers::models::depth_anything_v2::PATCH_MULTIPLE;
 
 use crate::color_map::SpectralRColormap;
 
@@ -14,7 +15,6 @@ const LOWER_BOUND: &'static str = "lower_bound";
 const UPPER_BOUND: &'static str = "upper_bound";
 const MINIMAL: &'static str = "minimal";
 const DINO_IMG_SIZE: usize = 518;
-const PATCH_MULTIPLE: usize = 14;
 
 pub fn load_and_prep_image(
     image_path: &PathBuf,

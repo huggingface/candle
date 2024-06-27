@@ -33,7 +33,7 @@ pub fn main() -> anyhow::Result<()> {
     let dinov2 = dino_model(&args.size, args.dinov2_model, args.dinov2_head, &device)?;
     println!("DinoV2 model built");
 
-    let depth_anything =
+    let mut depth_anything =
         depth_anything_model(&dinov2, &args.size, args.depth_anything_v2_model, &device)?;
     println!("Depth Anything model built");
 
@@ -42,6 +42,8 @@ pub fn main() -> anyhow::Result<()> {
 
     println!("Loaded image {image:?}");
 
+    let (_, _, image_height, image_width) = image.dims4()?;
+    depth_anything.set_image_and_patch_size(image_height, image_width);
     let depth = depth_anything.forward(&image)?;
 
     println!("Got predictions {:?}", depth.shape());
