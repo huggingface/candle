@@ -233,8 +233,8 @@ fn post_process_image(
     original_width: usize,
     color_map: bool,
 ) -> Result<Tensor> {
-    let out = image.interpolate2d(original_height, original_width)?;
-    let out = scale_image(&out)?;
+    let out = scale_image(&image)?;
+    let out = out.interpolate2d(original_height, original_width)?;
 
     let out = if color_map {
         let spectral_r = SpectralRColormap::new();
