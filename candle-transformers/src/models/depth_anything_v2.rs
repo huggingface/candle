@@ -5,6 +5,7 @@ use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, conv_transpose2d, linear, seq, Activation, BatchNorm,
     BatchNormConfig, Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
 };
+use std::cell::RefCell;
 
 use crate::models::dinov2::DinoVisionTransformer;
 
@@ -170,14 +171,13 @@ pub struct FeatureFusionBlock {
     res_conv_unit1: ResidualConvUnit,
     res_conv_unit2: ResidualConvUnit,
     output_conv: Conv2d,
-    patch_multiplier: usize,
-    target_patch_size: Option<(usize, usize)>,
+    output_size: RefCell<Option<(usize, usize)>>,
+    skip_add: RefCell<Option<Tensor>>,
 }
 
 impl FeatureFusionBlock {
     pub fn new(
         conf: DepthAnythingV2Config,
-        patch_multiplier: usize,
         activation: Activation,
         vb: VarBuilder,
     ) -> Result<Self> {
@@ -197,26 +197,37 @@ impl FeatureFusionBlock {
             res_conv_unit1,
             res_conv_unit2,
             output_conv,
-            patch_multiplier,
-            target_patch_size: None,
+            output_size: RefCell::new(None),
+            skip_add: RefCell::new(None),
         })
     }
 
-    fn set_target_patch_size(&mut self, target_patch_height: usize, target_patch_width: usize) {
-        self.target_patch_size = Some((
-            target_patch_height * self.patch_multiplier,
-            target_patch_width * self.patch_multiplier,
-        ));
+    fn set_output_size(&self, output_height: usize, output_width: usize) {
+        *self.output_size.borrow_mut() = Some((output_height, output_width));
+    }
+
+    fn set_skip_add(&self, skip_add: &Tensor) {
+        *self.skip_add.borrow_mut() = Some(skip_add.clone())
     }
 }
 
 impl Module for FeatureFusionBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let out = self.res_conv_unit2.forward(xs)?;
-        let out = out.interpolate2d(
-            self.target_patch_size.unwrap().0,
-            self.target_patch_size.unwrap().1,
-        )?;
+        let out = if let Some(ref skip_add) = *self.skip_add.borrow() {
+            let res = self.res_conv_unit1.forward(&skip_add)?;
+            &xs.add(&res)?
+        } else {
+            xs
+        };
+
+        let out = self.res_conv_unit2.forward(out)?;
+        let (target_height, target_width) = if let Some(size) = *self.output_size.borrow() {
+            size
+        } else {
+            let (_, _, h, w) = out.dims4()?;
+            (h * 2, w * 2)
+        };
+        let out = out.interpolate2d(target_height, target_width)?;
 
         self.output_conv.forward(&out)
     }
@@ -273,13 +284,13 @@ impl Scratch {
         )?;
 
         let refine_net1 =
-            FeatureFusionBlock::new(conf.clone(), 8, Activation::Relu, vb.pp("refinenet1"))?;
+            FeatureFusionBlock::new(conf.clone(), Activation::Relu, vb.pp("refinenet1"))?;
         let refine_net2 =
-            FeatureFusionBlock::new(conf.clone(), 4, Activation::Relu, vb.pp("refinenet2"))?;
+            FeatureFusionBlock::new(conf.clone(), Activation::Relu, vb.pp("refinenet2"))?;
         let refine_net3 =
-            FeatureFusionBlock::new(conf.clone(), 2, Activation::Relu, vb.pp("refinenet3"))?;
+            FeatureFusionBlock::new(conf.clone(), Activation::Relu, vb.pp("refinenet3"))?;
         let refine_net4 =
-            FeatureFusionBlock::new(conf.clone(), 1, Activation::Relu, vb.pp("refinenet4"))?;
+            FeatureFusionBlock::new(conf.clone(), Activation::Relu, vb.pp("refinenet4"))?;
 
         let output_conv1 = conv2d(
             conf.num_features,
@@ -419,18 +430,6 @@ impl DPTHead {
         let patch_height = image_height / PATCH_MULTIPLE;
         let patch_width = image_width / PATCH_MULTIPLE;
         self.patch_size = Some((patch_height, patch_width));
-        self.scratch
-            .refine_net1
-            .set_target_patch_size(patch_height, patch_width);
-        self.scratch
-            .refine_net2
-            .set_target_patch_size(patch_height, patch_width);
-        self.scratch
-            .refine_net3
-            .set_target_patch_size(patch_height, patch_width);
-        self.scratch
-            .refine_net4
-            .set_target_patch_size(patch_height, patch_width);
     }
 }
 
@@ -467,31 +466,28 @@ impl Module for DPTHead {
         let layer_3_rn = self.scratch.layer3_rn.forward(&out[2])?;
         let layer_4_rn = self.scratch.layer4_rn.forward(&out[3])?;
 
+        let (_, _, output_height, output_width) = layer_3_rn.dims4()?;
+        self.scratch
+            .refine_net4
+            .set_output_size(output_height, output_width);
         let path4 = self.scratch.refine_net4.forward(&layer_4_rn)?;
 
-        let res3_out = self
-            .scratch
+        let (_, _, output_height, output_width) = layer_2_rn.dims4()?;
+        self.scratch
             .refine_net3
-            .res_conv_unit1
-            .forward(&layer_3_rn)?;
-        let res3_out = path4.add(&res3_out)?;
-        let path3 = self.scratch.refine_net3.forward(&res3_out)?;
+            .set_output_size(output_height, output_width);
+        self.scratch.refine_net3.set_skip_add(&layer_3_rn);
+        let path3 = self.scratch.refine_net3.forward(&path4)?;
 
-        let res2_out = self
-            .scratch
+        let (_, _, output_height, output_width) = layer_1_rn.dims4()?;
+        self.scratch
             .refine_net2
-            .res_conv_unit1
-            .forward(&layer_2_rn)?;
-        let res2_out = path3.add(&res2_out)?;
-        let path2 = self.scratch.refine_net2.forward(&res2_out)?;
+            .set_output_size(output_height, output_width);
+        self.scratch.refine_net2.set_skip_add(&layer_2_rn);
+        let path2 = self.scratch.refine_net2.forward(&path3)?;
 
-        let res1_out = self
-            .scratch
-            .refine_net1
-            .res_conv_unit1
-            .forward(&layer_1_rn)?;
-        let res1_out = path2.add(&res1_out)?;
-        let path1 = self.scratch.refine_net1.forward(&res1_out)?;
+        self.scratch.refine_net1.set_skip_add(&layer_1_rn);
+        let path1 = self.scratch.refine_net1.forward(&path2)?;
 
         let out = self.scratch.output_conv1.forward(&path1)?;
 
