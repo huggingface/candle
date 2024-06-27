@@ -111,24 +111,21 @@ impl ResidualConvUnit {
         activation: Activation,
         vb: VarBuilder,
     ) -> Result<Self> {
-        const KERNEL_SIZE: usize = 3;
         let conv_cfg = Conv2dConfig {
             padding: 1,
-            stride: 1,
-            dilation: 1,
-            groups: 1,
+            ..Default::default()
         };
         let conv1 = conv2d(
             conf.num_features,
             conf.num_features,
-            KERNEL_SIZE,
+            3,
             conv_cfg,
             vb.pp("conv1"),
         )?;
         let conv2 = conv2d(
             conf.num_features,
             conf.num_features,
-            KERNEL_SIZE,
+            3,
             conv_cfg,
             vb.pp("conv2"),
         )?;
@@ -242,9 +239,7 @@ impl Scratch {
         const KERNEL_SIZE: usize = 3;
         let conv_cfg = Conv2dConfig {
             padding: 1,
-            stride: 1,
-            dilation: 1,
-            groups: 1,
+            ..Default::default()
         };
 
         let layer1_rn = conv2d_no_bias(
@@ -301,12 +296,6 @@ impl Scratch {
             vb.pp("refinenet4"),
         )?;
 
-        let conv_cfg = Conv2dConfig {
-            padding: 1,
-            stride: 1,
-            dilation: 1,
-            groups: 1,
-        };
         let output_conv1 = conv2d(
             conf.num_features,
             conf.num_features / 2,
@@ -391,11 +380,9 @@ impl DPTHead {
                 conf.out_channel_sizes[1],
                 conf.out_channel_sizes[1],
                 2,
-                ConvTranspose2dConfig {
-                    padding: 0,
+            ConvTranspose2dConfig {
                     stride: 2,
-                    dilation: 1,
-                    output_padding: 0,
+                    ..Default::default()
                 },
                 vb.pp("resize_layers").pp("1"),
             )?),
@@ -404,11 +391,10 @@ impl DPTHead {
                 conf.out_channel_sizes[3],
                 conf.out_channel_sizes[3],
                 3,
-                Conv2dConfig {
+            Conv2dConfig {
                     padding: 1,
                     stride: 2,
-                    dilation: 1,
-                    groups: 1,
+                    ..Default::default()
                 },
                 vb.pp("resize_layers").pp("3"),
             )?),
