@@ -3,6 +3,22 @@ use crate::models::with_tracing::{linear, linear_no_bias, Linear};
 use candle::{Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Conv1d, Conv1dConfig, Embedding, LayerNorm, Module, VarBuilder};
 
+#[cfg(feature = "flash-attn")]
+fn flash_attn(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    softmax_scale: f32,
+    causal: bool,
+) -> Result<Tensor> {
+    candle_flash_attn::flash_attn(q, k, v, softmax_scale, causal)
+}
+
+#[cfg(not(feature = "flash-attn"))]
+fn flash_attn(_: &Tensor, _: &Tensor, _: &Tensor, _: f32, _: bool) -> Result<Tensor> {
+    unimplemented!("compile with '--features flash-attn'")
+}
+
 fn conv1d(
     in_channels: usize,
     out_channels: usize,
@@ -33,6 +49,8 @@ struct MultiHeadAttention {
     softmax_span: tracing::Span,
     matmul_span: tracing::Span,
     kv_cache: Option<(Tensor, Tensor)>,
+    head_dim: usize,
+    softmax_scale: f32,
 }
 
 impl MultiHeadAttention {
@@ -44,6 +62,9 @@ impl MultiHeadAttention {
         let value = linear(n_state, n_state, vb.pp("v_proj"))?;
         let key = linear_no_bias(n_state, n_state, vb.pp("k_proj"))?;
         let out = linear(n_state, n_state, vb.pp("out_proj"))?;
+        let head_dim = n_state / n_head;
+        // use default softmax
+        let softmax_scale = 1f32 / (head_dim as f32).sqrt();
         Ok(Self {
             query,
             key,
@@ -54,7 +75,62 @@ impl MultiHeadAttention {
             softmax_span,
             matmul_span,
             kv_cache: None,
+            head_dim,
+            softmax_scale,
         })
+    }
+
+    fn flash_forward(
+        &mut self,
+        x: &Tensor,
+        xa: Option<&Tensor>,
+        mask: Option<&Tensor>,
+        flush_cache: bool,
+    ) -> Result<Tensor> {
+        let _enter = self.span.enter();
+        let (bsz, q_len, n_state) = x.dims3()?;
+        let shape = [bsz, q_len, self.n_head, n_state / self.n_head];
+
+        let q = self.query.forward(x)?.reshape(&shape)?;
+        let (k, v) = match xa {
+            None => {
+                let k = self.key.forward(x)?.reshape(&shape)?;
+                let v = self.value.forward(x)?.reshape(&shape)?;
+                (k, v)
+            }
+            Some(x) => {
+                let (bsz, q_len, n_state) = x.dims3()?;
+                let shape = [bsz, q_len, self.n_head, n_state / self.n_head];
+                if flush_cache {
+                    self.kv_cache = None;
+                }
+                if let Some((k, v)) = &self.kv_cache {
+                    let _k = self.key.forward(x)?.reshape(&shape)?;
+                    let _v = self.value.forward(x)?.reshape(&shape)?;
+                    // concat the new k and v with the old k and v
+                    let k = Tensor::cat(&[k, &_k], 1)?;
+                    let v = Tensor::cat(&[v, &_v], 1)?;
+                    (k, v)
+                } else {
+                    let k = self.key.forward(x)?.reshape(&shape)?;
+                    let v = self.value.forward(x)?.reshape(&shape)?;
+                    self.kv_cache = Some((k.clone(), v.clone()));
+                    (k, v)
+                }
+            }
+        };
+
+        // convert to f16
+        let q = q.to_dtype(candle::DType::F16)?;
+        let k = k.to_dtype(candle::DType::F16)?;
+        let v = v.to_dtype(candle::DType::F16)?;
+
+        let mask_len = mask.map_or(Ok(0), |m| m.dim(1))?;
+        let wv = flash_attn(&q, &k, &v, self.softmax_scale, mask_len > 0)?
+            .to_dtype(candle::DType::F32)?;
+        let wv = wv.reshape((bsz, q_len, self.n_head * self.head_dim))?;
+        let attn_out = self.out.forward(&wv)?;
+        Ok(attn_out)
     }
 
     fn forward(
@@ -141,6 +217,7 @@ struct ResidualAttentionBlock {
     attn: MultiHeadAttention,
     attn_ln: LayerNorm,
     cross_attn: Option<(MultiHeadAttention, LayerNorm)>,
+    use_flash: bool,
     mlp_linear1: Linear,
     mlp_linear2: Linear,
     mlp_ln: LayerNorm,
@@ -148,7 +225,7 @@ struct ResidualAttentionBlock {
 }
 
 impl ResidualAttentionBlock {
-    fn load(n_state: usize, n_head: usize, ca: bool, vb: VarBuilder) -> Result<Self> {
+    fn load(n_state: usize, n_head: usize, ca: bool, fa: bool, vb: VarBuilder) -> Result<Self> {
         let span = tracing::span!(tracing::Level::TRACE, "residual-attn");
         let attn = MultiHeadAttention::load(n_state, n_head, vb.pp("self_attn"))?;
         let attn_ln = layer_norm(n_state, vb.pp("self_attn_layer_norm"))?;
@@ -167,6 +244,7 @@ impl ResidualAttentionBlock {
             attn,
             attn_ln,
             cross_attn,
+            use_flash: fa,
             mlp_linear1,
             mlp_linear2,
             mlp_ln,
@@ -182,12 +260,21 @@ impl ResidualAttentionBlock {
         flush_kv_cache: bool,
     ) -> Result<Tensor> {
         let _enter = self.span.enter();
-        let attn = self
-            .attn
-            .forward(&self.attn_ln.forward(x)?, None, mask, flush_kv_cache)?;
+        let attn = if self.use_flash {
+            self.attn
+                .flash_forward(&self.attn_ln.forward(x)?, None, mask, flush_kv_cache)?
+        } else {
+            self.attn
+                .forward(&self.attn_ln.forward(x)?, None, mask, flush_kv_cache)?
+        };
         let mut x = (x + attn)?;
         if let Some((attn, ln)) = &mut self.cross_attn {
-            x = (&x + attn.forward(&ln.forward(&x)?, xa, None, flush_kv_cache)?)?;
+            let attn_out = if self.use_flash {
+                attn.flash_forward(&ln.forward(&x)?, xa, None, flush_kv_cache)?
+            } else {
+                attn.forward(&ln.forward(&x)?, xa, None, flush_kv_cache)?
+            };
+            x = (&x + attn_out)?;
         }
         let mlp = self.mlp_linear2.forward(
             &self
@@ -260,7 +347,13 @@ impl AudioEncoder {
         let positional_embedding = sinusoids(n_ctx, n_state, vb.device())?;
         let blocks = (0..cfg.encoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, false, vb.pp(&format!("layers.{i}")))
+                ResidualAttentionBlock::load(
+                    n_state,
+                    n_head,
+                    false,
+                    cfg.use_flash_attn,
+                    vb.pp(&format!("layers.{i}")),
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         let ln_post = layer_norm(n_state, vb.pp("layer_norm"))?;
@@ -321,7 +414,13 @@ impl TextDecoder {
         let positional_embedding = vb.get((n_ctx, n_state), "embed_positions.weight")?;
         let blocks = (0..cfg.decoder_layers)
             .map(|i| {
-                ResidualAttentionBlock::load(n_state, n_head, true, vb.pp(&format!("layers.{i}")))
+                ResidualAttentionBlock::load(
+                    n_state,
+                    n_head,
+                    true,
+                    cfg.use_flash_attn,
+                    vb.pp(&format!("layers.{i}")),
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         let ln = layer_norm(n_state, vb.pp("layer_norm"))?;
