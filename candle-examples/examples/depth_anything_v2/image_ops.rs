@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use candle::{Device, Tensor, WithDType};
 use candle::DType::U8;
+use candle::{Device, Tensor};
 use candle_transformers::models::depth_anything_v2::PATCH_MULTIPLE;
 
 use crate::color_map::SpectralRColormap;
@@ -22,18 +22,13 @@ pub fn load_and_prep_image(
     println!("Loading image");
     let (image, original_height, original_width) = load_image_and_resize(&image_path)?;
     println!("Got image {image:?}, with original size ({original_height}, {original_width})");
-    println!("(min, max): {:?}", get_min_max(&image)?);
 
-    let image = image
-        .to_device(&device)?;
+    let image = image.to_device(&device)?;
 
     println!("Normalizing image");
     let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD)?;
-    println!("(min, max): {:?}", get_min_max(&image)?);
 
-    let image = image
-        .permute((2, 0, 1))?
-        .unsqueeze(0)?;
+    let image = image.permute((2, 0, 1))?.unsqueeze(0)?;
 
     Ok((original_height, original_width, image))
 }
@@ -56,25 +51,28 @@ pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
     );
 
     let img = img.resize_to_fill(
-            target_width as u32,
-            target_height as u32,
-            image::imageops::FilterType::CatmullRom,
-        );
+        target_width as u32,
+        target_height as u32,
+        image::imageops::FilterType::CatmullRom,
+    );
 
     let img = img.into_rgb32f();
     let data = img.into_raw();
-    let data = Tensor::from_vec(data, (target_height, target_width, 3), &Device::Cpu)?;
+    let rgb_data = Tensor::from_vec(data, (target_height, target_width, 3), &Device::Cpu)?;
 
-    Ok((data, original_height, original_width))
+    let index = Tensor::from_vec(vec![2u32, 1, 0], (3,), &Device::Cpu)?;
+    let bgr_data = rgb_data.index_select(&index, 2)?;
+
+    Ok((bgr_data, original_height, original_width))
 }
 
 fn normalize_image(image: &Tensor, mean: &[f32; 3], std: &[f32; 3]) -> candle::Result<Tensor> {
     let shape = (1, 1, 3);
-    let mean_tensor = Tensor::from_vec(mean.to_vec(), shape, &image.device())?
-        .broadcast_as(image.shape())?;
-    let std_tensor = Tensor::from_vec(std.to_vec(), shape, &image.device())?
-        .broadcast_as(image.shape())?;
-    image.sub(&mean_tensor)?.div(&std_tensor)
+    let mean_tensor = Tensor::from_vec(mean.to_vec(), shape, &image.device())?;
+    let std_tensor = Tensor::from_vec(std.to_vec(), shape, &image.device())?;
+    image
+        .broadcast_sub(&mean_tensor)?
+        .broadcast_div(&std_tensor)
 }
 
 pub fn post_process_image(
