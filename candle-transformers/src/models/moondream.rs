@@ -3,6 +3,7 @@ use crate::models::with_tracing::{layer_norm, linear_b, LayerNorm, Linear};
 use candle::{IndexOp, Module, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct Config {
     pub phi_config: PhiConfig,
     pub vision_config: VisionConfig,
