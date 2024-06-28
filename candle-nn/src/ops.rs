@@ -1,4 +1,3 @@
-use std::ops::Deref;
 use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D, IndexOp, CustomOp1};
 use rayon::prelude::*;
 use candle::backend::BackendStorage;
