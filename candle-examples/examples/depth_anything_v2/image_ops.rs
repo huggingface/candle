@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use candle::{Device, Tensor};
+use candle::{Device, Tensor, WithDType};
 use candle::DType::U8;
 use candle_transformers::models::depth_anything_v2::PATCH_MULTIPLE;
 
@@ -22,12 +22,14 @@ pub fn load_and_prep_image(
     println!("Loading image");
     let (image, original_height, original_width) = load_image_and_resize(&image_path)?;
     println!("Got image {image:?}, with original size ({original_height}, {original_width})");
+    println!("(min, max): {:?}", get_min_max(&image)?);
 
     let image = image
         .to_device(&device)?;
 
     println!("Normalizing image");
     let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD)?;
+    println!("(min, max): {:?}", get_min_max(&image)?);
 
     let image = image
         .permute((2, 0, 1))?
@@ -100,13 +102,18 @@ pub fn post_process_image(
     out.to_dtype(U8)
 }
 
+pub fn get_min_max(t: &Tensor) -> candle::Result<(f32, f32)> {
+    let flat_values: Vec<f32> = t.flatten_all()?.to_vec1()?;
+    let min_val = *flat_values.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
+    let max_val = *flat_values.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
+
+    Ok((min_val, max_val))
+}
+
 fn scale_image(depth: &Tensor) -> candle::Result<Tensor> {
-    let flat_values: Vec<f32> = depth.flatten_all()?.to_vec1()?;
+    let (min_val, max_val) = get_min_max(&depth)?;
 
-    let min_val = flat_values.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
-    let max_val = flat_values.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
-
-    let min_val_tensor = Tensor::try_from(*min_val)?
+    let min_val_tensor = Tensor::try_from(min_val)?
         .to_device(depth.device())?
         .broadcast_as(depth.shape())?;
     let depth = (depth - min_val_tensor)?;
