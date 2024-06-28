@@ -46,7 +46,7 @@ pub fn main() -> anyhow::Result<()> {
     depth_anything.set_image_and_patch_size(image_height, image_width);
     let depth = depth_anything.forward(&image)?;
 
-    println!("Got predictions {:?}", depth.shape());
+    println!("Got predictions {depth:?}");
 
     let output_image =
         image_ops::post_process_image(&depth, original_height, original_width, args.color_map)?;

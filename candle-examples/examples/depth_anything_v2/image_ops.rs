@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use candle::DType::{F32, U8};
 use candle::{Device, Tensor};
-use candle_examples::{load_image, load_image_and_resize};
+use candle_examples::load_image;
 use candle_transformers::models::depth_anything_v2::PATCH_MULTIPLE;
 
 use crate::color_map::SpectralRColormap;
@@ -20,7 +20,9 @@ pub fn load_and_prep_image(
     image_path: &PathBuf,
     device: &Device,
 ) -> anyhow::Result<(usize, usize, Tensor)> {
-    let (_original_image, original_height, original_width) = load_image(&image_path, None)?;
+    println!("Loading image");
+    let (original_image, original_height, original_width) = load_image(&image_path, None)?;
+    println!("Original image {original_image:?}");
 
     let (target_height, target_width) = get_new_size(
         original_height,
@@ -31,26 +33,33 @@ pub fn load_and_prep_image(
         LOWER_BOUND,
         PATCH_MULTIPLE,
     );
-    let image = load_image_and_resize(&image_path, target_width, target_height)?
-        .permute((0, 2, 1))? // see issue #2291
-        .unsqueeze(0)?
-        .to_dtype(F32)?
-        .to_device(&device)?;
 
-    let max_pixel_val = Tensor::try_from(255.0f32)?
+    println!("Resizing image");
+    let image = original_image
         .to_device(&device)?
+        .to_dtype(F32)?
+        .unsqueeze(0)?
+        .interpolate2d(target_height, target_width)?;
+
+    println!("Scaling image to [0, 1]");
+    let max_pixel_val = Tensor::try_from(255.0f32)?
+        .to_device(image.device())?
         .broadcast_as(image.shape())?;
-    let image = (image / max_pixel_val)?;
+    let image = image.div(&max_pixel_val)?;
+
+    println!("Normalizing image");
     let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD)?;
 
     Ok((original_height, original_width, image))
 }
 
 fn normalize_image(image: &Tensor, mean: &[f32; 3], std: &[f32; 3]) -> candle::Result<Tensor> {
-    let mean_tensor =
-        Tensor::from_vec(mean.to_vec(), (3, 1, 1), &image.device())?.broadcast_as(image.shape())?;
-    let std_tensor =
-        Tensor::from_vec(std.to_vec(), (3, 1, 1), &image.device())?.broadcast_as(image.shape())?;
+    let mean_tensor = Tensor::from_vec(mean.to_vec(), (3, 1, 1), &image.device())?
+        .unsqueeze(0)?
+        .broadcast_as(image.shape())?;
+    let std_tensor = Tensor::from_vec(std.to_vec(), (3, 1, 1), &image.device())?
+        .unsqueeze(0)?
+        .broadcast_as(image.shape())?;
     image.sub(&mean_tensor)?.div(&std_tensor)
 }
 
