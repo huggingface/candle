@@ -1019,7 +1019,7 @@ pub fn simple_eval(
 
                 let alpha = get_attr_opt::<f32>(node, "alpha")?.copied().unwrap_or(1.0);
                 let beta = get_attr_opt::<f32>(node, "beta")?.copied().unwrap_or(1.0);
-                
+
                 let alpha = Tensor::full(alpha, a.shape(), &Device::Cpu)?;
                 let beta = Tensor::full(beta, c.shape(), &Device::Cpu)?;
 
@@ -1029,7 +1029,10 @@ pub fn simple_eval(
                 let a = if trans_a == 0 { a.clone() } else { a.t()? };
                 let b = if trans_b == 0 { b.clone() } else { b.t()? };
 
-                let output = a.broadcast_mul(&alpha)?.broadcast_matmul(&b)?.broadcast_add(&c.broadcast_mul(&beta)?)?;
+                let output = a
+                    .broadcast_mul(&alpha)?
+                    .broadcast_matmul(&b)?
+                    .broadcast_add(&c.broadcast_mul(&beta)?)?;
                 values.insert(node.output[0].clone(), output);
             }
             // https://github.com/onnx/onnx/blob/main/docs/Changelog.md#ArgMax-1
