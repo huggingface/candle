@@ -25,9 +25,9 @@ const SIZE: usize = B * M * K;
 const DATA: [u8; SIZE] = create_cond_arr::<SIZE>();
 
 fn run_where_cond_benchmark(c: &mut Criterion, device: &Device, dtype: DType, name: &str) {
-    let tensor = Tensor::from_slice(DATA.as_slice(), (B, M, K), &device).unwrap();
-    let on_true = Tensor::ones((B, M, K), dtype, &device).unwrap();
-    let on_false = Tensor::zeros((B, M, K), dtype, &device).unwrap();
+    let tensor = Tensor::from_slice(DATA.as_slice(), (B, M, K), device).unwrap();
+    let on_true = Tensor::ones((B, M, K), dtype, device).unwrap();
+    let on_false = Tensor::zeros((B, M, K), dtype, device).unwrap();
 
     let elements = B * M * K;
     // E.g. 2 f32 tensors + 1 u8 tensor
