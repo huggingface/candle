@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
-use candle::DType::{F32, U8};
 use candle::{Device, Tensor};
-use candle_examples::load_image;
+use candle::DType::U8;
 use candle_transformers::models::depth_anything_v2::PATCH_MULTIPLE;
 
 use crate::color_map::SpectralRColormap;
@@ -21,9 +20,29 @@ pub fn load_and_prep_image(
     device: &Device,
 ) -> anyhow::Result<(usize, usize, Tensor)> {
     println!("Loading image");
-    let (original_image, original_height, original_width) = load_image(&image_path, None)?;
-    println!("Original image {original_image:?}");
+    let (image, original_height, original_width) = load_image_and_resize(&image_path)?;
+    println!("Got image {image:?}, with original size ({original_height}, {original_width})");
 
+    let image = image
+        .to_device(&device)?;
+
+    println!("Normalizing image");
+    let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD)?;
+
+    let image = image
+        .permute((2, 0, 1))?
+        .unsqueeze(0)?;
+
+    Ok((original_height, original_width, image))
+}
+
+pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
+    p: P,
+) -> candle::Result<(Tensor, usize, usize)> {
+    let img = image::io::Reader::open(p)?
+        .decode()
+        .map_err(candle::Error::wrap)?;
+    let (original_height, original_width) = (img.height() as usize, img.width() as usize);
     let (target_height, target_width) = get_new_size(
         original_height,
         original_width,
@@ -34,31 +53,24 @@ pub fn load_and_prep_image(
         PATCH_MULTIPLE,
     );
 
-    println!("Resizing image");
-    let image = original_image
-        .to_device(&device)?
-        .to_dtype(F32)?
-        .unsqueeze(0)?
-        .interpolate2d(target_height, target_width)?;
+    let img = img.resize_to_fill(
+            target_width as u32,
+            target_height as u32,
+            image::imageops::FilterType::CatmullRom,
+        );
 
-    println!("Scaling image to [0, 1]");
-    let max_pixel_val = Tensor::try_from(255.0f32)?
-        .to_device(image.device())?
-        .broadcast_as(image.shape())?;
-    let image = image.div(&max_pixel_val)?;
+    let img = img.into_rgb32f();
+    let data = img.into_raw();
+    let data = Tensor::from_vec(data, (target_height, target_width, 3), &Device::Cpu)?;
 
-    println!("Normalizing image");
-    let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD)?;
-
-    Ok((original_height, original_width, image))
+    Ok((data, original_height, original_width))
 }
 
 fn normalize_image(image: &Tensor, mean: &[f32; 3], std: &[f32; 3]) -> candle::Result<Tensor> {
-    let mean_tensor = Tensor::from_vec(mean.to_vec(), (3, 1, 1), &image.device())?
-        .unsqueeze(0)?
+    let shape = (1, 1, 3);
+    let mean_tensor = Tensor::from_vec(mean.to_vec(), shape, &image.device())?
         .broadcast_as(image.shape())?;
-    let std_tensor = Tensor::from_vec(std.to_vec(), (3, 1, 1), &image.device())?
-        .unsqueeze(0)?
+    let std_tensor = Tensor::from_vec(std.to_vec(), shape, &image.device())?
         .broadcast_as(image.shape())?;
     image.sub(&mean_tensor)?.div(&std_tensor)
 }
