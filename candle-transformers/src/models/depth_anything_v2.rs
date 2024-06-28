@@ -214,7 +214,7 @@ impl FeatureFusionBlock {
 impl Module for FeatureFusionBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let out = if let Some(ref skip_add) = *self.skip_add.borrow() {
-            let res = self.res_conv_unit1.forward(&skip_add)?;
+            let res = self.res_conv_unit1.forward(skip_add)?;
             &xs.add(&res)?
         } else {
             xs
@@ -302,12 +302,10 @@ impl Scratch {
 
         let output_conv2 = seq();
         const HEAD_FEATURES_2: usize = 32;
-        const OUT_CHANNELS_2: usize = 1;
-        const KERNEL_SIZE_2: usize = 1;
         let output_conv2 = output_conv2.add(conv2d(
             conf.num_features / 2,
             HEAD_FEATURES_2,
-            KERNEL_SIZE,
+            3,
             conv_cfg,
             vb.pp("output_conv2").pp("0"),
         )?);
@@ -315,13 +313,12 @@ impl Scratch {
             .add(Activation::Relu)
             .add(conv2d(
                 HEAD_FEATURES_2,
-                OUT_CHANNELS_2,
-                KERNEL_SIZE_2,
-                conv_cfg,
+                1,
+                1,
+                Default::default(),
                 vb.pp("output_conv2").pp("2"),
             )?)
-            .add(Activation::Relu)
-            .add(Identity::new());
+            .add(Activation::Relu);
 
         Ok(Self {
             layer1_rn,
