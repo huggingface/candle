@@ -113,11 +113,9 @@ struct Block {
 
 impl Block {
     fn new(vb: VarBuilder, dim: usize, num_heads: usize) -> Result<Self> {
-        //let norm1 = layer_norm(dim, 1e-5, vb.pp("norm1"))?;
         let norm1 = layer_norm(dim, 1e-6, vb.pp("norm1"))?;
         let attn = Attention::new(vb.pp("attn"), dim, num_heads, true, true)?;
         let ls1 = LayerScale::new(vb.pp("ls1"), dim)?;
-        //let norm2 = layer_norm(dim, 1e-5, vb.pp("norm2"))?;
         let norm2 = layer_norm(dim, 1e-6, vb.pp("norm2"))?;
         let mlp = Mlp::new(vb.pp("mlp"), dim, dim * 4, true)?;
         let ls2 = LayerScale::new(vb.pp("ls2"), dim)?;
@@ -215,7 +213,6 @@ impl DinoVisionTransformer {
             "pos_embed",
         )?;
         let head = linear(vb.pp("head"), embed_dim, NUM_CLASSES, true)?;
-        //let norm = layer_norm(embed_dim, 1e-5, vb.pp("norm"))?;
         let norm = layer_norm(embed_dim, 1e-6, vb.pp("norm"))?;
         let vb_b = vb.pp("blocks");
         let blocks = (0..depth)
@@ -232,18 +229,14 @@ impl DinoVisionTransformer {
         })
     }
 
-    /*
-    To be added back later on
-
     fn interpolate_pos_encoding(&self, xs: &Tensor, w: usize, h: usize) -> Result<Tensor> {
         let npatch = xs.dim(1)? - 1;
         let n = self.pos_embed.dim(1)? - 1;
         let sqrt_n = (n as f64).sqrt();
         if npatch == n && w == h {
-            return Ok(xs.clone());
+            return Ok(self.pos_embed.clone());
         }
-        let class_pos_embed = self.pos_embed.i((.., ..1))?;
-        let patch_pos_embed = self.pos_embed.i((.., 1..))?;
+        let patch_pos_embed = &self.pos_embed;
         let dim = xs.dim(D::Minus1)?;
         let (w0, h0) = ((w / PATCH_SIZE) as f64 + 0.1, (h / PATCH_SIZE) as f64 + 0.1);
         let patch_pos_embed = patch_pos_embed
@@ -253,14 +246,11 @@ impl DinoVisionTransformer {
         // This uses bicubic interpolation in the original implementation.
         let patch_pos_embed = patch_pos_embed.upsample_nearest2d(h0 as usize, w0 as usize)?;
         let el_count = patch_pos_embed.shape().elem_count();
-        let patch_pos_embed =
-            patch_pos_embed
-                .transpose(1, 2)?
-                .transpose(2, 3)?
-                .reshape((1, el_count / dim, dim))?;
-        Tensor::cat(&[&class_pos_embed, &patch_pos_embed], 1)
+        patch_pos_embed
+            .transpose(1, 2)?
+            .transpose(2, 3)?
+            .reshape((1, el_count / dim, dim))
     }
-    */
 
     fn prepare_tokens_with_mask(&self, xs: &Tensor) -> Result<Tensor> {
         let (_b, _nc, w, h) = xs.dims4()?;
@@ -269,10 +259,8 @@ impl DinoVisionTransformer {
             panic!("Error: The input tensor should have the shape: Bx3x518x518.");
         }
         let xs = self.patch_embed.forward(xs)?;
-        let xs = (&xs + &self.pos_embed)?;
-        //let xs = Tensor::cat(&[&self.cls_token, &xs], 1)?;
+        let xs = (&xs +  &self.interpolate_pos_encoding(&xs, w, h)?)?;
         let xs = Tensor::cat(&[&self.cls_token, &self.reg_token, &xs], 1)?;
-        //&xs + &self.interpolate_pos_encoding(&xs, w, h)?
         return Ok(xs);
     }
 }
@@ -285,10 +273,7 @@ impl Module for DinoVisionTransformer {
         }
         let xs = self.norm.forward(&xs)?;
         let xs_norm_clstoken = xs.i((.., 0))?;
-        //let xs_norm_patchtokens = xs.i((.., 1..))?.mean(1)?;
-        let xs = xs_norm_clstoken;
-        //let xs = Tensor::cat(&[xs_norm_clstoken, xs_norm_patchtokens], D::Minus1)?;
-        self.head.forward(&xs)
+        self.head.forward(&xs_norm_clstoken)
     }
 }
 
