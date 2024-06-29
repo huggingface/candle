@@ -22,4 +22,4 @@ cargo run --example dinov2reg4 --release -- --image candle-examples/examples/din
 
 ```
 
-![Orchis Simia](bd2d3830ac3270218ba82fd24e2290becd01317c.jpg)
+![Orchis Simia](https://bs.plantnet.org/image/o/bd2d3830ac3270218ba82fd24e2290becd01317c)
