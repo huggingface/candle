@@ -114,6 +114,10 @@ impl TextGeneration {
             tokens.push(next_token);
             generated_tokens += 1;
             if next_token == eos_token {
+                if let Some(t) = self.tokenizer.decode_rest()? {
+                    print!("{t}");
+                    std::io::stdout().flush()?;
+                }
                 break;
             }
             if let Some(t) = self.tokenizer.next_token(next_token)? {
