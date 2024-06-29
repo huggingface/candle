@@ -35,7 +35,6 @@ pub fn load_image518<P: AsRef<std::path::Path>>(p: P) -> Result<Tensor> {
         .broadcast_div(&std)
 }
 
-
 pub const CLASS_COUNT: i64 = 1000;
 
 pub const CLASSES: [&str; 1000] = [

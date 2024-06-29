@@ -1,4 +1,3 @@
-
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
@@ -208,10 +207,7 @@ impl DinoVisionTransformer {
             PatchEmbed::new(vb.pp("patch_embed"), IMG_SIZE, PATCH_SIZE, 3, embed_dim)?;
         let cls_token = vb.get((1, 1, embed_dim), "cls_token")?;
         let reg_token = vb.get((1, 4, embed_dim), "reg_token")?;
-        let pos_embed = vb.get(
-            (1, patch_embed.num_patches, embed_dim),
-            "pos_embed",
-        )?;
+        let pos_embed = vb.get((1, patch_embed.num_patches, embed_dim), "pos_embed")?;
         let head = linear(vb.pp("head"), embed_dim, NUM_CLASSES, true)?;
         let norm = layer_norm(embed_dim, 1e-6, vb.pp("norm"))?;
         let vb_b = vb.pp("blocks");
@@ -254,14 +250,13 @@ impl DinoVisionTransformer {
 
     fn prepare_tokens_with_mask(&self, xs: &Tensor) -> Result<Tensor> {
         let (_b, _nc, w, h) = xs.dims4()?;
-        if (w != IMG_SIZE) || (h != IMG_SIZE)
-        {
+        if (w != IMG_SIZE) || (h != IMG_SIZE) {
             panic!("Error: The input tensor should have the shape: Bx3x518x518.");
         }
         let xs = self.patch_embed.forward(xs)?;
-        let xs = (&xs +  &self.interpolate_pos_encoding(&xs, w, h)?)?;
+        let xs = (&xs + &self.interpolate_pos_encoding(&xs, w, h)?)?;
         let xs = Tensor::cat(&[&self.cls_token, &self.reg_token, &xs], 1)?;
-        return Ok(xs);
+        Ok(xs)
     }
 }
 
