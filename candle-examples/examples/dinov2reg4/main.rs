@@ -3,9 +3,6 @@
 //! https://huggingface.co/spaces/BVRA/PlantCLEF2024
 //! https://zenodo.org/records/10848263
 
-// Exemple d'appel
-// cargo run --example dinov2reg4 --release -- --image candle-examples/examples/dinov2reg4/bd2d3830ac3270218ba82fd24e2290becd01317c.jpg
-
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
 
