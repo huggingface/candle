@@ -54,18 +54,17 @@ impl ModuleT for Vgg<'_> {
 fn conv2d_block(convs: &[(usize, usize, &str)], vb: &VarBuilder) -> Result<FuncT<'static>> {
     let layers = convs
         .iter()
-        .enumerate()
-        .map(|(_, &(in_c, out_c, name))| {
+        .map(|(in_c, out_c, name)| {
             candle_nn::conv2d(
-                in_c,
-                out_c,
+                *in_c,
+                *out_c,
                 3,
                 candle_nn::Conv2dConfig {
                     stride: 1,
                     padding: 1,
                     ..Default::default()
                 },
-                vb.pp(name),
+                vb.pp(*name),
             )
         })
         .collect::<Result<Vec<_>>>()?;

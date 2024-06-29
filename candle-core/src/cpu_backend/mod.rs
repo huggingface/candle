@@ -121,7 +121,8 @@ impl ReduceIndex {
         let dst_len = src_l.shape().elem_count() / reduce_dim_size;
         let mut dst: Vec<U> = Vec::with_capacity(dst_len);
         let dst_to_set = dst.spare_capacity_mut();
-        let dst_to_set = unsafe { std::mem::transmute::<_, &mut [U]>(dst_to_set) };
+        let dst_to_set =
+            unsafe { std::mem::transmute::<&mut [std::mem::MaybeUninit<U>], &mut [U]>(dst_to_set) };
         match src_l.contiguous_offsets() {
             Some((o1, o2)) => {
                 let src = &src[o1..o2];
