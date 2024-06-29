@@ -447,6 +447,70 @@ impl Map1 for UpsampleNearest2D {
     }
 }
 
+struct UpsampleBilinear2D(usize, usize, bool);
+
+
+impl Map1 for UpsampleBilinear2D {
+    fn f<T: WithDType>(&self, src: &[T], layout: &Layout) -> Result<Vec<T>> {
+        let (dst_h, dst_w) = (self.0, self.1);
+        let (b_sz, c, src_h, src_w) = layout.shape().dims4()?;
+        let stride = layout.stride();
+        let (stride_h, stride_w) = (stride[2], stride[3]);
+        let src_index = layout.start_offset();
+
+        let (scale_h, scale_w) = if self.2 {
+            ((src_h - 1) as f64 / (dst_h - 1) as f64, (src_w - 1) as f64 / (dst_w - 1) as f64)
+        } else {
+            (src_h as f64 / dst_h as f64, src_w as f64 / dst_w as f64)
+        };
+
+        let mut dst = vec![T::zero(); b_sz * c * dst_h * dst_w];
+
+        for b_idx in 0..b_sz {
+            let dst = &mut dst[b_idx * c * dst_h * dst_w..];
+            let src_index = src_index + b_idx * stride[0];
+            for c_idx in 0..c {
+                let dst = &mut dst[c_idx * dst_h * dst_w..];
+                let src_index = src_index + c_idx * stride[1];
+                for h_idx in 0..dst_h {
+                    for w_idx in 0..dst_w {
+                        let src_h_pos = if self.2 {
+                            (h_idx as f64 * scale_h).min(src_h as f64 - 1.0)
+                        } else {
+                            ((h_idx as f64 + 0.5) * scale_h - 0.5).min(src_h as f64 - 1.0).max(0.0)
+                        };
+                        let src_w_pos = if self.2 {
+                            (w_idx as f64 * scale_w).min(src_w as f64 - 1.0)
+                        } else {
+                            ((w_idx as f64 + 0.5) * scale_w - 0.5).min(src_w as f64 - 1.0).max(0.0)
+                        };
+
+                        let src_h_low = src_h_pos.floor() as usize;
+                        let src_w_low = src_w_pos.floor() as usize;
+                        let src_h_high = (src_h_low + 1).min(src_h - 1);
+                        let src_w_high = (src_w_low + 1).min(src_w - 1);
+
+                        let lh = src_h_pos - src_h_low as f64;
+                        let lw = src_w_pos - src_w_low as f64;
+                        let hh = 1.0 - lh;
+                        let hw = 1.0 - lw;
+
+                        let v1 = src[src_index + src_h_low * stride_h + src_w_low * stride_w] * T::from_f64(hh * hw);
+                        let v2 = src[src_index + src_h_low * stride_h + src_w_high * stride_w] * T::from_f64(hh * lw);
+                        let v3 = src[src_index + src_h_high * stride_h + src_w_low * stride_w] * T::from_f64(lh * hw);
+                        let v4 = src[src_index + src_h_high * stride_h + src_w_high * stride_w] * T::from_f64(lh * lw);
+
+                        dst[h_idx * dst_w + w_idx] = v1 + v2 + v3 + v4;
+                    }
+                }
+            }
+        }
+
+        Ok(dst)
+    }
+}
+
+
 struct Gather<'a, I: IntDType> {
     ids: &'a [I],
     ids_l: &'a Layout,
@@ -1932,6 +1996,10 @@ impl BackendStorage for CpuStorage {
 
     fn upsample_nearest2d(&self, layout: &Layout, h: usize, w: usize) -> Result<Self> {
         UpsampleNearest2D(h, w).map(self, layout)
+    }
+
+    fn upsample_bilinear2d(&self, layout: &Layout, h: usize, w: usize, align_corners: bool) -> Result<Self> {
+        UpsampleBilinear2D(h, w, align_corners).map(self, layout)
     }
 
     fn powf(&self, layout: &Layout, e: f64) -> Result<Self> {

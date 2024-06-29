@@ -845,6 +845,7 @@ impl Map1 for UpsampleNearest2D {
     }
 }
 
+
 struct WhereCond<'a>(&'a CudaStorage, &'a Layout);
 impl<'a> Map2 for WhereCond<'a> {
     fn f<T: DeviceRepr + WithDType + ValidAsZeroBits>(
@@ -1611,6 +1612,11 @@ impl BackendStorage for CudaStorage {
         let slice = UpsampleNearest2D(out_w, out_h).map(&self.slice, &device, l)?;
         Ok(Self { slice, device })
     }
+
+    fn upsample_bilinear2d(&self, _layout: &Layout, _h: usize, _w: usize, _align_corners: bool) -> Result<Self> {
+        crate::bail!("upsample_bilinear2d is not supported on cuda")
+    }
+
 
     fn index_select(&self, ids: &Self, l: &Layout, ids_l: &Layout, dim: usize) -> Result<Self> {
         let device = self.device().clone();

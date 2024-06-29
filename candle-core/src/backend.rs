@@ -67,6 +67,7 @@ pub trait BackendStorage: Sized {
     fn max_pool2d(&self, _: &Layout, _: (usize, usize), _: (usize, usize)) -> Result<Self>;
     fn upsample_nearest1d(&self, _: &Layout, _: usize) -> Result<Self>;
     fn upsample_nearest2d(&self, _: &Layout, _: usize, _: usize) -> Result<Self>;
+    fn upsample_bilinear2d(&self, _: &Layout, _: usize, _: usize, _: bool) -> Result<Self>;
 
     fn gather(&self, _: &Layout, _: &Self, _: &Layout, _: usize) -> Result<Self>;
     fn scatter_add(
@@ -111,6 +112,7 @@ pub trait BackendStorage: Sized {
         _src_offset: usize,
         _dst_offset: usize,
     ) -> Result<()>;
+
 }
 
 pub trait BackendDevice: Sized + std::fmt::Debug + Clone {
