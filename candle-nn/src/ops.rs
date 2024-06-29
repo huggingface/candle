@@ -1,3 +1,4 @@
+use num_traits::ToPrimitive;
 use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D, IndexOp, CustomOp1};
 use rayon::prelude::*;
 use candle::backend::BackendStorage;
@@ -957,7 +958,10 @@ fn end_index(curr_index: f32, output_size: f32, input_size: f32) -> usize {
     ((curr_index + 1.0f32) * input_size / output_size).ceil() as usize
 }
 
-pub fn adaptive_avg_pool1d<T: candle::WithDType + num_traits::Float>(xs: &Vec<T>, layout: &Layout, output_size: usize) -> Vec<T> {
+pub fn adaptive_avg_pool1d<T>(xs: &Vec<T>, layout: &Layout, output_size: usize) -> Vec<T>
+where
+    T: num_traits::ToPrimitive + num_traits::NumCast + Copy + std::ops::Add<Output=T> + std::ops::Div<Output = T> + Default,
+{
     let ndim = layout.dims().len();
     let channels = if ndim == 3 {
         layout.dims()[1]
@@ -970,11 +974,14 @@ pub fn adaptive_avg_pool1d<T: candle::WithDType + num_traits::Float>(xs: &Vec<T>
     for b in 0..B {
         for c in 0..channels {
             for i in 0..output_size {
-                let start = start_index(i as f32, output_size as f32, L as f32);
-                let end = end_index(i as f32, output_size as f32, L as f32);
+                let if32 = i.to_f32().unwrap();
+                let lf32 = L.to_f32().unwrap();
+                let output_size_f32 = output_size.to_f32().unwrap();
+                let start = start_index(if32, output_size_f32, lf32);
+                let end = end_index(if32, output_size_f32, lf32);
                 let mut sum: T = T::from(0).unwrap();
                 for j in start..end {
-                    sum += xs[b * channels * L + c * L + j];
+                    sum = sum + xs[b * channels * L + c * L + j];
                 }
                 let diff: T = T::from(end - start).unwrap();
                 ys.push(sum / diff);
@@ -1014,6 +1021,15 @@ impl CustomOp1 for AdaptiveAvgPool1d {
             }
             CpuStorage::F64(slice) => {
                 CpuStorage::F64(adaptive_avg_pool1d::<f64>(slice, layout, self.output_size))
+            }
+            CpuStorage::U8(slice) => {
+                CpuStorage::U8(adaptive_avg_pool1d::<u8>(slice, layout, self.output_size))
+            }
+            CpuStorage::U32(slice) => {
+                CpuStorage::U32(adaptive_avg_pool1d::<u32>(slice, layout, self.output_size))
+            }
+            CpuStorage::I64(slice) => {
+                CpuStorage::I64(adaptive_avg_pool1d::<i64>(slice, layout, self.output_size))
             }
             _ => candle::bail!("adaptive_avg_pool1d not implemented for {storage:?}"),
         };
