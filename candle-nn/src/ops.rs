@@ -1,7 +1,6 @@
 use num_traits::ToPrimitive;
-use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D, IndexOp, CustomOp1};
+use candle::{CpuStorage, DType, Layout, Module, Result, Shape, Tensor, D, CustomOp1};
 use rayon::prelude::*;
-use candle::backend::BackendStorage;
 
 /// Applies the softmax function to the input tensor, rescaling the element so that elements on
 /// a slice of fixed index on dimension `dim` are between 0 and 1 and sum to 1.
@@ -960,7 +959,7 @@ fn end_index(curr_index: f32, output_size: f32, input_size: f32) -> usize {
 
 pub fn adaptive_avg_pool1d<T>(xs: &Vec<T>, layout: &Layout, output_size: usize) -> Vec<T>
 where
-    T: num_traits::ToPrimitive + num_traits::NumCast + Copy + std::ops::Add<Output=T> + std::ops::Div<Output = T> + Default,
+    T: Send+ Sync + ToPrimitive + num_traits::NumCast + Copy + std::ops::Add<Output=T> + std::ops::Div<Output = T> + Default,
 {
     let ndim = layout.dims().len();
     let channels = if ndim == 3 {
@@ -970,26 +969,29 @@ where
     };
     let B = layout.dims()[0];
     let L = layout.dims()[ndim - 1];
-    let mut ys = Vec::with_capacity(B * channels * output_size);
-    for b in 0..B {
-        for c in 0..channels {
-            for i in 0..output_size {
-                let if32 = i.to_f32().unwrap();
-                let lf32 = L.to_f32().unwrap();
-                let output_size_f32 = output_size.to_f32().unwrap();
-                let start = start_index(if32, output_size_f32, lf32);
-                let end = end_index(if32, output_size_f32, lf32);
-                let mut sum: T = T::from(0).unwrap();
-                for j in start..end {
-                    sum = sum + xs[b * channels * L + c * L + j];
-                }
-                let diff: T = T::from(end - start).unwrap();
-                ys.push(sum / diff);
-            }
-        }
-    }
+    let mut ys: Vec<T> = vec![T::from(0).unwrap(); B * channels * output_size];
+    ys.par_chunks_mut(output_size).enumerate().for_each(|(idx, chunk)| {
+        let b = idx / channels;
+        let c = idx % channels;
 
-    return ys;
+        for i in 0..output_size {
+            let if32 = i.to_f32().unwrap();
+            let lf32 = L.to_f32().unwrap();
+            let output_size_f32 = output_size.to_f32().unwrap();
+            let start = start_index(if32, output_size_f32, lf32);
+            let end = end_index(if32, output_size_f32, lf32);
+            let mut sum: T = T::from(0).unwrap();
+
+            for j in start..end {
+                sum = sum + xs[b * channels * L + c * L + j];
+            }
+
+            let diff: T = T::from(end - start).unwrap();
+            chunk[i] = sum / diff;
+        }
+    });
+
+    ys
 }
 
 #[derive(Clone, Debug)]
@@ -1031,7 +1033,6 @@ impl CustomOp1 for AdaptiveAvgPool1d {
             CpuStorage::I64(slice) => {
                 CpuStorage::I64(adaptive_avg_pool1d::<i64>(slice, layout, self.output_size))
             }
-            _ => candle::bail!("adaptive_avg_pool1d not implemented for {storage:?}"),
         };
 
         let mut dims = layout.dims().to_vec();
