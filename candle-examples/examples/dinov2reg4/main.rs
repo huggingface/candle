@@ -39,7 +39,7 @@ pub fn main() -> anyhow::Result<()> {
     let f_species_id_mapping = "candle-examples/examples/dinov2reg4/species_id_mapping.txt";
     let classes: Vec<String> = std::fs::read_to_string(f_species_id_mapping)
         .expect("missing classes file")
-        .split("\n")
+        .split('\n')
         .map(|s| s.to_string())
         .collect();
 
