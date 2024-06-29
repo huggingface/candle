@@ -21,6 +21,11 @@ impl Sequential {
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }
+
+    /// Returns a reference to the specified sub-layer.
+    pub fn layer(&self, index: i64) -> Option<&dyn Module> {
+        self.layers.get(index as usize).map(|l| &**l)
+    }
 }
 
 impl Module for Sequential {
