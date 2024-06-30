@@ -14,10 +14,10 @@ var<workgroup> sharedSums: array<DTYPE, 64>;
 var<workgroup> sharedIndex: array<u32, 64>; 
 
 @compute
-@workgroup_size(64,1,1)
+@workgroup_size(1,64,1)
 fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let workgroup_id = global_id.x;
-    let output_index = global_id.y;
+    let workgroup_id = global_id.y;
+    let output_index = global_id.x;
     
     //Start Index of the Elements to Reduce
 
@@ -104,10 +104,10 @@ fn reduce(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 @compute
-@workgroup_size(64,1,1)
+@workgroup_size(1,64,1)
 fn reduce_index(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let workgroup_id = global_id.x;
-    let output_index = global_id.y;
+    let workgroup_id = global_id.y;
+    let output_index = global_id.x;
     
     //Start Index of the Elements to Reduce
 

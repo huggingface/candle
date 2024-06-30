@@ -1,15 +1,15 @@
 #include "../util.pwgsl"
 
 #define op_unary.operation           op_meta[0]
-#define op_unary.scalar1             bitcast<DTYPE>(op_meta[1])
-#define op_unary.scalar2             bitcast<DTYPE>(op_meta[2])
+#define op_unary.scalar1             bitcast<f32>(op_meta[1])
+#define op_unary.scalar2             bitcast<f32>(op_meta[2])
 #define op_unary.seed                op_meta[3]
 #define op_unary.input1_layout       4u
 
 
 #define op_unary_contiguous.operation           op_meta[0]
-#define op_unary_contiguous.scalar1             bitcast<DTYPE>(op_meta[1])
-#define op_unary_contiguous.scalar2             bitcast<DTYPE>(op_meta[2])
+#define op_unary_contiguous.scalar1             bitcast<f32>(op_meta[1])
+#define op_unary_contiguous.scalar2             bitcast<f32>(op_meta[2])
 #define op_unary_contiguous.seed                op_meta[3]
 #define op_unary_contiguous.offset              op_meta[4]
 #define op_unary_contiguous.length              op_meta[5]
@@ -129,7 +129,7 @@ fn erf(x : f32) -> f32{
 #endif
 
 //all Unary Operations(No Input)
-fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : DTYPE, scalar2 : DTYPE, seed : u32){
+fn set_unary(operation : u32, id : u32, x : DTYPE, scalar1 : f32, scalar2 : f32, seed : u32){
 switch operation {
         case 0u{ // set 0
             v_dest[id] = ZERO;
@@ -150,7 +150,12 @@ switch operation {
             v_dest[id] = x * x;
         }
         case 6u{//Affine
-            v_dest[id] = x * scalar1 + scalar2;
+#ifdef u32
+                v_dest[id] = u32(f32(x) * scalar1 + scalar2);
+#endif
+#ifdef f32
+                v_dest[id] = x * scalar1 + scalar2;
+#endif
         }
 
 #ifdef f32
@@ -286,6 +291,27 @@ switch operation {
              v_dest[id] = (erf(x / sqrt(2.0)) + 1.) * 0.5 * x;
         }
 #endif
+#ifdef u32
+        case 101u{ //add
+            v_dest[id] = x + u32(scalar1);
+        }
+        case 102u{ //mult
+            v_dest[id] = u32(f32(x) * scalar1);
+        }
+        case 103u{ //minus
+            v_dest[id] = x - u32(scalar1);
+        }
+        case 104u{ //div
+            v_dest[id] = u32(f32(x) / scalar1);
+        }
+        case 105u{ //max
+            v_dest[id] = max(x, u32(scalar1));
+        }
+        case 106u{ //min
+            v_dest[id] = min(x, u32(scalar1));
+        }
+#endif
+#ifdef f32
         case 101u{ //add
             v_dest[id] = x + scalar1;
         }
@@ -302,8 +328,10 @@ switch operation {
             v_dest[id] = max(x, scalar1);
         }
         case 106u{ //min
-            v_dest[id] = min(x, scalar1);
+            v_dest[id] = min(x,scalar1);
         }
+#endif
+
 #ifdef f32
         case 107u{ //powf
             v_dest[id] = pow(x, scalar1);

@@ -116,8 +116,8 @@ pub fn queue_unary_from_buffer_op(
         meta.add(scalar1);
         meta.add(scalar2);
         meta.add(dev.rand_state.lock().unwrap().next_u32());
-        meta.add(input_layout.start_offset());       //offset
-        meta.add(input_layout.shape().elem_count()); //length
+        meta.add(input_layout.start_offset());       //offset, do not change, will be checked at flush_gpu_command
+        meta.add(input_layout.shape().elem_count()); //length 
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBufferContiguous)?;
 

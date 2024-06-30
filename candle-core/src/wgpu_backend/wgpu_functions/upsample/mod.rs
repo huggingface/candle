@@ -17,7 +17,7 @@ pub fn queue_upsample1d(
 
     let strides = layout.stride();
 
-    let (mut meta,  meta_offset) = get_meta(&dev, 9);
+    let (mut meta,  meta_offset) = get_meta(&dev, 10);
 
     meta.add(target_size);
     meta.add(b);

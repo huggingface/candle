@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
-use super::{create_bind_group_input1, enqueue, enqueue_workgroups, get_meta, get_size};
+use super::{create_bind_group_input1, enqueue, enqueue_workgroups, get_meta, get_size, MAX_DISPATCH_SIZE};
 
 pub fn queue_copy_strided(
     dev: &WgpuDevice,
@@ -130,19 +130,39 @@ pub fn queue_copy2d(
         meta.add(input_offset);
         meta.add(dest_offset);
 
-        let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::Copy2d)?;
     
         let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
-        enqueue_workgroups(
-            meta,
-            pipeline,
-            bind_group,
-            (d1 + 7) / 8,
-            (d2 + 7) / 8,
-            1,
-            #[cfg(feature = "wgpu_debug")]
-            crate::wgpu::device::QueueDebugInfo::new(&format!("copy2d dtype:{:?}", dtype), d1 * d2),
-        );
+        
+        let x = (d1 + 15) / 16;
+        let y = (d2 + 15) / 16;
+
+
+        if y > MAX_DISPATCH_SIZE{
+            let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::Copy2dTranspose)?;
+            enqueue_workgroups(
+                meta,
+                pipeline,
+                bind_group,
+                y,
+                x,
+                1,
+                #[cfg(feature = "wgpu_debug")]
+                crate::wgpu::device::QueueDebugInfo::new(&format!("copy2dTranpose dtype:{:?}", dtype), d1 * d2),
+            );
+        }
+        else{
+            let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::Copy2d)?;
+            enqueue_workgroups(
+                meta,
+                pipeline,
+                bind_group,
+                x,
+                y,
+                1,
+                #[cfg(feature = "wgpu_debug")]
+                crate::wgpu::device::QueueDebugInfo::new(&format!("copy2d dtype:{:?}", dtype), d1 * d2),
+            );
+        }
     }
     return Ok(());
 }

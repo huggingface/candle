@@ -92,11 +92,12 @@ pub struct QueueBuffer{
     pub (crate) command_queue : Vec<MlQueue>,
     pub (crate) meta_array : MetaArray,
     pub (crate) indirect_array : Vec<DispatchIndirectArgs>,
+    pub (crate) test_expected_meta_size : u32,
 }
 
 impl QueueBuffer {
     pub fn new() -> Self {
-        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), indirect_array : vec![] }
+        Self {  command_queue: vec![], meta_array :MetaArray::new(META_BUFFER_SIZE), indirect_array : vec![],test_expected_meta_size : 0 }
     }
 
     pub (crate) fn add_layout(&mut self, layout : &Layout){
@@ -176,6 +177,7 @@ pub (crate) enum Pipelines{
     Conv1DTranspose,
     IndexSelect,
     Copy2d,
+    Copy2dTranspose,
     CopyStrided,
     Copy,
     ConvertF32ToU32,
@@ -192,6 +194,7 @@ pub (crate) enum Pipelines{
     ScatterAddInplace,
     IndexAddInplace
 }
+
 
 
 pub (crate) const META_BUFFER_SIZE : u32 = 65536;
@@ -249,6 +252,8 @@ impl WgpuDevice{
             usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
+        
 
         let device_limits = device.limits();
         let bindgroup_layouts = BindgroupLayouts::new(&device);
@@ -364,6 +369,7 @@ impl WgpuDevice{
             Pipelines::ConvertF32ToU8 => "convert_f32_to_u8",
             Pipelines::IndexSelect => "index_select",
             Pipelines::Copy2d => "copy2d",
+            Pipelines::Copy2dTranspose => "copy2d_transpose",
             Pipelines::CopyStrided => "copy_strided",
             Pipelines::Copy => "copy",
             Pipelines::WhereCondU32 => "where_cond_index_u32",

@@ -18,7 +18,7 @@ pub fn queue_conv2d(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
     
-    let (mut meta,  meta_offset) = get_meta(&dev, 24);
+    let (mut meta,  meta_offset) = get_meta(&dev, 23);
 
     meta.add(params.b_size);
     meta.add(params.c_in);
@@ -80,7 +80,7 @@ pub fn queue_conv2d_transpose(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
     
-    let (mut meta,  meta_offset) = get_meta(&dev, 24);
+    let (mut meta,  meta_offset) = get_meta(&dev, 23);
     meta.add(params.b_size);
     meta.add(params.c_in);
     meta.add(params.k_w);

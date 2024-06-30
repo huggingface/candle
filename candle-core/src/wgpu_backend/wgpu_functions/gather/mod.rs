@@ -17,7 +17,7 @@ pub fn queue_gather(
     lay_index: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay_index) + get_size(&lay_index));
+    let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay_input) + get_size(&lay_index));
 
     meta.add(dim);
     meta.add_layout(&lay_input);
@@ -53,7 +53,7 @@ pub fn queue_scatter_add_inplace(
     lay_src: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay_index) + get_size(&lay_index));
+    let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay_input) + get_size(&lay_index) + get_size(&lay_src));
 
     let selected_index_length = lay_index.shape().dims()[dim];
 
@@ -90,7 +90,7 @@ pub fn queue_index_add_inplace(
     lay_src: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay_index) + get_size(&lay_index));
+    let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay_input) + get_size(&lay_index) + get_size(&lay_src));
 
     let selected_index_length = lay_index.shape().elem_count();
 

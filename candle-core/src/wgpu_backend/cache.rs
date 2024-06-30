@@ -178,36 +178,28 @@ impl BufferReference{
 #[derive(Debug)]
 pub (crate) struct BufferCache{
     buffers: BTreeMulti<u64, BufferId>,
+    pub(crate) buffer_counter : u32, //total number of buffers created
+    pub(crate) buffer_memory : u64, //total memory allocated
 }
 
 impl BufferCache{
     fn new() -> Self{ 
-        return Self{buffers: BTreeMulti::new()}
+        return Self{buffers: BTreeMulti::new(), buffer_counter : 0, buffer_memory : 0 }
     }
 
     pub (crate) fn remove_unused(&mut self){
         self.buffers.map.retain(|_, buffers|{
-            buffers.retain(|b| Arc::strong_count(b) != 1);
-            return  buffers.len() > 1;
+            buffers.retain(|b| {
+                let keep = Arc::strong_count(b) != 1;
+                if !keep{
+                    self.buffer_counter -= 1;
+                    self.buffer_memory -= b.buffer.size();
+                }
+                keep
+            });
+            return buffers.len() > 1;
         });
     }
-
-    // pub (crate) fn create_buffer_if_needed(&mut self, dev : &WgpuDevice, size : u64){
-    //     for (buffer_size, buffers) in self.buffers.map.range_mut(size..){
-    //         if *buffer_size < size{
-    //             panic!("Did not expect size to be smaller, than key");
-    //         }
-
-    //         if buffers.len() > 0{
-    //             return;
-    //         }
-    //     }
-
-    //     let id = dev.cached_buffer_counter.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
-    //     let buffer = Arc::new(CachedBuffer::new(wgpu_functions::create_buffer(dev, size),  id));
-    //     self.add_buffer(buffer);
-    // }
-
 
     fn get_buffer(&mut self, dev : &WgpuDevice, size : u64) -> BufferId{
         if dev.use_cache{
@@ -222,7 +214,8 @@ impl BufferCache{
                 }
             }
         }
-        
+        self.buffer_counter += 1;
+        self.buffer_memory += size;
         let id = dev.cached_buffer_counter.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
         Arc::new(CachedBuffer::new(wgpu_functions::create_buffer(dev, size),  id))
     }
@@ -337,13 +330,14 @@ impl std::hash::Hash for BindGroupInput {
 #[derive(Debug)]
 pub (crate) struct BindGroupCache{
     pub(crate) bindgroups: HashMapMulti<BindGroupInput, BindgroupId>,
+    pub(crate) bindgroup_counter : u32,
 }
 
 
 
 impl BindGroupCache {
     fn new() -> Self{ 
-        return Self{bindgroups: HashMapMulti::new()}
+        return Self{bindgroups: HashMapMulti::new(),bindgroup_counter : 0}
     }
 
     pub (crate) fn remove_unused(&mut self, counter : u32){
@@ -353,7 +347,9 @@ impl BindGroupCache {
             bindgroups.retain(|b| 
                 {
                     let is_bindgroup_used = b.last_used.load(std::sync::atomic::Ordering::Relaxed) > counter;
-
+                    if !is_bindgroup_used{
+                        self.bindgroup_counter -= 1;
+                    }
                     if Arc::strong_count(b) != 1{
                         panic!("Expected to have a strong Count to this CachedBindGroup");
                     }
@@ -581,6 +577,7 @@ impl ModelCache {
         let bindgroup = Arc::new(CachedBindGroup::new(wgpu_functions::create_bindgroup(dev, bindgroup_reference.clone()), bindgroup_reference));
         
         if dev.use_cache{
+            self.bindgroups.bindgroup_counter += 1;
             self.bindgroups.bindgroups.add_mapping(bindgroup.buffers.clone().into(), bindgroup.clone());
             bindgroup.last_used.store(dev.cached_bindgroup_use_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
         }

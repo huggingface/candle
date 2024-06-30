@@ -318,7 +318,6 @@ pub fn queue_matmul_buffer(
         meta.add(input2_stride_n); //input2_stride_n
         meta.add(input2_stride_b); //input2_stride_b
         meta.add(layout_input2.start_offset()); //input2_offset
-        meta.add(layout_input2.start_offset()); //input2_offset
 
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul5Buffer)?;
     
@@ -424,7 +423,6 @@ pub fn queue_matmul_buffer6(
         meta.add(input2_stride_k); //input2_stride_k
         meta.add(input2_stride_n); //input2_stride_n
         meta.add(input2_stride_b); //input2_stride_b
-        meta.add(layout_input2.start_offset()); //input2_offset
         meta.add(layout_input2.start_offset()); //input2_offset
 
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul6Buffer)?;

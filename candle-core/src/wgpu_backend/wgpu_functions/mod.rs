@@ -14,11 +14,11 @@ pub mod unary;
 pub mod upsample;
 pub mod where_cond;
 
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, time::Instant};
 
 use super::{
     cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference},
-    device::{BindGroupReference, MlQueue, PipelineType, Pipelines, QueueBuffer, META_BUFFER_SIZE}, util::ToU32,
+    device::{BindGroupReference, MlQueue, PipelineType, Pipelines, QueueBuffer, INDIRECT_BUFFER_SIZE, META_BUFFER_SIZE}, util::ToU32,
 };
 use crate::DType;
 use crate::{wgpu_backend::device::WgpuDevice, Error, Layout, WebGpuError};
@@ -44,7 +44,7 @@ pub use unary::{queue_unary_from_buffer_op, queue_unary_inplace_op};
 pub use upsample::{queue_upsample1d, queue_upsample2d};
 pub use where_cond::queue_where_cond_u32;
 
-
+pub const MAX_DISPATCH_SIZE : u32 = 65535;
 
 ///Helper Type MetaArray, for constructing the MetaBuffer
 
@@ -231,7 +231,13 @@ fn enqueue_workgroups(
     z: u32,
     #[cfg(feature = "wgpu_debug")] _debug: super::device::QueueDebugInfo,
 ) {
-    if x > 65535 || y > 65535 || z > 65535 {
+    assert_eq!(command_queue.meta_array.0.len() as u32, command_queue.test_expected_meta_size);
+    
+    if y > MAX_DISPATCH_SIZE || z > MAX_DISPATCH_SIZE{ 
+        //y and z must be smaller than 65535, surpisingly it seems to work, if x is higher in an indirectBuffer
+        panic!("can not queue y or z higher than 65535 x:{x}, y:{y}, z:{z}");
+    }
+    if x > MAX_DISPATCH_SIZE {
         enqueue_workgroups_indirect(
             command_queue,
             pipeline,
@@ -266,7 +272,8 @@ fn enqueue_workgroups_indirect(
     z: u32,
     #[cfg(feature = "wgpu_debug")] _debug: super::device::QueueDebugInfo,
 ) {
-    let data = DispatchIndirectArgs { x, y, z };
+    //println!("enq indirect: x:{}, y:{}, z:{}", x, y, z);
+    let data = DispatchIndirectArgs { x, y, z};
 
     let indirect_array = &mut command_queue.indirect_array;
     let indirect_offset = indirect_array.len();
@@ -309,6 +316,7 @@ fn get_meta(dev: &WgpuDevice, size: u32) -> (MutexGuard<QueueBuffer>, u32) {
     if meta_offset as u32 + size + 256 > META_BUFFER_SIZE / 4 {
         println!("get_meta: {}",command_queue.command_queue.len());
         flush_gpu_command(dev, &mut command_queue);
+        command_queue.test_expected_meta_size = size;
         return (command_queue, 0);
     }
 
@@ -316,6 +324,8 @@ fn get_meta(dev: &WgpuDevice, size: u32) -> (MutexGuard<QueueBuffer>, u32) {
         .meta_array
         .0
         .extend(std::iter::repeat(0).take((meta_offset - meta_array_length) as usize));
+
+    command_queue.test_expected_meta_size = size + command_queue.meta_array.0.len() as u32;
 
     return (command_queue, meta_offset as u32);
 }
@@ -373,26 +383,9 @@ fn end_debug_queue(
         .store(global_index, std::sync::atomic::Ordering::Relaxed);
 }
 
-// fn unique_by_ptr<T, I>(iter: I) -> Vec<Arc<T>> 
-// where
-//     T: 'static,
-//     I: IntoIterator<Item = Arc<T>>,
-// {
-//     let mut seen = HashSet::new();
-//     let mut unique = Vec::new();
-
-//     for arc in iter {
-//         let ptr = Arc::as_ptr(&arc);
-//         if seen.insert(ptr) {
-//             unique.push(arc);
-//         }
-//     }
-
-//     unique
-// }
-
-
 pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer) {
+    
+    let mut start = Instant::now();
     if queue_buffer.command_queue.len() > 0 {
         #[cfg(feature = "wgpu_debug")]
         let (global_index, query_set) = init_debug_queue(dev, queue.len() as u32 * 2);
@@ -400,21 +393,10 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
         #[cfg(feature = "wgpu_debug")]
         let mut debug_index = 0;
     
-        //write Meta Buffer
-        dev.queue.write_buffer(
-            &dev.meta_buffer,
-            0,
-             &bytemuck::cast_slice(&queue_buffer.meta_array.0[..]),
-        );
-        queue_buffer.meta_array.0.clear();
+        if queue_buffer.meta_array.0.len() as u32 * 4 + 256 > META_BUFFER_SIZE{
+            panic!("Metta Array was to big, length was: {}",queue_buffer.meta_array.0.len());
+        }
 
-        //write Queue Buffer
-        dev.queue.write_buffer(
-            &dev.indirect_buffer,
-            0,
-            &bytemuck::cast_slice(&queue_buffer.indirect_array[..]),
-        );
-        queue_buffer.indirect_array.clear();
         {
             let queue = &mut queue_buffer.command_queue;
 
@@ -437,6 +419,9 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
             //     }
             // }
 
+            //println!("flash1: {}", start.elapsed().as_secs_f32());
+            start = Instant::now();
+
             let mut wgpu_data = Vec::with_capacity(queue.len());
             for q in queue.drain(..) {
                 {
@@ -452,27 +437,13 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                                     if Arc::strong_count(&v2) == 1{ //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
                                         if v1.size <= v2.size{
                                             if v1.storage.lock().unwrap().is_none(){
-                                                q.pipeline.1 = Pipelines::UnaryInplaceContiguous;
-                                                v1_ref = Some(v1.clone());
-                                                v2_ref = Some(v2.clone());
-                                                q.bindgroup = BindGroupReferenceBase::Bindgroup0(*meta, v2.clone());
-                                                optimize_unary_inplace = true;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if q.pipeline.1 == Pipelines::UnaryFromBuffer{
-                                if let BindGroupReferenceBase::Bindgroup1(meta, v1, v2) = &q.bindgroup{
-                                    if Arc::strong_count(&v2) == 1{ //this Bindgroup is the only one, holding a reference to this BufferReference -> So we can Reuse that Buffer
-                                        if v1.size <=  v2.size{
-                                            if v1.storage.lock().unwrap().is_none(){
-                                                q.pipeline.1 = Pipelines::UnaryInplace;
-                                                v1_ref = Some(v1.clone());
-                                                v2_ref = Some(v2.clone());
-                                                q.bindgroup = BindGroupReferenceBase::Bindgroup0(*meta, v2.clone());
-                                                optimize_unary_inplace = true;
+                                                if queue_buffer.meta_array.0[(meta + 4) as usize] == 0{ //startoffset = 0?
+                                                    q.pipeline.1 = Pipelines::UnaryInplaceContiguous;
+                                                    v1_ref = Some(v1.clone());
+                                                    v2_ref = Some(v2.clone());
+                                                    q.bindgroup = BindGroupReferenceBase::Bindgroup0(*meta, v2.clone());
+                                                    optimize_unary_inplace = true;
+                                                }
                                             }
                                         }
                                     }
@@ -510,7 +481,30 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                 }
             }
 
+            //write Meta Buffer
+            dev.queue.write_buffer(
+                &dev.meta_buffer,
+                0,
+                    &bytemuck::cast_slice(&queue_buffer.meta_array.0[..]),
+            );
+            queue_buffer.meta_array.0.clear();
 
+
+            let data = bytemuck::cast_slice(&queue_buffer.indirect_array[..]);
+            if data.len() as u32 + 256 > INDIRECT_BUFFER_SIZE{
+                panic!("Indirect Array was to big, length was: {}", data.len());
+            }
+
+            //write Queue Buffer
+            dev.queue.write_buffer(
+                &dev.indirect_buffer,
+                0,
+                data,
+            );
+            queue_buffer.indirect_array.clear();
+
+            //println!("flash2: {}", start.elapsed().as_secs_f32());
+            //start = Instant::now();
             let mut encoder = dev
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -533,9 +527,7 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
                     if let Some(indirect_buffer_index) = &qindirect_buffer {
                         cpass.dispatch_workgroups_indirect(
                             &dev.indirect_buffer,
-                            (indirect_buffer_index
-                                * std::mem::size_of::<DispatchIndirectArgs>())
-                                as u64,
+                            (indirect_buffer_index* std::mem::size_of::<DispatchIndirectArgs>()) as u64,
                         );
                     } else {
                         cpass.dispatch_workgroups(*qx, *qy, *qz);
@@ -573,9 +565,13 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
         queue_buffer.command_queue.clear();
 
         {
+            //println!("flash3: {}", start.elapsed().as_secs_f32());
+           
             let mut cache = dev.cache.lock().unwrap();
+            //println!("cache info before, buffers: {}, memory: {}, bindgroups: {}", cache.buffers.buffer_counter, cache.buffers.buffer_memory, cache.bindgroups.bindgroup_counter);
             cache.bindgroups.remove_unused(u32::max(1000, dev.cached_bindgroup_use_counter.load(std::sync::atomic::Ordering::Relaxed)) - 1000);
             cache.buffers.remove_unused();
+            //println!("cache info, buffers: {}, memory: {}, bindgroups: {}", cache.buffers.buffer_counter, cache.buffers.buffer_memory, cache.bindgroups.bindgroup_counter);
         }
     }
 }
@@ -778,7 +774,7 @@ pub async fn read_data_from_gpu_async<T: bytemuck::Pod>(
     buffer: Arc<BufferReference>,
 ) -> Vec<T> {
     let mut command_queue = dev.command_queue.lock().unwrap();
-    println!("read_data_from_gpu_async: {}", command_queue.command_queue.len());
+    //println!("read_data_from_gpu_async: {}", command_queue.command_queue.len());
     flush_gpu_command(dev, &mut command_queue); //send all previous commands to the gpu
     let dest_size = buffer.size;
 

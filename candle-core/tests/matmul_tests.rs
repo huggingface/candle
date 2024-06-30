@@ -62,7 +62,6 @@ fn broadcast_matmul(device: &Device) -> Result<()> {
             let out2 = lhs.matmul(&rhs);
             let sum_diff2 = (out - out2)?.sqr()?.sum_all()?;
             let sum_diff2 = sum_diff2.to_vec0::<f32>()?;
-            println!("sum_diff2: {}", sum_diff2);
             // With cuda, we see errors of up to ~1e-12.
             assert!(sum_diff2 < 1e-6)
         }

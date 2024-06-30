@@ -38,10 +38,26 @@ fn copy(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 
 @compute
-@workgroup_size(8,8,1)
+@workgroup_size(16,16,1)
 fn copy2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let i1 = global_id.x;
     let i2 = global_id.y;
+
+    if (i1 >= op_copy2d.d1){
+        return;
+    }
+    if(i2 >= op_copy2d.d2){
+        return;
+    }
+
+    v_dest[op_copy2d.dest_offset + op_copy2d.dest_stride1 * i1 + i2] = v_input1[op_copy2d.input1_offset + op_copy2d.input1_stride1 * i1 + i2];
+}
+
+@compute
+@workgroup_size(16,16,1)
+fn copy2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let i1 = global_id.y;
+    let i2 = global_id.x;
 
     if (i1 >= op_copy2d.d1){
         return;
