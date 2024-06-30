@@ -14,7 +14,7 @@ pub mod unary;
 pub mod upsample;
 pub mod where_cond;
 
-use std::{num::NonZeroU64, time::Instant};
+use std::num::NonZeroU64;
 
 use super::{
     cache::{BindGroupReferenceBase, BufferReference, CachedBindGroupReference},
@@ -384,8 +384,6 @@ fn end_debug_queue(
 }
 
 pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer) {
-    
-    let mut start = Instant::now();
     if queue_buffer.command_queue.len() > 0 {
         #[cfg(feature = "wgpu_debug")]
         let (global_index, query_set) = init_debug_queue(dev, queue.len() as u32 * 2);
@@ -420,7 +418,6 @@ pub(crate) fn flush_gpu_command(dev: &WgpuDevice, queue_buffer: &mut QueueBuffer
             // }
 
             //println!("flash1: {}", start.elapsed().as_secs_f32());
-            start = Instant::now();
 
             let mut wgpu_data = Vec::with_capacity(queue.len());
             for q in queue.drain(..) {
