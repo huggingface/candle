@@ -927,7 +927,7 @@ pub fn replication_pad2d(xs: &Tensor, pad: usize) -> Result<Tensor> {
     }
 }
 
-[cfg(feature = "cuda")]
+#[cfg(feature = "cuda")]
 pub fn kvconcat(ltensor: &Tensor, rtensor: &Tensor, concat_dim: usize) -> Result<Tensor> {
     if !ltensor.device().is_cuda() {
         return Tensor::cat(&[ltensor, &rtensor], concat_dim as usize)?.contiguous();
@@ -947,6 +947,11 @@ pub fn kvconcat(ltensor: &Tensor, rtensor: &Tensor, concat_dim: usize) -> Result
         let rtensor = rtensor.contiguous()?;
         ltensor.apply_op2(&rtensor, op)
     }
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn kvconcat(ltensor: &Tensor, rtensor: &Tensor, concat_dim: i32) -> Result<Tensor> {
+    Tensor::cat(&[ltensor, rtensor], concat_dim as usize)?.contiguous()
 }
 
 #[derive(Clone, Debug)]

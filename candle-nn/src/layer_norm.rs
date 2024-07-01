@@ -131,9 +131,7 @@ impl LayerNorm {
 impl Module for LayerNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         if x.is_contiguous() && self.remove_mean {
-            if let Some(bias) = self.bias.as_ref() {
-                return crate::ops::layer_norm(x, &self.weight, bias, self.eps as f32);
-            }
+            return crate::ops::layer_norm(x, &self.weight, &self.bias, self.eps as f32);
         }
         let x_dtype = x.dtype();
         let internal_dtype = match x_dtype {
