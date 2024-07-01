@@ -1,13 +1,51 @@
 use candle::D::Minus1;
-use candle::{Module, Result, Tensor};
+use candle::{Error, Module, Result, Tensor};
 use candle_nn::ops::Identity;
 use candle_nn::{
     batch_norm, conv2d, conv2d_no_bias, conv_transpose2d, linear, seq, Activation, BatchNorm,
     BatchNormConfig, Conv2d, Conv2dConfig, ConvTranspose2dConfig, Sequential, VarBuilder,
 };
 use std::cell::RefCell;
-
+use std::cmp::Ordering;
 use crate::models::dinov2::DinoVisionTransformer;
+
+
+fn print_tensor_statistics(tensor: &Tensor) -> Result<()> {
+    // General characteristics
+    println!("Tensor: {:?}", tensor);
+
+    let tensor = tensor.flatten_all().unwrap();
+
+    // Inline method to compute the minimum value over all elements
+    fn min_all(tensor: &Tensor) -> f32 {
+        let vec: Vec<f32> = tensor.to_vec1().unwrap();
+        vec.iter().cloned().min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)).unwrap()
+    }
+
+    // Inline method to compute the maximum value over all elements
+    fn max_all(tensor: &Tensor) -> f32 {
+        let vec: Vec<f32> = tensor.to_vec1().unwrap();
+        vec.iter().cloned().max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)).unwrap()
+    }
+
+    // Inline method to compute the mean value over all elements
+    fn mean_all(tensor: &Tensor) -> Result<f32> {
+        let vec: Vec<f32> = tensor.to_vec1()?;
+        Ok(vec.iter().sum::<f32>() / vec.len() as f32)
+    }
+
+    // Compute overall statistics
+    let min_val = min_all(&tensor);
+    let max_val = max_all(&tensor);
+    let mean_val = mean_all(&tensor)?;
+
+    println!("Overall statistics:");
+    println!("  Min: {:?}", min_val);
+    println!("  Max: {:?}", max_val);
+    println!("  Mean: {:?}", mean_val);
+
+    Ok(())
+}
 
 pub const PATCH_MULTIPLE: usize = 14;
 
@@ -445,6 +483,8 @@ impl Module for DPTHead {
                 xs.get(i)?
             };
 
+            print_tensor_statistics(&x)?;
+
             let x_dims = x.dims();
             let x = x.permute((0, 2, 1))?.reshape((
                 x_dims[0],
@@ -458,10 +498,17 @@ impl Module for DPTHead {
             out.push(x);
         }
 
+
+
         let layer_1_rn = self.scratch.layer1_rn.forward(&out[0])?;
         let layer_2_rn = self.scratch.layer2_rn.forward(&out[1])?;
         let layer_3_rn = self.scratch.layer3_rn.forward(&out[2])?;
         let layer_4_rn = self.scratch.layer4_rn.forward(&out[3])?;
+
+        print_tensor_statistics(&layer_1_rn)?;
+        print_tensor_statistics(&layer_2_rn)?;
+        print_tensor_statistics(&layer_3_rn)?;
+        print_tensor_statistics(&layer_4_rn)?;
 
         let (_, _, output_height, output_width) = layer_3_rn.dims4()?;
         self.scratch
@@ -487,9 +534,9 @@ impl Module for DPTHead {
         let path1 = self.scratch.refine_net1.forward(&path2)?;
 
         let out = self.scratch.output_conv1.forward(&path1)?;
-
+        print_tensor_statistics(&out)?;
         let out = out.interpolate2d(self.image_size.unwrap().0, self.image_size.unwrap().1)?;
-
+        print_tensor_statistics(&out)?;
         self.scratch.output_conv2.forward(&out)
     }
 }

@@ -13,7 +13,7 @@ use clap::Parser;
 
 use args::Args;
 use candle::DType::F32;
-use candle::{Device, Module};
+use candle::{Device, Module, Tensor};
 use candle_examples::save_image;
 use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DepthAnythingV2Config};
@@ -42,6 +42,8 @@ pub fn main() -> anyhow::Result<()> {
 
     println!("Loaded image {image:?}");
 
+
+
     let (_, _, image_height, image_width) = image.dims4()?;
     depth_anything.set_image_and_patch_size(image_height, image_width);
     let depth = depth_anything.forward(&image)?;
@@ -57,6 +59,7 @@ pub fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+
 
 fn depth_anything_model<'a>(
     dinov2: &'a DinoVisionTransformer,
