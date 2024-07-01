@@ -210,7 +210,7 @@ impl<'a, B: Backend> VarBuilderArgs<'a, B> {
             }),
             ..self
         }
-    }
+  }
 
     /// Set the dtype of the VarBuilder.
     pub fn set_dtype(self, dtype: DType) -> Self {
