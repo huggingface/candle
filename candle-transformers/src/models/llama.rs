@@ -388,6 +388,28 @@ pub struct Llama {
 }
 
 impl Llama {
+    // required by LLaVA
+    pub fn embed(&self, x: &Tensor) -> Result<Tensor> {
+        self.wte.forward(x)
+    }
+    // required by LLaVA
+    pub fn forward_input_embed(
+        &self,
+        input_embed: &Tensor,
+        index_pos: usize,
+        cache: &mut Cache,
+    ) -> Result<Tensor> {
+        let (_, seq_len, _) = input_embed.dims3()?;
+        let mut x = input_embed.clone();
+        for (block_idx, block) in self.blocks.iter().enumerate() {
+            x = block.forward(&x, index_pos, block_idx, cache)?;
+        }
+        let x = self.ln_f.forward(&x)?;
+        let x = x.i((.., seq_len - 1, ..))?.contiguous()?;
+        let logits = self.lm_head.forward(&x)?;
+        logits.to_dtype(DType::F32)
+    }
+
     pub fn forward(&self, x: &Tensor, index_pos: usize, cache: &mut Cache) -> Result<Tensor> {
         let (_b_sz, seq_len) = x.dims2()?;
         let mut x = self.wte.forward(x)?;
