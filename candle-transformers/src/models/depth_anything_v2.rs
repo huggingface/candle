@@ -85,7 +85,7 @@ impl DepthAnythingV2Config {
             in_channel_size: 384,
             num_features: 64,
             use_batch_norm: false,
-            use_class_token: true,
+            use_class_token: false,
             layer_ids_vits: vec![2, 5, 8, 11],
         }
     }
@@ -96,7 +96,7 @@ impl DepthAnythingV2Config {
             in_channel_size: 768,
             num_features: 128,
             use_batch_norm: false,
-            use_class_token: true,
+            use_class_token: false,
             layer_ids_vits: vec![2, 5, 8, 11],
         }
     }
@@ -107,7 +107,7 @@ impl DepthAnythingV2Config {
             in_channel_size: 1024,
             num_features: 256,
             use_batch_norm: false,
-            use_class_token: true,
+            use_class_token: false,
             layer_ids_vits: vec![4, 11, 17, 23],
         }
     }
