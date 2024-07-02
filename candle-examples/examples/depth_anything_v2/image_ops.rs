@@ -5,6 +5,11 @@ use candle::DType::U8;
 use candle::{Device, Tensor};
 use candle_transformers::models::depth_anything_v2::PATCH_MULTIPLE;
 
+use opencv::prelude::*;
+use opencv::core::{flip, MatTraitConst, Point, Rect, Scalar, Size};
+use opencv::imgproc;
+use opencv::imgcodecs;
+use opencv::imgproc::resize;
 use crate::color_map::SpectralRColormap;
 
 // taken these from: https://huggingface.co/spaces/depth-anything/Depth-Anything-V2/blob/main/depth_anything_v2/dpt.py#L207
@@ -73,6 +78,35 @@ fn print_image_statistics(image: DynamicImage) {
     println!("  Mean: {:?}", mean_val);
 }
 
+fn print_mat_statistics(mat: &Mat) -> anyhow::Result<()> {
+    // General characteristics
+    println!("Mat: {:?}", mat);
+    println!("Dimensions: {:?}", mat.size()?);
+    println!("Channels: {}", mat.channels());
+
+    // Flatten the Mat into a single vector of u8 values
+    let mut min_val = f64::MAX;
+    let mut max_val = f64::MIN;
+    let mut sum_val = 0.0;
+    let mut count = 0;
+
+    let mat_data = mat.data_bytes();
+    for &pixel in mat_data.iter() {
+        min_val = min_val.min(*pixel as f64);
+        max_val = max_val.max(*pixel as f64);
+        sum_val += pixel as f64;
+        count += 1;
+    }
+    let mean_val = sum_val / count as f64;
+
+    println!("Overall statistics:");
+    println!("  Min: {:?}", min_val);
+    println!("  Max: {:?}", max_val);
+    println!("  Mean: {:?}", mean_val);
+
+    Ok(())
+}
+
 pub fn load_and_prep_image(
     image_path: &PathBuf,
     device: &Device,
@@ -103,46 +137,65 @@ pub fn load_and_prep_image(
 
 pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
     p: P,
-) -> candle::Result<(Tensor, usize, usize)> {
-    let img = image::io::Reader::open(p)?
-        .decode()
-        .map_err(candle::Error::wrap)?;
+) -> anyhow::Result<(Tensor, usize, usize)> {
+    // let img = image::io::Reader::open(p)?
+    //     .decode()
+    //     .map_err(candle::Error::wrap)?;
+    //
+    // println!("Raw image");
+    // print_image_statistics(img.clone());
+    let image = imgcodecs::imread(&p.as_ref().to_string_lossy(), imgcodecs::IMREAD_COLOR)?;
 
-    println!("Raw image");
-    print_image_statistics(img.clone());
-    let (original_height, original_width) = (img.height() as usize, img.width() as usize);
+    // let (original_height, original_width) = (img.height() as usize, img.width() as usize);
+    let size = image.size()?;
     let (target_height, target_width) = get_new_size(
-        original_height,
-        original_width,
+        size.height as usize,
+        size.width as usize,
         DINO_IMG_SIZE,
         DINO_IMG_SIZE,
         true,
         LOWER_BOUND,
         PATCH_MULTIPLE,
     );
-
+    let mut source_image = Mat::default();
     println!("Pre Resize");
-    print_image_statistics(img.clone());
-    let img = img.resize_to_fill(
-        target_width as u32,
-        target_height as u32,
-        image::imageops::FilterType::CatmullRom,
-    );
-    println!("Post resize");
-    print_image_statistics(img.clone());
+    print_mat_statistics(&image)?;
+    resize(
+        &image,
+        &mut source_image,
+        Size::new(target_width as i32, target_height as i32),
+        0.0,
+        0.0,
+        imgproc::INTER_CUBIC,
+    )?;
+    println!("Post Resize");
+    print_mat_statistics(&image)?;
 
-    let img = img.into_rgb32f();
-    let data = img.into_raw();
-    let rgb_data = Tensor::from_vec(data, (target_height, target_width, 3), &Device::Cpu)?;
-    println!("RGB Image");
-    print_tensor_statistics(&rgb_data)?;
-
-    let index = Tensor::from_vec(vec![2u32, 1, 0], (3,), &Device::Cpu)?;
-    let bgr_data = rgb_data.index_select(&index, 2)?;
+    // let img = img.resize_to_fill(
+    //     target_width as u32,
+    //     target_height as u32,
+    //     image::imageops::FilterType::CatmullRom,
+    // );
+    // println!("Post resize");
+    // print_image_statistics(img.clone());
+    //
+    // let img = img.into_rgb32f();
+    // let data = img.into_raw();
+    let data = source_image.data_bytes()?;
+    let bgr_data =  Tensor::from_slice(
+        data,
+        (target_height as usize, target_width as usize, 3),
+        &Device::Cpu,
+    )?;
     println!("BGR Image");
-    print_tensor_statistics(&rgb_data)?;
+    print_tensor_statistics(&bgr_data)?;
 
-    Ok((bgr_data, original_height, original_width))
+    // let index = Tensor::from_vec(vec![2u32, 1, 0], (3,), &Device::Cpu)?;
+    // let  rgb_data = bgr_data.index_select(&index, 2)?;
+    // println!("rgb Image");
+    // print_tensor_statistics(&rgb_data)?;
+
+    Ok((bgr_data, size.height as usize, size.width as usize))
 }
 
 fn normalize_image(image: &Tensor, mean: &[f32; 3], std: &[f32; 3]) -> candle::Result<Tensor> {
