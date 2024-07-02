@@ -274,7 +274,7 @@ pub fn load_and_prep_image(
     print_tensor_statistics_f64(&image)?;
 
     let image = image.to_dtype(F32)?.to_device(device)?;
-    println!("Post net prep");
+    println!("Post transform");
     print_tensor_statistics(&image)?;
 
     Ok((original_height, original_width, image))
