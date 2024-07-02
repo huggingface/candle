@@ -1,5 +1,6 @@
+use std::cmp::Ordering;
 use std::path::PathBuf;
-
+use image::{DynamicImage, GenericImageView};
 use candle::DType::U8;
 use candle::{Device, Tensor};
 use candle_transformers::models::depth_anything_v2::PATCH_MULTIPLE;
@@ -15,6 +16,63 @@ const UPPER_BOUND: &'static str = "upper_bound";
 const MINIMAL: &'static str = "minimal";
 const DINO_IMG_SIZE: usize = 518;
 
+fn print_tensor_statistics(tensor: &Tensor) -> candle::Result<()> {
+    // General characteristics
+    println!("Tensor: {:?}", tensor);
+
+    let tensor = tensor.flatten_all().unwrap();
+
+    // Inline method to compute the minimum value over all elements
+    fn min_all(tensor: &Tensor) -> f32 {
+        let vec: Vec<f32> = tensor.to_vec1().unwrap();
+        vec.iter().cloned().min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)).unwrap()
+    }
+
+    // Inline method to compute the maximum value over all elements
+    fn max_all(tensor: &Tensor) -> f32 {
+        let vec: Vec<f32> = tensor.to_vec1().unwrap();
+        vec.iter().cloned().max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)).unwrap()
+    }
+
+    // Inline method to compute the mean value over all elements
+    fn mean_all(tensor: &Tensor) -> candle::Result<f32> {
+        let vec: Vec<f32> = tensor.to_vec1()?;
+        Ok(vec.iter().sum::<f32>() / vec.len() as f32)
+    }
+
+    // Compute overall statistics
+    let min_val = min_all(&tensor);
+    let max_val = max_all(&tensor);
+    let mean_val = mean_all(&tensor)?;
+
+    println!("Overall statistics:");
+    println!("  Min: {:?}", min_val);
+    println!("  Max: {:?}", max_val);
+    println!("  Mean: {:?}", mean_val);
+
+    Ok(())
+}
+
+fn print_image_statistics(image: DynamicImage) {
+    // General characteristics
+    println!("Image dimensions: {:?}", image.dimensions());
+    println!("Color type: {:?}", image.color());
+
+    // Flatten the image into a vector of u8 values
+    let pixels: Vec<u8> = image.into_bytes();
+
+    // Compute overall statistics
+    let min_val = *pixels.iter().min().unwrap();
+    let max_val = *pixels.iter().max().unwrap();
+    let pixels: Vec<f64> = pixels.iter().map(|p| *p as f64).collect();
+    let mean_val = pixels.iter().sum::<f64>() / pixels.len() as f64;
+
+    println!("Overall statistics:");
+    println!("  Min: {:?}", min_val);
+    println!("  Max: {:?}", max_val);
+    println!("  Mean: {:?}", mean_val);
+}
+
 pub fn load_and_prep_image(
     image_path: &PathBuf,
     device: &Device,
@@ -23,12 +81,22 @@ pub fn load_and_prep_image(
     let (image, original_height, original_width) = load_image_and_resize(&image_path)?;
     println!("Got image {image:?}, with original size ({original_height}, {original_width})");
 
+
+
     let image = image.to_device(&device)?;
 
+    println!("Pre normalization");
+    print_tensor_statistics(&image)?;
     println!("Normalizing image");
     let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD)?;
+    println!("Post normalization");
+    print_tensor_statistics(&image)?;
 
+    println!("Pre net prep");
+    print_tensor_statistics(&image)?;
     let image = image.permute((2, 0, 1))?.unsqueeze(0)?;
+    println!("Post net prep");
+    print_tensor_statistics(&image)?;
 
     Ok((original_height, original_width, image))
 }
@@ -39,6 +107,9 @@ pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
     let img = image::io::Reader::open(p)?
         .decode()
         .map_err(candle::Error::wrap)?;
+
+    println!("Raw image");
+    print_image_statistics(img.clone());
     let (original_height, original_width) = (img.height() as usize, img.width() as usize);
     let (target_height, target_width) = get_new_size(
         original_height,
@@ -50,18 +121,26 @@ pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
         PATCH_MULTIPLE,
     );
 
+    println!("Pre Resize");
+    print_image_statistics(img.clone());
     let img = img.resize_to_fill(
         target_width as u32,
         target_height as u32,
         image::imageops::FilterType::CatmullRom,
     );
+    println!("Post resize");
+    print_image_statistics(img.clone());
 
     let img = img.into_rgb32f();
     let data = img.into_raw();
     let rgb_data = Tensor::from_vec(data, (target_height, target_width, 3), &Device::Cpu)?;
+    println!("RGB Image");
+    print_tensor_statistics(&rgb_data)?;
 
     let index = Tensor::from_vec(vec![2u32, 1, 0], (3,), &Device::Cpu)?;
     let bgr_data = rgb_data.index_select(&index, 2)?;
+    println!("BGR Image");
+    print_tensor_statistics(&rgb_data)?;
 
     Ok((bgr_data, original_height, original_width))
 }

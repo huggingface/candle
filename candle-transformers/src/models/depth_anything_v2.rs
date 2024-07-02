@@ -186,22 +186,31 @@ impl ResidualConvUnit {
 impl Module for ResidualConvUnit {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let out = self.activation.forward(xs)?;
+        println!("ResidualConvUnit activation {out:?}");
         let out = self.conv1.forward(&out)?;
+        println!("ResidualConvUnit conv1 {out:?}");
         let out = if let Some(batch_norm1) = &self.batch_norm1 {
+            println!("ResidualConvUnit batch norm {out:?}");
             batch_norm1.forward_train(&out)?
         } else {
             out
         };
 
         let out = self.activation.forward(&out)?;
+        println!("ResidualConvUnit activation {out:?}");
         let out = self.conv2.forward(&out)?;
+        println!("ResidualConvUnit conv2 {out:?}");
         let out = if let Some(batch_norm2) = &self.batch_norm2 {
+            println!("ResidualConvUnit batch_norm2 {out:?}");
             batch_norm2.forward_train(&out)?
         } else {
             out
         };
 
-        out.add(xs)
+        let out = out.add(xs)?;
+        println!("ResidualConvUnit skip_add {out:?}");
+
+        Ok(out)
     }
 }
 
@@ -251,14 +260,20 @@ impl FeatureFusionBlock {
 
 impl Module for FeatureFusionBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        println!("FeatureFusionBlock output {xs:?}");
+
         let out = if let Some(ref skip_add) = *self.skip_add.borrow() {
             let res = self.res_conv_unit1.forward(skip_add)?;
-            &xs.add(&res)?
+            println!("FeatureFusionBlock resConfUnit1 {res:?}");
+            let skip = xs.add(&res)?;
+            println!("FeatureFusionBlock skip_add {skip:?}");
+            skip
         } else {
-            xs
+            xs.clone()
         };
 
-        let out = self.res_conv_unit2.forward(out)?;
+        let out = self.res_conv_unit2.forward(&out)?;
+        println!("FeatureFusionBlock resConfUnit2 {out:?}");
         let (target_height, target_width) = if let Some(size) = *self.output_size.borrow() {
             size
         } else {
@@ -266,8 +281,11 @@ impl Module for FeatureFusionBlock {
             (h * 2, w * 2)
         };
         let out = out.interpolate2d(target_height, target_width)?;
+        println!("FeatureFusionBlock interpolate {out:?}");
 
-        self.output_conv.forward(&out)
+        let out = self.output_conv.forward(&out)?;
+        println!("FeatureFusionBlock out_conv {out:?}");
+        Ok(out)
     }
 }
 
@@ -470,6 +488,7 @@ impl DPTHead {
 
 impl Module for DPTHead {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        println!("Original xs: {xs:?}");
         let mut out: Vec<Tensor> = Vec::with_capacity(self.conf.layer_ids_vits.len());
         for i in 0..self.conf.layer_ids_vits.len() {
             let x = if self.conf.use_class_token {
@@ -482,6 +501,7 @@ impl Module for DPTHead {
             } else {
                 xs.get(i)?
             };
+            println!("{i} and {x:?}");
 
             print_tensor_statistics(&x)?;
 
@@ -492,18 +512,35 @@ impl Module for DPTHead {
                 self.patch_size.unwrap().0,
                 self.patch_size.unwrap().1,
             ))?;
+            println!("{i} permute and reshape {x:?}");
+            print_tensor_statistics(&x)?;
             let x = self.projections[i].forward(&x)?;
+            println!("{i} projection x {x:?}");
+            print_tensor_statistics(&x)?;
 
             let x = self.resize_layers[i].forward(&x)?;
+            println!("{i} resize x {x:?}");
+            print_tensor_statistics(&x)?;
             out.push(x);
         }
 
+
+        println!("layer_1 {:?}", &out[0]);
+        println!("layer_2 {:?}", &out[1]);
+        println!("layer_3 {:?}", &out[2]);
+        println!("layer_4 {:?}", &out[3]);
+        println!("");
 
 
         let layer_1_rn = self.scratch.layer1_rn.forward(&out[0])?;
         let layer_2_rn = self.scratch.layer2_rn.forward(&out[1])?;
         let layer_3_rn = self.scratch.layer3_rn.forward(&out[2])?;
         let layer_4_rn = self.scratch.layer4_rn.forward(&out[3])?;
+        println!("layer_1_rn {:?}", layer_1_rn);
+        println!("layer_2_rn {:?}", layer_2_rn);
+        println!("layer_3_rn {:?}", layer_3_rn);
+        println!("layer_4_rn {:?}", layer_4_rn);
+        println!("");
 
         print_tensor_statistics(&layer_1_rn)?;
         print_tensor_statistics(&layer_2_rn)?;
@@ -533,11 +570,23 @@ impl Module for DPTHead {
         self.scratch.refine_net1.set_skip_add(&layer_1_rn);
         let path1 = self.scratch.refine_net1.forward(&path2)?;
 
+        println!("path_1 {path1:?}");
+        println!("path_2 {path2:?}");
+        println!("path_3 {path3:?}");
+        println!("path_4 {path4:?}");
+        println!("");
+
         let out = self.scratch.output_conv1.forward(&path1)?;
+        println!("output_conv1 {out:?}");
+
         print_tensor_statistics(&out)?;
         let out = out.interpolate2d(self.image_size.unwrap().0, self.image_size.unwrap().1)?;
+        println!("interpolate {out:?}");
         print_tensor_statistics(&out)?;
-        self.scratch.output_conv2.forward(&out)
+        let out = self.scratch.output_conv2.forward(&out)?;
+        println!("output_conv2 {out:?}");
+
+        Ok(out)
     }
 }
 
@@ -570,6 +619,13 @@ impl<'a> DepthAnythingV2<'a> {
 
 impl<'a> Module for DepthAnythingV2<'a> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        print_tensor_statistics(&xs)?;
+        let row: Vec<f32> = xs.get(0)?.get(0)?.get(0)?.flatten_all().unwrap().to_vec1()?;
+        println!("First row input ");
+        for e in row {
+            print!("{e} ")
+        }
+
         let features = self.pretrained.get_intermediate_layers(
             xs,
             &self.conf.layer_ids_vits,
