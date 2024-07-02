@@ -1202,6 +1202,10 @@ impl BackendStorage for MetalStorage {
         Ok(Self::new(buffer, self.device.clone(), dst_el, self.dtype))
     }
 
+    fn upsample_bilinear2d(&self, _layout: &Layout, _h: usize, _w: usize, _align_corners: bool) -> Result<Self> {
+        crate::bail!("upsample_bilinear2d is not supported on metal")
+    }
+
     fn gather(&self, src_l: &Layout, ids: &Self, ids_l: &Layout, dim: usize) -> Result<Self> {
         if !ids_l.is_contiguous() {
             return Err(crate::Error::RequiresContiguous { op: "gather" }.bt());

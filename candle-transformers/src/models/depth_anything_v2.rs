@@ -280,7 +280,9 @@ impl Module for FeatureFusionBlock {
             let (_, _, h, w) = out.dims4()?;
             (h * 2, w * 2)
         };
+
         let out = out.interpolate2d(target_height, target_width)?;
+        let out = out.interpolate_bilinear2d(target_height, target_width, true)?;
         println!("FeatureFusionBlock interpolate {out:?}");
 
         let out = self.output_conv.forward(&out)?;
@@ -580,7 +582,7 @@ impl Module for DPTHead {
         println!("output_conv1 {out:?}");
 
         print_tensor_statistics(&out)?;
-        let out = out.interpolate2d(self.image_size.unwrap().0, self.image_size.unwrap().1)?;
+        let out = out.interpolate_bilinear2d(self.image_size.unwrap().0, self.image_size.unwrap().1, true)?;
         println!("interpolate {out:?}");
         print_tensor_statistics(&out)?;
         let out = self.scratch.output_conv2.forward(&out)?;
