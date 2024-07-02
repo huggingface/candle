@@ -31,27 +31,9 @@ impl Attention {
         qkv_bias: bool,
         proj_bias: bool,
     ) -> Result<Self> {
-        let query = linear(vb.pp("attention").pp("query"), dim, dim, qkv_bias)?;
-        let key = linear(vb.pp("attention").pp("key"), dim, dim, qkv_bias)?;
-        let value = linear(vb.pp("attention").pp("value"), dim, dim, qkv_bias)?;
+        let qkv = linear(vb.pp("qkv"), dim, 3 *dim, qkv_bias)?;
 
-        let qkv_weight = Tensor::cat(&[query.weight(), key.weight(), value.weight()], 0)?;
-        let qkv_bias = if qkv_bias {
-            Some(Tensor::cat(
-                &[
-                    query.bias().unwrap(),
-                    key.bias().unwrap(),
-                    value.bias().unwrap(),
-                ],
-                0,
-            )?)
-        } else {
-            None
-        };
-
-        let qkv = Linear::new(qkv_weight, qkv_bias);
-
-        let output = linear(vb.pp("output").pp("dense"), dim, dim, proj_bias)?;
+        let output = linear(vb.pp("proj"), dim, dim, proj_bias)?;
         let scale = 1. / ((dim / num_heads) as f64).sqrt();
         Ok(Self {
             qkv,
@@ -88,7 +70,7 @@ struct LayerScale {
 
 impl LayerScale {
     fn new(vb: VarBuilder, dim: usize) -> Result<Self> {
-        let gamma = vb.get(dim, "lambda1")?;
+        let gamma = vb.get(dim, "gamma")?;
         Ok(Self { lambda: gamma })
     }
 }
@@ -134,11 +116,11 @@ struct Block {
 impl Block {
     fn new(vb: VarBuilder, dim: usize, num_heads: usize) -> Result<Self> {
         let norm1 = layer_norm(dim, 1e-5, vb.pp("norm1"))?;
-        let attn = Attention::new(vb.pp("attention"), dim, num_heads, true, true)?;
-        let ls1 = LayerScale::new(vb.pp("layer_scale1"), dim)?;
+        let attn = Attention::new(vb.pp("attn"), dim, num_heads, true, true)?;
+        let ls1 = LayerScale::new(vb.pp("ls1"), dim)?;
         let norm2 = layer_norm(dim, 1e-5, vb.pp("norm2"))?;
         let mlp = Mlp::new(vb.pp("mlp"), dim, dim * 4, true)?;
-        let ls2 = LayerScale::new(vb.pp("layer_scale2"), dim)?;
+        let ls2 = LayerScale::new(vb.pp("ls2"), dim)?;
         Ok(Self {
             norm1,
             attn,
@@ -184,7 +166,7 @@ impl PatchEmbed {
             stride: patch_size,
             ..Default::default()
         };
-        let proj = candle_nn::conv2d(in_chans, embed_dim, patch_size, config, vb.pp("projection"))?;
+        let proj = candle_nn::conv2d(in_chans, embed_dim, patch_size, config, vb.pp("proj"))?;
         let num_patches = (img_size / patch_size) * (img_size / patch_size);
         Ok(Self {
             proj,
@@ -229,26 +211,25 @@ impl DinoVisionTransformer {
         embed_dim: usize,
         num_heads: usize,
     ) -> Result<Self> {
-        let vb_embeddings = vb.pp("embeddings");
         let patch_embed = PatchEmbed::new(
-            vb_embeddings.pp("patch_embeddings"),
+            vb.pp("patch_embed"),
             IMG_SIZE,
             PATCH_SIZE,
             3,
             embed_dim,
         )?;
-        let cls_token = vb_embeddings.get((1, 1, embed_dim), "cls_token")?;
+        let cls_token = vb.get((1, 1, embed_dim), "cls_token")?;
         let num_tokens = 1;
-        let pos_embed = vb_embeddings.get(
+        let pos_embed = vb.get(
             (1, patch_embed.num_patches + num_tokens, embed_dim),
-            "position_embeddings",
+            "pos_embed",
         )?;
         let head = match vb_head {
             Some(vb_head) => Some(linear(vb_head, 2 * embed_dim, NUM_CLASSES, true)?),
             None => None,
         };
-        let norm = layer_norm(embed_dim, 1e-5, vb.pp("layernorm"))?;
-        let vb_layer = vb.pp("encoder").pp("layer");
+        let norm = layer_norm(embed_dim, 1e-5, vb.pp("norm"))?;
+        let vb_layer = vb.pp("blocks");
         let blocks = (0..depth)
             .map(|i| Block::new(vb_layer.pp(&i.to_string()), embed_dim, num_heads))
             .collect::<Result<Vec<_>>>()?;

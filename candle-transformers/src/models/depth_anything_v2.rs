@@ -593,15 +593,15 @@ impl Module for DPTHead {
     }
 }
 
-pub struct DepthAnythingV2<'a> {
-    pretrained: &'a DinoVisionTransformer,
+pub struct DepthAnythingV2 {
+    pretrained: DinoVisionTransformer,
     depth_head: DPTHead,
     conf: DepthAnythingV2Config,
 }
 
-impl<'a> DepthAnythingV2<'a> {
+impl<'a> DepthAnythingV2 {
     pub fn new(
-        pretrained: &'a DinoVisionTransformer,
+        pretrained: DinoVisionTransformer,
         conf: DepthAnythingV2Config,
         vb: VarBuilder,
     ) -> Result<Self> {
@@ -620,7 +620,7 @@ impl<'a> DepthAnythingV2<'a> {
     }
 }
 
-impl<'a> Module for DepthAnythingV2<'a> {
+impl Module for DepthAnythingV2 {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let features = self.pretrained.get_intermediate_layers(
             xs,

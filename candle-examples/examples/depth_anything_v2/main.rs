@@ -31,11 +31,8 @@ pub fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let device = candle_examples::device(args.cpu)?;
 
-    let dinov2 = dino_model(&args.size, args.dinov2_model, args.dinov2_head, &device)?;
-    println!("DinoV2 model built");
-
     let mut depth_anything =
-        depth_anything_model(&dinov2, &args.size, args.depth_anything_v2_model, &device)?;
+        depth_anything_model(&args.size, args.depth_anything_v2_model, &device)?;
     println!("Depth Anything model built");
 
     let (original_height, original_width, image) =
@@ -65,12 +62,11 @@ pub fn main() -> anyhow::Result<()> {
 }
 
 
-fn depth_anything_model<'a>(
-    dinov2: &'a DinoVisionTransformer,
+fn depth_anything_model(
     model_size: &ModelSize,
     depth_anything_v2_model: Option<PathBuf>,
-    device: &'a Device,
-) -> anyhow::Result<DepthAnythingV2<'a>> {
+    device: &Device,
+) -> anyhow::Result<DepthAnythingV2> {
     let api = hf_hub::api::sync::Api::new()?;
     let depth_anything_path = match depth_anything_v2_model {
         None => match model_size {
@@ -90,6 +86,14 @@ fn depth_anything_model<'a>(
     println!("Using file {:?}", depth_anything_path);
 
     let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[depth_anything_path], F32, &device)? };
+    let vb_dino = vb.push_prefix("pretrained");
+    let dinov2 = match model_size {
+        ModelSize::S => dinov2::vit_small(vb_dino, None)?,
+        ModelSize::B => dinov2::vit_base(vb_dino, None)?,
+        ModelSize::L => dinov2::vit_large(vb_dino, None)?,
+        ModelSize::G => dinov2::vit_giant(vb_dino, None)?,
+    };
+
     let config = match model_size {
         ModelSize::S => DepthAnythingV2Config::vit_small(),
         ModelSize::B => DepthAnythingV2Config::vit_base(),
