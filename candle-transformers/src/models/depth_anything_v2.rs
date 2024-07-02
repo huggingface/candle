@@ -585,6 +585,7 @@ impl Module for DPTHead {
         print_tensor_statistics(&out)?;
         let out = self.scratch.output_conv2.forward(&out)?;
         println!("output_conv2 {out:?}");
+        print_tensor_statistics(&out)?;
 
         Ok(out)
     }
@@ -619,13 +620,6 @@ impl<'a> DepthAnythingV2<'a> {
 
 impl<'a> Module for DepthAnythingV2<'a> {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        print_tensor_statistics(&xs)?;
-        let row: Vec<f32> = xs.get(0)?.get(0)?.get(0)?.flatten_all().unwrap().to_vec1()?;
-        println!("First row input ");
-        for e in row {
-            print!("{e} ")
-        }
-
         let features = self.pretrained.get_intermediate_layers(
             xs,
             &self.conf.layer_ids_vits,

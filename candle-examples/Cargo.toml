@@ -17,7 +17,7 @@ candle-nn = { workspace = true }
 candle-transformers = { workspace = true }
 candle-flash-attn = { workspace = true, optional = true }
 candle-onnx = { workspace = true, optional = true }
-opencv = { version = "0.91.3", features = ["imgcodecs", "imgproc"], optional = true}
+opencv = { version = "0.91.3", features = ["imgcodecs", "imgproc"] }
 
 csv = "1.3.0"
 cudarc = { workspace = true, optional = true }
@@ -68,7 +68,7 @@ onnx = ["candle-onnx"]
 metal = ["candle/metal", "candle-nn/metal"]
 microphone = ["cpal"]
 encodec = ["cpal", "symphonia", "rubato"]
-depth_anything_v2 = ["palette", "enterpolation", "opencv"]
+depth_anything_v2 = ["palette", "enterpolation"]
 
 [[example]]
 name = "llama_multiprocess"
