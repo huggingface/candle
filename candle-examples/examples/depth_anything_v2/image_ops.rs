@@ -23,7 +23,7 @@ const UPPER_BOUND: &'static str = "upper_bound";
 const MINIMAL: &'static str = "minimal";
 const DINO_IMG_SIZE: usize = 518;
 
-fn print_tensor_statistics(tensor: &Tensor) -> candle::Result<()> {
+pub fn print_tensor_statistics(tensor: &Tensor) -> candle::Result<()> {
     // General characteristics
     println!("Tensor: {:?}", tensor);
 
@@ -371,7 +371,13 @@ pub fn post_process_image(
     color_map: bool,
 ) -> candle::Result<Tensor> {
     let out = image.interpolate_bilinear2d(original_height, original_width, true)?;
+    println!("Post final interpolation");
+    print_tensor_statistics(&out);
+    println!("Pre scaling");
+    print_tensor_statistics(&out);
     let out = scale_image(&out)?;
+    println!("Post scaling");
+    print_tensor_statistics(&out);
 
     let out = if color_map {
         let spectral_r = SpectralRColormap::new();

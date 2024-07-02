@@ -21,6 +21,7 @@ use candle_transformers::models::dinov2;
 use candle_transformers::models::dinov2::DinoVisionTransformer;
 
 use crate::args::ModelSize;
+use crate::image_ops::print_tensor_statistics;
 
 mod args;
 mod color_map;
@@ -47,6 +48,9 @@ pub fn main() -> anyhow::Result<()> {
     let (_, _, image_height, image_width) = image.dims4()?;
     depth_anything.set_image_and_patch_size(image_height, image_width);
     let depth = depth_anything.forward(&image)?;
+
+    println!("Post relu");
+    print_tensor_statistics(&depth);
 
     println!("Got predictions {depth:?}");
 

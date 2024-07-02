@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use candle::D::Minus1;
 use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
@@ -326,6 +327,11 @@ impl DinoVisionTransformer {
         norm: bool,
     ) -> Result<Tensor> {
         let outputs = self.get_intermediate_layers_not_chunked(xs, blocks_to_take)?;
+        for (i, out) in outputs.iter().enumerate() {
+            println!("{i} Intermediate not chunked");
+            print_tensor_statistics(&out)?
+        }
+
         let outputs = if norm {
             outputs
                 .iter()
@@ -334,6 +340,10 @@ impl DinoVisionTransformer {
         } else {
             outputs
         };
+        for (i, out) in outputs.iter().enumerate() {
+            println!("{i} Normalized");
+            print_tensor_statistics(&out)?
+        }
         let class_tokens = outputs
             .iter()
             .map(|out| out.i((.., 0)))
@@ -342,6 +352,10 @@ impl DinoVisionTransformer {
             .iter()
             .map(|out| out.i((.., 1..)))
             .collect::<Result<Vec<_>>>()?;
+        for (i, out) in outputs.iter().enumerate() {
+            println!("{i} Split from class tokens");
+            print_tensor_statistics(&out)?
+        }
 
         let outputs = if reshape {
             let (b, _c, w, h) = xs.dims4()?;
@@ -405,4 +419,41 @@ pub fn vit_large(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisi
 
 pub fn vit_giant(vb: VarBuilder, vb_head: Option<VarBuilder>) -> Result<DinoVisionTransformer> {
     DinoVisionTransformer::new(vb, vb_head, 40, 1536, 24)
+}
+
+fn print_tensor_statistics(tensor: &Tensor) -> Result<()> {
+    // General characteristics
+    println!("Tensor: {:?}", tensor);
+
+    let tensor = tensor.flatten_all().unwrap();
+
+    // Inline method to compute the minimum value over all elements
+    fn min_all(tensor: &Tensor) -> f32 {
+        let vec: Vec<f32> = tensor.to_vec1().unwrap();
+        vec.iter().cloned().min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)).unwrap()
+    }
+
+    // Inline method to compute the maximum value over all elements
+    fn max_all(tensor: &Tensor) -> f32 {
+        let vec: Vec<f32> = tensor.to_vec1().unwrap();
+        vec.iter().cloned().max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal)).unwrap()
+    }
+
+    // Inline method to compute the mean value over all elements
+    fn mean_all(tensor: &Tensor) -> Result<f32> {
+        let vec: Vec<f32> = tensor.to_vec1()?;
+        Ok(vec.iter().sum::<f32>() / vec.len() as f32)
+    }
+
+    // Compute overall statistics
+    let min_val = min_all(&tensor);
+    let max_val = max_all(&tensor);
+    let mean_val = mean_all(&tensor)?;
+
+    println!("Overall statistics:");
+    println!("  Min: {:?}", min_val);
+    println!("  Max: {:?}", max_val);
+    println!("  Mean: {:?}", mean_val);
+
+    Ok(())
 }
