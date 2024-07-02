@@ -732,6 +732,30 @@ impl Tensor {
 
     /// Returns a new tensor that is a narrowed version of the input, the dimension `dim`
     /// ranges from `start` to `start + len`.
+    /// ```
+    /// use candle_core::{Tensor, Device};
+    /// let a = Tensor::new(&[
+    ///     [0., 1., 2.],
+    ///     [3., 4., 5.],
+    ///     [6., 7., 8.]
+    /// ], &Device::Cpu)?;
+    ///
+    /// let b = a.narrow(0, 1, 2)?;
+    /// assert_eq!(b.shape().dims(), &[2, 3]);
+    /// assert_eq!(b.to_vec2::<f64>()?, &[
+    ///     [3., 4., 5.],
+    ///     [6., 7., 8.]
+    /// ]);
+    ///
+    /// let c = a.narrow(1, 1, 1)?;
+    /// assert_eq!(c.shape().dims(), &[3, 1]);
+    /// assert_eq!(c.to_vec2::<f64>()?, &[
+    ///     [1.],
+    ///     [4.],
+    ///     [7.]
+    /// ]);
+    /// # Ok::<(), candle_core::Error>(())
+    /// ```
     pub fn narrow<D: Dim>(&self, dim: D, start: usize, len: usize) -> Result<Self> {
         let dims = self.dims();
         let dim = dim.to_index(self.shape(), "narrow")?;
