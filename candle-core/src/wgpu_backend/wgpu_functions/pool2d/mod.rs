@@ -22,7 +22,7 @@ pub fn queue_max_pool2d(
     let input_stride = layout.stride();
     
 
-    let (mut meta,  meta_offset) = get_meta(&dev, 17);
+    let mut meta = get_meta(&dev);
 
     meta.add(b);
     meta.add(c);
@@ -46,7 +46,6 @@ pub fn queue_max_pool2d(
     let pipeline = dev.get_pipeline(super::Shader::Pool2d(dtype), Pipelines::MaxPool2d)?;
 
     let bind_group = create_bind_group_input1(
-        meta_offset,
         buffer_dest,
         buffer_input1,
     );
@@ -82,7 +81,7 @@ pub fn queue_avg_pool2d(
     let input_stride = layout.stride();
     
 
-    let (mut meta,  meta_offset) = get_meta(&dev, 17);
+    let mut meta = get_meta(&dev);
 
     meta.add(b);
     meta.add(c);
@@ -106,7 +105,6 @@ pub fn queue_avg_pool2d(
     let pipeline = dev.get_pipeline(super::Shader::Pool2d(dtype), Pipelines::AvgPool2d)?;
 
     let bind_group = create_bind_group_input1(
-        meta_offset,
         buffer_dest,
         buffer_input1,
     );

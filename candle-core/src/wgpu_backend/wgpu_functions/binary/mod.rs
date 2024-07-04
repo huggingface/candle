@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{wgpu::{cache::BufferReference, device::{PipelineType, Pipelines}}, WgpuDevice};
 
-use super::{create_bind_group_input2, enqueue, get_meta, get_size};
+use super::{create_bind_group_input2, enqueue_big, get_meta};
 
 #[derive(Copy, Clone, Debug)]
 #[allow(dead_code)]
@@ -28,7 +28,7 @@ pub fn queue_binary_buffer_from_buffer(
 ) -> crate::Result<()> {
     if lay1.is_contiguous() && lay2.is_contiguous() {
 
-        let (mut meta,  meta_offset) = get_meta(&dev, 5);
+        let mut meta = get_meta(&dev);
         meta.add(op as u32);
         meta.add(lay1.shape().elem_count()); //input1_length
         meta.add(lay1.start_offset()); //input1_offset
@@ -36,12 +36,11 @@ pub fn queue_binary_buffer_from_buffer(
         meta.add(lay2.start_offset()); //input2_offset
 
         let bind_group = create_bind_group_input2(
-            meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,
         );
-        enqueue(
+        enqueue_big(
             meta,
             PipelineType(super::Shader::Binary(dtype),Pipelines::BinaryBufferFromBufferContiguousBoth),
             bind_group,
@@ -51,7 +50,7 @@ pub fn queue_binary_buffer_from_buffer(
         );
         return Ok(());
     } else {
-        let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay1) + get_size(&lay2));
+        let mut meta = get_meta(&dev);
         meta.add(op as u32);
         meta.add_layout(&lay1);
         meta.add_layout(&lay2);
@@ -60,13 +59,12 @@ pub fn queue_binary_buffer_from_buffer(
         let pipeline = dev.get_pipeline(super::Shader::Binary(dtype), pipeline_type.clone())?;
         
         let bind_group = create_bind_group_input2(
-            meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,
         );
 
-        enqueue(
+        enqueue_big(
             meta,
             pipeline,
             bind_group,

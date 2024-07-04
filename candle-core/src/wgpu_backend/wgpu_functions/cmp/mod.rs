@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::{wgpu::{cache::BufferReference, device::Pipelines}, Layout, WgpuDevice};
 
-use super::{create_bind_group_input2, enqueue, get_meta, get_size};
+use super::{create_bind_group_input2, enqueue, get_meta};
 
 #[derive(Copy, Clone, Debug)]
 #[allow(dead_code)]
@@ -27,7 +27,7 @@ pub fn queue_cmp_buffer_from_buffer(
     layout_input1: &Layout,
     layout_input2: &Layout,
 ) -> crate::Result<()> {
-    let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&layout_input1) + get_size(&layout_input2));
+    let mut meta = get_meta(&dev);
     meta.add(op as u32);
     meta.add_layout(&layout_input1);
     meta.add_layout(&layout_input2);
@@ -35,7 +35,6 @@ pub fn queue_cmp_buffer_from_buffer(
     let pipeline = dev.get_pipeline(super::Shader::Cmp(dtype), Pipelines::CmpFromBuffer)?;
 
     let bind_group = create_bind_group_input2(
-        meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,

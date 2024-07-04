@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
-use super::{create_bind_group_input1, enqueue, enqueue_workgroups, get_meta, get_size, MAX_DISPATCH_SIZE};
+use super::{create_bind_group_input1, enqueue_big, enqueue_workgroups, get_meta, MAX_DISPATCH_SIZE};
 
 pub fn queue_copy_strided(
     dev: &WgpuDevice,
@@ -13,14 +13,16 @@ pub fn queue_copy_strided(
     dst_offset: u32,
 ) -> crate::Result<()> {
     if input_layout.shape().elem_count() > 0{
-        let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&input_layout));
+        let mut meta = get_meta(&dev);
         meta.add(dst_offset);
         meta.add_layout(&input_layout);
     
+        //println!("queue_copy_strided: dst_offset: {dst_offset}, input_layout: {:?}", input_layout);
+
         let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::CopyStrided)?;
     
-        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
-        enqueue(
+        let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
+        enqueue_big(
             meta,
             pipeline,
             bind_group,
@@ -85,15 +87,15 @@ pub fn queue_copy(
     dtype : crate::DType
 ) -> crate::Result<()> {
     if copy_size > 0{
-        let (mut meta,  meta_offset) = get_meta(&dev, 3);
+        let mut meta = get_meta(&dev);
         meta.add(copy_size);
         meta.add(destination_offset);
         meta.add(source_offset);
         
         let pipeline = dev.get_pipeline(super::Shader::Copy(dtype), Pipelines::Copy)?;
     
-        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
-        enqueue(
+        let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
+        enqueue_big(
             meta,
             pipeline,
             bind_group,
@@ -122,7 +124,7 @@ pub fn queue_copy2d(
 ) -> crate::Result<()> {
     if buffer_dest.size > 0 && buffer_input.size > 0{
         
-        let (mut meta,  meta_offset) = get_meta(&dev, 6);
+        let mut meta = get_meta(&dev);
         meta.add(d1);
         meta.add(d2);
         meta.add(input_stride1);
@@ -131,7 +133,7 @@ pub fn queue_copy2d(
         meta.add(dest_offset);
 
     
-        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
+        let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
         
         let x = (d1 + 15) / 16;
         let y = (d2 + 15) / 16;
@@ -143,9 +145,9 @@ pub fn queue_copy2d(
                 meta,
                 pipeline,
                 bind_group,
-                y,
+                y.min(65535),
                 x,
-                1,
+                (y + 65534) / 65535,
                 #[cfg(feature = "wgpu_debug")]
                 crate::wgpu::device::QueueDebugInfo::new(&format!("copy2dTranpose dtype:{:?}", dtype), d1 * d2),
             );
@@ -156,9 +158,9 @@ pub fn queue_copy2d(
                 meta,
                 pipeline,
                 bind_group,
-                x,
+                x.min(65535),
                 y,
-                1,
+                (x + 65534) / 65535,
                 #[cfg(feature = "wgpu_debug")]
                 crate::wgpu::device::QueueDebugInfo::new(&format!("copy2d dtype:{:?}", dtype), d1 * d2),
             );

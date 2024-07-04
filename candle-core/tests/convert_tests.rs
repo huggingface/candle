@@ -1,5 +1,5 @@
-use candle_core::{test_device, DType, Device, Tensor, D};
-use anyhow::Result;
+use candle_core::{test_device, DType, Device, IndexOp, Tensor, D};
+use anyhow::{Ok, Result};
 
 fn convert(device: &Device) -> Result<()> {
 
@@ -73,8 +73,8 @@ fn sum3(device: &Device) -> Result<()> {
     //let a : usize = 256;  
     //let b : usize = 256;
 
-    let a : usize = 256;  
-    let b : usize = 256;
+    let a : usize = 258;  
+    let b : usize = 258;
 
     let data_cpu = Tensor::ones((1,b,a,rs), DType::U32, &Device::Cpu)?;
     let data_cpu = data_cpu.reshape((1, b, a, rs))?;
@@ -90,15 +90,105 @@ fn sum3(device: &Device) -> Result<()> {
     let m2 = result2.to_vec2::<u32>()?;
 
     if m != m2{
-         panic!("m != m2")
+        panic!("m != m2")
     }
+
+    //test big unary
+    let unary1 = (data_cpu * 2.0)?;
+    let unary2 = (data * 2.0)?;
+
+    let result1 = unary1.sum_all()?.to_vec0::<u32>()?;
+    let result2 = unary2.sum_all()?.to_vec0::<u32>()?;
+
+    assert_eq!(result1, result2);
+
+    
+    //test big binary
+    let binary1 = (&unary1 + &unary1)?;
+    let binary2 =  (&unary2 + &unary2)?;
+
+    let result1 = binary1.sum_all()?.to_vec0::<u32>()?;
+    let result2 = binary2.sum_all()?.to_vec0::<u32>()?;
+
+    assert_eq!(result1, result2);
+
+    //test copy
+    let copy1 = binary1.copy()?;
+    let copy2 = binary2.copy()?;
+
+    let result1 = copy1.sum_all()?.to_vec0::<u32>()?;
+    let result2 = copy2.sum_all()?.to_vec0::<u32>()?;
+    
+    assert_eq!(result1, result2);
+
+    let copy1 = binary1.transpose(2, 3)?.copy()?;
+    let copy2 = binary2.transpose(2, 3)?.copy()?;
+
+    let result1 = copy1.sum_all()?.to_vec0::<u32>()?;
+    let result2 = copy2.sum_all()?.to_vec0::<u32>()?;
+
+    assert_eq!(result1, result2);
+
+    
+    let copy1 = binary1.i((..,..,30..50,..4))?.copy()?;
+    let copy2 = binary2.i((..,..,30..50,..4))?.copy()?;
+
+    let result1 = copy1.sum_all()?.to_vec0::<u32>()?;
+    let result2 = copy2.sum_all()?.to_vec0::<u32>()?;
+
+    assert_eq!(result1, result2);
+
     //assert_eq!(m, m2);
     Ok(())
 }
 
+fn layout(device: &Device) -> Result<()> {
 
+    let rs : usize = 14;
+    
+    //let a : usize = 256;  
+    //let b : usize = 256;
+
+    let a : usize = 12;  
+    let b : usize = 13;
+
+    let data1 = Tensor::ones((1,b,a,rs), DType::U32, &Device::Cpu)?;
+    let data1 = data1.reshape((1, b, a, rs))?;
+    let data2 = data1.to_device(device)?;
+
+    let index1 = data1.i((..,..,3..6,..4))?;
+    let index2 = data2.i((..,..,3..6,..4))?;
+
+    let result1 = index1.reshape((b, 3,4))?;
+    let result2 = index2.reshape((b, 3,4))?;
+
+
+    println!("test1:");
+    assert_eq!(result1.to_vec3::<u32>()?, result2.to_vec3::<u32>()?);
+
+
+    println!("copy:");
+    let copy1 = index1.copy()?;
+    let copy2 = index2.copy()?;
+
+    println!("reshape:");
+    let result1 = copy1.reshape((b, 3,4))?;
+    let result2 = copy2.reshape((b, 3,4))?;
+
+    println!("test2:");
+    assert_eq!(result1.to_vec3::<u32>()?, result2.to_vec3::<u32>()?);
+
+    let result1 = index1.sum_all()?.to_vec0::<u32>()?;
+    let result2 = index2.sum_all()?.to_vec0::<u32>()?;
+    
+    assert_eq!(result1, result2);
+    
+    Ok(())
+}
 
 test_device!(convert, convert_cpu, convert_gpu, convert_metal, convert_webgpu);
 test_device!(alloc, alloc_cpu, alloc_gpu, alloc_metal, alloc_webgpu);
 test_device!(sum2, sum2_cpu, sum2_gpu, sum2_metal, sum2_webgpu);
 test_device!(sum3, sum3_cpu, sum3_gpu, sum3_metal, sum3_webgpu);
+
+test_device!(layout, layout_cpu, layout_gpu, layout_metal, layout_webgpu);

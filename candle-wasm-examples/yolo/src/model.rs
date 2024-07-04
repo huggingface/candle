@@ -747,7 +747,7 @@ pub async fn report_detect(
     let mut bboxes: Vec<Vec<Bbox>> = (0..nclasses).map(|_| vec![]).collect();
     // Extract the bounding boxes for which confidence is above the threshold.
     for index in 0..npreds {
-        let pred = Vec::<f32>::try_from_async(pred.i((.., index)).await?)?;
+        let pred : Vec<f32> = pred.i((.., index))?.flatten_all()?.to_vec1_async().await?;
         let confidence = *pred[4..].iter().max_by(|x, y| x.total_cmp(y)).unwrap();
         if confidence > conf_threshold {
             let mut class_index = 0;

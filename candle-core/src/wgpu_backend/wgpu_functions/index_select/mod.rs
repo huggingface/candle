@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::{wgpu::{cache::BufferReference, device::Pipelines}, Shape, WgpuDevice};
 
-use super::{create_bind_group_input2, enqueue_workgroups, get_meta, get_size};
+use super::{create_bind_group_input2, enqueue_workgroups, get_meta};
 
 pub fn queue_index_select(
     dev: &WgpuDevice,
@@ -29,7 +29,7 @@ pub fn queue_index_select(
         .iter()
         .fold(1, |prev, c| prev * *c) as u32; //Mul Strides Left of dim
 
-    let (mut meta,  meta_offset) = get_meta(&dev, 5 + get_size(&lay_input) + get_size(&lay_index));
+    let mut meta = get_meta(&dev);
 
     meta.add(input_stride_x);
     meta.add(input_stride_y);
@@ -41,7 +41,7 @@ pub fn queue_index_select(
 
     let pipeline = dev.get_pipeline(super::Shader::IndexSelect(input_dtype), Pipelines::IndexSelect)?;
 
-    let bind_group = create_bind_group_input2(meta_offset, buffer_dest, buffer_input, buffer_index);
+    let bind_group = create_bind_group_input2( buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups(
         meta,
         pipeline,

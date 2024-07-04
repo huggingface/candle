@@ -18,7 +18,7 @@
 @compute
 @workgroup_size(64,1,1)
 fn copy_strided(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
+    let id = global_id.x + global_id.y * 65535 * 64;
     let pos1 = get_index(op_copy_strided.input1_layout, id);
     if(pos1.is_valid){
         let x = v_input1[pos1.id];
@@ -30,7 +30,7 @@ fn copy_strided(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute
 @workgroup_size(64,1,1)
 fn copy(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
+    let id = global_id.x + global_id.y * 65535 * 64;
     if(id < op_copy.copy_size){
         v_dest[op_copy.dest_offset + id] = v_input1[op_copy.src_offset + id];
     }
@@ -40,7 +40,7 @@ fn copy(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute
 @workgroup_size(16,16,1)
 fn copy2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let i1 = global_id.x;
+    let i1 = global_id.x + global_id.z * 65535 * 16;
     let i2 = global_id.y;
 
     if (i1 >= op_copy2d.d1){
@@ -57,7 +57,7 @@ fn copy2d(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @workgroup_size(16,16,1)
 fn copy2d_transpose(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let i1 = global_id.y;
-    let i2 = global_id.x;
+    let i2 = global_id.x + global_id.z * 65535 * 16;
 
     if (i1 >= op_copy2d.d1){
         return;

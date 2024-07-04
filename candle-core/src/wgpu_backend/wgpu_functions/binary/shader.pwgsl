@@ -13,7 +13,7 @@
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
+    let id = global_id.x + global_id.y * 65535 * 64;
 
     let input2_layout = op_binary.input1_layout +  get_size(op_binary.input1_layout);
 
@@ -28,7 +28,7 @@ fn binary_buffer_from_buffer(@builtin(global_invocation_id) global_id: vec3<u32>
 @compute
 @workgroup_size(64,1,1)
 fn binary_buffer_from_buffer_contiguous_both(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let id = global_id.x;
+    let id = global_id.x + global_id.y * 65535 * 64;
     if (id >= op_binary_contiguous_both.input1_length){
         return;
     }

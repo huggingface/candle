@@ -18,7 +18,7 @@ pub fn queue_conv2d(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
     
-    let (mut meta,  meta_offset) = get_meta(&dev, 23);
+    let mut meta = get_meta(&dev);
 
     meta.add(params.b_size);
     meta.add(params.c_in);
@@ -48,7 +48,6 @@ pub fn queue_conv2d(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv2D)?;
 
     let bind_group = create_bind_group_input2(
-        meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
@@ -80,7 +79,7 @@ pub fn queue_conv2d_transpose(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
     
-    let (mut meta,  meta_offset) = get_meta(&dev, 23);
+    let mut meta = get_meta(&dev);
     meta.add(params.b_size);
     meta.add(params.c_in);
     meta.add(params.k_w);
@@ -109,7 +108,6 @@ pub fn queue_conv2d_transpose(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv2DTranspose)?;
 
     let bind_group = create_bind_group_input2(
-        meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
@@ -141,7 +139,7 @@ pub fn queue_conv1d(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
     
-    let (mut meta,  meta_offset) = get_meta(&dev, 18);
+    let mut meta = get_meta(&dev);
 
     meta.add(params.b_size);
     meta.add(params.c_in);
@@ -166,7 +164,6 @@ pub fn queue_conv1d(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv1D)?;
 
     let bind_group = create_bind_group_input2(
-                meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
@@ -196,7 +193,7 @@ pub fn queue_conv1d_transpose(
     let input_stride = input_layout.stride();
     let kernel_stride = kernel_layout.stride();
     
-    let (mut meta,  meta_offset) = get_meta(&dev, 18);
+    let mut meta = get_meta(&dev);
     meta.add(params.b_size);
     meta.add(params.c_in);
     meta.add(params.k_size);
@@ -220,7 +217,6 @@ pub fn queue_conv1d_transpose(
     let pipeline = dev.get_pipeline(super::Shader::Conv2D(dtype), Pipelines::Conv1DTranspose)?;
 
     let bind_group = create_bind_group_input2(
-        meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,

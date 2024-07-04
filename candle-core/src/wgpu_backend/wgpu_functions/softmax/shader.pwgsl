@@ -4,6 +4,7 @@
 #define op_softmax.workgroup_size               op_meta[1]
 #define op_softmax.length                       op_meta[2]
 #define op_softmax.input1_offset                op_meta[3]
+#define op_softmax.dest_size                    op_meta[4]
 
 var<workgroup> sharedSums: array<DTYPE, 64>; 
 
@@ -13,9 +14,9 @@ var<workgroup> sharedM: f32;
 
 @compute
 @workgroup_size(64,1,1)
-fn softmax(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgroup_id) output_id3: vec3<u32>,) {
-    let workgroup_id = local_id.x;
-    let output_index = output_id3.y;
+fn softmax(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let workgroup_id = global_id.x;
+    let output_index = global_id.y + global_id.z * 65535;
     
     //Start Index of the Elements to Reduce
     let length = op_softmax.length; //length of the elements to reduce
@@ -26,17 +27,19 @@ fn softmax(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgrou
     let start = workgroup_id * op_softmax.workgroup_size;
     let end = min(length, (workgroup_id + 1) * op_softmax.workgroup_size);
 
-    //Now Reduce from start to end
-    var sum = MINVALUE;
-    for (var i = start; i < end; i++){
-        let v = v_input1[start_index1 + i];
-        sum = max(sum,v);
+    if(output_index < op_softmax.dest_size)
+    {
+        //Now Reduce from start to end
+        var sum = MINVALUE;
+        for (var i = start; i < end; i++){
+            let v = v_input1[start_index1 + i];
+            sum = max(sum,v);
+        }
+        sharedSums[workgroup_id] = sum; 
     }
-    sharedSums[workgroup_id] = sum;
-        
     workgroupBarrier();
     //calculate max
-    if (workgroup_id == 0){
+    if (workgroup_id == 0 && output_index < op_softmax.dest_size){
         let cnt = op_softmax.workgroup_count;
         //Finnaly Sum of all worker threads:
         var sum = MINVALUE;
@@ -48,24 +51,23 @@ fn softmax(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgrou
     }
 
     workgroupBarrier();
+    if (output_index < op_softmax.dest_size) {
+         for (var i = start; i < end; i++){
+            v_dest[start_index + i] = exp(v_input1[start_index1 + i] - sharedM);
+        }
 
-    for (var i = start; i < end; i++){
-        v_dest[start_index + i] = exp(v_input1[start_index1 + i] - sharedM);
+        //Now Calculate Sum:
+        var sum = ZERO;
+        for (var i = start; i < end; i++){
+            let v = v_dest[start_index + i];
+            sum += v;
+        }
+        sharedSums[workgroup_id] = sum;
     }
-
+   
     workgroupBarrier();
 
-    //Now Calculate Sum:
-    sum = ZERO;
-    for (var i = start; i < end; i++){
-        let v = v_dest[start_index + i];
-        sum += v;
-    }
-    sharedSums[workgroup_id] = sum;
-        
-    workgroupBarrier();
-
-    if (workgroup_id == 0){
+    if (workgroup_id == 0 && output_index < op_softmax.dest_size){
         let cnt = op_softmax.workgroup_count;
         //Finnaly Sum of all worker threads:
         var sum = ZERO;
@@ -76,10 +78,12 @@ fn softmax(@builtin(local_invocation_id) local_id: vec3<u32>,  @builtin(workgrou
         sharedM = sum;
     }
 
-    for (var i = start; i < end; i++){
-        v_dest[start_index + i] = v_dest[start_index + i] / sharedM;
+    workgroupBarrier();
+    if (output_index < op_softmax.dest_size) {
+        for (var i = start; i < end; i++){
+            v_dest[start_index + i] = v_dest[start_index + i] / sharedM;
+        }
     }
-
 }
 
 #endif

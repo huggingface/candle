@@ -15,6 +15,7 @@ pub struct WgpuStorage {
 
 impl WgpuStorage {
     pub fn new(buffer: Arc<BufferReference>, wgpu_device: WgpuDevice, dtype: crate::DType) -> Self {
+        buffer.is_referenced_by_storage.store(true, std::sync::atomic::Ordering::Relaxed);
         Self {
             buffer,
             wgpu_device,
@@ -45,6 +46,18 @@ impl WgpuStorage {
 
     pub fn get_length(&self) -> usize {
         return (self.buffer.size / 4) as usize; //f32
+    }
+
+    fn try_clone_layout(&self, layout: &crate::Layout) -> crate::Result<Self> {
+        let buffer_dest = BufferReference::new(self.device(), (layout.shape().elem_count() * 4) as usize);
+
+        self.copy_strided_src(buffer_dest.clone(), 0, layout)?;
+    
+        return Ok(WgpuStorage::new(
+            buffer_dest,
+            self.device().clone(),
+            self.dtype,
+        ));
     }
 
     fn copy_strided_src(
@@ -79,17 +92,19 @@ impl WgpuStorage {
 impl crate::backend::BackendStorage for WgpuStorage {
     type Device = WgpuDevice;
 
-    fn try_clone(&self, layout: &crate::Layout) -> crate::Result<Self> {
+    fn try_clone(&self, _: &crate::Layout) -> crate::Result<Self> {
         let buffer_dest = BufferReference::new(self.device(), self.buffer.size as usize);
+
         wgpu_functions::queue_copy(
             self.device(),
             buffer_dest.clone(),
             self.buffer.clone(),
             0,
-            layout.start_offset(),
-            layout.shape().elem_count() as usize,
+            0,
+            self.buffer.size as usize,
             self.dtype
         )?;
+
         return Ok(WgpuStorage::new(
             buffer_dest,
             self.device().clone(),
@@ -385,8 +400,8 @@ impl crate::backend::BackendStorage for WgpuStorage {
 
     fn to_dtype(&self, layout: &crate::Layout, dtype: crate::DType) -> crate::Result<Self> {
         match (self.dtype, dtype) {
-            (DType::F32, DType::F32) => self.try_clone(layout),
-            (DType::U32, DType::U32) => self.try_clone(layout),
+            (DType::F32, DType::F32) => self.try_clone_layout(layout),
+            (DType::U32, DType::U32) => self.try_clone_layout(layout),
             (DType::U32, DType::F32) => {
                 let buffer_dest =
                     BufferReference::new(self.device(), layout.shape().elem_count() * 4);
@@ -922,5 +937,12 @@ impl crate::backend::BackendStorage for WgpuStorage {
             dst_offset as u32
         )?;
         Ok(())
+    }
+}
+
+
+impl Drop for WgpuStorage{
+    fn drop(&mut self) {
+        self.buffer.is_referenced_by_storage.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }

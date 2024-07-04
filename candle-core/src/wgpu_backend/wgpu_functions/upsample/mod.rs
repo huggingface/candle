@@ -17,7 +17,7 @@ pub fn queue_upsample1d(
 
     let strides = layout.stride();
 
-    let (mut meta,  meta_offset) = get_meta(&dev, 10);
+    let mut meta = get_meta(&dev);
 
     meta.add(target_size);
     meta.add(b);
@@ -35,7 +35,6 @@ pub fn queue_upsample1d(
     let pipeline = dev.get_pipeline(super::Shader::Upsample(dtype), Pipelines::Upsample1d)?;
 
     let bind_group = create_bind_group_input1(
-        meta_offset,
         buffer_dest,
         buffer_input1,
     );
@@ -65,7 +64,7 @@ pub fn queue_upsample2d(
 
     let strides = layout.stride();
 
-    let (mut meta,  meta_offset) = get_meta(&dev, 14);
+    let mut meta = get_meta(&dev);
 
     meta.add(target_size.0);
     meta.add(target_size.1);
@@ -87,7 +86,6 @@ pub fn queue_upsample2d(
     let pipeline = dev.get_pipeline(super::Shader::Upsample(dtype), Pipelines::Upsample2d)?;
 
     let bind_group = create_bind_group_input1(
-        meta_offset,
         buffer_dest,
         buffer_input1,
     );

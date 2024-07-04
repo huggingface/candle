@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::{wgpu::{cache::BufferReference, device::Pipelines}, Layout, WgpuDevice};
 
-use super::{create_bind_group_input1, enqueue_workgroups, get_meta, get_size};
+use super::{create_bind_group_input1, enqueue_workgroups, get_meta};
 
 #[derive(Copy, Clone, Debug)]
 #[allow(dead_code)]
@@ -33,7 +33,7 @@ pub fn queue_reduce_from_buffer_op(
     let workgroup_count = u32::min(64, (reduction_length / 10 + 1) as u32);
     let workgroup_size = reduction_length as u32 / workgroup_count + 1;
     
-    let (mut meta,  meta_offset) = get_meta(&dev, 8 + get_size(&layout_input1));
+    let mut meta = get_meta(&dev);
 
     meta.add(op as u32);
     meta.add(workgroup_count);
@@ -43,6 +43,7 @@ pub fn queue_reduce_from_buffer_op(
     meta.add(output_to_start_shape_stride2);
     meta.add(output_to_start_stride2);
     meta.add(stride_reduction);
+    meta.add(dest_size);
     meta.add_layout(layout_input1);
 
     let pipeline_type = match op {
@@ -54,14 +55,19 @@ pub fn queue_reduce_from_buffer_op(
     };
     let pipeline = dev.get_pipeline(super::Shader::Reduce(dtype), pipeline_type)?;
 
-    let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
+    let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
+    
+    
+    let y = dest_size.min(65535);
+    let z= (dest_size + 65534) / 65535;
+
     enqueue_workgroups(
         meta,
         pipeline,
         bind_group,
-        dest_size,
-        1,        
         1,
+        y,      
+        z,
         #[cfg(feature = "wgpu_debug")] 
         crate::wgpu::device::QueueDebugInfo::new(&format!("reduce op:{:?}, dtype:{:?}", op, dtype), reduction_length * dest_size),
     );

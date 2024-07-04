@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
-use super::{create_bind_group_input3, enqueue, get_meta, get_size};
+use super::{create_bind_group_input3, enqueue, get_meta};
 
 pub fn queue_where_cond_u32(
     dev: &WgpuDevice,
@@ -16,14 +16,14 @@ pub fn queue_where_cond_u32(
     layout_false :&crate::Layout,
     dtype: crate::DType,
 ) -> crate::Result<()> {
-    let (mut meta,  meta_offset) = get_meta(&dev, get_size(&layout_input) + get_size(&layout_true) + get_size(&layout_false));
+    let mut meta = get_meta(&dev);
     meta.add_layout(&layout_input);
     meta.add_layout(&layout_true);
     meta.add_layout(&layout_false);
 
     let pipeline = dev.get_pipeline(super::Shader::WhereCond(dtype), Pipelines::WhereCondU32)?;
 
-    let bind_group = create_bind_group_input3(meta_offset,dest_buffer, input_buffer, true_buffer, false_buffer);
+    let bind_group = create_bind_group_input3(dest_buffer, input_buffer, true_buffer, false_buffer);
     enqueue(
         meta,
         pipeline,

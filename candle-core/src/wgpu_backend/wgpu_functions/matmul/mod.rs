@@ -21,7 +21,7 @@ pub fn queue_matmul_buffer1(
     let mut input1_stride = layout_input1.stride().iter().rev();
     let mut input2_stride = layout_input2.stride().iter().rev();
 
-    let (mut meta,  meta_offset) = get_meta(&dev, 12);
+    let mut meta = get_meta(&dev);
     meta.add(b);
     meta.add(m);
     meta.add(n);
@@ -40,7 +40,6 @@ pub fn queue_matmul_buffer1(
     let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::MatmulBuffer)?;
   
     let bind_group = create_bind_group_input2(
-        meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
@@ -76,7 +75,7 @@ pub fn queue_matmul_buffer1b(
     let mut input1_stride = layout_input1.stride().iter().rev();
     let mut input2_stride = layout_input2.stride().iter().rev();
 
-    let (mut meta,  meta_offset) = get_meta(&dev, 12);
+    let mut meta = get_meta(&dev);
     meta.add(b);
     meta.add(m);
     meta.add(n);
@@ -95,7 +94,6 @@ pub fn queue_matmul_buffer1b(
     let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::MatmulBuffer1b)?;
   
     let bind_group = create_bind_group_input2(
-        meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
@@ -131,7 +129,7 @@ pub fn queue_matmul_buffer3(
     let mut input1_stride = layout_input1.stride().iter().rev();
     let mut input2_stride = layout_input2.stride().iter().rev();
 
-    let (mut meta,  meta_offset) = get_meta(&dev, 12);
+    let mut meta = get_meta(&dev);
     meta.add(b);
     meta.add(m);
     meta.add(n);
@@ -150,7 +148,6 @@ pub fn queue_matmul_buffer3(
     let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul3Buffer)?;
   
     let bind_group = create_bind_group_input2(
-        meta_offset,
         buffer_dest,
         buffer_input1,
         buffer_input2,
@@ -197,7 +194,7 @@ pub fn queue_matmul_buffer4(
     let input2_stride_b = *input2_stride.next().unwrap_or(&1);
 
     if k / 16 > 0 && m / 16 > 0{
-        let (mut meta,  meta_offset) = get_meta(&dev, 12);
+        let mut meta = get_meta(&dev);
         meta.add(b);
         meta.add(m);
         meta.add(n);
@@ -216,7 +213,6 @@ pub fn queue_matmul_buffer4(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul4Buffer)?;
     
         let bind_group = create_bind_group_input2(
-            meta_offset,
             buffer_dest.clone(),
             buffer_input1.clone(),
             buffer_input2.clone(),
@@ -234,7 +230,7 @@ pub fn queue_matmul_buffer4(
     }
     //calcualte rest:
     if k % 16 != 0 || m % 16 != 0 {
-        let (mut meta,  meta_offset) = get_meta(&dev, 14);
+        let mut meta = get_meta(&dev);
         meta.add(b);
         meta.add(m);
         meta.add(n);
@@ -255,7 +251,6 @@ pub fn queue_matmul_buffer4(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul4endBuffer)?;
       
         let bind_group = create_bind_group_input2(
-            meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,
@@ -303,7 +298,7 @@ pub fn queue_matmul_buffer(
     let input2_stride_b = *input2_stride.next().unwrap_or(&1);
 
     if k / 16 > 0 && m / 16 > 0{
-        let (mut meta,  meta_offset) = get_meta(&dev, 12);
+        let mut meta = get_meta(&dev);
         meta.add(b);
         meta.add(m);
         meta.add(n);
@@ -322,7 +317,6 @@ pub fn queue_matmul_buffer(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul5Buffer)?;
     
         let bind_group = create_bind_group_input2(
-            meta_offset,
             buffer_dest.clone(),
             buffer_input1.clone(),
             buffer_input2.clone(),
@@ -340,7 +334,7 @@ pub fn queue_matmul_buffer(
     }
     //calcualte rest:
     if k % 16 != 0 || m % 16 != 0 {
-        let (mut meta,  meta_offset) = get_meta(&dev, 14);
+        let mut meta = get_meta(&dev);
         meta.add(b);
         meta.add(m);
         meta.add(n);
@@ -361,7 +355,6 @@ pub fn queue_matmul_buffer(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul1endBuffer)?;
       
         let bind_group = create_bind_group_input2(
-            meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,
@@ -409,7 +402,7 @@ pub fn queue_matmul_buffer6(
     let input2_stride_b = *input2_stride.next().unwrap_or(&1);
 
     if k / 16 > 0 && m / 16 > 0{
-        let (mut meta,  meta_offset) = get_meta(&dev, 12);
+        let mut meta = get_meta(&dev);
         meta.add(b);
         meta.add(m);
         meta.add(n);
@@ -428,7 +421,6 @@ pub fn queue_matmul_buffer6(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul6Buffer)?;
     
         let bind_group = create_bind_group_input2(
-            meta_offset,
             buffer_dest.clone(),
             buffer_input1.clone(),
             buffer_input2.clone(),
@@ -446,7 +438,7 @@ pub fn queue_matmul_buffer6(
     }
     //calcualte rest:
     if k % 16 != 0 || m % 16 != 0 {
-        let (mut meta,  meta_offset) = get_meta(&dev, 14);
+        let mut meta = get_meta(&dev);
         meta.add(b);
         meta.add(m);
         meta.add(n);
@@ -467,7 +459,6 @@ pub fn queue_matmul_buffer6(
         let pipeline = dev.get_pipeline(super::Shader::Matmul(dtype), Pipelines::Matmul4endBuffer)?;
       
         let bind_group = create_bind_group_input2(
-            meta_offset,
             buffer_dest,
             buffer_input1,
             buffer_input2,

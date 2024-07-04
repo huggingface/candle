@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
-use super::{create_bind_group_input2, enqueue_workgroups, get_meta, get_size};
+use super::{create_bind_group_input2, enqueue_workgroups, get_meta};
 
 
 
@@ -17,7 +17,7 @@ pub fn queue_gather(
     lay_index: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay_input) + get_size(&lay_index));
+    let mut meta = get_meta(&dev);
 
     meta.add(dim);
     meta.add_layout(&lay_input);
@@ -26,7 +26,7 @@ pub fn queue_gather(
     let pipeline = dev.get_pipeline(super::Shader::Gather(input_dtype), Pipelines::Gather)?;
 
     let bind_group =
-        create_bind_group_input2(meta_offset, buffer_dest, buffer_input, buffer_index);
+        create_bind_group_input2( buffer_dest, buffer_input, buffer_index);
     enqueue_workgroups(
         meta,
         pipeline,
@@ -53,7 +53,7 @@ pub fn queue_scatter_add_inplace(
     lay_src: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay_input) + get_size(&lay_index) + get_size(&lay_src));
+    let mut meta = get_meta(&dev);
 
     let selected_index_length = lay_index.shape().dims()[dim];
 
@@ -65,7 +65,7 @@ pub fn queue_scatter_add_inplace(
     let pipeline = dev.get_pipeline(super::Shader::Gather(input_dtype), Pipelines::ScatterAddInplace)?;
 
     let bind_group =
-        create_bind_group_input2(meta_offset, buffer_dest, buffer_index, buffer_src);
+        create_bind_group_input2( buffer_dest, buffer_index, buffer_src);
     enqueue_workgroups(
         meta,
         pipeline,
@@ -90,7 +90,7 @@ pub fn queue_index_add_inplace(
     lay_src: &crate::Layout,
     dim: usize,
 ) -> crate::Result<()> {
-    let (mut meta,  meta_offset) = get_meta(&dev, 1 + get_size(&lay_input) + get_size(&lay_index) + get_size(&lay_src));
+    let mut meta = get_meta(&dev);
 
     let selected_index_length = lay_index.shape().elem_count();
 
@@ -102,7 +102,7 @@ pub fn queue_index_add_inplace(
     let pipeline = dev.get_pipeline(super::Shader::Gather(input_dtype), Pipelines::IndexAddInplace)?;
 
     let bind_group =
-        create_bind_group_input2(meta_offset, buffer_dest, buffer_index, buffer_src);
+        create_bind_group_input2( buffer_dest, buffer_index, buffer_src);
     enqueue_workgroups(
         meta,
         pipeline,

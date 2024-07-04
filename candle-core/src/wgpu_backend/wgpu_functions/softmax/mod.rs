@@ -16,23 +16,25 @@ pub fn queue_softmax(
 ) -> crate::Result<()> {
     let workgroup_count = u32::min(64, (reduction_length / 10 + 1) as u32);
     let workgroup_size = reduction_length as u32 / workgroup_count + 1;
+    let workgroup_count = (reduction_length + (workgroup_size - 1)) / workgroup_size; 
     
-    let (mut meta,  meta_offset) = get_meta(&dev, 4);
+    let mut meta = get_meta(&dev);
     meta.add(workgroup_count);
     meta.add(workgroup_size);
     meta.add(reduction_length);
     meta.add(input1_offset);
-
+    meta.add(dest_size);
+    
     let pipeline = dev.get_pipeline(super::Shader::Softmax(dtype), Pipelines::Softmax)?;
 
-    let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input1);
+    let bind_group = create_bind_group_input1( buffer_dest, buffer_input1);
     enqueue_workgroups(
         meta,
         pipeline,
         bind_group,
         1,
-        dest_size,
-        1,
+        (dest_size).min(65535),
+        (dest_size + 65534) / 65535,
         #[cfg(feature = "wgpu_debug")] 
         crate::wgpu::device::QueueDebugInfo::new(&format!("softmax, dtype:{:?}", dtype), reduction_length * dest_size),
     );

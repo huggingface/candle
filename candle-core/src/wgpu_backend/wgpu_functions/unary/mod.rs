@@ -4,7 +4,7 @@ use rand::RngCore;
 
 use crate::{wgpu::{cache::BufferReference, device::Pipelines}, WgpuDevice};
 
-use super::{create_bind_group_input0, create_bind_group_input1, enqueue, get_meta, get_size};
+use super::{create_bind_group_input0, create_bind_group_input1, enqueue_big, get_meta};
 
 
 #[derive(Copy, Clone, Debug)]
@@ -79,24 +79,30 @@ pub fn queue_unary_inplace_op(
     layout: crate::Layout,
 ) -> crate::Result<()> {
 
-    let (mut meta,  meta_offset) = get_meta(&dev, 4 + get_size(&layout));
-    meta.add(op as u32);
-    meta.add(scalar1);
-    meta.add(scalar2);
-    meta.add(dev.rand_state.lock().unwrap().next_u32());
-    meta.add_layout(&layout);
+    if layout.is_contiguous() {
+        let mut meta = get_meta(&dev);
+        meta.add(op as u32);
+        meta.add(scalar1);
+        meta.add(scalar2);
+        meta.add(dev.rand_state.lock().unwrap().next_u32());
+        meta.add(layout.start_offset());       //offset, do not change, will be checked at flush_gpu_command
+        meta.add(layout.shape().elem_count()); //length 
 
-    let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryInplace)?;
+        let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryInplaceContiguous)?;
 
-    let bind_group = create_bind_group_input0(meta_offset, buffer);
-    enqueue(
-        meta,
-        pipeline,
-        bind_group,
-        layout.shape().elem_count() as u32,
-        #[cfg(feature = "wgpu_debug")] 
-        crate::wgpu::device::QueueDebugInfo::new(&format!("unary inplace op:{:?}, dtype:{:?}", op, Pipelines::UnaryInplace), layout.shape().elem_count()),
-    );
+        let bind_group = create_bind_group_input0( buffer);
+        enqueue_big(
+            meta,
+            pipeline,
+            bind_group,
+            layout.shape().elem_count() as u32,
+            #[cfg(feature = "wgpu_debug")] 
+            crate::wgpu::device::QueueDebugInfo::new(&format!("unary_inplace_contiguoes op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryInplaceContiguous), input_layout.shape().elem_count()),
+        );
+    }
+    else{
+        panic!("can only query unary inplace for contigueos memory!");
+    }
     return Ok(());
 }
 
@@ -111,7 +117,7 @@ pub fn queue_unary_from_buffer_op(
     input_layout: &crate::Layout,
 ) -> crate::Result<()> {
     if input_layout.is_contiguous() {
-        let (mut meta,  meta_offset) = get_meta(&dev, 6);
+        let mut meta = get_meta(&dev);
         meta.add(op as u32);
         meta.add(scalar1);
         meta.add(scalar2);
@@ -121,8 +127,8 @@ pub fn queue_unary_from_buffer_op(
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBufferContiguous)?;
 
-        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
-        enqueue(
+        let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
+        enqueue_big(
             meta,
             pipeline,
             bind_group,
@@ -131,7 +137,7 @@ pub fn queue_unary_from_buffer_op(
             crate::wgpu::device::QueueDebugInfo::new(&format!("unary op:{:?}, dtype:{:?}, pipeline:{:?}",op, dtype, Pipelines::UnaryFromBufferContiguous), input_layout.shape().elem_count()),
         );
     } else {
-        let (mut meta,  meta_offset) = get_meta(&dev, 4 + get_size(&input_layout));
+        let mut meta = get_meta(&dev);
         meta.add(op as u32);
         meta.add(scalar1);
         meta.add(scalar2);
@@ -139,8 +145,8 @@ pub fn queue_unary_from_buffer_op(
         meta.add_layout(&input_layout);
 
         let pipeline = dev.get_pipeline(super::Shader::Unary(dtype), Pipelines::UnaryFromBuffer)?;
-        let bind_group = create_bind_group_input1(meta_offset, buffer_dest, buffer_input);
-        enqueue(
+        let bind_group = create_bind_group_input1( buffer_dest, buffer_input);
+        enqueue_big(
             meta,
             pipeline,
             bind_group,
