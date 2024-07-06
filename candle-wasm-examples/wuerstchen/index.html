@@ -1,0 +1,319 @@
+<html>
+  <head>
+    <meta content="text/html;charset=utf-8" http-equiv="Content-Type" />
+    <title>Candle WUERSTCHEN Rust/WASM</title>
+  </head>
+  <body></body>
+</html>
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@200;300;400&family=Source+Sans+3:wght@100;200;300;400;500;600;700;800;900&display=swap");
+      html,
+      body {
+        font-family: "Source Sans 3", sans-serif;
+      }
+      code,
+      output,
+      select,
+      pre {
+        font-family: "Source Code Pro", monospace;
+      }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      Error.stackTraceLimit = 50;
+
+      const opfsRoot = await navigator.storage.getDirectory();
+      console.log(opfsRoot);
+      console.log("entries:");
+      for await (let [name, handle] of opfsRoot) {
+          console.log(name);
+      }
+      
+      const wuerstchenWorker = new Worker("./wuerstchenWorker.js", {
+        type: "module",
+      });
+
+      // import init, {Model} from "./build/m.js";
+      // console.log("before init");
+      // await init();
+      // let m = new Model();
+      // console.log(m);
+      // let res = await m.run("{}");
+      // console.log(res);
+      // console.log("after init");
+
+      import init, {Model} from "./build/m.js";
+
+      async function generateSequence(controller) {
+        const getValue = (id) => document.querySelector(`#${id}`).value;
+        const useWgpu = getValue("useWgpu");
+        const prompt = getValue("prompt");
+        const temperature = getValue("temperature");
+        const topP = getValue("top-p");
+        const repeatPenalty = getValue("repeat_penalty");
+        const seed = getValue("seed");
+        const maxSeqLen = getValue("max-seq");
+     
+        function updateStatus(data) {
+          const outStatus = document.querySelector("#output-status");
+          const outGen = document.querySelector("#output-generation");
+          const outCounter = document.querySelector("#output-counter");
+        
+
+          switch (data.status) {
+            case "loading":
+              outStatus.hidden = false;
+              outStatus.textContent = data.message;
+              outGen.hidden = true;
+              outCounter.hidden = true;
+              break;
+            case "generating":
+              const { message, prompt, sentence, tokensSec, totalTime } = data;
+              outStatus.hidden = true;
+              outCounter.hidden = false;
+              outGen.hidden = false;
+              outGen.innerHTML = `<span class="font-semibold">${prompt}</span>${sentence.replace(
+                /\<s\>|\<\/s\>/g,
+                ""
+              )}`;
+              outCounter.innerHTML = `${(totalTime / 1000).toFixed(
+                2
+              )}s (${tokensSec.toFixed(2)} tok/s)`;
+              break;
+            case "complete":
+              outStatus.hidden = true;
+              outGen.hidden = false;
+              break;
+          }
+        
+        }
+        let weightsURL = "test";
+        let modelID = "test2";
+
+       
+        console.log("before init");
+        await init();
+        let m = new Model();
+      
+        let result = await m.run(JSON.stringify({prompt : prompt, prior_steps: 60, vgan_steps : 20}));
+        console.log("Got Result");
+        var blob = new Blob([result], {'type': 'image/png'});
+        console.log("Loaded Blob");
+        var url = URL.createObjectURL(blob);
+        console.log("Got Blob Url:" + url);
+        const outputCanvas = document.querySelector("#output-canvas");
+        outputCanvas.src = url; 
+        console.log("Set image url");
+      }
+
+      const form = document.querySelector("#form");
+      const prompt = document.querySelector("#prompt");
+      const clearBtn = document.querySelector("#clear-btn");
+      const runBtn = document.querySelector("#run");
+      let runController = new AbortController();
+      let isRunning = false;
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (isRunning) {
+          stopRunning();
+        } else {
+          startRunning();
+          await generateSequence(runController);
+          stopRunning();
+        }
+      });
+
+      function startRunning() {
+        isRunning = true;
+        runBtn.textContent = "Stop";
+      }
+
+      function stopRunning() {
+        runController.abort();
+        runController = new AbortController();
+        runBtn.textContent = "Run";
+        isRunning = false;
+      }
+      clearBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        prompt.value = "";
+        clearBtn.classList.add("invisible");
+        runBtn.disabled = true;
+        stopRunning();
+      });
+      prompt.addEventListener("input", (e) => {
+        runBtn.disabled = false;
+        if (e.target.value.length > 0) {
+          clearBtn.classList.remove("invisible");
+        } else {
+          clearBtn.classList.add("invisible");
+        }
+      });
+    </script>
+  </head>
+  <body class="container max-w-4xl mx-auto p-4 text-gray-800">
+    <main class="grid grid-cols-1 gap-8 relative">
+      <span class="absolute text-5xl -ml-[1em]"> 🕯️ </span>
+      <div>
+        <h1 class="text-5xl font-bold">Candle wuerstchen</h1>
+        <h2 class="text-2xl font-bold">Rust/WASM Demo</h2>
+        <p class="max-w-lg">
+         wuerstchen
+          <a
+            href="https://github.com/huggingface/candle/"
+            target="_blank"
+            class="underline hover:text-blue-500 hover:no-underline"
+            >Candle
+          </a>
+          to run wuerstchen in the browser using rust/wasm.
+        </p>
+      </div>
+
+      <div>
+        <label for="useWgpu" class="font-medium">Use Wgpu </label>
+        <select
+          id="useWgpu"
+          class="border-2 border-gray-500 rounded-md font-light">
+          <option value="true" selected>True</option>
+          <option value="false">False</option>
+        </select>
+      </div>
+      <form
+        id="form"
+        class="flex text-normal px-1 py-1 border border-gray-700 rounded-md items-center">
+        <input type="submit" hidden />
+        <input
+          type="text"
+          id="prompt"
+          class="font-light w-full px-3 py-2 mx-1 resize-none outline-none"
+          placeholder="Add your prompt here..."
+          value="Once upon a time" />
+        <button id="clear-btn">
+          <svg
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            width="40"
+            viewBox="0 0 70 40">
+            <path opacity=".5" d="M39 .2v40.2" stroke="#1F2937" />
+            <path
+              d="M1.5 11.5 19 29.1m0-17.6L1.5 29.1"
+              opacity=".5"
+              stroke="#1F2937"
+              stroke-width="2" />
+          </svg>
+        </button>
+        <button
+          id="run"
+          class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-2 w-16 rounded disabled:bg-gray-300 disabled:cursor-not-allowed">
+          Run
+        </button>
+      </form>
+      <details>
+        <summary class="font-medium cursor-pointer">Advanced Options</summary>
+        <div class="grid grid-cols-3 max-w-md items-center gap-3 py-3">
+          <label class="text-sm font-medium" for="max-seq"
+            >Maximum length
+          </label>
+          <input
+            type="range"
+            id="max-seq"
+            name="max-seq"
+            min="1"
+            max="256"
+            step="1"
+            value="200"
+            oninput="this.nextElementSibling.value = Number(this.value)" />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+            200</output
+          >
+          <label class="text-sm font-medium" for="temperature"
+            >Temperature</label
+          >
+          <input
+            type="range"
+            id="temperature"
+            name="temperature"
+            min="0"
+            max="2"
+            step="0.01"
+            value="0.40"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+            0.40</output
+          >
+          <label class="text-sm font-medium" for="top-p">Top-p</label>
+          <input
+            type="range"
+            id="top-p"
+            name="top-p"
+            min="0"
+            max="1"
+            step="0.01"
+            value="1.00"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md">
+            1.00</output
+          >
+
+          <label class="text-sm font-medium" for="repeat_penalty"
+            >Repeat Penalty</label
+          >
+
+          <input
+            type="range"
+            id="repeat_penalty"
+            name="repeat_penalty"
+            min="1"
+            max="2"
+            step="0.01"
+            value="1.10"
+            oninput="this.nextElementSibling.value = Number(this.value).toFixed(2)" />
+          <output
+            class="text-xs w-[50px] text-center font-light px-1 py-1 border border-gray-700 rounded-md"
+            >1.10</output
+          >
+          <label class="text-sm font-medium" for="seed">Seed</label>
+          <input
+            type="number"
+            id="seed"
+            name="seed"
+            value="299792458"
+            class="font-light border border-gray-700 text-right rounded-md p-2" />
+          <button
+            id="run"
+            onclick="document.querySelector('#seed').value = BigInt(Math.floor(Math.random() * 2**64-1))"
+            class="bg-gray-700 hover:bg-gray-800 text-white font-normal py-1 w-[50px] rounded disabled:bg-gray-300 disabled:cursor-not-allowed text-sm">
+            Rand
+          </button>
+        </div>
+      </details>
+      <div>
+        <h3 class="font-medium">Generation:</h3>
+        <div
+          class="min-h-[250px] bg-slate-100 text-gray-500 p-4 rounded-md flex flex-col gap-2">
+          <div
+            id="output-counter"
+            hidden
+            class="ml-auto font-semibold grid-rows-1 text-sm"></div>
+          <p hidden id="output-generation" class="grid-rows-2"></p>
+          <span id="output-status" class="m-auto font-light"
+            >No output yet</span
+          >
+        </div>
+        <img id="output-canvas">
+
+        </img>
+      </div>
+    </main>
+  </body>
+</html>

@@ -11,7 +11,8 @@ members = [
     "candle-wasm-tests",
     "tensor-tools",
     "candle-wasm-examples/llama2-c/xtask",
-    "candle-wasm-examples/t5/xtask5"
+    "candle-wasm-examples/t5/xtask5",
+    "candle-wasm-examples/wuerstchen/xtask6"
 ]
 exclude = [
    "candle-flash-attn",
@@ -48,7 +49,7 @@ criterion = { version = "0.5.1", default-features=false }
 cudarc = { version = "0.10.0", features = ["f16"] }
 fancy-regex = "0.13.0"
 gemm = { version = "0.17.0", features = ["wasm-simd128-enable"] }
-hf-hub = "0.3.0"
+hf-hub = "0.3.0" 
 half = { version = "2.3.1", features = ["num-traits", "use-intrinsics", "rand_distr"] }
 image = { version = "0.25.0", default-features = false, features = ["jpeg", "png"] }
 imageproc = { version = "0.24.0", default-features = false }

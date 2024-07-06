@@ -288,6 +288,12 @@ impl WgpuDevice{
         println!("Bindgroup Inplace used: {}", self.cached_buffer_inplace_counter.load(std::sync::atomic::Ordering::Relaxed));
     }
     
+    pub fn clear_cache(&self){
+        log::info!("Clear cache");
+        let mut cache = self.cache.lock().unwrap();
+        cache.clear();
+    }
+
     #[cfg(feature = "wgpu_debug")]
     pub async fn get_debug_info_full(&self) -> crate::Result<Measurements>{
         let data = wgpu_functions::read_data_from_gpu_async::<u64>(self, &self.debug.query_set_buffer).await;

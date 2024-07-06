@@ -315,7 +315,7 @@ impl BufferCache {
     fn match_buffer_locked(
         &mut self,
         cached: BufferId,
-        reference: &BufferReferenceId,
+        _: &BufferReferenceId,
         reference_storage: &mut Option<BufferId>,
     ) {
         if let None = reference_storage.as_ref() {
@@ -606,6 +606,25 @@ impl ModelCache {
             mappings: BufferMappingCache::new(),
         }
     }
+
+    pub fn clear(&mut self) {
+        self.bindgroups.bindgroups.map.clear();
+        self.bindgroups.bindgroups.empty.clear();
+        self.bindgroups.bindgroups_full.clear();
+        self.bindgroups.cached_bindgroup_use_counter = 0;
+        self.bindgroups.bindgroup_counter = 0;
+        self.bindgroups.order.clear();
+     
+        self.buffers.buffer_counter = 0;
+        self.buffers.buffer_memory = 0;
+        self.buffers.buffers.empty.clear();
+        self.buffers.buffers.map.clear();
+
+        self.mappings.current_buffer_mapping = None;
+        self.mappings.current_index = 0;
+        self.mappings.last_buffer_mappings.deque.clear();
+    }
+
 
     pub fn remove_unused(&mut self) -> bool {
         let mut counter = 0;
