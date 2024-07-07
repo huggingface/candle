@@ -25,8 +25,8 @@ pub fn load_image448_openai_norm<P: AsRef<std::path::Path>>(p: P) -> Result<Tens
     let data = Tensor::from_vec(data, (448, 448, 3), &Device::Cpu)?.permute((2, 0, 1))?;
     let mean =
         Tensor::new(&[0.48145466f32, 0.4578275, 0.40821073], &Device::Cpu)?.reshape((3, 1, 1))?;
-    let std =
-        Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1], &Device::Cpu)?.reshape((3, 1, 1))?;
+    let std = Tensor::new(&[0.26862954f32, 0.261_302_6, 0.275_777_1], &Device::Cpu)?
+        .reshape((3, 1, 1))?;
     (data.to_dtype(candle::DType::F32)? / 255.)?
         .broadcast_sub(&mean)?
         .broadcast_div(&std)
