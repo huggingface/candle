@@ -14,6 +14,7 @@ pub mod distilbert;
 pub mod efficientnet;
 pub mod efficientvit;
 pub mod encodec;
+pub mod eva2;
 pub mod falcon;
 pub mod gemma;
 pub mod jina_bert;
