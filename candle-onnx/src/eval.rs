@@ -643,6 +643,13 @@ fn simple_eval_(
                 let dims = Tensor::from_vec(dims, xs.rank(), xs.device())?;
                 values.insert(node.output[0].clone(), dims);
             }
+            // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Size
+            "Size" => {
+                let data = get(&node.input[0])?;
+                let size: usize = data.dims().iter().product();
+                let output = Tensor::from_slice(&[size as i64], (), data.device())?;
+                values.insert(node.output[0].clone(), output);
+            }
             // https://github.com/onnx/onnx/blob/main/docs/Operators.md#Sqrt
             "Sqrt" => {
                 let xs = get(&node.input[0])?;
