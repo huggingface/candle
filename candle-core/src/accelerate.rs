@@ -52,6 +52,18 @@ mod ffi {
         pub fn vvlog(dst: *mut c_double, src: *const c_double, len: *const c_int);
         pub fn vvtanhf(dst: *mut c_float, src: *const c_float, len: *const c_int);
         pub fn vvtanh(dst: *mut c_double, src: *const c_double, len: *const c_int);
+        pub fn vvpowhf(
+            dst: *mut c_float,
+            exp: *const c_float,
+            base: *const c_float,
+            len: *const c_int,
+        );
+        pub fn vvpowh(
+            dst: *mut c_double,
+            exp: *const c_double,
+            base: *const c_double,
+            len: *const c_int,
+        );
 
         pub fn vDSP_vaddD(
             _: *const c_double,
@@ -432,6 +444,34 @@ pub fn vd_silu(vs: &[f64], ys: &mut [f64]) {
     for (&v, y) in vs.iter().zip(ys.iter_mut()) {
         *y = v / (1.0 + *y)
     }
+}
+
+#[inline]
+pub fn vs_pow(a: &[f32], b: &[f32], y: &mut [f32]) {
+    let a_len = a.len();
+    let b_len = b.len();
+    let y_len = y.len();
+    if a_len != y_len || b_len != y_len {
+        panic!(
+            "{} a,b,y len mismatch {a_len} {b_len} {y_len}",
+            stringify!(vs_pow)
+        );
+    }
+    unsafe { ffi::vvpowhf(y.as_mut_ptr(), b.as_ptr(), a.as_ptr(), a_len as u64) }
+}
+
+#[inline]
+pub fn vd_pow(a: &[f64], b: &[f64], y: &mut [f64]) {
+    let a_len = a.len();
+    let b_len = b.len();
+    let y_len = y.len();
+    if a_len != y_len || b_len != y_len {
+        panic!(
+            "{} a,b,y len mismatch {a_len} {b_len} {y_len}",
+            stringify!(vs_pow)
+        );
+    }
+    unsafe { ffi::vvpowh(y.as_mut_ptr(), b.as_ptr(), a.as_ptr(), a_len as u64) }
 }
 
 macro_rules! binary_op {

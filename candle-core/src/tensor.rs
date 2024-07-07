@@ -494,11 +494,13 @@ impl Tensor {
     binary_op!(mul, Mul);
     binary_op!(sub, Sub);
     binary_op!(div, Div);
+    binary_op!(pow, Pow);
     binary_op_scalar!(maximum, Maximum);
     binary_op_scalar!(minimum, Minimum);
     broadcast_binary_op!(broadcast_add, add);
     broadcast_binary_op!(broadcast_mul, mul);
     broadcast_binary_op!(broadcast_sub, sub);
+    broadcast_binary_op!(broadcast_pow, pow);
     broadcast_binary_op!(broadcast_div, div);
     broadcast_binary_op!(broadcast_maximum, maximum);
     broadcast_binary_op!(broadcast_minimum, minimum);
@@ -2443,16 +2445,6 @@ impl Tensor {
         let exp = self.exp()?;
         let sum = exp.sum(sum_dims)?;
         sum.log()
-    }
-
-    /// Pointwise pow operation.
-    pub fn pow(&self, rhs: &Tensor) -> Result<Self> {
-        rhs.mul(&self.log()?)?.exp()
-    }
-
-    /// Broadcasting version of `pow`.
-    pub fn broadcast_pow(&self, rhs: &Tensor) -> Result<Self> {
-        rhs.broadcast_mul(&self.log()?)?.exp()
     }
 }
 

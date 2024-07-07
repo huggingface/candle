@@ -1336,12 +1336,12 @@ fn log_sum_exp() -> Result<()> {
 
 #[test]
 fn pow() -> Result<()> {
-    let lhs = Tensor::new(&[[1f32, 2., 3.], [4., 5., 6.]], &Device::Cpu)?;
+    let lhs = Tensor::new(&[[1f32, 2., 3.], [4., 5., -1.]], &Device::Cpu)?;
     let rhs = (&lhs - 2.)?;
     let res = lhs.pow(&rhs)?;
     assert_eq!(
         test_utils::to_vec2_round(&res, 3)?,
-        [[1.0, 1.0, 3.0], [16.0, 125.0, 1296.0]]
+        [[1.0, 1.0, 3.0], [16.0, 125.0, -1.0]]
     );
     Ok(())
 }
