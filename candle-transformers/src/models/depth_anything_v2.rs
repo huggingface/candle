@@ -218,13 +218,12 @@ impl Module for FeatureFusionBlock {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let out = if let Some(ref skip_add) = *self.skip_add.borrow() {
             let res = self.res_conv_unit1.forward(skip_add)?;
-            let skip = xs.add(&res)?;
-            skip
+            &xs.add(&res)?
         } else {
-            xs.clone()
+            xs
         };
 
-        let out = self.res_conv_unit2.forward(&out)?;
+        let out = self.res_conv_unit2.forward(out)?;
         let (target_height, target_width) = if let Some(size) = *self.output_size.borrow() {
             size
         } else {

@@ -12,16 +12,14 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use args::Args;
+use candle::{Device, Module};
 use candle::DType::F32;
-use candle::{Device, Module, Tensor};
 use candle_examples::save_image;
 use candle_nn::VarBuilder;
 use candle_transformers::models::depth_anything_v2::{DepthAnythingV2, DepthAnythingV2Config};
 use candle_transformers::models::dinov2;
-use candle_transformers::models::dinov2::DinoVisionTransformer;
 
 use crate::args::ModelSize;
-use crate::image_ops::print_tensor_statistics;
 
 mod args;
 mod color_map;
@@ -40,14 +38,9 @@ pub fn main() -> anyhow::Result<()> {
 
     println!("Loaded image {image:?}");
 
-
-
     let (_, _, image_height, image_width) = image.dims4()?;
     depth_anything.set_image_and_patch_size(image_height, image_width);
     let depth = depth_anything.forward(&image)?;
-
-    println!("Post relu");
-    print_tensor_statistics(&depth);
 
     println!("Got predictions {depth:?}");
 
@@ -102,64 +95,6 @@ fn depth_anything_model(
     };
 
     Ok(DepthAnythingV2::new(dinov2, config, vb)?)
-}
-
-fn dino_model(
-    model_size: &ModelSize,
-    dinov2_model: Option<PathBuf>,
-    dinov2_head: Option<PathBuf>,
-    device: &Device,
-) -> anyhow::Result<DinoVisionTransformer> {
-    let api = hf_hub::api::sync::Api::new()?;
-    let model_path = match dinov2_model {
-        None => match model_size {
-            ModelSize::S => api
-                .model("facebook/dinov2-small".into())
-                .get("model.safetensors")?,
-            ModelSize::B => api
-                .model("facebook/dinov2-base".into())
-                .get("model.safetensors")?,
-
-            ModelSize::L => api
-                .model("facebook/dinov2-large".into())
-                .get("model.safetensors")?,
-            ModelSize::G => api
-                .model("facebook/dinov2-giant".into())
-                .get("model.safetensors")?,
-        },
-        Some(path) => path,
-    };
-    println!("Using dinov2 file {:?}", model_path);
-
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[model_path], F32, &device)? };
-
-    let head_path = match dinov2_head {
-        None => match model_size {
-            ModelSize::S => api
-                .model("jeroenvlek/dinov2-linear-heads-safetensors".into())
-                .get("dinov2_vits14_linear_head.safetensors")?,
-            ModelSize::B => api
-                .model("jeroenvlek/dinov2-linear-heads-safetensors".into())
-                .get("dinov2_vitb14_linear_head.safetensors")?,
-            ModelSize::L => api
-                .model("jeroenvlek/dinov2-linear-heads-safetensors".into())
-                .get("dinov2_vitl14_linear_head.safetensors")?,
-            ModelSize::G => api
-                .model("jeroenvlek/dinov2-linear-heads-safetensors".into())
-                .get("dinov2_vitg14_linear_head.safetensors")?,
-        },
-        Some(path) => path,
-    };
-    println!("Using dinov2 head file {:?}", head_path);
-    let vb_head = unsafe { VarBuilder::from_mmaped_safetensors(&[head_path], F32, &device)? };
-
-    let model = match model_size {
-        ModelSize::S => dinov2::vit_small(vb, Some(vb_head))?,
-        ModelSize::B => dinov2::vit_base(vb, Some(vb_head))?,
-        ModelSize::L => dinov2::vit_large(vb, Some(vb_head))?,
-        ModelSize::G => dinov2::vit_giant(vb, Some(vb_head))?,
-    };
-    Ok(model)
 }
 
 fn full_output_path(image_path: &PathBuf, output_dir: &Option<PathBuf>) -> PathBuf {

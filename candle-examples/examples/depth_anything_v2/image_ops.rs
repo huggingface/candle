@@ -1,16 +1,8 @@
-use std::cmp::Ordering;
 use std::path::PathBuf;
-use enterpolation::DiscreteGenerator;
-use image::{DynamicImage, GenericImageView};
 
 use candle::DType::{F32, F64, U8};
 use candle::{Device, Tensor};
 use candle_transformers::models::depth_anything_v2::PATCH_MULTIPLE;
-use opencv::core::{flip, MatTraitConst, Point3_, Point3d, Rect, Scalar, Size};
-use opencv::imgcodecs;
-use opencv::imgproc;
-use opencv::imgproc::resize;
-use opencv::prelude::*;
 
 use crate::color_map::SpectralRColormap;
 
@@ -23,235 +15,6 @@ const UPPER_BOUND: &'static str = "upper_bound";
 const MINIMAL: &'static str = "minimal";
 const DINO_IMG_SIZE: usize = 518;
 
-pub fn print_tensor_statistics(tensor: &Tensor) -> candle::Result<()> {
-    // General characteristics
-    println!("Tensor: {:?}", tensor);
-
-    let tensor = tensor.flatten_all().unwrap();
-
-    // Inline method to compute the minimum value over all elements
-    fn min_all(tensor: &Tensor) -> f32 {
-        let vec: Vec<f32> = tensor.to_vec1().unwrap();
-        vec.iter()
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-            .unwrap()
-    }
-
-    // Inline method to compute the maximum value over all elements
-    fn max_all(tensor: &Tensor) -> f32 {
-        let vec: Vec<f32> = tensor.to_vec1().unwrap();
-        vec.iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-            .unwrap()
-    }
-
-    // Inline method to compute the mean value over all elements
-    fn mean_all(tensor: &Tensor) -> candle::Result<f32> {
-        let vec: Vec<f32> = tensor.to_vec1()?;
-        Ok(vec.iter().sum::<f32>() / vec.len() as f32)
-    }
-
-    // Compute overall statistics
-    let min_val = min_all(&tensor);
-    let max_val = max_all(&tensor);
-    let mean_val = mean_all(&tensor)?;
-
-    println!("Overall statistics:");
-    println!("  Min: {:?}", min_val);
-    println!("  Max: {:?}", max_val);
-    println!("  Mean: {:?}", mean_val);
-
-    Ok(())
-}
-
-fn print_tensor_statistics_f64(tensor: &Tensor) -> candle::Result<()> {
-    // General characteristics
-    println!("Tensor: {:?}", tensor);
-
-    let tensor = tensor.flatten_all().unwrap();
-
-    // Inline method to compute the minimum value over all elements
-    fn min_all(tensor: &Tensor) -> f64 {
-        let vec: Vec<f64> = tensor.to_vec1().unwrap();
-        vec.iter()
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-            .unwrap()
-    }
-
-    // Inline method to compute the maximum value over all elements
-    fn max_all(tensor: &Tensor) -> f64 {
-        let vec: Vec<f64> = tensor.to_vec1().unwrap();
-        vec.iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-            .unwrap()
-    }
-
-    // Inline method to compute the mean value over all elements
-    fn mean_all(tensor: &Tensor) -> candle::Result<f64> {
-        let vec: Vec<f64> = tensor.to_vec1()?;
-        Ok(vec.iter().sum::<f64>() / vec.len() as f64)
-    }
-
-    // Compute overall statistics
-    let min_val = min_all(&tensor);
-    let max_val = max_all(&tensor);
-    let mean_val = mean_all(&tensor)?;
-
-    println!("Overall statistics:");
-    println!("  Min: {:?}", min_val);
-    println!("  Max: {:?}", max_val);
-    println!("  Mean: {:?}", mean_val);
-
-    Ok(())
-}
-
-fn print_tensor_statistics_u8(tensor: &Tensor) -> candle::Result<()> {
-    // General characteristics
-    println!("Tensor: {:?}", tensor);
-
-    let tensor = tensor.flatten_all().unwrap();
-
-    // Inline method to compute the minimum value over all elements
-    fn min_all(tensor: &Tensor) -> u8 {
-        let vec: Vec<u8> = tensor.to_vec1().unwrap();
-        vec.iter()
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-            .unwrap()
-    }
-
-    // Inline method to compute the maximum value over all elements
-    fn max_all(tensor: &Tensor) -> u8 {
-        let vec: Vec<u8> = tensor.to_vec1().unwrap();
-        vec.iter()
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-            .unwrap()
-    }
-
-    // Inline method to compute the mean value over all elements
-    fn mean_all(tensor: &Tensor) -> candle::Result<f32> {
-        let vec: Vec<u8> = tensor.to_vec1()?;
-        let vec: Vec<u32> = vec.iter().map(|u| u as u32).collect();
-        Ok(vec.iter().sum::<u32>() as f32 / vec.len() as f32)
-    }
-
-    // Compute overall statistics
-    let min_val = min_all(&tensor);
-    let max_val = max_all(&tensor);
-    let mean_val = mean_all(&tensor)?;
-
-    println!("Overall statistics:");
-    println!("  Min: {:?}", min_val);
-    println!("  Max: {:?}", max_val);
-    println!("  Mean: {:?}", mean_val);
-
-    Ok(())
-}
-
-fn print_image_statistics(image: DynamicImage) {
-    // General characteristics
-    println!("Image dimensions: {:?}", image.dimensions());
-    println!("Color type: {:?}", image.color());
-
-    // Flatten the image into a vector of u8 values
-    let pixels: Vec<u8> = image.into_bytes();
-
-    // Compute overall statistics
-    let min_val = pixels.iter().min().unwrap();
-    let max_val = pixels.iter().max().unwrap();
-    let pixels: Vec<f64> = pixels.iter().map(|p| p as f64).collect();
-    let mean_val = pixels.iter().sum::<f64>() / pixels.len() as f64;
-
-    println!("Overall statistics:");
-    println!("  Min: {:?}", min_val);
-    println!("  Max: {:?}", max_val);
-    println!("  Mean: {:?}", mean_val);
-}
-
-fn print_mat_statistics_u8(mat: &Mat) -> anyhow::Result<()> {
-    // General characteristics
-    println!("Mat: {:?}", mat);
-    println!("Dimensions: {:?}", mat.size()?);
-    println!("Channels: {}", mat.channels());
-
-    // Flatten the Mat into a single vector of u8 values
-    let mut min_val = u8::MAX as f64;
-    let mut max_val = u8::MIN as f64;
-    let mut sum_val = 0.0;
-    let mut count = 0;
-
-    let mat_data: Vec<u8> = mat
-        .data_typed::<Point3_<u8>>()
-        .iter()
-        .flat_map(|pv| {
-            let pv = pv.to_vec();
-
-            pv.iter().flat_map(|p| p.to_vec3()).collect::<Vec<u8>>()
-        })
-        .collect();
-    // let mat_data = mat_data.iter().map(|p| Vec::from([p.x, p.y.p.z])).collect();
-    for pixel in mat_data.iter() {
-        min_val = min_val.min(pixel as f64);
-        max_val = max_val.max(pixel as f64);
-        sum_val += pixel as f64;
-        count += 1;
-    }
-    let mean_val = sum_val / count as f64;
-
-    println!("Overall statistics:");
-    println!("  Min: {:?}", min_val);
-    println!("  Max: {:?}", max_val);
-    println!("  Mean: {:?}", mean_val);
-
-    Ok(())
-}
-
-fn print_mat_statistics_f64(mat: &Mat) -> anyhow::Result<()> {
-    // General characteristics
-    println!("Mat: {:?}", mat);
-    println!("Dimensions: {:?}", mat.size()?);
-    println!("Channels: {}", mat.channels());
-
-    // Flatten the Mat into a single vector of f64 values
-    let mut min_val = f64::MAX;
-    let mut max_val = f64::MIN;
-    let mut sum_val = 0.0;
-    let mut count = 0;
-
-    let mat_data: Vec<f64> = mat
-        .data_typed::<Point3d>()
-        .iter()
-        .flat_map(|pv| {
-            let pv = pv.to_vec();
-
-            pv.iter().flat_map(|p| p.to_vec3()).collect::<Vec<f64>>()
-        })
-        .collect();
-
-    for pixel in mat_data.iter() {
-        min_val = min_val.min(pixel as f64);
-        max_val = max_val.max(pixel as f64);
-        sum_val += pixel as f64;
-        count += 1;
-    }
-
-    let mean_val = sum_val / count as f64;
-
-    println!("Overall statistics:");
-    println!("  Min: {:?}", min_val);
-    println!("  Max: {:?}", max_val);
-    println!("  Mean: {:?}", mean_val);
-
-    Ok(())
-}
-
-fn print_mat_statistics(mat: &Mat) -> anyhow::Result<()> {
-    match mat.typ() {
-        opencv::core::CV_8UC1 | opencv::core::CV_8UC3 => print_mat_statistics_u8(mat),
-        opencv::core::CV_64FC1 | opencv::core::CV_64FC3 => print_mat_statistics_f64(mat),
-        _ => Err(anyhow::anyhow!("Unsupported Mat type")),
-    }
-}
-
 pub fn load_and_prep_image(
     image_path: &PathBuf,
     device: &Device,
@@ -260,99 +23,57 @@ pub fn load_and_prep_image(
     let (image, original_height, original_width) = load_image_and_resize(&image_path)?;
     println!("Got image {image:?}, with original size ({original_height}, {original_width})");
 
-    println!("Pre normalization");
-    print_tensor_statistics_f64(&image)?;
+    let image = image.to_device(&device)?;
+
     println!("Normalizing image");
     let image = normalize_image(&image, &MAGIC_MEAN, &MAGIC_STD)?;
-    println!("Post normalization");
-    print_tensor_statistics_f64(&image)?;
 
-    println!("Pre net prep");
-    print_tensor_statistics_f64(&image)?;
-    let image = image.permute((2, 0, 1))?.unsqueeze(0)?;
-    println!("Post net prep");
-    print_tensor_statistics_f64(&image)?;
-
-    let image = image.to_dtype(F32)?.to_device(device)?;
-    println!("Post transform");
-    print_tensor_statistics(&image)?;
+    // the original code does normalization in 64 bits before converting it to 32 when feeding it to the model.
+    // we're following that recipe here
+    let image = image
+        .to_dtype(F32)?
+        .permute((2, 0, 1))?
+        .unsqueeze(0)?;
 
     Ok((original_height, original_width, image))
 }
 
 pub fn load_image_and_resize<P: AsRef<std::path::Path>>(
     p: P,
-) -> anyhow::Result<(Tensor, usize, usize)> {
-    // let img = image::io::Reader::open(p)?
-    //     .decode()
-    //     .map_err(candle::Error::wrap)?;
-    //
-    // println!("Raw image");
-    // print_image_statistics(img.clone());
-    let image = imgcodecs::imread(&p.as_ref().to_string_lossy(), imgcodecs::IMREAD_COLOR)?;
-
-    // let (original_height, original_width) = (img.height() as usize, img.width() as usize);
-    let size = image.size()?;
-    let mut float_image = unsafe { Mat::new_size(image.size()?, opencv::core::CV_64FC3)? };
-    image.convert_to(&mut float_image, opencv::core::CV_64FC3, 1.0 / 255.0, 0.0)?;
-
+) -> candle::Result<(Tensor, usize, usize)> {
+    let img = image::io::Reader::open(p)?
+        .decode()
+        .map_err(candle::Error::wrap)?;
+    let (original_height, original_width) = (img.height() as usize, img.width() as usize);
     let (target_height, target_width) = get_new_size(
-        size.height as usize,
-        size.width as usize,
+        original_height,
+        original_width,
         DINO_IMG_SIZE,
         DINO_IMG_SIZE,
         true,
         LOWER_BOUND,
         PATCH_MULTIPLE,
     );
-    let mut source_image = Mat::default();
-    println!("Pre Resize");
-    print_mat_statistics(&float_image)?;
-    resize(
-        &float_image,
-        &mut source_image,
-        Size::new(target_width as i32, target_height as i32),
-        0.0,
-        0.0,
-        imgproc::INTER_CUBIC,
-    )?;
-    println!("Post Resize");
-    print_mat_statistics(&source_image)?;
 
-    // let img = img.resize_to_fill(
-    //     target_width as u32,
-    //     target_height as u32,
-    //     image::imageops::FilterType::CatmullRom,
-    // );
-    // println!("Post resize");
-    // print_image_statistics(img.clone());
-    //
-    // let img = img.into_rgb32f();
-    // let data = img.into_raw();
-    let data: Vec<f64> = source_image
-        .data_typed::<Point3d>()
-        .iter()
-        .flat_map(|pv| {
-            let pv = pv.to_vec();
+    let img = img.resize_to_fill(
+        target_width as u32,
+        target_height as u32,
+        image::imageops::FilterType::CatmullRom,
+    );
 
-            pv.iter().flat_map(|p| p.to_vec3()).collect::<Vec<f64>>()
-        })
-        .collect();
+    let img = img.into_rgb8();
+    let data = img.into_raw();
+    let rgb_data = Tensor::from_vec(data, (target_height, target_width, 3), &Device::Cpu)?.to_dtype(F64)?;
 
-    let bgr_data = Tensor::from_slice(
-        &data,
-        (target_height as usize, target_width as usize, 3),
-        &Device::Cpu,
-    )?;
-    println!("BGR Image");
-    print_tensor_statistics_f64(&bgr_data)?;
+    let max_pixel_val = Tensor::try_from(255.0f64)?
+        .broadcast_as(rgb_data.shape())?;
+    let rgb_data = rgb_data.div(&max_pixel_val)?;
+
 
     let index = Tensor::from_vec(vec![2u32, 1, 0], (3,), &Device::Cpu)?;
-    let  rgb_data = bgr_data.index_select(&index, 2)?;
-    println!("rgb Image");
-    print_tensor_statistics_f64(&rgb_data)?;
+    let bgr_data = rgb_data.index_select(&index, 2)?;
 
-    Ok((rgb_data, size.height as usize, size.width as usize))
+    Ok((bgr_data, original_height, original_width))
 }
 
 fn normalize_image(image: &Tensor, mean: &[f64; 3], std: &[f64; 3]) -> candle::Result<Tensor> {
@@ -371,13 +92,7 @@ pub fn post_process_image(
     color_map: bool,
 ) -> candle::Result<Tensor> {
     let out = image.interpolate_bilinear2d(original_height, original_width, true)?;
-    println!("Post final interpolation");
-    print_tensor_statistics(&out);
-    println!("Pre scaling");
-    print_tensor_statistics(&out);
     let out = scale_image(&out)?;
-    println!("Post scaling");
-    print_tensor_statistics(&out)?;
 
     let out = if color_map {
         let spectral_r = SpectralRColormap::new();
@@ -397,8 +112,8 @@ pub fn post_process_image(
 
 pub fn get_min_max(t: &Tensor) -> candle::Result<(f32, f32)> {
     let flat_values: Vec<f32> = t.flatten_all()?.to_vec1()?;
-    let min_val = flat_values.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
-    let max_val = flat_values.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
+    let min_val = *flat_values.iter().min_by(|a, b| a.total_cmp(b)).unwrap();
+    let max_val = *flat_values.iter().max_by(|a, b| a.total_cmp(b)).unwrap();
 
     Ok((min_val, max_val))
 }

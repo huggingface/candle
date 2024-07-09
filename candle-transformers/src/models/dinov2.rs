@@ -1,6 +1,5 @@
-use std::cmp::Ordering;
+use candle::{D, IndexOp, Result, Tensor};
 use candle::D::Minus1;
-use candle::{IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 
 const IMG_SIZE: usize = 518;
@@ -167,8 +166,6 @@ impl PatchEmbed {
             ..Default::default()
         };
         let proj = candle_nn::conv2d(in_chans, embed_dim, patch_size, config, vb.pp("proj"))?;
-        println!("Patch embed WEIGHTS");
-        print_tensor_statistics(proj.weight())?;
         let num_patches = (img_size / patch_size) * (img_size / patch_size);
         Ok(Self {
             proj,
@@ -258,13 +255,16 @@ impl DinoVisionTransformer {
         let (w0, h0) = ((w / PATCH_SIZE) as f64 + 0.1, (h / PATCH_SIZE) as f64 + 0.1);
         let patch_pos_embed = patch_pos_embed
             .reshape((1, sqrt_n as usize, sqrt_n as usize, dim))?
-            .permute((0, 3, 1, 2))?;
+            .transpose(2, 3)?
+            .transpose(1, 2)?;
+
         // This uses bicubic interpolation in the original implementation.
         let patch_pos_embed = patch_pos_embed.upsample_nearest2d(h0 as usize, w0 as usize)?;
         let el_count = patch_pos_embed.shape().elem_count();
         let patch_pos_embed =
             patch_pos_embed
-                .permute((0, 2, 3, 1))?
+                .transpose(1, 2)?
+                .transpose(2, 3)?
                 .reshape((1, el_count / dim, dim))?;
         Tensor::cat(&[&class_pos_embed, &patch_pos_embed], 1)
     }
@@ -272,15 +272,8 @@ impl DinoVisionTransformer {
     fn prepare_tokens_with_mask(&self, xs: &Tensor) -> Result<Tensor> {
         let (_b, _nc, w, h) = xs.dims4()?;
         let xs = self.patch_embed.forward(xs)?;
-        println!("Patch embed");
-        print_tensor_statistics(&xs)?;
         let xs = Tensor::cat(&[&self.cls_token, &xs], 1)?;
-        println!("Cat tokens");
-        print_tensor_statistics(&xs)?;
-        let out = xs.add(&self.interpolate_pos_encoding(&xs, w, h)?)?;
-        println!("add interpolate encodings");
-        print_tensor_statistics(&out)?;
-        Ok(out)
+        &xs + &self.interpolate_pos_encoding(&xs, w, h)?
     }
 
     fn get_intermediate_layers_not_chunked(
@@ -288,18 +281,12 @@ impl DinoVisionTransformer {
         xs: &Tensor,
         blocks_to_take: &[usize],
     ) -> Result<Vec<Tensor>> {
-        println!("Start get intermediate layers");
-        print_tensor_statistics(&xs)?;
 
         let mut xs = self.prepare_tokens_with_mask(xs)?;
-        println!("Post prep with mask");
-        print_tensor_statistics(&xs)?;
         let mut output = Vec::new();
         for (i, blk) in self.blocks.iter().enumerate() {
             xs = blk.forward(&xs)?;
             if blocks_to_take.contains(&i) {
-                println!("Taking block {i}");
-                print_tensor_statistics(&xs)?;
                 output.push(xs.clone());
             }
         }
@@ -322,11 +309,6 @@ impl DinoVisionTransformer {
         norm: bool,
     ) -> Result<Tensor> {
         let outputs = self.get_intermediate_layers_not_chunked(xs, blocks_to_take)?;
-        for (i, out) in outputs.iter().enumerate() {
-            println!("{i} Intermediate not chunked");
-            print_tensor_statistics(&out)?
-        }
-
         let outputs = if norm {
             outputs
                 .iter()
@@ -335,10 +317,7 @@ impl DinoVisionTransformer {
         } else {
             outputs
         };
-        for (i, out) in outputs.iter().enumerate() {
-            println!("{i} Normalized");
-            print_tensor_statistics(&out)?
-        }
+
         let class_tokens = outputs
             .iter()
             .map(|out| out.i((.., 0)))
@@ -347,10 +326,6 @@ impl DinoVisionTransformer {
             .iter()
             .map(|out| out.i((.., 1..)))
             .collect::<Result<Vec<_>>>()?;
-        for (i, out) in outputs.iter().enumerate() {
-            println!("{i} Split from class tokens");
-            print_tensor_statistics(&out)?
-        }
 
         let outputs = if reshape {
             let (b, _c, w, h) = xs.dims4()?;
